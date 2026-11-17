@@ -12,6 +12,8 @@
   entry.
 * issue #3908: two ``start`` calls at once leave one supervisor, the one the daemon pidfile names, and Core answers
   afterwards: the start is serialized by a lock and returns once the pidfile names the supervisor;
+* issue #4032: a PHP caller of ``GetResources`` under the appliance's own PHP CLI limits holds a two-million-entry
+  ``full`` body and its 1 % ``delta``; wall time and peak memory, in Go and in PHP, are printed, never asserted;
 * issue #3982: the package's pfb-core and pfb-dns, every architecture's, carry Go build info naming the Go minor their
   module's go.mod declares (x/net picks its IDNA tables by compiler, so the minor decides the Unicode version served);
 
@@ -59,6 +61,10 @@ NOBODY_GROUP = 65534  # the group of the user `nobody`
 CORE_DAEMON_PID = "/var/run/pfb_core_daemon.pid"
 # The rc script's supervisor as pgrep -f finds it: by daemon(8)'s title, or by its command line until the title is set
 SUPERVISORS = r"{ /bin/pgrep -f '^daemon: pfb_core\[' ; /bin/pgrep -f '^/usr/sbin/daemon .*-t pfb_core ' ; }"
+# issue #4032: the measured resource, its size and the share of it that changes between the two generations (1 %)
+MEASURE_ID = "ip-set/Measure/ipv4"
+MEASURE_ENTRIES, MEASURE_REPLACED = 2_000_000, 20_000
+CURL, PROCSTAT = "/usr/local/bin/curl", "/usr/bin/procstat"
 ROOT = Path(__file__).resolve().parents[2]
 # issue #3982: each shipped Go binary, by the module it is built from; all architectures ship (the package is NO_ARCH)
 GO_BINARIES = {
@@ -88,6 +94,70 @@ foreach (array_slice($argv, 1) as $path) {
 }
 echo json_encode($info, JSON_INVALID_UTF8_SUBSTITUTE);
 """
+# issue #4032: fixture setup, run with no memory limit: a store of two generations of $n IPv4 members, written as
+# Core's store holds them (index.json + <id with / as ~>.<generation>.body). Generation 2 swaps $r members of
+# generation 1 for $r the first never held, spread over the whole range: even addresses of 10.0.0.0/8 are the
+# baseline, the odd ones the additions.
+STORE_PHP = r"""<?php
+[, $dir, $n, $r] = $argv;
+$step = intdiv((int) $n, (int) $r);
+$base = $current = $added = [];
+for ($i = 0; $i < $n; $i++) {
+    $base[] = $ip = long2ip(0x0A000000 + 2 * $i);
+    if ($i % $step === 0) { $added[] = long2ip(0x0A000000 + 2 * $i + 1); } else { $current[] = $ip; }
+}
+$current = array_merge($current, $added);
+$metadata = ['action' => 'deny', 'direction' => ['ingress']];
+$gens = [];
+foreach ([1 => $base, 2 => $current] as $g => $members) {
+    sort($members, SORT_STRING);
+    $body = implode("\n", $members) . "\n";
+    file_put_contents("$dir/ip-set~Measure~ipv4.$g.body", $body);
+    chmod("$dir/ip-set~Measure~ipv4.$g.body", 0600);
+    $gens[$g] = ['generation' => (string) $g, 'digest' => hash('xxh128', $body), 'length' => strlen($body),
+        'entries' => count($members), 'metadata' => $metadata];
+}
+file_put_contents("$dir/index.json", json_encode(['version' => 1, 'resources' => ['ip-set/Measure/ipv4' =>
+    ['current' => $gens[2], 'applied' => $gens[1]]]], JSON_UNESCAPED_SLASHES));
+chmod("$dir/index.json", 0600);
+chmod($dir, 0700);
+echo '@OPEN@' . json_encode(['digest' => $gens[1]['digest'],
+    'entries' => [$gens[1]['entries'], $gens[2]['entries']]]) . '@CLOSE@';
+"""
+# issue #4032: the measured PHP caller, run by the appliance's plain CLI with its own php.ini (no -d, no ini_set):
+# argv is the socket, the mode (full: no cursor; delta: from generation 1) and the baseline digest. The peak after
+# the call is what holding the decoded reply costs; verifying (a digest over the joined members) comes after it.
+CALLER_PHP = r"""<?php
+require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
+[, $socket, $mode, $digest] = $argv;
+$id = 'ip-set/Measure/ipv4';
+$cursor = $mode === 'delta' ? ['generation' => '1', 'digest' => $digest] : new stdClass();
+$baseline = memory_get_peak_usage(true);
+$start = hrtime(true);
+$reply = pfb_core_call('GetResources', ['resources' => [$id => $cursor]], $socket, 300);
+$wall = (hrtime(true) - $start) / 1e9;
+$afterCall = memory_get_peak_usage(true);
+$item = $reply['body']['resources'][$id] ?? [];
+$out = ['status' => $reply['status'], 'error' => $reply['error'], 'kind' => $item['kind'] ?? null,
+    'generation' => $item['generation'] ?? null, 'from' => $item['from'] ?? null,
+    'members' => count($item['members'] ?? []), 'add' => count($item['add'] ?? []),
+    'remove' => count($item['remove'] ?? []),
+    'digest_ok' => isset($item['members'])
+        && hash('xxh128', implode("\n", $item['members']) . "\n") === $item['digest'],
+    'memory_limit' => ini_get('memory_limit'), 'wall_s' => $wall, 'baseline_peak' => $baseline,
+    'peak_after_call' => $afterCall,
+    'peak_after_verify' => memory_get_peak_usage(true)];
+echo '@OPEN@' . json_encode($out) . '@CLOSE@';
+"""
+MEASURE_FIGURES = (
+    "go_wall_s",
+    "go_reply_bytes",
+    "go_max_rss_kb",
+    "php_wall_s",
+    "php_peak_after_call_bytes",
+    "php_peak_after_verify_bytes",
+    "php_baseline_peak_bytes",
+)
 
 
 @pytest.fixture(scope="module")
@@ -523,3 +593,131 @@ def test_the_packaged_go_binaries_are_built_with_the_go_minor_their_module_decla
         if built.split(".")[:2] != declared_go_minor(module).split("."):
             wrong[path] = f"expected {declared_go_minor(module)} (go/{module}/go.mod), actual {built}"
     assert wrong == {}, "binaries built with another Go minor:\n" + "\n".join(f"{p}: {w}" for p, w in wrong.items())
+
+
+def put_script(vm: SmokeVM, path: str, source: str) -> None:
+    """Write a PHP script to the box, its result markers filled in."""
+    text = source.replace("@OPEN@", OPEN).replace("@CLOSE@", CLOSE)
+    wrote = vm.ssh(f"printf %s {shlex.quote(text)} > {path}", timeout=60)
+    assert wrote.returncode == 0, f"could not write {path}: {wrote.stderr}"
+
+
+def stop_core(vm: SmokeVM, pid: str) -> None:
+    """TERM, then KILL after a bounded wait (salvage only); returns once the process is gone."""
+    vm.ssh(
+        f"kill {pid}; for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 {pid} 2>/dev/null || break; sleep 1; done; "
+        f"kill -9 {pid} 2>/dev/null; true",
+        timeout=60,
+    )
+
+
+def measure_resource(vm: SmokeVM, work: str, mode: str, digest: str) -> dict[str, Any]:
+    """One fresh Core over the store, asked for ``mode`` (full or delta) by curl, then by the PHP caller."""
+    api, log = f"{work}/run/api.sock", f"{work}/log"
+    request = json.dumps({"resources": {MEASURE_ID: {"generation": "1", "digest": digest} if mode == "delta" else {}}})
+    start = vm.ssh(
+        f"nohup {CORE_BIN} --socket {api} --state-dir {work}/state --resource-dir {work}/store "
+        f"</dev/null >{log} 2>&1 & echo $!",
+        timeout=30,
+    )
+    pid = start.stdout.strip()
+    assert start.returncode == 0 and pid.isdigit(), f"the {mode} Core did not start: {start.stdout}{start.stderr}"
+    try:
+        deadline = time.monotonic() + READY_WATCHDOG
+        while True:  # the real condition: the API answers; a Core that exited fails at once, the watchdog only salvages
+            up = vm.ssh(
+                f"{CURL} -s -o /dev/null -w %{{http_code}} --unix-socket {api} -X POST http://localhost/v1/GetVersion"
+            )
+            if up.stdout.strip() == "200":
+                break
+            if vm.ssh(f"kill -0 {pid}", timeout=30).returncode != 0 or time.monotonic() > deadline:
+                said = vm.ssh(f"tail -n 20 {log}", timeout=30).stdout
+                pytest.fail(f"STUCK: the {mode} Core never answered on {api} (curl: {up.stdout}{up.stderr}):\n{said}")
+            time.sleep(1)
+        go = vm.ssh(
+            f"{CURL} -s -o /dev/null -w '%{{time_total}} %{{size_download}} %{{http_code}}' --unix-socket {api} "
+            f"-H 'Content-Type: application/json' --data {shlex.quote(request)} http://localhost/v1/GetResources",
+            timeout=600,
+        )
+        seconds, size, status = go.stdout.split() if go.stdout.count(" ") == 2 else ("0", "0", go.stdout)
+        assert (go.returncode, status) == (0, "200"), f"GetResources {mode} over curl: {go.stdout}{go.stderr}"
+        rss = vm.ssh(f"{PROCSTAT} -r {pid}", timeout=30)
+        held = re.search(r"maximum RSS\s+(\d+)", rss.stdout)
+        assert held, f"no 'maximum RSS' row from {PROCSTAT} -r {pid}: rc={rss.returncode}\n{rss.stdout}{rss.stderr}"
+        caller = vm.ssh(f"{PHP} {work}/call.php {api} {mode} {digest} 2>&1", timeout=600)
+    finally:
+        stop_core(vm, pid)
+    assert OPEN in caller.stdout and CLOSE in caller.stdout, (
+        f"the PHP caller ({mode}) printed no result: rc={caller.returncode}\n{caller.stdout[-2000:]}"
+    )
+    php = json.loads(caller.stdout.split(OPEN, 1)[1].split(CLOSE, 1)[0])
+    assert caller.returncode == 0, f"the PHP caller ({mode}) exited {caller.returncode}:\n{caller.stdout[-2000:]}"
+    return {
+        **php,
+        "go_wall_s": float(seconds),
+        "go_reply_bytes": int(size),
+        "go_max_rss_kb": int(held.group(1)),
+        "php_wall_s": php["wall_s"],
+        "php_peak_after_call_bytes": php["peak_after_call"],
+        "php_peak_after_verify_bytes": php["peak_after_verify"],
+        "php_baseline_peak_bytes": php["baseline_peak"],
+    }
+
+
+def test_a_php_caller_holds_a_full_body_of_two_million_entries_and_its_one_percent_delta(core_vm: SmokeVM) -> None:
+    """The cost of a GetResources body at scale, in Go and in a PHP caller under the appliance's own CLI limits.
+
+    Given a store of two generations of 2,000,000 IPv4 members (generation 2 replaces 1 % of generation 1), on a private
+    directory under /root (never a RAM disk), served by a fresh Core for each measurement;
+    when curl and then a PHP caller (plain ``php``, no ini override) ask for the 1 % delta and for the full body;
+    then both are served as the protocol says, and the PHP caller held the decoded reply and verified the body's digest.
+    Wall time and peak memory are printed for the PR (PFB_RESOURCE_MEASURE), never asserted.
+    """
+    missing = core_vm.ssh(f"for tool in {CURL} {PROCSTAT}; do test -x $tool || echo $tool; done", timeout=30)
+    assert missing.stdout.split() == [], f"the box lacks {missing.stdout.split()}: the measurement needs them"
+    made = core_vm.ssh("mktemp -d /root/pfbresmeasure.XXXXXX", timeout=30)
+    work = made.stdout.strip()
+    assert made.returncode == 0 and work.startswith("/root/pfbresmeasure."), f"no scratch: {made.stdout}{made.stderr}"
+    try:
+        core_vm.ssh(f"mkdir -m 700 {work}/store {work}/state {work}/run", timeout=30)
+        put_script(core_vm, f"{work}/store.php", STORE_PHP)
+        put_script(core_vm, f"{work}/call.php", CALLER_PHP)
+        began = time.monotonic()
+        built = core_vm.ssh(
+            f"{PHP} -d memory_limit=-1 {work}/store.php {work}/store {MEASURE_ENTRIES} {MEASURE_REPLACED}", timeout=600
+        )
+        generator_s = time.monotonic() - began
+        assert OPEN in built.stdout, f"the store was not built: rc={built.returncode}\n{built.stdout}{built.stderr}"
+        store = json.loads(built.stdout.split(OPEN, 1)[1].split(CLOSE, 1)[0])
+        assert store["entries"] == [MEASURE_ENTRIES, MEASURE_ENTRIES], f"before-state: the store holds {store}"
+
+        delta = measure_resource(core_vm, work, "delta", store["digest"])
+        full = measure_resource(core_vm, work, "full", store["digest"])
+        box = core_vm.ssh("sysctl -n hw.physmem hw.ncpu", timeout=30).stdout.split()
+
+        want = {"kind": "delta", "from": "1", "generation": "2", "add": MEASURE_REPLACED, "remove": MEASURE_REPLACED}
+        assert {k: delta[k] for k in want} == want, f"delta: want {want}, got {delta}"
+        want = {"kind": "full", "generation": "2", "members": MEASURE_ENTRIES, "digest_ok": True}
+        assert {k: full[k] for k in want} == want, f"full: want {want}, got {full}"
+        # A diagnostic, never an assertion: durations and memory are what the PR records
+        print(
+            "PFB_RESOURCE_MEASURE "
+            + json.dumps(
+                {
+                    "full": {k: full[k] for k in MEASURE_FIGURES},
+                    "delta": {k: delta[k] for k in MEASURE_FIGURES},
+                    "php_memory_limit": full["memory_limit"],
+                    "entries": MEASURE_ENTRIES,
+                    "delta_add": delta["add"],
+                    "delta_remove": delta["remove"],
+                    "hw_physmem": box[0] if box else None,
+                    "hw_ncpu": box[1] if len(box) > 1 else None,
+                    "generator_wall_s": generator_s,
+                }
+            ),
+            flush=True,
+        )
+    finally:
+        core_vm.ssh(f"rm -rf {work}", timeout=120)
+    package_core = core_vm.ssh(f"test -S {SOCKET}", timeout=30)
+    assert package_core.returncode == 0, f"the package's Core lost its socket {SOCKET}"
