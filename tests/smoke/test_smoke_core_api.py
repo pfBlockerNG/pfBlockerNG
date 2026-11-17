@@ -144,9 +144,9 @@ $out = ['status' => $reply['status'], 'error' => $reply['error'], 'kind' => $ite
     'remove' => count($item['remove'] ?? []),
     'digest_ok' => isset($item['members'])
         && hash('xxh128', implode("\n", $item['members']) . "\n") === $item['digest'],
-    'memory_limit' => ini_get('memory_limit'), 'wall_s' => $wall, 'baseline_peak' => $baseline,
-    'peak_after_call' => $afterCall,
-    'peak_after_verify' => memory_get_peak_usage(true)];
+    'memory_limit' => ini_get('memory_limit'), 'php_wall_s' => $wall, 'php_baseline_peak_bytes' => $baseline,
+    'php_peak_after_call_bytes' => $afterCall,
+    'php_peak_after_verify_bytes' => memory_get_peak_usage(true)];
 echo '@OPEN@' . json_encode($out) . '@CLOSE@';
 """
 MEASURE_FIGURES = (
@@ -275,12 +275,9 @@ def test_a_socket_group_member_that_is_not_admitted_gets_401(core_vm: SmokeVM) -
         )
         assert json.loads(body)["error"]["code"] == "unauthenticated", f"nobody's reply: {body}"
     finally:
-        # TERM, KILL after a bounded wait (salvage only); the scratch directory goes either way
-        reap = (
-            f"kill {pid}; for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 {pid} 2>/dev/null || break; sleep 1; done; "
-            f"kill -9 {pid} 2>/dev/null; "
-        )
-        core_vm.ssh(f"{reap if pid else ''}rm -rf {fence}", timeout=60)
+        if pid:
+            stop_core(core_vm, pid)
+        core_vm.ssh(f"rm -rf {fence}", timeout=60)
 
 
 def php_json(vm: SmokeVM, expression: str) -> Any:
@@ -657,10 +654,6 @@ def measure_resource(vm: SmokeVM, work: str, mode: str, digest: str) -> dict[str
         "go_wall_s": float(seconds),
         "go_reply_bytes": int(size),
         "go_max_rss_kb": int(held.group(1)),
-        "php_wall_s": php["wall_s"],
-        "php_peak_after_call_bytes": php["peak_after_call"],
-        "php_peak_after_verify_bytes": php["peak_after_verify"],
-        "php_baseline_peak_bytes": php["baseline_peak"],
     }
 
 
