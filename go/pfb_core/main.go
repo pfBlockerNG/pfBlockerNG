@@ -1,7 +1,7 @@
 // pfb-core, the pfBlockerNG Core daemon (map #3813): the platform-neutral business logic behind a versioned HTTP+JSON API
 // that the co-located pfSense layer (PHP, native curl) calls over a Unix socket. docs/misc/core-api-protocol.md is the contract.
 //
-//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--zoneinfo PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
+//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
 //
 //	--socket PATH       the API's Unix socket: its directory is made 0700 and the socket 0600, the server's user's alone
 //	--state-dir DIR     Core's own storage (its lock core.lock, the settings store settings.json without
@@ -18,6 +18,9 @@
 //	--zoneinfo PATH     the host's time zone file (a TZif file): the scheduler reads the schedule in its zone, re-reading it at
 //	                    every evaluation, so a change of the host's zone applies without a restart. Without it, or when the file
 //	                    cannot be used (logged once), the process's local zone
+//	--resource-dir PATH the resource store's absolute directory, which the Core Updater writes and GetResources reads: bodies of IP
+//	                    sets, aggregates, the geo catalog and DNSBL scopes, never settings. Without it GetResources answers
+//	                    unavailable. A directory that does not exist is not an error: every resource is then not_found
 //	--feed-local-dir PATH
 //	                    an absolute folder a file:// feed may sit directly in; repeatable (issue #3975, the feed phase)
 //	--script-dir PATH   an absolute folder a group's pre and post scripts are looked up in; repeatable, searched in the order given
@@ -50,6 +53,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
 )
 
@@ -64,6 +68,14 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	updateCmd := fl.String("update-cmd", "", "run the scheduler and the Updates through this program")
 	zoneinfo := fl.String("zoneinfo", "", "the host's time zone file the scheduler reads the schedule's zone from")
 	feed := addFeedFlags(fl)
+	var resourceDir string
+	fl.Func("resource-dir", "the resource store's directory (an absolute path)", func(v string) error {
+		if !filepath.IsAbs(v) {
+			return fmt.Errorf("%q is not an absolute path", v)
+		}
+		resourceDir = filepath.Clean(v)
+		return nil
+	})
 	var allowUID uint32
 	fl.Func("allow-uid", "the privileged caller's uid (default 0)", func(v string) error {
 		uid, err := strconv.ParseUint(v, 10, 32)
@@ -92,7 +104,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		return 2
 	}
 	if *socket == "" || *stateDir == "" || fl.NArg() != 0 {
-		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--zoneinfo PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
+		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
 		return 2
 	}
 	logger := log.New(stderr, "pfb_core: ", log.LstdFlags)
@@ -121,6 +133,11 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	logger.Printf("feed phase: %d local folders, %d script folders, rsync %q, user agent set %t", len(feed.LocalDirs), len(feed.ScriptDirs), feed.RsyncBin, feed.UserAgent != "")
 	methods := productionMethods()
 	maps.Copy(methods, settingsMethods(store))
+	var resourceStore *resources.Store // nil without --resource-dir
+	if resourceDir != "" {
+		resourceStore = resources.Open(resourceDir)
+	}
+	maps.Copy(methods, resourceMethods(resourceStore))
 	sched, gate := newUpdates(*updateCmd, *zoneinfo, *stateDir, store, logger.Printf) // nil without --update-cmd
 	maps.Copy(methods, updateMethods(sched, gate))
 	srv, err := listen(options{socket: *socket, allowUID: allowUID, clientUIDs: clients, socketGroup: group, groupSet: groupSet,

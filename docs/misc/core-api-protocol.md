@@ -2,7 +2,7 @@
 
 Scope: the HTTP+JSON API of the pfBlockerNG Core daemon (`go/pfb_core`, binary `pfb-core`, issue #3841; map #3813), the
 conventions every Core method follows, the settings methods and backends (issues #3842, #3913, #3924), the singleton Update,
-its scheduler and `--update-cmd` (issue #3941), who may call it, and how the package runs it. Load when: adding a Core
+its scheduler and `--update-cmd` (issue #3941), the resource store and `GetResources` (issue #4032), who may call it, and how the package runs it. Load when: adding a Core
 method or settings projection, calling Core from PHP or another local process, or changing `go/pfb_core`,
 `pfb_core_service()` or `pfb_core_call()`.
 
@@ -39,6 +39,7 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 | `StartUpdate` | `requestId`, `trigger`: `manual` (`scope`, `force`), `apply` or `retry` | `{}` once the Update is admitted; `conflict` while one runs |
 | `GetUpdate` | `after` (optional cursor, a decimal string; default: the start) | `{"running", "update", "log", "next"}`: the current or last Update and a chunk of its log; `next` is a string |
 | `GetSchedule` | none | `{"scheduled", "feeds", "extras", "lastSuccessfulCheck"}`: when the scheduled Updates last ran and are next due, and each item's last successful check |
+| `GetResources` | `resources` (optional; none: nothing is read): resource id to cursor | `{"resources": {id: item}}`: per resource unchanged, a delta from the cursor, or the full body; read-only |
 
 `GetVersion` is also the health check: a `200` with `status` `serving` means Core takes requests.
 
@@ -443,6 +444,58 @@ The cutover imports configuration only, so a Core that finds no state file start
 The worker retains its lock, log and receipt until its transaction completes. A new Core observes a live worker or reconciles its
 terminal receipt; it does not relaunch the same transaction.
 
+## Resources
+
+The resource store is a directory (`--resource-dir`) that holds the bodies the Core Updater publishes for the Outpost apply and for
+pfB-DNS to fetch: IP sets, IP aggregates, the geo catalog and DNSBL scopes (issue #4032; spec `docs/specs/go-updater-pipeline.md`
+section 8.2). Only the Core Updater writes it. The Core API reads it and never writes it, never creates its directory, and
+never follows a symlink out of it. It holds data and caches, never settings or secrets. Per resource it keeps the current
+generation and the applied baseline, the generation the Outpost apply last reported applied, and nothing else.
+
+**Resource ids.** `ip-set/<group>/<family>`, `ip-aggregate/<class>/<family>`, `geo-catalog` and `dnsbl/<scope>`. A
+`<group>`, `<class>` or `<scope>` is one segment of `[A-Za-z0-9_-]+`, a `<family>` is `ipv4` or `ipv6`, and an id is at most
+128 bytes. Any other id is `invalid_argument`.
+
+**Body and digest.** A body is canonical: its members are unique and sorted in byte order, one per line, each line ending
+in a newline. Its `digest` is the xxh128 of that body, 32 lower-case hexadecimal characters, and `entries` is the number of
+members. A **generation** is a number the Core Updater advances when a body or its `metadata` changes. `metadata` is an object the
+Core Updater publishes with the body (for an IP set, its action and direction). A change of metadata alone is a new generation,
+answered as a `delta` with empty `add` and `remove`.
+
+**Request.** `{"resources": {"<id>": <cursor>, ...}}`. A cursor is `{}` (none) or `{"generation": "<decimal string>", "digest":
+"<32 hex>"}`: the generation and digest of the body the caller applied. Both fields come together; a field that is `null` is
+absent. A missing or empty `resources` answers `{"resources": {}}`. A caller never does arithmetic on a generation: it keeps the
+strings it was given and sends them back. A generation is a string because it can exceed 2^53.
+
+**Reply.** HTTP `200` and `{"resources": {"<id>": <item>, ...}}`, one item per requested id. An item is exactly one of:
+
+| Item | When | Keys |
+|---|---|---|
+| `{"kind": "unchanged"}` | the cursor's generation is the current one and its digest matches | `kind`, `generation` |
+| `{"kind": "delta"}` | the store holds the cursor's generation with that digest | `kind`, `generation`, `from` (the cursor's generation), `add`, `remove`, `digest`, `entries`, `metadata` |
+| `{"kind": "full"}` | there is no cursor, the store does not hold the cursor's generation, or the digest differs | `kind`, `generation`, `members`, `digest`, `entries`, `metadata` |
+| `{"error": {"code": "not_found", ...}}` | the store has no such resource: never published, removed, or the store directory or its index does not exist | `error` |
+| `{"error": {"code": "unavailable", ...}}` | the store cannot serve it: its index cannot be read, or its body is missing, not a regular file, or fails verification | `error` |
+
+`add`, `remove` and `members` are always arrays, `[]` when empty. A key that does not belong to the kind is absent.
+`generation`, `digest`, `entries` and `metadata` describe the current body; `add` and `remove` are what turns the body of the
+cursor's generation into it, computed at the call. A resource's error does not change the HTTP status, so one unreadable
+resource does not hide the others. A caller treats `not_found` as a resource that left the configuration.
+
+Fetching never advances a cursor and never changes the store. The digest in the cursor is what makes the fallback safe: a store
+that was lost and rebuilt, edited by hand, or that reuses a generation number answers `full`.
+
+**Refusals.** `invalid_argument` (`400`), with nothing read from the store, when `resources` or a cursor is not a JSON object,
+a cursor holds an unknown key, an id is not a valid resource id (field `resources`, the message quotes the id), a cursor has
+only one of `generation` and `digest`, a `generation` is not a string of ASCII decimal digits that fits 64 bits (`"007"` is
+valid, `"-1"`, `"1.5"` and `""` are not), or a `digest` is not 32 lower-case hexadecimal characters. The field of a fault in a
+cursor is `resources.<id>.generation` or `resources.<id>.digest`. More than 16 resources in one call are refused too, with the
+field `resources`. A caller that fetches large bodies asks for one resource per call: a body is in the reply whole, and the
+reply is not limited as the request is.
+
+Without `--resource-dir` the call is `unavailable` (`503`), whatever it asks. A `--resource-dir` that does not exist is not an
+error at start: every resource is `not_found` until the Core Updater creates it.
+
 ## Errors
 
 Every error is the same envelope, with the HTTP status its code maps to:
@@ -456,14 +509,14 @@ Every error is the same envelope, with the HTTP status its code maps to:
 
 | `code` | HTTP | When |
 |---|---|---|
-| `invalid_argument` | 400 | Body not one JSON object, unknown or mistyped parameter, bad or missing `requestId` |
+| `invalid_argument` | 400 | Body not one JSON object, unknown or mistyped parameter, bad or missing `requestId`, a `GetResources` request that names a bad id or cursor or more than 16 resources ([Resources](#resources)) |
 | `unauthenticated` | 401 | The caller is not an admitted local process (see [Local authentication](#local-authentication)) |
 | `not_found` | 404 | No such method, or no such API version |
 | `method_not_allowed` | 405 | Not `POST` |
 | `conflict` | 409 | A `requestId` reused with a different body; a settings call the store's state refuses ([Settings](#settings)); `StartUpdate` while an Update runs ([Update and schedule](#update-and-schedule)) |
 | `payload_too_large` | 413 | Body over the limit |
 | `internal` | 500 | The method failed unexpectedly or ran past its deadline (logged); also any code a method returns that is not in this table |
-| `unavailable` | 503 | A repeat of a `requestId` whose first request still ran when the repeat's own deadline passed; the settings backend failed; Core runs no scheduler (no `--update-cmd`) or is stopping; the schedule cannot be computed ([Update and schedule](#update-and-schedule)) |
+| `unavailable` | 503 | A repeat of a `requestId` whose first request still ran when the repeat's own deadline passed; the settings backend failed; Core runs no scheduler (no `--update-cmd`) or no resource store (no `--resource-dir`), or is stopping; the schedule cannot be computed ([Update and schedule](#update-and-schedule)) |
 
 ## requestId and replay
 
@@ -488,6 +541,7 @@ A read-only method takes no `requestId` and is never replayed.
 | Limit | Value |
 |---|---|
 | Request body | 1 MiB (`payload_too_large` above) |
+| Resources per `GetResources` call | 16 (`invalid_argument` above) |
 | Request header | 16 KiB |
 | Reading the header | 5 s; a client that has not sent it by then is disconnected |
 | Reading the whole request | 10 s |
@@ -554,7 +608,7 @@ pfb-dns ticket decides it.
   `/usr/local/etc` and the schedule entries of `/var/db/pfblockerng/pfb_due_ledger.json` (`extra:dcc`, `extra:bl`, the cache
   stamp and the times of `cron`; its `pending_apply` flag, `ss_refresh` and `apply_reconcile` stay). With Keep Settings off, a removal also deletes the state
   directory once `pfb_core` is stopped (`pfb_core_state_teardown()`).
-- **Paths.** Core reads every path from a flag (`--feed-local-dir`, `--script-dir` and `--rsync-bin` must be absolute: a relative one is a usage error). It names no pfSense path and imports nothing but the standard library, its
+- **Paths.** Core reads every path from a flag (`--resource-dir`, `--feed-local-dir`, `--script-dir` and `--rsync-bin` must be absolute: a relative one is a usage error; the rc script does not pass `--resource-dir` yet, as nothing publishes into the store, so `GetResources` answers `unavailable` on pfSense for now). It names no pfSense path and imports nothing but the standard library, its
   own packages, `golang.org/x/net` and `golang.org/x/text` (the feed parser's UTS #46 conversion), `golang.org/x/sys` (CPU
   feature detection for xxh128), all pinned in `go.mod` to the versions of `go/pfb_dns_gateway`, and
   `github.com/pfBlockerNG/xxh3` (the feed content digest, xxh128 as PHP writes it; the pfBlockerNG fork of `zeebo/xxh3`,
