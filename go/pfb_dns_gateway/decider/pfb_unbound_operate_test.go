@@ -1552,7 +1552,7 @@ func TestOperateKeepsOneSnapshotForAllEventsOfAQuery(t *testing.T) {
 
 	// The swap lands between the events: the new lists no longer block the target, so a reply from the new generation
 	// would pass it.
-	opInstall(t, m, func(s *pfbSettings) { opEnable(s); s.pythonCname = true}, nil)
+	opInstall(t, m, func(s *pfbSettings) { opEnable(s); s.pythonCname = true }, nil)
 	if m.snapshot.Load() == first {
 		t.Fatalf("the swap did not install a new snapshot")
 	}

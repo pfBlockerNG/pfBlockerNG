@@ -421,7 +421,7 @@ function pfb_stats_panel(string $stat_type, array $stype, array $summary, $pfbma
 								$data_disp = $data;	// literal, trusted
 							}
 
-							if (empty($data)) {
+							if (pfb_is_empty($data) || $data === '0') {
 								$data = 'Unknown';
 								$data_disp = $data;	// literal, trusted
 							}
