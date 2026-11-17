@@ -1,0 +1,8379 @@
+{
+ "schema": 1,
+ "cases": [
+  {
+   "id": "agg_adjacent_merge",
+   "description": "Two adjacent /25 merge into a /24.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "10.0.0.0/25\n10.0.0.128/25\n"
+    }
+   }
+  },
+  {
+   "id": "agg_unsorted_dups",
+   "description": "Unsorted input with repeated rows; output order and duplicates are iprange's.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "10.0.0.9\n10.0.0.1\n10.0.0.9\n9.9.9.9\n10.0.0.2\n"
+    }
+   }
+  },
+  {
+   "id": "agg_host_spellings",
+   "description": "How iprange spells a /32 and merges neighbouring hosts.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "1.2.3.4\n1.2.3.5/32\n1.2.3.6\n1.2.3.7\n"
+    }
+   }
+  },
+  {
+   "id": "agg_contained",
+   "description": "A /24 swallows a contained host and a contained /26.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n203.0.113.9\n203.0.113.64/26\n"
+    }
+   }
+  },
+  {
+   "id": "agg_partial_overlap",
+   "description": "An earlier /25 and a later /24 union to the /24.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "198.51.100.0/25\n198.51.100.0/24\n"
+    }
+   }
+  },
+  {
+   "id": "agg_empty",
+   "description": "Empty file: iprange output and whether the file is rewritten.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": ""
+    }
+   }
+  },
+  {
+   "id": "agg_one_member",
+   "description": "One host.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "192.0.2.1\n"
+    }
+   }
+  },
+  {
+   "id": "agg_no_final_newline",
+   "description": "Last row has no newline.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "192.0.2.1\n192.0.2.2"
+    }
+   }
+  },
+  {
+   "id": "agg_crlf",
+   "description": "CRLF line ends: whether iprange accepts the trailing CR.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "192.0.2.1\r\n192.0.2.2\r\n"
+    }
+   }
+  },
+  {
+   "id": "agg_blank_and_comment",
+   "description": "Blank lines and # comment lines.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "# comment\n\n192.0.2.1\n   \n192.0.2.2 # tail\n"
+    }
+   }
+  },
+  {
+   "id": "agg_whitespace",
+   "description": "Leading/trailing blanks and tabs around rows.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "  192.0.2.1  \n\t192.0.2.2\t\n"
+    }
+   }
+  },
+  {
+   "id": "agg_whole_space",
+   "description": "0.0.0.0/0 absorbs every other row.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "0.0.0.0/0\n10.0.0.1\n"
+    }
+   }
+  },
+  {
+   "id": "agg_exact_union_hosts",
+   "description": "Ordering case 3 (partner of rec_pmax_widen_not_exact): four hosts of one /24 aggregate to their exact union (203.0.113.1, 203.0.113.2/31, 203.0.113.4), never a /24: a translator that widens here adds addresses no feed listed.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+    }
+   }
+  },
+  {
+   "id": "agg_v6_text",
+   "description": "IPv6 text handed to the v4 verb (no caller does: every cidr_aggregate call site is gated to _v4); recorded so Core never has to guess what the old verb would do with it.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "2001:db8::1\n2001:db8::2\n203.0.113.7\n"
+    }
+   }
+  },
+  {
+   "id": "agg_h_name",
+   "description": "Hostile row: a hostname (iprange resolves non-address tokens as hostnames; .invalid has no answer), between two good rows.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\npfbipset-nx.invalid\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "agg_h_leading0",
+   "description": "Hostile row: a leading-zero octet, between two good rows.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n010.1.1.1\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "agg_h_pfx33",
+   "description": "Hostile row: a prefix over the family length, between two good rows.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4/33\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "agg_h_hostbits",
+   "description": "Hostile row: host bits set, between two good rows.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4/24\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "agg_h_zerozero",
+   "description": "Hostile row: the whole IPv4 space, between two good rows.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n0.0.0.0/0\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "agg_h_range",
+   "description": "Hostile row: an iprange range spelling, between two good rows.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4-1.2.3.9\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "agg_h_netmask",
+   "description": "Hostile row: a dotted netmask spelling, between two good rows.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.0/255.255.255.0\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "agg_h_dupspell",
+   "description": "Hostile row: one host in two spellings, between two good rows.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4\n1.2.3.4/32\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "pre_dup0_agg0_rep0",
+   "description": "Switch combination dup=False agg=False rep=False: the verb pfb_ip_preprocess_args() builds (no exec when empty); four hosts of 203.0.113.0/24 over max=3 with an unknown country and ccblack=block.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n198.51.100.0/25\n198.51.100.5\n192.0.2.9\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_dup0_agg0_rep1",
+   "description": "Switch combination dup=False agg=False rep=True: the verb pfb_ip_preprocess_args() builds (no exec when empty); four hosts of 203.0.113.0/24 over max=3 with an unknown country and ccblack=block.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n198.51.100.0/25\n198.51.100.5\n192.0.2.9\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_dup0_agg1_rep0",
+   "description": "Switch combination dup=False agg=True rep=False: the verb pfb_ip_preprocess_args() builds (no exec when empty); four hosts of 203.0.113.0/24 over max=3 with an unknown country and ccblack=block.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n198.51.100.0/25\n198.51.100.5\n192.0.2.9\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": true,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_dup0_agg1_rep1",
+   "description": "Switch combination dup=False agg=True rep=True: the verb pfb_ip_preprocess_args() builds (no exec when empty); four hosts of 203.0.113.0/24 over max=3 with an unknown country and ccblack=block.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n198.51.100.0/25\n198.51.100.5\n192.0.2.9\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": true,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_dup1_agg0_rep0",
+   "description": "Switch combination dup=True agg=False rep=False: the verb pfb_ip_preprocess_args() builds (no exec when empty); four hosts of 203.0.113.0/24 over max=3 with an unknown country and ccblack=block.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n198.51.100.0/25\n198.51.100.5\n192.0.2.9\n192.0.2.9\n"
+    },
+    "dup": true,
+    "agg": false,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_dup1_agg0_rep1",
+   "description": "Switch combination dup=True agg=False rep=True: the verb pfb_ip_preprocess_args() builds (no exec when empty); four hosts of 203.0.113.0/24 over max=3 with an unknown country and ccblack=block.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n198.51.100.0/25\n198.51.100.5\n192.0.2.9\n192.0.2.9\n"
+    },
+    "dup": true,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_dup1_agg1_rep0",
+   "description": "Switch combination dup=True agg=True rep=False: the verb pfb_ip_preprocess_args() builds (no exec when empty); four hosts of 203.0.113.0/24 over max=3 with an unknown country and ccblack=block.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n198.51.100.0/25\n198.51.100.5\n192.0.2.9\n192.0.2.9\n"
+    },
+    "dup": true,
+    "agg": true,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_dup1_agg1_rep1",
+   "description": "Switch combination dup=True agg=True rep=True: the verb pfb_ip_preprocess_args() builds (no exec when empty); four hosts of 203.0.113.0/24 over max=3 with an unknown country and ccblack=block.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n198.51.100.0/25\n198.51.100.5\n192.0.2.9\n192.0.2.9\n"
+    },
+    "dup": true,
+    "agg": true,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_255_collapse",
+   "description": "_255: 254 hosts in one /24 (more than 253) become 198.51.100.0/24, appended after the untouched rows.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v4_seq",
+        "count": 254,
+        "step": 1,
+        "suffix": "",
+        "start": 3325256705
+       }
+      },
+      "192.0.2.1\n"
+     ]
+    },
+    "dup": true,
+    "agg": false,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   }
+  },
+  {
+   "id": "pre_255_boundary",
+   "description": "_255: exactly 253 hosts in a /24 stay hosts (the threshold is more than 253).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v4_seq",
+        "count": 253,
+        "step": 1,
+        "suffix": "",
+        "start": 3325256705
+       }
+      },
+      "192.0.2.1\n"
+     ]
+    },
+    "dup": true,
+    "agg": false,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   }
+  },
+  {
+   "id": "pre_255_agg",
+   "description": "_255 then _agg: the collapsed /24 then iprange.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v4_seq",
+        "count": 254,
+        "step": 1,
+        "suffix": "",
+        "start": 3325256705
+       }
+      },
+      "192.0.2.1\n"
+     ]
+    },
+    "dup": true,
+    "agg": true,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   }
+  },
+  {
+   "id": "pre_rep_unknown_block",
+   "description": "_rep dMax: unknown country (GeoIP answers nothing), ccblack=block: offender /24 collapsed.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_rep_country_not_in_cc_block",
+   "description": "_rep dMax: country US not in cc=CN, ccblack=block: collapsed.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {
+     "203.0.113": "US"
+    }
+   }
+  },
+  {
+   "id": "pre_rep_country_in_cc",
+   "description": "_rep dMax: country CN is in cc=CN (exempt), ccwhite=off ccblack=block: rows left alone, no match file.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {
+     "203.0.113": "CN"
+    }
+   }
+  },
+  {
+   "id": "pre_rep_exempt_match_dedup_off",
+   "description": "_rep dMax: exempt country, ccwhite=match, dedup token '' (dedup off): pfB_Match_Rep file written.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": false,
+    "cc": "CN",
+    "ccwhite": "match",
+    "ccblack": "block",
+    "geo": {
+     "203.0.113": "CN"
+    }
+   }
+  },
+  {
+   "id": "pre_rep_exempt_match_dedup_on",
+   "description": "_rep dMax: exempt country, ccwhite=match, dedup token on: the match file is NOT written here.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "match",
+    "ccblack": "block",
+    "geo": {
+     "203.0.113": "CN"
+    }
+   }
+  },
+  {
+   "id": "pre_rep_ccblack_match",
+   "description": "_rep dMax: country not in cc, ccblack=match: rows kept, pfB_Match_Rep lists the /24 and the hosts.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "match",
+    "geo": {
+     "203.0.113": "US"
+    }
+   }
+  },
+  {
+   "id": "pre_rep_exempt_match_both",
+   "description": "_rep dMax: exempt country, ccwhite=match and ccblack=match, dedup token '': match file written.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": false,
+    "cc": "CN",
+    "ccwhite": "match",
+    "ccblack": "match",
+    "geo": {
+     "203.0.113": "CN"
+    }
+   }
+  },
+  {
+   "id": "pre_rep_unknown_match",
+   "description": "_rep dMax: unknown country, ccblack=match.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "match",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_rep_unknown_off",
+   "description": "_rep dMax: unknown country, ccblack=off: nothing changes.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_rep_geoip_unavailable",
+   "description": "_rep dMax with no mmdblookup at all: the lookup yields nothing, which is the unknown-country path.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   }
+  },
+  {
+   "id": "pre_rep_boundary_eq_max",
+   "description": "_rep: exactly max=4 hosts in the /24 is not an offender (strictly more than max).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n192.0.2.9\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 4,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_rep_unsorted_dups",
+   "description": "_rep sorts -u the deny file when it collapses a /24 (unsorted input with repeats).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.4\n203.0.113.1\n203.0.113.1\n203.0.113.3\n203.0.113.2\n10.0.0.1\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_one_member",
+   "description": "One host through the full chain dup+agg+rep.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "192.0.2.1\n"
+    },
+    "dup": true,
+    "agg": true,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_empty",
+   "description": "Empty file through the full chain dup+agg+rep.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": ""
+    },
+    "dup": true,
+    "agg": true,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_crlf",
+   "description": "CRLF rows through dup+agg+rep.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "192.0.2.1\r\n192.0.2.2\r\n192.0.2.3\r\n192.0.2.4\r\n"
+    },
+    "dup": true,
+    "agg": true,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_no_final_newline",
+   "description": "Unterminated last row through dup+agg+rep.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "192.0.2.1\n192.0.2.2\n192.0.2.3\n192.0.2.4"
+    },
+    "dup": true,
+    "agg": true,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_unsorted",
+   "description": "Unsorted rows through dup+agg only.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "10.0.0.9\n10.0.0.1\n9.9.9.9\n10.0.0.2\n"
+    },
+    "dup": true,
+    "agg": true,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   }
+  },
+  {
+   "id": "pre_h_name",
+   "description": "Hostile row: a hostname (iprange resolves non-address tokens as hostnames; .invalid has no answer), through _255 then _agg (dup+agg).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\npfbipset-nx.invalid\n198.51.100.0/25\n"
+    },
+    "dup": true,
+    "agg": true,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   }
+  },
+  {
+   "id": "pre_h_name_rep",
+   "description": "Hostile row: a hostname (iprange resolves non-address tokens as hostnames; .invalid has no answer), through _rep (rep only; the rows share a /24 with three hosts so dMax runs).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "1.2.3.1\n1.2.3.2\n1.2.3.3\npfbipset-nx.invalid\n198.51.100.0/25\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_h_leading0",
+   "description": "Hostile row: a leading-zero octet, through _255 then _agg (dup+agg).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n010.1.1.1\n198.51.100.0/25\n"
+    },
+    "dup": true,
+    "agg": true,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   }
+  },
+  {
+   "id": "pre_h_leading0_rep",
+   "description": "Hostile row: a leading-zero octet, through _rep (rep only; the rows share a /24 with three hosts so dMax runs).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "1.2.3.1\n1.2.3.2\n1.2.3.3\n010.1.1.1\n198.51.100.0/25\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_h_pfx33",
+   "description": "Hostile row: a prefix over the family length, through _255 then _agg (dup+agg).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4/33\n198.51.100.0/25\n"
+    },
+    "dup": true,
+    "agg": true,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   }
+  },
+  {
+   "id": "pre_h_pfx33_rep",
+   "description": "Hostile row: a prefix over the family length, through _rep (rep only; the rows share a /24 with three hosts so dMax runs).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "1.2.3.1\n1.2.3.2\n1.2.3.3\n1.2.3.4/33\n198.51.100.0/25\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_h_hostbits",
+   "description": "Hostile row: host bits set, through _255 then _agg (dup+agg).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4/24\n198.51.100.0/25\n"
+    },
+    "dup": true,
+    "agg": true,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   }
+  },
+  {
+   "id": "pre_h_hostbits_rep",
+   "description": "Hostile row: host bits set, through _rep (rep only; the rows share a /24 with three hosts so dMax runs).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "1.2.3.1\n1.2.3.2\n1.2.3.3\n1.2.3.4/24\n198.51.100.0/25\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_h_zerozero",
+   "description": "Hostile row: the whole IPv4 space, through _255 then _agg (dup+agg).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n0.0.0.0/0\n198.51.100.0/25\n"
+    },
+    "dup": true,
+    "agg": true,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   }
+  },
+  {
+   "id": "pre_h_zerozero_rep",
+   "description": "Hostile row: the whole IPv4 space, through _rep (rep only; the rows share a /24 with three hosts so dMax runs).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "1.2.3.1\n1.2.3.2\n1.2.3.3\n0.0.0.0/0\n198.51.100.0/25\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_h_range",
+   "description": "Hostile row: an iprange range spelling, through _255 then _agg (dup+agg).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4-1.2.3.9\n198.51.100.0/25\n"
+    },
+    "dup": true,
+    "agg": true,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   }
+  },
+  {
+   "id": "pre_h_range_rep",
+   "description": "Hostile row: an iprange range spelling, through _rep (rep only; the rows share a /24 with three hosts so dMax runs).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "1.2.3.1\n1.2.3.2\n1.2.3.3\n1.2.3.4-1.2.3.9\n198.51.100.0/25\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_h_netmask",
+   "description": "Hostile row: a dotted netmask spelling, through _255 then _agg (dup+agg).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.0/255.255.255.0\n198.51.100.0/25\n"
+    },
+    "dup": true,
+    "agg": true,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   }
+  },
+  {
+   "id": "pre_h_netmask_rep",
+   "description": "Hostile row: a dotted netmask spelling, through _rep (rep only; the rows share a /24 with three hosts so dMax runs).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "1.2.3.1\n1.2.3.2\n1.2.3.3\n1.2.3.0/255.255.255.0\n198.51.100.0/25\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "pre_h_dupspell",
+   "description": "Hostile row: one host in two spellings, through _255 then _agg (dup+agg).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4\n1.2.3.4/32\n198.51.100.0/25\n"
+    },
+    "dup": true,
+    "agg": true,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   }
+  },
+  {
+   "id": "pre_h_dupspell_rep",
+   "description": "Hostile row: one host in two spellings, through _rep (rep only; the rows share a /24 with three hosts so dMax runs).",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "1.2.3.1\n1.2.3.2\n1.2.3.3\n1.2.3.4\n1.2.3.4/32\n198.51.100.0/25\n"
+    },
+    "dup": false,
+    "agg": false,
+    "rep": true,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "rec_own_dup_earlier_wins",
+   "description": "Ordering case 1: the same host in two feeds belongs to the EARLIER member. Order [X,Y]: Y keeps only 3.3.3.3. Reversed order (rec_own_dup_reversed) moves 2.2.2.2 to Y and X loses it; a translator that iterates the other way, or keeps the later owner, gets that other answer here.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "1.1.1.1\n2.2.2.2\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "2.2.2.2\n3.3.3.3\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_own_dup_reversed",
+   "description": "Ordering case 1 (reverse of rec_own_dup_earlier_wins): order [Y,X] gives 2.2.2.2 to Y and leaves X with 1.1.1.1 only.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "Y_v4",
+      "text": "2.2.2.2\n3.3.3.3\n"
+     },
+     {
+      "name": "X_v4",
+      "text": "1.1.1.1\n2.2.2.2\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_own_cidr_then_host",
+   "description": "Ordering case 1, contained variant: earlier /24, later host inside it: the later feed LOSES the host (Y empty). Reversed (rec_own_host_then_cidr) the later /24 is only partially covered by the host and is kept whole; a wrong order or a partial-cover prune gives Y empty there instead.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.0/24\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.9\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_own_host_then_cidr",
+   "description": "Ordering case 1, contained variant (reverse): earlier host, later /24: the /24 stays whole (issue #3606: only full containment prunes), so both feeds keep their row; the wrong order would prune the host from X instead.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.9\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.0/24\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_own_three_feeds",
+   "description": "Three feeds share hosts: ownership is first-listed, transitively.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "A_v4",
+      "text": "1.1.1.1\n"
+     },
+     {
+      "name": "B_v4",
+      "text": "1.1.1.1\n2.2.2.2\n"
+     },
+     {
+      "name": "C_v4",
+      "text": "1.1.1.1\n2.2.2.2\n3.3.3.3\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_own_three_feeds_reversed",
+   "description": "Reverse of rec_own_three_feeds.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "C_v4",
+      "text": "1.1.1.1\n2.2.2.2\n3.3.3.3\n"
+     },
+     {
+      "name": "B_v4",
+      "text": "1.1.1.1\n2.2.2.2\n"
+     },
+     {
+      "name": "A_v4",
+      "text": "1.1.1.1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_own_dedup_off",
+   "description": "dedup=off: overlaps across feeds are all retained, no masterfile rows.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "1.1.1.1\n2.2.2.2\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "2.2.2.2\n3.3.3.3\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_own_equal_cidr",
+   "description": "The same /24 in two feeds: the later feed is emptied.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "10.0.0.0/24\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "10.0.0.0/24\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_own_partial_cover_kept",
+   "description": "A later /24 only partly covered by an earlier /25 is kept whole.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "10.0.0.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "10.0.0.0/24\n10.0.0.7\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_own_pfB_member",
+   "description": "A pfB_-prefixed member (a Continent/Uber alias) takes part in dedup order like any other.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "pfB_Continent_v4",
+      "text": "1.1.1.1\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "1.1.1.1\n5.5.5.5\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_within_feed_repeats",
+   "description": "A repeat inside one feed collapses (sort -u), unsorted input comes out sorted.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "9.9.9.9\n1.1.1.1\n9.9.9.9\n1.1.1.1/32\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_blank_ws_lines",
+   "description": "Blank and whitespace-only rows are dropped from the output and from the cumulative stream.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "1.1.1.1\n\n   \n\t\n2.2.2.2\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "2.2.2.2\n3.3.3.3\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_crlf",
+   "description": "CRLF feeds: the CR is stripped from output rows.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "1.1.1.1\r\n2.2.2.2\r\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "2.2.2.2\r\n3.3.3.3\r\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_no_final_newline",
+   "description": "Feeds whose last row is unterminated.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "1.1.1.1\n2.2.2.2"
+     },
+     {
+      "name": "Y_v4",
+      "text": "2.2.2.2\n3.3.3.3"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_total_range_first",
+   "description": "A 0.0.0.0/0 row in the first feed is kept in its own file but kept out of the cumulative stream, so the later feed is not wiped.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "0.0.0.0/0\n1.1.1.1\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "1.1.1.1\n5.5.5.5\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_empty_first",
+   "description": "An empty first feed leaves the cumulative stream empty: the next feed is copied whole.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": ""
+     },
+     {
+      "name": "Y_v4",
+      "text": "2.2.2.2\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_all_empty",
+   "description": "Every feed empty.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": ""
+     },
+     {
+      "name": "Y_v4",
+      "text": ""
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_one_member",
+   "description": "One feed, one host.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "1.1.1.1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_no_members",
+   "description": "An empty member list.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_prior_master_both_families",
+   "description": "A prior masterfile with rows of both families: a v4 pass rebuilds its own rows and keeps the v6 rows.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "1.1.1.1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null,
+    "master": {
+     "text": "X_v4 9.9.9.9\nGone_v4 8.8.8.8\nX_v6 2001:db8::1\nZ_v6 2001:db8::2\n"
+    }
+   }
+  },
+  {
+   "id": "rec_stale_deny_not_in_list",
+   "description": "A live deny file of an alias absent from the member list stays on disk; only masterfile rows go.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "1.1.1.1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null,
+    "master": {
+     "text": "Gone_v4 8.8.8.8\n"
+    },
+    "deny_pre": {
+     "Gone_v4": {
+      "text": "8.8.8.8\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "rec_missing_snapshot_live_fallback",
+   "description": "A listed snapshot that does not exist falls back to the alias's live deny file.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "1.1.1.1\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "ignored\n",
+      "missing": true
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null,
+    "deny_pre": {
+     "Y_v4": {
+      "text": "2.2.2.2\n1.1.1.1\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "rec_missing_snapshot_skipped",
+   "description": "A listed snapshot with no live deny file either is skipped.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "1.1.1.1\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "ignored\n",
+      "missing": true
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_custom_ph",
+   "description": "A non-default placeholder address does not change dedup of ordinary rows.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "1.1.1.1\n2.2.2.2\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "2.2.2.2\n3.3.3.3\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null,
+    "ph": "127.9.9.9"
+   }
+  },
+  {
+   "id": "rec_h_name_dedup_on",
+   "description": "Hostile row: a hostname (iprange resolves non-address tokens as hostnames; .invalid has no answer); first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup on).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\npfbipset-nx.invalid\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_name_dedup_off",
+   "description": "Hostile row: a hostname (iprange resolves non-address tokens as hostnames; .invalid has no answer); first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup off).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\npfbipset-nx.invalid\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_leading0_dedup_on",
+   "description": "Hostile row: a leading-zero octet; first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup on).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\n010.1.1.1\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_leading0_dedup_off",
+   "description": "Hostile row: a leading-zero octet; first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup off).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\n010.1.1.1\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_pfx33_dedup_on",
+   "description": "Hostile row: a prefix over the family length; first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup on).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\n1.2.3.4/33\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_pfx33_dedup_off",
+   "description": "Hostile row: a prefix over the family length; first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup off).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\n1.2.3.4/33\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_hostbits_dedup_on",
+   "description": "Hostile row: host bits set; first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup on).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\n1.2.3.4/24\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_hostbits_dedup_off",
+   "description": "Hostile row: host bits set; first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup off).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\n1.2.3.4/24\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_zerozero_dedup_on",
+   "description": "Hostile row: the whole IPv4 space; first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup on).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\n0.0.0.0/0\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_zerozero_dedup_off",
+   "description": "Hostile row: the whole IPv4 space; first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup off).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\n0.0.0.0/0\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_range_dedup_on",
+   "description": "Hostile row: an iprange range spelling; first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup on).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\n1.2.3.4-1.2.3.9\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_range_dedup_off",
+   "description": "Hostile row: an iprange range spelling; first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup off).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\n1.2.3.4-1.2.3.9\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_netmask_dedup_on",
+   "description": "Hostile row: a dotted netmask spelling; first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup on).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\n1.2.3.0/255.255.255.0\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_netmask_dedup_off",
+   "description": "Hostile row: a dotted netmask spelling; first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup off).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\n1.2.3.0/255.255.255.0\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_dupspell_dedup_on",
+   "description": "Hostile row: one host in two spellings; first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup on).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\n1.2.3.4\n1.2.3.4/32\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_h_dupspell_dedup_off",
+   "description": "Hostile row: one host in two spellings; first feed has it between good rows, the second feed holds hosts the cumulative stream may cover (dedup off).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.7\n1.2.3.4\n1.2.3.4/32\n198.51.100.0/25\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.7\n198.51.100.9\n1.2.3.5\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_pmax_widen_dedup_on",
+   "description": "pMax over max=3 collapses the offender /24 (dedup on); no GeoIP.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n198.51.100.1\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.3\n203.0.113.4\n192.0.2.1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "pmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_pmax_widen_dedup_off",
+   "description": "pMax over max=3 collapses the offender /24 (dedup off); no GeoIP.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n198.51.100.1\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.3\n203.0.113.4\n192.0.2.1\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "pmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_pmax_widen_not_exact",
+   "description": "Ordering case 3 (partner of agg_exact_union_hosts): pMax with max=3 turns four hosts into 203.0.113.0/24, which covers 252 addresses no feed listed; this is a reputation widening, not an exact union. A translator that treats the result as exact (or aggregates instead) gets the four hosts back.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "pmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_pmax_boundary",
+   "description": "pMax: exactly max hosts in a /24 is not an offender.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "pmax",
+    "max": 4,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_pmax_pfB_excluded",
+   "description": "pMax ignores pfB_-prefixed aliases for detection and leaves their rows alone.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "pfB_C_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     },
+     {
+      "name": "X_v4",
+      "text": "203.0.113.9\n203.0.113.10\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "pmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_pmax_placeholder_prefix",
+   "description": "The placeholder's /24 prefix never counts as an offender.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "127.1.7.1\n127.1.7.2\n127.1.7.3\n127.1.7.4\n127.1.7.7\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "pmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_pmax_cidr_rows_count",
+   "description": "A CIDR row counts as one member of its first three octets in the offender scan.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.0/26\n203.0.113.64/26\n203.0.113.128/26\n203.0.113.192/26\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "pmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_pmax_window_owner",
+   "description": "The collapsed /24 of an offender shared by two feeds belongs to the FIRST feed in order; both lose their hosts. Reversing the order moves the /24 to the other feed.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "pmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_pmax_window_owner_reversed",
+   "description": "Reverse of rec_pmax_window_owner.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.3\n203.0.113.4\n"
+     },
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "pmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_pmax_dedup_before_count",
+   "description": "dedup=on counts a host once even when two feeds list it; dedup=off counts it twice (here 3 distinct hosts, 4 rows: only dedup=off crosses max=3).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.2\n203.0.113.3\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "pmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_pmax_dedup_before_count_off",
+   "description": "dedup=off variant of rec_pmax_dedup_before_count: 4 rows, offender.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.2\n203.0.113.3\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "pmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_pmax_v4_row_in_v6_pass",
+   "description": "pmax with a v4 row in a v6 member (it is a v6 pass: no reputation).",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "::ffff:203.0.113.1\n::ffff:203.0.113.2\n::ffff:203.0.113.3\n::ffff:203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "pmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_dmax_unknown_block",
+   "description": "dMax: offender /24 with no GeoIP answer and ccblack=block collapses to the /24.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "rec_dmax_country_not_in_cc_block",
+   "description": "dMax: US is not in cc=CN, ccblack=block: collapsed.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {
+     "203.0.113": "US"
+    }
+   }
+  },
+  {
+   "id": "rec_dmax_exempt_country_untouched",
+   "description": "dMax: CN is in cc=CN, ccwhite=off, ccblack=block: nothing happens (no action row).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {
+     "203.0.113": "CN"
+    }
+   }
+  },
+  {
+   "id": "rec_dmax_exempt_match_ccwhite",
+   "description": "dMax: exempt country with ccwhite=match: rows kept, pfB_Match_Exempt_v4.txt written.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "match",
+    "ccblack": "block",
+    "geo": {
+     "203.0.113": "CN"
+    }
+   }
+  },
+  {
+   "id": "rec_dmax_exempt_match_ccblack_only",
+   "description": "dMax: exempt country, ccwhite=off, ccblack=match: the action is matchexempt but the consolidated exempt file is gated on ccwhite alone, so no file is written.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "match",
+    "geo": {
+     "203.0.113": "CN"
+    }
+   }
+  },
+  {
+   "id": "rec_dmax_exempt_match_both",
+   "description": "dMax: exempt country with ccwhite=match AND ccblack=match: the exempt file is written, rows kept.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "match",
+    "ccblack": "match",
+    "geo": {
+     "203.0.113": "CN"
+    }
+   }
+  },
+  {
+   "id": "rec_dmax_matchdup",
+   "description": "dMax: country not in cc, ccblack=match: rows kept, pfB_Match_Rep_<alias>.txt written for every alias in the window.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "match",
+    "geo": {
+     "203.0.113": "US"
+    }
+   }
+  },
+  {
+   "id": "rec_dmax_unknown_match",
+   "description": "dMax: unknown country, ccblack=match: matchdup.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "match",
+    "geo": {}
+   }
+  },
+  {
+   "id": "rec_dmax_unknown_off",
+   "description": "dMax: unknown country, ccblack=off: no action.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": {}
+   }
+  },
+  {
+   "id": "rec_dmax_geoip_unavailable",
+   "description": "dMax with no mmdblookup: the classification bails, the pass rides the direct path and previous match artifacts are kept.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "match",
+    "ccblack": "block",
+    "geo": null,
+    "match_pre": {
+     "pfB_Match_Rep_X_v4.txt": {
+      "text": "203.0.113.0/24\n"
+     },
+     "pfB_Match_Exempt_v4.txt": {
+      "text": "198.51.100.0/24\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "rec_dmax_stale_match_removed",
+   "description": "dMax with GeoIP working and no offenders: stale pfB_Match_Rep and exempt files are removed (ccwhite=match).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "192.0.2.1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "match",
+    "ccblack": "block",
+    "geo": {},
+    "match_pre": {
+     "pfB_Match_Rep_X_v4.txt": {
+      "text": "203.0.113.0/24\n"
+     },
+     "pfB_Match_Exempt_v4.txt": {
+      "text": "198.51.100.0/24\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "rec_dmax_stale_exempt_ccwhite_off",
+   "description": "As rec_dmax_stale_match_removed with ccwhite=off: the exempt file is not reconciled away.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "192.0.2.1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {},
+    "match_pre": {
+     "pfB_Match_Rep_X_v4.txt": {
+      "text": "203.0.113.0/24\n"
+     },
+     "pfB_Match_Exempt_v4.txt": {
+      "text": "198.51.100.0/24\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "rec_dmax_pfB_excluded",
+   "description": "dMax leaves pfB_-prefixed aliases untouched.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "pfB_C_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "rec_dmax_cc_substring",
+   "description": "cc is matched as a substring: cc='CN, US' matches country US.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN,US",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {
+     "203.0.113": "US"
+    }
+   }
+  },
+  {
+   "id": "rec_dmax_block_dedup_on",
+   "description": "dMax block with two feeds sharing an offender /24 (dedup on).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n198.51.100.1\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.3\n203.0.113.4\n203.0.113.2\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "rec_dmax_block_dedup_off",
+   "description": "dMax block with two feeds sharing an offender /24 (dedup off).",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n198.51.100.1\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "203.0.113.3\n203.0.113.4\n203.0.113.2\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "dmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "rec_pmax_ccblack_ignored",
+   "description": "pMax ignores country flags: ccwhite=match ccblack=match change nothing.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "pmax",
+    "max": 3,
+    "cc": "CN",
+    "ccwhite": "match",
+    "ccblack": "match",
+    "geo": {
+     "203.0.113": "CN"
+    }
+   }
+  },
+  {
+   "id": "rec_rep_off_ignores_max",
+   "description": "repmode off ignores max: nothing collapses.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 1,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_own_earlier_wins",
+   "description": "IPv6 ownership by member order: a host in two feeds belongs to the earlier one.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8::1\n2001:db8::2\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8::2\n2001:db8::3\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_own_reversed",
+   "description": "Reverse of rec_v6_own_earlier_wins.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "Y_v6",
+      "text": "2001:db8::2\n2001:db8::3\n"
+     },
+     {
+      "name": "X_v6",
+      "text": "2001:db8::1\n2001:db8::2\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_cidr_then_host",
+   "description": "IPv6: earlier /64, later host inside it: the host is pruned.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8:0:1::/64\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8:0:1::9\n2001:db8:0:2::9\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_host_then_cidr",
+   "description": "IPv6: earlier host, later /64: the /64 stays whole.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8:0:1::9\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8:0:1::/64\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_spellings_across_feeds",
+   "description": "The same IPv6 host spelled differently in two feeds: whether grepcidr sees them as equal.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "::1\n2001:DB8::A\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "0:0:0:0:0:0:0:1\n2001:db8::a\n2001:db8:0:0:0:0:0:b\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_repmode_ignored_pmax",
+   "description": "A v6 pass invoked with repmode=pmax and max=1 ignores reputation (v4-only).",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8::1\n2001:db8::2\n2001:db8::3\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "pmax",
+    "max": 1,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_repmode_ignored_dmax",
+   "description": "A v6 pass invoked with repmode=dmax ignores reputation.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8::1\n2001:db8::2\n2001:db8::3\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "dmax",
+    "max": 1,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": {}
+   }
+  },
+  {
+   "id": "rec_v6_dedup_off",
+   "description": "A v6 pass with dedup=off plain-copies every member.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8::1\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8::1\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_total_range",
+   "description": "::/0 in the first feed is kept out of the cumulative stream.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "::/0\n2001:db8::1\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8::1\n2001:db8::5\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_prior_master",
+   "description": "A v6 pass keeps the prior v4 masterfile rows and rebuilds the v6 ones.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8::1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null,
+    "master": {
+     "text": "X_v4 1.1.1.1\nX_v6 2001:db8::ff\n"
+    }
+   }
+  },
+  {
+   "id": "rec_v6_empty_and_one",
+   "description": "An empty feed then a one-host feed (v6).",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": ""
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8::1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_h_name",
+   "description": "Hostile row (v6): a hostname; second feed holds neighbours the cumulative stream may cover.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8:1::7\npfbipset-nx.invalid\n2001:db8:2::/48\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8:1::7\n2001:db8:2::9\n2001:db8:3::1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_h_zone",
+   "description": "Hostile row (v6): a zone identifier; second feed holds neighbours the cumulative stream may cover.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8:1::7\nfe80::1%em0\n2001:db8:2::/48\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8:1::7\n2001:db8:2::9\n2001:db8:3::1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_h_pfx129",
+   "description": "Hostile row (v6): a prefix over the family length; second feed holds neighbours the cumulative stream may cover.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8:1::7\n::1/129\n2001:db8:2::/48\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8:1::7\n2001:db8:2::9\n2001:db8:3::1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_h_hostbits",
+   "description": "Hostile row (v6): host bits set; second feed holds neighbours the cumulative stream may cover.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8:1::7\n2001:db8::1/32\n2001:db8:2::/48\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8:1::7\n2001:db8:2::9\n2001:db8:3::1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_h_zerozero",
+   "description": "Hostile row (v6): the whole IPv6 space; second feed holds neighbours the cumulative stream may cover.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8:1::7\n::/0\n2001:db8:2::/48\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8:1::7\n2001:db8:2::9\n2001:db8:3::1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_h_mapped",
+   "description": "Hostile row (v6): an IPv4-mapped IPv6 address; second feed holds neighbours the cumulative stream may cover.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8:1::7\n::ffff:1.2.3.4\n2001:db8:2::/48\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8:1::7\n2001:db8:2::9\n2001:db8:3::1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_h_compat",
+   "description": "Hostile row (v6): an IPv4-compatible IPv6 address; second feed holds neighbours the cumulative stream may cover.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8:1::7\n::1.2.3.4\n2001:db8:2::/48\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8:1::7\n2001:db8:2::9\n2001:db8:3::1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_h_compat2",
+   "description": "Hostile row (v6): an IPv4-compatible-looking short form; second feed holds neighbours the cumulative stream may cover.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8:1::7\n::100\n2001:db8:2::/48\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8:1::7\n2001:db8:2::9\n2001:db8:3::1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_h_dupspell",
+   "description": "Hostile row (v6): one host in two spellings; second feed holds neighbours the cumulative stream may cover.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8:1::7\n::1\n0:0:0:0:0:0:0:1\n2001:db8:2::/48\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8:1::7\n2001:db8:2::9\n2001:db8:3::1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "pmax_basic",
+   "description": "Four hosts of one /24 across two files, max=3: the first file in glob order gets the /24, both lose their hosts; masterfile rows are replaced.",
+   "op": "pmax",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "203.0.113.1\n203.0.113.2\n192.0.2.1\n"
+     },
+     "B_v4": {
+      "text": "203.0.113.3\n203.0.113.4\n"
+     }
+    },
+    "max": 3,
+    "geo": {},
+    "master": {
+     "text": "A_v4 203.0.113.1\nA_v4 203.0.113.2\nA_v4 192.0.2.1\nB_v4 203.0.113.3\nB_v4 203.0.113.4\n"
+    }
+   }
+  },
+  {
+   "id": "pmax_boundary",
+   "description": "Exactly max hosts is not an offender: 'Reputation -pMax ( None )'.",
+   "op": "pmax",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n"
+     }
+    },
+    "max": 3,
+    "geo": {}
+   }
+  },
+  {
+   "id": "pmax_emptied_gets_placeholder",
+   "description": "The collapse leaves the /24 in the first file only; the other file ends empty and emptyfiles refills it with the placeholder.",
+   "op": "pmax",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "203.0.113.1\n203.0.113.2\n"
+     },
+     "B_v4": {
+      "text": "203.0.113.3\n203.0.113.4\n"
+     }
+    },
+    "max": 3,
+    "geo": {}
+   }
+  },
+  {
+   "id": "pmax_v6_files_untouched",
+   "description": "Files named *_v6.txt pass through untouched; so do pfB*.txt files, even when they hold v4-looking rows.",
+   "op": "pmax",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "192.0.2.1\n"
+     },
+     "X_v6": {
+      "text": "::ffff:203.0.113.1\n::ffff:203.0.113.2\n::ffff:203.0.113.3\n::ffff:203.0.113.4\n"
+     },
+     "pfB_C_v4": {
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    },
+    "max": 3,
+    "geo": {}
+   }
+  },
+  {
+   "id": "pmax_v6_only",
+   "description": "Only v6 files in the deny folder: nothing happens.",
+   "op": "pmax",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "X_v6": {
+      "text": "2001:db8::1\n2001:db8::2\n2001:db8::3\n2001:db8::4\n"
+     }
+    },
+    "max": 3,
+    "geo": {}
+   }
+  },
+  {
+   "id": "pmax_cidr_rows_count",
+   "description": "CIDR rows count by their first three octets.",
+   "op": "pmax",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "203.0.113.0/26\n203.0.113.64/26\n203.0.113.128/26\n203.0.113.192/26\n"
+     }
+    },
+    "max": 3,
+    "geo": {}
+   }
+  },
+  {
+   "id": "pmax_placeholder_prefix",
+   "description": "The placeholder prefix is excluded from offenders.",
+   "op": "pmax",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "127.1.7.1\n127.1.7.2\n127.1.7.3\n127.1.7.4\n"
+     }
+    },
+    "max": 3,
+    "geo": {}
+   }
+  },
+  {
+   "id": "pmax_no_final_newline",
+   "description": "Unterminated last rows in the deny files.",
+   "op": "pmax",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "203.0.113.1\n203.0.113.2"
+     },
+     "B_v4": {
+      "text": "203.0.113.3\n203.0.113.4"
+     }
+    },
+    "max": 3,
+    "geo": {}
+   }
+  },
+  {
+   "id": "pmax_crlf",
+   "description": "CRLF rows: the prefix cut sees the CR only on the last octet, so counting is unchanged; the removal greps may not.",
+   "op": "pmax",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "203.0.113.1\r\n203.0.113.2\r\n"
+     },
+     "B_v4": {
+      "text": "203.0.113.3\r\n203.0.113.4\r\n"
+     }
+    },
+    "max": 3,
+    "geo": {}
+   }
+  },
+  {
+   "id": "pmax_empty_dir",
+   "description": "No deny files at all.",
+   "op": "pmax",
+   "family": "v4",
+   "input": {
+    "deny": {},
+    "max": 3,
+    "geo": {}
+   }
+  },
+  {
+   "id": "pmax_shared_host",
+   "description": "A host listed in both files counts twice in the scan.",
+   "op": "pmax",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "203.0.113.1\n203.0.113.2\n"
+     },
+     "B_v4": {
+      "text": "203.0.113.2\n203.0.113.3\n"
+     }
+    },
+    "max": 3,
+    "geo": {}
+   }
+  },
+  {
+   "id": "pmax_two_offenders",
+   "description": "Two offender /24s in the same pass.",
+   "op": "pmax",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "203.0.113.1\n203.0.113.2\n198.51.100.1\n198.51.100.2\n"
+     },
+     "B_v4": {
+      "text": "203.0.113.3\n203.0.113.4\n198.51.100.3\n198.51.100.4\n"
+     }
+    },
+    "max": 3,
+    "geo": {}
+   }
+  },
+  {
+   "id": "supp4_slash32_from_24",
+   "description": "ADR-53: a /32 cut from a /24 leaves exactly 8 covering entries.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n"
+    },
+    "suppression": {
+     "text": "203.0.113.5/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_slash32_from_16",
+   "description": "ADR-53: a /32 cut from a /16 leaves 16 entries.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "10.1.0.0/16\n"
+    },
+    "suppression": {
+     "text": "10.1.77.9/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_slash24_from_16",
+   "description": "ADR-53: a /24 cut from a /16 leaves 8 entries.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "10.1.0.0/16\n"
+    },
+    "suppression": {
+     "text": "10.1.77.0/24\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_hole_larger",
+   "description": "A hole larger than the block: the block disappears.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n"
+    },
+    "suppression": {
+     "text": "203.0.0.0/8\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_hole_equal",
+   "description": "A hole equal to the block: an empty set, not the placeholder, not the previous content.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n"
+    },
+    "suppression": {
+     "text": "203.0.113.0/24\n"
+    },
+    "dedup": "on",
+    "master": {
+     "text": "Feed_v4 203.0.113.0/24\n"
+    }
+   }
+  },
+  {
+   "id": "supp4_overlapping_holes",
+   "description": "Overlapping holes (/32 inside a /28 inside a /27).",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n"
+    },
+    "suppression": {
+     "text": "203.0.113.0/28\n203.0.113.4/32\n203.0.113.0/27\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_hole_hosts_in_two_blocks",
+   "description": "One hole spanning two member entries cuts from each.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/25\n203.0.113.128/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.120/29\n203.0.113.128/29\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_no_overlap",
+   "description": "A hole outside every member leaves the set as iprange spells it.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n10.0.0.1\n"
+    },
+    "suppression": {
+     "text": "192.0.2.0/24\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_host_member",
+   "description": "A bare host member removed by a /32 hole and one kept.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.1\n203.0.113.2\n"
+    },
+    "suppression": {
+     "text": "203.0.113.1/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_dedup_off_master_untouched",
+   "description": "dedup=off: the masterfile is not rewritten.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n"
+    },
+    "suppression": {
+     "text": "203.0.113.5/32\n"
+    },
+    "dedup": "off",
+    "master": {
+     "text": "Feed_v4 203.0.113.0/24\n"
+    }
+   }
+  },
+  {
+   "id": "supp4_dedup_on_master_rows",
+   "description": "dedup=on: the alias's masterfile rows are replaced by the remainder; a sibling alias suffix-named row stays.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n"
+    },
+    "suppression": {
+     "text": "203.0.113.5/32\n"
+    },
+    "dedup": "on",
+    "master": {
+     "text": "Feed_v4 203.0.113.0/24\nBadFeed_v4 192.0.2.1\nOther_v4 198.51.100.1\n"
+    }
+   }
+  },
+  {
+   "id": "supp4_dedup_on_alias_not_in_master",
+   "description": "dedup=on but the alias has no masterfile row: the masterfile is left alone.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n"
+    },
+    "suppression": {
+     "text": "203.0.113.5/32\n"
+    },
+    "dedup": "on",
+    "master": {
+     "text": "Other_v4 198.51.100.1\n"
+    }
+   }
+  },
+  {
+   "id": "supp4_no_suppression_file",
+   "description": "No suppression file at all: the verb is a no-op.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n"
+    },
+    "suppression": null,
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_empty_suppression_file",
+   "description": "An empty suppression file: a no-op.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n"
+    },
+    "suppression": {
+     "text": ""
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_bare_host_in_list",
+   "description": "A bare host (no /mask) in the suppression list is dropped and logged as malformed.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n"
+    },
+    "suppression": {
+     "text": "203.0.113.5\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_malformed_list_tokens",
+   "description": "Malformed suppression tokens are dropped and logged; the good one still cuts.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n"
+    },
+    "suppression": {
+     "text": "203.0.113.5/32\n10.0.0.1/\n10.0.0.1//32\n/24\nabc/24\n1.2.3.4/33\n203.0.113.9/32 # note\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_crlf_list",
+   "description": "A suppression list with CRLF: the CR makes every token malformed.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n"
+    },
+    "suppression": {
+     "text": "203.0.113.5/32\r\n203.0.113.6/32\r\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_crlf_members",
+   "description": "Member rows with CRLF fail the strict member filter and are dropped, counted as malformed.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/25\r\n203.0.113.128/25\r\n"
+    },
+    "suppression": {
+     "text": "203.0.113.5/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_malformed_members",
+   "description": "Malformed member rows are dropped and the drop is logged; a hostname is never resolved.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\npfbipset-nx.invalid\n010.1.1.1\n1.2.3.4/33\n::1\n1.2.3.4-1.2.3.9\n198.51.100.1/\n"
+    },
+    "suppression": {
+     "text": "203.0.113.5/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_unsorted_members_no_nl",
+   "description": "Unsorted member rows, last row unterminated.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.9\n10.0.0.1/32\n203.0.113.1"
+    },
+    "suppression": {
+     "text": "203.0.113.1/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_dup_holes",
+   "description": "Duplicate suppression rows collapse (sort -u).",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n"
+    },
+    "suppression": {
+     "text": "203.0.113.5/32\n203.0.113.5/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_empty_members",
+   "description": "An empty member file with a suppression list present.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": ""
+    },
+    "suppression": {
+     "text": "203.0.113.5/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_one_member_cut",
+   "description": "One host member cut by itself: the file ends empty.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.5\n"
+    },
+    "suppression": {
+     "text": "203.0.113.5/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_whole_space_hole",
+   "description": "A /0 hole removes everything.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n10.0.0.1\n"
+    },
+    "suppression": {
+     "text": "0.0.0.0/0\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_whole_space_member",
+   "description": "A 0.0.0.0/0 member with a /32 hole: as many covering entries as iprange emits (32).",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "0.0.0.0/0\n"
+    },
+    "suppression": {
+     "text": "203.0.113.5/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_name_member",
+   "description": "Hostile row in the MEMBER file: a hostname (iprange resolves non-address tokens as hostnames; .invalid has no answer).",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\npfbipset-nx.invalid\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_name_hole",
+   "description": "Hostile row in the SUPPRESSION list: a hostname (iprange resolves non-address tokens as hostnames; .invalid has no answer).",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\npfbipset-nx.invalid\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_leading0_member",
+   "description": "Hostile row in the MEMBER file: a leading-zero octet.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n010.1.1.1\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_leading0_hole",
+   "description": "Hostile row in the SUPPRESSION list: a leading-zero octet.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n010.1.1.1\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_pfx33_member",
+   "description": "Hostile row in the MEMBER file: a prefix over the family length.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4/33\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_pfx33_hole",
+   "description": "Hostile row in the SUPPRESSION list: a prefix over the family length.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n1.2.3.4/33\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_hostbits_member",
+   "description": "Hostile row in the MEMBER file: host bits set.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4/24\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_hostbits_hole",
+   "description": "Hostile row in the SUPPRESSION list: host bits set.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n1.2.3.4/24\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_zerozero_member",
+   "description": "Hostile row in the MEMBER file: the whole IPv4 space.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n0.0.0.0/0\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_zerozero_hole",
+   "description": "Hostile row in the SUPPRESSION list: the whole IPv4 space.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n0.0.0.0/0\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_range_member",
+   "description": "Hostile row in the MEMBER file: an iprange range spelling.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4-1.2.3.9\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_range_hole",
+   "description": "Hostile row in the SUPPRESSION list: an iprange range spelling.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n1.2.3.4-1.2.3.9\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_netmask_member",
+   "description": "Hostile row in the MEMBER file: a dotted netmask spelling.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.0/255.255.255.0\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_netmask_hole",
+   "description": "Hostile row in the SUPPRESSION list: a dotted netmask spelling.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n1.2.3.0/255.255.255.0\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_dupspell_member",
+   "description": "Hostile row in the MEMBER file: one host in two spellings.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4\n1.2.3.4/32\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_h_dupspell_hole",
+   "description": "Hostile row in the SUPPRESSION list: one host in two spellings.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n198.51.100.0/25\n"
+    },
+    "suppression": {
+     "text": "203.0.113.7/32\n1.2.3.4\n1.2.3.4/32\n"
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp6_slash128_from_64",
+   "description": "ADR-53: a /128 cut from a /64 leaves 64 entries.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:0:1::/64\n"
+    },
+    "suppression": {
+     "text": "2001:db8:0:1::5/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_hole_larger",
+   "description": "A hole larger than the block: empty set.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:0:1::/64\n"
+    },
+    "suppression": {
+     "text": "2001:db8::/32\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_hole_equal",
+   "description": "A hole equal to the block: empty set, not the placeholder.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:0:1::/64\n"
+    },
+    "suppression": {
+     "text": "2001:db8:0:1::/64\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_overlapping_holes",
+   "description": "Overlapping holes.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:0:1::/64\n"
+    },
+    "suppression": {
+     "text": "2001:db8:0:1::/80\n2001:db8:0:1::5/128\n2001:db8:0:1::/96\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_no_overlap_normalises",
+   "description": "No hole touches the members: members still pass through ip_range_to_subnet_array, so bare hosts get /128.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8::1\n2001:DB8::2/128\n2001:db8:5::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:ffff::/48\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_empty_suppression_file",
+   "description": "An empty (but readable) suppression file: members are re-emitted normalised.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8::1\n"
+    },
+    "suppression": {
+     "text": ""
+    }
+   }
+  },
+  {
+   "id": "supp6_missing_suppression_file",
+   "description": "No suppression file: fail-safe FALSE, member file untouched.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8::1\n"
+    },
+    "suppression": null
+   }
+  },
+  {
+   "id": "supp6_malformed_tokens",
+   "description": "Malformed members and holes are dropped and logged; blank and comment lines are silent.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8::1\nnope\n\n# c\n2001:db8::/129\n1.2.3.4\n"
+    },
+    "suppression": {
+     "text": "2001:db8::1/128\nbad\n2001:db8::/200\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_crlf_both",
+   "description": "CRLF in members and holes: PHP trims, so v6 accepts them (unlike v4).",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8::1\r\n2001:db8::2\r\n"
+    },
+    "suppression": {
+     "text": "2001:db8::1/128\r\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_unsorted_dups_no_nl",
+   "description": "Unsorted, duplicated members, last unterminated; output order is the engine's.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8::9\n2001:db8::1\n2001:db8::9"
+    },
+    "suppression": {
+     "text": "2001:db8::1/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_empty_members",
+   "description": "An empty member file.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": ""
+    },
+    "suppression": {
+     "text": "2001:db8::1/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_one_member_cut",
+   "description": "One host cut by itself.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8::1\n"
+    },
+    "suppression": {
+     "text": "2001:db8::1/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_whole_space_hole",
+   "description": "A ::/0 hole removes everything.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8::1\n::1\n"
+    },
+    "suppression": {
+     "text": "::/0\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_whole_space_member",
+   "description": "A ::/0 member with a /128 hole.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "::/0\n"
+    },
+    "suppression": {
+     "text": "2001:db8::1/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_hole_straddles_members",
+   "description": "A hole spanning two adjacent members cuts both.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8::/65\n2001:db8:0:0:8000::/65\n"
+    },
+    "suppression": {
+     "text": "2001:db8:0:0:7fff:ffff:ffff:ffff/128\n2001:db8:0:0:8000::/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_name_member",
+   "description": "Hostile row (v6) in the MEMBER file: a hostname.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\npfbipset-nx.invalid\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_name_hole",
+   "description": "Hostile row (v6) in the SUPPRESSION list: a hostname.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::/120\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\npfbipset-nx.invalid\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_zone_member",
+   "description": "Hostile row (v6) in the MEMBER file: a zone identifier.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\nfe80::1%em0\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_zone_hole",
+   "description": "Hostile row (v6) in the SUPPRESSION list: a zone identifier.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::/120\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\nfe80::1%em0\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_pfx129_member",
+   "description": "Hostile row (v6) in the MEMBER file: a prefix over the family length.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\n::1/129\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_pfx129_hole",
+   "description": "Hostile row (v6) in the SUPPRESSION list: a prefix over the family length.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::/120\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n::1/129\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_hostbits_member",
+   "description": "Hostile row (v6) in the MEMBER file: host bits set.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\n2001:db8::1/32\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_hostbits_hole",
+   "description": "Hostile row (v6) in the SUPPRESSION list: host bits set.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::/120\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n2001:db8::1/32\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_zerozero_member",
+   "description": "Hostile row (v6) in the MEMBER file: the whole IPv6 space.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\n::/0\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_zerozero_hole",
+   "description": "Hostile row (v6) in the SUPPRESSION list: the whole IPv6 space.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::/120\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n::/0\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_mapped_member",
+   "description": "Hostile row (v6) in the MEMBER file: an IPv4-mapped IPv6 address.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\n::ffff:1.2.3.4\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_mapped_hole",
+   "description": "Hostile row (v6) in the SUPPRESSION list: an IPv4-mapped IPv6 address.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::/120\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n::ffff:1.2.3.4\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_compat_member",
+   "description": "Hostile row (v6) in the MEMBER file: an IPv4-compatible IPv6 address.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\n::1.2.3.4\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_compat_hole",
+   "description": "Hostile row (v6) in the SUPPRESSION list: an IPv4-compatible IPv6 address.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::/120\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n::1.2.3.4\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_compat2_member",
+   "description": "Hostile row (v6) in the MEMBER file: an IPv4-compatible-looking short form.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\n::100\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_compat2_hole",
+   "description": "Hostile row (v6) in the SUPPRESSION list: an IPv4-compatible-looking short form.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::/120\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n::100\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_dupspell_member",
+   "description": "Hostile row (v6) in the MEMBER file: one host in two spellings.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\n::1\n0:0:0:0:0:0:0:1\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n"
+    }
+   }
+  },
+  {
+   "id": "supp6_h_dupspell_hole",
+   "description": "Hostile row (v6) in the SUPPRESSION list: one host in two spellings.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::/120\n2001:db8:2::/48\n"
+    },
+    "suppression": {
+     "text": "2001:db8:1::7/128\n::1\n0:0:0:0:0:0:0:1\n"
+    }
+   }
+  },
+  {
+   "id": "rm_basic",
+   "description": "A feed leaves: its files in every class dir and its masterfile rows go, others stay.",
+   "op": "remove",
+   "family": "v4",
+   "input": {
+    "headers": [
+     "A_v4"
+    ],
+    "deny": {
+     "A_v4.txt": {
+      "text": "1.1.1.1\n"
+     },
+     "B_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "original": {
+     "A_v4.orig": {
+      "text": "1.1.1.1\n"
+     },
+     "A_v4.aggcount": {
+      "text": "1\n"
+     },
+     "B_v4.orig": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "match": {
+     "A_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "matchgen": {
+     "pfB_Match_Rep_A_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "permit": {
+     "A_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "native": {
+     "A_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "master": {
+     "text": "A_v4 1.1.1.1\nB_v4 2.2.2.2\n"
+    }
+   }
+  },
+  {
+   "id": "rm_multiple_headers",
+   "description": "Several headers in one comma list.",
+   "op": "remove",
+   "family": "v4",
+   "input": {
+    "headers": [
+     "A_v4",
+     "B_v4"
+    ],
+    "deny": {
+     "A_v4.txt": {
+      "text": "1.1.1.1\n"
+     },
+     "B_v4.txt": {
+      "text": "1.1.1.1\n"
+     },
+     "C_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "master": {
+     "text": "A_v4 1.1.1.1\nB_v4 2.2.2.2\nC_v4 3.3.3.3\n"
+    }
+   }
+  },
+  {
+   "id": "rm_last_row_deletes_masterfile",
+   "description": "The last masterfile row leaves: masterfile and mastercat are deleted.",
+   "op": "remove",
+   "family": "v4",
+   "input": {
+    "headers": [
+     "A_v4"
+    ],
+    "deny": {
+     "A_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "master": {
+     "text": "A_v4 1.1.1.1\n"
+    }
+   }
+  },
+  {
+   "id": "rm_suffix_alias_not_overmatched",
+   "description": "A shorter alias that is a suffix of another does not strip the sibling's masterfile row.",
+   "op": "remove",
+   "family": "v4",
+   "input": {
+    "headers": [
+     "Ads_v4"
+    ],
+    "deny": {
+     "Ads_v4.txt": {
+      "text": "1.1.1.1\n"
+     },
+     "BadAds_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "master": {
+     "text": "Ads_v4 1.1.1.1\nBadAds_v4 2.2.2.2\n"
+    }
+   }
+  },
+  {
+   "id": "rm_prefix_glob_overmatch",
+   "description": "The file glob is header* : a sibling whose name starts with the header loses its files too.",
+   "op": "remove",
+   "family": "v4",
+   "input": {
+    "headers": [
+     "A_v4"
+    ],
+    "deny": {
+     "A_v4.txt": {
+      "text": "1.1.1.1\n"
+     },
+     "A_v4_more.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "master": {
+     "text": "A_v4 1.1.1.1\nA_v4_more 2.2.2.2\n"
+    }
+   }
+  },
+  {
+   "id": "rm_alias_not_in_master",
+   "description": "A header absent from the masterfile: files go, the masterfile is untouched.",
+   "op": "remove",
+   "family": "v4",
+   "input": {
+    "headers": [
+     "A_v4"
+    ],
+    "deny": {
+     "A_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "master": {
+     "text": "B_v4 2.2.2.2\n"
+    }
+   }
+  },
+  {
+   "id": "rm_v6_header",
+   "description": "A _v6 header: same behaviour.",
+   "op": "remove",
+   "family": "v4",
+   "input": {
+    "headers": [
+     "A_v6"
+    ],
+    "deny": {
+     "A_v6.txt": {
+      "text": "2001:db8::1\n"
+     },
+     "A_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "master": {
+     "text": "A_v6 2001:db8::1\nA_v4 1.1.1.1\n"
+    }
+   }
+  },
+  {
+   "id": "rm_traversal_header",
+   "description": "A header with a path separator or '..' is refused and logged.",
+   "op": "remove",
+   "family": "v4",
+   "input": {
+    "headers": [
+     "../deny/B_v4",
+     "A/../B"
+    ],
+    "deny": {
+     "B_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "master": {
+     "text": "B_v4 2.2.2.2\n"
+    }
+   }
+  },
+  {
+   "id": "rm_nothing_present",
+   "description": "A header with no files and no masterfile.",
+   "op": "remove",
+   "family": "v4",
+   "input": {
+    "headers": [
+     "Nope_v4"
+    ]
+   }
+  },
+  {
+   "id": "rm_empty_header_list_item",
+   "description": "An empty list item and a trailing comma.",
+   "op": "remove",
+   "family": "v4",
+   "input": {
+    "headers": [
+     "A_v4",
+     ""
+    ],
+    "deny": {
+     "A_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "master": {
+     "text": "A_v4 1.1.1.1\nB_v4 2\n"
+    }
+   }
+  },
+  {
+   "id": "rm_header_with_dot_tail",
+   "description": "Files of the header with other extensions (.orig, .txt, .update) all go.",
+   "op": "remove",
+   "family": "v4",
+   "input": {
+    "headers": [
+     "A_v4"
+    ],
+    "deny": {
+     "A_v4.txt": {
+      "text": "1.1.1.1\n"
+     },
+     "A_v4.update": {
+      "text": ""
+     }
+    },
+    "original": {
+     "A_v4.orig": {
+      "text": "1.1.1.1\n"
+     },
+     "A_v4.fail": {
+      "text": ""
+     }
+    },
+    "master": {
+     "text": "A_v4 1.1.1.1\n"
+    }
+   }
+  },
+  {
+   "id": "clos_passed",
+   "description": "dedup on, deny folder and masterfile agree: PASSED, no uniq rows.",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "1.1.1.1\n2.2.2.2\n"
+     },
+     "B_v4": {
+      "text": "3.3.3.3\n"
+     }
+    },
+    "dedup": "on",
+    "master": {
+     "text": "A_v4 1.1.1.1\nA_v4 2.2.2.2\nB_v4 3.3.3.3\n"
+    },
+    "orig": {
+     "A_v4.aggcount": {
+      "text": "5\n"
+     },
+     "B_v4.aggcount": {
+      "text": "2\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "clos_failed_counts",
+   "description": "The masterfile has a row the deny folder lacks: FAILED, both counts shown.",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "dedup": "on",
+    "master": {
+     "text": "A_v4 1.1.1.1\nA_v4 2.2.2.2\n"
+    }
+   }
+  },
+  {
+   "id": "clos_duplicates_across_files",
+   "description": "Two deny files share a row: the deny-side uniq list reports it.",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "1.1.1.1\n2.2.2.2\n"
+     },
+     "B_v4": {
+      "text": "2.2.2.2\n"
+     }
+    },
+    "dedup": "on",
+    "master": {
+     "text": "A_v4 1.1.1.1\nA_v4 2.2.2.2\nB_v4 2.2.2.2\n"
+    }
+   }
+  },
+  {
+   "id": "clos_empty_file_gets_placeholder",
+   "description": "A 0-byte deny file takes the placeholder, a non-empty one is untouched, and the empty-lists section names it.",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": ""
+     },
+     "B_v4": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "dedup": "on",
+    "master": {
+     "text": "B_v4 1.1.1.1\n"
+    }
+   }
+  },
+  {
+   "id": "clos_empty_v6_file_placeholder_spelling",
+   "description": "A 0-byte _v6 deny file: which placeholder spelling it gets (emptyfiles writes ip_placeholder).",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v6": {
+      "text": ""
+     },
+     "A_v4": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "dedup": "on",
+    "master": {
+     "text": "A_v4 1.1.1.1\n"
+    }
+   }
+  },
+  {
+   "id": "clos_custom_ph",
+   "description": "A non-default placeholder is written to empty files and excluded from the sanity counts.",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": ""
+     },
+     "B_v4": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "dedup": "on",
+    "master": {
+     "text": "B_v4 1.1.1.1\n"
+    },
+    "ph": "127.9.9.9"
+   }
+  },
+  {
+   "id": "clos_placeholder_rows_excluded",
+   "description": "Placeholder rows are excluded from both sanity counts.",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "127.1.7.7\n"
+     },
+     "B_v4": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "dedup": "on",
+    "master": {
+     "text": "A_v4 127.1.7.7\nB_v4 1.1.1.1\n"
+    }
+   }
+  },
+  {
+   "id": "clos_dedup_off",
+   "description": "closing off: only the original count prints, no sanity block, empty files still refilled.",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": ""
+     },
+     "B_v4": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "dedup": "off"
+   }
+  },
+  {
+   "id": "clos_dedup_off_orig_fallback",
+   "description": "closing off with .orig files but no .aggcount: the count falls back to counting non-comment rows.",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "dedup": "off",
+    "orig": {
+     "A_v4.orig": {
+      "text": "# c\n\n1.1.1.1\n2.2.2.2\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "clos_orig_aggcount_and_orig",
+   "description": "closing on with .aggcount files (summed).",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "dedup": "on",
+    "master": {
+     "text": "A_v4 1.1.1.1\n"
+    },
+    "orig": {
+     "A_v4.aggcount": {
+      "text": "7\n"
+     },
+     "B_v4.aggcount": {
+      "text": "3\n"
+     },
+     "A_v6.aggcount": {
+      "text": "100\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "clos_no_final_newline",
+   "description": "Deny files without a final newline and a masterfile without one: awk 1 guards the concat.",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "1.1.1.1"
+     },
+     "B_v4": {
+      "text": "2.2.2.2"
+     }
+    },
+    "dedup": "on",
+    "master": {
+     "text": "A_v4 1.1.1.1\nB_v4 2.2.2.2"
+    }
+   }
+  },
+  {
+   "id": "clos_crlf",
+   "description": "CRLF rows in the deny files and masterfile.",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "1.1.1.1\r\n"
+     }
+    },
+    "dedup": "on",
+    "master": {
+     "text": "A_v4 1.1.1.1\r\n"
+    }
+   }
+  },
+  {
+   "id": "clos_masterfile_uniq",
+   "description": "Duplicate masterfile rows appear in the master-side uniq list.",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "dedup": "on",
+    "master": {
+     "text": "A_v4 1.1.1.1\nB_v4 1.1.1.1\n"
+    }
+   }
+  },
+  {
+   "id": "clos_empty_everything",
+   "description": "No deny files, empty masterfile.",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {},
+    "dedup": "on",
+    "master": {
+     "text": ""
+    }
+   }
+  },
+  {
+   "id": "clos_only_v6",
+   "description": "Only v6 deny files with a v6 masterfile row.",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v6": {
+      "text": "2001:db8::1\n"
+     }
+    },
+    "dedup": "on",
+    "master": {
+     "text": "A_v6 2001:db8::1\n"
+    }
+   }
+  },
+  {
+   "id": "canon_sorted_unique",
+   "description": "Duplicates collapse and the set is C-sorted (byte order).",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "10.0.0.1\n9.0.0.1\n10.0.0.1\n1.1.1.1\n"
+    }
+   }
+  },
+  {
+   "id": "canon_byte_order_not_numeric",
+   "description": "Byte order: '10.' sorts before '9.', 'a' after 'B'.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "9.9.9.9\n10.0.0.1\n100.0.0.1\n1.1.1.1\n"
+    }
+   }
+  },
+  {
+   "id": "canon_v6_case_and_order",
+   "description": "v6 text: uppercase sorts before lowercase, no normalisation, '::' prefix sorts first.",
+   "op": "canonical",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8::a\n2001:DB8::A\n::1\n::127.1.7.7\nfe80::1\n"
+    }
+   }
+  },
+  {
+   "id": "canon_comments_blank",
+   "description": "Comment lines and empty lines are dropped; whitespace-only lines are kept.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "# c\n\n1.1.1.1\n   \n#2.2.2.2\n # not a comment\n"
+    }
+   }
+  },
+  {
+   "id": "canon_crlf",
+   "description": "CRLF: the CR stays part of the line, so '1.1.1.1\\r' and '1.1.1.1' are different members.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "1.1.1.1\r\n1.1.1.1\n2.2.2.2\r\n"
+    }
+   }
+  },
+  {
+   "id": "canon_no_final_newline",
+   "description": "Unterminated last line is a member.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "2.2.2.2\n1.1.1.1"
+    }
+   }
+  },
+  {
+   "id": "canon_weld_without_newline",
+   "description": "A feed file without a final newline welds onto the next feed's first row in the raw concatenation.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "1.1.1.1\n2.2.2.23.3.3.3\n"
+    }
+   }
+  },
+  {
+   "id": "canon_empty",
+   "description": "Empty input is the real empty set.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": ""
+    }
+   }
+  },
+  {
+   "id": "canon_only_comments",
+   "description": "Only comments and blanks: the real empty set, not a placeholder.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "# a\n\n# b\n"
+    }
+   }
+  },
+  {
+   "id": "canon_placeholder_is_a_member",
+   "description": "The placeholder is an ordinary member.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "127.1.7.7\n1.1.1.1\n"
+    }
+   }
+  },
+  {
+   "id": "canon_cidr_and_host_spellings",
+   "description": "No semantic merging: '1.2.3.4' and '1.2.3.4/32' are different members.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "1.2.3.4/32\n1.2.3.4\n"
+    }
+   }
+  },
+  {
+   "id": "canon_unsorted_big_digits",
+   "description": "More byte-order checks including a leading space and a tab.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": " 1.1.1.1\n\t1.1.1.1\n1.1.1.1 \n1.1.1.1\n"
+    }
+   }
+  },
+  {
+   "id": "canon_one_member",
+   "description": "One member.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "1.1.1.1\n"
+    }
+   }
+  },
+  {
+   "id": "canon_h_name",
+   "description": "Hostile row (v4): a hostname (iprange resolves non-address tokens as hostnames; .invalid has no answer).",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\npfbipset-nx.invalid\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "canon_h_leading0",
+   "description": "Hostile row (v4): a leading-zero octet.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n010.1.1.1\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "canon_h_pfx33",
+   "description": "Hostile row (v4): a prefix over the family length.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4/33\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "canon_h_hostbits",
+   "description": "Hostile row (v4): host bits set.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4/24\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "canon_h_zerozero",
+   "description": "Hostile row (v4): the whole IPv4 space.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n0.0.0.0/0\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "canon_h_range",
+   "description": "Hostile row (v4): an iprange range spelling.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4-1.2.3.9\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "canon_h_netmask",
+   "description": "Hostile row (v4): a dotted netmask spelling.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.0/255.255.255.0\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "canon_h_dupspell",
+   "description": "Hostile row (v4): one host in two spellings.",
+   "op": "canonical",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.7\n1.2.3.4\n1.2.3.4/32\n198.51.100.0/25\n"
+    }
+   }
+  },
+  {
+   "id": "canon_v6_h_name",
+   "description": "Hostile row (v6): a hostname.",
+   "op": "canonical",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\npfbipset-nx.invalid\n2001:db8:2::/48\n"
+    }
+   }
+  },
+  {
+   "id": "canon_v6_h_zone",
+   "description": "Hostile row (v6): a zone identifier.",
+   "op": "canonical",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\nfe80::1%em0\n2001:db8:2::/48\n"
+    }
+   }
+  },
+  {
+   "id": "canon_v6_h_pfx129",
+   "description": "Hostile row (v6): a prefix over the family length.",
+   "op": "canonical",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\n::1/129\n2001:db8:2::/48\n"
+    }
+   }
+  },
+  {
+   "id": "canon_v6_h_hostbits",
+   "description": "Hostile row (v6): host bits set.",
+   "op": "canonical",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\n2001:db8::1/32\n2001:db8:2::/48\n"
+    }
+   }
+  },
+  {
+   "id": "canon_v6_h_zerozero",
+   "description": "Hostile row (v6): the whole IPv6 space.",
+   "op": "canonical",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\n::/0\n2001:db8:2::/48\n"
+    }
+   }
+  },
+  {
+   "id": "canon_v6_h_mapped",
+   "description": "Hostile row (v6): an IPv4-mapped IPv6 address.",
+   "op": "canonical",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\n::ffff:1.2.3.4\n2001:db8:2::/48\n"
+    }
+   }
+  },
+  {
+   "id": "canon_v6_h_compat",
+   "description": "Hostile row (v6): an IPv4-compatible IPv6 address.",
+   "op": "canonical",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\n::1.2.3.4\n2001:db8:2::/48\n"
+    }
+   }
+  },
+  {
+   "id": "canon_v6_h_compat2",
+   "description": "Hostile row (v6): an IPv4-compatible-looking short form.",
+   "op": "canonical",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\n::100\n2001:db8:2::/48\n"
+    }
+   }
+  },
+  {
+   "id": "canon_v6_h_dupspell",
+   "description": "Hostile row (v6): one host in two spellings.",
+   "op": "canonical",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8:1::7\n::1\n0:0:0:0:0:0:0:1\n2001:db8:2::/48\n"
+    }
+   }
+  },
+  {
+   "id": "union_deny_v4",
+   "description": "Class Deny v4: members of this class and family are unioned, other families, markers and .ip files are not members.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.1\n203.0.113.2/31\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.1\n198.51.100.9\n"
+     },
+     "X_v4.update": {
+      "text": ""
+     },
+     "Y_v4.ip": {
+      "text": "9.9.9.9\n"
+     },
+     "Other_v6.txt": {
+      "text": "8.8.8.8\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_deny_v6",
+   "description": "Class Deny v6: members of this class and family are unioned, other families, markers and .ip files are not members.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8::1\n2001:db8::2\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8::1\n2001:db8::9\n"
+     },
+     "X_v6.update": {
+      "text": ""
+     },
+     "Y_v6.ip": {
+      "text": "9.9.9.9\n"
+     },
+     "Other_v4.txt": {
+      "text": "8.8.8.8\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_permit_v4",
+   "description": "Class Permit v4: members of this class and family are unioned, other families, markers and .ip files are not members.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Permit",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.1\n203.0.113.2/31\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.1\n198.51.100.9\n"
+     },
+     "X_v4.update": {
+      "text": ""
+     },
+     "Y_v4.ip": {
+      "text": "9.9.9.9\n"
+     },
+     "Other_v6.txt": {
+      "text": "8.8.8.8\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_permit_v6",
+   "description": "Class Permit v6: members of this class and family are unioned, other families, markers and .ip files are not members.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Permit",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8::1\n2001:db8::2\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8::1\n2001:db8::9\n"
+     },
+     "X_v6.update": {
+      "text": ""
+     },
+     "Y_v6.ip": {
+      "text": "9.9.9.9\n"
+     },
+     "Other_v4.txt": {
+      "text": "8.8.8.8\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_match_v4",
+   "description": "Class Match v4: members of this class and family are unioned, other families, markers and .ip files are not members.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Match",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.1\n203.0.113.2/31\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.1\n198.51.100.9\n"
+     },
+     "X_v4.update": {
+      "text": ""
+     },
+     "Y_v4.ip": {
+      "text": "9.9.9.9\n"
+     },
+     "Other_v6.txt": {
+      "text": "8.8.8.8\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_match_v6",
+   "description": "Class Match v6: members of this class and family are unioned, other families, markers and .ip files are not members.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Match",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8::1\n2001:db8::2\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8::1\n2001:db8::9\n"
+     },
+     "X_v6.update": {
+      "text": ""
+     },
+     "Y_v6.ip": {
+      "text": "9.9.9.9\n"
+     },
+     "Other_v4.txt": {
+      "text": "8.8.8.8\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_native_v4",
+   "description": "Class Native v4: members of this class and family are unioned, other families, markers and .ip files are not members.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Native",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.1\n203.0.113.2/31\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.1\n198.51.100.9\n"
+     },
+     "X_v4.update": {
+      "text": ""
+     },
+     "Y_v4.ip": {
+      "text": "9.9.9.9\n"
+     },
+     "Other_v6.txt": {
+      "text": "8.8.8.8\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_native_v6",
+   "description": "Class Native v6: members of this class and family are unioned, other families, markers and .ip files are not members.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Native",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8::1\n2001:db8::2\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8::1\n2001:db8::9\n"
+     },
+     "X_v6.update": {
+      "text": ""
+     },
+     "Y_v6.ip": {
+      "text": "9.9.9.9\n"
+     },
+     "Other_v4.txt": {
+      "text": "8.8.8.8\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_collapsed_off_v4",
+   "description": "v4, CIDR Aggregation off: members unioned through iprange (cross-member merges).",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "10.0.0.0/25\n10.0.0.7\n"
+     },
+     "B_v4.txt": {
+      "text": "10.0.0.128/25\n10.0.0.9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_collapsed_on_v4",
+   "description": "Same members with CIDR Aggregation on: only sort -u, no cross-member merge.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "10.0.0.0/25\n10.0.0.7\n"
+     },
+     "B_v4.txt": {
+      "text": "10.0.0.128/25\n10.0.0.9\n"
+     }
+    },
+    "collapsed": "on"
+   }
+  },
+  {
+   "id": "union_collapsed_on_v6",
+   "description": "v6 with the collapsed flag on.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8::2\n2001:db8::1\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8::1\n"
+     }
+    },
+    "collapsed": "on"
+   }
+  },
+  {
+   "id": "union_collapsed_off_v6",
+   "description": "v6 with the collapsed flag off: still sort -u (iprange is never used for v6).",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8::2\n2001:db8::1\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8::1\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_placeholder_only_dropped_v4",
+   "description": "A placeholder-only member is not a member; a member with the placeholder and a real row is kept whole.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "127.1.7.7\n"
+     },
+     "B_v4.txt": {
+      "text": "127.1.7.7\n1.1.1.1\n"
+     },
+     "C_v4.txt": {
+      "text": "1.1.1.2\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_placeholder_only_dropped_v6",
+   "description": "v6: '::127.1.7.7' (and the bare '127.1.7.7') only: dropped.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v6.txt": {
+      "text": "::127.1.7.7\n"
+     },
+     "B_v6.txt": {
+      "text": "127.1.7.7\n"
+     },
+     "C_v6.txt": {
+      "text": "::127.1.7.7\n2001:db8::1\n"
+     },
+     "D_v6.txt": {
+      "text": "2001:db8::2\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_comment_only_dropped",
+   "description": "A comment-only member counts as placeholder-only and is dropped; an empty member is kept (adds nothing).",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "# nothing\n"
+     },
+     "B_v4.txt": {
+      "text": ""
+     },
+     "C_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_all_dropped_is_empty",
+   "description": "Every member dropped: an empty aggregate and the '#' never-empty consumer line.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "127.1.7.7\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_no_members",
+   "description": "No member file at all: empty aggregate, '#' consumer.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {},
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_unterminated_members",
+   "description": "Members without a final newline do not weld (awk 1 supplies the terminator).",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "1.1.1.1"
+     },
+     "B_v4.txt": {
+      "text": "2.2.2.2"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_crlf_members",
+   "description": "CRLF members: sort -u keeps CR-bearing rows distinct; iprange (collapsed off) may read them.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "1.1.1.1\r\n1.1.1.2\r\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_crlf_members_collapsed",
+   "description": "CRLF members with the collapsed flag on: pure sort -u.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "1.1.1.1\r\n1.1.1.2\r\n"
+     },
+     "B_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "collapsed": "on"
+   }
+  },
+  {
+   "id": "union_custom_ph",
+   "description": "A non-default placeholder.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "127.9.9.9\n"
+     },
+     "B_v4.txt": {
+      "text": "127.1.7.7\n"
+     }
+    },
+    "collapsed": "off",
+    "ph": "127.9.9.9"
+   }
+  },
+  {
+   "id": "union_member_name_order",
+   "description": "Members are taken in sorted file-name order (uppercase before lowercase); with sort -u the order does not show, with iprange it does not either: recorded as kept.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "b_v4.txt": {
+      "text": "2.2.2.2\n"
+     },
+     "A_v4.txt": {
+      "text": "1.1.1.1\n"
+     },
+     "a_v4.txt": {
+      "text": "3.3.3.3\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_one_member",
+   "description": "One member.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_h_name_on",
+   "description": "Hostile row (v4): a hostname (iprange resolves non-address tokens as hostnames; .invalid has no answer); collapsed=on.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\npfbipset-nx.invalid\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "on"
+   }
+  },
+  {
+   "id": "union_h_name_off",
+   "description": "Hostile row (v4): a hostname (iprange resolves non-address tokens as hostnames; .invalid has no answer); collapsed=off.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\npfbipset-nx.invalid\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_h_leading0_on",
+   "description": "Hostile row (v4): a leading-zero octet; collapsed=on.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\n010.1.1.1\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "on"
+   }
+  },
+  {
+   "id": "union_h_leading0_off",
+   "description": "Hostile row (v4): a leading-zero octet; collapsed=off.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\n010.1.1.1\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_h_pfx33_on",
+   "description": "Hostile row (v4): a prefix over the family length; collapsed=on.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\n1.2.3.4/33\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "on"
+   }
+  },
+  {
+   "id": "union_h_pfx33_off",
+   "description": "Hostile row (v4): a prefix over the family length; collapsed=off.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\n1.2.3.4/33\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_h_hostbits_on",
+   "description": "Hostile row (v4): host bits set; collapsed=on.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\n1.2.3.4/24\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "on"
+   }
+  },
+  {
+   "id": "union_h_hostbits_off",
+   "description": "Hostile row (v4): host bits set; collapsed=off.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\n1.2.3.4/24\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_h_zerozero_on",
+   "description": "Hostile row (v4): the whole IPv4 space; collapsed=on.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\n0.0.0.0/0\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "on"
+   }
+  },
+  {
+   "id": "union_h_zerozero_off",
+   "description": "Hostile row (v4): the whole IPv4 space; collapsed=off.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\n0.0.0.0/0\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_h_range_on",
+   "description": "Hostile row (v4): an iprange range spelling; collapsed=on.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\n1.2.3.4-1.2.3.9\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "on"
+   }
+  },
+  {
+   "id": "union_h_range_off",
+   "description": "Hostile row (v4): an iprange range spelling; collapsed=off.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\n1.2.3.4-1.2.3.9\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_h_netmask_on",
+   "description": "Hostile row (v4): a dotted netmask spelling; collapsed=on.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\n1.2.3.0/255.255.255.0\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "on"
+   }
+  },
+  {
+   "id": "union_h_netmask_off",
+   "description": "Hostile row (v4): a dotted netmask spelling; collapsed=off.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\n1.2.3.0/255.255.255.0\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_h_dupspell_on",
+   "description": "Hostile row (v4): one host in two spellings; collapsed=on.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\n1.2.3.4\n1.2.3.4/32\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "on"
+   }
+  },
+  {
+   "id": "union_h_dupspell_off",
+   "description": "Hostile row (v4): one host in two spellings; collapsed=off.",
+   "op": "union",
+   "family": "v4",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "text": "203.0.113.7\n1.2.3.4\n1.2.3.4/32\n198.51.100.0/25\n"
+     },
+     "B_v4.txt": {
+      "text": "203.0.113.9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_v6_h_name",
+   "description": "Hostile row (v6): a hostname.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8:1::7\npfbipset-nx.invalid\n2001:db8:2::/48\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8:3::9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_v6_h_zone",
+   "description": "Hostile row (v6): a zone identifier.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8:1::7\nfe80::1%em0\n2001:db8:2::/48\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8:3::9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_v6_h_pfx129",
+   "description": "Hostile row (v6): a prefix over the family length.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8:1::7\n::1/129\n2001:db8:2::/48\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8:3::9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_v6_h_hostbits",
+   "description": "Hostile row (v6): host bits set.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8:1::7\n2001:db8::1/32\n2001:db8:2::/48\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8:3::9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_v6_h_zerozero",
+   "description": "Hostile row (v6): the whole IPv6 space.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8:1::7\n::/0\n2001:db8:2::/48\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8:3::9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_v6_h_mapped",
+   "description": "Hostile row (v6): an IPv4-mapped IPv6 address.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8:1::7\n::ffff:1.2.3.4\n2001:db8:2::/48\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8:3::9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_v6_h_compat",
+   "description": "Hostile row (v6): an IPv4-compatible IPv6 address.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8:1::7\n::1.2.3.4\n2001:db8:2::/48\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8:3::9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_v6_h_compat2",
+   "description": "Hostile row (v6): an IPv4-compatible-looking short form.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8:1::7\n::100\n2001:db8:2::/48\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8:3::9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_v6_h_dupspell",
+   "description": "Hostile row (v6): one host in two spellings.",
+   "op": "union",
+   "family": "v6",
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v6.txt": {
+      "text": "2001:db8:1::7\n::1\n0:0:0:0:0:0:0:1\n2001:db8:2::/48\n"
+     },
+     "B_v6.txt": {
+      "text": "2001:db8:3::9\n"
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "dnsblip_v4_two_files",
+   "description": "Two *_v4.ip sources concatenated in sorted file-name order; a *_v6.ip file is not read.",
+   "op": "dnsblip",
+   "family": "v4",
+   "input": {
+    "ip_files": {
+     "B_v4.ip": {
+      "text": "2.2.2.2\n"
+     },
+     "A_v4.ip": {
+      "text": "1.1.1.1\n3.3.3.3\n"
+     },
+     "A_v6.ip": {
+      "text": "2001:db8::1\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "dnsblip_v6_two_files",
+   "description": "Two *_v6.ip sources.",
+   "op": "dnsblip",
+   "family": "v6",
+   "input": {
+    "ip_files": {
+     "B_v6.ip": {
+      "text": "2001:db8::2\n"
+     },
+     "A_v6.ip": {
+      "text": "2001:db8::1\n"
+     },
+     "A_v4.ip": {
+      "text": "1.1.1.1\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "dnsblip_v4_empty_placeholder",
+   "description": "No *_v4.ip file: DNSBLIP_v4 holds the placeholder.",
+   "op": "dnsblip",
+   "family": "v4",
+   "input": {
+    "ip_files": {
+     "A_v6.ip": {
+      "text": "2001:db8::1\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "dnsblip_v6_empty_placeholder",
+   "description": "No *_v6.ip file: DNSBLIP_v6 holds '::' + placeholder.",
+   "op": "dnsblip",
+   "family": "v6",
+   "input": {
+    "ip_files": {
+     "A_v4.ip": {
+      "text": "1.1.1.1\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "dnsblip_v4_custom_ph",
+   "description": "A custom placeholder in the empty case.",
+   "op": "dnsblip",
+   "family": "v4",
+   "input": {
+    "ip_files": {},
+    "ip_ph": "10.9.9.9"
+   }
+  },
+  {
+   "id": "dnsblip_v6_custom_ph",
+   "description": "A custom placeholder in the empty v6 case.",
+   "op": "dnsblip",
+   "family": "v6",
+   "input": {
+    "ip_files": {},
+    "ip_ph": "10.9.9.9"
+   }
+  },
+  {
+   "id": "dnsblip_unterminated_weld",
+   "description": "A source without a final newline welds onto the next source's first row (no record terminator is added).",
+   "op": "dnsblip",
+   "family": "v4",
+   "input": {
+    "ip_files": {
+     "A_v4.ip": {
+      "text": "1.1.1.1"
+     },
+     "B_v4.ip": {
+      "text": "2.2.2.2\n3.3.3.3\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "dnsblip_crlf",
+   "description": "CRLF rows pass through unchanged.",
+   "op": "dnsblip",
+   "family": "v4",
+   "input": {
+    "ip_files": {
+     "A_v4.ip": {
+      "text": "1.1.1.1\r\n2.2.2.2\r\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "dnsblip_empty_source",
+   "description": "An empty source file is a source: the file is built, empty (no placeholder).",
+   "op": "dnsblip",
+   "family": "v4",
+   "input": {
+    "ip_files": {
+     "A_v4.ip": {
+      "text": ""
+     }
+    }
+   }
+  },
+  {
+   "id": "dnsblip_order_bytes",
+   "description": "Source order is byte order of the file name (uppercase before lowercase).",
+   "op": "dnsblip",
+   "family": "v4",
+   "input": {
+    "ip_files": {
+     "b_v4.ip": {
+      "text": "2.2.2.2\n"
+     },
+     "A_v4.ip": {
+      "text": "1.1.1.1\n"
+     },
+     "a_v4.ip": {
+      "text": "3.3.3.3\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "dnsblip_duplicates_kept",
+   "description": "Duplicates across sources are kept (no dedup here).",
+   "op": "dnsblip",
+   "family": "v4",
+   "input": {
+    "ip_files": {
+     "A_v4.ip": {
+      "text": "1.1.1.1\n"
+     },
+     "B_v4.ip": {
+      "text": "1.1.1.1\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "dnsblip_v6_spellings",
+   "description": "v6 rows are not normalised.",
+   "op": "dnsblip",
+   "family": "v6",
+   "input": {
+    "ip_files": {
+     "A_v6.ip": {
+      "text": "2001:DB8::1\n::1\n"
+     },
+     "B_v6.ip": {
+      "text": "0:0:0:0:0:0:0:1\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "dnsblip_one_member",
+   "description": "One source, one row.",
+   "op": "dnsblip",
+   "family": "v4",
+   "input": {
+    "ip_files": {
+     "A_v4.ip": {
+      "text": "1.1.1.1\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "matrix_dup0_trig0_drep0_prep0",
+   "description": "pfb_ip_recompute_matrix(dedup_on=False, rep_trigger=False, drep_on=False, prep_on=False).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": false,
+    "rep_trigger": false,
+    "drep_on": false,
+    "prep_on": false
+   }
+  },
+  {
+   "id": "matrix_dup0_trig0_drep0_prep1",
+   "description": "pfb_ip_recompute_matrix(dedup_on=False, rep_trigger=False, drep_on=False, prep_on=True).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": false,
+    "rep_trigger": false,
+    "drep_on": false,
+    "prep_on": true
+   }
+  },
+  {
+   "id": "matrix_dup0_trig0_drep1_prep0",
+   "description": "pfb_ip_recompute_matrix(dedup_on=False, rep_trigger=False, drep_on=True, prep_on=False).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": false,
+    "rep_trigger": false,
+    "drep_on": true,
+    "prep_on": false
+   }
+  },
+  {
+   "id": "matrix_dup0_trig0_drep1_prep1",
+   "description": "pfb_ip_recompute_matrix(dedup_on=False, rep_trigger=False, drep_on=True, prep_on=True).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": false,
+    "rep_trigger": false,
+    "drep_on": true,
+    "prep_on": true
+   }
+  },
+  {
+   "id": "matrix_dup0_trig1_drep0_prep0",
+   "description": "pfb_ip_recompute_matrix(dedup_on=False, rep_trigger=True, drep_on=False, prep_on=False).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": false,
+    "rep_trigger": true,
+    "drep_on": false,
+    "prep_on": false
+   }
+  },
+  {
+   "id": "matrix_dup0_trig1_drep0_prep1",
+   "description": "pfb_ip_recompute_matrix(dedup_on=False, rep_trigger=True, drep_on=False, prep_on=True).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": false,
+    "rep_trigger": true,
+    "drep_on": false,
+    "prep_on": true
+   }
+  },
+  {
+   "id": "matrix_dup0_trig1_drep1_prep0",
+   "description": "pfb_ip_recompute_matrix(dedup_on=False, rep_trigger=True, drep_on=True, prep_on=False).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": false,
+    "rep_trigger": true,
+    "drep_on": true,
+    "prep_on": false
+   }
+  },
+  {
+   "id": "matrix_dup0_trig1_drep1_prep1",
+   "description": "pfb_ip_recompute_matrix(dedup_on=False, rep_trigger=True, drep_on=True, prep_on=True).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": false,
+    "rep_trigger": true,
+    "drep_on": true,
+    "prep_on": true
+   }
+  },
+  {
+   "id": "matrix_dup1_trig0_drep0_prep0",
+   "description": "pfb_ip_recompute_matrix(dedup_on=True, rep_trigger=False, drep_on=False, prep_on=False).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": true,
+    "rep_trigger": false,
+    "drep_on": false,
+    "prep_on": false
+   }
+  },
+  {
+   "id": "matrix_dup1_trig0_drep0_prep1",
+   "description": "pfb_ip_recompute_matrix(dedup_on=True, rep_trigger=False, drep_on=False, prep_on=True).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": true,
+    "rep_trigger": false,
+    "drep_on": false,
+    "prep_on": true
+   }
+  },
+  {
+   "id": "matrix_dup1_trig0_drep1_prep0",
+   "description": "pfb_ip_recompute_matrix(dedup_on=True, rep_trigger=False, drep_on=True, prep_on=False).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": true,
+    "rep_trigger": false,
+    "drep_on": true,
+    "prep_on": false
+   }
+  },
+  {
+   "id": "matrix_dup1_trig0_drep1_prep1",
+   "description": "pfb_ip_recompute_matrix(dedup_on=True, rep_trigger=False, drep_on=True, prep_on=True).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": true,
+    "rep_trigger": false,
+    "drep_on": true,
+    "prep_on": true
+   }
+  },
+  {
+   "id": "matrix_dup1_trig1_drep0_prep0",
+   "description": "pfb_ip_recompute_matrix(dedup_on=True, rep_trigger=True, drep_on=False, prep_on=False).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": true,
+    "rep_trigger": true,
+    "drep_on": false,
+    "prep_on": false
+   }
+  },
+  {
+   "id": "matrix_dup1_trig1_drep0_prep1",
+   "description": "pfb_ip_recompute_matrix(dedup_on=True, rep_trigger=True, drep_on=False, prep_on=True).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": true,
+    "rep_trigger": true,
+    "drep_on": false,
+    "prep_on": true
+   }
+  },
+  {
+   "id": "matrix_dup1_trig1_drep1_prep0",
+   "description": "pfb_ip_recompute_matrix(dedup_on=True, rep_trigger=True, drep_on=True, prep_on=False).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": true,
+    "rep_trigger": true,
+    "drep_on": true,
+    "prep_on": false
+   }
+  },
+  {
+   "id": "matrix_dup1_trig1_drep1_prep1",
+   "description": "pfb_ip_recompute_matrix(dedup_on=True, rep_trigger=True, drep_on=True, prep_on=True).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "recompute_matrix",
+    "dedup_on": true,
+    "rep_trigger": true,
+    "drep_on": true,
+    "prep_on": true
+   }
+  },
+  {
+   "id": "matrix_closing_dup0_ran0",
+   "description": "pfb_ip_closing_pass_active(dup_on=False, recompute_ran_v4=False).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "closing_pass_active",
+    "dup_on": false,
+    "ran_v4": false
+   }
+  },
+  {
+   "id": "matrix_closing_dup0_ran1",
+   "description": "pfb_ip_closing_pass_active(dup_on=False, recompute_ran_v4=True).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "closing_pass_active",
+    "dup_on": false,
+    "ran_v4": true
+   }
+  },
+  {
+   "id": "matrix_closing_dup1_ran0",
+   "description": "pfb_ip_closing_pass_active(dup_on=True, recompute_ran_v4=False).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "closing_pass_active",
+    "dup_on": true,
+    "ran_v4": false
+   }
+  },
+  {
+   "id": "matrix_closing_dup1_ran1",
+   "description": "pfb_ip_closing_pass_active(dup_on=True, recompute_ran_v4=True).",
+   "op": "matrix",
+   "family": "v4",
+   "input": {
+    "fn": "closing_pass_active",
+    "dup_on": true,
+    "ran_v4": true
+   }
+  },
+  {
+   "id": "pipe_sibling_recompute_v4",
+   "description": "Ordering case 2 (v4): suppression runs after a sibling-triggered recompute. Pass 1 parses both feeds and suppresses 203.0.113.5 from AliasA. Pass 2 changes ONLY feed B: recompute rewrites AliasA's deny file from its pre-suppression snapshot, and the suppression pass must run again for AliasA (recompute ran). A translator that suppresses only changed feeds puts 203.0.113.5 back into AliasA's canonical set in pass 2.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "203.0.113.0/24\n198.51.100.7\n"
+     },
+     {
+      "name": "B_v4",
+      "alias": "AliasB",
+      "text": "192.0.2.1\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4",
+       "B_v4"
+      ]
+     },
+     {
+      "changed": [
+       "B_v4"
+      ],
+      "set": {
+       "B_v4": {
+        "text": "192.0.2.2\n"
+       }
+      }
+     }
+    ],
+    "suppression": {
+     "v4": {
+      "text": "203.0.113.5/32\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "pipe_sibling_recompute_v6",
+   "description": "Ordering case 2 (v6): as pipe_sibling_recompute_v4 for IPv6 (dedup on so v6 recomputes).",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v6",
+      "alias": "AliasA",
+      "text": "2001:db8:0:1::/120\n"
+     },
+     {
+      "name": "B_v6",
+      "alias": "AliasB",
+      "text": "2001:db8:0:2::1\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v6",
+       "B_v6"
+      ]
+     },
+     {
+      "changed": [
+       "B_v6"
+      ],
+      "set": {
+       "B_v6": {
+        "text": "2001:db8:0:2::2\n"
+       }
+      }
+     }
+    ],
+    "suppression": {
+     "v6": {
+      "text": "2001:db8:0:1::5/128\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "pipe_sibling_recompute_dedup_off",
+   "description": "Ordering case 2 control: dedup off and no reputation: no recompute runs in pass 2, so the suppressed alias keeps its pass-1 suppressed file and the canonical set still excludes the host.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": false,
+     "agg": false,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "203.0.113.0/24\n198.51.100.7\n"
+     },
+     {
+      "name": "B_v4",
+      "alias": "AliasB",
+      "text": "192.0.2.1\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4",
+       "B_v4"
+      ]
+     },
+     {
+      "changed": [
+       "B_v4"
+      ],
+      "set": {
+       "B_v4": {
+        "text": "192.0.2.2\n"
+       }
+      }
+     }
+    ],
+    "suppression": {
+     "v4": {
+      "text": "203.0.113.5/32\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "pipe_suppress_after_pmax",
+   "description": "Ordering case 2, single pass: pMax (max=3) crosses its threshold only WITH the suppressed host counted (four hosts). Order of the old path: recompute collapses to 203.0.113.0/24, THEN suppression cuts .4 out of it, leaving 8 covering entries that exclude .4. A translator that suppresses first sees three hosts, never collapses, and returns the three hosts.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": true,
+     "drep": false,
+     "prep": true,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4"
+      ]
+     }
+    ],
+    "suppression": {
+     "v4": {
+      "text": "203.0.113.4/32\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "pipe_suppress_after_dmax",
+   "description": "Ordering case 2, single pass with dMax: as pipe_suppress_after_pmax (unknown country, ccblack=block).",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": true,
+     "drep": true,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": {}
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4"
+      ]
+     }
+    ],
+    "suppression": {
+     "v4": {
+      "text": "203.0.113.4/32\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "pipe_suppress_after_pmax_dedup_off",
+   "description": "Ordering case 2, dedup off: only the rep trigger routes recompute; suppression still follows it.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": false,
+     "agg": false,
+     "rep": true,
+     "drep": false,
+     "prep": true,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4"
+      ]
+     }
+    ],
+    "suppression": {
+     "v4": {
+      "text": "203.0.113.4/32\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "pipe_both_drep_prep",
+   "description": "Both dRep and pRep on: recompute applies dMax, then the legacy pMax verb runs over the emitted deny files, then suppression.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": true,
+     "drep": true,
+     "prep": true,
+     "supp": true,
+     "dmax": 5,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": {
+      "203.0.113": "US"
+     }
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     },
+     {
+      "name": "B_v4",
+      "alias": "AliasB",
+      "text": "198.51.100.1\n198.51.100.2\n198.51.100.3\n198.51.100.4\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4",
+       "B_v4"
+      ]
+     }
+    ],
+    "suppression": {
+     "v4": {
+      "text": "198.51.100.4/32\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "pipe_all_suppressed_v4",
+   "description": "Ordering case 4 (v4): the only member is fully suppressed: the canonical set is [] (a real empty set), and closing then refills the deny file with the placeholder. A translator that substitutes the placeholder in the canonical set, or keeps the previous content, differs.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "203.0.113.0/24\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4"
+      ]
+     },
+     {
+      "changed": [
+       "A_v4"
+      ],
+      "set": {
+       "A_v4": {
+        "text": "203.0.113.0/24\n203.0.113.128/25\n"
+       }
+      }
+     }
+    ],
+    "suppression": {
+     "v4": {
+      "text": "203.0.113.0/24\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "pipe_all_suppressed_v6",
+   "description": "Ordering case 4 (v6): as pipe_all_suppressed_v4 for IPv6.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v6",
+      "alias": "AliasA",
+      "text": "2001:db8:0:1::/64\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v6"
+      ]
+     }
+    ],
+    "suppression": {
+     "v6": {
+      "text": "2001:db8:0:1::/64\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "pipe_supp_off",
+   "description": "Suppression switched off: the suppression lists are ignored.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": false,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "203.0.113.0/24\n198.51.100.7\n"
+     },
+     {
+      "name": "B_v4",
+      "alias": "AliasB",
+      "text": "192.0.2.1\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4",
+       "B_v4"
+      ]
+     }
+    ],
+    "suppression": {
+     "v4": {
+      "text": "203.0.113.5/32\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "pipe_dedup_across_aliases_v4",
+   "description": "Ownership across logical sets: the same host in two aliases belongs to the earlier-configured feed.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "1.1.1.1\n2.2.2.2\n"
+     },
+     {
+      "name": "B_v4",
+      "alias": "AliasB",
+      "text": "2.2.2.2\n3.3.3.3\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4",
+       "B_v4"
+      ]
+     }
+    ],
+    "suppression": {},
+    "agg_types": [
+     "Deny"
+    ]
+   }
+  },
+  {
+   "id": "pipe_dedup_across_aliases_v6",
+   "description": "Ownership across logical sets, v6.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v6",
+      "alias": "AliasA",
+      "text": "2001:db8::1\n2001:db8::2\n"
+     },
+     {
+      "name": "B_v6",
+      "alias": "AliasB",
+      "text": "2001:db8::2\n2001:db8::3\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v6",
+       "B_v6"
+      ]
+     }
+    ],
+    "suppression": {},
+    "agg_types": [
+     "Deny"
+    ]
+   }
+  },
+  {
+   "id": "pipe_one_alias_two_feeds",
+   "description": "One logical set made of two feeds: its canonical set is the sorted union of their deny files, with the ownership cut applied between them.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "Set",
+      "text": "1.1.1.1\n2.2.2.2\n"
+     },
+     {
+      "name": "B_v4",
+      "alias": "Set",
+      "text": "2.2.2.2\n3.3.3.3\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4",
+       "B_v4"
+      ]
+     }
+    ],
+    "suppression": {}
+   }
+  },
+  {
+   "id": "pipe_reorder_by_change",
+   "description": "Ownership changes when the earlier feed shrinks: pass 2 drops 2.2.2.2 from the earlier feed and the later feed now owns it (recompute reads pristine snapshots, never its own output).",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "1.1.1.1\n2.2.2.2\n"
+     },
+     {
+      "name": "B_v4",
+      "alias": "AliasB",
+      "text": "2.2.2.2\n3.3.3.3\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4",
+       "B_v4"
+      ]
+     },
+     {
+      "changed": [
+       "A_v4"
+      ],
+      "set": {
+       "A_v4": {
+        "text": "1.1.1.1\n"
+       }
+      }
+     }
+    ],
+    "suppression": {}
+   }
+  },
+  {
+   "id": "pipe_uber_collapsed_on",
+   "description": "Uber Deny union with CIDR Aggregation on: sort -u only.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": true,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "10.0.0.0/25\n10.0.0.7\n"
+     },
+     {
+      "name": "B_v4",
+      "alias": "AliasB",
+      "text": "10.0.0.128/25\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4",
+       "B_v4"
+      ]
+     }
+    ],
+    "suppression": {},
+    "agg_types": [
+     "Deny"
+    ]
+   }
+  },
+  {
+   "id": "pipe_uber_collapsed_off",
+   "description": "Uber Deny union with CIDR Aggregation off: iprange merges across members.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "10.0.0.0/25\n10.0.0.7\n"
+     },
+     {
+      "name": "B_v4",
+      "alias": "AliasB",
+      "text": "10.0.0.128/25\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4",
+       "B_v4"
+      ]
+     }
+    ],
+    "suppression": {},
+    "agg_types": [
+     "Deny"
+    ]
+   }
+  },
+  {
+   "id": "pipe_uber_after_suppression",
+   "description": "The Uber union is built from the post-suppression deny files.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "203.0.113.0/24\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4"
+      ]
+     }
+    ],
+    "suppression": {
+     "v4": {
+      "text": "203.0.113.5/32\n"
+     }
+    },
+    "agg_types": [
+     "Deny"
+    ]
+   }
+  },
+  {
+   "id": "pipe_quiet_second_pass",
+   "description": "A pass with no changed feed runs no recompute, no suppression body and no closing.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": false,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "203.0.113.0/24\n198.51.100.7\n"
+     },
+     {
+      "name": "B_v4",
+      "alias": "AliasB",
+      "text": "192.0.2.1\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4",
+       "B_v4"
+      ]
+     },
+     {
+      "changed": []
+     }
+    ],
+    "suppression": {
+     "v4": {
+      "text": "203.0.113.5/32\n"
+     }
+    }
+   }
+  },
+  {
+   "id": "pipe_agg_preprocess_chain",
+   "description": "Per-feed preprocessing with dup+agg+rep on: _255, _agg, _rep before the snapshot.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": true,
+     "agg": true,
+     "rep": true,
+     "drep": true,
+     "prep": false,
+     "supp": true,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": {}
+    },
+    "feeds": [
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n203.0.113.5\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v4"
+      ]
+     }
+    ],
+    "suppression": {}
+   }
+  },
+  {
+   "id": "agg_one_million_pairs",
+   "description": "1,000,000 hosts 1.0.0.0, 1.0.0.2, ... (step 2: nothing merges); output digest.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "digest": true,
+   "input": {
+    "members": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v4_seq",
+        "count": 1000000,
+        "step": 2,
+        "suffix": "",
+        "start": 16777216
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "agg_large_2m_step2",
+   "description": "2,000,000 non-adjacent hosts (1.0.0.0 + 2i); the output is the same set, iprange's spelling and order; digest.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "digest": true,
+   "input": {
+    "members": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v4_seq",
+        "count": 2000000,
+        "step": 2,
+        "suffix": "",
+        "start": 16777216
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "agg_large_2m_contiguous",
+   "description": "2,000,000 contiguous hosts collapse to a handful of CIDRs; digest.",
+   "op": "cidr_aggregate",
+   "family": "v4",
+   "digest": true,
+   "input": {
+    "members": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v4_seq",
+        "count": 2000000,
+        "step": 1,
+        "suffix": "",
+        "start": 16777216
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "pre_large_2m",
+   "description": "2,000,000 non-adjacent hosts through _255 and _agg; digest.",
+   "op": "preprocess",
+   "family": "v4",
+   "digest": true,
+   "input": {
+    "members": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v4_seq",
+        "count": 2000000,
+        "step": 2,
+        "suffix": "",
+        "start": 16777216
+       }
+      }
+     ]
+    },
+    "dup": true,
+    "agg": true,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_large_2m_dedup_on",
+   "description": "Two feeds of 1,000,000 hosts each overlapping by half (second starts at 500,000); dedup on; digest.",
+   "op": "recompute",
+   "family": "v4",
+   "digest": true,
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "parts": [
+       {
+        "generate": {
+         "kind": "v4_seq",
+         "count": 1000000,
+         "step": 1,
+         "suffix": "",
+         "start": 16777216
+        }
+       }
+      ]
+     },
+     {
+      "name": "Y_v4",
+      "parts": [
+       {
+        "generate": {
+         "kind": "v4_seq",
+         "count": 1000000,
+         "step": 1,
+         "suffix": "",
+         "start": 17277216
+        }
+       }
+      ]
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_large_2m_dedup_off",
+   "description": "One feed of 2,000,000 hosts, dedup off; digest.",
+   "op": "recompute",
+   "family": "v4",
+   "digest": true,
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "parts": [
+       {
+        "generate": {
+         "kind": "v4_seq",
+         "count": 2000000,
+         "step": 2,
+         "suffix": "",
+         "start": 16777216
+        }
+       }
+      ]
+     }
+    ],
+    "dedup": "off",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_large_2m_dedup_on_single",
+   "description": "One feed of 2,000,000 hosts, dedup on; digest.",
+   "op": "recompute",
+   "family": "v4",
+   "digest": true,
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "parts": [
+       {
+        "generate": {
+         "kind": "v4_seq",
+         "count": 2000000,
+         "step": 2,
+         "suffix": "",
+         "start": 16777216
+        }
+       }
+      ]
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "rec_v6_large_2m",
+   "description": "One v6 feed of 2,000,000 hosts (2001:db8:: + 3i), dedup on; digest.",
+   "op": "recompute",
+   "family": "v6",
+   "digest": true,
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "parts": [
+       {
+        "generate": {
+         "kind": "v6_seq",
+         "count": 2000000,
+         "step": 3,
+         "suffix": "",
+         "base": "2001:db8::"
+        }
+       }
+      ]
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   }
+  },
+  {
+   "id": "supp4_ten_thousand_holes",
+   "description": "10,000 /32 holes spaced 1597 apart inside 10.0.0.0/8; digest of the remainder.",
+   "op": "suppress",
+   "family": "v4",
+   "digest": true,
+   "input": {
+    "members": {
+     "text": "10.0.0.0/8\n"
+    },
+    "suppression": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v4_seq",
+        "count": 10000,
+        "step": 1597,
+        "suffix": "/32",
+        "start": 167772161
+       }
+      }
+     ]
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_ten_thousand_holes_adjacent",
+   "description": "10,000 adjacent /32 holes starting at 10.0.0.0 (they merge into /27-ish blocks); digest.",
+   "op": "suppress",
+   "family": "v4",
+   "digest": true,
+   "input": {
+    "members": {
+     "text": "10.0.0.0/8\n"
+    },
+    "suppression": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v4_seq",
+        "count": 10000,
+        "step": 1,
+        "suffix": "/32",
+        "start": 167772160
+       }
+      }
+     ]
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp4_large_2m_members",
+   "description": "2,000,000 non-adjacent member hosts with ten /32 holes; digest.",
+   "op": "suppress",
+   "family": "v4",
+   "digest": true,
+   "input": {
+    "members": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v4_seq",
+        "count": 2000000,
+        "step": 2,
+        "suffix": "",
+        "start": 16777216
+       }
+      }
+     ]
+    },
+    "suppression": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v4_seq",
+        "count": 10,
+        "step": 2000,
+        "suffix": "/32",
+        "start": 16777216
+       }
+      }
+     ]
+    },
+    "dedup": "on"
+   }
+  },
+  {
+   "id": "supp6_ten_thousand_holes",
+   "description": "10,000 /128 holes in one /64; digest of the remainder.",
+   "op": "suppress",
+   "family": "v6",
+   "digest": true,
+   "input": {
+    "members": {
+     "text": "2001:db8:0:1::/64\n"
+    },
+    "suppression": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v6_seq",
+        "count": 10000,
+        "step": 1597,
+        "suffix": "/128",
+        "base": "2001:db8:0:1::"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "supp6_large_500k_members",
+   "description": "500,000 member hosts with ten /128 holes (pfb_suppress_file_v6 holds every entry as two 128-character strings: 2,000,000 members peaked at 1.1 GB of PHP memory on a dev host, more than a 2 GB smoke VM should be asked for, so the largest size attempted on the appliance is 500,000); digest.",
+   "op": "suppress",
+   "family": "v6",
+   "digest": true,
+   "input": {
+    "members": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v6_seq",
+        "count": 500000,
+        "step": 3,
+        "suffix": "",
+        "base": "2001:db8::"
+       }
+      }
+     ]
+    },
+    "suppression": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v6_seq",
+        "count": 10,
+        "step": 3000,
+        "suffix": "/128",
+        "base": "2001:db8::"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "canon_large_2m_v4",
+   "description": "2,000,000 hosts then the first 1,000 repeated; digest.",
+   "op": "canonical",
+   "family": "v4",
+   "digest": true,
+   "input": {
+    "members": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v4_seq",
+        "count": 2000000,
+        "step": 1,
+        "suffix": "",
+        "start": 16777216
+       }
+      },
+      {
+       "generate": {
+        "kind": "v4_seq",
+        "count": 1000,
+        "step": 1,
+        "suffix": "",
+        "start": 16777216
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "canon_large_2m_v6",
+   "description": "2,000,000 v6 hosts; digest.",
+   "op": "canonical",
+   "family": "v6",
+   "digest": true,
+   "input": {
+    "members": {
+     "parts": [
+      {
+       "generate": {
+        "kind": "v6_seq",
+        "count": 2000000,
+        "step": 1,
+        "suffix": "",
+        "base": "2001:db8::"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "union_large_2m_v4_off",
+   "description": "Two members of 1,000,000 hosts (second overlaps half), CIDR Aggregation off; digest.",
+   "op": "union",
+   "family": "v4",
+   "digest": true,
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "parts": [
+       {
+        "generate": {
+         "kind": "v4_seq",
+         "count": 1000000,
+         "step": 2,
+         "suffix": "",
+         "start": 16777216
+        }
+       }
+      ]
+     },
+     "B_v4.txt": {
+      "parts": [
+       {
+        "generate": {
+         "kind": "v4_seq",
+         "count": 1000000,
+         "step": 2,
+         "suffix": "",
+         "start": 17777216
+        }
+       }
+      ]
+     }
+    },
+    "collapsed": "off"
+   }
+  },
+  {
+   "id": "union_large_2m_v4_on",
+   "description": "As union_large_2m_v4_off with the collapsed flag on; digest.",
+   "op": "union",
+   "family": "v4",
+   "digest": true,
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v4.txt": {
+      "parts": [
+       {
+        "generate": {
+         "kind": "v4_seq",
+         "count": 1000000,
+         "step": 2,
+         "suffix": "",
+         "start": 16777216
+        }
+       }
+      ]
+     },
+     "B_v4.txt": {
+      "parts": [
+       {
+        "generate": {
+         "kind": "v4_seq",
+         "count": 1000000,
+         "step": 2,
+         "suffix": "",
+         "start": 17777216
+        }
+       }
+      ]
+     }
+    },
+    "collapsed": "on"
+   }
+  },
+  {
+   "id": "union_large_2m_v6",
+   "description": "Two members of 1,000,000 v6 hosts, half overlapping; digest.",
+   "op": "union",
+   "family": "v6",
+   "digest": true,
+   "input": {
+    "type": "Deny",
+    "members": {
+     "A_v6.txt": {
+      "parts": [
+       {
+        "generate": {
+         "kind": "v6_seq",
+         "count": 1000000,
+         "step": 1,
+         "suffix": "",
+         "base": "2001:db8::"
+        }
+       }
+      ]
+     },
+     "B_v6.txt": {
+      "parts": [
+       {
+        "generate": {
+         "kind": "v6_seq",
+         "count": 1000000,
+         "step": 1,
+         "suffix": "",
+         "base": "2001:db8::f:4240"
+        }
+       }
+      ]
+     }
+    },
+    "collapsed": "off"
+   }
+  }
+ ]
+}
