@@ -109,14 +109,14 @@ def _tracked(root: Path) -> list[str]:
 @pytest.mark.parametrize(
     ("rel", "budget"),
     [
-        ("AGENTS.md", 10_240),
+        ("AGENTS.md", 12_288),
         ("CLAUDE.md", 8_192),
         ("GROK.md", 8_192),
         (".agents/policy/new-policy.md", 12_288),
         (".agents/context/new-context.md", 12_288),
         (".agents/policy/landing.md", 26_000),
-        (".agents/policy/agent-roles.md", 19_000),
-        (".agents/policy/delegation.md", 18_000),
+        (".agents/policy/agent-roles.md", 12_288),
+        (".agents/policy/delegation.md", 12_288),
         ("tests/smoke/CLAUDE.md", 400),
         ("tests/smoke/GROK.md", 400),
         ("src/usr/local/AGENTS.md", 400),
@@ -145,7 +145,7 @@ def test_size_over_budget_fires_and_at_budget_passes(tmp_path: Path) -> None:
 def test_nested_stub_over_budget_fires_root_files_use_own_budget(tmp_path: Path) -> None:
     root = tmp_path
     _write(root, "www/CLAUDE.md", "x" * 401)
-    _write(root, "AGENTS.md", "x" * 401)  # root bootstrap: 401 B is far under 10,240
+    _write(root, "AGENTS.md", "x" * 401)  # root bootstrap: 401 B is far under 12,288
     violations = ccb.check_sizes(root, ["www/CLAUDE.md", "AGENTS.md"])
     assert violations == ["www/CLAUDE.md: 401 bytes > budget 400"]
 

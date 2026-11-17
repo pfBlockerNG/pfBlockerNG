@@ -3,6 +3,13 @@
 Scope: cross-client repository discovery, exact code semantics, and persistent graphs.
 Load when: every agent session, from `AGENTS.md`.
 
+Which tool: Graphify (`graphify query|path|explain`) first, to find anything in code or
+outside it (docs, specs, policy, decisions); CodeGraph (`codegraph explore`) for questions
+inside code (symbols, call paths, blast radius); the harness's native LSP, otherwise
+Serena, for definitions, references, and refactors (renames, moves, symbol edits);
+Grep/Read only for exact lines those tools already located. The tools' hook nudges are
+requirements, not hints.
+
 - Bootstrap or refresh a macOS/Debian agent host with
   `sh scripts/agent/setup-agent-tools.sh <checkout>`. It installs uv when absent and
   never updates an installed one (#3106); installs or updates Serena, CodeGraph,

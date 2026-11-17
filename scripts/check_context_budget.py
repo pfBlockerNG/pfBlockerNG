@@ -8,11 +8,11 @@ Every surface has a byte budget so the hot context cannot silently re-accrete
 table references must carry a `Scope:` + `Load-when:` header so it stays
 routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 
-- `AGENTS.md` (bootstrap)                          10,240 B
+- `AGENTS.md` (bootstrap)                          12,288 B (owner-raised, #4043)
 - `CLAUDE.md` / `GROK.md` (thin vendor adapters)    8,192 B
 - `.agents/policy/*.md` / `.agents/context/*.md`   12,288 B default; grandfathered
-  ratchet caps for the pre-taxonomy files (landing 26,000, agent-roles 19,000,
-  delegation 18,000 — frozen constants: lower them as the files shrink)
+  ratchet cap for the pre-taxonomy landing.md (26,000 — frozen constant: lower it
+  as the file shrinks)
 - nested `CLAUDE.md`/`AGENTS.md` dir stubs            400 B
 - `.claude/rules/*.md` (Claude soft routing backstops) 400 B
 - each hook-capsule `additionalContext` payload     1,800 B
@@ -64,7 +64,7 @@ from pathlib import Path
 
 from _git_paths import nul_listing
 
-BOOTSTRAP_BUDGET = 10_240
+BOOTSTRAP_BUDGET = 12_288
 ADAPTER_BUDGET = 8_192
 POLICY_BUDGET = 12_288
 STUB_BUDGET = 400
@@ -85,8 +85,6 @@ FILE_BUDGETS = {
     "CLAUDE.md": ADAPTER_BUDGET,
     "GROK.md": ADAPTER_BUDGET,
     ".agents/policy/landing.md": 26_000,
-    ".agents/policy/agent-roles.md": 19_000,
-    ".agents/policy/delegation.md": 18_000,
     # Append-only ledger (#3329): grows one capped line per missed review; the
     # owner raised its cap once it filled the policy default.
     ".agents/policy/coderabbit-misses.md": 16_384,

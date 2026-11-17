@@ -75,8 +75,17 @@ client mechanics.
 
 ## Repository intelligence routing
 
-At session start read `.agents/context/repository-intelligence.md` (CodeGraph, Serena,
-Graphify routing; per-worktree `.codegraph/` invariants).
+At session start read `.agents/context/repository-intelligence.md` (details; per-worktree
+`.codegraph/` invariants). Which navigation tool:
+
+- **Graphify** (`graphify query|path|explain`) first, to find anything in code or outside
+  it (docs, specs, policy, decisions).
+- **CodeGraph** (`codegraph explore`) for questions inside code: symbols, call paths, blast
+  radius.
+- **Harness's native LSP, otherwise Serena**, for definitions, references, and refactors
+  (renames, moves, symbol edits).
+- **Grep/Read** only for exact lines those tools already located.
+- The tools' hook nudges are requirements, not hints.
 
 ## Routing table — read on trigger, not up front
 
