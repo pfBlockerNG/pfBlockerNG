@@ -8,9 +8,7 @@
         "python_blocking": "true",
         "python_cname": "true",
         "tld_allow": "true",
-        "tld_allow_list": "org,uk",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "tld_allow_list": "org,uk"
       }
     },
     "manifest": {
@@ -39,8 +37,7 @@
   },
   "upstream": {
     "site.org. A": ["site.org. 300 IN A 192.0.2.10"],
-    "shop.co.uk. A": ["shop.co.uk. 300 IN A 192.0.2.11"],
-    "10.10.10.1. A": ["10.10.10.1. 300 IN A 192.0.2.12"]
+    "shop.co.uk. A": ["shop.co.uk. 300 IN A 192.0.2.11"]
   },
   "cases": [
     {
@@ -65,7 +62,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["site.com. 3600 IN A 10.10.10.1"],
+        "answer": ["site.com. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -91,20 +88,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["evil.pages.com. 3600 IN A 10.10.10.1"],
-        "authority": []
-      }
-    },
-    {
-      "id": "block-page-address-as-a-name-is-exempt-from-tld-allow",
-      "family": "tld_allow",
-      "description": "the DNSBL VIP address written as a name (10.10.10.1) is exempt from the TLD Allow block, so it resolves although its last label is not an allowed TLD",
-      "query": {"name": "10.10.10.1.", "type": "A"},
-      "expect": {
-        "decision": "relay",
-        "forwards": ["10.10.10.1. A"],
-        "rcode": "NOERROR",
-        "answer": ["10.10.10.1. 300 IN A 192.0.2.12"],
+        "answer": ["evil.pages.com. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     }

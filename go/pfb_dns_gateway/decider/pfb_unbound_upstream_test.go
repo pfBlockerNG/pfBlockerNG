@@ -537,24 +537,6 @@ func TestUpstreamBlockRowCases(t *testing.T) {
 	}
 }
 
-// An Upstream row has no python_nolog gate and no duplicate mark: it is written each time, "+" each time.
-func TestUpstreamBlockRowIgnoresPythonNologAndTheDuplicateMark(t *testing.T) {
-	r := newObserverRig(t, "forwarding = true\npython_nolog = true\n")
-	if !r.m.snapshot.Load().settings.pythonNolog {
-		t.Fatal("python_nolog is off: the test does not exercise the gate")
-	}
-	r.relay(t, observerReport(t, nil))
-	r.relay(t, observerReport(t, nil))
-	if len(r.rows) != 2 {
-		t.Fatalf("%d rows, want 2: the Upstream row has no python_nolog gate", len(r.rows))
-	}
-	for i, row := range r.rows {
-		if !strings.Contains(row, ",EDE15 (Blocked),Blocked by Quad9,+,A,") {
-			t.Errorf("row %d = %q, want the duplicate column to be + each time", i, row)
-		}
-	}
-}
-
 // A qstate of the test's own making carries a transport and a listener the observer path never has: the callback reads
 // them from the qstate, since the shim fires it with no keyword arguments.
 func TestUpstreamBlockRowTakesTransportAndListenerFromTheQstate(t *testing.T) {

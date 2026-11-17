@@ -108,7 +108,6 @@ func TestSaveSettingsRefusesAChangeSetThatNamesHooksOrABoxFactAndWritesNothing(t
 		"hooks empty":                   {`{"hooks":{}}`, "changes.hooks"},
 		"hooks null":                    {`{"hooks":null}`, "changes.hooks"},
 		"scheduled work disabled":       {`{"ingest":{"scheduledWorkDisabled":true}}`, "changes.ingest"},
-		"a sinkhole address":            {`{"ingest":{"sinkholeV4":"10.10.10.1"}}`, "changes.ingest"},
 		"hooks beside a writable field": {`{"policy/ip":{"dedup":true},"hooks":{"rows":[]}}`, "changes.hooks"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -117,7 +116,7 @@ func TestSaveSettingsRefusesAChangeSetThatNamesHooksOrABoxFactAndWritesNothing(t
 				http.StatusBadRequest, codeInvalidArgument, changes.field)
 			wantError(t, h.post("/v1/ValidateSettings", `{"changes":`+changes.body+`}`), http.StatusBadRequest, codeInvalidArgument, changes.field)
 			got := h.post("/v1/GetSettings", `{"projectionIds":["policy/ip","ingest","hooks"]}`)
-			for _, want := range []string{`"revision":1`, `"dedup":false`, `"scheduledWorkDisabled":false`, `"sinkholeV4":""`, `"rows":[]`} {
+			for _, want := range []string{`"revision":1`, `"dedup":false`, `"scheduledWorkDisabled":false`, `"rows":[]`} {
 				if !bytes.Contains(got.body, []byte(want)) {
 					t.Errorf("after the refused change GetSettings lacks %s: nothing may have changed\n%s", want, got.body)
 				}

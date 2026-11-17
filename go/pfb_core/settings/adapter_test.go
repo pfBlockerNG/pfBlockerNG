@@ -358,7 +358,7 @@ func TestLoadFailsWhenTheAdapterDoes(t *testing.T) {
 }
 
 const allDnsFields = `{"cnameValidation":false,"control":true,"controlLegacy":false,"decisionCacheMax":10000,"hstsNullBlocking":true,` +
-	`"idnBlockMalicious":true,"idnEscalateSuspicious":false,"idnMode":"off","logViaWebserver":false,"metricsClientIp":false,` +
+	`"idnBlockMalicious":true,"idnEscalateSuspicious":false,"idnMode":"off","metricsClientIp":false,` +
 	`"pslAllowPrivate":false,"pslFeedIcannPolicy":"honor","pslFeedPrivatePolicy":"honor","pslIncludePrivate":true,"regexCap":false,` +
 	`"replyLogging":true,"tldWildcard":false}`
 
@@ -376,7 +376,7 @@ func TestSaveWritesThroughTheAdapter(t *testing.T) {
 		`{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_Top"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_Africa"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_Antarctica"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_Asia"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_Europe"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_NAmerica"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_Oceania"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_SAmerica"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_PS"}` +
 		`]},"feeds/ipv4":{"groups":[]},"feeds/ipv6":{"groups":[]},` +
 		`"hooks":{"rows":[]},"ingest":{"dnsblIp":false,"dnsblLenient":false,"feedHostAllowlist":[],"feedHostFilter":true,"proxyPassword":"","proxyUnusable":false,"proxyUrl":"",` +
-		`"proxyUser":"","scheduledWorkDisabled":false,"selfAddresses":[],"sinkholeV4":"","sinkholeV6":"","suppression":true,"suppressionCidrV4":0,"suppressionCidrV6":0},` +
+		`"proxyUser":"","scheduledWorkDisabled":false,"selfAddresses":[],"suppression":true,"suppressionCidrV4":0,"suppressionCidrV6":0},` +
 		`"maintenance":{"clearDnsblCounters":"never","clearIpCounters":"never","enabled":false,"metricsExport":false,"scheduledWorkDisabled":false},` +
 		`"policy/dnsbl":{"blacklistLogging":"disabled_log","dnsblIpAction":"Disabled","enabled":false,"groups":[],"logging":"disabled_log","regex":false,"regexList":[],` +
 		`"safeSearch":false,"safeSearchDoh":false,"safeSearchDohList":[],"safeSearchYoutube":"Disable","tldAllow":false,"tldAllowBgtld":[],"tldAllowCctld":[],"tldAllowGtld":[],` +

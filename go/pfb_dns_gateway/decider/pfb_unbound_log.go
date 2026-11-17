@@ -320,10 +320,6 @@ func (m *pfbUnbound) getDetailsDnsbl(mType string, qinfo *queryInfo, qstate *mod
 	if dnsbl == nil || !dnsbl.isFound || dnsbl.inWhitelist {
 		return true
 	}
-	// If logging is disabled, do not log blocked DNSBL events (Utilize DNSBL Webserver) except for Python nullblock events.
-	if m.snapshotOf(qstate).settings.pythonNolog && !dnsbl.nullBlocking {
-		return true
-	}
 
 	// Increment the dnsblgroup counter.
 	if m.sqlite3DnsblCon.Load() && dnsbl.group != "" && groupEpoch != "" {

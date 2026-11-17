@@ -69,7 +69,6 @@ $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_Pr
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_blacklist.php*";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_threats.php*";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_safesearch.php*";
-$priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/www/index.php";
 $priv_list['page-firewall-pfblockerng']['match'][] = "wizard.php?xml=pfblockerng_wizard.xml*";
 $priv_list['page-firewall-pfblockerng']['match'][] = "widgets/widgets/pfblockerng.widget.php*";
 

@@ -7,9 +7,7 @@
         "python_enable": "true",
         "python_blocking": "true",
         "python_cname": "true",
-        "idn_mode": "on",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "idn_mode": "on"
       }
     },
     "manifest": {
@@ -35,7 +33,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["xn--mnchen-3ya.com. 3600 IN A 10.10.10.1"],
+        "answer": ["xn--mnchen-3ya.com. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -48,7 +46,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["www.xn--mnchen-3ya.com. 3600 IN A 10.10.10.1"],
+        "answer": ["www.xn--mnchen-3ya.com. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -61,7 +59,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["xn--pple-43d.com. 3600 IN A 10.10.10.1"],
+        "answer": ["xn--pple-43d.com. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },

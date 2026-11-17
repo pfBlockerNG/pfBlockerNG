@@ -89,7 +89,7 @@ def test_with_dnsbl_off_a_listed_name_is_unbounds_own_answer_and_unbound_logs_th
     tcp = _tcp(pfb_dns.server, BLOCKED, ALLOWED_CLIENT_TCP)
 
     for reply in (udp, tcp):
-        assert _answers(reply) == [UNBOUNDS_ANSWER_FOR_BLOCKED], "Unbound's answer, not the DNSBL VIP"
+        assert _answers(reply) == [UNBOUNDS_ANSWER_FOR_BLOCKED], "Unbound's answer, not the DNSBL block"
     logged = unbound.tail.wait_for(f"{ALLOWED_CLIENT_TCP} {BLOCKED} A IN", since=mark)
     assert any(f"{ALLOWED_CLIENT} {BLOCKED} A IN" in line for line in logged)
     assert not any(f"127.0.0.1 {BLOCKED}" in line for line in logged), "the client, not the gateway"
@@ -138,7 +138,7 @@ def test_with_dnsbl_off_dot_forwards_a_listed_name_and_unbound_logs_the_tls_clie
             )
         )[0]
 
-    assert _answers(reply) == [UNBOUNDS_ANSWER_FOR_BLOCKED], "Unbound's answer, not the DNSBL VIP"
+    assert _answers(reply) == [UNBOUNDS_ANSWER_FOR_BLOCKED], "Unbound's answer, not the DNSBL block"
     logged = unbound.tail.wait_for(f"{ALLOWED_CLIENT_TCP} {BLOCKED} A IN", since=mark)
     assert not any(f"127.0.0.1 {BLOCKED}" in line for line in logged), "the TLS client, not the gateway"
     assert not no_module_dir.exists(), "the decider needed no module directory at all"

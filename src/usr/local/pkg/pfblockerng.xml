@@ -41,12 +41,6 @@
 		<url>/pfblockerng/pfblockerng_general.php</url>
 	</menu>
 	<service>
-		<name>pfb_dnsbl</name>
-		<rcfile>pfb_dnsbl.sh</rcfile>
-		<executable>lighttpd_pfb</executable>
-		<description>pfBlockerNG DNSBL service</description>
-	</service>
-	<service>
 		<name>pfb_dns_proxy</name>
 		<rcfile>pfb_dns_proxy.sh</rcfile>
 		<custom_php_service_status_command>isvalidpid('/var/run/pfb_dns_proxy.pid')</custom_php_service_status_command>

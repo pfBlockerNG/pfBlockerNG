@@ -7,15 +7,13 @@
         "python_enable": "true",
         "python_blocking": "true",
         "python_cname": "true",
-        "idn_mode": "on",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "idn_mode": "on"
       }
     },
     "manifest": {
       "version": 1,
       "config": {"builtin_log_flag": "1"},
-      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "0"}]
     },
     "files": {
       "pfb_py_raw/feed.txt": ["||x.example^", "@@||y.example^"]
@@ -34,7 +32,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["xn--mnchen-3ya.com. 3600 IN A 10.10.10.1"],
+        "answer": ["xn--mnchen-3ya.com. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },

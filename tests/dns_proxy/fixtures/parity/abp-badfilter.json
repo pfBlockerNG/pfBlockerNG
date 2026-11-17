@@ -6,21 +6,19 @@
       "MAIN": {
         "python_enable": "true",
         "python_blocking": "true",
-        "python_cname": "true",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "python_cname": "true"
       }
     },
     "manifest": {
       "version": 1,
       "config": {},
       "feeds": [
-        {"raw": "pfb_py_raw/abp.txt", "feed": "AbpFeed", "group": "AbpFeedGroup", "log_flag": "1"},
+        {"raw": "pfb_py_raw/abp.txt", "feed": "AbpFeed", "group": "AbpFeedGroup", "log_flag": "0"},
         {
           "raw": "pfb_py_raw/custom.txt",
           "feed": "CustomList",
           "group": "CustomListGroup",
-          "log_flag": "1",
+          "log_flag": "0",
           "provenance": "user"
         }
       ]
@@ -49,7 +47,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["control.example. 3600 IN A 10.10.10.1"],
+        "answer": ["control.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -75,7 +73,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["different-options.example. 3600 IN A 10.10.10.1"],
+        "answer": ["different-options.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -88,7 +86,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["user-twin.example. 3600 IN A 10.10.10.1"],
+        "answer": ["user-twin.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     }

@@ -6,21 +6,19 @@
       "MAIN": {
         "python_enable": "true",
         "python_blocking": "true",
-        "python_cname": "true",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "python_cname": "true"
       }
     },
     "manifest": {
       "version": 1,
       "config": {"user_whitelist": ["custom-block-vs-whitelist.example"], "user_unlock": ["custom-block-vs-unlock.example"]},
       "feeds": [
-        {"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "FeedGroup", "log_flag": "1"},
+        {"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "FeedGroup", "log_flag": "0"},
         {
           "raw": "pfb_py_raw/custom.txt",
           "feed": "CustomList",
           "group": "CustomListGroup",
-          "log_flag": "1",
+          "log_flag": "0",
           "provenance": "user"
         },
         {
@@ -78,7 +76,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["feed-block-alone.example. 3600 IN A 10.10.10.1"],
+        "answer": ["feed-block-alone.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -104,7 +102,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["important-block-vs-allow.example. 3600 IN A 10.10.10.1"],
+        "answer": ["important-block-vs-allow.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -130,7 +128,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["custom-block-vs-important-allow.example. 3600 IN A 10.10.10.1"],
+        "answer": ["custom-block-vs-important-allow.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -143,7 +141,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["custom-block-alone.example. 3600 IN A 10.10.10.1"],
+        "answer": ["custom-block-alone.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -195,7 +193,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["permit-vs-important-block.example. 3600 IN A 10.10.10.1"],
+        "answer": ["permit-vs-important-block.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -221,7 +219,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["allow-regex-vs-block-x.example. 3600 IN A 10.10.10.1"],
+        "answer": ["allow-regex-vs-block-x.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },

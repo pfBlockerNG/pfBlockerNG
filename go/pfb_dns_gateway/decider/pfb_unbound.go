@@ -88,9 +88,6 @@ type pfbSettings struct {
 	pslAllowPrivate             bool
 	pslFeedPrivatePolicy        string
 	pslFeedIcannPolicy          string
-	dnsblIpv4                   string
-	dnsblIpv6                   string
-	pythonNolog                 bool
 	pythonMaxmind               bool
 	pythonCname                 bool
 	pythonControl               bool
@@ -120,8 +117,6 @@ type pfbSettings struct {
 	pfbPyReloadApplied  string
 	pfbPyControl        string
 	pfbPyControlApplied string
-	pfbPyQuery          string
-	pfbPyQueryReply     string
 	pfbPyCount          string
 	pfbPyRegexCount     string
 	pfbPyRejectStats    string
@@ -174,13 +169,6 @@ type pfbUnbound struct {
 	controlTick func() (tick <-chan time.Time, stop func())
 	// controlStop stops the control watcher and waits for it to end; nil is pfb["control_watcher"] False.
 	controlStop func()
-	// queryTick and queryStop are the query channel's (pfb_unbound_query.go), as controlTick and controlStop are the control
-	// watcher's; queryStop is nil before the watcher starts and after it stops.
-	queryTick func() (tick <-chan time.Time, stop func())
-	queryStop func()
-	// queryDrained, when set before the watcher starts, is called each time one of its drain passes returns, so that a
-	// test knows a pass is over without waiting for a time to go by.
-	queryDrained func()
 	// queryNewTicker makes the default tick of the query watcher (nil: time.NewTicker); a test wraps it to see the
 	// interval the watcher's ticker is made with.
 	queryNewTicker func(d time.Duration) *time.Ticker
@@ -337,8 +325,6 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 	pfb.pfbPyReloadApplied = in("pfb_py_reload.applied")
 	pfb.pfbPyControl = in("pfb_py_control")
 	pfb.pfbPyControlApplied = in("pfb_py_control.applied")
-	pfb.pfbPyQuery = in("pfb_py_query")
-	pfb.pfbPyQueryReply = in("pfb_py_query.reply")
 	pfb.pfbPyCount = in("pfb_py_count")
 	pfb.pfbPyRegexCount = in("pfb_py_regex_count")
 	pfb.pfbPyRejectStats = in("pfb_py_reject_stats.json")
@@ -390,17 +376,6 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 					return nil
 				}
 				value, err := config.getboolean("MAIN", option)
-				if err != nil {
-					return mainOptionError(option, err)
-				}
-				*dst = value
-				return nil
-			}
-			mainString := func(option string, dst *string) error {
-				if !config.hasOption("MAIN", option) {
-					return nil
-				}
-				value, err := config.get("MAIN", option)
 				if err != nil {
 					return mainOptionError(option, err)
 				}
@@ -509,15 +484,6 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 			if err := mainPslPolicy("psl_feed_icann_policy", &pfb.pslFeedIcannPolicy); err != nil {
 				return nil, err
 			}
-			if err := mainString("dnsbl_ipv4", &pfb.dnsblIpv4); err != nil {
-				return nil, err
-			}
-			if err := mainString("dnsbl_ipv6", &pfb.dnsblIpv6); err != nil {
-				return nil, err
-			}
-			if err := mainBool("python_nolog", &pfb.pythonNolog); err != nil {
-				return nil, err
-			}
 			if err := mainBool("python_cname", &pfb.pythonCname); err != nil {
 				return nil, err
 			}
@@ -545,10 +511,6 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 				case !isValueError(err):
 					return nil, mainOptionError("regex_warn_ms", err)
 				}
-			}
-
-			if pfb.dnsblIpv6 == "" {
-				pfb.dnsblIpv6 = "::"
 			}
 
 			m.rcodeDB = rcodeNames()
@@ -700,8 +662,6 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 		m.startControlWatcher()
 	}
 
-	// ADR-65: start the read-only DNSBL decision query channel's reader, always on (Python gates it on threading alone).
-	m.startQueryWatcher()
 	m.pfbSetupLogging()
 	return m, nil
 }
@@ -753,7 +713,6 @@ func (m *pfbUnbound) deinit() {
 	m.publishMu.Unlock()
 	m.stopReloadWatcher()
 	m.stopControlWatcher()
-	m.stopQueryWatcher()
 	m.closeDb()
 	m.stopLogging()
 	m.closeMaxmind()
@@ -1604,18 +1563,10 @@ func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any)
 
 				if dnsbl.logType != "5" && dnsbl.logType != "6" {
 					if qType == RR_TYPE_A || qType == RR_TYPE_ANY {
-						ip := settings.dnsblIpv4
-						if dnsbl.nullBlocking {
-							ip = "0.0.0.0"
-						}
-						msg.answer = append(msg.answer, fmt.Sprintf("%s. 3600 IN A %s", qName, ip))
+						msg.answer = append(msg.answer, fmt.Sprintf("%s. 3600 IN A 0.0.0.0", qName))
 					}
 					if qType == RR_TYPE_AAAA || qType == RR_TYPE_ANY {
-						ip := settings.dnsblIpv6
-						if dnsbl.nullBlocking {
-							ip = "::"
-						}
-						msg.answer = append(msg.answer, fmt.Sprintf("%s. 3600 IN AAAA %s", qName, ip))
+						msg.answer = append(msg.answer, fmt.Sprintf("%s. 3600 IN AAAA ::", qName))
 					}
 				}
 				// issue #3222: empty answer -> RFC 2308 Type-2 NODATA (SOA in AUTHORITY).

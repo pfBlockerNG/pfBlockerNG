@@ -9,15 +9,13 @@
         "python_tld_wildcard": "true",
         "psl_include_private": "false",
         "psl_feed_private_policy": "honor",
-        "psl_feed_icann_policy": "ignore",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "psl_feed_icann_policy": "ignore"
       }
     },
     "manifest": {
       "version": 1,
       "config": {},
-      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "0"}]
     },
     "files": {
       "dnsbl_psl": [
@@ -44,7 +42,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["pages.com. 3600 IN A 10.10.10.1"],
+        "answer": ["pages.com. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -57,7 +55,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["x.pages.com. 3600 IN A 10.10.10.1"],
+        "answer": ["x.pages.com. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },

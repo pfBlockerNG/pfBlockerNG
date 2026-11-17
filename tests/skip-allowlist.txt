@@ -142,8 +142,6 @@ smoke:tests.smoke.test_ha_policy_authority::test_unreachable_peer_is_reported_tr
 smoke:tests.smoke.test_ha_policy_authority::test_unreachable_peer_is_reported_truthfully[manual]  # HA pair is CE-only; Plus legs are out of scope (#3455)
 
 # smoke -- the HA Auto VIP module rides the same CE-only pair (issue #3540).
-smoke:tests.smoke.test_ha_auto_vip::test_secondary_creates_its_vip_at_the_address_the_primary_chose  # HA pair is CE-only; Plus legs are out of scope (#3540)
-smoke:tests.smoke.test_ha_auto_vip::test_secondary_with_the_address_in_use_creates_no_vip_and_reports_it  # HA pair is CE-only; Plus legs are out of scope (#3540)
 
 # PHPUnit -- FeedParseNormalizeCorpusTest (issue #3906): corpus cases the host may not be able to answer.
 phpunit:FeedParseNormalizeCorpusTest::testNormalizeMatchesTheCorpus with data set "utf8-bom-prefix-stripped"  # host sed lacks the appliance C.UTF-8 class data (BOM/ZWJ non-printable, NBSP in [:space:]); GNU/glibc and macOS differ, the appliance result is pinned (PHP 8.3, 8.4 and 8.5)

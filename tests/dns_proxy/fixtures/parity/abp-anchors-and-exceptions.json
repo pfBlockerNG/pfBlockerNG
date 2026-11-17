@@ -6,15 +6,13 @@
       "MAIN": {
         "python_enable": "true",
         "python_blocking": "true",
-        "python_cname": "true",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "python_cname": "true"
       }
     },
     "manifest": {
       "version": 1,
       "config": {},
-      "feeds": [{"raw": "pfb_py_raw/abp.txt", "feed": "AbpFeed", "group": "AbpFeedGroup", "log_flag": "1"}]
+      "feeds": [{"raw": "pfb_py_raw/abp.txt", "feed": "AbpFeed", "group": "AbpFeedGroup", "log_flag": "0"}]
     },
     "files": {
       "pfb_py_raw/abp.txt": ["||block-d.example^", "||parent.example^", "@@||allowed.parent.example^"]
@@ -34,7 +32,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["block-d.example. 3600 IN A 10.10.10.1"],
+        "answer": ["block-d.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -47,7 +45,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["www.block-d.example. 3600 IN A 10.10.10.1"],
+        "answer": ["www.block-d.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -60,7 +58,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["a.b.block-d.example. 3600 IN A 10.10.10.1"],
+        "answer": ["a.b.block-d.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -99,7 +97,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["other.parent.example. 3600 IN A 10.10.10.1"],
+        "answer": ["other.parent.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -112,7 +110,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["parent.example. 3600 IN A 10.10.10.1"],
+        "answer": ["parent.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     }

@@ -1427,8 +1427,8 @@ func TestControlAddbypassRacingAReloadSwapLosesNeither(t *testing.T) {
 }
 
 // Queries run through Frontend.Resolve in several goroutines while the watcher drains one generation after another and
-// control commands run alongside. The odd generations block n.example and t.example, the even ones m.example, with
-// different sinkholes, so each answer must be exactly one generation's verdict (a torn mix matches neither). The applied
+// control commands run alongside. The odd generations block n.example and t.example, the even ones m.example, so each
+// answer must be exactly one generation's verdict. The applied
 // marker must end at the last generation. Run it with -race.
 func TestReloadSwapRaceEveryAnswerIsOneGenerationsVerdict(t *testing.T) {
 	m := modMust(t, t.TempDir())
@@ -1450,9 +1450,9 @@ func TestReloadSwapRaceEveryAnswerIsOneGenerationsVerdict(t *testing.T) {
 		rlDrainOnce(t, m, w)
 	}
 	want := map[string]map[string]string{
-		"n.example.": {"A": "192.0.2.1", "B": "192.0.2.99"},
-		"m.example.": {"A": "192.0.2.99", "B": "192.0.2.2"},
-		"c.example.": {"A": "192.0.2.1", "B": "CNAME,192.0.2.99"},
+		"n.example.": {"A": "0.0.0.0", "B": "192.0.2.99"},
+		"m.example.": {"A": "192.0.2.99", "B": "0.0.0.0"},
+		"c.example.": {"A": "0.0.0.0", "B": "CNAME,192.0.2.99"},
 		"u.example.": {"A": "192.0.2.99", "B": "192.0.2.99"},
 	}
 	names := []string{"n.example.", "m.example.", "c.example.", "u.example."}

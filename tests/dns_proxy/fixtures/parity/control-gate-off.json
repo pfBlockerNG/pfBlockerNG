@@ -7,9 +7,7 @@
         "python_enable": "true",
         "python_blocking": "true",
         "python_cname": "true",
-        "python_control_legacy": "true",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "python_control_legacy": "true"
       }
     },
     "manifest": {"version": 1, "config": {}, "feeds": []},

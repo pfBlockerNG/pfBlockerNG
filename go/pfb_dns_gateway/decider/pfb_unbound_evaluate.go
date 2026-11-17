@@ -332,8 +332,6 @@ type evaluateConfig struct {
 	zoneDB                      bool
 	tldAllow                    bool
 	tldAllowList                []string
-	dnsblIpv4                   string
-	dnsblIpv6                   string
 	pythonIdn                   bool
 	idnMode                     IdnMode
 	pythonIdnBlockMalicious     bool
@@ -408,7 +406,7 @@ func evaluateDomain(qName, qNameOriginal, tld string, isCname bool, cfg evaluate
 	}
 
 	if !isFound {
-		if qName != cfg.dnsblIpv4 && qName != cfg.dnsblIpv6 && tldAllowBlocks(qName, tld, cfg, containers) {
+		if tldAllowBlocks(qName, tld, cfg, containers) {
 			isFound = true
 			feed = "TLD_Allow"
 			group = "DNSBL_TLD_Allow"
@@ -553,9 +551,7 @@ func evaluateDomain(qName, qNameOriginal, tld string, isCname bool, cfg evaluate
 			inHsts, pType = hstsCheckDomain(qName, containers.hstsDB, cfg.hstsTlds, tld)
 		}
 
-		if logType == "1" && !inHsts {
-			nullBlocking = false
-		} else if logType == "3" || logType == "4" || logType == "5" || logType == "6" {
+		if logType == "3" || logType == "4" || logType == "5" || logType == "6" {
 			// NXDOMAIN and NODATA bypass address replies; HSTS did not cause the block.
 			inHsts = false
 			pType = "Python"
@@ -609,8 +605,6 @@ func (m *pfbUnbound) evaluateCfg(snap *snapshot) evaluateConfig {
 		zoneDB:                      len(snap.zoneDB) > 0,
 		tldAllow:                    settings.tldAllow,
 		tldAllowList:                tldAllowList,
-		dnsblIpv4:                   settings.dnsblIpv4,
-		dnsblIpv6:                   settings.dnsblIpv6,
 		pythonIdn:                   settings.pythonIdn,
 		idnMode:                     idnMode,
 		pythonIdnBlockMalicious:     settings.pythonIdnBlockMalicious,

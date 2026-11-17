@@ -9,9 +9,7 @@
         "python_cname": "true",
         "tld_allow": "true",
         "tld_allow_list": "org,uk",
-        "psl_allow_private": "true",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "psl_allow_private": "true"
       }
     },
     "manifest": {
@@ -65,7 +63,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["site.com. 3600 IN A 10.10.10.1"],
+        "answer": ["site.com. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },

@@ -52,8 +52,6 @@ func evCaptureLog(t *testing.T) *evSyncBuffer {
 func evCfg() evaluateConfig {
 	return evaluateConfig{
 		pythonBlocking:          true,
-		dnsblIpv4:               "10.10.10.1",
-		dnsblIpv6:               "::1",
 		regexWarnMs:             REGEX_WARN_MS_DEFAULT,
 		pythonTldSeg:            2,
 		hstsTlds:                []string{"app", "dev"},
@@ -1523,7 +1521,7 @@ func TestEvaluateCfg(t *testing.T) {
 	m := &pfbUnbound{regexRuntime: newRegexRuntime()}
 	m.pfb.pythonBlocking = false // a swap does not refresh this; the snapshot's settings decide
 	settings := &pfbSettings{
-		pythonBlocking: true, tldAllow: true, tldAllowList: []string{"com"}, dnsblIpv4: "10.0.0.1", dnsblIpv6: "fd00::1",
+		pythonBlocking: true, tldAllow: true, tldAllowList: []string{"com"},
 		pythonIdn: true, idnMode: IdnModeConfusable, pythonIdnBlockMalicious: false, pythonIdnEscalateSuspicious: true,
 		regexWarnMs: 7.5, pythonTldSeg: 3, pythonHsts: true, hstsTlds: []string{"app"},
 	}
@@ -1537,7 +1535,7 @@ func TestEvaluateCfg(t *testing.T) {
 
 	want := evaluateConfig{
 		pythonBlocking: true, dataDB: true, zoneDB: false, tldAllow: true, tldAllowList: []string{"io"},
-		dnsblIpv4: "10.0.0.1", dnsblIpv6: "fd00::1", pythonIdn: true, idnMode: IdnModeConfusable,
+		pythonIdn: true, idnMode: IdnModeConfusable,
 		pythonIdnBlockMalicious: false, pythonIdnEscalateSuspicious: true,
 		regexDB: true, whiteDB: true, allowRegexDB: false, userRegexDB: true, userAllowRegexDB: false,
 		importantRules: true, regexWarnMs: 7.5, pythonTldSeg: 3, pythonHsts: true, hstsTlds: []string{"app"},

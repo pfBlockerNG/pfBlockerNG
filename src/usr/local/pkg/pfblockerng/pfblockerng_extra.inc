@@ -1296,89 +1296,14 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
-		// ADR-13: auto-create/remove DNSBL sinkhole VIPs: 'on' | '' (checkbox).
-		'dnsbl/pfb_dnsvip_auto' => [
-			'default'       => '',
-			'read_adapter'  => 'pfb_cfg_toggle_read',
-			'write_adapter' => 'pfb_cfg_toggle_write',
-			'sync'          => 'local',
-			'no_grandfather' => 'ADR-13 opt-in auto-VIP; new 4.0 field, \'\' = manual VIP handling = prior behaviour',
-		],
 
-		// [ #381 ] Opt out of automatic DNSBL sinkhole NAT rule generation: 'on' | '' (checkbox).
-		// Default '' = NAT generated (current behaviour); 'on' = user manages NAT manually.
-		'dnsbl/pfb_dnsbl_nonat' => [
-			'default'       => '',
-			'read_adapter'  => 'pfb_cfg_toggle_read',
-			'write_adapter' => 'pfb_cfg_toggle_write',
-			'sync'          => 'policy',
-			'no_grandfather' => '#381 opt-OUT toggle; new 4.0 field, \'\' = NAT rules generated = prior behaviour',
-		],
 
-		// VIP interface for DNSBL sinkhole. Default 'lo0'.
-		'dnsbl/dnsbl_interface' => [
-			'default'       => 'lo0',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'local',
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
-		],
 
-		// DNSBL IPv4 sinkhole VIP id string. Default ''.
-		'dnsbl/pfb_dnsvip4' => [
-			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'local',
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
-		],
 
-		// DNSBL IPv6 sinkhole VIP id string. Default ''.
-		'dnsbl/pfb_dnsvip6' => [
-			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'local',
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
-		],
 
-		// issue #3540: address of this node's auto-created IPv4 sinkhole VIP, synced so a policy receiver provisions at it.
-		'dnsbl/pfb_dnsvip_auto4' => [
-			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'policy',
-			'no_grandfather' => '#3540 new field; absent = no synced auto-VIP address = prior behaviour',
-		],
 
-		// issue #3540: address of this node's auto-created IPv6 sinkhole VIP, synced so a policy receiver provisions at it.
-		'dnsbl/pfb_dnsvip_auto6' => [
-			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'policy',
-			'no_grandfather' => '#3540 new field; absent = no synced auto-VIP address = prior behaviour',
-		],
 
-		// DNSBL lighttpd HTTP port. Default '8081' (the page/save contract since 3.2).
-		// pfb_registry_pass seeds this on a fresh install, so apply no longer hits
-		// "DNSBL Ports are not defined" on a never-saved config.
-		'dnsbl/pfb_dnsport' => [
-			'default'       => '8081',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'local',
-			'no_grandfather' => '#2994 page/save default 8081 is the operator-visible contract; absent already rendered 8081; a fresh install now seeds it',
-		],
 
-		// DNSBL lighttpd HTTPS port. Default '8443' (the page/save contract since 3.2).
-		'dnsbl/pfb_dnsport_ssl' => [
-			'default'       => '8443',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'local',
-			'no_grandfather' => '#2994 page/save default 8443 is the operator-visible contract; absent already rendered 8443; a fresh install now seeds it',
-		],
 
 		// TOP1M whitelist enable. Default ''.
 		'dnsbl/top1m_enable' => [
@@ -1680,14 +1605,6 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => '3.2-era field; v3.2.16 absent fallback equals default; registered for old_name parity (#1921)',
 		],
 
-		// Log events via DNSBL Webserver vs python. Default ''.
-		'dnsbl/pfb_py_nolog' => [
-			'default'       => '',
-			'read_adapter'  => 'pfb_cfg_toggle_read',
-			'write_adapter' => 'pfb_cfg_toggle_write',
-			'sync'          => 'local',
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
-		],
 
 		// No AAAA blocking: 'on' | ''. Default ''.
 		'dnsbl/pfb_noaaaa' => [
@@ -1764,23 +1681,7 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
-		// Auto-create floating pass rule. Default 'Disabled'.
-		'dnsbl/pfb_dnsbl_rule' => [
-			'default'       => 'Disabled',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'policy',
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
-		],
 
-		// Allow-interface for DNSBL (multi-select). Default ''.
-		'dnsbl/dnsbl_allow_int' => [
-			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'local',
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
-		],
 
 		// Python control integration. Default ''.
 		'dnsbl/pfb_control' => [
@@ -2609,18 +2510,6 @@ function pfb_sync_local_paths(): array
 		'section'     => ['pfblockerngblacklist' => ['item/*/username', 'item/*/password']],
 		'policy_only' => ['pfblockerngglobal' => ['feed_']],
 	];
-}
-
-// Read the configured DNSBL block-page template filename. issue #713: this is a FOREIGN key
-// (ADR-29 §2.5 out-of-scope), written directly by pfblockerng_dnsbl.php as 'dnsbl_webpage' —
-// so it is read here via a direct config_get_path(), mirroring how the DNSBL settings page
-// stores/reads it. config_get_path()'s default arg only substitutes when the key is ABSENT,
-// not when present-but-empty (''), so the `?:` coercion below is required — a
-// saved-then-cleared 'dnsbl_webpage' must still report 'dnsbl_default.php'. Fixes the dead
-// read of the mis-spelled 'dnsblwebpage' key, which always returned ''.
-function pfb_dnsbl_webpage(): string
-{
-	return config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_webpage', 'dnsbl_default.php') ?: 'dnsbl_default.php';
 }
 
 /**
@@ -8500,183 +8389,6 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 
 	$result['savemsg'] = gettext('Cannot Lock/Unlock - Invalid action.');
 	return $result;
-}
-
-/**
- * ADR-65 SS2.1: ask the live DNSBL matcher whether $domain is blocked, via the
- * read-only query channel (pfb_py_query / pfb_py_query.reply) -- no counter/
- * log/cache sink is touched, only the decision-cache LRU may warm.
- *
- * @param string $domain    Domain to query (trailing dot stripped; PFBL-01 validated).
- * @param string $qtype     Informational only -- the matcher's decision ignores it.
- * @param float  $timeout_s Bounded-wait budget in seconds (a deadline AND a hard poll
- *                          cap both bound the wait -- CLAUDE.md "No orphaned waits").
- * @param callable|null $now Monotonic clock seam for deterministic wait tests.
- * @return array{blocked:bool,b_type:string,group:string,b_eval:string,feed:string,p_type:string,group_owner:string,group_origin:string,group_epoch:string}|null
- *         The matcher's verdict, or NULL when none was obtained (invalid domain,
- *         request-encode, lock open/acquire, or write failure; timeout; or a malformed reply)
- *         -- callers must treat NULL and blocked=false identically ("no block"),
- *         never distinguish them.
- */
-function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s = 5.0, ?callable $now = NULL): ?array {
-	global $pfb;
-	$now ??= static fn (): float => microtime(TRUE);
-
-	$channel    = "{$pfb['dnsbldir']}/pfb_py_query";
-	$reply_path = "{$pfb['dnsbldir']}/pfb_py_query.reply";
-
-	$domain = rtrim($domain, '.');
-	$clean  = pfb_filter($domain, PFB_FILTER_DOMAIN, 'pfb_dnsbl_query');
-	if (empty($clean)) {
-		pfb_logger("\nADR-65: pfb_dnsbl_query rejected an invalid domain [ " . htmlspecialchars($domain) . " ]", 2);
-		return NULL;
-	}
-
-	$id      = uniqid('pfbq_', TRUE);
-	$payload = json_encode(array('id' => $id, 'domain' => $clean, 'qtype' => $qtype));
-	if ($payload === FALSE) {
-		pfb_logger("\nADR-65: pfb_dnsbl_query failed to encode the request for [ {$clean} ]", 2);
-		return NULL;
-	}
-
-	// The two Lighttpd hit parsers share one request/reply slot. Serialize the
-	// complete transaction so neither can overwrite or clean up the other's files.
-	$wait_s    = max($timeout_s, 0.0);
-	$deadline  = $now() + $wait_s;
-	$lock_path = "{$pfb['dnsbldir']}/pfb_py_query.lock";
-	$lock = is_dir($lock_path) ? FALSE : @fopen($lock_path, 'c');
-	if ($lock === FALSE) {
-		pfb_logger("\nADR-65: query channel lock open failed [ {$lock_path} ]", 2);
-		return NULL;
-	}
-
-	$locked = FALSE;
-	$max_lock_polls = (int) ceil($wait_s / 0.02) + 2;
-	$lock_polls = 0;
-	$first_lock_attempt = TRUE;
-	do {
-		$allow_expired_attempt = $first_lock_attempt && $wait_s <= 0.0;
-		$first_lock_attempt = FALSE;
-		if (!$allow_expired_attempt && $now() >= $deadline) {
-			break;
-		}
-		$would_block = 0;
-		if (@flock($lock, LOCK_EX | LOCK_NB, $would_block)) {
-			// A waiter can be descheduled between its deadline check and flock().
-			// Never publish after that budget expires; timeout=0 still gets one
-			// immediate non-blocking attempt.
-			if (!$allow_expired_attempt && $now() >= $deadline) {
-				@flock($lock, LOCK_UN);
-				break;
-			}
-			$locked = TRUE;
-			break;
-		}
-		if ($would_block !== 1) {
-			@fclose($lock);
-			pfb_logger("\nADR-65: query channel lock acquire failed [ {$lock_path} ]", 2);
-			return NULL;
-		}
-		$lock_polls++;
-		$remaining_s = $deadline - $now();
-		if ($lock_polls >= $max_lock_polls || $remaining_s <= 0.0) {
-			break;
-		}
-		usleep((int) min(20000, ceil($remaining_s * 1000000)));
-	} while (TRUE);
-	if (!$locked) {
-		@fclose($lock);
-		pfb_logger("\nADR-65: query channel lock timed out [ {$lock_path} ]", 2);
-		return NULL;
-	}
-
-	try {
-		if (!pfb_unbound_py_atomic_write_root($channel, $payload . "\n")) {
-			// The shared atomic-write helper logs a PFBL-03 "control channel" message,
-			// which misattributes a query-channel write failure -- emit an ADR-65-scoped
-			// line so it is attributable.
-			pfb_logger("\nADR-65: pfb_dnsbl_query failed to publish the request for [ {$clean} ]", 2);
-			return NULL;
-		}
-		// ADR-65 SS2.1: the query request is group-writable (0660) for the attributing
-		// daemon, unlike the owner-only 0640 control-command channel.
-		@chmod($channel, 0660);
-
-		$max_polls = (int) ceil($wait_s / 0.2) + 2;
-		$verdict   = NULL;
-		$polls     = 0;
-		$first_poll = TRUE;
-
-		do {
-			$allow_expired_poll = $first_poll && $wait_s <= 0.0;
-			$first_poll = FALSE;
-			if (!$allow_expired_poll && $now() >= $deadline) {
-				break;
-			}
-			if (file_exists($reply_path)) {
-				$raw = @file_get_contents($reply_path);
-				// An oversized read is treated as malformed -- a genuine reply is < 1 KB.
-				if ($raw !== FALSE && strlen($raw) <= 65536) {
-					$rec = json_decode($raw, TRUE);
-					if (
-						is_array($rec)
-						&& (($rec['id'] ?? NULL) === $id)
-						&& is_bool($rec['blocked'] ?? NULL)
-						&& is_string($rec['b_type'] ?? NULL)
-						&& is_string($rec['group'] ?? NULL)
-						&& is_string($rec['b_eval'] ?? NULL)
-						&& is_string($rec['feed'] ?? NULL)
-						&& is_string($rec['p_type'] ?? NULL)
-						&& is_string($rec['group_owner'] ?? NULL)
-						&& is_string($rec['group_origin'] ?? NULL)
-						&& in_array($rec['group_origin'], array('', 'custom', 'builtin'), TRUE)
-						&& is_string($rec['group_epoch'] ?? NULL)
-						&& ($rec['group_epoch'] === '' || preg_match('/^[0-9a-f]{32}$/D', $rec['group_epoch']) === 1)
-					) {
-						// A reply that becomes readable after the shared deadline is
-						// late even if this process was descheduled while reading it.
-						if (!$allow_expired_poll && $now() >= $deadline) {
-							break;
-						}
-						$verdict = array(
-							'blocked' => $rec['blocked'],
-							'b_type'  => $rec['b_type'],
-							'group'   => $rec['group'],
-							'b_eval'  => $rec['b_eval'],
-							'feed'    => $rec['feed'],
-							'p_type'  => $rec['p_type'],
-							'group_epoch' => $rec['group_epoch'],
-							'group_owner' => $rec['group_owner'],
-							'group_origin' => $rec['group_origin'],
-						);
-						break;
-					}
-				}
-			}
-			$polls++;
-			$remaining_s = $deadline - $now();
-			if ($polls >= $max_polls || $remaining_s <= 0.0) {
-				break;
-			}
-			usleep((int) min(200000, ceil($remaining_s * 1000000)));
-		} while (TRUE);
-
-		if ($verdict === NULL) {
-			pfb_logger("\nADR-65: pfb_dnsbl_query timed out waiting for a verdict [ {$clean} ]", 2);
-			if (file_exists($reply_path)) {
-				@unlink($reply_path);
-			}
-			@unlink($channel);
-			return NULL;
-		}
-
-		@unlink($reply_path);
-		@unlink($channel);
-		return $verdict;
-	} finally {
-		@flock($lock, LOCK_UN);
-		@fclose($lock);
-	}
 }
 
 // ---------------------------------------------------------------------------

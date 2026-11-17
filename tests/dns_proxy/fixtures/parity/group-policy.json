@@ -6,16 +6,14 @@
       "MAIN": {
         "python_enable": "true",
         "python_blocking": "true",
-        "python_cname": "true",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "python_cname": "true"
       },
       "GP_Bypass_List": {"row1": "192.0.2.50", "row2": "198.51.100.0/24", "row3": "2001:db8:100::/48"}
     },
     "manifest": {
       "version": 1,
       "config": {},
-      "feeds": [{"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"}]
+      "feeds": [{"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "0"}]
     },
     "files": {
       "pfb_py_raw/vip.txt": ["blocked.example"],
@@ -33,7 +31,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["blocked.example. 3600 IN A 10.10.10.1"],
+        "answer": ["blocked.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -85,7 +83,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["blocked.example. 3600 IN A 10.10.10.1"],
+        "answer": ["blocked.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },

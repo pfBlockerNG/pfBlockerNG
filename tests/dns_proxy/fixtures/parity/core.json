@@ -6,16 +6,14 @@
       "MAIN": {
         "python_enable": "true",
         "python_blocking": "true",
-        "python_cname": "true",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "python_cname": "true"
       }
     },
     "manifest": {
       "version": 1,
       "config": {},
       "feeds": [
-        {"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"},
+        {"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "0"},
         {"raw": "pfb_py_raw/null0.txt", "feed": "Null0Feed", "group": "Null0Group", "log_flag": "0"},
         {"raw": "pfb_py_raw/null2.txt", "feed": "Null2Feed", "group": "Null2Group", "log_flag": "2"},
         {"raw": "pfb_py_raw/nx3.txt", "feed": "Nx3Feed", "group": "Nx3Group", "log_flag": "3"},
@@ -75,7 +73,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["blocked.example. 3600 IN A 10.10.10.1"],
+        "answer": ["blocked.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -101,7 +99,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["BlOcKeD.ExAmPlE. 3600 IN A 10.10.10.1"],
+        "answer": ["BlOcKeD.ExAmPlE. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -114,7 +112,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["vip.example. 3600 IN AAAA fd00::1"],
+        "answer": ["vip.example. 3600 IN AAAA ::"],
         "authority": []
       }
     },
@@ -127,7 +125,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["vip.example. 3600 IN A 10.10.10.1", "vip.example. 3600 IN AAAA fd00::1"],
+        "answer": ["vip.example. 3600 IN A 0.0.0.0", "vip.example. 3600 IN AAAA ::"],
         "authority": []
       }
     },

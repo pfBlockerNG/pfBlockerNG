@@ -87,7 +87,6 @@ func dnsProjection() Projection {
 		{Name: "idnBlockMalicious", Type: TypeBool, Default: true},
 		{Name: "idnEscalateSuspicious", Type: TypeBool, Default: false},
 		{Name: "decisionCacheMax", Type: TypeInt, Default: int64(10000), Min: new(int64(0)), Max: new(int64(5000000))}, // 0: unlimited
-		{Name: "logViaWebserver", Type: TypeBool, Default: false},
 		{Name: "cnameValidation", Type: TypeBool, Default: false},
 		{Name: "control", Type: TypeBool, Default: false},
 		{Name: "controlLegacy", Type: TypeBool, Default: false, Requires: "control"},

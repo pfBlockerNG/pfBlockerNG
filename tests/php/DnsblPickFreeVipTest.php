@@ -7,18 +7,18 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * pfb_pick_free_dnsbl_vip() (ADR-13 / issue #473 / issue #487) — the conflict-aware
- * picker that walks pfb_dnsbl_vip_candidates() and returns the first address free of
+ * pfb_pick_free_vip() (ADR-13 / issue #473 / issue #487) — the conflict-aware
+ * picker that walks the caller's candidates and returns the first address free of
  * VIP/subnet conflicts.
  *
  * Scenario A (control): no existing VIPs, no configured subnets
  *   Given  the VIP list is empty and no subnets are seeded
- *   When   pfb_pick_free_dnsbl_vip(AF_INET, 'lan') is called
+ *   When   pfb_pick_free_vip(AF_INET, NULL, self::candidates(AF_INET)) is called
  *   Then   it returns '172.16.53.1' (the first Class-B candidate)
  *
  * Scenario B: first candidate conflicts — skip to next
  *   Given  172.16.53.1 is a configured subnet
- *   When   pfb_pick_free_dnsbl_vip(AF_INET, 'lan') is called
+ *   When   pfb_pick_free_vip(AF_INET, NULL, self::candidates(AF_INET)) is called
  *   Then   it returns '192.168.53.1' (second candidate)
  *
  * Scenario B2: first two candidates conflict — fall to the tertiary
@@ -27,7 +27,7 @@ use PHPUnit\Framework\TestCase;
  *
  * Scenario C: all three candidates conflict — pool exhausted → null
  *   Given  172.16/12, 192.168/16, and 10/8 are all occupied
- *   When   pfb_pick_free_dnsbl_vip(AF_INET, 'lan') is called
+ *   When   pfb_pick_free_vip(AF_INET, NULL, self::candidates(AF_INET)) is called
  *   Then   it returns null (user must resolve manually)
  *
  * Scenario E (IPv6): the single ULA candidate is returned when free, and null
@@ -43,10 +43,20 @@ use PHPUnit\Framework\TestCase;
  *   bare addresses, get_specialnet() labels them "<address> (<descr>)" — and a VIP at a candidate
  *   address takes it, whatever case or zero padding its stored IPv6 text uses
  */
-#[CoversFunction('pfb_pick_free_dnsbl_vip')]
+#[CoversFunction('pfb_pick_free_vip')]
 #[CoversFunction('pfb_get_vips')]
 final class DnsblPickFreeVipTest extends TestCase
 {
+	/** The candidate lists the retired DNSBL sinkhole used (issue #4053): the picker now takes its candidates from the caller. */
+	private static function candidates(int $family): array
+	{
+		return match ($family) {
+			AF_INET  => ['172.16.53.1', '192.168.53.1', '10.53.53.1'],
+			AF_INET6 => ['fd00:53:53:53:53:53:53:1'],
+			default  => [],
+		};
+	}
+
 	protected function setUp(): void
 	{
 		// Start each test with an empty VIP list and no subnet seed.
@@ -70,7 +80,7 @@ final class DnsblPickFreeVipTest extends TestCase
 		// Given: empty VIP list, no subnet seed (globals unset in setUp).
 
 		// When
-		$result = pfb_pick_free_dnsbl_vip(AF_INET, 'lan');
+		$result = pfb_pick_free_vip(AF_INET, NULL, self::candidates(AF_INET));
 
 		// Then: Class-B first candidate is chosen (least-used RFC1918 on end-user LANs).
 		$this->assertSame('172.16.53.1', $result,
@@ -82,7 +92,7 @@ final class DnsblPickFreeVipTest extends TestCase
 	public function testV4_FirstCandidateConflicts_ReturnsSecond(): void
 	{
 		// Given: before seeding the conflict the first candidate is returned.
-		$before = pfb_pick_free_dnsbl_vip(AF_INET, 'lan');
+		$before = pfb_pick_free_vip(AF_INET, NULL, self::candidates(AF_INET));
 		$this->assertSame('172.16.53.1', $before,
 			'Pre-condition: without subnet seed the picker must return the first candidate');
 
@@ -90,7 +100,7 @@ final class DnsblPickFreeVipTest extends TestCase
 		$GLOBALS['pfb_test_configured_subnets'] = ['172.16.0.0/12'];
 
 		// When
-		$result = pfb_pick_free_dnsbl_vip(AF_INET, 'lan');
+		$result = pfb_pick_free_vip(AF_INET, NULL, self::candidates(AF_INET));
 
 		// Then: second candidate (Class-C) is chosen.
 		$this->assertSame('192.168.53.1', $result,
@@ -106,7 +116,7 @@ final class DnsblPickFreeVipTest extends TestCase
 		$GLOBALS['pfb_test_configured_subnets'] = ['172.16.0.0/12', '192.168.0.0/16'];
 
 		// When
-		$result = pfb_pick_free_dnsbl_vip(AF_INET, 'lan');
+		$result = pfb_pick_free_vip(AF_INET, NULL, self::candidates(AF_INET));
 
 		// Then: the Class-A tertiary candidate is chosen (last in the fixed list).
 		$this->assertSame('10.53.53.1', $result,
@@ -124,7 +134,7 @@ final class DnsblPickFreeVipTest extends TestCase
 		];
 
 		// When
-		$result = pfb_pick_free_dnsbl_vip(AF_INET, 'lan');
+		$result = pfb_pick_free_vip(AF_INET, NULL, self::candidates(AF_INET));
 
 		// Then: pool exhausted → null; user must set the VIP manually.
 		$this->assertNull($result,
@@ -137,7 +147,7 @@ final class DnsblPickFreeVipTest extends TestCase
 	{
 		// Given: empty VIP list, no seed.
 		// When
-		$result = pfb_pick_free_dnsbl_vip(AF_INET6, 'lan');
+		$result = pfb_pick_free_vip(AF_INET6, NULL, self::candidates(AF_INET6));
 
 		// Then: the single ULA candidate is returned.
 		$this->assertSame('fd00:53:53:53:53:53:53:1', $result,
@@ -147,7 +157,7 @@ final class DnsblPickFreeVipTest extends TestCase
 	public function testV6_CandidateIsExistingVip_ReturnsNull(): void
 	{
 		// Given: before seeding, the ULA candidate is returned (transition pre-state).
-		$before = pfb_pick_free_dnsbl_vip(AF_INET6, 'lan');
+		$before = pfb_pick_free_vip(AF_INET6, NULL, self::candidates(AF_INET6));
 		$this->assertSame('fd00:53:53:53:53:53:53:1', $before,
 			'Pre-condition: without a conflicting VIP the v6 picker returns the ULA candidate');
 
@@ -155,7 +165,7 @@ final class DnsblPickFreeVipTest extends TestCase
 		$GLOBALS['pfb_test_vip_list'] = ['_vip6test' => 'fd00:53:53:53:53:53:53:1'];
 
 		// When
-		$result = pfb_pick_free_dnsbl_vip(AF_INET6, 'lan');
+		$result = pfb_pick_free_vip(AF_INET6, NULL, self::candidates(AF_INET6));
 
 		// Then: no free candidate -> null -> the user resolves the ULA conflict manually.
 		$this->assertNull($result,
@@ -166,8 +176,8 @@ final class DnsblPickFreeVipTest extends TestCase
 
 	public function testUnknownFamily_ReturnsNull(): void
 	{
-		$this->assertNull(pfb_pick_free_dnsbl_vip(0, 'lan'));
-		$this->assertNull(pfb_pick_free_dnsbl_vip(AF_UNIX, 'lan'));
+		$this->assertNull(pfb_pick_free_vip(0, NULL, self::candidates(0)));
+		$this->assertNull(pfb_pick_free_vip(AF_UNIX, NULL, self::candidates(AF_UNIX)));
 	}
 
 	// ---------- Scenario F — issue #3540: a caller-given address ----------
@@ -175,11 +185,11 @@ final class DnsblPickFreeVipTest extends TestCase
 	public function testV4_GivenCandidateIsFree_ReturnsThatCandidateNotTheFirst(): void
 	{
 		// Given: every candidate is free, so a plain pick would return the first one.
-		$this->assertSame('172.16.53.1', pfb_pick_free_dnsbl_vip(AF_INET, 'lan'),
+		$this->assertSame('172.16.53.1', pfb_pick_free_vip(AF_INET, NULL, self::candidates(AF_INET)),
 			'Pre-condition: without a given address the picker returns the first candidate');
 
 		// When: a free candidate other than the first is given.
-		$result = pfb_pick_free_dnsbl_vip(AF_INET, 'lan', '192.168.53.1');
+		$result = pfb_pick_free_vip(AF_INET, '192.168.53.1', self::candidates(AF_INET));
 
 		// Then: that candidate, not the first one.
 		$this->assertSame('192.168.53.1', $result,
@@ -189,12 +199,12 @@ final class DnsblPickFreeVipTest extends TestCase
 	public function testV4_GivenCandidateIsAnExistingVip_ReturnsNull(): void
 	{
 		// Given: the given candidate is free, so it is returned.
-		$this->assertSame('192.168.53.1', pfb_pick_free_dnsbl_vip(AF_INET, 'lan', '192.168.53.1'),
+		$this->assertSame('192.168.53.1', pfb_pick_free_vip(AF_INET, '192.168.53.1', self::candidates(AF_INET)),
 			'Pre-condition: a free given candidate is returned');
 
 		// When: an existing VIP takes that address.
 		$GLOBALS['pfb_test_vip_list'] = ['_vipuser1' => '192.168.53.1'];
-		$result = pfb_pick_free_dnsbl_vip(AF_INET, 'lan', '192.168.53.1');
+		$result = pfb_pick_free_vip(AF_INET, '192.168.53.1', self::candidates(AF_INET));
 
 		// Then: no fallback to another candidate; the caller must treat it as a conflict.
 		$this->assertNull($result,
@@ -204,12 +214,12 @@ final class DnsblPickFreeVipTest extends TestCase
 	public function testV4_GivenCandidateOverlapsAConfiguredSubnet_ReturnsNull(): void
 	{
 		// Given: the given candidate is free, so it is returned.
-		$this->assertSame('192.168.53.1', pfb_pick_free_dnsbl_vip(AF_INET, 'lan', '192.168.53.1'),
+		$this->assertSame('192.168.53.1', pfb_pick_free_vip(AF_INET, '192.168.53.1', self::candidates(AF_INET)),
 			'Pre-condition: a free given candidate is returned');
 
 		// When: a configured subnet covers that address.
 		$GLOBALS['pfb_test_configured_subnets'] = ['192.168.0.0/16'];
-		$result = pfb_pick_free_dnsbl_vip(AF_INET, 'lan', '192.168.53.1');
+		$result = pfb_pick_free_vip(AF_INET, '192.168.53.1', self::candidates(AF_INET));
 
 		// Then: no fallback to another candidate.
 		$this->assertNull($result,
@@ -218,7 +228,7 @@ final class DnsblPickFreeVipTest extends TestCase
 
 	public function testV6_GivenCandidateIsFree_ReturnsIt(): void
 	{
-		$result = pfb_pick_free_dnsbl_vip(AF_INET6, 'lan', 'fd00:53:53:53:53:53:53:1');
+		$result = pfb_pick_free_vip(AF_INET6, 'fd00:53:53:53:53:53:53:1', self::candidates(AF_INET6));
 
 		$this->assertSame('fd00:53:53:53:53:53:53:1', $result,
 			'The free v6 candidate given must be returned. Got: ' . var_export($result, TRUE));
@@ -229,7 +239,7 @@ final class DnsblPickFreeVipTest extends TestCase
 		// Given: the v6 candidate is taken by an existing VIP.
 		$GLOBALS['pfb_test_vip_list'] = ['_vip6user' => 'fd00:53:53:53:53:53:53:1'];
 
-		$result = pfb_pick_free_dnsbl_vip(AF_INET6, 'lan', 'fd00:53:53:53:53:53:53:1');
+		$result = pfb_pick_free_vip(AF_INET6, 'fd00:53:53:53:53:53:53:1', self::candidates(AF_INET6));
 
 		$this->assertNull($result,
 			'A given v6 candidate taken by a VIP must return NULL. Got: ' . var_export($result, TRUE));
@@ -256,20 +266,11 @@ final class DnsblPickFreeVipTest extends TestCase
 	public function testGivenNonCandidateAddress_ReturnsNull(int $family, string $address): void
 	{
 		// Given: every candidate is free (setUp seeds no VIP or subnet), so only the address itself can decide.
-		$result = pfb_pick_free_dnsbl_vip($family, 'lan', $address);
+		$result = pfb_pick_free_vip($family, $address, self::candidates($family));
 
 		$this->assertNull($result,
 			'A given address that is not a fixed candidate of its family must return NULL. Given: '
 			. var_export($address, TRUE) . ', got: ' . var_export($result, TRUE));
-	}
-
-	public function testAPublishedLegacySinkholeIsFreeEvenThoughNewCreatesUseDot1(): void
-	{
-		$this->assertSame('172.16.53.1', pfb_pick_free_dnsbl_vip(AF_INET, 'lan'));
-		$this->assertSame('172.16.53.53', pfb_pick_free_dnsbl_vip(AF_INET, 'lan', '172.16.53.53'));
-		$this->assertSame('fd00:53:53:53:53:53:53:53', pfb_pick_free_dnsbl_vip(AF_INET6, 'lan', 'fd00:53:53:53:53:53:53:53'));
-		$GLOBALS['pfb_test_vip_list'] = ['_viptaken' => '172.16.53.53'];
-		$this->assertNull(pfb_pick_free_dnsbl_vip(AF_INET, 'lan', '172.16.53.53'));
 	}
 
 	// ---------- Scenario G — issue #3565: VIPs in pfSense's own shapes ----------
@@ -277,7 +278,7 @@ final class DnsblPickFreeVipTest extends TestCase
 	public function testV4_FirstCandidateHeldByADescribedVip_ReturnsSecond(): void
 	{
 		// Given: before the VIP exists the first candidate is returned.
-		$this->assertSame('172.16.53.1', pfb_pick_free_dnsbl_vip(AF_INET, 'lan'),
+		$this->assertSame('172.16.53.1', pfb_pick_free_vip(AF_INET, NULL, self::candidates(AF_INET)),
 			'Pre-condition: without a VIP the picker returns the first candidate');
 
 		// A described VIP holds 172.16.53.1, listed exactly as pfSense lists it.
@@ -285,7 +286,7 @@ final class DnsblPickFreeVipTest extends TestCase
 		$GLOBALS['pfb_test_specialnet'] = ['172.16.53.1' => '172.16.53.1 (web server)'];
 
 		// When
-		$result = pfb_pick_free_dnsbl_vip(AF_INET, 'lan');
+		$result = pfb_pick_free_vip(AF_INET, NULL, self::candidates(AF_INET));
 
 		// Then: the VIP's address is taken, so the second candidate is chosen.
 		$this->assertSame('192.168.53.1', $result,
@@ -305,14 +306,14 @@ final class DnsblPickFreeVipTest extends TestCase
 	public function testV6_CandidateHeldByAVipInAnySpelling_ReturnsNull(string $stored): void
 	{
 		// Given: before the VIP exists the ULA candidate is returned.
-		$this->assertSame('fd00:53:53:53:53:53:53:1', pfb_pick_free_dnsbl_vip(AF_INET6, 'lan'),
+		$this->assertSame('fd00:53:53:53:53:53:53:1', pfb_pick_free_vip(AF_INET6, NULL, self::candidates(AF_INET6)),
 			'Pre-condition: without a VIP the v6 picker returns the ULA candidate');
 
 		// pfSense stores a VIP address as typed; this one is the ULA candidate.
 		$GLOBALS['pfb_test_vip_list'] = ['_vip6user' => $stored];
 
 		// When
-		$result = pfb_pick_free_dnsbl_vip(AF_INET6, 'lan');
+		$result = pfb_pick_free_vip(AF_INET6, NULL, self::candidates(AF_INET6));
 
 		// Then
 		$this->assertNull($result,
@@ -329,8 +330,8 @@ final class DnsblPickFreeVipTest extends TestCase
 		];
 
 		// When / Then: the candidates themselves are still free.
-		$this->assertSame('172.16.53.1', pfb_pick_free_dnsbl_vip(AF_INET, 'lan'));
-		$this->assertSame('fd00:53:53:53:53:53:53:1', pfb_pick_free_dnsbl_vip(AF_INET6, 'lan'));
+		$this->assertSame('172.16.53.1', pfb_pick_free_vip(AF_INET, NULL, self::candidates(AF_INET)));
+		$this->assertSame('fd00:53:53:53:53:53:53:1', pfb_pick_free_vip(AF_INET6, NULL, self::candidates(AF_INET6)));
 	}
 
 	public function testVipsAtTheFirstTwoCandidatesAndANumericLookalike_LeaveTheThird(): void
@@ -344,7 +345,7 @@ final class DnsblPickFreeVipTest extends TestCase
 		];
 
 		// When / Then: only exact address matches take a candidate.
-		$result = pfb_pick_free_dnsbl_vip(AF_INET, 'lan');
+		$result = pfb_pick_free_vip(AF_INET, NULL, self::candidates(AF_INET));
 		$this->assertSame('10.53.53.1', $result, 'Got: ' . var_export($result, TRUE));
 	}
 

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "projection": "ingest",
-  "defaults": {"suppression": true, "suppressionCidrV4": 0, "suppressionCidrV6": 0, "dnsblIp": false, "dnsblLenient": false, "feedHostFilter": true, "feedHostAllowlist": [], "selfAddresses": [], "proxyUrl": "", "proxyUser": "", "proxyPassword": "", "proxyUnusable": false, "scheduledWorkDisabled": false, "sinkholeV4": "", "sinkholeV6": ""},
+  "defaults": {"suppression": true, "suppressionCidrV4": 0, "suppressionCidrV6": 0, "dnsblIp": false, "dnsblLenient": false, "feedHostFilter": true, "feedHostAllowlist": [], "selfAddresses": [], "proxyUrl": "", "proxyUser": "", "proxyPassword": "", "proxyUnusable": false, "scheduledWorkDisabled": false},
   "cases": [
     {"id":"defaults","description":"Nothing stored: suppression on with no CIDR limit, the DNSBL IP action off and strict, the feed-host filter on with an empty allowlist, no address of the box, no proxy.","config":{},"ingest":{},"php":{"supp":true,"floors":["Disabled","Disabled"],"dnsblIp":false,"lenient":false,"filter":true,"allow":[],"proxy":{"host":null,"port":null,"userpwd":null}}},
     {"id":"suppression-on","description":"ip suppression on.","config":{"ip":{"suppression":"on"}},"ingest":{},"php":{"supp":true}},
@@ -85,15 +85,7 @@
     {"id":"scheduled-work-empty-marker","description":"An empty .pfb_cron_disable file disables scheduled work: only its presence counts.","config":{},"cronDisable":"empty","ingest":{"scheduledWorkDisabled":true},"php":{"cronDisabled":true}},
     {"id":"scheduled-work-marker-with-content","description":"The marker's content is ignored.","config":{},"cronDisable":"content","ingest":{"scheduledWorkDisabled":true},"php":{"cronDisabled":true}},
     {"id":"scheduled-work-marker-is-a-directory","description":"A directory at the marker's path is no marker.","config":{},"cronDisable":"directory","ingest":{},"php":{"cronDisabled":false}},
-    {"id":"scheduled-work-marker-is-a-symlink","description":"A symlink to a file is a marker.","config":{},"cronDisable":"symlink","ingest":{"scheduledWorkDisabled":true},"php":{"cronDisabled":true}},
-    {"id":"sinkhole-none","description":"No DNSBL VIP stored: no sinkhole address.","config":{},"ingest":{},"php":{"vip4":"","vip6":""}},
-    {"id":"sinkhole-v4","description":"The stored IPv4 VIP id resolves to its address.","config":{"dnsbl":{"pfb_dnsvip4":"_vip4a"}},"vips":[{"uniqid":"4a","subnet":"10.10.10.1"}],"ingest":{"sinkholeV4":"10.10.10.1"},"php":{"vip4":"10.10.10.1","vip6":""}},
-    {"id":"sinkhole-v4-and-v6","description":"Both VIP ids resolve.","config":{"dnsbl":{"pfb_dnsvip4":"_vip4a","pfb_dnsvip6":"_vip6a"}},"vips":[{"uniqid":"4a","subnet":"10.10.10.1"},{"uniqid":"6a","subnet":"fd00::1"}],"ingest":{"sinkholeV4":"10.10.10.1","sinkholeV6":"fd00::1"},"php":{"vip4":"10.10.10.1","vip6":"fd00::1"}},
-    {"id":"sinkhole-v6-only","description":"Only the IPv6 VIP is stored.","config":{"dnsbl":{"pfb_dnsvip6":"_vip6a"}},"vips":[{"uniqid":"6a","subnet":"fd00::1"}],"ingest":{"sinkholeV6":"fd00::1"},"php":{"vip4":"","vip6":"fd00::1"}},
-    {"id":"sinkhole-id-unresolved","description":"A stored id no VIP carries: no address.","config":{"dnsbl":{"pfb_dnsvip4":"_vip9z","pfb_dnsvip6":"_vip9y"}},"vips":[{"uniqid":"4a","subnet":"10.10.10.1"}],"ingest":{},"php":{"vip4":"","vip6":""}},
-    {"id":"sinkhole-v4-id-names-an-ipv6-vip","description":"The IPv4 id names a VIP whose address is IPv6: not an IPv4 sinkhole.","config":{"dnsbl":{"pfb_dnsvip4":"_vip6a"}},"vips":[{"uniqid":"6a","subnet":"fd00::1"}],"ingest":{},"php":{"vip4":"","vip6":""}},
-    {"id":"sinkhole-v6-zoned","description":"A link-local VIP with a zone: today's PHP writes it as typed; Core's field holds no zoned address, so it is not listed.","config":{"dnsbl":{"pfb_dnsvip6":"_vip6z"}},"vips":[{"uniqid":"6z","subnet":"fe80::1%em0"}],"ingest":{},"php":{"vip6":"fe80::1%em0"}},
-    {"id":"sinkhole-id-array","description":"An array where the VIP id is stored (hand-edited config.xml): no address, no warning.","config":{"dnsbl":{"pfb_dnsvip4":["_vip4a"],"pfb_dnsvip6":["_vip6a"]}},"vips":[{"uniqid":"4a","subnet":"10.10.10.1"},{"uniqid":"6a","subnet":"fd00::1"}],"ingest":{},"php":{}}
+    {"id":"scheduled-work-marker-is-a-symlink","description":"A symlink to a file is a marker.","config":{},"cronDisable":"symlink","ingest":{"scheduledWorkDisabled":true},"php":{"cronDisabled":true}}
   ],
   "refused": [
     {"id":"suppression-string","description":"suppression is a bool, not the stored token.","ingest":{"suppression":"on"},"field":"suppression"},
@@ -134,12 +126,6 @@
     {"id":"proxy-url-without-host","description":"The proxy URL names a host.","ingest":{"proxyUrl":"http://:3128"},"field":"proxyUrl"},
     {"id":"proxy-user-number","description":"proxyUser is a string.","ingest":{"proxyUser":5},"field":"proxyUser"},
     {"id":"proxy-password-bool","description":"proxyPassword is a string.","ingest":{"proxyPassword":true},"field":"proxyPassword"},
-    {"id":"scheduled-work-disabled-string","description":"scheduledWorkDisabled is a bool.","ingest":{"scheduledWorkDisabled":"yes"},"field":"scheduledWorkDisabled"},
-    {"id":"sinkhole-v4-not-an-address","description":"sinkholeV4 is an IPv4 address or empty.","ingest":{"sinkholeV4":"not-an-ip"},"field":"sinkholeV4"},
-    {"id":"sinkhole-v4-ipv6-address","description":"sinkholeV4 holds no IPv6 address.","ingest":{"sinkholeV4":"fd00::1"},"field":"sinkholeV4"},
-    {"id":"sinkhole-v4-mapped","description":"sinkholeV4 holds no IPv4-mapped IPv6 address.","ingest":{"sinkholeV4":"::ffff:10.10.10.1"},"field":"sinkholeV4"},
-    {"id":"sinkhole-v6-ipv4-address","description":"sinkholeV6 holds no IPv4 address.","ingest":{"sinkholeV6":"10.10.10.1"},"field":"sinkholeV6"},
-    {"id":"sinkhole-v6-zoned","description":"sinkholeV6 holds no zone.","ingest":{"sinkholeV6":"fe80::1%em0"},"field":"sinkholeV6"},
-    {"id":"sinkhole-v6-number","description":"sinkholeV6 is a string.","ingest":{"sinkholeV6":6},"field":"sinkholeV6"}
+    {"id":"scheduled-work-disabled-string","description":"scheduledWorkDisabled is a bool.","ingest":{"scheduledWorkDisabled":"yes"},"field":"scheduledWorkDisabled"}
   ]
 }

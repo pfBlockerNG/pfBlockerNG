@@ -7,17 +7,15 @@
         "python_enable": "true",
         "python_blocking": "true",
         "python_cname": "true",
-        "python_tld_wildcard": "false",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "python_tld_wildcard": "false"
       }
     },
     "manifest": {
       "version": 1,
       "config": {"top1m_enabled": true},
       "feeds": [
-        {"raw": "pfb_py_raw/marked.txt", "feed": "MarkedFeed", "group": "MarkedGroup", "log_flag": "1", "top1m": true},
-        {"raw": "pfb_py_raw/plain.txt", "feed": "PlainFeed", "group": "PlainGroup", "log_flag": "1"}
+        {"raw": "pfb_py_raw/marked.txt", "feed": "MarkedFeed", "group": "MarkedGroup", "log_flag": "0", "top1m": true},
+        {"raw": "pfb_py_raw/plain.txt", "feed": "PlainFeed", "group": "PlainGroup", "log_flag": "0"}
       ]
     },
     "files": {
@@ -53,7 +51,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["big.example. 3600 IN A 10.10.10.1"],
+        "answer": ["big.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -79,7 +77,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["deep.popular.example. 3600 IN A 10.10.10.1"],
+        "answer": ["deep.popular.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -92,7 +90,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["tracker.example. 3600 IN A 10.10.10.1"],
+        "answer": ["tracker.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     }

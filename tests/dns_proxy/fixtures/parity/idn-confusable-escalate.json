@@ -8,9 +8,7 @@
         "python_blocking": "true",
         "python_cname": "true",
         "idn_mode": "confusable",
-        "python_idn_escalate_suspicious": "true",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "python_idn_escalate_suspicious": "true"
       }
     },
     "manifest": {
@@ -37,7 +35,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["xn--pple-43d.com. 3600 IN A 10.10.10.1"],
+        "answer": ["xn--pple-43d.com. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -50,7 +48,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["xn--bnk-1ce.com. 3600 IN A 10.10.10.1"],
+        "answer": ["xn--bnk-1ce.com. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },

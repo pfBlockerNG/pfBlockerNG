@@ -9,21 +9,18 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_DIR = REPO_ROOT / "src" / "usr" / "local" / "pkg" / "pfblockerng"
 PROTO_DIR = SHIPPED_DIR / "dns_proxy"
 
-DNSBL_IPV4 = "10.10.10.1"
-DNSBL_IPV6 = "fd00::1"
+NULL_IPV4 = "0.0.0.0"
 BLOCKED = "blocked.example."
 ALLOWED = "allowed.example."
 
-# python_blocking/python_cname on: the DNSBL VIP answers blocks and CNAME chains are validated.
-INI = f"""[MAIN]
+# python_blocking/python_cname on: blocks get the null answer and CNAME chains are validated.
+INI = """[MAIN]
 python_enable = true
 python_blocking = true
 python_reply = true
 python_cname = true
 python_control = true
 python_control_legacy = true
-dnsbl_ipv4 = {DNSBL_IPV4}
-dnsbl_ipv6 = {DNSBL_IPV6}
 
 [noAAAA]
 row1 = noaaaa.example,0
