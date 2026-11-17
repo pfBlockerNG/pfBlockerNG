@@ -127,18 +127,24 @@ func TestLaneChildIsItsOwnSessionLeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pgid, err := syscall.Getpgid(pid) // a new session's leader leads a new process group of its own
-	if err != nil {
-		t.Fatal(err)
-	}
-	own, _ := syscall.Getpgid(0)
-	if pgid == own || pgid != pid {
-		t.Errorf("child process group %d (pid %d), want its own group distinct from Core's %d", pgid, pid, own)
+	sid := sessionOf(t, pid)
+	if own := sessionOf(t, os.Getpid()); sid == own || sid != pid {
+		t.Errorf("child session %d (pid %d), want its own session, distinct from Core's %d", sid, pid, own)
 	}
 	if err := os.WriteFile(release, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	within(t, "the program to be reaped", idle(l))
+}
+
+// sessionOf is the session id of pid.
+func sessionOf(t *testing.T, pid int) int {
+	t.Helper()
+	sid, _, errno := syscall.Syscall(syscall.SYS_GETSID, uintptr(pid), 0, 0)
+	if errno != 0 {
+		t.Fatalf("getsid(%d): %v", pid, errno)
+	}
+	return int(sid)
 }
 
 // A failure is logged once per outage: a success ends the outage and the next failure is logged again.
@@ -413,12 +419,99 @@ func TestRunClockStartsCountersOncePerLocalDayChange(t *testing.T) {
 	}
 }
 
+// driveScript runs runClock over the clock readings in nows, one per boundary computed, with each wait ending at once once both
+// lanes are idle. The loop is stopped when the readings run out, after the last boundary has fired.
+func driveScript(t *testing.T, nows []time.Time, zone func() *time.Location, metrics, counters *lane) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	i := 0
+	now := func() time.Time {
+		if i >= len(nows) {
+			cancel()
+			return nows[len(nows)-1]
+		}
+		i++
+		return nows[i-1]
+	}
+	after := func(time.Duration) <-chan time.Time {
+		for _, l := range []*lane{metrics, counters} {
+			for l.busy.Load() {
+				time.Sleep(time.Millisecond)
+			}
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}
+	runClock(ctx, now, after, zone, metrics, counters)
+	within(t, "the lanes to be reaped", func() bool { return !metrics.busy.Load() && !counters.busy.Load() })
+}
+
+// A local day change is remembered across boundaries, so a clock that jumps or a gap of days still starts the counters once at
+// the boundary that lands on a later local date, and a clock stepped back never does until a real later date.
+func TestRunClockCountersSurviveClockJumpsAndNeverFireBackwards(t *testing.T) {
+	at := func(d, h, m, s int) time.Time { return time.Date(2024, 3, d, h, m, s, 0, time.UTC) } // 2024-03-09 Sat, 10 Sun, 11 Mon
+	for _, c := range []struct {
+		name string
+		nows []time.Time
+		want []string
+	}{
+		{"a jump across midnight", []time.Time{at(9, 23, 58, 30), at(10, 0, 10, 10)}, []string{"daily weekly"}},
+		{"a step back from Sunday into Saturday fires nothing, then the real change fires once",
+			[]time.Time{at(10, 0, 4, 30), at(9, 23, 49, 30), at(9, 23, 58, 30), at(9, 23, 59, 30)}, []string{"daily weekly"}},
+		{"a gap of days to a Monday", []time.Time{at(6, 12, 0, 30), at(11, 12, 0, 30)}, []string{"daily"}},
+		{"a gap of days to a Sunday", []time.Time{at(6, 12, 0, 30), at(10, 12, 0, 30)}, []string{"daily weekly"}},
+		{"a day change on every following day", []time.Time{at(9, 23, 59, 30), at(10, 23, 59, 30)}, []string{"daily weekly", "daily"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "out")
+			rec := &logRecorder{}
+			metrics := &lane{name: "metrics", logf: rec.logf}
+			counters := &lane{name: "counters", path: laneProgram(t, t.TempDir(), "prog", `echo "$*" >> `+out), logf: rec.logf}
+			driveScript(t, c.nows, func() *time.Location { return time.UTC }, metrics, counters)
+			if got := lines(readFile(t, out)); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("counters started with %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// Cadences are due only when the boundary's local date is strictly after the previous boundary's: never for a clock stepped back,
+// and a gap of several days is one start, weekly only when the boundary's own day is a Sunday.
+func TestCadencesDueIsStrictlyForward(t *testing.T) {
+	at := func(d, h, m int) time.Time { return time.Date(2024, 3, d, h, m, 0, 0, time.UTC) } // 9 Sat, 10 Sun, 11 Mon
+	for _, c := range []struct {
+		name           string
+		prev, boundary time.Time
+		want           []string
+	}{
+		{"a step back to the previous date", at(10, 0, 5), at(9, 23, 50), nil},
+		{"a step back by days", at(11, 12, 0), at(6, 12, 0), nil},
+		{"a gap of days ending on a Monday", at(6, 12, 0), at(11, 12, 1), []string{"daily"}},
+		{"a gap of days ending on a Sunday", at(6, 12, 0), at(10, 12, 1), []string{"daily", "weekly"}},
+		{"a jump across midnight", at(9, 23, 59), at(10, 0, 11), []string{"daily", "weekly"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := cadencesDue(c.prev, c.boundary, time.UTC); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("cadencesDue(%s, %s) = %v, want %v", c.prev, c.boundary, got, c.want)
+			}
+		})
+	}
+}
+
 // run starts the --metrics-cmd and --counters-cmd programs at the clock's boundary, whose paths hold a space and shell
 // metacharacters, and stops cleanly. The clock is the package's clockNow/clockAfter seam.
 func TestRunStartsTheClockLanesAtTheBoundary(t *testing.T) {
-	oldNow, oldAfter, oldLocal := clockNow, clockAfter, time.Local
-	t.Cleanup(func() { clockNow, clockAfter, time.Local = oldNow, oldAfter, oldLocal })
-	time.Local = time.UTC
+	oldNow, oldAfter := clockNow, clockAfter
+	t.Cleanup(func() { clockNow, clockAfter = oldNow, oldAfter })
+	utc, err := os.ReadFile("/usr/share/zoneinfo/UTC")
+	if err != nil {
+		t.Skipf("the host has no zoneinfo to give --zoneinfo: %v", err)
+	}
 	clockNow = func() time.Time { return time.Date(2024, 3, 9, 23, 59, 30, 0, time.UTC) } // a Saturday: the next boundary is Sunday
 	var calls sync.Mutex
 	asked := 0
@@ -433,6 +526,10 @@ func TestRunStartsTheClockLanesAtTheBoundary(t *testing.T) {
 		return nil
 	}
 	dir := scratchDir(t)
+	zoneFile := filepath.Join(dir, "UTC")
+	if err := os.WriteFile(zoneFile, utc, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	progs := filepath.Join(dir, "x y;$(z)")
 	metricsOut, countersOut := filepath.Join(dir, "metrics"), filepath.Join(dir, "counters")
 	metrics := laneProgram(t, progs, "metrics", `echo "metrics [$#]" > `+metricsOut)
@@ -443,7 +540,7 @@ func TestRunStartsTheClockLanesAtTheBoundary(t *testing.T) {
 	go func() {
 		var stderr strings.Builder
 		code <- run(ctx, []string{"--socket", filepath.Join(dir, "run", "api.sock"), "--state-dir", filepath.Join(dir, "state"),
-			"--metrics-cmd", metrics, "--counters-cmd", counters}, &stderr)
+			"--zoneinfo", zoneFile, "--metrics-cmd", metrics, "--counters-cmd", counters}, &stderr)
 	}()
 	within(t, "the metrics program to start", exists(metricsOut))
 	within(t, "the counters program to start", exists(countersOut))

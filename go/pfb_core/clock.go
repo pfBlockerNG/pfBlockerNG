@@ -51,23 +51,25 @@ func (l *lane) report(err error) {
 	}
 }
 
-// cadencesDue names the cadences the boundary starts: none when prev, a minute before, is on the same calendar date in loc,
-// otherwise daily, and weekly too when the new date is a Sunday.
+// cadencesDue names the cadences boundary starts: none unless its local date in loc is strictly after prev's (so a clock stepped
+// back never fires), otherwise daily, and weekly too when boundary's own day is a Sunday.
 func cadencesDue(prev, boundary time.Time, loc *time.Location) []string {
-	py, pm, pd := prev.In(loc).Date()
-	by, bm, bd := boundary.In(loc).Date()
-	switch {
-	case py == by && pm == bm && pd == bd:
+	local, before := boundary.In(loc), prev.In(loc)
+	py, pm, pd := before.Date()
+	by, bm, bd := local.Date()
+	if !time.Date(by, bm, bd, 0, 0, 0, 0, time.UTC).After(time.Date(py, pm, pd, 0, 0, 0, 0, time.UTC)) {
 		return nil
-	case boundary.In(loc).Weekday() == time.Sunday:
+	}
+	if local.Weekday() == time.Sunday {
 		return []string{"daily", "weekly"}
 	}
 	return []string{"daily"}
 }
 
-// runClock starts metrics at every Unix minute boundary and counters at the first boundary of each local day in zone() (nil
-// func or result: the local zone), until ctx ends. It never touches a running child.
+// runClock starts metrics at every Unix minute boundary and counters at each boundary whose local date in zone() (nil func or
+// result: the local zone) is later than the previous boundary's, kept in memory only, until ctx ends. It never touches a running child.
 func runClock(ctx context.Context, now func() time.Time, after func(time.Duration) <-chan time.Time, zone func() *time.Location, metrics, counters *lane) {
+	var prev time.Time
 	for {
 		n := now()
 		b := time.Unix((n.Unix()/60+1)*60, 0)
@@ -82,9 +84,13 @@ func runClock(ctx context.Context, now func() time.Time, after func(time.Duratio
 				loc = z
 			}
 		}
+		if prev.IsZero() {
+			prev = b.Add(-time.Minute)
+		}
 		metrics.start()
-		if due := cadencesDue(b.Add(-time.Minute), b, loc); len(due) > 0 {
+		if due := cadencesDue(prev, b, loc); len(due) > 0 {
 			counters.start(due...)
 		}
+		prev = b
 	}
 }
