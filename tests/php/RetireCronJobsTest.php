@@ -79,6 +79,8 @@ final class RetireCronJobsTest extends TestCase
 			'/usr/sbin/newsyslog', '/usr/local/bin/php /usr/local/www/otherpackage.php clearip-cache',
 			self::PHP . 'clearip_backup >/dev/null 2>&1', self::PHP . 'cleardnsbl2 >/dev/null 2>&1', self::PHP . 'metrics_x >> /dev/null 2>&1',
 			self::PHP . "'clearip'x >/dev/null 2>&1", self::PHP . "'cleardnsbl'x >/dev/null 2>&1",
+			self::PHP . 'tickle >/dev/null 2>&1', self::PHP . 'cron-tick-mine >/dev/null 2>&1', self::PHP . 'dccx >/dev/null 2>&1',
+			self::PHP . 'ss_refresh_x >/dev/null 2>&1', self::PHP . 'bls ads >/dev/null 2>&1',	// bls is a real verb a user may schedule
 		];
 		$this->seed(array_merge($legacy, $others));
 		$this->assertSame(array_merge($legacy, $others), $this->commands(), 'before: daily and weekly entries of one verb, quoted and not');

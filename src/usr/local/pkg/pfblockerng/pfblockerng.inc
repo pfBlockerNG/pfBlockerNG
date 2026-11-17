@@ -4285,8 +4285,8 @@ const PFB_CORE_COUNTERS_CMD = '/usr/local/pkg/pfblockerng/pfb_core_counters.sh';
 // Every crontab command an earlier version installed, as the substring install_cron_job() matches on (issue #3996); the trailing space
 // after a verb keeps a user's own `clearip_backup` or `metrics_x` job out of reach.
 const PFB_LEGACY_CRON_NEEDLES = [
-	'pfblockerng.php cron-tick', 'pfblockerng.php tick', 'pfblockerng.php cron ', 'pfblockerng.php dcc', 'pfblockerng.php ss_refresh',
-	'pfblockerng.php bl', 'pfblockerng.php metrics ', 'pfblockerng.php clearip ', 'pfblockerng.php cleardnsbl ',
+	'pfblockerng.php cron-tick ', 'pfblockerng.php tick ', 'pfblockerng.php cron ', 'pfblockerng.php dcc ', 'pfblockerng.php ss_refresh ',
+	'pfblockerng.php bl ', 'pfblockerng.php metrics ', 'pfblockerng.php clearip ', 'pfblockerng.php cleardnsbl ',
 	"pfblockerng.php 'clearip' ", "pfblockerng.php 'cleardnsbl' ",
 ];
 // The adapter reads at most this many bytes of request from stdin
