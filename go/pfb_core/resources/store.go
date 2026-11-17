@@ -261,15 +261,18 @@ func (s *Store) Remove(id string) error {
 	return s.save(idx)
 }
 
-// RemovalApplied deletes a removed id and all its files. An id that is unknown or was published again is left alone.
+// RemovalApplied deletes a removed id and all its files. An id that was published again is left alone; one with no
+// entry has only the files a removal killed before its deletion left, and they go.
 func (s *Store) RemovalApplied(id string) error {
 	e, idx, err := s.writerEntry(id)
-	if err != nil || e == nil || !e.Removed {
+	if err != nil || e != nil && !e.Removed {
 		return err
 	}
-	delete(idx.Resources, id)
-	if err := s.save(idx); err != nil {
-		return err
+	if e != nil {
+		delete(idx.Resources, id)
+		if err := s.save(idx); err != nil {
+			return err
+		}
 	}
 	return s.prune(id, &entry{})
 }
@@ -501,7 +504,7 @@ func (s *Store) prune(id string, e *entry) error {
 		keep[filepath.Base(s.bodyPath(id, e.Applied.Generation))] = true
 	}
 	files, err := os.ReadDir(s.dir)
-	if err != nil {
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	for _, f := range files {

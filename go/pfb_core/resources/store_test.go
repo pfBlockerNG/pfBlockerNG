@@ -570,6 +570,23 @@ func TestInconsistentIndexNeverServed(t *testing.T) {
 	}
 }
 
+// A removal killed between the index write and the deletion leaves the bodies behind with no entry: reporting the removal
+// applied again clears them, and only them.
+func TestARepeatedRemovalAppliedClearsTheBodiesAKilledOneLeft(t *testing.T) {
+	s, dir := newStore(t)
+	publish(t, s, "dnsbl/xy", 1, nil, "a")
+	for _, left := range []string{bn("dnsbl/x", 2), bn("dnsbl/x", 3)} {
+		if err := os.WriteFile(filepath.Join(dir, left), []byte("gone\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantNames(t, dir, bn("dnsbl/x", 2), bn("dnsbl/x", 3), bn("dnsbl/xy", 1), "index.json")
+	if err := s.RemovalApplied("dnsbl/x"); err != nil {
+		t.Fatalf("RemovalApplied: %v", err)
+	}
+	wantNames(t, dir, bn("dnsbl/xy", 1), "index.json")
+}
+
 func TestFIFOBodyNeverServed(t *testing.T) {
 	fifo := func(t *testing.T, p string) {
 		os.Remove(p)
