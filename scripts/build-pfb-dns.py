@@ -28,13 +28,13 @@
 # null when the module vendors nothing, "targets": {"freebsd-amd64": {"goarch", "path", "sha256",
 # "size", "freebsd_abi_note"}, ...}, "pfb_core": the same per target for pfb-core, {} for a tree without
 # go/pfb_core}. --modules-txt and --vendored concern the gateway. Core may require golang.org/x/net, x/sys and x/text,
-# at the versions the gateway's go.mod requires, and github.com/pfBlockerNG/xxh3 (which the gateway does not carry) at
-# any version, and nothing else: it is built from a scratch copy of its module whose vendor/ is cut from the gateway's
-# (those modules' packages and licenses, and their vendor/modules.txt sections) plus xxh3's root package, from
-# `go mod download` (go.sum verifies it) or, with --vendored, from go/pfb_core/vendor/github.com/pfBlockerNG/xxh3 (a
-# ports recipe's GH_TUPLE extraction), the only thing a Core vendor/ may then hold. Any other `require`, a `replace`, or
-# any other vendor/ of Core's own exits 1, as does a package Core imports that the vendor trees lack. Everything else
-# goes to stderr.
+# at the versions the gateway's go.mod requires, and github.com/pfBlockerNG/xxh3 and go4.org/netipx (which the gateway
+# does not carry) at any version, and nothing else: it is built from a scratch copy of its module whose vendor/ is cut
+# from the gateway's (those modules' packages and licenses, and their vendor/modules.txt sections) plus each own
+# module's root package, from `go mod download` (go.sum verifies it) or, with --vendored, from
+# go/pfb_core/vendor/<module> (a ports recipe's GH_TUPLE extraction), the only things a Core vendor/ may then hold.
+# Any other `require`, a `replace`, or any other vendor/ of Core's own exits 1, as does a package Core imports that
+# the vendor trees lack. Everything else goes to stderr.
 # Exit 1, with every output it wrote removed (a modules.txt installed into a --vendored tree stays: it is
 # that tree's state), when Go is missing or older than go.mod requires, a compile fails, or an output
 # fails a check: ELF64 little-endian, OS/ABI FreeBSD, ET_EXEC, the architecture's e_machine; static
@@ -73,8 +73,9 @@ CORE_BINARY = "pfb-core"
 # Core's allowed dependencies, at the versions the gateway's go.mod requires: the ports recipe's vendor tree is the
 # gateway's, so Core's vendor/ is cut from it.
 CORE_MODULES = ("golang.org/x/net", "golang.org/x/sys", "golang.org/x/text")
-# Modules Core vendors itself, at any version, because the gateway does not carry them: the xxh3 fork (issue #3925).
-CORE_OWN_MODULES = ("github.com/pfBlockerNG/xxh3",)
+# Modules Core vendors itself, at any version, because the gateway does not carry them: the xxh3 fork (issue #3925)
+# and go4.org/netipx (issue #4033).
+CORE_OWN_MODULES = ("github.com/pfBlockerNG/xxh3", "go4.org/netipx")
 # The files Go copies from a module's root into vendor/ beside its packages.
 _LICENSE_PREFIXES = (
     "AUTHORS",

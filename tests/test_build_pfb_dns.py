@@ -280,6 +280,8 @@ def vendored_gateway(tmp_path_factory: pytest.TempPathFactory, xxh3_fork: Path) 
     root = tmp_path_factory.mktemp("pfb-dns-vendored")
     shutil.copytree(ROOT / "go", root / "go")
     copy_writable(xxh3_fork, root / "go" / "pfb_core" / "vendor" / XXH3)
+    if REAL_NETIPX_VERSION:
+        copy_writable(downloaded_module(NETIPX, REAL_NETIPX_VERSION), root / "go" / "pfb_core" / "vendor" / NETIPX)
     module = root / "go" / "pfb_dns_gateway"
     vendor = subprocess.run(
         ["go", "mod", "vendor"], cwd=module, capture_output=True, text=True, check=False, timeout=WATCHDOG_SECONDS
@@ -1135,18 +1137,22 @@ def vendored_xxh3_gateway(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return vendor_x_gateway(tmp_path_factory.mktemp("pfb-xxh3-gateway"), cpu=True)
 
 
-@pytest.fixture(scope="module")
-def xxh3_fork() -> Path:
-    """The fork's whole module tree, as the module cache holds it: what the ports recipe's GH_TUPLE extracts."""
+def downloaded_module(module: str, version: str) -> Path:
+    """A module's whole tree, as the module cache holds it: what the ports recipe's GH_TUPLE extracts."""
     done = subprocess.run(
-        ["go", "mod", "download", "-json", f"{XXH3}@{XXH3_VERSION}"],
+        ["go", "mod", "download", "-json", f"{module}@{version}"],
         capture_output=True,
         text=True,
         check=False,
         timeout=WATCHDOG_SECONDS,
     )
-    assert done.returncode == 0, f"go mod download of the xxh3 fork failed:\n{done.stdout}{done.stderr}"
+    assert done.returncode == 0, f"go mod download of {module} failed:\n{done.stdout}{done.stderr}"
     return Path(json.loads(done.stdout)["Dir"])
+
+
+@pytest.fixture(scope="module")
+def xxh3_fork() -> Path:
+    return downloaded_module(XXH3, XXH3_VERSION)
 
 
 def copy_writable(src: Path, dst: Path) -> None:
@@ -1297,3 +1303,107 @@ def test_a_core_vendor_dir_is_refused_unless_it_holds_only_own_modules_in_vendor
     stray.parent.mkdir(parents=True)
     stray.write_text("")
     assert_refused(run_helper(root, tmp_path / "out", extra=mode_args(mode)), tmp_path / "out", says)
+
+
+# --- pfb-core's second own module (issue #4033): go4.org/netipx, untagged, so its version is a pseudo-version. ---
+
+NETIPX = "go4.org/netipx"
+NETIPX_VERSION = "v0.0.0-20260823151212-3075585bcbeb"
+# go.sum's two lines for it, as the approved pin hashes (the module zip and its go.mod)
+NETIPX_SUMS = (
+    f"{NETIPX} {NETIPX_VERSION} h1:XBM4hvfwGAttkkiTIFfeigdfcL1xIfdKXqFdgiHGtDs=\n"
+    f"{NETIPX} {NETIPX_VERSION}/go.mod h1:PLyyIXexvUFg3Owu6p/WfdlivPbZJsZdgWZlrGope/Y=\n"
+)
+_netipx = re.search(
+    rf"^\s*{re.escape(NETIPX)} (v\S+)", (REAL_CORE / "go.mod").read_text(encoding="utf-8"), re.MULTILINE
+)
+REAL_NETIPX_VERSION = _netipx.group(1) if _netipx else None  # None until the real Core imports it
+
+
+def netipx_requires() -> str:
+    return (
+        f"require (\n\t{NETIPX} {NETIPX_VERSION}\n\t{X_NET} {PINS[X_NET]}\n)\n\n"
+        f"require (\n\t{X_SYS} {PINS[X_SYS]} // indirect\n\t{X_TEXT} {PINS[X_TEXT]} // indirect\n)\n"
+    )
+
+
+NETIPX_MAIN = (
+    'package main\n\nimport (\n\t"net/netip"\n\n\t"go4.org/netipx"\n\t"golang.org/x/net/idna"\n)\n\n'
+    'func main() {\n\tvar b netipx.IPSetBuilder\n\tb.AddPrefix(netip.MustParsePrefix("192.0.2.0/24"))\n'
+    '\tset, err := b.IPSet()\n\tascii, _ := idna.Lookup.ToASCII("b\\u00fccher.example")\n'
+    '\tprintln("CORE-NETIPX", len(set.Prefixes()), err == nil, ascii)\n}\n'
+)
+
+
+@pytest.fixture(scope="module")
+def netipx_tree() -> Path:
+    return downloaded_module(NETIPX, NETIPX_VERSION)
+
+
+def netipx_source(tmp_path: Path, mode: str, gateway: Path, tree: Path | None) -> Path:
+    """A source tree whose Core imports netipx, with its tree in Core's vendor/ in `vendored` mode."""
+    extra = {"main.go": NETIPX_MAIN, "go.sum": CORE_SUMS + NETIPX_SUMS}
+    root = x_source(tmp_path, mode, gateway, core_tail=netipx_requires(), extra=extra)
+    if mode == "vendored" and tree is not None:
+        copy_writable(tree, root / "go" / "pfb_core" / "vendor" / NETIPX)
+    return root
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_a_core_requiring_netipx_builds_in_both_modes(
+    tmp_path: Path, vendored_x_gateway: Path, netipx_tree: Path, mode: str
+) -> None:
+    root = netipx_source(tmp_path, mode, vendored_x_gateway, netipx_tree)
+    result = run_helper(root, tmp_path / "out", extra=mode_args(mode))
+    assert result.returncode == 0, f"a Core on netipx was refused:\n{result.stderr}"
+    for target in TARGETS:
+        binary = tmp_path / "out" / target / "pfb-core"
+        assert b"CORE-NETIPX" in binary.read_bytes(), f"{binary} is not the Core"
+        info = subprocess.run(["go", "version", "-m", str(binary)], capture_output=True, text=True, check=True).stdout
+        assert re.search(rf"\tdep\t{re.escape(NETIPX)}\t{re.escape(NETIPX_VERSION)}(\t|$)", info, re.MULTILINE), info
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_cores_vendor_tree_with_netipx_is_what_go_mod_vendor_writes_for_that_core(
+    tmp_path: Path, vendored_x_gateway: Path, netipx_tree: Path, mode: str
+) -> None:
+    root = netipx_source(tmp_path, mode, vendored_x_gateway, netipx_tree)
+    snapshots = tmp_path / "snapshots"
+    spy = snapshot_vendor_on_build(tmp_path, snapshots)
+    result = run_helper(root, tmp_path / "out", go=str(spy), extra=mode_args(mode))
+    assert result.returncode == 0, result.stderr
+
+    reference = tmp_path / "reference"
+    shutil.copytree(root / "go" / "pfb_core", reference, ignore=shutil.ignore_patterns("vendor"))
+    done = subprocess.run(
+        ["go", "mod", "vendor"], cwd=reference, capture_output=True, text=True, check=False, timeout=WATCHDOG_SECONDS
+    )
+    assert done.returncode == 0, f"go mod vendor failed on the reference Core:\n{done.stderr}"
+    got, want = vendor_bytes(snapshots / "pfb_core"), vendor_bytes(reference / "vendor")
+    assert sorted(got) == sorted(want)
+    assert [name for name in want if got[name] != want[name]] == []
+    assert {f"{NETIPX}/ipset.go", f"{NETIPX}/LICENSE", "modules.txt"} <= set(got)
+
+
+# (Core's go.mod tail, the module it must refuse): neither is the approved module, whatever a go4.org path looks like
+NOT_NETIPX = {
+    "another-go4-module": (CORE_REQUIRES + "\nrequire go4.org/mem v0.0.0-20260823151212-3075585bcbeb\n", "go4.org/mem"),
+    "lookalike-of-netipx": (CORE_REQUIRES + f"\nrequire {NETIPX}x {NETIPX_VERSION}\n", f"{NETIPX}x"),
+    "netipx-in-another-case": (CORE_REQUIRES + f"\nrequire go4.org/NetIPx {NETIPX_VERSION}\n", "go4.org/NetIPx"),
+    "netipx-with-a-trailing-slash": (CORE_REQUIRES + f"\nrequire {NETIPX}/ {NETIPX_VERSION}\n", f"{NETIPX}/"),
+}
+
+
+@pytest.mark.parametrize("shape", NOT_NETIPX)
+def test_a_go4_module_that_is_not_netipx_is_refused_and_writes_nothing(tmp_path: Path, shape: str) -> None:
+    tail, module = NOT_NETIPX[shape]
+    root = write_tiny_core(write_x_gateway(tmp_path / "src-tree"), go_mod=core_go_mod(tail))
+    assert_refused(run_helper(root, tmp_path / "out"), tmp_path / "out", [f"requires {module}; Core may require only"])
+
+
+def test_a_vendored_core_may_hold_netipx_and_no_sibling_of_it(tmp_path: Path, vendored_x_gateway: Path) -> None:
+    root = netipx_source(tmp_path, "vendored", vendored_x_gateway, None)
+    stray = root / "go" / "pfb_core" / "vendor" / "go4.org" / "mem" / "mem.go"
+    stray.parent.mkdir(parents=True)
+    stray.write_text("")
+    assert_refused(run_helper(root, tmp_path / "out", extra=["--vendored"]), tmp_path / "out", ["go4.org/mem"])
