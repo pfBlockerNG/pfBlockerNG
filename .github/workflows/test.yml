@@ -485,7 +485,10 @@ jobs:
     container:
       image: ${{ needs.ci-image.outputs.ci }}
       options: --init
-    timeout-minutes: 20
+    # issue #4039: the same tree takes 4 to 19 minutes depending on the runner (slowest passing job,
+    # kcov included: 19.3 min), and a 20-minute cap cancelled passing runs. 2x the slowest keeps room
+    # for a slower runner while still ending a hung job.
+    timeout-minutes: 40
 
     steps:
       - name: Checkout

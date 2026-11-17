@@ -57,7 +57,7 @@ def test_slow_tests_jobs_pin_timeout_minutes() -> None:
     text = TEST_YML.read_text(encoding="utf-8")
     expected = {
         "test": 20,
-        "shell-tests": 20,
+        "shell-tests": 40,
         "php-static-analysis": 10,
         "php-unit": 15,
     }
