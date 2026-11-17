@@ -548,6 +548,22 @@ func TestInconsistentIndexNeverServed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// The reply's metadata is the current generation's: it must be the JSON object the writer stored.
+	for name, f := range map[string]func(g map[string]any){
+		"metadata an array": func(g map[string]any) { g["metadata"] = []any{} },
+		"metadata null":     func(g map[string]any) { g["metadata"] = nil },
+		"metadata a number": func(g map[string]any) { g["metadata"] = 5 },
+		"metadata a string": func(g map[string]any) { g["metadata"] = "{}" },
+		"metadata missing":  func(g map[string]any) { delete(g, "metadata") },
+	} {
+		t.Run("current "+name, func(t *testing.T) {
+			s, dir := newStore(t)
+			publish(t, s, id, 1, map[string]any{"action": "deny"}, "10", "20")
+			edit(t, dir, "current", f)
+			r, err := s.Get(id, nil)
+			wantErr(t, fmt.Sprintf("Get (reply %+v)", r), err, resources.ErrUnavailable)
+		})
+	}
 	for name, f := range edits {
 		t.Run("current "+name, func(t *testing.T) {
 			s, dir := newStore(t)

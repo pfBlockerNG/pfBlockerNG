@@ -309,6 +309,9 @@ func (s *Store) Get(id string, cursor *Cursor) (Reply, error) {
 		if cursor != nil && cursor.Generation == cur.Generation && cursor.Digest == cur.Digest {
 			return Reply{Kind: KindUnchanged, Generation: cur.Generation}, nil
 		}
+		if len(cur.Metadata) == 0 || cur.Metadata[0] != '{' {
+			return Reply{}, fmt.Errorf("%w: %q metadata in the index is not an object", ErrUnavailable, id)
+		}
 		body, err := s.readBody(id, cur)
 		if err != nil {
 			// A publish between the index read and the body read prunes the generation just read: read again.
