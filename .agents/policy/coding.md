@@ -46,6 +46,15 @@ Every user-entered text field sanitized through shared helpers in `pfblockerng.i
 
 New field MUST route through these helpers; persist path that deliberately stays narrower documents why. One fork raised so far — GUI hook-script editor, whose saved content is executable script source rather than list data (issue #1728) — resolved *against* carve-out: joins standard (issue #1734), so literal control byte in hook script must be written as escape (`\033`). Contracts pinned by `PfbSanitizeTextTest`, `TextAreaDecodeTest`, `PfbFilterContractTest`, `tests/smoke/ui/test_sanitize_persist.py`.
 
+## Third-party libraries — reputable or reviewed fork, owner-approved (owner, 2026-11-17)
+
+Replaces #3813's Core "stdlib only" stance. Library allowed from a **reputable source**, or as a **thoroughly reviewed
+fork** under the `pfBlockerNG` org (xxh3, #3925); imported **only after owner approves that library**, pinned (tag or
+pseudo-version). Propose with: what it replaces, license, maintainers, `govulncheck`, corpus parity, FreeBSD
+`CGO_ENABLED=0` build. Approved set = `allowedModules` (`go/pfb_core/boundary_test.go`), plus
+`_PSEUDO_VERSION_MODULES` (`scripts/build-pkg-portable.py`) for a pseudo-version; joined in the first importing PR.
+Runtime limits stay (Unbound Python loader: stdlib only).
+
 ## Linting
 
 Run linters while working; `.githooks/pre-commit` hook blocks failing commits (path-scoped to staged file types); CI is final authority.
