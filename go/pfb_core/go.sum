@@ -2,6 +2,8 @@ github.com/pfBlockerNG/xxh3 v1.1.1-pfblockerng.1 h1:+cdzw6e/3K/o7EEWbrsXysEFdCXU
 github.com/pfBlockerNG/xxh3 v1.1.1-pfblockerng.1/go.mod h1:IWbkMuLLnyPgFid22PVudlUz2+SpMLzBxAFROh+C0OQ=
 github.com/zeebo/assert v1.3.0 h1:g7C04CbJuIDKNPFHmsk4hwZDO5O+kntRxzaUoNXj+IQ=
 github.com/zeebo/assert v1.3.0/go.mod h1:Pq9JiuJQpG8JLJdtkwrJESF0Foym2/D9XMU5ciN/wJ0=
+go4.org/netipx v0.0.0-20260823151212-3075585bcbeb h1:XBM4hvfwGAttkkiTIFfeigdfcL1xIfdKXqFdgiHGtDs=
+go4.org/netipx v0.0.0-20260823151212-3075585bcbeb/go.mod h1:PLyyIXexvUFg3Owu6p/WfdlivPbZJsZdgWZlrGope/Y=
 golang.org/x/net v0.56.0 h1:Rw8j/hFzGvJUZwNBXnAtf5sVDVt+65SK2C7IxCxZt5o=
 golang.org/x/net v0.56.0/go.mod h1:D3Ku6r+V6JROoZK144D2XfMHFcMq/0zSfLelVTCFKec=
 golang.org/x/sys v0.50.0 h1:dkKZEFTEKaLr1sjhs0WiKqoi8Jj5nHbS3Njmx1UoMJs=

@@ -23,7 +23,9 @@ frozen. A one-member difference is a failure, never a tolerance.
   a `\r` stays part of its line. A file the run did not leave behind is `null`.
 - Comparison rule: an output list is compared as a **multiset** (order-insensitive, duplicates significant), except the lists
   named `set` (canonical sets), `kept` (member names of a union), `counts` (the recompute counts file), `content` (DNSBLIP) and
-  `sources` (DNSBLIP source names), which are compared **in order**: byte order or sequence is their contract.
+  `sources` (DNSBLIP source names), which are compared **in order**: byte order or sequence is their contract. The order
+  inside any other member list is the tool's (`iprange` writes numeric order, `sort -u` byte order) and no requirement on Core:
+  the canonical body re-sorts every set bytewise, so that order is not observable downstream.
 - `"digest": true` marks a case whose input is large. Every output member list of that case is then recorded as
   `{"count": n, "sha256": "<hex>"}`: `n` lines, and the SHA-256 of the lines sorted bytewise (`LC_ALL=C sort`) and joined with
   `\n`, no trailing newline (the empty list is `count` 0 and the hash of the empty string). Digests are order-insensitive
@@ -249,3 +251,96 @@ To refreeze after an intended change of the oracle (never to make a failing case
 
 3. Review every changed `expect` by eye, then update the versions in the "Frozen run" section, and rerun the replay: it must be
    green without any edit.
+
+## What the Go runner asserts
+
+The Go runner (`corpus_test.go`, `corpus_groups_test.go`) reads every `expect` key as one of two kinds. **Asserted** keys are
+compared with what the package returns; for a value the package does not return itself (a count, a flag, a file name) the
+runner derives it from what is returned, and the row says so. **Presentation** keys are text or file lifecycle that the Core
+Updater owns (slice 9, #4038), not asserted. A key in neither kind, or a key of the table missing from a case, fails the load,
+so a new `expect` key can never be ignored silently. `TestExpectTableMatchesReadme` holds this table equal to the runner's.
+
+The runner stands in for the Updater's file work with plain data: a file is its alias plus an extension (`.txt`, `.ip`), a
+folder is a name-to-rows map, a missing snapshot falls back to the live deny file (or is skipped) before `Recompute`, the
+match folder and the deny folder are the pre-seeded files overlaid with the returned lists, and the original folder is split
+into the v4 count files and the v4 original feeds before `Closing`. The comparison rule above applies; a digest case compares
+every member list it records as a digest. Every `rc` must be 0 or null: no Go function has an error path.
+
+| Group | Key | Status | Reason |
+| --- | --- | --- | --- |
+| `cidr_aggregate` | `members` | asserted | the exact CIDR union; `CIDRAggregate` returns its rows |
+| `cidr_aggregate` | `unchanged` | asserted | derived: the returned rows written one per line equal the input text |
+| `cidr_aggregate` | `stats` | asserted | derived: input line count and output line count, recorded only when they differ |
+| `cidr_aggregate` | `rc` | presentation | exit status; no Go function returns an error, so the runner requires 0 or null |
+| `cidr_aggregate` | `log` | presentation | error-log text of IO failures; empty in every case |
+| `preprocess` | `args` | asserted | derived from `Prepped.Ran`: `_255`, `_agg`, `_rep` in that order |
+| `preprocess` | `ran` | asserted | derived: any stage ran |
+| `preprocess` | `members` | asserted | the feed's rows after the stages |
+| `preprocess` | `match_rep` | asserted | `Prepped.Match`; null is no rows, and an empty recorded list is refused |
+| `preprocess` | `rc` | presentation | exit status; the runner requires 0 or null |
+| `preprocess` | `log` | presentation | the GeoIP-missing line is a script message; its effect is in `members` |
+| `recompute` | `deny` | asserted | every feed's rows; files not in the member list keep their pre-seeded rows |
+| `recompute` | `master` | asserted | `RecomputeOut.Master`, both families |
+| `recompute` | `mastercat` | asserted | `MasterCat` of the returned masterfile |
+| `recompute` | `counts` | asserted | derived: `<feed> <rows>` per feed, in member order |
+| `recompute` | `match` | asserted | the match folder: pre-seeded files, minus `DropRep` and `DropExempt`, plus the lists written |
+| `recompute` | `processed` | asserted | derived: the number of feeds the pass returned |
+| `recompute` | `rc` | presentation | exit status; the runner requires 0 or null |
+| `recompute` | `log` | asserted | containment only: the missing-snapshot lines must name the runner's own fallback decision; the rest is script text |
+| `pmax` | `deny` | asserted | every deny feed's rows, untouched ones included |
+| `pmax` | `master` | asserted | `PMaxOut.Master` |
+| `pmax` | `mastercat` | asserted | `MasterCat` of the returned masterfile |
+| `pmax` | `rc` | presentation | exit status; the runner requires 0 or null |
+| `pmax` | `log` | presentation | error-log text of IO failures; empty in every case |
+| `suppress/v4` | `members` | asserted | the remainder rows |
+| `suppress/v4` | `master` | asserted | the masterfile after the alias rows are replaced |
+| `suppress/v4` | `stats` | asserted | derived: input rows, remainder rows and masterfile rows, recorded only when the hole list names an entry (`Applied`) |
+| `suppress/v4` | `log` | asserted | only the dropped-token lines, against `BadHoles` and the count of `BadMembers`; their wording is not asserted |
+| `suppress/v4` | `rc` | presentation | exit status; the runner requires 0 or null |
+| `suppress/v6` | `ok` | asserted | `Applied`; a missing suppression list never reaches the function and records `ok` false with the member rows untouched |
+| `suppress/v6` | `members` | asserted | the normalised remainder rows |
+| `suppress/v6` | `log` | asserted | the welded text is the only witness of the dropped tokens: compared with `BadMembers` and `BadHoles` |
+| `suppress/v6` | `leftover_tmp` | presentation | temporary-file lifecycle of the atomic write |
+| `remove` | `files` | asserted | the names left in each directory; `matchgen` is not handed to `Remove` and keeps every name |
+| `remove` | `master` | asserted | the masterfile left; null when no row is left (the file is deleted) |
+| `remove` | `mastercat` | asserted | `MasterCat` of the masterfile left; null when no row is left |
+| `remove` | `messages` | asserted | derived from `Removed` and `Invalid` |
+| `remove` | `rc` | presentation | exit status; the runner requires 0 or null |
+| `closing` | `deny` | asserted | the deny folder after the placeholder refill |
+| `closing` | `master` | asserted | the masterfile in byte order |
+| `closing` | `sanity` | asserted | the verdict `Sanity`; the nested keys below |
+| `closing` | `sanity.original` | asserted | `Sanity.Original` |
+| `closing` | `sanity.final` | asserted | `Sanity.Final`; null with dedup off |
+| `closing` | `sanity.verdict` | asserted | `Sanity.Passed`; null with dedup off |
+| `closing` | `sanity.masterfile_count` | asserted | `Sanity.MasterCat`; recorded only on a failure |
+| `closing` | `sanity.deny_count` | asserted | `Sanity.Deny`; recorded only on a failure |
+| `closing` | `sanity.uniq_master` | asserted | `Sanity.DupMaster` |
+| `closing` | `sanity.uniq_deny` | asserted | `Sanity.DupDeny` |
+| `closing` | `sanity.empty_lists` | asserted | `Sanity.Empty`, as file names |
+| `closing` | `rc` | presentation | exit status; the runner requires 0 or null |
+| `closing` | `log` | presentation | error-log text of IO failures; empty in every case |
+| `canonical` | `set` | asserted | the canonical set, in byte order |
+| `union` | `kept` | asserted | `UnionOut.Kept` as file names, in order |
+| `union` | `aggregate` | asserted | `UnionOut.Aggregate` |
+| `union` | `consumer` | asserted | `UnionOut.Consumer` |
+| `union` | `stats` | asserted | derived: `UnionOut.Before` and the aggregate's row count |
+| `union` | `rc` | presentation | exit status; the runner requires 0 or null |
+| `union` | `log` | presentation | error-log text of IO failures; empty in every case |
+| `dnsblip` | `content` | asserted | the file text as lines, in order, the weld included |
+| `dnsblip` | `final_newline` | asserted | derived: the content ends with a newline |
+| `dnsblip` | `sources` | asserted | the names concatenated, as file names, in order |
+| `dnsblip` | `built` | presentation | file-write success flag; no Go function returns an error |
+| `matrix/recompute_matrix` | `invoke_v4` | asserted | `Matrix.InvokeV4` |
+| `matrix/recompute_matrix` | `invoke_v6` | asserted | `Matrix.InvokeV6` |
+| `matrix/recompute_matrix` | `dedup` | asserted | `Matrix.Dedup` |
+| `matrix/recompute_matrix` | `repmode` | asserted | `Matrix.Mode` |
+| `matrix/recompute_matrix` | `legacy_pmax_followup` | asserted | `Matrix.LegacyPMax` |
+| `matrix/closing_pass_active` | `invoke` | asserted | the first result of `ClosingPass` |
+| `matrix/closing_pass_active` | `alias_arg` | asserted | the second result of `ClosingPass` |
+| `pipeline` | `passes` | asserted | one entry per pass; the nested keys below |
+| `pipeline` | `passes[].matrix` | asserted | `PassOut.Matrix`, the five keys of `matrix/recompute_matrix` |
+| `pipeline` | `passes[].ran` | asserted | `PassOut.RanV4` and `RanV6` |
+| `pipeline` | `passes[].canonical` | asserted | `PassOut.Canonical`, each set in byte order |
+| `pipeline` | `passes[].aggregate` | asserted | `PassOut.Union`: `kept`, `aggregate`, `consumer` per family; empty without an Uber union |
+| `pipeline` | `passes[].closing` | asserted | `PassOut.Closing` as `closing` `sanity`; null when the closing pass did not run |
+| `pipeline` | `passes[].deny_final` | asserted | `PassOut.Deny`, the deny folder after the pass |
