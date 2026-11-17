@@ -19,7 +19,7 @@ func ingestBackend(t *testing.T, over map[string]any) *refreshBackend {
 	return newRefreshBackend(1, values)
 }
 
-func TestOnlyTheIngestProjectionIsPublishedReadOnly(t *testing.T) {
+func TestOnlyTheIngestAndMaintenanceProjectionsArePublishedReadOnly(t *testing.T) {
 	var schema struct {
 		Projections []map[string]any `json:"projections"`
 	}
@@ -31,17 +31,17 @@ func TestOnlyTheIngestProjectionIsPublishedReadOnly(t *testing.T) {
 	for _, p := range schema.Projections {
 		v, published := p["readOnly"]
 		switch {
-		case p["id"] == "ingest" && v != true:
-			t.Errorf("settings/ingest is published %v, want readOnly true", p)
-		case p["id"] != "ingest" && published:
-			t.Errorf("settings/%v is published readOnly %v: only ingest is", p["id"], v)
+		case (p["id"] == "ingest" || p["id"] == "maintenance") && v != true:
+			t.Errorf("settings/%v is published %v, want readOnly true", p["id"], p)
+		case p["id"] != "ingest" && p["id"] != "maintenance" && published:
+			t.Errorf("settings/%v is published readOnly %v: only ingest and maintenance are", p["id"], v)
 		}
 		if published {
 			readOnly++
 		}
 	}
-	if readOnly != 1 {
-		t.Errorf("%d projections publish readOnly, want only ingest in %s", readOnly, raw)
+	if readOnly != 2 {
+		t.Errorf("%d projections publish readOnly, want only ingest and maintenance in %s", readOnly, raw)
 	}
 }
 

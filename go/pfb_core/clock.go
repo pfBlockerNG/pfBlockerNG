@@ -66,9 +66,11 @@ func cadencesDue(prev, boundary time.Time, loc *time.Location) []string {
 	return []string{"daily"}
 }
 
-// runClock starts metrics at every Unix minute boundary and counters at each boundary whose local date in zone() (nil func or
-// result: the local zone) is later than the previous boundary's, kept in memory only, until ctx ends. It never touches a running child.
-func runClock(ctx context.Context, now func() time.Time, after func(time.Duration) <-chan time.Time, zone func() *time.Location, metrics, counters *lane) {
+// runClock, until ctx ends, starts metrics at each Unix minute boundary when ls (from memory, never reloaded per minute) says the
+// package is enabled and exports metrics, and counters at each boundary whose local date in zone() (nil func or result: the local
+// zone) is later than the previous boundary's, kept in memory only, with the counter verbs due, after reading ls again. With
+// no usable ls values nothing starts. It never touches a running child.
+func runClock(ctx context.Context, now func() time.Time, after func(time.Duration) <-chan time.Time, zone func() *time.Location, metrics, counters *lane, ls *laneSettings) {
 	var prev time.Time
 	for {
 		n := now()
@@ -87,9 +89,19 @@ func runClock(ctx context.Context, now func() time.Time, after func(time.Duratio
 		if prev.IsZero() {
 			prev = b.Add(-time.Minute)
 		}
-		metrics.start()
-		if due := cadencesDue(prev, b, loc); len(due) > 0 {
-			counters.start(due...)
+		due := cadencesDue(prev, b, loc)
+		var cur maintenanceSettings
+		var ok bool
+		if len(due) > 0 {
+			cur, ok = ls.reload(ctx)
+		} else {
+			cur, ok = ls.read()
+		}
+		if ok && cur.Enabled && cur.MetricsExport {
+			metrics.start()
+		}
+		if verbs := counterVerbs(cur, due); ok && len(verbs) > 0 {
+			counters.start(verbs...)
 		}
 		prev = b
 	}

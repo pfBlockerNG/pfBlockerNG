@@ -80,7 +80,10 @@ func TestGetSettingsSchemaPublishesIngestAsReadOnly(t *testing.T) {
 	if got.status != http.StatusOK || !bytes.Contains(got.body, []byte(`"id":"ingest","readOnly":true,"fields":[`)) {
 		t.Errorf("GetSettingsSchema = %d %s, want settings/ingest published readOnly", got.status, got.body)
 	}
-	if bytes.Count(got.body, []byte(`"readOnly"`)) != 1 {
-		t.Errorf("GetSettingsSchema publishes readOnly %d times, want only for ingest", bytes.Count(got.body, []byte(`"readOnly"`)))
+	if !bytes.Contains(got.body, []byte(`"id":"maintenance","readOnly":true,"fields":[`)) {
+		t.Errorf("GetSettingsSchema = %s, want settings/maintenance published readOnly", got.body)
+	}
+	if bytes.Count(got.body, []byte(`"readOnly"`)) != 2 {
+		t.Errorf("GetSettingsSchema publishes readOnly %d times, want only for ingest and maintenance", bytes.Count(got.body, []byte(`"readOnly"`)))
 	}
 }

@@ -16,13 +16,17 @@
 //	                    scheduling and observation, not an admitted worker; a restarted Core observes or reconciles its receipt.
 //	                    Exit status 75 means the worker deferred the Update: its result is skipped and nothing is recorded
 //	--maintenance-cmd PATH
-//	                    optional quarter-hour Outpost command in an independent maintenance worker; it uses maintenance.log
-//	                    and separate receipts/lock. Core shutdown ends observation, not an admitted maintenance transaction.
-//	--metrics-cmd PATH  optional program Core starts, with no arguments, at every Unix minute boundary
+//	                    optional quarter-hour Outpost command, no arguments, in an independent maintenance worker; it uses
+//	                    maintenance.log and separate receipts/lock. Core reads the maintenance settings before each run and
+//	                    skips it unless the package is enabled and scheduled work is not switched off. Core shutdown ends
+//	                    observation, not an admitted maintenance transaction.
+//	--metrics-cmd PATH  optional program Core starts, with no arguments, at every Unix minute boundary while the package is
+//	                    enabled and exports metrics (memory, no reload per minute)
 //	--counters-cmd PATH optional program Core starts at the first minute boundary of each local calendar day (--zoneinfo's
-//	                    zone) with the cadences due as arguments: "daily", plus "weekly" on a Sunday. Both are started and
-//	                    observed, never signalled: a run still alive skips the boundary, output is discarded, a failure is logged
-//	                    once per outage, and a Core stop leaves a running program alone
+//	                    zone), after reading the settings again, with the verbs due as arguments: clearip, then cleardnsbl
+//	                    (each daily, or weekly on a Sunday); nothing due starts nothing. The lanes are started and observed,
+//	                    never signalled: a run still alive skips the boundary, output is discarded, a failure is logged once
+//	                    per outage, and a Core stop leaves a running program alone
 //	--zoneinfo PATH     the host's time zone file (a TZif file): the scheduler reads the schedule in its zone, re-reading it at
 //	                    every evaluation, so a change of the host's zone applies without a restart. Without it, or when the file
 //	                    cannot be used (logged once), the process's local zone
@@ -153,7 +157,8 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		resourceStore = resources.Open(resourceDir)
 	}
 	maps.Copy(methods, resourceMethods(resourceStore))
-	sched, gate := newUpdates(*updateCmd, maintenanceCmd, *zoneinfo, *stateDir, store, logger.Printf) // nil without --update-cmd
+	lanes := newLaneSettings(store, logger.Printf)
+	sched, gate := newUpdates(*updateCmd, maintenanceCmd, *zoneinfo, *stateDir, store, lanes, logger.Printf) // nil without --update-cmd
 	maps.Copy(methods, updateMethods(sched, gate))
 	srv, err := listen(options{socket: *socket, allowUID: allowUID, clientUIDs: clients, socketGroup: group, groupSet: groupSet,
 		methods: methods, logf: logger.Printf})
@@ -170,7 +175,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		clock := make(chan struct{})
 		go func() {
 			runClock(ctx, clockNow, clockAfter, hostZone(*zoneinfo, logger.Printf),
-				&lane{name: "metrics", path: metricsCmd, logf: logger.Printf}, &lane{name: "counters", path: countersCmd, logf: logger.Printf})
+				&lane{name: "metrics", path: metricsCmd, logf: logger.Printf}, &lane{name: "counters", path: countersCmd, logf: logger.Printf}, lanes)
 			close(clock)
 		}()
 		defer func() { <-clock }() // ctx ends it before run returns; running children are left alone

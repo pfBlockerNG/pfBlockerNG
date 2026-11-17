@@ -63,7 +63,7 @@ Core's native settings (issue #3842). Core holds them in memory, loaded from a [
   `SaveSettings` and `ValidateSettings` refuse a change set that names it, with any content (also `{}` and `null`):
   `invalid_argument`, one field error naming the projection (`changes.ingest`, or `settings.ingest` for `InitializeSettings`, whose argument is
   `settings`), and nothing of the change set is applied.
-  `InitializeSettings` gives it its defaults. Only [`ingest`](#projection-ingest) is read-only.
+  `InitializeSettings` gives it its defaults. Only [`ingest`](#projection-ingest) and [`maintenance`](#projection-maintenance) are read-only.
 - **Revision and generations.** The configuration *revision* is the optimistic lock. It comes from the backend and is
   compared only for equality. A projection's *generation* is derived from its value as a read shows it (53 bits of the
   SHA-256 of its JSON, secrets as their presence): it is never stored, stays equal across Core restarts while the value
@@ -126,7 +126,7 @@ Protocol, version 1:
 
 | Request | Reply |
 |---|---|
-| `{"version": 1, "op": "read"}` | `{"version": 1, "revision": N, "settings": {"dns": {...}, "feeds/ipv4": {...}, "feeds/ipv6": {...}, "feeds/dnsbl": {...}, "schedule": {...}, "ingest": {...}}}` |
+| `{"version": 1, "op": "read"}` | `{"version": 1, "revision": N, "settings": {"dns": {...}, "feeds/ipv4": {...}, "feeds/ipv6": {...}, "feeds/dnsbl": {...}, "schedule": {...}, "ingest": {...}, "maintenance": {...}}}` |
 | `{"version": 1, "op": "write", "expectedRevision": N, "settings": {...every projection, every field}}` | `{"version": 1, "revision": M}` |
 
 A read carries secrets (feed credentials, the proxy password) to Core; only Core's API hides them. A write carries `ingest`
@@ -352,6 +352,25 @@ layer relays these calls from its authenticated pages; Core is never exposed to 
   identify the original live worker and prevent a duplicate. A malformed receipt makes the API unavailable, not idle. If a worker
   dies before publishing completion, Core salvages complete result lines, records failure and does not rerun the transaction.
 
+### Projection `maintenance`
+
+What Core's timed lanes decide from (issue #3996), published as `settings/maintenance`. It is **read-only**
+([`readOnly`](#settings)): config.xml and the platform own it, and a change set that names it is refused.
+
+| Field | Type, default | config.xml / platform (PHP reader) |
+|---|---|---|
+| `enabled` | bool, `false` | General `enable_cb` is `on` |
+| `scheduledWorkDisabled` | bool, `false` | the file `.pfb_cron_disable` exists |
+| `metricsExport` | bool, `false` | General `pfb_metrics_export` is `on` |
+| `clearIpCounters` | enum `never`, `daily`, `weekly`; `never` | `pfblockerngglobal` `widget-clearip` |
+| `clearDnsblCounters` | enum `never`, `daily`, `weekly`; `never` | `pfblockerngglobal` `widget-cleardnsbl` |
+
+- **Garbage reads as never.** A counter cadence that is none of the three exact values (`Daily`, `1`, empty, an array, absent) is `never`.
+  Core refuses what a backend answers outside the schema, as for `ingest`: an unknown enum value, a non-string enum, a bool that is not a JSON bool and
+  a field the projection lacks fail the read naming `maintenance.<field>`; a field the backend leaves out is its default.
+
+Parity fixture: `tests/core/fixtures/settings_maintenance_parity.json` (`config` as sections `gen` and `pfblockerngglobal`, the sentinel as `cronDisable`).
+
 ### StartUpdate
 
 Asks for an Update. It takes a `requestId` ([replay](#requestid-and-replay)) and `trigger`, which is required:
@@ -436,13 +455,16 @@ The worker receives this request on stdin and reports progress and results as fo
   recovered as failed from its complete result lines, never relaunched.
 
 - **Scheduled maintenance.** With `--maintenance-cmd PATH`, each quarter-hour boundary admits a separate maintenance worker; a busy lane skips rather than queues.
+  Core reads [`maintenance`](#projection-maintenance) again before each decision and runs the worker only while `enabled` is true and `scheduledWorkDisabled` is false;
+  it logs one line when the lane flips between running and skipping, and a failed read keeps the values read last (logged once per outage). The program is run with no arguments.
   It uses `maintenance.log` and its own `maintenance.log.lock`, `.request`, `.result` and `.status` receipts, never the Update lease or `Scheduler.Done`.
   Core shutdown ends observation but the worker keeps its lock and can finish; a restarted Core cannot start a duplicate. Update and maintenance use different locks and can overlap.
-  The wrapper returns 75 while pfBlockerNG is disabled or `.pfb_cron_disable` is present; Core treats that and `ErrRunning` as benign skips and logs other failures.
-  Maintenance has no whole-program timeout; bounds belong to the invoked operations.
-- **Timed lanes.** With `--metrics-cmd PATH`, Core starts PATH with no arguments at every Unix minute boundary; with `--counters-cmd PATH`, it starts PATH at the first minute boundary of each new local day in the `--zoneinfo` zone, with `daily`, plus `weekly` when that day is a Sunday.
+  Exit status 75 and `ErrRunning` are benign skips of a program that defers itself; other failures are logged. Maintenance has no whole-program timeout; bounds belong to the invoked operations.
+- **Timed lanes.** Core, not the Outpost, decides when each program is due, from `maintenance` in memory or, at a day change, read again.
+  With `--metrics-cmd PATH`, Core starts PATH with no arguments at every Unix minute boundary while `enabled` and `metricsExport` are true; `scheduledWorkDisabled` does not stop it, and a minute boundary never reads the backend.
+  With `--counters-cmd PATH`, at each boundary that falls on a later local date (in the `--zoneinfo` zone) than the previous boundary, Core reads `maintenance` again and starts PATH with the verbs due as arguments, `clearip` when `clearIpCounters` is `daily` (or `weekly` on a Sunday), then `cleardnsbl` likewise; none due starts nothing. It ignores `enabled` and `scheduledWorkDisabled`.
   A lane whose previous run is still alive skips the boundary rather than queueing it. Core only starts and observes: it never signals the program, a Core stop leaves a running one alone, and its output is discarded.
-  A failure to start or a non-zero exit is logged once per outage. The bound of a run belongs to the program Core is given.
+  A failure to start or a non-zero exit is logged once per outage, as is settings that cannot be read, in which case nothing starts. The bound of a run belongs to the program Core is given.
 
 The scheduler records the result in `schedule_state.json` (0600, `{"schema": 1, "items": {...}}`, replaced atomically), either
 when the worker reports completion or when a later Core reconciles its receipt: each feed's outcome, the attempted ids that stay

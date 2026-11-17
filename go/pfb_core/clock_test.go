@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -261,12 +262,12 @@ func (f *fakeClock) after(d time.Duration) <-chan time.Time {
 }
 
 // drive runs runClock from start for ticks boundaries with the zone func and returns the waits it asked for.
-func drive(t *testing.T, start time.Time, ticks int, zone func() *time.Location, metrics, counters *lane) []time.Duration {
+func drive(t *testing.T, start time.Time, ticks int, zone func() *time.Location, metrics, counters *lane, ls *laneSettings) []time.Duration {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	f := &fakeClock{cur: start, ticks: ticks, cancel: cancel, lanes: []*lane{metrics, counters}}
-	runClock(ctx, f.now, f.after, zone, metrics, counters)
+	runClock(ctx, f.now, f.after, zone, metrics, counters, ls)
 	within(t, "the lanes to be reaped", func() bool { return !metrics.busy.Load() && !counters.busy.Load() })
 	return f.waits
 }
@@ -287,7 +288,7 @@ func TestRunClockStartsMetricsAtEveryMinuteBoundary(t *testing.T) {
 			rec := &logRecorder{}
 			metrics := &lane{name: "metrics", path: laneProgram(t, t.TempDir(), "prog", `date +%s >> `+out), logf: rec.logf}
 			counters := &lane{name: "counters", logf: rec.logf}
-			waits := drive(t, c.start, 3, func() *time.Location { return time.UTC }, metrics, counters)
+			waits := drive(t, c.start, 3, func() *time.Location { return time.UTC }, metrics, counters, laneSettingsOver(t, metricsOn, rec.logf))
 			if !reflect.DeepEqual(waits, c.waits) {
 				t.Errorf("runClock waited %v, want %v", waits, c.waits)
 			}
@@ -320,7 +321,7 @@ func TestRunClockCancellationLeavesARunningChildAlone(t *testing.T) {
 	}
 	ended := make(chan struct{})
 	go func() {
-		runClock(ctx, func() time.Time { return time.Date(2024, 5, 6, 12, 0, 30, 0, time.UTC) }, after, nil, metrics, &lane{})
+		runClock(ctx, func() time.Time { return time.Date(2024, 5, 6, 12, 0, 30, 0, time.UTC) }, after, nil, metrics, &lane{}, laneSettingsOver(t, metricsOn, metrics.logf))
 		close(ended)
 	}()
 	within(t, "the child to start", exists(pidFile))
@@ -391,10 +392,10 @@ func TestRunClockStartsCountersOncePerLocalDayChange(t *testing.T) {
 		zones []*time.Location // the zone at each boundary; the last repeats
 		want  []string
 	}{
-		{"Saturday into Sunday", time.Date(2024, 3, 9, 23, 58, 30, 0, time.UTC), []*time.Location{time.UTC}, []string{"daily weekly"}},
-		{"Sunday into Monday", time.Date(2024, 3, 10, 23, 58, 30, 0, time.UTC), []*time.Location{time.UTC}, []string{"daily"}},
+		{"Saturday into Sunday", time.Date(2024, 3, 9, 23, 58, 30, 0, time.UTC), []*time.Location{time.UTC}, []string{"clearip cleardnsbl"}},
+		{"Sunday into Monday", time.Date(2024, 3, 10, 23, 58, 30, 0, time.UTC), []*time.Location{time.UTC}, []string{"clearip"}},
 		{"mid-week day without a change", time.Date(2024, 3, 6, 12, 0, 30, 0, time.UTC), []*time.Location{time.UTC}, nil},
-		{"zone changed between boundaries", time.Date(2024, 3, 10, 2, 58, 30, 0, time.UTC), []*time.Location{time.UTC, sp}, []string{"daily weekly"}},
+		{"zone changed between boundaries", time.Date(2024, 3, 10, 2, 58, 30, 0, time.UTC), []*time.Location{time.UTC, sp}, []string{"clearip cleardnsbl"}},
 		{"zone kept at UTC", time.Date(2024, 3, 10, 2, 58, 30, 0, time.UTC), []*time.Location{time.UTC, time.UTC}, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -408,7 +409,7 @@ func TestRunClockStartsCountersOncePerLocalDayChange(t *testing.T) {
 				asked++
 				return loc
 			}
-			drive(t, c.start, 3, zone, metrics, counters)
+			drive(t, c.start, 3, zone, metrics, counters, laneSettingsOver(t, dailyIPWeeklyDNSBL, rec.logf))
 			if got := lines(readFile(t, out)); !reflect.DeepEqual(got, c.want) {
 				t.Errorf("counters started with %q, want %q", got, c.want)
 			}
@@ -421,7 +422,7 @@ func TestRunClockStartsCountersOncePerLocalDayChange(t *testing.T) {
 
 // driveScript runs runClock over the clock readings in nows, one per boundary computed, with each wait ending at once once both
 // lanes are idle. The loop is stopped when the readings run out, after the last boundary has fired.
-func driveScript(t *testing.T, nows []time.Time, zone func() *time.Location, metrics, counters *lane) {
+func driveScript(t *testing.T, nows []time.Time, zone func() *time.Location, metrics, counters *lane, ls *laneSettings) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -447,7 +448,7 @@ func driveScript(t *testing.T, nows []time.Time, zone func() *time.Location, met
 		ch <- time.Time{}
 		return ch
 	}
-	runClock(ctx, now, after, zone, metrics, counters)
+	runClock(ctx, now, after, zone, metrics, counters, ls)
 	within(t, "the lanes to be reaped", func() bool { return !metrics.busy.Load() && !counters.busy.Load() })
 }
 
@@ -460,19 +461,19 @@ func TestRunClockCountersSurviveClockJumpsAndNeverFireBackwards(t *testing.T) {
 		nows []time.Time
 		want []string
 	}{
-		{"a jump across midnight", []time.Time{at(9, 23, 58, 30), at(10, 0, 10, 10)}, []string{"daily weekly"}},
+		{"a jump across midnight", []time.Time{at(9, 23, 58, 30), at(10, 0, 10, 10)}, []string{"clearip cleardnsbl"}},
 		{"a step back from Sunday into Saturday fires nothing, then the real change fires once",
-			[]time.Time{at(10, 0, 4, 30), at(9, 23, 49, 30), at(9, 23, 58, 30), at(9, 23, 59, 30)}, []string{"daily weekly"}},
-		{"a gap of days to a Monday", []time.Time{at(6, 12, 0, 30), at(11, 12, 0, 30)}, []string{"daily"}},
-		{"a gap of days to a Sunday", []time.Time{at(6, 12, 0, 30), at(10, 12, 0, 30)}, []string{"daily weekly"}},
-		{"a day change on every following day", []time.Time{at(9, 23, 59, 30), at(10, 23, 59, 30)}, []string{"daily weekly", "daily"}},
+			[]time.Time{at(10, 0, 4, 30), at(9, 23, 49, 30), at(9, 23, 58, 30), at(9, 23, 59, 30)}, []string{"clearip cleardnsbl"}},
+		{"a gap of days to a Monday", []time.Time{at(6, 12, 0, 30), at(11, 12, 0, 30)}, []string{"clearip"}},
+		{"a gap of days to a Sunday", []time.Time{at(6, 12, 0, 30), at(10, 12, 0, 30)}, []string{"clearip cleardnsbl"}},
+		{"a day change on every following day", []time.Time{at(9, 23, 59, 30), at(10, 23, 59, 30)}, []string{"clearip cleardnsbl", "clearip"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "out")
 			rec := &logRecorder{}
 			metrics := &lane{name: "metrics", logf: rec.logf}
 			counters := &lane{name: "counters", path: laneProgram(t, t.TempDir(), "prog", `echo "$*" >> `+out), logf: rec.logf}
-			driveScript(t, c.nows, func() *time.Location { return time.UTC }, metrics, counters)
+			driveScript(t, c.nows, func() *time.Location { return time.UTC }, metrics, counters, laneSettingsOver(t, dailyIPWeeklyDNSBL, rec.logf))
 			if got := lines(readFile(t, out)); !reflect.DeepEqual(got, c.want) {
 				t.Errorf("counters started with %q, want %q", got, c.want)
 			}
@@ -503,63 +504,95 @@ func TestCadencesDueIsStrictlyForward(t *testing.T) {
 	}
 }
 
-// run starts the --metrics-cmd and --counters-cmd programs at the clock's boundary, whose paths hold a space and shell
-// metacharacters, and stops cleanly. The clock is the package's clockNow/clockAfter seam.
-func TestRunStartsTheClockLanesAtTheBoundary(t *testing.T) {
-	oldNow, oldAfter := clockNow, clockAfter
-	t.Cleanup(func() { clockNow, clockAfter = oldNow, oldAfter })
+// run starts the --metrics-cmd and --counters-cmd programs at the clock's boundary as the maintenance settings of its backend
+// decide, with program paths that hold a space and shell metacharacters, and stops cleanly. The clock is the package's
+// clockNow/clockAfter seam; the zone comes in through --zoneinfo.
+func TestRunStartsTheClockLanesAsTheMaintenanceSettingsDecide(t *testing.T) {
 	utc, err := os.ReadFile("/usr/share/zoneinfo/UTC")
 	if err != nil {
 		t.Skipf("the host has no zoneinfo to give --zoneinfo: %v", err)
 	}
-	clockNow = func() time.Time { return time.Date(2024, 3, 9, 23, 59, 30, 0, time.UTC) } // a Saturday: the next boundary is Sunday
-	var calls sync.Mutex
-	asked := 0
-	ready := make(chan time.Time, 1)
-	ready <- time.Time{}
-	clockAfter = func(time.Duration) <-chan time.Time {
-		calls.Lock()
-		defer calls.Unlock()
-		if asked++; asked == 1 {
-			return ready
-		}
-		return nil
-	}
-	dir := scratchDir(t)
-	zoneFile := filepath.Join(dir, "UTC")
-	if err := os.WriteFile(zoneFile, utc, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	progs := filepath.Join(dir, "x y;$(z)")
-	metricsOut, countersOut := filepath.Join(dir, "metrics"), filepath.Join(dir, "counters")
-	metrics := laneProgram(t, progs, "metrics", `echo "metrics [$#]" > `+metricsOut)
-	counters := laneProgram(t, progs, "counters", `echo "$*" > `+countersOut)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	code := make(chan int, 1)
-	go func() {
-		var stderr strings.Builder
-		code <- run(ctx, []string{"--socket", filepath.Join(dir, "run", "api.sock"), "--state-dir", filepath.Join(dir, "state"),
-			"--zoneinfo", zoneFile, "--metrics-cmd", metrics, "--counters-cmd", counters}, &stderr)
-	}()
-	within(t, "the metrics program to start", exists(metricsOut))
-	within(t, "the counters program to start", exists(countersOut))
-	cancel()
-	select {
-	case c := <-code:
-		if c != 0 {
-			t.Errorf("run = %d, want 0", c)
-		}
-	case <-time.After(20 * time.Second):
-		t.Fatal("STUCK/ENVIRONMENT: run did not return after its context was cancelled")
-	}
-	within(t, "the programs to finish writing", func() bool {
-		return readFile(t, metricsOut) != "" && readFile(t, countersOut) != ""
-	})
-	if got := readFile(t, metricsOut); got != "metrics [0]\n" {
-		t.Errorf("the metrics program ran with %q, want no arguments", got)
-	}
-	if got := readFile(t, countersOut); got != "daily weekly\n" {
-		t.Errorf("the counters program ran with %q, want \"daily weekly\"", got)
+	for _, c := range []struct {
+		name         string
+		values       map[string]any
+		metrics      bool   // whether the metrics program starts
+		countersArgs string // the counters program's arguments; empty: it does not start
+	}{
+		{"metrics on and both counters due", map[string]any{"enabled": true, "metricsExport": true, "clearIpCounters": "daily", "clearDnsblCounters": "weekly"}, true, "clearip cleardnsbl"},
+		{"metrics export off", map[string]any{"enabled": true, "clearIpCounters": "weekly"}, false, "clearip"},
+		{"package off and the off switch present still clear counters, and export nothing", map[string]any{"scheduledWorkDisabled": true, "metricsExport": true, "clearDnsblCounters": "daily"}, false, "cleardnsbl"},
+		{"nothing due", map[string]any{"enabled": true, "metricsExport": true}, true, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			oldNow, oldAfter := clockNow, clockAfter
+			t.Cleanup(func() { clockNow, clockAfter = oldNow, oldAfter })
+			clockNow = func() time.Time { return time.Date(2024, 3, 9, 23, 59, 30, 0, time.UTC) } // a Saturday: the next boundary is Sunday
+			var calls sync.Mutex
+			asked := 0
+			ready := make(chan time.Time, 1)
+			ready <- time.Time{}
+			clockAfter = func(time.Duration) <-chan time.Time {
+				calls.Lock()
+				defer calls.Unlock()
+				if asked++; asked == 1 {
+					return ready
+				}
+				return nil
+			}
+			dir := scratchDir(t)
+			state := filepath.Join(dir, "state")
+			if err := os.MkdirAll(state, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			doc, _ := json.Marshal(map[string]any{"format": 1, "revision": 1, "projections": map[string]any{"maintenance": map[string]any{"values": c.values}}})
+			if err := os.WriteFile(filepath.Join(state, "settings.json"), doc, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			zoneFile := filepath.Join(dir, "UTC")
+			if err := os.WriteFile(zoneFile, utc, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			progs := filepath.Join(dir, "x y;$(z)")
+			metricsOut, countersOut := filepath.Join(dir, "metrics"), filepath.Join(dir, "counters")
+			metrics := laneProgram(t, progs, "metrics", `echo "metrics [$#]" > `+metricsOut)
+			counters := laneProgram(t, progs, "counters", `echo "$*" > `+countersOut)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			code := make(chan int, 1)
+			var stderr syncBuffer
+			go func() {
+				code <- run(ctx, []string{"--socket", filepath.Join(dir, "run", "api.sock"), "--state-dir", state,
+					"--zoneinfo", zoneFile, "--metrics-cmd", metrics, "--counters-cmd", counters}, &stderr)
+			}()
+			// Both decisions of the boundary are taken, in order, before the loop waits again: the second wait is the barrier.
+			within(t, "the clock to wait for the boundary after the first", func() bool { calls.Lock(); defer calls.Unlock(); return asked >= 2 })
+			if c.metrics {
+				within(t, "the metrics program to start", exists(metricsOut))
+			}
+			if c.countersArgs != "" {
+				within(t, "the counters program to start", exists(countersOut))
+			}
+			cancel()
+			select {
+			case got := <-code:
+				if got != 0 {
+					t.Errorf("run = %d, want 0; stderr %s", got, stderr.String())
+				}
+			case <-time.After(20 * time.Second):
+				t.Fatal("STUCK/ENVIRONMENT: run did not return after its context was cancelled")
+			}
+			if c.metrics {
+				within(t, "the metrics program to finish writing", func() bool { return readFile(t, metricsOut) != "" })
+			}
+			if c.countersArgs != "" {
+				within(t, "the counters program to finish writing", func() bool { return readFile(t, countersOut) != "" })
+			}
+			if got := readFile(t, metricsOut); c.metrics != (got != "") || (c.metrics && got != "metrics [0]\n") {
+				t.Errorf("the metrics program ran with %q, want it run with no arguments: %t", got, c.metrics)
+			}
+			if got, want := readFile(t, countersOut), c.countersArgs; (want == "") != (got == "") || (want != "" && got != want+"\n") {
+				t.Errorf("the counters program ran with %q, want %q", got, want)
+			}
+		})
 	}
 }
