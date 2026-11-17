@@ -145,7 +145,7 @@ final class CoreSettingsFeedsMergeOrderTest extends TestCase
 		$settings = $read['settings'];
 		$feed = ['header' => 'F', 'state' => 'enabled', 'format' => 'auto', 'url' => 'https://example.org/f.txt', 'credentials' => ''];
 		$group = ['name' => 'A', 'action' => 'Deny_Inbound', 'updateFrequency' => 'Never', 'bindAddress' => '', 'preScript' => '', 'postScript' => '',
-			'customList' => '', 'suppressionCidr' => 0, 'whoisConvert' => FALSE, 'feeds' => [$feed]];
+			'customList' => '', 'suppressionCidr' => 0, 'whoisConvert' => FALSE, 'listClass' => 'deny', 'feeds' => [$feed]];
 		$settings['feeds/ipv4']['groups'] = [$group, ['name' => 'B'] + $group];
 
 		$reply = $this->backend(['version' => 1, 'op' => 'write', 'expectedRevision' => $read['revision'], 'settings' => $settings]);

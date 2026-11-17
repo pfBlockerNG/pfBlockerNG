@@ -24,6 +24,8 @@ type ingestFixture struct {
 		Config        json.RawMessage `json:"config"`
 		AllowlistText *string         `json:"allowlistText"`
 		Platform      json.RawMessage `json:"platform"`
+		CronDisable   json.RawMessage `json:"cronDisable"`
+		Vips          json.RawMessage `json:"vips"`
 		Ingest        map[string]any  `json:"ingest"`
 		PHP           json.RawMessage `json:"php"`
 	} `json:"cases"`

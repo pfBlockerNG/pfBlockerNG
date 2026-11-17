@@ -61,8 +61,11 @@ if (isset($_POST['save'])) {
 
 		PfbConfig::writeSection('installedpackages/pfblockerngsafesearch', $pfb['bconfig']);
 		$msg = 'Saved SafeSearch configuration';
-		write_config("[ pfBlockerNG ] {$msg}");
+		$pfb_written = write_config("[ pfBlockerNG ] {$msg}");
 		pfb_mark_pending_changes();	// applies on the next Update, not on save
+		if (!pfb_dns_config_write_failed($pfb_written)) {
+			pfb_core_settings_changed(NULL, TRUE);	// Core reads these settings (issue #4031); a failure never undoes the save
+		}
 		$savemsg = 'Changes saved. Apply them using "Run Now" on "Update", or wait for the next automatic apply.';
 		header("Location: /pfblockerng/pfblockerng_safesearch.php?savemsg={$savemsg}");
 	}

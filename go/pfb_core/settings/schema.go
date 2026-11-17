@@ -64,8 +64,13 @@ type Schema struct {
 // DNSBL groups and their feeds, as far as downloading and parsing them needs (tests/core/fixtures/settings_feeds_parity.json).
 // ingest: what the feed phase reads of the package settings and the platform (tests/core/fixtures/settings_ingest_parity.json).
 // maintenance: what the timed lanes decide from (tests/core/fixtures/settings_maintenance_parity.json).
+// policy/ip: the IP policy the Update loop applies (tests/core/fixtures/settings_policy_ip_parity.json).
+// feeds/geoip: the nine GeoIP continents (tests/core/fixtures/settings_feeds_geoip_parity.json).
+// policy/dnsbl: the DNSBL build policy (tests/core/fixtures/settings_policy_dnsbl_parity.json).
+// extras: the Extras credentials and options (tests/core/fixtures/settings_extras_parity.json).
+// hooks: the Update hook rows (tests/core/fixtures/settings_hooks_parity.json).
 func Production() Schema {
-	return Schema{Version: 1, Projections: []Projection{dnsProjection(), feeds("ipv4"), feeds("ipv6"), feeds("dnsbl"), scheduleProjection(), ingestProjection(), maintenanceProjection()}}
+	return Schema{Version: 1, Projections: []Projection{dnsProjection(), feeds("ipv4"), feeds("ipv6"), feeds("dnsbl"), scheduleProjection(), ingestProjection(), policyIPProjection(), feedsGeoipProjection(), policyDNSBLProjection(), extrasProjection(), hooksProjection(), maintenanceProjection()}}
 }
 
 func dnsProjection() Projection {
@@ -103,6 +108,10 @@ const (
 var reservedHeaders = []string{"DNSBLIP", "pfB_Top", "pfB_Africa", "pfB_Antarctica", "pfB_Asia", "pfB_Europe", "pfB_NAmerica",
 	"pfB_Oceania", "pfB_SAmerica", "pfB_PS"}
 
+// ipActions are the actions of an IP group or a GeoIP continent.
+var ipActions = []string{"Disabled", "Deny_Inbound", "Deny_Outbound", "Deny_Both", "Permit_Inbound", "Permit_Outbound",
+	"Permit_Both", "Match_Inbound", "Match_Outbound", "Match_Both", "Alias_Deny", "Alias_Permit", "Alias_Match", "Alias_Native"}
+
 // feeds is the projection feeds/<kind>: the groups of one Groups editor tab (IPv4, IPv6, DNSBL) with their feeds. The
 // Outpost translates what is local to it: the source interface is the address to bind, a local file a file:// URL, and a
 // URL's userinfo the write-only credentials.
@@ -111,8 +120,7 @@ func feeds(kind string) Projection {
 	name, actions, formats := word, []string{"Disabled", "unbound"}, []string{"auto", "rsync"}
 	if ip {
 		name = `^[A-Za-z0-9_]{1,24}$` // pfB_<name>_v4 within PF's 31 characters
-		actions = []string{"Disabled", "Deny_Inbound", "Deny_Outbound", "Deny_Both", "Permit_Inbound", "Permit_Outbound",
-			"Permit_Both", "Match_Inbound", "Match_Outbound", "Match_Both", "Alias_Deny", "Alias_Permit", "Alias_Match", "Alias_Native"}
+		actions = ipActions
 		formats = []string{"auto", "geoip", "regex", "whois", "asn", "rsync"}
 	}
 	feed := []Field{
@@ -139,7 +147,7 @@ func feeds(kind string) Projection {
 		group = append(group, Field{Name: "suppressionCidr", Type: TypeInt, Default: int64(0), Min: new(int64(0)), Max: new(int64(32))}) // 0: Disabled
 	}
 	if ip {
-		group = append(group, Field{Name: "whoisConvert", Type: TypeBool, Default: false})
+		group = append(group, Field{Name: "whoisConvert", Type: TypeBool, Default: false}, listClass())
 	}
 	group = append(group, Field{Name: "feeds", Type: TypeList, Default: []any{}, Key: "header", Items: feed, Check: checkFeed})
 	return Projection{ID: "feeds/" + kind, Fields: []Field{

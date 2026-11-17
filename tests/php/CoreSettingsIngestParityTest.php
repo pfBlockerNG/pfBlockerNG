@@ -53,6 +53,8 @@ final class CoreSettingsIngestParityTest extends TestCase
 			unset($GLOBALS['pfb']['curl_defaults'][$option]);
 		}
 		$GLOBALS['pfb']['pending_marker'] = "{$this->dir}/pending";
+		$GLOBALS['pfb']['dbdir'] = "{$this->dir}/db";
+		$this->assertTrue(mkdir("{$this->dir}/db", 0700));
 		$GLOBALS['pfb']['metrics_lock'] = "{$this->dir}/metrics.lock";
 		$GLOBALS['pfb']['log'] = "{$this->dir}/pfblockerng.log";
 		$GLOBALS['pfb']['errlog'] = "{$this->dir}/error.log";
@@ -116,6 +118,17 @@ final class CoreSettingsIngestParityTest extends TestCase
 		if (isset($case['allowlistText'])) {
 			config_set_path(PFB_SECTIONS['gen'] . '/pfb_feed_internal_allowlist', base64_encode($case['allowlistText']));
 		}
+		if (isset($case['vips'])) {
+			config_set_path('virtualip/vip', $case['vips']);
+		}
+		$marker = pfb_cron_disable_path();
+		match ($case['cronDisable'] ?? NULL) {
+			'empty'     => $this->assertSame(0, file_put_contents($marker, '')),
+			'content'   => $this->assertSame(3, file_put_contents($marker, 'off')),
+			'directory' => $this->assertTrue(mkdir($marker)),
+			'symlink'   => $this->assertTrue(file_put_contents("{$this->dir}/target", '') === 0 && symlink("{$this->dir}/target", $marker)),
+			NULL        => NULL,
+		};
 		$platform = $case['platform'] ?? ['ipv4' => [], 'ipv6' => []];
 		$GLOBALS['pfb_test_configured_ip_addresses'] = $platform['ipv4'];
 		$GLOBALS['pfb_test_configured_ipv6'] = $platform['ipv6'];
@@ -162,16 +175,20 @@ final class CoreSettingsIngestParityTest extends TestCase
 			'proxy-ipv6-url-with-port', 'proxy-ipv6-url-without-port', 'proxy-ipv6-socks5h', 'proxy-ipv6-userinfo',
 			'proxy-explicit-credentials-override-userinfo', 'proxy-uppercase-scheme', 'proxy-host-whitespace', 'proxy-nonscalar-url',
 			'proxy-trailing-slash', 'proxy-path-is-ignored', 'proxy-query-is-ignored', 'proxy-fragment-is-ignored',
-			'self-interface-and-vip', 'self-link-local-excluded', 'self-hostile-addresses'] as $id) {
+			'self-interface-and-vip', 'self-link-local-excluded', 'self-hostile-addresses',
+			'scheduled-work-no-marker', 'scheduled-work-empty-marker', 'scheduled-work-marker-with-content', 'scheduled-work-marker-is-a-directory',
+			'scheduled-work-marker-is-a-symlink', 'sinkhole-none', 'sinkhole-v4', 'sinkhole-v4-and-v6', 'sinkhole-v6-only', 'sinkhole-id-unresolved',
+			'sinkhole-v4-id-names-an-ipv6-vip', 'sinkhole-v6-zoned', 'sinkhole-id-array'] as $id) {
 			$this->assertContains($id, $ids, "the coverage matrix row {$id}");
 		}
 		$refused = array_column($doc['refused'], 'id');
 		$this->assertSame(array_values(array_unique($refused)), $refused, 'a refused row id appears once');
-		foreach (['proxy-url-with-userinfo', 'proxy-url-with-crlf', 'allowlist-with-spaces', 'allowlist-ipv6-zone', 'self-unspecified-v4', 'self-unspecified-v6', 'self-mapped-ipv4'] as $id) {
+		foreach (['proxy-url-with-userinfo', 'proxy-url-with-crlf', 'allowlist-with-spaces', 'allowlist-ipv6-zone', 'self-unspecified-v4', 'self-unspecified-v6', 'self-mapped-ipv4',
+			'scheduled-work-disabled-string', 'sinkhole-v4-not-an-address', 'sinkhole-v4-ipv6-address', 'sinkhole-v6-ipv4-address', 'sinkhole-v6-zoned'] as $id) {
 			$this->assertContains($id, $refused, "the hostile row {$id}");
 		}
 		$this->assertSame(['suppression', 'suppressionCidrV4', 'suppressionCidrV6', 'dnsblIp', 'dnsblLenient', 'feedHostFilter', 'feedHostAllowlist', 'selfAddresses',
-			'proxyUrl', 'proxyUser', 'proxyPassword', 'proxyUnusable'], array_keys($doc['defaults']), 'the defaults name every field in the protocol order');
+			'proxyUrl', 'proxyUser', 'proxyPassword', 'proxyUnusable', 'scheduledWorkDisabled', 'sinkholeV4', 'sinkholeV6'], array_keys($doc['defaults']), 'the defaults name every field in the protocol order');
 	}
 
 	/** @param array<string, mixed> $case */
@@ -179,7 +196,9 @@ final class CoreSettingsIngestParityTest extends TestCase
 	public function testTodaysPhpGivesTheFixturesObservationsAndTheAdapterTheFixturesProjection(array $case): void
 	{
 		$this->arrange($case);
-		pfb_global();
+		if ($case['php'] !== []) {	// a case without observations holds a value today's readers warn about
+			pfb_global();
+		}
 		$pfb = $GLOBALS['pfb'];
 		$curl = $pfb['curl_defaults'];
 		$seen = [
@@ -189,6 +208,9 @@ final class CoreSettingsIngestParityTest extends TestCase
 			'lenient' => static fn(): bool => $pfb['dnsbl_lenient'] === PfbToggle::On,
 			'filter'  => static fn(): bool => pfb_feed_filter_enabled(),
 			'allow'   => static fn(): array => pfb_feed_internal_allowlist(),
+			'cronDisabled' => static fn(): bool => pfb_cron_disabled(),
+			'vip4'    => static fn(): string => $pfb['dnsbl_vip4'],
+			'vip6'    => static fn(): string => $pfb['dnsbl_vip6'],
 			'proxy'   => static fn(): array => ['host' => $curl[CURLOPT_PROXY] ?? NULL, 'port' => $curl[CURLOPT_PROXYPORT] ?? NULL, 'userpwd' => $curl[CURLOPT_PROXYUSERPWD] ?? NULL],
 		];
 		foreach ($case['php'] as $key => $expected) {
@@ -351,5 +373,27 @@ final class CoreSettingsIngestParityTest extends TestCase
 		}
 		$reset();
 		$this->assertSame($base, $this->read()['revision'], 'the same box gives the same revision');
+	}
+
+	public function testTheRevisionMovesWhenScheduledWorkIsDisabledOrASinkholeAddressChanges(): void
+	{
+		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4', '_vip4a');
+		config_set_path('virtualip/vip', [['uniqid' => '4a', 'subnet' => '10.10.10.1']]);
+		$base = $this->read();
+		$this->assertFalse($base['settings']['ingest']['scheduledWorkDisabled'], 'before-state: no marker');
+		$this->assertSame('10.10.10.1', $base['settings']['ingest']['sinkholeV4'], 'before-state: the VIP address');
+
+		touch(pfb_cron_disable_path());
+		$disabled = $this->read();
+		$this->assertTrue($disabled['settings']['ingest']['scheduledWorkDisabled']);
+		$this->assertNotSame($base['revision'], $disabled['revision'], 'the marker appearing moves the revision');
+
+		unlink(pfb_cron_disable_path());
+		$this->assertSame($base['revision'], $this->read()['revision'], 'the marker going moves it back');
+
+		config_set_path('virtualip/vip', [['uniqid' => '4a', 'subnet' => '10.10.10.2']]);
+		$moved = $this->read();
+		$this->assertSame('10.10.10.2', $moved['settings']['ingest']['sinkholeV4']);
+		$this->assertNotSame($base['revision'], $moved['revision'], 'a changed sinkhole address moves the revision');
 	}
 }

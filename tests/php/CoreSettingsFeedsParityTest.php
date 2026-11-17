@@ -14,6 +14,8 @@ use PHPUnit\Framework\TestCase;
  *   - A `posted` case is a Groups editor save: the page's own validation, run as shipped, decides `valid`, and the adapter's write
  *     validation gives the same verdict on the case's `input` filled with the native defaults.
  *   - A `scriptNames` entry is a preScript/postScript name with the verdict both the adapter and Core give it (issue #3961).
+ *   - A `listClasses` row (issue #4031) is an IP group's action and Advanced Inversions as config.xml holds them: `folder` is where
+ *     today's apply pass builds the group's list (NULL: nowhere), `listClass` the derived field the adapter reads for it.
  */
 #[CoversFunction('pfb_core_settings_backend')]
 #[CoversFunction('pfb_core_settings_request_refusal')]
@@ -86,6 +88,19 @@ final class CoreSettingsFeedsParityTest extends TestCase
 		}
 	}
 
+	/** @return array<string, array{0: array<string, mixed>, 1: string}> every list class row of the fixture, for each IP projection */
+	public static function listClasses(): array
+	{
+		$doc = json_decode((string) file_get_contents(self::FIXTURE), TRUE, 512, JSON_THROW_ON_ERROR);
+		$rows = [];
+		foreach ($doc['listClasses'] as $row) {
+			foreach (['feeds/ipv4', 'feeds/ipv6'] as $projection) {
+				$rows["{$projection} {$row['id']}"] = [$row, $projection];
+			}
+		}
+		return $rows;
+	}
+
 	/** @return array<string, array{0: string, 1: bool}> */
 	public static function scriptNames(): array
 	{
@@ -136,6 +151,46 @@ final class CoreSettingsFeedsParityTest extends TestCase
 			"{$case['id']}: the adapter's write validation accepts what its read answered");
 	}
 
+	public function testTodaysPhpStillBuildsAnIpGroupsListInTheFolderOfItsActionOrInversions(): void
+	{
+		$source = (string) file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+
+		foreach (["pfb_dnsbl_toggle_enabled(\$list['autoaddrnot_in'] ?? '')", "pfb_dnsbl_toggle_enabled(\$list['autoaddrnot_out'] ?? '')", "\$list['action'] = 'Alias_Native';",
+			"if (!pfb_group_action_valid(\$list['action'] ?? NULL, \$ltype === 'pfblockerngdnsbl' ? 'dnsbl' : 'ipv4'))"] as $statement) {
+			$this->assertStringContainsString($statement, $source, "the apply pass still has: {$statement}");
+		}
+	}
+
+	/**
+	 * @param array<string, mixed> $row
+	 */
+	#[DataProvider('listClasses')]
+	public function testTodaysPhpKeepsAnIpGroupsListInTheFolderTheFixtureNames(array $row, string $projection): void
+	{
+		[$section, $gtype] = self::SECTION[$projection];
+		config_set_path("installedpackages/{$section}/config/0", ['aliasname' => 'G'] + $row['stored']);
+		$action = $row['stored']['action'];
+
+		// A group with an action the pass skips, or a Disabled one, builds no list
+		$folder = pfb_group_action_valid($action, $gtype) && $action !== 'Disabled' ? basename(pfb_determine_list_detail($action, 'G', $section, '0')['folder'] ?? '') : NULL;
+
+		$this->assertSame($row['folder'], $folder, "{$row['id']}: the folder the pass builds {$projection}'s group in: {$row['description']}");
+	}
+
+	/**
+	 * @param array<string, mixed> $row
+	 */
+	#[DataProvider('listClasses')]
+	public function testTheAdapterProjectsTheFixturesListClassOfAnIpGroup(array $row, string $projection): void
+	{
+		[$section] = self::SECTION[$projection];
+		config_set_path("installedpackages/{$section}/config/0", ['aliasname' => 'G'] + $row['stored']);
+
+		$reply = pfb_core_settings_backend(['version' => 1, 'op' => 'read']);
+
+		$this->assertSame($row['listClass'], $reply['settings'][$projection]['groups'][0]['listClass'] ?? NULL, "{$row['id']}: {$row['description']} " . json_encode($reply['settings'][$projection] ?? NULL));
+	}
+
 	/**
 	 * The adapter's verdict on one group of $projection: valid is no refusal; invalid is invalid_argument naming a field of that group.
 	 *
@@ -152,6 +207,11 @@ final class CoreSettingsFeedsParityTest extends TestCase
 			'categoryFrequency' => 'Never', 'categoryProviders' => []];
 		$settings['ingest'] = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_ingest_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
 		$settings['maintenance'] = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_maintenance_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
+		$settings['policy/ip'] = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_policy_ip_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
+		$settings['feeds/geoip'] = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_feeds_geoip_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
+		$settings['policy/dnsbl'] = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_policy_dnsbl_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
+		$settings['extras'] = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_extras_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
+		$settings['hooks'] = ['rows' => []];
 
 		$refusal = pfb_core_settings_request_refusal(['version' => 1, 'op' => 'write', 'expectedRevision' => 1, 'settings' => $settings]);
 
@@ -168,7 +228,7 @@ final class CoreSettingsFeedsParityTest extends TestCase
 	/**
 	 * A fixture `input` with every field it leaves out at its native default: action Disabled, updateFrequency Never, bindAddress,
 	 * preScript, postScript and customList '', suppressionCidr 0 (IPv4), whoisConvert false (IP); a feed enabled, auto, url and
-	 * credentials '', action deny (DNSBL).
+	 * credentials '', action deny (DNSBL); listClass none (IP).
 	 *
 	 * @param array<string, mixed> $input
 	 * @return array<string, mixed>
@@ -181,6 +241,7 @@ final class CoreSettingsFeedsParityTest extends TestCase
 		}
 		if ($projection !== 'feeds/dnsbl') {
 			$group['whoisConvert'] = FALSE;
+			$group['listClass'] = 'none';
 		}
 		$feed = ['state' => 'enabled', 'format' => 'auto', 'url' => '', 'credentials' => ''] + ($projection === 'feeds/dnsbl' ? ['action' => 'deny'] : []);
 		$group = array_merge($group, $input);

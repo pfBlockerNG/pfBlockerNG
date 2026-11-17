@@ -131,7 +131,7 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 	private function read(): array
 	{
 		$reply = $this->backend(['version' => 1, 'op' => 'read']);
-		$this->assertSame(['dns', 'feeds/ipv4', 'feeds/ipv6', 'feeds/dnsbl', 'schedule', 'ingest', 'maintenance'], array_keys($reply['settings'] ?? []), 'the read answers: ' . json_encode($reply));
+		$this->assertSame(['dns', 'feeds/ipv4', 'feeds/ipv6', 'feeds/dnsbl', 'schedule', 'ingest', 'policy/ip', 'feeds/geoip', 'policy/dnsbl', 'extras', 'hooks', 'maintenance'], array_keys($reply['settings'] ?? []), 'the read answers: ' . json_encode($reply));
 		return $reply;
 	}
 
@@ -276,7 +276,10 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 		$reply = $this->write($settings, $read['revision']);
 
 		$this->assertWritten($reply);
-		$this->assertSame($settings, $this->read()['settings'], 'the read gives back what Core asked for');
+		// The list class is derived from the stored action: a write that moves the action to a Permit family moves it, whatever Core sent
+		$expected = $settings;
+		$expected['feeds/ipv4']['groups'][0]['listClass'] = $field === 'action' ? 'permit' : $settings['feeds/ipv4']['groups'][0]['listClass'];
+		$this->assertSame($expected, $this->read()['settings'], 'the read gives back what Core asked for');
 		$this->assertSame($stored, config_get_path(self::V4 . "/0/{$key}"), "{$key} as stored");
 		$this->assertSame([self::V4 . "/0/{$key}"], self::changedLeaves($before, $GLOBALS['config']), 'no other config.xml key is touched');
 	}
@@ -390,9 +393,9 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 		$stored = ['aliasname' => 'New', 'action' => 'Deny_Both', 'cron' => '01hour', 'srcint' => 'em1', 'script_pre' => '', 'script_post' => 'pfb_post.sh',
 			'custom' => base64_encode('x')];
 		return [
-			'IPv4'  => ['feeds/ipv4', self::V4, $group + ['suppressionCidr' => 0, 'whoisConvert' => TRUE, 'feeds' => [$feed]],
+			'IPv4'  => ['feeds/ipv4', self::V4, $group + ['suppressionCidr' => 0, 'whoisConvert' => TRUE, 'listClass' => 'deny', 'feeds' => [$feed]],
 				$stored + ['suppression_cidr' => 'Disabled', 'whois_convert' => 'on', 'row' => [$row]]],
-			'IPv6'  => ['feeds/ipv6', self::V6, $group + ['whoisConvert' => FALSE, 'feeds' => [$feed]],
+			'IPv6'  => ['feeds/ipv6', self::V6, $group + ['whoisConvert' => FALSE, 'listClass' => 'deny', 'feeds' => [$feed]],
 				$stored + ['whois_convert' => '', 'row' => [$row]]],
 			'DNSBL' => ['feeds/dnsbl', self::DNSBL, array_merge($group, ['action' => 'unbound', 'feeds' => [$feed + ['action' => 'permit']]]),
 				array_merge($stored, ['action' => 'unbound', 'row' => [$row + ['action' => 'Permit']]])],
@@ -420,6 +423,10 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 		$settings['schedule']['groups'][] = ['id' => substr($projection, 6) . '/' . $group['name'], 'override' => FALSE, 'weekday' => 7, 'hour' => 0, 'minute' => 0];
 		usort($settings['schedule']['groups'], static fn(array $a, array $b): int => array_search(explode('/', $a['id'])[0], ['ipv4', 'ipv6', 'dnsbl'], TRUE)
 			<=> array_search(explode('/', $b['id'])[0], ['ipv4', 'ipv6', 'dnsbl'], TRUE));
+		if ($projection === 'feeds/dnsbl') {
+			// policy/dnsbl lists the groups of feeds/dnsbl with the logging the Outpost derives (a stored section with no mode: the VIP response)
+			$settings['policy/dnsbl']['groups'][] = ['name' => $group['name'], 'logging' => 'enabled', 'primary' => FALSE, 'top1mFilter' => FALSE];
+		}
 		$this->assertSame($settings, $this->read()['settings']);
 	}
 
@@ -683,7 +690,7 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 		$read = $this->read();
 		$settings = $read['settings'];
 		$new = ['name' => 'Unbound', 'action' => 'Deny_Both', 'updateFrequency' => 'Never', 'bindAddress' => '', 'preScript' => '', 'postScript' => '',
-			'customList' => '', 'suppressionCidr' => 0, 'whoisConvert' => FALSE, 'feeds' => []];
+			'customList' => '', 'suppressionCidr' => 0, 'whoisConvert' => FALSE, 'listClass' => 'deny', 'feeds' => []];
 		$at = count($settings['feeds/ipv4']['groups']);
 		$settings['feeds/ipv4']['groups'][] = $new;
 		$before = $GLOBALS['config'];
@@ -875,7 +882,7 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 		$read = $this->read();
 		$settings = $read['settings'];
 		$new = ['action' => 'Deny_Both', 'updateFrequency' => 'Never', 'bindAddress' => '', 'preScript' => '', 'postScript' => '', 'suppressionCidr' => 0,
-			'whoisConvert' => FALSE, 'feeds' => []];
+			'whoisConvert' => FALSE, 'listClass' => 'deny', 'feeds' => []];
 		$settings['feeds/ipv4']['groups'][] = ['name' => 'Listed', 'customList' => "x\n"] + $new;
 		$settings['feeds/ipv4']['groups'][] = ['name' => 'Empty', 'customList' => ''] + $new;
 

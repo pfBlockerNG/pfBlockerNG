@@ -4821,7 +4821,7 @@ function pfb_core_settings_revision(array $settings): int {
 function pfb_core_revision_key(): string {
 	global $pfb;
 	$path = $pfb['core_revision_key'];
-	if (!file_exists($path)) {
+	if (!file_exists($path) && !is_dir(dirname($path))) {
 		@mkdir(dirname($path), 0755, TRUE);
 	}
 	$fh = file_exists($path) ? FALSE : @fopen($path, 'x');	// 'x': of two first callers, one creates it
@@ -4943,7 +4943,10 @@ function pfb_core_ingest_entry_valid(string $entry): bool {
  * are the addresses pfb_ip_is_self() calls the box's own beyond the loopbacks, each once and without the ones Core refuses to list (unspecified,
  * link-local, IPv4-mapped): the interfaces' addresses, the virtual IPs and the PPPoE server's, IPv4 then IPv6, as pfSense lists them.
  *
- * @return array<string, mixed> the 11 fields, in the protocol's order
+ * `scheduledWorkDisabled` is pfb_cron_disabled(); `sinkholeV4` and `V6` are the DNSBL VIP addresses pfb_global() resolves (issue #4031), '' unless an
+ * address of that family without a zone.
+ *
+ * @return array<string, mixed> the 15 fields, in the protocol's order
  */
 function pfb_core_ingest_settings(): array {
 	$on = static fn(string $key): bool => PfbConfig::read($key) === PfbToggle::On;
@@ -4952,17 +4955,22 @@ function pfb_core_ingest_settings(): array {
 		return ctype_digit($stored) && (int) $stored >= 1 && (int) $stored <= $max ? (int) $stored : 0;
 	};
 	$listed = static fn(array $values, callable $valid): array => array_values(array_unique(array_filter(array_map('strval', $values), $valid)));
+	$sinkhole = static fn(mixed $address, int $family): string => is_string($address) && filter_var($address, FILTER_VALIDATE_IP, $family) !== FALSE ? $address : '';
 	$self = $listed(array_merge(array_values(get_configured_ip_addresses()), array_values(get_configured_ipv6_addresses())), 'pfb_core_ingest_self_valid');
 	return [
 		'suppression'       => $on('ip/suppression'),
 		'suppressionCidrV4' => $limit('ip/suppression_cidr', 17),
 		'suppressionCidrV6' => $limit('ip/suppression_cidr_v6', 64),
-		'dnsblIp'           => pfb_dnsblip_action_value(PfbConfig::read('dnsbl/action')) !== 'Disabled',
+		'dnsblIp'           => pfb_dnsblip_action_value(pfb_core_table_text('dnsbl/action')) !== 'Disabled',	// an array stored there is no action, and no warning
 		'dnsblLenient'      => $on('dnsbl/pfb_dnsbl_lenient'),
 		'feedHostFilter'    => pfb_feed_filter_enabled(),
 		'feedHostAllowlist' => array_map(static fn(string $entry): array => ['cidr' => $entry], $listed(pfb_feed_internal_allowlist(), 'pfb_core_ingest_entry_valid')),
 		'selfAddresses'     => array_map(static fn(string $address): array => ['address' => $address], $self),
-	] + pfb_core_proxy_settings();
+	] + pfb_core_proxy_settings() + [
+		'scheduledWorkDisabled' => pfb_cron_disabled(),
+		'sinkholeV4'            => $sinkhole(get_configured_vip_ipv4(pfb_core_table_text('dnsbl/pfb_dnsvip4')), FILTER_FLAG_IPV4),
+		'sinkholeV6'            => $sinkhole(get_configured_vip_ipv6(pfb_core_table_text('dnsbl/pfb_dnsvip6')), FILTER_FLAG_IPV6),
+	];
 }
 
 /**
@@ -4974,16 +4982,562 @@ function pfb_core_ingest_settings(): array {
  * @param array<string, mixed> $current
  * @return list<array{field: string, message: string}>
  */
-function pfb_core_ingest_faults(array $wanted, array $current, string $projection = 'ingest'): array {
+function pfb_core_ingest_faults(array $wanted, array $current, string $id = 'ingest'): array {
 	$faults = [];
 	foreach (array_unique(array_merge(array_keys($current), array_keys($wanted))) as $name) {
 		if (!array_key_exists($name, $current)) {
-			$faults[] = ['field' => "{$projection}.{$name}", 'message' => 'no such field'];
+			$faults[] = ['field' => "{$id}.{$name}", 'message' => 'no such field'];
 		} elseif (!array_key_exists($name, $wanted) || $wanted[$name] !== $current[$name]) {
-			$faults[] = ['field' => "{$projection}.{$name}", 'message' => 'read-only: config.xml and the platform own it'];
+			$faults[] = ['field' => "{$id}.{$name}", 'message' => 'read-only: config.xml and the platform own it'];
 		}
 	}
 	return $faults;
+}
+
+/**
+ * Core's read-only `hooks` (issue #4031, docs/misc/core-api-protocol.md): the stored Update hook rows in list order, `id` a row's index
+ * in that list. A row is listed when today's runner could run it: `when` is `pre` or `post` and `script` a bare file name
+ * hook_<when>_*.sh or .py (pfb_hook_script_valid(); whether the file exists is for whoever runs it) without a control character.
+ * `enabled` is the runner's exact `on`, `timeout` pfb_hook_timeout() (the default for a non-scalar), `description` the sanitized text.
+ *
+ * @return array{rows: list<array{id: string, when: string, script: string, description: string, timeout: int, enabled: bool}>}
+ */
+function pfb_core_hooks_settings(): array {
+	$rows = [];
+	foreach (array_values(pfb_hook_rows(config_get_path('installedpackages/pfblockerng/config/0', []))) as $n => $hook) {
+		$when = is_array($hook) ? ($hook['when'] ?? NULL) : NULL;
+		$script = is_array($hook) ? ($hook['script'] ?? NULL) : NULL;
+		if (!in_array($when, ['pre', 'post'], TRUE) || !is_string($script) || preg_match("/^hook_{$when}_[^\\/\\p{C}]*\\.(?:sh|py)\$/Du", $script) !== 1) {
+			continue;
+		}
+		$rows[] = [
+			'id'          => (string) $n,
+			'when'        => $when,
+			'script'      => $script,
+			'description' => is_scalar($hook['description'] ?? NULL) ? pfb_sanitize_text((string) $hook['description']) : '',
+			'timeout'     => is_scalar($hook['timeout'] ?? '') ? pfb_hook_timeout($hook) : PFB_HOOK_TIMEOUT_DEFAULT,
+			'enabled'     => ($hook['enabled'] ?? '') === 'on',
+		];
+	}
+	return ['rows' => $rows];
+}
+
+/**
+ * The table-driven projections (issue #4031, docs/misc/core-api-protocol.md), in the protocol's order after `ingest` (`feeds/geoip` sits
+ * between the two, pfb_core_settings()): projection id => its fields (pfb_core_table_read(), _faults() and _merge() take the table of one).
+ *
+ * @return array<string, array<string, array{0: string, 1: string, 2: mixed}>>
+ */
+function pfb_core_table_projections(): array {
+	return ['policy/ip' => pfb_core_policy_ip_fields(), 'policy/dnsbl' => pfb_core_policy_dnsbl_fields(), 'extras' => pfb_core_extras_fields()];
+}
+
+/**
+ * Core's `extras` fields (issue #4031), a table as pfb_core_policy_ip_fields() describes one: the MaxMind account and key as pfb_global()
+ * filters them (a word, not `0`), the locale the IP page offers (`en` for any other), the IPinfo and TOP1M tokens when they hold no control
+ * character, the TOP1M source as its gateway adapter reads it. The key and the two tokens are secrets: Core's API hides them, not this read.
+ *
+ * @return array<string, array{0: string, 1: string, 2: mixed}>
+ */
+function pfb_core_extras_fields(): array {
+	$word = static fn(string $v): bool => $v !== '0' && preg_match('/^[A-Za-z0-9_]+$/D', $v) === 1;
+	$token = static fn(string $v): bool => preg_match('/^[^\p{C}]+$/Du', $v) === 1;
+	$same = static fn(array $tokens): array => array_combine($tokens, $tokens);
+	return [
+		'maxmindAccount'     => ['ip/maxmind_account', 'value', $word],
+		'maxmindKey'         => ['ip/maxmind_key', 'value', $word],
+		'maxmindLocale'      => ['ip/maxmind_locale', 'enum', $same(['en', 'fr', 'pt-BR', 'de', 'ja', 'zh-CN', 'es'])],
+		'maxmindCsvDisabled' => ['ip/database_cc', 'toggle', NULL],
+		'ipinfoToken'        => ['ip/asn_token', 'value', static fn(string $v): bool => $v !== '0' && $token($v)],	// the registry reads a stored 0 as none
+		'top1mProvider'      => ['dnsbl/top1m_source', 'adapted', $same(array_column(PfbTop1mSource::cases(), 'value'))],
+		'top1mToken'         => ['dnsbl/top1m_token', 'value', $token],
+	];
+}
+
+/**
+ * Core's `policy/ip` fields in the protocol's order, each as [config key, kind, argument]. The key is path-form `<PFB_SECTIONS alias>/<key>`,
+ * registered (read and written through PfbConfig) or not (config_set_path). Kinds: 'toggle'; 'enable' (a bool stored as Enable or Disable);
+ * 'int' (0: not set, stored as ''; else 1 to the argument, stored as decimal text); 'range' (the argument [lowest, highest, default], plain digits as text);
+ * 'enum' (the argument maps each token to its stored text, the first token being the default); 'adapted' (an enum read through its gateway
+ * adapter); 'value' (a string the argument accepts, else ''); 'csv', 'list' and 'text' (a list of objects
+ * holding one string, the argument [that field, its validity test, ...]: the CSV passing PFB_FILTER_CSV as a whole, a CSV taken as it
+ * is (the third element says whether each token is trimmed), the lines of a base64 text area (the third and fourth elements, when given,
+ * are the line's entry and a text's lines, as pfb_core_table_line_entry() and pfb_core_table_text_lines())); 'derived' (the Outpost's
+ * own answer, never stored: [the kind and argument its value is checked with, what reads it given the interface lookup]); 'string' and
+ * 'objects' (the argument [key field, the table of an item]) only inside a derived value.
+ *
+ * @return array<string, array{0: string, 1: string, 2: mixed}>
+ */
+function pfb_core_policy_ip_fields(): array {
+	$token = static fn(string $field, string $pattern): array => [$field, static fn(string $entry): bool => preg_match($pattern, $entry) === 1];
+	return [
+		'dedup'                  => ['ip/enable_dup', 'toggle', NULL],
+		'aggregate'              => ['ip/enable_agg', 'toggle', NULL],
+		'max'                    => ['rep/enable_rep', 'toggle', NULL],
+		'maxLimit'               => ['rep/p24_max_var', 'int', 50],
+		'pMax'                   => ['rep/enable_pdup', 'toggle', NULL],
+		'pMaxLimit'              => ['rep/p24_pmax_var', 'int', 50],
+		'dMax'                   => ['rep/enable_dedup', 'toggle', NULL],
+		'dMaxLimit'              => ['rep/p24_dmax_var', 'int', 50],
+		'countryWhitelistAction' => ['rep/ccwhite', 'enum', ['ignore' => 'ignore', 'match' => 'match']],
+		'countryBlacklistAction' => ['rep/ccblack', 'enum', ['none' => '', 'block' => 'block', 'match' => 'match']],
+		'countryWhitelist'       => ['rep/ccexclude', 'csv', $token('code', '/^[A-Z][A-Z0-9]$/D')],
+		'etBlock'                => ['rep/etblock', 'csv', $token('category', '/^ET_[A-Za-z0-9_]+$/D')],
+		'etMatch'                => ['rep/etmatch', 'csv', $token('category', '/^ET_[A-Za-z0-9_]+$/D')],
+		'suppressionV4'          => ['ip/v4suppression', 'text', ['cidr', static fn(string $entry): bool => pfb_core_policy_cidr_valid($entry, 'ipv4')]],
+		'suppressionV6'          => ['ip/v6suppression', 'text', ['cidr', static fn(string $entry): bool => pfb_core_policy_cidr_valid($entry, 'ipv6')]],
+	];
+}
+
+/**
+ * Whether $entry is a suppression entry Core's list can hold: one the IP page accepts (pfb_validate_suppression_line()) that is also a
+ * CIDR of its family as netip.ParsePrefix reads it (an address, then / and a prefix length of plain digits within the page's range), lower-case, no zone.
+ */
+function pfb_core_policy_cidr_valid(string $entry, string $family): bool {
+	$v6 = $family === 'ipv6';
+	[$min, $max] = $v6 ? [32, 128] : [8, 32];
+	return preg_match('/^([^\/%]+)\/(0|[1-9][0-9]{0,2})$/D', $entry, $parts) === 1 && $entry === strtolower($entry)
+		&& (int) $parts[2] >= $min && (int) $parts[2] <= $max
+		&& filter_var($parts[1], FILTER_VALIDATE_IP, $v6 ? FILTER_FLAG_IPV6 : FILTER_FLAG_IPV4) !== FALSE
+		&& pfb_validate_suppression_line($entry, $family) === NULL;
+}
+
+/**
+ * Core's `policy/dnsbl` fields in the protocol's order (pfb_core_policy_ip_fields() describes the table): the DNSBL settings page, its
+ * SafeSearch and Regex lists, and the logging policy the Outpost derives from them and from the groups. A text area is read as its
+ * consumer reads it: the whitelist as pfb_dnsbl_whitelist_lines() (lower-cased, IDN punycoded, a domain the filter accepts), the TLD lists as
+ * the manifest builder's pfb_text_area_decode(TRUE, FALSE, TRUE) does, the Regex list as pfB-DNS does (pfb_core_regex_lines()).
+ *
+ * @return array<string, array{0: string, 1: string, 2: mixed}>
+ */
+function pfb_core_policy_dnsbl_fields(): array {
+	$entry = static function (string $line): ?string {
+		$read = trim(pfb_text_area_decode(base64_encode($line), TRUE, FALSE, TRUE)[0] ?? '');
+		return $read === '' ? NULL : $read;
+	};
+	$lower = static fn(string $field, callable $also): array => [$field, static fn(string $v): bool => preg_match('/^[^\p{C}\p{Z}A-Z]+$/Du', $v) === 1 && $also($v), $entry];
+	$word = static fn(string $v): bool => preg_match('/^[A-Za-z0-9_]+$/D', $v) === 1;
+	$tld = static fn(bool $trim): array => ['tld', static fn(string $v): bool => preg_match('/^[^\p{C}\p{Z},]+$/Du', $v) === 1, $trim];
+	$mechanisms = array_fill_keys(PFB_DNSBL_CONCRETE_MECHANISMS, '');
+	$group = ['name' => ['', 'string', $word], 'logging' => ['', 'enum', $mechanisms], 'primary' => ['', 'toggle', NULL], 'top1mFilter' => ['', 'toggle', NULL]];
+	return [
+		'enabled'           => ['dnsbl/pfb_dnsbl', 'toggle', NULL],
+		'whitelist'         => ['dnsbl/whitelist', 'text', $lower('domain', static fn(string $v): bool => !empty(pfb_filter($v, PFB_FILTER_DOMAIN, 'pfb_core_settings')))],
+		'top1m'             => ['dnsbl/top1m_enable', 'toggle', NULL],
+		'top1mCount'        => ['dnsbl/top1m_count', 'range', [1, 1000000, 1000]],
+		'top1mInclusions'   => ['dnsbl/top1m_inclusion', 'csv', ['tld', static fn(string $v): bool => preg_match('/^[A-Za-z0-9_-]+$/D', $v) === 1]],
+		'tldBlacklist'      => ['dnsbl/tld_wildcard_blacklist', 'text', $lower('tld', static fn(string $v): bool => TRUE)],
+		'tldExclusions'     => ['dnsbl/tld_wildcard_exclusion', 'text', $lower('domain', static fn(string $v): bool => TRUE)],
+		'tldAllow'          => ['dnsbl/tld_allow', 'toggle', NULL],
+		'tldAllowGtld'      => ['dnsbl/tld_allow_gtld', 'list', $tld(FALSE)],
+		'tldAllowCctld'     => ['dnsbl/tld_allow_cctld', 'list', $tld(FALSE)],
+		'tldAllowItld'      => ['dnsbl/tld_allow_itld', 'list', $tld(FALSE)],
+		'tldAllowBgtld'     => ['dnsbl/tld_allow_bgtld', 'list', $tld(FALSE)],
+		'regex'             => ['dnsbl/pfb_regex', 'toggle', NULL],
+		'regexList'         => ['dnsbl/pfb_regex_list', 'text', ['pattern', static fn(string $v): bool => preg_match('/\p{C}/u', $v) === 0 && pfb_core_regex_entry($v) === $v,
+			'pfb_core_regex_entry', 'pfb_core_regex_lines']],
+		'safeSearch'        => ['ss/safesearch_enable', 'enable', NULL],
+		'safeSearchYoutube' => ['ss/safesearch_youtube', 'enum', ['Disable' => 'Disable', 'Moderate' => 'Moderate', 'Strict' => 'Strict']],
+		'safeSearchDoh'     => ['ss/safesearch_doh', 'enable', NULL],
+		'safeSearchDohList' => ['ss/safesearch_doh_list', 'list', ['host', $tld(FALSE)[1], TRUE]],
+		'dnsblIpAction'     => ['dnsbl/action', 'enum', pfb_core_geoip_fields()['action'][2]],
+		'logging'           => ['', 'derived', ['enum', $mechanisms, static fn(callable $interfaces): string => pfb_core_dnsbl_policy()[0]['mechanism']]],
+		'blacklistLogging'  => ['', 'derived', ['enum', $mechanisms, static fn(callable $interfaces): string => pfb_core_dnsbl_blacklist_logging()]],
+		'groups'            => ['', 'derived', ['objects', ['name', $group], 'pfb_core_dnsbl_groups']],
+	];
+}
+
+/**
+ * The DNSBL logging policy and the stored DNSBL groups, as pfb_global() reads them (pfb_dnsbl_policy_config()).
+ *
+ * @return array{0: array{mode: PfbDnsblGlobalMode, mechanism: string, legacy: bool}, 1: array<mixed>}
+ */
+function pfb_core_dnsbl_policy(): array {
+	$groups = config_get_path('installedpackages/pfblockerngdnsbl/config', []);
+	$groups = is_array($groups) ? $groups : [];
+	return [pfb_dnsbl_policy_config(PfbConfig::readSection(PFB_SECTIONS['dnsbl']), $groups), $groups];
+}
+
+/** The mechanism the Blacklist categories log with (pfb_dnsbl_effective_logging() over their stored blacklist_logging, as the apply pass reads it). */
+function pfb_core_dnsbl_blacklist_logging(): string {
+	$policy = pfb_core_dnsbl_policy()[0];
+	$stored = config_get_path('installedpackages/pfblockerngblacklist', []);
+	return pfb_dnsbl_effective_logging(pfb_dnsbl_blacklist_logging(is_array($stored) ? $stored : []), $policy['mechanism'], $policy['mode'], $policy['legacy']);
+}
+
+/**
+ * The groups `feeds/dnsbl` projects, in its order, each with what the apply pass makes of its stored logging, order and TOP1M filter:
+ * the mechanism it logs with, whether it goes first (stored order primary) and whether it filters TOP1M.
+ *
+ * @param callable(): array<string, string> $interfaces
+ * @return list<array{name: string, logging: string, primary: bool, top1mFilter: bool}>
+ */
+function pfb_core_dnsbl_groups(callable $interfaces): array {
+	[$policy, $stored] = pfb_core_dnsbl_policy();
+	$groups = [];
+	foreach (pfb_core_feed_groups('feeds/dnsbl', $interfaces) as $n => $group) {
+		$groups[] = [
+			'name'        => $group['name'],
+			'logging'     => pfb_dnsbl_effective_logging($stored[$n]['logging'] ?? NULL, $policy['mechanism'], $policy['mode'], $policy['legacy']),
+			'primary'     => ($stored[$n]['order'] ?? NULL) === 'primary',
+			'top1mFilter' => pfb_cfg_toggle_read($stored[$n]['filter_top1m'] ?? NULL) === PfbToggle::On,
+		];
+	}
+	return $groups;
+}
+
+/**
+ * The lines of a Regex list as pfB-DNS reads them (loadUserRegexEntries in the decider's pfb_unbound_build.go): the stored
+ * text is strictly valid base64 (pfb_core_strict_base64()) of valid UTF-8, else the list has no line; lines end at a CR or an LF.
+ *
+ * @return list<string>
+ */
+function pfb_core_regex_lines(string $stored64): array {
+	$text = pfb_core_strict_base64(trim($stored64));
+	if ($text === NULL || $text === '' || !mb_check_encoding($text, 'UTF-8')) {
+		return [];
+	}
+	return preg_split('/\r\n?|\n/', rtrim($text, "\r\n"));
+}
+
+/** The entry of a Regex list line as pfB-DNS takes it: the line trimmed of Python's white space, NULL when that is empty or starts a comment. */
+function pfb_core_regex_entry(string $line): ?string {
+	$space = '[\t-\r \x1c-\x1f\x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}]+';	// Python's str.strip() set: PCRE's \s also takes U+180E
+	$entry = (string) preg_replace("/^{$space}|{$space}\$/Du", '', $line);
+	return $entry === '' || $entry[0] === '#' ? NULL : $entry;
+}
+
+/**
+ * base64.b64decode(validate=True) as Python 3.11 runs it (binascii.a2b_base64, strict mode), which pfB-DNS mirrors: only the base64
+ * alphabet, padding only after a quad's second character and never followed by data, a missing padding is an error. NULL when it fails.
+ */
+function pfb_core_strict_base64(string $text): ?string {
+	if (str_starts_with($text, '=')) {
+		return NULL;
+	}
+	$data = '';
+	$quad = $pads = 0;
+	$padding = FALSE;
+	for ($i = 0, $n = strlen($text); $i < $n; $i++) {
+		if ($text[$i] === '=') {
+			$padding = TRUE;
+			if ($quad >= 2 && $quad + ++$pads >= 4) {
+				return $i + 1 < $n ? NULL : (string) base64_decode($data);
+			}
+		} elseif ($padding || !preg_match('/^[A-Za-z0-9+\/]$/D', $text[$i])) {
+			return NULL;
+		} else {
+			$data .= $text[$i];
+			$quad = ($quad + 1) % 4;
+		}
+	}
+	return $quad === 0 ? (string) base64_decode($data) : NULL;
+}
+
+/** The text stored at the path-form $key: '' for an absent or non-scalar value (an array where a scalar belongs). */
+function pfb_core_table_text(string $key): string {
+	[$alias, $bare] = explode('/', $key, 2);
+	$stored = PfbConfig::readSection(PFB_SECTIONS[$alias])[$bare] ?? NULL;
+	return is_scalar($stored) ? (string) $stored : '';
+}
+
+/** The entry of one line of a text area, as pfb_text_area_decode() reads it (comment cut, lower-cased, trimmed), NULL for a blank or comment line. */
+function pfb_core_table_line_entry(string $line): ?string {
+	$entry = rtrim(pfb_text_area_decode(base64_encode($line), FALSE, TRUE), "\n");
+	return $entry === '' ? NULL : $entry;
+}
+
+/** The lines of the text area $stored64 (base64) as pfb_text_area_decode() splits them: sanitized, blank ones included. @return list<string> */
+function pfb_core_table_text_lines(string $stored64): array {
+	$text = rtrim(pfb_sanitize_text_area((string) base64_decode($stored64)), "\n");
+	return $text === '' ? [] : explode("\n", $text);
+}
+
+/**
+ * The values of the table $fields from config.xml, never failing whatever it holds: a value that is no valid one is the field's default, a
+ * list item that is none is left out, and every item is listed once (the first). 'csv' lists are the stored CSV's tokens when the whole
+ * CSV passes pfb_filter()'s PFB_FILTER_CSV rule, none otherwise; 'list' lists are its tokens as they are (trimmed, or not); 'text' lists are
+ * the entries of the text area's lines; a 'derived' value is what its reader answers.
+ *
+ * @param array<string, array{0: string, 1: string, 2: mixed}> $fields
+ * @param ?callable(): array<string, string> $interfaces realif => IPv4 address; pfb_core_interface_addresses() by default (a test seam)
+ * @return array<string, mixed>
+ */
+function pfb_core_table_read(array $fields, ?callable $interfaces = NULL): array {
+	$values = [];
+	foreach ($fields as $name => [$key, $kind, $arg]) {
+		if ($kind === 'derived') {
+			$values[$name] = $arg[2]($interfaces ?? 'pfb_core_interface_addresses');
+			continue;
+		}
+		$text = $kind === 'toggle' ? '' : pfb_core_table_text($key);
+		$tokens = match ($kind) {
+			'csv'   => preg_match('/^[a-zA-Z0-9,_-]+$/D', $text) === 1 ? explode(',', $text) : [],
+			'list'  => $arg[2] ? array_map('trim', explode(',', $text)) : explode(',', $text),
+			'text'  => array_filter(array_map($arg[2] ?? 'pfb_core_table_line_entry', ($arg[3] ?? 'pfb_core_table_text_lines')($text)), 'is_string'),
+			default => [],
+		};
+		$values[$name] = match ($kind) {
+			'toggle'              => pfb_cfg_toggle_read(PfbConfig::read($key)) === PfbToggle::On,
+			'enable'              => $text === 'Enable',
+			'int'                 => preg_match('/^[1-9][0-9]{0,8}$/D', $text) === 1 && (int) $text <= $arg ? (int) $text : 0,
+			'range'               => preg_match('/^[0-9]{1,7}$/D', $text) === 1 && (int) $text >= $arg[0] && (int) $text <= $arg[1] ? (int) $text : $arg[2],
+			'enum'                => ($token = array_search($text, $arg, TRUE)) === FALSE ? array_key_first($arg) : $token,
+			'adapted'             => PfbConfig::read($key)->value,
+			'value'               => $arg($text) ? $text : '',
+			'csv', 'list', 'text' => array_map(static fn(string $entry): array => [$arg[0] => $entry], array_values(array_unique(array_filter($tokens, $arg[1])))),
+		};
+	}
+	return $values;
+}
+
+/**
+ * The faults of Core's value for the projection $id: exactly the fields of $fields, each of its native type and within its rules, each
+ * list an array of objects holding the one string field with its key unique (an 'objects' list's items are held to their own table). A
+ * derived field is checked as the kind it names. Field names are `<id>.<field>[<i>].<item field>`.
+ *
+ * @param array<string, array{0: string, 1: string, 2: mixed}> $fields
+ * @return list<array{field: string, message: string}>
+ */
+function pfb_core_table_faults(mixed $value, array $fields, string $id): array {
+	$checks = $kinds = [];
+	foreach ($fields as $name => [, $kind, $arg]) {
+		if ($kind === 'derived') {
+			[$kind, $arg] = $arg;
+		}
+		$kinds[$name] = [$kind, $arg];
+		$checks[$name] = match ($kind) {
+			'toggle', 'enable'              => static fn(mixed $v): ?string => is_bool($v) ? NULL : 'not a bool',
+			'int'                           => static fn(mixed $v): ?string => is_int($v) && $v >= 0 && $v <= $arg ? NULL : "not an integer from 0 to {$arg}",
+			'range'                         => static fn(mixed $v): ?string => is_int($v) && $v >= $arg[0] && $v <= $arg[1] ? NULL : "not an integer from {$arg[0]} to {$arg[1]}",
+			'enum', 'adapted'               => static fn(mixed $v): ?string => is_string($v) && array_key_exists($v, $arg) ? NULL : 'not a valid value',
+			'value'                         => static fn(mixed $v): ?string => is_string($v) && ($v === '' || $arg($v)) ? NULL : 'not a valid value',
+			'string'                        => static fn(mixed $v): ?string => is_string($v) && $arg($v) ? NULL : 'not a valid value',
+			'csv', 'list', 'text', 'objects' => static fn(mixed $v): ?string => is_array($v) && array_is_list($v) ? NULL : 'not a list',
+		};
+	}
+	$faults = pfb_core_object_faults($value, $checks, $id);
+	foreach ($kinds as $name => [$kind, $arg]) {
+		if (!in_array($kind, ['csv', 'list', 'text', 'objects'], TRUE) || !is_array($value[$name] ?? NULL) || !array_is_list($value[$name])) {
+			continue;
+		}
+		$seen = [];
+		foreach ($value[$name] as $i => $item) {
+			$itemFaults = $kind === 'objects' ? pfb_core_table_faults($item, $arg[1], "{$id}.{$name}[{$i}]")
+				: pfb_core_object_faults($item, [$arg[0] => static fn(mixed $v): ?string => is_string($v) && $arg[1]($v) ? NULL : 'not a valid value'], "{$id}.{$name}[{$i}]");
+			$faults = array_merge($faults, $itemFaults);
+			if ($itemFaults !== []) {
+				continue;
+			}
+			if (isset($seen[$item[$arg[0]]])) {
+				$faults[] = ['field' => "{$id}.{$name}[{$i}].{$arg[0]}", 'message' => "repeats an earlier item's"];
+			}
+			$seen[$item[$arg[0]]] = TRUE;
+		}
+	}
+	return $faults;
+}
+
+/**
+ * The text area $stored64 (base64) with its entries changed to $wanted: every line whose entry stays is kept as it is, a line that holds
+ * no entry (blank, comment, no valid one) is kept, a line whose entry went is dropped, and each new entry is appended as its own line.
+ * $entryOf and $linesOf are the field's own reading of a line and of a text (the defaults are pfb_core_table_line_entry() and
+ * pfb_core_table_text_lines()): a kept line is one the read gives an entry that stays.
+ *
+ * @param list<string> $wanted
+ * @param callable(string): bool $valid
+ * @param ?callable(string): ?string $entryOf
+ * @param ?callable(string): list<string> $linesOf
+ */
+function pfb_core_table_text_rewrite(string $stored64, array $wanted, callable $valid, ?callable $entryOf = NULL, ?callable $linesOf = NULL): string {
+	$kept = $present = [];
+	foreach (($linesOf ?? 'pfb_core_table_text_lines')($stored64) as $line) {
+		$entry = ($entryOf ?? 'pfb_core_table_line_entry')($line);
+		if ($entry === NULL || !$valid($entry) || in_array($entry, $wanted, TRUE)) {
+			$kept[] = $line;
+			$present[$entry ?? ''] = TRUE;
+		}
+	}
+	foreach ($wanted as $entry) {
+		if (!isset($present[$entry])) {
+			$kept[] = $entry;
+		}
+	}
+	return base64_encode(implode("\n", $kept));
+}
+
+/**
+ * Core's value for the projection of $fields merged into config.xml: only what differs from $current (the projection config.xml has now)
+ * is stored, a list when its entries changed (a text area's by set, not order); a derived field is never stored. Returns the registered keys
+ * to write, key => stored text, for the caller's PfbConfig::writeSystem(); an unregistered key goes into $sections as config path => text,
+ * like the schedule's.
+ *
+ * @param array<string, mixed> $wanted a value pfb_core_table_faults() accepts
+ * @param array<string, mixed> $current
+ * @param array<string, array{0: string, 1: string, 2: mixed}> $fields
+ * @param array<string, mixed> $sections config path => the value to set
+ * @return array<string, string>
+ */
+function pfb_core_table_merge(array $wanted, array $current, array $fields, array &$sections): array {
+	$registry = pfb_cfg_registry();
+	$keys = [];
+	foreach ($fields as $name => [$key, $kind, $arg]) {
+		if ($kind === 'derived') {
+			continue;
+		}
+		$value = $wanted[$name];
+		if (is_array($value)) {
+			[$want, $was] = [array_column($value, $arg[0]), array_column($current[$name], $arg[0])];
+			if ($kind === 'text') {
+				sort($want);
+				sort($was);
+			}
+			if ($want === $was) {
+				continue;
+			}
+		} elseif ($value === $current[$name]) {
+			continue;
+		}
+		$stored = match ($kind) {
+			'toggle'      => $value ? 'on' : '',
+			'enable'      => $value ? 'Enable' : 'Disable',
+			'int'         => $value > 0 ? (string) $value : '',
+			'range'       => (string) $value,
+			'enum', 'adapted' => $arg[$value],
+			'value'       => $value,
+			'csv', 'list' => implode(',', array_column($value, $arg[0])),
+			'text'        => pfb_core_table_text_rewrite(pfb_core_table_text($key), array_column($value, $arg[0]), $arg[1], $arg[2] ?? NULL, $arg[3] ?? NULL),
+		};
+		[$alias, $bare] = explode('/', $key, 2);
+		if (isset($registry[$key])) {
+			$keys[$key] = $stored;
+		} else {
+			$sections[PFB_SECTIONS[$alias] . "/{$bare}"] = $stored;
+		}
+	}
+	return $keys;
+}
+
+/**
+ * The GeoIP continents as alias => their config.xml section, in $pfb['continents'] order: `pfblockerng` and the continent's name in
+ * lower case without spaces, the name the apply pass builds (issue #4031).
+ *
+ * @return array<string, string>
+ */
+function pfb_core_geoip_sections(): array {
+	global $pfb;
+	$sections = [];
+	foreach ($pfb['continents'] as $continent => $alias) {
+		$sections[$alias] = 'pfblockerng' . strtolower(str_replace(' ', '', $continent));
+	}
+	return $sections;
+}
+
+/**
+ * The fields of one `feeds/geoip` group as [config key in the continent's section, kind, argument] for pfb_core_table_faults(): the name is
+ * one of the nine, the action one of an IP group's (pfb_group_action_valid()), the list class the derived one, and each country list's items
+ * hold a code: a country, an A1 or A2 prefix before it, a _rep suffix after (the names of the files the apply pass reads, A1_US_rep).
+ *
+ * @return array<string, array{0: string, 1: string, 2: mixed}>
+ */
+function pfb_core_geoip_fields(): array {
+	$actions = ['Disabled', 'Deny_Inbound', 'Deny_Outbound', 'Deny_Both', 'Permit_Inbound', 'Permit_Outbound', 'Permit_Both', 'Match_Inbound', 'Match_Outbound',
+		'Match_Both', 'Alias_Deny', 'Alias_Permit', 'Alias_Match', 'Alias_Native'];
+	$country = ['code', static fn(string $entry): bool => preg_match('/^(?:A[12]_)?[A-Z][A-Z0-9](?:_rep)?$/D', $entry) === 1];
+	return [
+		'name'        => ['', 'enum', array_fill_keys(array_keys(pfb_core_geoip_sections()), '')],
+		'action'      => ['action', 'enum', array_combine($actions, $actions)],
+		'listClass'   => ['', 'enum', array_fill_keys(PFB_CORE_LIST_CLASSES, '')],
+		'countriesV4' => ['countries4', 'csv', $country],
+		'countriesV6' => ['countries6', 'csv', $country],
+	];
+}
+
+/**
+ * Core's `feeds/geoip` groups (issue #4031), one per continent in $pfb['continents'] order, from config.xml and never failing whatever it
+ * holds: an action the apply pass skips is Disabled, a country token that is none of the codes of pfb_core_geoip_fields() is left out and
+ * a repeated one listed once, a section or key that is not what the Continents page saves reads as its default.
+ *
+ * @return list<array<string, mixed>>
+ */
+function pfb_core_geoip_groups(): array {
+	$fields = pfb_core_geoip_fields();
+	$groups = [];
+	foreach (pfb_core_geoip_sections() as $alias => $section) {
+		$stored = config_get_path("installedpackages/{$section}/config/0");
+		$stored = is_array($stored) ? $stored : [];
+		$action = pfb_group_action_valid($stored['action'] ?? NULL, 'geoip') ? $stored['action'] : 'Disabled';
+		$countries = static fn(string $field): array => array_map(static fn(string $code): array => ['code' => $code], array_values(array_unique(array_filter(
+			is_string($stored[$fields[$field][0]] ?? NULL) ? explode(',', $stored[$fields[$field][0]]) : [], $fields[$field][2][1]))));
+		$groups[] = ['name' => $alias, 'action' => $action, 'listClass' => pfb_core_list_class($action, $stored), 'countriesV4' => $countries('countriesV4'),
+			'countriesV6' => $countries('countriesV6')];
+	}
+	return $groups;
+}
+
+/**
+ * The faults of Core's value for `feeds/geoip` (issue #4031): exactly `groups`, a list of objects with exactly the fields of
+ * pfb_core_geoip_fields() within their rules, holding each of the nine continents once.
+ *
+ * @return list<array{field: string, message: string}>
+ */
+function pfb_core_geoip_faults(mixed $value): array {
+	$faults = pfb_core_object_faults($value, ['groups' => static fn(mixed $v): ?string => is_array($v) && array_is_list($v) ? NULL : 'not a list'], 'feeds/geoip');
+	if ($faults !== [] || !is_array($value)) {
+		return $faults;
+	}
+	$fields = pfb_core_geoip_fields();
+	$seen = [];
+	foreach ($value['groups'] as $i => $group) {
+		$faults = array_merge($faults, pfb_core_table_faults($group, $fields, "feeds/geoip.groups[{$i}]"));
+		$name = is_array($group) && is_string($group['name'] ?? NULL) ? $group['name'] : '';
+		if (isset($seen[$name])) {
+			$faults[] = ['field' => "feeds/geoip.groups[{$i}].name", 'message' => 'not unique'];
+		}
+		$seen[$name] = TRUE;
+	}
+	if (array_diff(array_keys($fields['name'][2]), array_keys($seen)) !== []) {
+		$faults[] = ['field' => 'feeds/geoip.groups', 'message' => 'must hold each of the ' . count($fields['name'][2]) . ' continents'];
+	}
+	return $faults;
+}
+
+/**
+ * Core's `feeds/geoip` value merged into config.xml: for each continent only the action and the country lists that differ from $current
+ * (what the read gives now) go into $sections as config path => text, in the continent's section; the list class is derived and never stored.
+ *
+ * @param array<string, mixed> $wanted a value pfb_core_geoip_faults() accepts
+ * @param array<string, mixed> $current
+ * @param array<string, mixed> $sections config path => the value to set
+ */
+function pfb_core_geoip_merge(array $wanted, array $current, array &$sections): void {
+	$fields = pfb_core_geoip_fields();
+	$sectionOf = pfb_core_geoip_sections();
+	$now = array_column($current['groups'], NULL, 'name');
+	foreach ($wanted['groups'] as $group) {
+		$set = [];
+		foreach (['action', 'countriesV4', 'countriesV6'] as $field) {
+			if ($group[$field] !== $now[$group['name']][$field]) {
+				$set[$fields[$field][0]] = is_array($group[$field]) ? implode(',', array_column($group[$field], 'code')) : $group[$field];
+			}
+		}
+		if ($set === []) {
+			continue;
+		}
+		$path = "installedpackages/{$sectionOf[$group['name']]}/config";
+		$list = is_array(config_get_path($path, []));
+		$entry = config_get_path("{$path}/0");
+		// pfSense's config_set_path() leaves a scalar where a list or an entry belongs untouched: Core's keys replace that scalar alone
+		if ($list && (is_array($entry) || empty($entry))) {
+			foreach ($set as $key => $value) {
+				$sections["{$path}/0/{$key}"] = $value;
+			}
+		} elseif ($list) {
+			$sections["{$path}/0"] = $set;
+		} else {
+			$sections[$path] = [$set];
+		}
+	}
 }
 
 /**
@@ -5009,7 +5563,8 @@ function pfb_core_maintenance_settings(): array {
 /**
  * Every projection Core reads through its settings adapter, in the protocol's order (issue #3937): `dns`, then each feed projection
  * as `groups`, config.xml's groups that project (pfb_core_feed_groups()) with their feeds, in config order, then `schedule` (issue #3941)
- * and the read-only `ingest` (issue #3975) and `maintenance` (issue #3996).
+ * the read-only `ingest` (issue #3975), then the table-driven projections (pfb_core_table_projections(), issue #4031) and `feeds/geoip`
+ * (pfb_core_geoip_groups(), issue #4031), the read-only `hooks` (pfb_core_hooks_settings()) and last the read-only `maintenance` (issue #3996).
  *
  * @param ?callable(): array<string, string> $interfaces realif => IPv4 address; pfb_core_interface_addresses() by default (a test seam)
  * @return array<string, array<string, mixed>>
@@ -5026,6 +5581,11 @@ function pfb_core_settings(?callable $interfaces = NULL): array {
 	}
 	$settings['schedule'] = pfb_core_schedule_settings($settings);
 	$settings['ingest'] = pfb_core_ingest_settings();
+	$tables = pfb_core_table_projections();
+	$table = static fn(string $id): array => pfb_core_table_read($tables[$id], $interfaces ?? 'pfb_core_interface_addresses');
+	$settings += ['policy/ip' => $table('policy/ip'), 'feeds/geoip' => ['groups' => pfb_core_geoip_groups()], 'policy/dnsbl' => $table('policy/dnsbl'),
+		'extras' => $table('extras')];
+	$settings['hooks'] = pfb_core_hooks_settings();
 	$settings['maintenance'] = pfb_core_maintenance_settings();
 	return $settings;
 }
@@ -5173,6 +5733,27 @@ function pfb_core_feed_rows_native(array $stored, string $gtype): array {
 	return $feeds;
 }
 
+/** The list classes Core reads of an IP group or a GeoIP continent (issue #4031): where the apply pass keeps the list, `none` for a Disabled group. */
+const PFB_CORE_LIST_CLASSES = ['none', 'deny', 'permit', 'match', 'native'];
+
+/**
+ * The list class of a group or continent whose valid action is $action, from its stored keys (issue #4031): the folder pfb_determine_list_detail()
+ * builds its list in. A Disabled one has none, an Advanced Inbound/Outbound inversion (stored on, any case) forces native, else the action
+ * says: Match, Permit, Deny, or Alias_Native.
+ *
+ * @param array<mixed> $stored
+ */
+function pfb_core_list_class(string $action, array $stored): string {
+	return match (TRUE) {
+		$action === 'Disabled'                                                                                                         => 'none',
+		pfb_dnsbl_toggle_enabled($stored['autoaddrnot_in'] ?? '') || pfb_dnsbl_toggle_enabled($stored['autoaddrnot_out'] ?? '') => 'native',
+		str_contains($action, 'Match')                                                                                                 => 'match',
+		str_contains($action, 'Permit')                                                                                                => 'permit',
+		str_contains($action, 'Deny')                                                                                                  => 'deny',
+		default                                                                                                                        => 'native',
+	};
+}
+
 /**
  * One stored group as Core's native group (issue #3937), its `feeds` keyed by row index (pfb_core_feed_rows_native()): each token as
  * the download path reads it (an invalid action is Disabled, an unknown frequency Never, a script its file name or none, a custom
@@ -5209,6 +5790,7 @@ function pfb_core_feed_group_native(array $stored, string $gtype, callable $inte
 	}
 	if ($gtype !== 'dnsbl') {
 		$group['whoisConvert'] = ($stored['whois_convert'] ?? NULL) === 'on';
+		$group['listClass'] = pfb_core_list_class($group['action'], $stored);
 	}
 	$group['feeds'] = pfb_core_feed_rows_native($stored, $gtype);
 	return $group;
@@ -5286,6 +5868,8 @@ function pfb_core_feed_projection_faults(mixed $value, string $projection, calla
 	}
 	if ($gtype !== 'dnsbl') {
 		$fields['whoisConvert'] = static fn(mixed $v): ?string => is_bool($v) ? NULL : 'not a bool';
+		// Derived from the stored keys the Outpost owns (pfb_core_list_class()): a client's value is checked and never stored
+		$fields['listClass'] = static fn(mixed $v): ?string => in_array($v, PFB_CORE_LIST_CLASSES, TRUE) ? NULL : 'not a valid value';
 	}
 	$fields['feeds'] = $list;
 	$names = $headers = [];
@@ -5732,7 +6316,8 @@ function pfb_core_settings_refusal(string $code, string $message, array $fieldEr
  * The refusal for a malformed settings adapter request, NULL for a well-formed one: nothing is locked or written before it passes.
  * A request holds exactly the keys of its op, and a write's `settings` exactly `dns` (the 17 fields, each of its native type and
  * range), the feed projections (pfb_core_feed_projection_faults(), issue #3937), `schedule` (pfb_core_schedule_faults(), issue #3941) and
- * `ingest` (an object here; pfb_core_settings_backend() holds it to what config.xml and the platform project, issue #3975).
+ * `ingest` (an object here; pfb_core_settings_backend() holds it to what config.xml and the platform project, issue #3975) and the
+ * table-driven projections (pfb_core_table_faults(), issue #4031) and `feeds/geoip` (pfb_core_geoip_faults()).
  *
  * @param array<mixed> $request
  * @param ?callable(): array<string, string> $interfaces realif => IPv4 address; pfb_core_interface_addresses() by default (a test seam)
@@ -5757,9 +6342,9 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
 		return pfb_core_settings_refusal('invalid_argument', 'expectedRevision must be a non-negative integer', [['field' => 'expectedRevision', 'message' => 'must be a non-negative integer']]);
 	}
 	$settings = $request['settings'];
-	$projections = ['dns', ...array_keys(PFB_CORE_FEED_SECTIONS), 'schedule', 'ingest', 'maintenance'];
+	$projections = ['dns', ...array_keys(PFB_CORE_FEED_SECTIONS), 'schedule', 'ingest', ...array_keys(pfb_core_table_projections()), 'feeds/geoip', 'hooks', 'maintenance'];
 	if (!is_array($settings) || count($settings) !== count($projections) || array_diff($projections, array_keys($settings)) !== [] || !is_array($settings['dns'])
-	    || !is_array($settings['ingest']) || !is_array($settings['maintenance'])) {
+	    || !is_array($settings['ingest']) || !is_array($settings['maintenance']) || !is_array($settings['hooks'])) {
 		return pfb_core_settings_refusal('invalid_argument', 'settings must hold exactly ' . implode(', ', $projections));
 	}
 	$dns = $settings['dns'];
@@ -5791,6 +6376,10 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
 		$faults = array_merge($faults, pfb_core_feed_projection_faults($settings[$projection], $projection, $interfaces ?? 'pfb_core_interface_addresses'));
 	}
 	$faults = array_merge($faults, pfb_core_schedule_faults($settings['schedule'], pfb_core_schedule_settings(NULL, $interfaces)));
+	foreach (pfb_core_table_projections() as $id => $fields) {
+		$faults = array_merge($faults, pfb_core_table_faults($settings[$id], $fields, $id));
+	}
+	$faults = array_merge($faults, pfb_core_geoip_faults($settings['feeds/geoip']));
 	return $faults === [] ? NULL : pfb_core_settings_refusal('invalid_argument', 'the settings are not valid', $faults);
 }
 
@@ -5799,7 +6388,7 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
  * values of every projection (pfb_core_settings()). `read` answers them with their revision. `write` stores what differs from
  * config.xml under the DNS config lock and with one write_config(): each changed `dns` field in its registered key, and each feed
  * projection merged into its section (pfb_core_feed_merge(), issue #3937) and `schedule` merged into its keys (pfb_core_schedule_merge(),
- * issue #3941); `ingest` is never written (a write that changes it is `invalid_argument`, after the revision check: a stale Core gets `conflict`). It refuses with `conflict` when config.xml is no longer
+ * issue #3941) and each table-driven projection merged into its keys (pfb_core_table_merge(), issue #4031); `ingest` is never written (a write that changes it is `invalid_argument`, after the revision check: a stale Core gets `conflict`). It refuses with `conflict` when config.xml is no longer
  * at the revision Core read, and with `unavailable` when it could not change config.xml (a lock that stays taken, a refused
  * write_config(), a client-IP metrics privacy step that failed). A malformed request is `invalid_argument` and touches nothing.
  * Once the write is stored, each custom list it changed is flagged for a rebuild (pfb_core_custom_list_flag(), issue #3946). The
@@ -5822,8 +6411,13 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		return $refusal;
 	}
 	if ($request['op'] === 'read') {
+		// Before the settings, as the apply pass takes it: a change marked while they are read stays pending. JSON carries text only
+		$token = is_file(pfb_pending_changes_marker()) ? pfb_pending_changes_token() : NULL;
+		if ($token !== NULL && !mb_check_encoding($token, 'UTF-8')) {
+			return pfb_core_settings_refusal('unavailable', 'the pending-changes marker does not hold text');
+		}
 		$settings = pfb_core_settings($interfaces);
-		return ['version' => 1, 'revision' => pfb_core_settings_revision($settings), 'settings' => $settings];
+		return ['version' => 1, 'revision' => pfb_core_settings_revision($settings), 'settings' => $settings, 'platform' => ['pendingToken' => $token]];
 	}
 	$fields = pfb_core_dns_fields();
 	$wanted = $request['settings']['dns'];
@@ -5841,14 +6435,12 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		if ($refusal !== NULL) {
 			return $refusal;
 		}
-		// issue #3975: Core holds ingest as it read it, and the revision just matched, so a difference is a write of the read-only projection
-		$readOnly = pfb_core_ingest_faults($request['settings']['ingest'], $now['ingest']);
-		if ($readOnly !== []) {
-			return pfb_core_settings_refusal('invalid_argument', 'ingest is read-only: config.xml and the platform own it', $readOnly);
-		}
-		$readOnly = pfb_core_ingest_faults($request['settings']['maintenance'], $now['maintenance'], 'maintenance');
-		if ($readOnly !== []) {
-			return pfb_core_settings_refusal('invalid_argument', 'maintenance is read-only: config.xml and the platform own it', $readOnly);
+		// issue #3975: Core holds a read-only projection as it read it, and the revision just matched, so a difference is a write of it
+		foreach (['ingest', 'maintenance', 'hooks'] as $id) {
+			$readOnly = pfb_core_ingest_faults($request['settings'][$id], $now[$id], $id);
+			if ($readOnly !== []) {
+				return pfb_core_settings_refusal('invalid_argument', "{$id} is read-only: config.xml and the platform own it", $readOnly);
+			}
 		}
 		$current = pfb_core_dns_settings();
 		$changed = array_keys(array_filter($wanted, static fn(mixed $value, string $field): bool => $value !== $current[$field], ARRAY_FILTER_USE_BOTH));
@@ -5860,8 +6452,12 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 				$lists[$projection] = array_column(pfb_core_feed_groups($projection, $interfaces), 'customList', 'name');
 			}
 		}
-		$schedule = pfb_core_schedule_merge($request['settings']['schedule'], $now['schedule'], $sections);
-		if ($changed === [] && $sections === [] && $schedule === []) {
+		$keys = pfb_core_schedule_merge($request['settings']['schedule'], $now['schedule'], $sections);
+		foreach (pfb_core_table_projections() as $id => $table) {
+			$keys += pfb_core_table_merge($request['settings'][$id], $now[$id], $table, $sections);
+		}
+		pfb_core_geoip_merge($request['settings']['feeds/geoip'], $now['feeds/geoip'], $sections);
+		if ($changed === [] && $sections === [] && $keys === []) {
 			return ['version' => 1, 'revision' => $request['expectedRevision']];
 		}
 		// A legacy token stored beneath a control that was off would surface when control turns on: write the off Core asked for
@@ -5870,12 +6466,12 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 			$changed[] = 'controlLegacy';
 		}
 		$written = NULL;
-		$persist = static function () use ($changed, $wanted, $fields, $sections, $schedule, &$written): bool {
+		$persist = static function () use ($changed, $wanted, $fields, $sections, $keys, &$written): bool {
 			foreach ($changed as $field) {
 				$value = $wanted[$field];
 				PfbConfig::writeSystem($fields[$field][0], is_bool($value) ? ($value ? 'on' : '') : (string) $value);
 			}
-			foreach ($schedule as $key => $value) {
+			foreach ($keys as $key => $value) {
 				PfbConfig::writeSystem($key, $value);
 			}
 			foreach ($sections as $path => $groups) {
@@ -12336,21 +12932,13 @@ function pfb_software_add_tab(array &$tab_array, bool $active = FALSE, ?bool $pr
 }
 
 /*
- * Return the enabled hook entries matching $when ('pre'|'post'), in list order.
- *
- * Pure helper: takes the pfBlockerNG config array (config/0) so it can be unit
- * tested without a live config. pfb_run_hooks() reads the live config and feeds
- * it here. Malformed entries (missing script/when, disabled) are skipped.
+ * The stored hook rows of the pfBlockerNG config array (config/0) as a list, whatever
+ * shape they are stored in; array() when there are none. Shared by pfb_get_hooks() and
+ * Core's `hooks` projection (pfb_core_hooks_settings()).
  */
-function pfb_get_hooks($pfbconfig, $when) {
-
-	if ($when !== 'pre' && $when !== 'post') {
-		return array();
-	}
-
-	$hooks = array();
+function pfb_hook_rows($pfbconfig) {
 	if (!is_array($pfbconfig) || !isset($pfbconfig['hooks']) || !is_array($pfbconfig['hooks'])) {
-		return $hooks;
+		return array();
 	}
 
 	// Hook entries are stored under the 'row' listtag: config/0/hooks/row. This
@@ -12376,11 +12964,24 @@ function pfb_get_hooks($pfbconfig, $when) {
 	if (isset($list['script']) || isset($list['when']) || isset($list['enabled'])) {
 		$list = array($list);
 	}
-	if (!is_array($list)) {
-		return $hooks;
+	return is_array($list) ? $list : array();
+}
+
+/*
+ * Return the enabled hook entries matching $when ('pre'|'post'), in list order.
+ *
+ * Pure helper: takes the pfBlockerNG config array (config/0) so it can be unit
+ * tested without a live config. pfb_run_hooks() reads the live config and feeds
+ * it here. Malformed entries (missing script/when, disabled) are skipped.
+ */
+function pfb_get_hooks($pfbconfig, $when) {
+
+	if ($when !== 'pre' && $when !== 'post') {
+		return array();
 	}
 
-	foreach ($list as $hook) {
+	$hooks = array();
+	foreach (pfb_hook_rows($pfbconfig) as $hook) {
 		if (!is_array($hook)) {
 			continue;
 		}

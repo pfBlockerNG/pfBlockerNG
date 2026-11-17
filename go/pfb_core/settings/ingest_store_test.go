@@ -3,6 +3,7 @@ package settings
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -19,7 +20,7 @@ func ingestBackend(t *testing.T, over map[string]any) *refreshBackend {
 	return newRefreshBackend(1, values)
 }
 
-func TestOnlyTheIngestAndMaintenanceProjectionsArePublishedReadOnly(t *testing.T) {
+func TestOnlyIngestMaintenanceAndHooksArePublishedReadOnly(t *testing.T) {
 	var schema struct {
 		Projections []map[string]any `json:"projections"`
 	}
@@ -27,21 +28,17 @@ func TestOnlyTheIngestAndMaintenanceProjectionsArePublishedReadOnly(t *testing.T
 	if err := json.Unmarshal([]byte(raw), &schema); err != nil {
 		t.Fatal(err)
 	}
-	readOnly := 0
+	var readOnly []string
 	for _, p := range schema.Projections {
-		v, published := p["readOnly"]
-		switch {
-		case (p["id"] == "ingest" || p["id"] == "maintenance") && v != true:
-			t.Errorf("settings/%v is published %v, want readOnly true", p["id"], p)
-		case p["id"] != "ingest" && p["id"] != "maintenance" && published:
-			t.Errorf("settings/%v is published readOnly %v: only ingest and maintenance are", p["id"], v)
-		}
-		if published {
-			readOnly++
+		if v, published := p["readOnly"]; published {
+			if v != true {
+				t.Errorf("settings/%v is published readOnly %v, want true or no member", p["id"], v)
+			}
+			readOnly = append(readOnly, p["id"].(string))
 		}
 	}
-	if readOnly != 2 {
-		t.Errorf("%d projections publish readOnly, want only ingest and maintenance in %s", readOnly, raw)
+	if want := []string{"ingest", "hooks", "maintenance"}; !slices.Equal(readOnly, want) {
+		t.Errorf("the projections published readOnly are %v, want %v in %s", readOnly, want, raw)
 	}
 }
 

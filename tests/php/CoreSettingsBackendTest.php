@@ -155,12 +155,18 @@ final class CoreSettingsBackendTest extends TestCase
 		};
 	}
 
-	/** @return array<string, mixed> every projection the adapter answers: $dns, and the feed, schedule, ingest and maintenance projections of a config.xml with no group (issue #3975: nothing stored, nothing of the box listed) */
-	private static function settings(array $dns): array
+	/** @return array<string, mixed> every projection the adapter answers ($logging: the derived DNSBL logging, by default what config.xml's DNSBL section gives): $dns, and the feed, schedule, ingest, policy/ip, policy/ip, feeds/geoip, policy/dnsbl, extras, hooks and maintenance projections of a config.xml with no group (issue #3975: nothing stored, nothing of the box listed) */
+	private static function settings(array $dns, ?string $logging = NULL): array
 	{
 		$ingest = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_ingest_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
 		$maintenance = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_maintenance_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
-		return ['dns' => $dns] + self::FEEDS + ['schedule' => self::SCHEDULE, 'ingest' => $ingest, 'maintenance' => $maintenance];
+		$policyIp = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_policy_ip_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
+		$geoip = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_feeds_geoip_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
+		$policyDnsbl = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_policy_dnsbl_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
+		// A DNSBL section that holds a key but no global_log_mode is a box saved before the mode: its logging is the legacy VIP response
+		$policyDnsbl['logging'] = $policyDnsbl['blacklistLogging'] = $logging ?? pfb_dnsbl_policy_config(PfbConfig::readSection(PFB_SECTIONS['dnsbl']), [])['mechanism'];
+		return ['dns' => $dns] + self::FEEDS + ['schedule' => self::SCHEDULE, 'ingest' => $ingest, 'policy/ip' => $policyIp, 'feeds/geoip' => $geoip, 'policy/dnsbl' => $policyDnsbl,
+			'extras' => json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_extras_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'], 'hooks' => ['rows' => []], 'maintenance' => $maintenance];
 	}
 
 	/** @return array<string, mixed> */
@@ -231,7 +237,7 @@ final class CoreSettingsBackendTest extends TestCase
 
 		$reply = $this->backend(['version' => 1, 'op' => 'read']);
 
-		$this->assertSame(['version', 'revision', 'settings'], array_keys($reply), "{$case['id']}: the reply's keys");
+		$this->assertSame(['version', 'revision', 'settings', 'platform'], array_keys($reply), "{$case['id']}: the reply's keys");
 		$this->assertSame(1, $reply['version']);
 		$this->assertSame(self::settings($native), $reply['settings'], "{$case['id']}: the 17 native fields, in the protocol's order");
 		$this->assertSame(pfb_core_settings_revision(self::settings($native)), $reply['revision'], "{$case['id']}: the projection's revision");
@@ -624,12 +630,15 @@ final class CoreSettingsBackendTest extends TestCase
 
 		$this->assertSame(0, $run['exit'], $run['stderr']);
 		$defaults = self::defaults();
-		// The verb's sandbox has its own revision key (#3937): its revision is any positive int, the rest is exact
+		// The verb's sandbox config holds DNSBL settings and no mode: the legacy logging. It has its own revision key (#3937): its revision is any positive int, the rest is exact
 		$revision = json_decode($run['stdout'], TRUE)['revision'] ?? NULL;
 		$this->assertIsInt($revision, $run['stdout']);
 		$this->assertGreaterThan(0, $revision);
+		// The pending token is the sandbox marker's own (issue #4031): none or one version, the rest is exact
+		$token = json_decode($run['stdout'], TRUE)['platform']['pendingToken'] ?? NULL;
+		$this->assertMatchesRegularExpression('/^(?:[0-9a-f]{16})?$/D', (string) $token, $run['stdout']);
 		$this->assertSame(
-			json_encode(['version' => 1, 'revision' => $revision, 'settings' => self::settings($defaults)]),
+			json_encode(['version' => 1, 'revision' => $revision, 'settings' => self::settings($defaults, 'enabled'), 'platform' => ['pendingToken' => $token]]),
 			$run['stdout'],
 			'nothing but the reply on stdout: ' . $run['stderr']
 		);

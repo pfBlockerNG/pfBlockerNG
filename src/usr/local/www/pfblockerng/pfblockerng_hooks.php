@@ -171,8 +171,11 @@ if ($_POST) {
 				config_set_path('installedpackages/pfblockerng/config/0/hooks/row', $hooks);
 			}
 
-			write_config('[pfBlockerNG] save Update Hooks settings');
+			$pfb_written = write_config('[pfBlockerNG] save Update Hooks settings');
 			pfb_mark_pending_changes();	// hooks run during the Update, not on save
+			if (!pfb_dns_config_write_failed($pfb_written)) {
+				pfb_core_settings_changed(NULL, TRUE);	// Core reads these settings (issue #4031); a failure never undoes the save
+			}
 			header('Location: /pfblockerng/pfblockerng_hooks.php');
 			exit;
 		}

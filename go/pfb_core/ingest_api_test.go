@@ -74,16 +74,15 @@ func TestTheSettingsMethodsRefuseAChangeToIngestAndAnInitializeThatNamesIt(t *te
 	}
 }
 
-func TestGetSettingsSchemaPublishesIngestAsReadOnly(t *testing.T) {
+func TestGetSettingsSchemaPublishesIngestMaintenanceAndHooksAsReadOnly(t *testing.T) {
 	h := startSettings(t)
 	got := h.post("/v1/GetSettingsSchema", `{}`)
-	if got.status != http.StatusOK || !bytes.Contains(got.body, []byte(`"id":"ingest","readOnly":true,"fields":[`)) {
-		t.Errorf("GetSettingsSchema = %d %s, want settings/ingest published readOnly", got.status, got.body)
+	for _, id := range []string{"ingest", "maintenance", "hooks"} {
+		if got.status != http.StatusOK || !bytes.Contains(got.body, []byte(`"id":"`+id+`","readOnly":true,"fields":[`)) {
+			t.Errorf("GetSettingsSchema = %d %s, want settings/%s published readOnly", got.status, got.body, id)
+		}
 	}
-	if !bytes.Contains(got.body, []byte(`"id":"maintenance","readOnly":true,"fields":[`)) {
-		t.Errorf("GetSettingsSchema = %s, want settings/maintenance published readOnly", got.body)
-	}
-	if bytes.Count(got.body, []byte(`"readOnly"`)) != 2 {
-		t.Errorf("GetSettingsSchema publishes readOnly %d times, want only for ingest and maintenance", bytes.Count(got.body, []byte(`"readOnly"`)))
+	if bytes.Count(got.body, []byte(`"readOnly"`)) != 3 {
+		t.Errorf("GetSettingsSchema publishes readOnly %d times, want only for ingest, maintenance and hooks", bytes.Count(got.body, []byte(`"readOnly"`)))
 	}
 }

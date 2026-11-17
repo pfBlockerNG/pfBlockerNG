@@ -27,7 +27,7 @@ const (
 // reaches it by running Path once per call: one JSON request on stdin, one JSON reply on stdout, exit status 0.
 //
 //	request {"version":1,"op":"read"} or {"version":1,"op":"write","expectedRevision":N,"settings":{<projection>:{<field>:<value>}}}
-//	reply   {"version":1,"revision":N,"settings":{...}} for a read, {"version":1,"revision":N} for a write, or
+//	reply   {"version":1,"revision":N,"settings":{...},"platform":{"pendingToken":...}} for a read, {"version":1,"revision":N} for a write, or
 //	        {"version":1,"error":{"code":"conflict"|"invalid_argument"|"unavailable","message":"...","fieldErrors":[{"field","message"}]}}
 //
 // Its settings always exist, so Read is always Initialized. Every failure is a *BackendError: a non-zero exit (with the
@@ -56,7 +56,10 @@ type reply struct {
 	Version  int                                   `json:"version"`
 	Revision uint64                                `json:"revision"`
 	Settings map[string]map[string]json.RawMessage `json:"settings"`
-	Error    *replyError                           `json:"error"`
+	Platform *struct {
+		PendingToken json.RawMessage `json:"pendingToken"`
+	} `json:"platform"`
+	Error *replyError `json:"error"`
 }
 
 func (a *AdapterBackend) Read(ctx context.Context) (Stored, error) {
@@ -67,7 +70,11 @@ func (a *AdapterBackend) Read(ctx context.Context) (Stored, error) {
 	if r.Settings == nil {
 		return Stored{}, backendErr("the reply to a read holds no settings")
 	}
-	return Stored{Initialized: true, Revision: r.Revision, Projections: r.Settings}, nil
+	stored := Stored{Initialized: true, Revision: r.Revision, Projections: r.Settings}
+	if r.Platform != nil {
+		stored.PendingToken = r.Platform.PendingToken
+	}
+	return stored, nil
 }
 
 func (a *AdapterBackend) Write(ctx context.Context, expected uint64, values map[string]map[string]any) (uint64, error) {

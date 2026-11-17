@@ -3,8 +3,10 @@ package settings
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -25,6 +27,13 @@ func TestTheFeedProjectionsMatchTodaysPhpOnEveryFixtureCase(t *testing.T) {
 			Name  string `json:"name"`
 			Valid bool   `json:"valid"`
 		} `json:"scriptNames"`
+		ListClasses []struct {
+			ID          string         `json:"id"`
+			Description string         `json:"description"`
+			Stored      map[string]any `json:"stored"`
+			ListClass   string         `json:"listClass"`
+			Folder      *string        `json:"folder"`
+		} `json:"listClasses"`
 		Cases []struct {
 			ID          string          `json:"id"`
 			Description string          `json:"description"`
@@ -42,8 +51,25 @@ func TestTheFeedProjectionsMatchTodaysPhpOnEveryFixtureCase(t *testing.T) {
 	if err := dec.Decode(&doc); err != nil {
 		t.Fatalf("the fixture does not read: %v", err)
 	}
-	if doc.Schema != 1 || len(doc.Cases) == 0 || len(doc.ScriptNames) == 0 {
-		t.Fatalf("fixture schema %d with %d cases and %d script names", doc.Schema, len(doc.Cases), len(doc.ScriptNames))
+	if doc.Schema != 1 || len(doc.Cases) == 0 || len(doc.ScriptNames) == 0 || len(doc.ListClasses) == 0 {
+		t.Fatalf("fixture schema %d with %d cases, %d script names and %d list classes", doc.Schema, len(doc.Cases), len(doc.ScriptNames), len(doc.ListClasses))
+	}
+	// A list class (issue #4031) is derived from the Outpost's stored keys: Core holds each of the fixture's classes on an IP group, and no DNSBL group has one.
+	for _, row := range doc.ListClasses {
+		for _, id := range []string{"feeds/ipv4", "feeds/ipv6"} {
+			st := open(t, t.TempDir())
+			if _, err := st.Initialize(t.Context(), nil); err != nil {
+				t.Fatal(err)
+			}
+			group := jsonOf(t, map[string]string{"name": "G", "listClass": row.ListClass})
+			if _, err := st.Save(t.Context(), 1, map[string]map[string]json.RawMessage{id: {"groups": json.RawMessage("[" + group + "]")}}); err != nil {
+				t.Fatalf("%s %s: Core refuses the list class %s: %v", id, row.ID, row.ListClass, err)
+			}
+			groups, _ := projection(t, get(t, st, id), id).Value["groups"].([]any)
+			if len(groups) != 1 || groups[0].(map[string]any)["listClass"] != row.ListClass {
+				t.Errorf("%s %s: read %s, want the list class %s", id, row.ID, jsonOf(t, groups), row.ListClass)
+			}
+		}
 	}
 	for _, id := range doc.Projections {
 		if _, ok := open(t, t.TempDir()).projection(id); !ok {
@@ -159,5 +185,50 @@ func TestListKeysAreRequiredAndUnique(t *testing.T) {
 				t.Fatalf("Validate accepted %s", text)
 			}
 		})
+	}
+}
+
+// The list class is part of an IP group only, and one of five tokens; it is the Outpost's to derive, so Core's value is what it was read as.
+func TestOnlyIpGroupsHaveAListClassOfFiveTokens(t *testing.T) {
+	for _, p := range Production().Projections {
+		if !strings.HasPrefix(p.ID, "feeds/") || p.ID == "feeds/geoip" {
+			continue
+		}
+		var group []Field
+		for _, f := range p.Fields {
+			if f.Name == "groups" {
+				group = f.Items
+			}
+		}
+		i := slices.IndexFunc(group, func(f Field) bool { return f.Name == "listClass" })
+		if p.ID == "feeds/dnsbl" {
+			if i >= 0 {
+				t.Errorf("%s has a listClass field: a DNSBL group has no IP list", p.ID)
+			}
+			continue
+		}
+		if i < 0 {
+			t.Errorf("%s has no listClass field", p.ID)
+			continue
+		}
+		f := group[i]
+		if f.Type != TypeEnum || f.Default != "none" || !slices.Equal(f.Enum, []string{"none", "deny", "permit", "match", "native"}) {
+			t.Errorf("%s listClass = %+v, want an enum of none deny permit match native, default none", p.ID, f)
+		}
+		if after := slices.IndexFunc(group, func(f Field) bool { return f.Name == "whoisConvert" }); i != after+1 {
+			t.Errorf("%s listClass is field %d, want right after whoisConvert (%d)", p.ID, i, after)
+		}
+	}
+	for id, text := range map[string]string{
+		"feeds/ipv4":  `{"feeds/ipv4": {"groups": [{"name": "G", "listClass": "block"}]}}`,
+		"feeds/ipv6":  `{"feeds/ipv6": {"groups": [{"name": "G", "listClass": ""}]}}`,
+		"feeds/dnsbl": `{"feeds/dnsbl": {"groups": [{"name": "G", "listClass": "deny"}]}}`,
+	} {
+		st, _ := initialized(t)
+		err := st.Validate(changes(t, text))
+		var invalid *ValidationError
+		if !errors.As(err, &invalid) || len(invalid.Fields) == 0 || invalid.Fields[0].Field != id+".groups[0].listClass" {
+			t.Errorf("%s: Validate(%s) = %v, want a validation error naming %s.groups[0].listClass", id, text, err, id)
+		}
 	}
 }

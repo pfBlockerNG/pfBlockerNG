@@ -371,10 +371,18 @@ func TestSaveWritesThroughTheAdapter(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	if want := `{"version":1,"op":"write","expectedRevision":7,"settings":{"dns":` + allDnsFields +
-		`,"feeds/dnsbl":{"groups":[]},"feeds/ipv4":{"groups":[]},"feeds/ipv6":{"groups":[]},` +
-		`"ingest":{"dnsblIp":false,"dnsblLenient":false,"feedHostAllowlist":[],"feedHostFilter":true,"proxyPassword":"","proxyUnusable":false,"proxyUrl":"",` +
-		`"proxyUser":"","selfAddresses":[],"suppression":true,"suppressionCidrV4":0,"suppressionCidrV6":0},` +
-		`"maintenance":{"clearDnsblCounters":"never","clearIpCounters":"never","enabled":false,"metricsExport":false,"scheduledWorkDisabled":false},"schedule":{"categoryFrequency":"Never",` +
+		`,"extras":{"ipinfoToken":"","maxmindAccount":"","maxmindCsvDisabled":false,"maxmindKey":"","maxmindLocale":"en","top1mProvider":"tranco","top1mToken":""}` +
+		`,"feeds/dnsbl":{"groups":[]},"feeds/geoip":{"groups":[` +
+		`{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_Top"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_Africa"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_Antarctica"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_Asia"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_Europe"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_NAmerica"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_Oceania"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_SAmerica"},{"action":"Disabled","countriesV4":[],"countriesV6":[],"listClass":"none","name":"pfB_PS"}` +
+		`]},"feeds/ipv4":{"groups":[]},"feeds/ipv6":{"groups":[]},` +
+		`"hooks":{"rows":[]},"ingest":{"dnsblIp":false,"dnsblLenient":false,"feedHostAllowlist":[],"feedHostFilter":true,"proxyPassword":"","proxyUnusable":false,"proxyUrl":"",` +
+		`"proxyUser":"","scheduledWorkDisabled":false,"selfAddresses":[],"sinkholeV4":"","sinkholeV6":"","suppression":true,"suppressionCidrV4":0,"suppressionCidrV6":0},` +
+		`"maintenance":{"clearDnsblCounters":"never","clearIpCounters":"never","enabled":false,"metricsExport":false,"scheduledWorkDisabled":false},` +
+		`"policy/dnsbl":{"blacklistLogging":"disabled_log","dnsblIpAction":"Disabled","enabled":false,"groups":[],"logging":"disabled_log","regex":false,"regexList":[],` +
+		`"safeSearch":false,"safeSearchDoh":false,"safeSearchDohList":[],"safeSearchYoutube":"Disable","tldAllow":false,"tldAllowBgtld":[],"tldAllowCctld":[],"tldAllowGtld":[],` +
+		`"tldAllowItld":[],"tldBlacklist":[],"tldExclusions":[],"top1m":false,"top1mCount":1000,"top1mInclusions":[],"whitelist":[]},` +
+		`"policy/ip":{"aggregate":false,"countryBlacklistAction":"none","countryWhitelist":[],"countryWhitelistAction":"ignore","dMax":false,"dMaxLimit":0,` +
+		`"dedup":false,"etBlock":[],"etMatch":[],"max":false,"maxLimit":0,"pMax":false,"pMaxLimit":0,"suppressionV4":[],"suppressionV6":[]},"schedule":{"categoryFrequency":"Never",` +
 		`"categoryProviders":[],"categoryUpdates":false,"groups":[],"hour":0,"minute":0,"scheduledUpdates":true,"weekday":7}}}`; f.lastWrite() != want {
 		t.Errorf("the adapter was sent\n %s\n want\n %s", f.lastWrite(), want)
 	}

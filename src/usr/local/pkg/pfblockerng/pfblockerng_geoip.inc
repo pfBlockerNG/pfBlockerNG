@@ -533,8 +533,11 @@ if ($_POST) {
 			$pfb['geoipconfig']['agateway_out']		= $_POST['agateway_out']				?: '';
 
 			config_set_path("installedpackages/{$conf_type}/config/0", $pfb['geoipconfig']);
-			write_config("[pfBlockerNG] save GeoIP [ {$continent_display} ] settings");
+			$pfb_written = write_config("[pfBlockerNG] save GeoIP [ {$continent_display} ] settings");
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
+			if (!pfb_dns_config_write_failed($pfb_written)) {
+				pfb_core_settings_changed(NULL, TRUE);	// Core reads these settings (issue #4031); a failure never undoes the save
+			}
 			header("Location: /pfblockerng/pfblockerng_{$continent_en}.php");
 			exit;
 		}
@@ -1045,8 +1048,11 @@ if ($_POST) {
 			$pfb['repconfig']['et_update']	= 'enabled';
 
 			PfbConfig::writeSection('installedpackages/pfblockerngreputation/config/0', $pfb['repconfig']);
-			write_config('[pfBlockerNG] save Reputation settings');
+			$pfb_written = write_config('[pfBlockerNG] save Reputation settings');
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
+			if (!pfb_dns_config_write_failed($pfb_written)) {
+				pfb_core_settings_changed(NULL, TRUE);	// Core reads these settings (issue #4031); a failure never undoes the save
+			}
 			header('Location: /pfblockerng/pfblockerng_reputation.php');
 			exit;
 		}

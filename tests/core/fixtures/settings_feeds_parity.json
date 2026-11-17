@@ -10,6 +10,37 @@
 		{"name": " -x", "valid": true},
 		{"name": "\u200b-x", "valid": false}
 	],
+	"listClasses": [
+		{"id": "action-Disabled", "description": "Action Disabled: class none.", "stored": {"action": "Disabled"}, "listClass": "none", "folder": null},
+		{"id": "action-Deny_Inbound", "description": "Action Deny_Inbound: class deny.", "stored": {"action": "Deny_Inbound"}, "listClass": "deny", "folder": "deny"},
+		{"id": "action-Deny_Outbound", "description": "Action Deny_Outbound: class deny.", "stored": {"action": "Deny_Outbound"}, "listClass": "deny", "folder": "deny"},
+		{"id": "action-Deny_Both", "description": "Action Deny_Both: class deny.", "stored": {"action": "Deny_Both"}, "listClass": "deny", "folder": "deny"},
+		{"id": "action-Permit_Inbound", "description": "Action Permit_Inbound: class permit.", "stored": {"action": "Permit_Inbound"}, "listClass": "permit", "folder": "permit"},
+		{"id": "action-Permit_Outbound", "description": "Action Permit_Outbound: class permit.", "stored": {"action": "Permit_Outbound"}, "listClass": "permit", "folder": "permit"},
+		{"id": "action-Permit_Both", "description": "Action Permit_Both: class permit.", "stored": {"action": "Permit_Both"}, "listClass": "permit", "folder": "permit"},
+		{"id": "action-Match_Inbound", "description": "Action Match_Inbound: class match.", "stored": {"action": "Match_Inbound"}, "listClass": "match", "folder": "match"},
+		{"id": "action-Match_Outbound", "description": "Action Match_Outbound: class match.", "stored": {"action": "Match_Outbound"}, "listClass": "match", "folder": "match"},
+		{"id": "action-Match_Both", "description": "Action Match_Both: class match.", "stored": {"action": "Match_Both"}, "listClass": "match", "folder": "match"},
+		{"id": "action-Alias_Deny", "description": "Action Alias_Deny: class deny.", "stored": {"action": "Alias_Deny"}, "listClass": "deny", "folder": "deny"},
+		{"id": "action-Alias_Permit", "description": "Action Alias_Permit: class permit.", "stored": {"action": "Alias_Permit"}, "listClass": "permit", "folder": "permit"},
+		{"id": "action-Alias_Match", "description": "Action Alias_Match: class match.", "stored": {"action": "Alias_Match"}, "listClass": "match", "folder": "match"},
+		{"id": "action-Alias_Native", "description": "Action Alias_Native: class native.", "stored": {"action": "Alias_Native"}, "listClass": "native", "folder": "native"},
+		{"id": "invalid-action", "description": "A token that is no action: the group is Disabled.", "stored": {"action": "Deny"}, "listClass": "none", "folder": null},
+		{"id": "invert-in-on", "description": "autoaddrnot_in stored 'on': a Deny_Both list is kept native.", "stored": {"action": "Deny_Both", "autoaddrnot_in": "on"}, "listClass": "native", "folder": "native"},
+		{"id": "invert-out-on", "description": "autoaddrnot_out stored 'on': a Deny_Both list is kept native.", "stored": {"action": "Deny_Both", "autoaddrnot_out": "on"}, "listClass": "native", "folder": "native"},
+		{"id": "invert-in-upper", "description": "autoaddrnot_in stored 'On': a Deny_Both list is kept native.", "stored": {"action": "Deny_Both", "autoaddrnot_in": "On"}, "listClass": "native", "folder": "native"},
+		{"id": "invert-out-upper", "description": "autoaddrnot_out stored 'ON': a Deny_Both list is kept native.", "stored": {"action": "Deny_Both", "autoaddrnot_out": "ON"}, "listClass": "native", "folder": "native"},
+		{"id": "invert-both", "description": "Both inversions: native.", "stored": {"action": "Permit_Both", "autoaddrnot_in": "on", "autoaddrnot_out": "on"}, "listClass": "native", "folder": "native"},
+		{"id": "invert-on-native", "description": "Inversion on Alias_Native: native.", "stored": {"action": "Alias_Native", "autoaddrnot_out": "on"}, "listClass": "native", "folder": "native"},
+		{"id": "invert-on-disabled", "description": "Inversion on a Disabled group: none; the apply pass builds nothing for a Disabled group.", "stored": {"action": "Disabled", "autoaddrnot_in": "on"}, "listClass": "none", "folder": null},
+		{"id": "not-inverted-yes", "description": "autoaddrnot_out stored \"yes\" is not the toggle's on: Permit_Both stays permit.", "stored": {"action": "Permit_Both", "autoaddrnot_out": "yes"}, "listClass": "permit", "folder": "permit"},
+		{"id": "not-inverted-one", "description": "autoaddrnot_out stored \"1\" is not the toggle's on: Permit_Both stays permit.", "stored": {"action": "Permit_Both", "autoaddrnot_out": "1"}, "listClass": "permit", "folder": "permit"},
+		{"id": "not-inverted-space-on", "description": "autoaddrnot_out stored \" on\" is not the toggle's on: Permit_Both stays permit.", "stored": {"action": "Permit_Both", "autoaddrnot_out": " on"}, "listClass": "permit", "folder": "permit"},
+		{"id": "not-inverted-off", "description": "autoaddrnot_out stored \"off\" is not the toggle's on: Permit_Both stays permit.", "stored": {"action": "Permit_Both", "autoaddrnot_out": "off"}, "listClass": "permit", "folder": "permit"},
+		{"id": "not-inverted-empty", "description": "autoaddrnot_out stored \"\" is not the toggle's on: Permit_Both stays permit.", "stored": {"action": "Permit_Both", "autoaddrnot_out": ""}, "listClass": "permit", "folder": "permit"},
+		{"id": "not-inverted-array", "description": "autoaddrnot_out stored [\"on\"] is not the toggle's on: Permit_Both stays permit.", "stored": {"action": "Permit_Both", "autoaddrnot_out": ["on"]}, "listClass": "permit", "folder": "permit"},
+		{"id": "invert-array-in-and-yes-out", "description": "An array in one key and yes in the other: not inverted.", "stored": {"action": "Match_Both", "autoaddrnot_in": ["on"], "autoaddrnot_out": "yes"}, "listClass": "match", "folder": "match"}
+	],
 	"cases": [
 		{
 			"id": "ipv4-stored-full",
@@ -23,7 +54,7 @@
 					{"format": "regex", "state": "Hold", "url": "https://example.com/x.html", "header": "Held"}
 				]},
 			"valid": true,
-			"native": {"name": "Spamhaus", "action": "Deny_Inbound", "updateFrequency": "EveryDay", "bindAddress": "", "preScript": "pfb_pre_x.sh", "postScript": "", "customList": "", "suppressionCidr": 0, "whoisConvert": false,
+			"native": {"name": "Spamhaus", "action": "Deny_Inbound", "updateFrequency": "EveryDay", "bindAddress": "", "preScript": "pfb_pre_x.sh", "postScript": "", "customList": "", "suppressionCidr": 0, "whoisConvert": false, "listClass": "deny",
 				"feeds": [
 					{"header": "DROP", "state": "enabled", "format": "auto", "url": "https://www.spamhaus.org/drop/drop.txt", "credentials": "user:s3cret"},
 					{"header": "Own", "state": "flex", "format": "auto", "url": "file:///var/db/pfblockerng/own.txt", "credentials": ""},
@@ -40,7 +71,7 @@
 					{"format": "bogus", "state": "Whatever", "url": "https://example.org/a.txt", "header": "A"}
 				]},
 			"valid": true,
-			"native": {"name": "Mixed", "action": "Permit_Outbound", "updateFrequency": "Never", "bindAddress": "", "preScript": "", "postScript": "", "customList": "example.com\nAS13335", "suppressionCidr": 16, "whoisConvert": true,
+			"native": {"name": "Mixed", "action": "Permit_Outbound", "updateFrequency": "Never", "bindAddress": "", "preScript": "", "postScript": "", "customList": "example.com\nAS13335", "suppressionCidr": 16, "whoisConvert": true, "listClass": "permit",
 				"feeds": [
 					{"header": "A", "state": "enabled", "format": "auto", "url": "https://example.org/a.txt", "credentials": ""}
 				]}
@@ -58,7 +89,7 @@
 					{"format": "auto", "state": "Disabled", "url": "https://example.net/z.txt", "header": ""}
 				]},
 			"valid": true,
-			"native": {"name": "Geo", "action": "Alias_Native", "updateFrequency": "Weekly", "bindAddress": "", "preScript": "", "postScript": "", "customList": "", "suppressionCidr": 0, "whoisConvert": false,
+			"native": {"name": "Geo", "action": "Alias_Native", "updateFrequency": "Weekly", "bindAddress": "", "preScript": "", "postScript": "", "customList": "", "suppressionCidr": 0, "whoisConvert": false, "listClass": "native",
 				"feeds": [
 					{"header": "US", "state": "enabled", "format": "geoip", "url": "US United States", "credentials": ""},
 					{"header": "CF", "state": "enabled", "format": "asn", "url": "AS13335 & Cloudflare", "credentials": ""}
@@ -77,7 +108,7 @@
 					{"format": "auto", "state": "Enabled", "url": "https://example.org/4.txt", "header": "pfB_Europe"}
 				]},
 			"valid": true,
-			"native": {"name": "Dups", "action": "Deny_Both", "updateFrequency": "01hour", "bindAddress": "", "preScript": "", "postScript": "", "customList": "", "suppressionCidr": 0, "whoisConvert": false,
+			"native": {"name": "Dups", "action": "Deny_Both", "updateFrequency": "01hour", "bindAddress": "", "preScript": "", "postScript": "", "customList": "", "suppressionCidr": 0, "whoisConvert": false, "listClass": "deny",
 				"feeds": [
 					{"header": "One", "state": "enabled", "format": "auto", "url": "https://example.org/1.txt", "credentials": ""}
 				]}
@@ -89,7 +120,7 @@
 			"source": "stored",
 			"stored": {"aliasname": "Odd", "action": "unbound", "cron": "Never", "row": []},
 			"valid": true,
-			"native": {"name": "Odd", "action": "Disabled", "updateFrequency": "Never", "bindAddress": "", "preScript": "", "postScript": "", "customList": "", "suppressionCidr": 0, "whoisConvert": false, "feeds": []}
+			"native": {"name": "Odd", "action": "Disabled", "updateFrequency": "Never", "bindAddress": "", "preScript": "", "postScript": "", "customList": "", "suppressionCidr": 0, "whoisConvert": false, "listClass": "none", "feeds": []}
 		},
 		{
 			"id": "ipv4-stored-bad-name",
@@ -110,7 +141,7 @@
 					{"format": "rsync", "state": "Enabled", "url": "rsync://example.org/feeds/six.txt", "header": "SixFeed"}
 				]},
 			"valid": true,
-			"native": {"name": "Six", "action": "Match_Both", "updateFrequency": "12hours", "bindAddress": "", "preScript": "", "postScript": "", "customList": "", "whoisConvert": false,
+			"native": {"name": "Six", "action": "Match_Both", "updateFrequency": "12hours", "bindAddress": "", "preScript": "", "postScript": "", "customList": "", "whoisConvert": false, "listClass": "match",
 				"feeds": [
 					{"header": "SixFeed", "state": "enabled", "format": "rsync", "url": "rsync://example.org/feeds/six.txt", "credentials": ""}
 				]}

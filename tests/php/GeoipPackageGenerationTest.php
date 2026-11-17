@@ -76,6 +76,8 @@ final class GeoipPackageGenerationTest extends TestCase
 			$page = "{$this->output}/pfblockerng_{$continent}.php";
 			$this->assertFileExists($page, "generated {$continent} page");
 			$this->assertSame(0, $this->phpLint($page), "generated {$continent} page must pass php -l");
+			$this->assertSame(1, substr_count((string) file_get_contents($page), 'pfb_core_settings_changed(NULL, TRUE);'),
+				"issue #4031: the generated {$continent} page tells Core after its save");
 		}
 
 		$africa = (string) file_get_contents("{$this->output}/pfblockerng_Africa.php");
@@ -92,6 +94,7 @@ final class GeoipPackageGenerationTest extends TestCase
 		$this->assertFileExists($reputation);
 		$firstReputation = (string) file_get_contents($reputation);
 		$this->assertStringContainsString("'ccexclude'", $firstReputation);
+		$this->assertSame(1, substr_count($firstReputation, 'pfb_core_settings_changed(NULL, TRUE);'), 'issue #4031: the generated Reputation page tells Core after its save');
 		$this->assertSame(0, $this->phpLint($reputation));
 
 		// Populate -> empty: headers remain valid continent inputs, so the page

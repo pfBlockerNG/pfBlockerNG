@@ -326,8 +326,11 @@ if ($_POST) {
 			PfbConfig::write('gen/pfb_alias_delta_batch', (string) pfb_alias_delta_batch_resolve($_pfb_batch_raw));
 
 			PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig']);
-			write_config('[pfBlockerNG] save IP settings');
+			$pfb_written = write_config('[pfBlockerNG] save IP settings');
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
+			if (!pfb_dns_config_write_failed($pfb_written)) {
+				pfb_core_settings_changed(NULL, TRUE);	// Core reads these settings (issue #4031); a failure never undoes the save
+			}
 			if (!empty($savemsg)) {
 				header("Location: /pfblockerng/pfblockerng_ip.php?savemsg={$savemsg}");
 			} else {

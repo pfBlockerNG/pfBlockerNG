@@ -63,7 +63,8 @@ Core's native settings (issue #3842). Core holds them in memory, loaded from a [
   `SaveSettings` and `ValidateSettings` refuse a change set that names it, with any content (also `{}` and `null`):
   `invalid_argument`, one field error naming the projection (`changes.ingest`, or `settings.ingest` for `InitializeSettings`, whose argument is
   `settings`), and nothing of the change set is applied.
-  `InitializeSettings` gives it its defaults. Only [`ingest`](#projection-ingest) and [`maintenance`](#projection-maintenance) are read-only.
+  `InitializeSettings` gives it its defaults. [`ingest`](#projection-ingest), [`maintenance`](#projection-maintenance) and
+  [`hooks`](#projection-hooks) are read-only.
 - **Revision and generations.** The configuration *revision* is the optimistic lock. It comes from the backend and is
   compared only for equality. A projection's *generation* is derived from its value as a read shows it (53 bits of the
   SHA-256 of its JSON, secrets as their presence): it is never stored, stays equal across Core restarts while the value
@@ -126,8 +127,15 @@ Protocol, version 1:
 
 | Request | Reply |
 |---|---|
-| `{"version": 1, "op": "read"}` | `{"version": 1, "revision": N, "settings": {"dns": {...}, "feeds/ipv4": {...}, "feeds/ipv6": {...}, "feeds/dnsbl": {...}, "schedule": {...}, "ingest": {...}, "maintenance": {...}}}` |
+| `{"version": 1, "op": "read"}` | `{"version": 1, "revision": N, "settings": {"dns": {...}, "feeds/ipv4": {...}, "feeds/ipv6": {...}, "feeds/dnsbl": {...}, "schedule": {...}, "ingest": {...}, "policy/ip": {...}, "feeds/geoip": {...}, "policy/dnsbl": {...}, "extras": {...}, "hooks": {...}, "maintenance": {...}}, "platform": {"pendingToken": "..."}}` |
 | `{"version": 1, "op": "write", "expectedRevision": N, "settings": {...every projection, every field}}` | `{"version": 1, "revision": M}` |
+
+A read also answers `platform.pendingToken` (issue #4031): the Outpost's pending-changes token (`pfb_pending_changes_token()`), a
+string, or `null` when nothing is marked. The adapter takes it before it reads the settings, as the apply pass does, so a change
+marked meanwhile stays pending. It is not a setting and not part of the revision. Core keeps its JSON value as the adapter wrote
+it (`Store.PendingToken`, in-process only), hands it back to the platform in the apply request and never parses, compares or logs
+it; no API method answers it. A token JSON cannot carry unaltered (bytes that are not UTF-8) refuses the read whole
+(`unavailable`). A write's reply holds no `platform`.
 
 A read carries secrets (feed credentials, the proxy password) to Core; only Core's API hides them. A write carries `ingest`
 as Core read it; the adapter never writes it, and refuses (`invalid_argument`, field errors `ingest.<field>`) a write whose
@@ -197,6 +205,7 @@ options stay with the Outpost; the schedule override is in [`settings/schedule`]
 | `customList` | UTF-8 string (invalid stored bytes scrubbed on read without rewriting storage), `""` |
 | `suppressionCidr` (IPv4) | int 0 to 32 (0: off), `0` |
 | `whoisConvert` (IP) | bool, `false` |
+| `listClass` (IP, derived) | enum `none` `deny` `permit` `match` `native`, `none` |
 | `feeds` | list keyed by `header`, `[]` |
 
 | Feed field | Type, default |
@@ -228,7 +237,14 @@ with `<folder>/<name>_custom<suffix>.update`, as on the Groups page: the stored 
 including Advanced Invert routing; the suffix is `_v4`, `_v6` or empty for DNSBL. An action with no list folder
 (Disabled), an unchanged list, or a refused or failed write flags nothing.
 
-Parity fixture: `tests/core/fixtures/settings_feeds_parity.json`. `CoreSettingsFeedsParityTest` (PHPUnit) freezes it
+`listClass` (issue #4031) is where the Update pass keeps the group's list, derived by the adapter and never stored: `none` for a
+`Disabled` group; `native` when either Advanced Inbound or Outbound invert (`autoaddrnot_in`, `autoaddrnot_out`) is stored `on`
+(any case; `yes`, `1`, `on` with a leading space and an array are not on); else `match`, `permit` or `deny` by the action's family, and `native` for
+`Alias_Native`. A write validates the token and ignores it: no key is stored for it, and the next read derives it again from
+the stored action and inversions, so a write that changes `action` leaves the inversions alone.
+
+Parity fixture: `tests/core/fixtures/settings_feeds_parity.json` (its `listClasses` rows hold the action and inversions of a
+group, the folder today's PHP builds its list in and the class). `CoreSettingsFeedsParityTest` (PHPUnit) freezes it
 against today's PHP and the adapter. `go/pfb_core/settings/feeds_parity_test.go` runs Core against it.
 
 ### Projection `schedule`
@@ -300,6 +316,9 @@ once and reads again, and the Update's start reads the backend again ([Update an
 | `proxyUser` | string, `""` | System `proxyuser`, or decoded proxy URL userinfo |
 | `proxyPassword` | secret string, `""` | System `proxypass`, or decoded proxy URL userinfo |
 | `proxyUnusable` | bool, `false` | A configured proxy that Core cannot represent; remote transfers refuse instead of bypassing it |
+| `scheduledWorkDisabled` | bool, `false` | The `.pfb_cron_disable` marker is a file (`pfb_cron_disabled()`); its content is ignored (issue #4031) |
+| `sinkholeV4` | string, an IPv4 address or `""`; `""` | The address of the stored DNSBL VIP `pfb_dnsvip4` (`$pfb['dnsbl_vip4']`) |
+| `sinkholeV6` | string, an IPv6 address without a zone or `""`; `""` | The address of the stored DNSBL VIP `pfb_dnsvip6` (`$pfb['dnsbl_vip6']`) |
 
 - **Suppression limits.** A limit beyond what the IP page offers (hand-edited config.xml: 18, 8.5, `1e1`, negative) reads as
   0, as a group's own `suppressionCidr` reads a value out of its range; today's PHP applies such a number as typed. A limit
@@ -315,12 +334,218 @@ once and reads again, and the Update's start reads the backend again ([Update an
 - `CURLOPT_PROXYPORT` is considered only if the proxy URL has no port: that URL port wins even when `proxyport` is set. Otherwise PHP's `empty()` means `""` and `"0"` leave the option unset; numeric prefixes are read (`3128abc` → 3128), while `00`, `abc`, and service names read as zero. The default is 443 for HTTPS proxies and 1080 for other supported schemes. Ports outside 1–65535 are unusable to Core.
 - Encoded URL userinfo is decoded into `proxyUser` and secret `proxyPassword`; explicit `proxyuser` and `proxypass` replace it only when both are nonempty. Core sends these as Basic proxy credentials; PHP's legacy `CURLOPT_PROXYAUTH` string disables authentication for explicit credentials, a documented divergence in the feed-fetch parity fixtures.
 - `feedfetch` refuses remote feeds with `proxy_unusable` when the configured proxy cannot be used, preserving last-known-good; for FTP it supports only an HTTP proxy and refuses HTTPS/SOCKS rather than sending Basic credentials in cleartext. The proxy is not applied to local files, self-hosted feeds (PHP uses its stream wrapper), or rsync. An empty URL (`""` or `"0"`) means no proxy.
-- **Core refuses what it reads.** `proxyUrl` must use `http`, `https`, `socks5` or `socks5h` with a port from 1 to 65535 and no userinfo; a listed self address an IP address that is not unspecified, link-local, IPv4-mapped or zoned; an allowlist entry an address or a CIDR without a zone. A backend answer that breaks a rule fails the read ([Settings backends](#settings-backends)).
+- **Sinkhole addresses.** What `pfb_global()` resolves from the stored VIP ids, whatever the DNSBL state. A VIP id that resolves to
+  nothing, or to an address of the other family or with a zone (a link-local VIP: today's PHP writes it as typed), reads as `""`.
+- **Core refuses what it reads.** `proxyUrl` must use `http`, `https`, `socks5` or `socks5h` with a port from 1 to 65535 and no userinfo; a listed self address an IP address that is not unspecified, link-local, IPv4-mapped or zoned; an allowlist entry an address or a CIDR without a zone; a sinkhole address an address of its family without a zone, or empty. A backend answer that breaks a rule fails the read ([Settings backends](#settings-backends)).
 
 Parity fixture: `tests/core/fixtures/settings_ingest_parity.json`. `CoreSettingsIngestParityTest` (PHPUnit) freezes it
 against today's readers (`pfb_global()`, `pfb_list_cidr_floors()`, `pfb_feed_internal_allowlist()`, `pfb_ip_is_self()`, the
 cURL proxy options) and the adapter. `go/pfb_core/settings/ingest_parity_test.go` runs Core against it, hostile rows
 included.
+
+### Projection `policy/ip`
+
+The IP policy the Update loop applies after the feeds are downloaded (issue #4031), published as `settings/policy/ip`; writable.
+The adapter builds it from one field table (`pfb_core_policy_ip_fields()`: field, config.xml key, kind), shared by the read,
+the write validation and the merge, and Core's schema (`go/pfb_core/settings/policy.go`) holds the same rules.
+
+| Field | Type, default | config.xml (PHP reader) |
+|---|---|---|
+| `dedup` | bool, `false` | ip `enable_dup` is `on`, any case (`$pfb['dup']`) |
+| `aggregate` | bool, `false` | ip `enable_agg` (`$pfb['agg']`) |
+| `max` | bool, `false` | Reputation `enable_rep` (`$pfb['rep']`) |
+| `maxLimit` | int 0 to 50 (0: none), `0` | Reputation `p24_max_var`: plain decimal digits 1 to 50 as typed, else 0 |
+| `pMax` | bool, `false` | Reputation `enable_pdup` (`$pfb['prep']`) |
+| `pMaxLimit` | int 0 to 50, `0` | Reputation `p24_pmax_var`, as `maxLimit` |
+| `dMax` | bool, `false` | Reputation `enable_dedup` (`$pfb['drep']`) |
+| `dMaxLimit` | int 0 to 50, `0` | Reputation `p24_dmax_var`, as `maxLimit` |
+| `countryWhitelistAction` | enum `ignore` `match`, `ignore` | Reputation `ccwhite`: `match` only when stored exactly so |
+| `countryBlacklistAction` | enum `none` `block` `match`, `none` | Reputation `ccblack`: `block` or `match` only when stored exactly so; `none` is stored as `""` |
+| `countryWhitelist` | list keyed by `code`, `[]`; item `{code: string [A-Z][A-Z0-9]}` | Reputation `ccexclude` (CSV) |
+| `etBlock`, `etMatch` | list keyed by `category`, `[]`; item `{category: string ET_[A-Za-z0-9_]+}` | Reputation `etblock`, `etmatch` (CSV) |
+| `suppressionV4` | list keyed by `cidr`, `[]`; item `{cidr: string}` | ip `v4suppression` (base64 text area) |
+| `suppressionV6` | list keyed by `cidr`, `[]`; item `{cidr: string}` | ip `v6suppression` (base64 text area) |
+
+- **Limits.** A value that is no plain decimal 1 to 50 (`abc`, `-5`, `1e1`, `8.5`, `51`, `5,10`, `05`, a leading space, an array)
+  reads as 0. Today's PHP passes on as typed to the shell script any value of the characters `[a-zA-Z0-9,_-]` (`abc`, `-5`,
+  `1e1`, `51`, `05`, `5,10`) and treats `8.5`, a leading space, an empty value, `0` and an array as unset (`x`); Core reads a
+  limit it cannot use as none. A write of N above 0 stores `N`, a write of 0 stores `""`.
+- **CSV lists.** The whole stored CSV must pass `PFB_FILTER_CSV` (`[a-zA-Z0-9,_-]+`), as today's PHP requires, else the list is
+  empty. The tokens that match the item pattern are listed, each once (the first): a token PHP would pass on as typed (`USA`,
+  `us`, `DE_rep`, `Spam`) is dropped. A write stores the list as a CSV in the given order.
+- **Suppression lists.** The entries `pfb_text_area_decode()` yields (comments cut, lower-cased) that the IP page accepts
+  (`pfb_validate_suppression_line()`) and that are a CIDR as `netip.ParsePrefix` reads it: an address, `/`, a prefix length of
+  plain digits from 8 to 32 (IPv4) or 32 to 128 (IPv6), no zone. Each is listed once. An entry PHP writes to the suppression
+  file though the page would refuse it (no mask, `10.0.0.0/08`, `0.0.0.0/0`, a zone) is not listed. A write whose entry **set**
+  differs from the read's rewrites the text: every line whose entry stays is kept with its comment, a line that holds no entry
+  (blank, comment, invalid) is kept, a line whose entry went is dropped and each new entry is appended as a line; a reorder alone
+  writes nothing. Kept lines are written back as the text-area sanitizer leaves them (control characters stripped, line ends
+  normalized), as every page save stores them.
+- **Core refuses what it reads.** A limit outside 0 to 50, an action outside its tokens, a country code or ET category outside
+  its pattern, a repeated item, and a suppression entry that is no CIDR of its family within its range, has a zone or an
+  upper-case letter. The adapter's write validation names the same fields (`policy/ip.<field>[<i>].<item field>`).
+- **Write.** Only the keys of the fields whose value differs from what the read gives are written, with the other
+  projections in the one `write_config()` under the DNS config lock; an unchanged write is a no-op. A value the read normalizes
+  (a limit of `abc` reads 0) stays until Core changes that field. All values participate in the revision.
+
+Parity fixture: `tests/core/fixtures/settings_policy_ip_parity.json`. `CoreSettingsPolicyIpParityTest` freezes it against
+today's PHP (the Reputation block and the toggles of `sync_package_pfblockerng()`, run as shipped, and
+`pfb_create_suppression_file()`) and the adapter read; `CoreSettingsPolicyIpBackendTest` covers the write.
+`go/pfb_core/settings/policy_ip_parity_test.go` runs Core against it, hostile rows included.
+
+### Projection `feeds/geoip`
+
+The nine GeoIP continents of the Continents pages (issue #4031), published as `settings/feeds/geoip`; writable. One field,
+`groups`: a list keyed by `name` that always holds each continent once, in the order of `$pfb['continents']`: `pfB_Top`,
+`pfB_Africa`, `pfB_Antarctica`, `pfB_Asia`, `pfB_Europe`, `pfB_NAmerica`, `pfB_Oceania`, `pfB_SAmerica`, `pfB_PS`. Core
+cannot add or remove a continent. The section of a continent is `installedpackages/pfblockerng<name in lower case without
+spaces>/config/0` (`pfblockerngtopspammers`, `pfblockerngafrica`, ..., `pfblockerngproxyandsatellite`); a section never saved
+projects the defaults.
+
+| Group field | Type, default | config.xml |
+|---|---|---|
+| `name` (key) | enum of the nine | |
+| `action` | enum of the IP group actions (see above), `Disabled` | `action`; one the apply pass skips (not an IP action, an array, missing) reads `Disabled` |
+| `listClass` (derived) | enum `none` `deny` `permit` `match` `native`, `none` | from `action`, `autoaddrnot_in` and `autoaddrnot_out`, as for an IP group |
+| `countriesV4`, `countriesV6` | list keyed by `code`, `[]`; item `{code: string}` matching `(A[12]_)?[A-Z][A-Z0-9](_rep)?` | `countries4`, `countries6`: a CSV of the codes the page stores (`US`, `US_rep`, `A1`, `A2`, `A1_US_rep`) |
+
+- **Country lists.** Today's PHP splits the CSV on `,` and names a file `{ccdir}/{token}_v4.txt` after each token with no check.
+  The adapter lists the tokens that match the item pattern, each once (the first): `USA`, `us`, `U`, `../x`, a code with a leading space and an empty
+  token are dropped, and an array where the CSV belongs reads as no country. There is no whole-CSV rule, unlike `policy/ip`.
+  A write stores the list as a CSV in the given order.
+- **Write.** The groups must hold exactly the nine names, once each: an unknown, missing or repeated name, a field missing from or
+  added to a group, or a value of the wrong type is `invalid_argument` naming `feeds/geoip.groups[<i>]...`, and nothing is
+  written. A continent whose `action` or country lists changed has only those keys of its own section written (a section never
+  saved is created holding only them), in the one `write_config()` of the other projections; an unchanged write is a no-op.
+  `listClass` is validated as the enum and ignored.
+- **Core refuses what it reads.** A name outside the nine or repeated, a number of groups other than nine, an action outside
+  the IP actions, a list class outside the five, a country outside its pattern or repeated, an unknown field.
+
+Parity fixture: `tests/core/fixtures/settings_feeds_geoip_parity.json`. `CoreSettingsFeedsGeoipParityTest` freezes it against
+today's PHP (the continent statements of `sync_package_pfblockerng()`, replayed with their source anchored) and the adapter read;
+`CoreSettingsFeedsGeoipBackendTest` covers the write. `go/pfb_core/settings/feeds_geoip_parity_test.go` runs Core against it,
+hostile rows included.
+
+### Projection `policy/dnsbl`
+
+The DNSBL build policy the Update loop applies (issue #4031), published as `settings/policy/dnsbl`; writable. The adapter builds
+it from the field table `pfb_core_policy_dnsbl_fields()` (field, config.xml key, kind), the mechanism of `policy/ip` extended with
+kinds for the Enable/Disable switches, a bounded count, CSVs without the whole-CSV rule, text areas with their own line reading and
+derived fields; Core's schema (`go/pfb_core/settings/policy.go`) holds the same rules. Nothing reads it yet. `dns.idnMode` stays
+the only projection of the IDN mode.
+
+| Field | Type, default | config.xml (PHP reader) |
+|---|---|---|
+| `enabled` | bool, `false` | dnsbl `pfb_dnsbl` is `on`, any case |
+| `whitelist` | list keyed by `domain`, `[]`; item a lower-case domain | dnsbl `whitelist` (base64 text area), the lines `pfb_dnsbl_whitelist_lines()` yields |
+| `top1m` | bool, `false` | dnsbl `top1m_enable` |
+| `top1mCount` | int 1 to 1000000, `1000` | dnsbl `top1m_count`: plain digits 1 to 1000000, else 1000 |
+| `top1mInclusions` | list keyed by `tld`, `[]`; item `[A-Za-z0-9_-]+` | dnsbl `top1m_inclusion` (CSV, whole-CSV rule) |
+| `tldBlacklist` | list keyed by `tld`, `[]`; item without control character, space or upper case | dnsbl `tld_wildcard_blacklist` (text area), listed whether `dns.tldWildcard` is on or not |
+| `tldExclusions` | list keyed by `domain`, `[]`; same item | dnsbl `tld_wildcard_exclusion` (text area) |
+| `tldAllow` | bool, `false` | dnsbl `tld_allow` |
+| `tldAllowGtld`, `tldAllowCctld`, `tldAllowItld`, `tldAllowBgtld` | list keyed by `tld`, `[]`; item without control character, space or comma | dnsbl `tld_allow_gtld`, `_cctld`, `_itld`, `_bgtld` (CSV, no whole-CSV rule) |
+| `regex` | bool, `false` | dnsbl `pfb_regex` |
+| `regexList` | list keyed by `pattern`, `[]`; item trimmed, not starting with `#`, no control character | dnsbl `pfb_regex_list` (base64 text), the lines pfB-DNS loads |
+| `safeSearch` | bool, `false` | SafeSearch `safesearch_enable` is exactly `Enable` |
+| `safeSearchYoutube` | enum `Disable` `Moderate` `Strict`, `Disable` | SafeSearch `safesearch_youtube`, the exact token |
+| `safeSearchDoh` | bool, `false` | SafeSearch `safesearch_doh` is exactly `Enable` |
+| `safeSearchDohList` | list keyed by `host`, `[]`; item without control character, space or comma | SafeSearch `safesearch_doh_list` (CSV, each token trimmed) |
+| `dnsblIpAction` | enum of the IP group actions, `Disabled` | dnsbl `action`, as `pfb_dnsblip_action_value()` |
+| `logging` (derived) | enum `enabled` `disabled_log` `disabled` `nxdomain_log` `nxdomain` `nodata_log` `nodata`, `disabled_log` | the mechanism of `pfb_dnsbl_policy_config()` (dnsbl `global_log_mode`, `global_log`) |
+| `blacklistLogging` (derived) | same enum | what the Blacklist categories log with: `pfb_dnsbl_effective_logging()` over their stored `blacklist_logging` |
+| `groups` (derived) | list keyed by `name`, `[]`; item `{name, logging: the enum above, primary: bool, top1mFilter: bool}` | the groups `feeds/dnsbl` projects, in its order: the effective logging of the group, whether its stored `order` is `primary`, whether its `filter_top1m` toggle is on |
+
+- **Lists.** Each entry is listed once (the first). A whitelist, TLD blacklist or TLD exclusion entry is what
+  `pfb_text_area_decode()` yields (comments cut, lower-cased, a whitelist's IDN punycoded, a NUL stripped, a CR a line end); a
+  whitelist entry must also pass the domain filter. An entry Core cannot hold (a TLD entry with a space inside) is not listed. The
+  **Regex list** is not read by PHP but by pfB-DNS: the stored text must be strictly valid base64 (a missing padding is an error) of
+  valid UTF-8, else the list is empty; each line, split at CR or LF and trimmed of Python's white space, that is not blank and does
+  not start with `#` is an entry, **kept whole** (an inline `#` description, upper case); an entry holding a control character
+  (pfB-DNS would take it) is not listed. The TLD Allow buckets and the DoH list take the stored CSV's tokens (the DoH ones
+  trimmed), the gtld bucket's empty token after `arpa` (no local TLD) is dropped, and an array where a scalar is stored reads as no
+  entry. A write of a text area follows the rule of `policy/ip`: lines whose entry stays are kept, lines that hold no entry are
+  kept, and the other entries are appended; a CSV is stored in the given order. A stored regex list pfB-DNS cannot decode (text
+  that is not strict base64, as a hand edit can leave it) reads as no entries, and a write of the list replaces that text.
+- **TOP1M count.** Plain digits whose value is 1 to 1000000 are the count; anything else (`-1`, `abc`, `1e1`, `5abc`, `+5`,
+  `1000001`, an array, `0`, empty) is 1000. Today's PHP keeps `-1`, `abc`, `1e1`, `1000001` as typed, and an array.
+- **Derived fields.** `logging`, `blacklistLogging` and `groups` are answered by every read and validated for type, and a write
+  ignores them: they follow `global_log`, `global_log_mode`, each group's `logging`, `order`, `filter_top1m` and the Blacklist
+  page's `blacklist_logging`, which the Outpost owns. Core reads again after each save. The revision covers them, so it moves
+  when a group's stored logging changes.
+- **SafeSearch.** The three switches are exactly `Enable` and `YouTube` exactly `Moderate` or `Strict`; today's PHP runs the
+  SafeSearch phase for any stored value other than `Disable` (`enable`, an array), and acts only on the exact tokens: Core reads the
+  exact ones.
+- **Core refuses what it reads.** A `top1mCount` outside 1 to 1000000, an entry that is empty, repeated or off its pattern, an
+  action or mechanism outside its tokens, a `groups` item with a repeated or non-word name; the adapter's write validation names
+  the same fields (`policy/dnsbl.<field>[<i>].<item field>`).
+- **Write.** Only the keys of the fields whose value differs from what the read gives are written, in the one `write_config()`
+  with the other projections; an unchanged write is a no-op.
+
+Parity fixture: `tests/core/fixtures/settings_policy_dnsbl_parity.json`. `CoreSettingsPolicyDnsblParityTest` freezes it against
+today's PHP (the statements of `pfb_global()` and the apply pass, run as shipped, `pfb_dnsbl_whitelist_lines()` and the decoders
+of the manifest builder) and the adapter read; `CoreSettingsPolicyDnsblBackendTest` covers the write.
+`go/pfb_core/settings/policy_dnsbl_parity_test.go` runs Core against it, hostile rows included.
+
+### Projection `extras`
+
+What the Extras stage of an Update (the MaxMind, IPinfo ASN and TOP1M downloads, map #3813) reads of the package settings
+(issue #4031), published as `settings/extras`. The key and the two tokens are **secrets**: the adapter's read carries them to Core
+in clear, as it carries feed credentials, and only Core's API hides them. Whether the TOP1M whitelist is on is
+`policy/dnsbl`'s `top1m`.
+
+| Field | Type, default | config.xml (PHP reader) |
+|---|---|---|
+| `maxmindAccount` | string `[A-Za-z0-9_]*`, `""` | ip `maxmind_account`, as `pfb_global()` filters it (`$pfb['maxmind_account']`): a word, not `0`, else `""` |
+| `maxmindKey` | secret string `[A-Za-z0-9_]*`, `""` | ip `maxmind_key`, the same rule (`$pfb['maxmind_key']`) |
+| `maxmindLocale` | enum `en` `fr` `pt-BR` `de` `ja` `zh-CN` `es`, `en` | ip `maxmind_locale`: a locale the IP page offers, else `en` |
+| `maxmindCsvDisabled` | bool, `false` | ip `database_cc` is `on` (`$pfb['cc']`) |
+| `ipinfoToken` | secret string without control characters, `""` | ip `asn_token` (`$pfb['asn_token']`; a stored `0` is none) |
+| `top1mProvider` | enum `tranco` `cisco` `openpagerank` `majestic` `cloudflare`, `tranco` | DNSBL `top1m_source`, as its gateway adapter reads it (`alexa` is Tranco, `domcop` Open PageRank) |
+| `top1mToken` | secret string without control characters, `""` | DNSBL `top1m_token` |
+
+- **Where Core and today's PHP differ.** A locale the page never stores (`EN`, `xx`, a path in a hand-edited config.xml) is used as
+  typed in a file name by PHP and reads as `en`. A token holding a control character (a line break, a NUL) or bytes that are not
+  UTF-8 is URL-encoded or header-stripped by PHP and reads as `""`: Core's tokens go into a URL or an HTTP header as they are.
+- **Writes.** Only a changed field is stored, in its registered key; `""` clears a secret (no page can). An unchanged write, its
+  secrets in clear, writes nothing. A secret takes part in the revision, which is keyed.
+- **Core refuses what it reads.** An account or key outside `[A-Za-z0-9_]`, a locale or provider outside its tokens, a token with a
+  control character, and `0` as the account, the key or the IPinfo token (the Outpost reads a stored `0` as none).
+
+Parity fixture: `tests/core/fixtures/settings_extras_parity.json`. `CoreSettingsExtrasParityTest` (PHPUnit) freezes it against
+today's readers (`pfb_global()`, the gateway) and the adapter, with the write path. `go/pfb_core/settings/extras_parity_test.go`
+runs Core against it, hostile rows included, and pins that a read shows each secret as its presence only.
+
+### Projection `hooks`
+
+The Update hook rows of the Hooks page (issue #4031), published as `settings/hooks`. It is **read-only**
+([`readOnly`](#settings)): the Outpost's page owns the rows, the adapter never writes them, and a write whose `hooks` differs from
+what config.xml projects is refused (`invalid_argument`, field errors `hooks.<field>`), after the revision check, as for `ingest`.
+It holds one field, `rows`: a list keyed by `id`, in the stored order.
+
+| Row field | Type, default | Stored row (PHP reader) |
+|---|---|---|
+| `id` (key) | string, a decimal number | the row's index in the stored list (`hooks/row`, a bare list or a lone row, as `pfb_get_hooks()` tolerates) |
+| `when` | enum `pre` `post` | `when`, exactly one of the two |
+| `script` | string `hook_<when>_*.sh` or `.py`: a file name, no `/`, no control character | `script` |
+| `description` | string without control characters, `""` | `description`, sanitized and trimmed |
+| `timeout` | int, at least 1 (seconds), `60` | `timeout` as `pfb_hook_timeout()` reads it: a number of at least 1, else 60 |
+| `enabled` | bool, `false` | `enabled` is exactly `on`, as the runner reads it |
+
+- **Rows that are not listed.** A row today's runner would never run: `when` that is not `pre` or `post`, a `script` that is not a
+  bare file name `hook_<when>_*.sh` or `.py` (a path, `..`, a leading `-`, another extension, the other fire point's name), a row
+  that is not an object. Core is stricter in one case: a script name holding a control character, which today's
+  `pfb_hook_script_valid()` accepts when such a file exists, is not listed. A disabled row is listed, with `enabled` false. The ids
+  of the rows that follow a row that is not listed keep their stored index.
+- **Not in the projection.** Whether the script file exists in the hook directory: whoever runs the hook checks that, against its
+  own directory.
+- **A timeout stored as an array** (hand-edited config.xml) reads as the default; `pfb_hook_timeout()` reads PHP's `1`.
+- **Core refuses what it reads.** A script that is not such a file name or names the other fire point, `when` outside its tokens, a
+  timeout below 1, an id that is no index or repeats, a description with a control character.
+
+Parity fixture: `tests/core/fixtures/settings_hooks_parity.json`. `CoreSettingsHooksParityTest` (PHPUnit) freezes it against
+today's readers (`pfb_get_hooks()`, `pfb_hook_timeout()`, `pfb_hook_script_valid()`) and the adapter.
+`go/pfb_core/settings/hooks_parity_test.go` runs Core against it, hostile rows included.
 
 ## Update and schedule
 

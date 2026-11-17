@@ -10,6 +10,8 @@ type Stored struct {
 	Initialized bool
 	Revision    uint64
 	Projections map[string]map[string]json.RawMessage // projection → field → JSON value, as stored: the Store validates it
+	// PendingToken is the platform's opaque token of this read, as JSON (nil: none). Core hands it back and never looks inside.
+	PendingToken json.RawMessage
 }
 
 // Backend is where a Store's settings live. A Store calls it one call at a time. A call that ctx ends before it finishes
