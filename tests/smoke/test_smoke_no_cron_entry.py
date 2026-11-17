@@ -71,6 +71,8 @@ def test_fresh_install_enabled_apply_and_metrics_sync_leave_no_cron_entry(instal
 @pytest.mark.timeout(900)
 def test_upgrade_retires_the_entries_the_previous_package_installed(installed_vm: SmokeVM, prev_pkg: Path) -> None:
     vm = installed_vm
+    # Enabled: a package that still scheduled would put its tick back on the install's own sync pass.
+    h.set_package_enabled(vm, True)
     _force_install(vm, prev_pkg)
     _seed_legacy_jobs(vm)
     seeded = h.pfb_cron_entries(vm)
