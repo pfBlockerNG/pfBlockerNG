@@ -3856,6 +3856,15 @@ function pfb_migration_registry(): array
 			'message'  => 'pfBlockerNG: migrated DNSBL global logging policy to Default/Override (issue #3288)',
 			'since'    => '4.0.0',
 		],
+		// 0b. issue #4053: the WebServer/VIP response is removed; every stored VIP marker becomes
+		// Null Blocking (logging). After #3288's fold, so legacy markers are already Default/Override.
+		[
+			'id'       => 'issue4053-remove-vip-mechanism',
+			'sections' => [$dnsbl, 'installedpackages/pfblockerngdnsbl/config', 'installedpackages/pfblockerngblacklist'],
+			'apply'    => 'pfb_dnsbl_vip_mechanism_migrate',
+			'message'  => 'pfBlockerNG: moved DNSBL WebServer/VIP blocking to Null Blocking (logging) (issue #4053)',
+			'since'    => '4.0.0',
+		],
 		// 1. issue #1898: retire the compatibility-only stored per-row key name. The
 		// scalar-section renames now live as registry 'old_name' slots consumed by
 		// pfb_registry_pass() (issue #1921); this entry keeps only what that pass

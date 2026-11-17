@@ -4520,7 +4520,7 @@ const PFB_DELTA_CHURN_THRESHOLD = 0.05;
 
 // Concrete mechanisms; only group choices may use the inheritance token.
 const PFB_DNSBL_CONCRETE_MECHANISMS = array(
-	'enabled', 'disabled_log', 'disabled', 'nxdomain_log', 'nxdomain', 'nodata_log', 'nodata',
+	'disabled_log', 'disabled', 'nxdomain_log', 'nxdomain', 'nodata_log', 'nodata',
 );
 
 // issue #1898: the compatibility-only stored-key rename this migration still owns -- the
@@ -23058,7 +23058,7 @@ function pfb_dnsbl_mechanism_normalize(mixed $stored): string {
 	return (is_string($stored) && in_array($stored, PFB_DNSBL_CONCRETE_MECHANISMS, TRUE)) ? $stored : 'disabled_log';
 }
 
-/** Project legacy VIP markers (absent, '', 'enabled' in any case) without touching explicit choices; issue #3539: junk fails safe to 'disabled_log'. */
+/** Project legacy VIP markers (absent, '', 'enabled' in any case) without touching explicit choices; issue #4053: the VIP response is gone, so a marker answers Null Blocking (logging), as junk does. */
 function pfb_dnsbl_group_logging(mixed $stored, bool $legacy = FALSE): string {
 
 	if ($stored === 'default') {
@@ -23068,7 +23068,7 @@ function pfb_dnsbl_group_logging(mixed $stored, bool $legacy = FALSE): string {
 	$is_vip_marker = ($stored === NULL) || ($stored === '')
 		|| (is_string($stored) && strcasecmp($stored, 'enabled') === 0);
 	if ($is_vip_marker) {
-		return $legacy ? 'default' : 'enabled';
+		return $legacy ? 'default' : 'disabled_log';
 	}
 
 	if (is_string($stored) && in_array($stored, PFB_DNSBL_CONCRETE_MECHANISMS, TRUE)) {
@@ -23091,7 +23091,6 @@ function pfb_dnsbl_effective_logging(mixed $group_logging, string $global_loggin
  * built-in manifest flag. Issue #3539: unknown input fails closed to '0' (Null Blocking, logged). */
 function pfb_dnsbl_mechanism_flag(string $mechanism): string {
 	return match ($mechanism) {
-		'enabled'      => '1',
 		'disabled_log' => '0',
 		'disabled'     => '2',
 		'nxdomain_log' => '3',
@@ -23102,10 +23101,9 @@ function pfb_dnsbl_mechanism_flag(string $mechanism): string {
 	};
 }
 
-/** issue #3539: the one mechanism label map every page renders, in PFB_DNSBL_CONCRETE_MECHANISMS order; the VIP response is deprecated. */
+/** issue #3539: the one mechanism label map every page renders, in PFB_DNSBL_CONCRETE_MECHANISMS order. */
 function pfb_dnsbl_mechanism_labels(): array {
 	return array(
-		'enabled'	=> 'DNSBL WebServer/VIP (deprecated)',
 		'disabled_log'	=> 'Null Blocking (logging)',
 		'disabled'	=> 'Null Blocking (no logging)',
 		'nxdomain_log'	=> 'NXDOMAIN (logging)',
@@ -23118,13 +23116,12 @@ function pfb_dnsbl_mechanism_labels(): array {
 /** issue #3539: the one mechanism help, one list item per mechanism label, shared by the DNSBL tab, the group editor and the DNSBL Category page. */
 function pfb_dnsbl_mechanism_help(): string {
 	$notes = array(
-		'enabled'	=> 'blocked names resolve to the DNSBL VIP. The web server can log requests and show the block page.',
 		'disabled_log'	=> 'answer <code>0.0.0.0</code> for A and <code>::</code> for AAAA; log the block.',
 		'disabled'	=> 'answer <code>0.0.0.0</code> for A and <code>::</code> for AAAA; do not log the event.',
-		'nxdomain_log'	=> 'answer NXDOMAIN and log the block. No block page.',
-		'nxdomain'	=> 'answer NXDOMAIN without an event log. No block page.',
-		'nodata_log'	=> 'return an empty successful answer with an SOA record; log the block. No block page.',
-		'nodata'	=> 'return an empty successful answer with an SOA record, without an event log. No block page.',
+		'nxdomain_log'	=> 'answer NXDOMAIN and log the block.',
+		'nxdomain'	=> 'answer NXDOMAIN without an event log.',
+		'nodata_log'	=> 'return an empty successful answer with an SOA record; log the block.',
+		'nodata'	=> 'return an empty successful answer with an SOA record, without an event log.',
 	);
 
 	$help = '<ul>';
@@ -23161,7 +23158,7 @@ function pfb_dnsbl_policy_config(array $dconfig, array $groups): array {
 	$override_active = is_string($raw_mechanism) && !empty($raw_mechanism);
 	return array(
 		'mode'      => $override_active ? PfbDnsblGlobalMode::Override : PfbDnsblGlobalMode::Default,
-		'mechanism' => $override_active ? pfb_dnsbl_mechanism_normalize($raw_mechanism) : 'enabled',
+		'mechanism' => $override_active ? pfb_dnsbl_mechanism_normalize($raw_mechanism) : 'disabled_log',
 		'legacy'    => TRUE,
 	);
 }
@@ -23303,6 +23300,50 @@ function pfb_dnsbl_policy_migrate(array $sections): ?array {
 		$result[$groups_path] = $raw_groups;
 	}
 	return $result;
+}
+
+/**
+ * Issue #4053: the WebServer/VIP response is removed. Every stored VIP marker becomes Null Blocking (logging): the global
+ * mechanism, a group's logging (absent, '' or 'enabled' in any case: after #3288's migration those mean the VIP), and an
+ * explicit Blacklist logging ('' or 'enabled'). An absent Blacklist logging follows the policy and stays absent.
+ * Returns the sections to write back, or NULL when nothing is stored as the VIP.
+ */
+function pfb_dnsbl_vip_mechanism_migrate(array $sections): ?array {
+
+	$dnsbl_path  = PFB_SECTIONS['dnsbl'];
+	$groups_path = 'installedpackages/pfblockerngdnsbl/config';
+	$bl_path     = 'installedpackages/pfblockerngblacklist';
+	$is_vip      = static fn(mixed $v): bool => $v === NULL || $v === '' || (is_string($v) && strcasecmp($v, 'enabled') === 0);
+	$result      = array();
+
+	$dconfig = is_array($sections[$dnsbl_path] ?? NULL) ? $sections[$dnsbl_path] : array();
+	if (is_string($dconfig['global_log'] ?? NULL) && strcasecmp($dconfig['global_log'], 'enabled') === 0) {
+		$dconfig['global_log'] = 'disabled_log';
+		$result[$dnsbl_path] = $dconfig;
+	}
+
+	$groups = $sections[$groups_path] ?? NULL;
+	if (is_array($groups)) {
+		$changed = FALSE;
+		foreach ($groups as $index => $group) {
+			if (is_array($group) && $is_vip($group['logging'] ?? NULL)) {
+				$groups[$index]['logging'] = 'disabled_log';
+				$changed = TRUE;
+			}
+		}
+		if ($changed) {
+			$result[$groups_path] = $groups;
+		}
+	}
+
+	$blconfig = is_array($sections[$bl_path] ?? NULL) ? $sections[$bl_path] : array();
+	if (array_key_exists('blacklist_logging', $blconfig) && $is_vip($blconfig['blacklist_logging'])) {
+		$blconfig['blacklist_logging'] = 'disabled_log';
+		$result[$bl_path] = $blconfig;
+	}
+
+	// The unchanged sections ride along, as #3288's migration returns them; an absent one stays absent.
+	return $result === array() ? NULL : $result + array_filter($sections, static fn(mixed $s): bool => $s !== array() && $s !== NULL);
 }
 
 /**
