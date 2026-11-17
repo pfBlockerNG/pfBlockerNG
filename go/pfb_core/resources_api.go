@@ -49,8 +49,10 @@ func resourceMethods(store *resources.Store) map[string]method {
 			var ae *apiError
 			if errors.As(err, &ae) {
 				for i := range ae.FieldErrors {
-					f := &ae.FieldErrors[i].Field // the decoder writes "/" as "~1" and "~" as "~0"
-					*f = strings.ReplaceAll(strings.ReplaceAll(*f, "~1", "/"), "~0", "~")
+					// A path from the decoder writes "/" as "~1" and "~" as "~0"; an unknown name is verbatim
+					if f := &ae.FieldErrors[i]; f.Message != "unknown parameter" {
+						f.Field = strings.ReplaceAll(strings.ReplaceAll(f.Field, "~1", "/"), "~0", "~")
+					}
 				}
 			}
 			return nil, err

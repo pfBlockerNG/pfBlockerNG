@@ -361,6 +361,8 @@ func TestGetResourcesRefusesAHostileRequestNamingTheField(t *testing.T) {
 		"resources a string":          {`{"resources":"x"}`, "resources"},
 		"resources a number":          {`{"resources":5}`, "resources"},
 		"unknown parameter":           {`{"resources":{},"bogus":1}`, "bogus"},
+		"unknown parameter with ~1":   {`{"resources":{},"a~1b":1}`, "a~1b"},
+		"unknown cursor key with ~0":  {one(`"dnsbl/main"`, `{"generation":"1","digest":"`+dg+`","x~0y":1}`), "x~0y"},
 	}
 	for _, name := range slices.Sorted(maps.Keys(cases)) {
 		t.Run(name, func(t *testing.T) {
