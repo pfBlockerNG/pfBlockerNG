@@ -38,28 +38,22 @@ Ordered highest precedence first.
 | ------------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------- |
 | **Environment override** | A shell-exported variable (e.g. `CLAUDE_CODE_EFFORT_LEVEL`) that outranks every session and settings-file value | Env setting, shell default |
 | **Session override**     | An effort chosen interactively for one session (`/effort` in Claude, `-c model_reasoning_effort=…` in Codex)   | Runtime setting           |
-| **Repo default**         | The effort committed in the repository and applied to every session in it (`.claude/settings.json` `effortLevel`, `.codex/config.toml` `model_reasoning_effort`) | Project setting           |
 | **User layer**           | Per-machine, cross-repo configuration outside the repository (`~/.claude/settings.json` — the directory itself is relocatable via the `CLAUDE_CONFIG_DIR` environment variable — and `~/.codex/config.toml`) | Global config             |
-| **Per-agent pin**        | An effort fixed inside one subagent's own definition (`.codex/agents/*.toml`), unaffected by session-level changes | Agent default             |
 | **Plan-mode effort**     | A Codex-only separate effort used while planning (`plan_mode_reasoning_effort`)                            | Planning level            |
 
 ## Relationships
 
-- An **Environment override** outranks a **Session override**, which outranks the **Repo default**.
-- A **Per-agent pin** sets the **Effort level** for exactly one subagent, regardless of the **Repo default**.
-- The **Repo default** and a **Per-agent pin** are committed and shared; an **Environment override** and the **User layer** are machine-local.
+- An **Environment override** outranks a **Session override**, which outranks the **User layer**.
+- The repository commits no **Effort level**: effort is relative to each model, so it is chosen per session or per user,
+  never pinned in agent definitions or repository settings (owner, 2026-11-17, #4051).
 
 ## Example dialogue
 
-> **Dev:** "I set `/effort` but the session ignored it — is the **Repo default** broken?"
+> **Dev:** "I set `/effort` but the session ignored it — is something in the repository overriding it?"
 >
-> **Domain expert:** "No — an **Environment override** was active. `CLAUDE_CODE_EFFORT_LEVEL` in your shell profile outranks both the **Session override** and the **Repo default**."
->
-> **Dev:** "If I delete it, do the Codex reviewer subagents drop below `xhigh`?"
->
-> **Domain expert:** "No. Each reviewer carries a **Per-agent pin** in its own TOML, so it keeps its **Effort level** no matter what the session does."
+> **Domain expert:** "No — the repository pins no effort. An **Environment override** was active: `CLAUDE_CODE_EFFORT_LEVEL` in your shell profile outranks the **Session override**."
 
 ## Flagged ambiguities
 
-- **"settings"** was used for both shell environment and settings files ("environment and/or settings"). Use **Environment override** for exported variables and name the concrete layer (**Repo default**, **User layer**) for files.
-- **"default"** is overloaded: an exported variable is often described as a "default effort" even though it has the *highest* precedence — that is an **Environment override**, not a default. Reserve "default" for the lowest-precedence fallback a layer supplies (**Repo default**).
+- **"settings"** was used for both shell environment and settings files ("environment and/or settings"). Use **Environment override** for exported variables and name the concrete layer (the **User layer**) for files.
+- **"default"** is overloaded: an exported variable is often described as a "default effort" even though it has the *highest* precedence — that is an **Environment override**, not a default. Reserve "default" for the lowest-precedence fallback, the **User layer**.

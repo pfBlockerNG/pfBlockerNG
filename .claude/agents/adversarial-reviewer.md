@@ -1,7 +1,6 @@
 ---
 name: adversarial-reviewer
 description: Independent read-only verifier for pfBlockerNG diffs, plans, tests, and PRs.
-effort: medium
 ---
 
 <!-- mutation: read-only -->
