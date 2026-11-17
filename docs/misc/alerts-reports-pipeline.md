@@ -8,7 +8,7 @@ How `src/usr/local/www/pfblockerng/pfblockerng_alerts.php` get data, why IP rows
 
 ## Attribution: DNSBL is one-phase, IP is two-phase
 
-DNSBL rows attributed **once**, at event time, by log writer, rendered as logged (ADR-65). No render-time re-check: `pfb_dnsbl_query()` — same live matcher resolver itself use — asked only by write-path webserver-hit attributor below, never by page render.
+DNSBL rows attributed **once**, at event time, by log writer, rendered as logged (ADR-65). No render-time re-check.
 
 IP rows keep older **two-phase** model:
 
@@ -28,7 +28,7 @@ IP logs self-sufficient for rendering complete table; render-time pass is freshn
 
 Daemon reconstructs bare pf event into fully attributed record **once**, at event time, caches its lookups in `ipcache` SQLite table so repeated offenders cheap on write path.
 
-DNSBL webserver-hit (block-page load) attributed same way: `pfb_log_event()` (`pfblockerng.inc`) asks live matcher via `pfb_dnsbl_query($domain)` — read-only query channel ADR-65 added — for domain's current verdict, uses returned group/feed to build `dnsbl.log` line it appends, increments per-group widget counter (`UPDATE dnsbl SET counter = counter + 1`). Miss (`NULL` or `blocked=false`) renders every field `Unknown` rather than guessing. Issue #1349 retired unconsumed reports-cache SQLite writer/table; event log is sole durable per-block record.
+Issue #4053 removed the block-page webserver, its hit attributor (`pfb_log_event()`) and the read-only query channel (`pfb_dnsbl_query()`) it used; Alerts still reads older `DNSBL-Full`/`DNSBL-1x1`/`DNSBL-HTTPS` lines until the log rotates. Issue #1349 retired unconsumed reports-cache SQLite writer/table; event log is sole durable per-block record.
 
 ### DNS transport (issue #3751)
 

@@ -117,7 +117,7 @@ await "pfB-DNS answers probe.example. before the removal" answered probe.example
 before_ok=$(dns probe.example.); before_blocked=$(dns blocked.example.)
 note "before: probe.example. -> $before_ok | blocked.example. -> $before_blocked"
 check "pfB-DNS answers before the removal" has "$before_ok" "ANSWERED rcode=0 answers=1 last4=192.0.2.7"
-check "and blocks a listed name with the DNSBL VIP" has "$before_blocked" "last4=10.10.10.1"
+check "and blocks a listed name with the null answer" has "$before_blocked" "last4=0.0.0.0"
 # The stand-in for the r272 core's liveness test (shims/pgrep): a live pid answers 0, a reaped one 1. Checked here, so a broken
 # stand-in fails the run instead of reading as a proxy that is not running.
 sh -c 'exit 0' & reaped=$!; wait "$reaped"
@@ -218,7 +218,7 @@ sed 's/^/  | /' "$out/delete1.out" | tail -12
 if [ "$expect" = recovered ]; then
 	check "pkg leaves the package installed (the hook exited 3)" has "$(installed)" pfSense-pkg-pfBlockerNG-devel
 	check "pfB-DNS still answers a forwarded name" has "$after_ok" "ANSWERED rcode=0 answers=1 last4=192.0.2.7"
-	check "and still blocks the listed name with the DNSBL VIP" has "$after_blocked" "last4=10.10.10.1"
+	check "and still blocks the listed name with the null answer" has "$after_blocked" "last4=0.0.0.0"
 	check "and the menu entry" has "$s1" 'Firewall:pfBlockerNG'
 	check "the proxy runs in module mode" has "$s1" '"rc_no_module":false'
 	check "the module's manifest is kept" has "$s1" '"manifest":true'

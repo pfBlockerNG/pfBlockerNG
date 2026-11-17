@@ -444,7 +444,7 @@ pages. Wired into `.github/workflows/test.yml`, `.githooks/pre-commit` and
   six page/registry scalar divergences (`pfb_dnsport`/`pfb_dnsport_ssl`/`aliaslog`
   follow the page, and a fresh install now seeds those values; `pfb_dnsbl_rule` keeps
   registry `Disabled`; `pfb_dnsvip4/6` store `''` and map the Form_Select sentinel
-  `none` after the gateway read). The matchers require a literal key; a dynamic
+  `none` after the gateway read; issue #4053 later retired all five DNSBL web server keys). The matchers require a literal key; a dynamic
   `$pfb['gconfig']['log_max_' . $suffix]` restatement is a documented ceiling, not a
   clean scan of those sites.
 - The mirror → alias mapping is DERIVED from each page's own

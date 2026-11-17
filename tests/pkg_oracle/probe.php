@@ -27,8 +27,6 @@ $g['varetc_path'] = '/etc';
 $pfb['dns_proxy_pidfile'] = PFB_DNS_PROXY_PIDFILE;
 $pfb['dns_proxy_ready'] = '/var/unbound/pfb_dns_ready';
 $cfgfile = race_path('config.json');
-// A sinkhole VIP pfSense knows: the shared doubles resolve ids of this shape
-$GLOBALS['pfb_test_vip_list'] = ['_vip_test_a' => '10.10.10.1'];
 const ORACLE_MODULE_DIR = '/var/unbound';
 
 function oracle_load_config(): void
@@ -83,13 +81,10 @@ switch ($cmd) {
 		config_set_path('installedpackages/pfblockerng/config/0/pfb_keep', 'on');
 		$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
 		config_set_path("{$dnsbl}/pfb_dnsbl", 'on');
-		config_set_path("{$dnsbl}/dnsbl_interface", 'opt-double');
-		config_set_path("{$dnsbl}/pfb_dnsvip4", '_vip_test_a');
 		config_set_path("{$dnsbl}/pfb_py_reply", 'on');
 		// The DNSBL logging policy an earlier apply already migrated (issue #3288): without the key the disable pass's policy
 		// upgrade calls pfb_global() again, which re-reads enable_cb and turns the uninstall's disable back on.
 		config_set_path("{$dnsbl}/global_log_mode", 'default');
-		config_set_path('virtualip/vip', [['uniqid' => '_test_a', 'subnet' => '10.10.10.1']]);
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns', 'on');
 		config_set_path('unbound/enable', '');
 		config_set_path('unbound/port', '53');
@@ -110,7 +105,7 @@ switch ($cmd) {
 		file_put_contents(ORACLE_MODULE_DIR . '/pfb_py_raw/feed.txt', "blocked.example\n");
 		file_put_contents(ORACLE_MODULE_DIR . '/pfb_py_sources.json', json_encode([
 			'version' => 1, 'config' => new stdClass(),
-			'feeds' => [['raw' => 'pfb_py_raw/feed.txt', 'feed' => 'TestFeed', 'group' => 'TestGroup', 'log_flag' => '1']],
+			'feeds' => [['raw' => 'pfb_py_raw/feed.txt', 'feed' => 'TestFeed', 'group' => 'TestGroup', 'log_flag' => '0']],
 		]));
 		pfb_dnsbl_ini_inputs();
 		file_put_contents($pfb['unbound_py_conf'], pfb_unbound_python_ini('enabled', 'BASELINE'));
