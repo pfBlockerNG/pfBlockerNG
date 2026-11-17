@@ -11,18 +11,14 @@ use PHPUnit\Framework\TestCase;
  * fresh box/request, exactly the same deprecation class #1768 already closed
  * ~85 other call sites for.
  *
- * - www/index.php:37 -- the per-request $ptype[$server_type] build reads
- *   $_SERVER[$server_type] directly for HTTP_REFERER/HTTP_USER_AGENT, which a
- *   client is not required to send; an absent key is NULL, passed straight
- *   into htmlspecialchars().
+ * - www/index.php (the block page; issue #4053 removed it) read absent request headers the same way.
  * - pfblockerng.widget.php:695 -- the DNSBL row of the "Queries" stat block
  *   reads $pfb_table['stats']['DNSBL'], which is populated ONLY inside the
  *   `if (!empty($pfb_table))` loop over update-table entries; on a fresh box
  *   (no aliases/lists synced yet) that loop never runs and the key stays
  *   unset.
  *
- * Neither file is require()-able off-appliance (index.php is top-level page
- * execution; the widget file's stat block lives inside pfBlockerNG_get_header(),
+ * The widget file is not require()-able off-appliance (its stat block lives inside pfBlockerNG_get_header(),
  * a page-scoped function with prior SQLite/session setup this test does not
  * want to stand up) -- so, following DnsblFreshPconfigTest/AlertsFreshTopBlockTest's
  * established idiom, each narrow region is eval-extracted VERBATIM from the
@@ -32,32 +28,10 @@ use PHPUnit\Framework\TestCase;
  */
 final class FreshConfigNullGuardCloseoutTest extends TestCase
 {
-	private const INDEX_PHP  = __DIR__ . '/../../src/usr/local/www/pfblockerng/www/index.php';
 	private const WIDGET_PHP = __DIR__ . '/../../src/usr/local/www/widgets/widgets/pfblockerng.widget.php';
 
 	public static function setUpBeforeClass(): void
 	{
-		if (!function_exists('pfb_index_oracle_ptype_server_field')) {
-			$src = file_get_contents(self::INDEX_PHP);
-			if ($src === FALSE) {
-				throw new RuntimeException('test bootstrap: failed to read www/index.php');
-			}
-			if (!preg_match(
-				'/\$ptype\[\$server_type\] = \(\$server_value = htmlspecialchars\(\$_SERVER\[\$server_type\][^\n]*\n/',
-				$src,
-				$m
-			)) {
-				throw new RuntimeException('test bootstrap: index.php $ptype server-field line not found');
-			}
-			eval(
-				'function pfb_index_oracle_ptype_server_field(bool $setKey, string $value = \'\'): string {'
-				. ' $ptype = array(); $server_type = \'HTTP_REFERER\';'
-				. ' if ($setKey) { $_SERVER[$server_type] = $value; } else { unset($_SERVER[$server_type]); }'
-				. $m[0]
-				. ' return $ptype[$server_type]; }'
-			);
-		}
-
 		if (!function_exists('pfb_widget_oracle_dnsbl_stat')) {
 			$src = file_get_contents(self::WIDGET_PHP);
 			if ($src === FALSE) {
@@ -122,37 +96,7 @@ final class FreshConfigNullGuardCloseoutTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// www/index.php:37 -- $ptype[$server_type] server-header read.
 	// -----------------------------------------------------------------------
-
-	public function testIndexPtypeServerFieldEmitsNoPassingNullDeprecationWhenHeaderAbsent(): void
-	{
-		[$result, $diagnostics] = $this->runCapturing(
-			static fn (): string => pfb_index_oracle_ptype_server_field(FALSE)
-		);
-
-		$this->assertSame(
-			[],
-			self::nullDeprecationsOnly($diagnostics),
-			"index.php's \$ptype server-field build must emit zero 'Passing null' deprecations when the client sends no Referer header, got:\n"
-			. implode("\n", self::nullDeprecationsOnly($diagnostics))
-		);
-		$this->assertSame('Unknown', $result, 'an absent header must still fall back to "Unknown" (behaviour-preserving)');
-	}
-
-	public function testIndexPtypeServerFieldPassesThroughAPopulatedHeaderUnchanged(): void
-	{
-		[$result, $diagnostics] = $this->runCapturing(
-			static fn (): string => pfb_index_oracle_ptype_server_field(TRUE, 'https://example.com/<script>')
-		);
-
-		$this->assertSame([], self::nullDeprecationsOnly($diagnostics));
-		$this->assertSame(
-			'https://example.com/&lt;script&gt;',
-			$result,
-			'a present header must still pass through htmlspecialchars() unchanged (behaviour-preserving)'
-		);
-	}
 
 	// -----------------------------------------------------------------------
 	// pfblockerng.widget.php:695 -- Queries/DNSBL stat read.

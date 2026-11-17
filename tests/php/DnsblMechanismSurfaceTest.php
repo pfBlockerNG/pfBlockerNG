@@ -7,9 +7,8 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Issue #3539 -- the DNSBL WebServer/VIP response is deprecated on every surface that names it, and
- * every page reads ONE shared mechanism label map and ONE shared mechanism help. The seven tokens and
- * six of their labels are the #3288 vocabulary and stay exact; only the `enabled` label changes.
+ * Issue #3539 -- every page reads ONE shared mechanism label map and ONE shared mechanism help. The tokens and their
+ * labels are the #3288 vocabulary and stay exact; issue #4053 removed the WebServer/VIP response (`enabled`).
  *
  * Pages are hermetic-unreachable, so each page's OWN assignment/region is extracted from the shipped
  * source and evaluated (PageStatementLoader.php); the live render of the same markup is pinned by
@@ -24,9 +23,7 @@ final class DnsblMechanismSurfaceTest extends TestCase
 	private const CATEGORY_PAGE      = 'src/usr/local/www/pfblockerng/pfblockerng_category.php';
 	private const BLACKLIST_PAGE     = 'src/usr/local/www/pfblockerng/pfblockerng_blacklist.php';
 
-	private const VIP_LABEL = 'DNSBL WebServer/VIP (deprecated)';
-
-	/** The six labels the deprecation must not touch. */
+	/** The six labels. */
 	private const UNCHANGED_LABELS = [
 		'disabled_log' => 'Null Blocking (logging)',
 		'disabled'     => 'Null Blocking (no logging)',
@@ -45,21 +42,14 @@ final class DnsblMechanismSurfaceTest extends TestCase
 	// 1 -- the shared label map
 	// -----------------------------------------------------------------------
 
-	public function testLabelMapKeysAreTheSevenConcreteMechanismsInResolverOrder(): void
+	public function testLabelMapKeysAreTheConcreteMechanismsInResolverOrder(): void
 	{
 		$this->assertSame(PFB_DNSBL_CONCRETE_MECHANISMS, array_keys(pfb_dnsbl_mechanism_labels()));
 	}
 
-	public function testVipLabelNamesTheResponseDeprecated(): void
+	public function testTheSixLabelsStayExact(): void
 	{
-		$this->assertSame(self::VIP_LABEL, pfb_dnsbl_mechanism_labels()['enabled']);
-	}
-
-	public function testTheOtherSixLabelsStayExact(): void
-	{
-		$labels = pfb_dnsbl_mechanism_labels();
-		unset($labels['enabled']);
-		$this->assertSame(self::UNCHANGED_LABELS, $labels);
+		$this->assertSame(self::UNCHANGED_LABELS, pfb_dnsbl_mechanism_labels());
 	}
 
 	// -----------------------------------------------------------------------
@@ -90,12 +80,6 @@ final class DnsblMechanismSurfaceTest extends TestCase
 		$this->assertStringContainsString(pfb_dnsbl_mechanism_help(), $scope['options_global_log_txt']);
 	}
 
-	public function testDnsblPageVipHelpAnnouncesTheDeprecation(): void
-	{
-		$scope = pfb_test_page_eval(pfb_test_page_statement(self::DNSBL_PAGE, '/\$pfb_vip_help\s*=/'), []);
-		$this->assertStringContainsString('deprecated', strtolower($scope['pfb_vip_help']));
-	}
-
 	public function testGroupEditorLoggingSelectUsesTheSharedMapAfterDefault(): void
 	{
 		$scope = pfb_test_page_eval(pfb_test_page_statement(self::CATEGORY_EDIT_PAGE, '/\$options_logging\s*=/'), []);
@@ -117,14 +101,6 @@ final class DnsblMechanismSurfaceTest extends TestCase
 			'Default policy, Null Blocking global' => [
 				PfbDnsblGlobalMode::Default, 'disabled_log',
 				array_replace($base, ['default' => 'Default (Null Blocking (logging))']),
-			],
-			'Default policy, VIP global' => [
-				PfbDnsblGlobalMode::Default, 'enabled',
-				array_replace($base, ['default' => 'Default (' . self::VIP_LABEL . ')']),
-			],
-			'Override policy, VIP enforced' => [
-				PfbDnsblGlobalMode::Override, 'enabled',
-				array_replace($base, ['enabled' => self::VIP_LABEL . ' (Override)']),
 			],
 			'Override policy, NODATA enforced' => [
 				PfbDnsblGlobalMode::Override, 'nodata',
@@ -166,12 +142,13 @@ final class DnsblMechanismSurfaceTest extends TestCase
 		}
 	}
 
-	public function testAlertsUnknownBlockingTypeLabelsUseTheSharedLabel(): void
+	/** Issue #4053: with no block page, an event without a user agent is Unknown, not the removed VIP label. */
+	public function testAlertsUnknownBlockingTypeIsLabelledUnknown(): void
 	{
 		require_once __DIR__ . '/AlertsPageLoader.php';
 		require_once __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_stats.inc';
 		pfb_test_load_alerts_page_functions();
 		$panel = pfb_stats_panel('dnsblagent', ['', 'Found', 'Type(s)', FALSE, ''], ['Unknown' => 1], 'max', []);
-		$this->assertStringContainsString('>' . pfb_dnsbl_mechanism_labels()['enabled'] . '</td>', $panel['html']);
+		$this->assertStringContainsString('>Unknown</td>', $panel['html']);
 	}
 }

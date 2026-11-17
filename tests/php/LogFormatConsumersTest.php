@@ -9,11 +9,9 @@ use PHPUnit\Framework\TestCase;
  * 3-space-token log shape (ADR.md S1.8), now rebuilt for the ISO-8601 shape
  * Phases 2-4 landed.
  *
- * Neither `www/index.php`'s DNSBL block page nor `pfblockerng_alerts.php`'s
- * day-bucket/chart builder is a callable function -- both are top-level
- * script code (`www/index.php` runs at include time; the alerts stat loop
- * is guarded by a live `$alert_summary`/`$alert_log`, not wrapped in a
- * function AlertsPageLoader.php's eval window covers). Each fixed formula
+ * `pfblockerng_alerts.php`'s day-bucket/chart builder is not a callable function: the alerts stat loop is
+ * guarded by a live `$alert_summary`/`$alert_log`, not wrapped in a function AlertsPageLoader.php's eval window
+ * covers. (Issue #4053 removed the other consumer, the `www/index.php` block page.) Each fixed formula
  * below is pinned by a comment-free code tripwire (php_strip_whitespace(), so
  * production prose can never satisfy the oracle) and then reproduced -- not included -- and executed for REAL via
  * `exec()`/`shell_exec()` against synthetic fixture files, mirroring Phase
@@ -21,7 +19,6 @@ use PHPUnit\Framework\TestCase;
  */
 final class LogFormatConsumersTest extends TestCase
 {
-	private const INDEX_PHP  = __DIR__ . '/../../src/usr/local/www/pfblockerng/www/index.php';
 	private const ALERTS_PHP = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_alerts.php';
 
 	/** @var string[] temp files to remove in tearDown */
@@ -59,184 +56,6 @@ final class LogFormatConsumersTest extends TestCase
 		$source = php_strip_whitespace($path);
 		$this->assertNotSame('', $source, "could not read comment-free source: {$path}");
 		return $source;
-	}
-
-	// -----------------------------------------------------------------------
-	// www/index.php -- the DNSBL block page's dnsbl.log correlation grep key
-	// -----------------------------------------------------------------------
-
-	/**
-	 * The critical finding: the guard regex's charset must include '-' or an
-	 * ISO timestamp (which always contains one) fails preg_match and the
-	 * page render aborts via `exit`. Confirms the CURRENT source has the
-	 * widened charset, then proves it accepts an ISO string.
-	 */
-	public function testBlockPageGuardCharsetAcceptsIsoTimestamp(): void
-	{
-		$source = $this->codeSource(self::INDEX_PHP);
-		$needle = 'preg_match("/^[a-zA-Z0-9:\- ]+$/"';
-		$this->assertStringContainsString(
-			$needle,
-			$source,
-			"www/index.php's timestamp guard regex changed -- update this oracle (expected: {$needle})"
-		);
-		$this->assertSame(
-			2,
-			substr_count($source, $needle),
-			'expected exactly 2 guard-regex call sites (the outer $timestamp guard and the foreach $ts guard)'
-		);
-
-		$this->assertSame(1, preg_match('/^[a-zA-Z0-9:\- ]+$/', '2026-07-08 14:30'), 'ISO date+time must pass the guard');
-		$this->assertSame(1, preg_match('/^[a-zA-Z0-9:\- ]+$/', '2026-07-08'), 'ISO date-only must pass the guard');
-	}
-
-	/**
-	 * Red proof (the critical finding): the PRE-Phase-5 guard charset (no '-',
-	 * confirmed via `git show` of the prior commit) rejects an ISO timestamp,
-	 * which is exactly what would have driven the page's `exit` on every real
-	 * request once Phase 4's writer went ISO -- worse than a placeholder
-	 * fallback, a hard abort.
-	 */
-	public function testBlockPageOldGuardCharsetWouldHaveAbortedOnIsoTimestamp(): void
-	{
-		// Pre-Phase-5 charset, verified via `git show HEAD~1:.../www/index.php`
-		// before this phase's fix landed -- reproduced literally, not re-derived.
-		$oldGuardRegex = '/^[a-zA-Z0-9: ]+$/';
-
-		$this->assertSame(0, preg_match($oldGuardRegex, '2026-07-08 14:30'), 'the OLD charset must reject an ISO timestamp (the abort bug)');
-		$this->assertSame(1, preg_match($oldGuardRegex, 'Jul 8 14:30'), 'sanity: the OLD charset accepted the OLD no-hyphen format');
-	}
-
-	/**
-	 * Green, end-to-end: a synthetic ISO-format dnsbl.log line is found by the
-	 * rebuilt grep key and its Type/Group/Evaluated/Feed fields render.
-	 */
-	public function testBlockPageCorrelationMatchesNewIsoFormatLogLine(): void
-	{
-		$source = $this->codeSource(self::INDEX_PHP);
-		$this->assertStringContainsString(
-			"date('Y-m-d H:i', htmlspecialchars(\$_SERVER['REQUEST_TIME']))",
-			$source,
-			"www/index.php's outer timestamp build changed -- update this oracle"
-		);
-		$this->assertStringContainsString(
-			'/usr/bin/tail -n50 /var/log/pfblockerng/dnsbl.log | /usr/bin/grep -F -- {$domain} | /usr/bin/grep {$now} | /usr/bin/tail -1',
-			$source,
-			"www/index.php's correlation exec() pipeline changed -- update this oracle"
-		);
-
-		$log = $this->tempFile('pfb_dnsbl_iso_');
-		$host = 'rv60p5-block.example';
-		// b_type=DNSBL-Full, group=RV60P5Group, evald=Match, feed=RV60P5Feed (fields 5-8, 0-indexed).
-		file_put_contents(
-			$log,
-			"DNSBL-python,2026-07-08 14:30:15,{$host},203.0.113.9,Python,DNSBL-Full,RV60P5Group,Match,RV60P5Feed,+,A\n"
-		);
-
-		$requestTime = strtotime('2026-07-08 14:30:45 UTC');
-		$this->assertNotFalse($requestTime, 'fixture sanity: the fixed instant must parse');
-
-		// Reproduces www/index.php's exact variable construction (tripwired above),
-		// against the synthetic log path instead of the hardcoded production one.
-		$timestamp = date('Y-m-d H:i', $requestTime);
-		$this->assertSame('2026-07-08 14:30', $timestamp, 'fixture sanity: the built timestamp must match the log line\'s minute');
-		$ts = $timestamp; // first foreach iteration -- matches immediately, same as production's loop order.
-		$now = escapeshellarg($ts);
-		$domain = escapeshellarg(',' . $host . ',');
-
-		$data = [];
-		$logArg = escapeshellarg($log);
-		exec("/usr/bin/tail -n50 {$logArg} | /usr/bin/grep -F -- {$domain} | /usr/bin/grep {$now} | /usr/bin/tail -1", $data, $retval);
-		$this->assertSame(0, $retval, 'the reproduced pipeline must exit 0');
-		$this->assertNotEmpty($data, 'the ISO-format log line must be found by the rebuilt grep key (green)');
-
-		$fields = explode(',', $data[0]);
-		$this->assertSame('DNSBL-Full', $fields[5] ?? null, 'type field (index 5) must render, not a "-" placeholder');
-		$this->assertSame('RV60P5Group', $fields[6] ?? null, 'group field (index 6) must render');
-		$this->assertSame('Match', $fields[7] ?? null, 'evald field (index 7) must render');
-		$this->assertSame('RV60P5Feed', $fields[8] ?? null, 'feed field (index 8) must render');
-	}
-
-	/**
-	 * Red proof (the real live breakage this phase fixes): the SAME synthetic
-	 * ISO-format log line, correlated with the PRE-Phase-5 key format (`M j
-	 * H:i`, confirmed via `git show` of the prior commit) -- must NOT match.
-	 * This is exactly the state the branch tip was in before this phase's fix.
-	 */
-	public function testBlockPageCorrelationFailsWithPreP5KeyAgainstNewIsoLogLine(): void
-	{
-		$log = $this->tempFile('pfb_dnsbl_iso_preP5_');
-		$host = 'rv60p5-block.example';
-		file_put_contents(
-			$log,
-			"DNSBL-python,2026-07-08 14:30:15,{$host},203.0.113.9,Python,DNSBL-Full,RV60P5Group,Match,RV60P5Feed,+,A\n"
-		);
-
-		$requestTime = strtotime('2026-07-08 14:30:45 UTC');
-		// Pre-Phase-5 key build (verified via `git show HEAD~1:.../www/index.php`
-		// before this phase's fix landed).
-		$oldTs = date('M j H:i', $requestTime);
-		$this->assertSame('Jul 8 14:30', $oldTs, 'fixture sanity: the OLD-format key for this instant');
-		$oldNow = escapeshellarg($oldTs);
-		$domain = escapeshellarg(',' . $host . ',');
-
-		$data = [];
-		exec("/usr/bin/tail -n50 {$log} | /usr/bin/grep {$domain} | /usr/bin/grep {$oldNow} | /usr/bin/tail -1", $data, $retval);
-		$this->assertEmpty(
-			$data,
-			'the OLD 3-space-token key must NOT match a NEW ISO-format log line -- this is the live breakage Phase 5 fixes'
-		);
-	}
-
-	/**
-	 * issue #1652: the correlation grep embedded the host as an unanchored
-	 * Basic Regular Expression, so '.' wildcard-matched any character and a
-	 * blocked host could correlate to a DIFFERENT entry's row --
-	 * `ads.example.com` matching `ads-example.com`'s line -- rendering the
-	 * wrong Group/Feed/Evaluated-Domain on the block page. A log containing
-	 * only the lookalike host's row must not correlate to the blocked host.
-	 */
-	public function testBlockPageCorrelationNeverMatchesLookalikeHostRow(): void
-	{
-		$source = $this->codeSource(self::INDEX_PHP);
-		$matched = preg_match(
-			'#exec\("(/usr/bin/tail -n50 /var/log/pfblockerng/dnsbl\.log[^"]+)",\s*\$data,\s*\$retval\);#',
-			$source,
-			$m
-		);
-		$this->assertSame(1, $matched, 'could not extract the correlation exec() pipeline from www/index.php');
-
-		$log = $this->tempFile('pfb_dnsbl_lookalike_');
-		// ONLY the lookalike's row: '-' exactly where the victim host has '.'.
-		file_put_contents(
-			$log,
-			"DNSBL-python,2026-07-08 14:30:15,ads-example.com,203.0.113.9,Python,DNSBL-Full,LookalikeGroup,ads-example.com,LookalikeFeed,+,A\n"
-		);
-
-		$ts = '2026-07-08 14:30';
-		$now = escapeshellarg($ts);
-		// index.php's exact key construction, per host queried.
-		$pipelineFor = static fn (string $host): string => str_replace(
-			['/var/log/pfblockerng/dnsbl.log', '{$domain}', '{$now}'],
-			[escapeshellarg($log), escapeshellarg(',' . $host . ','), $now],
-			$m[1]
-		);
-
-		// Control (before-state discipline): the lookalike host itself DOES
-		// correlate to its own row, proving the fixture, key construction, and
-		// extracted pipeline find a genuine match.
-		$ownData = [];
-		exec($pipelineFor('ads-example.com'), $ownData);
-		$this->assertNotEmpty($ownData, "control: the lookalike host must correlate to its OWN row");
-
-		$data = [];
-		exec($pipelineFor('ads.example.com'), $data);
-		$this->assertSame(
-			[],
-			$data,
-			"a blocked host must never correlate to a DIFFERENT entry's row ('.' must not wildcard-match '-'); matched: "
-			. implode(' | ', $data)
-		);
 	}
 
 	// -----------------------------------------------------------------------

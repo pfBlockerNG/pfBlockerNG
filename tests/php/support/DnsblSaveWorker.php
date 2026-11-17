@@ -15,17 +15,12 @@ declare(strict_types=1);
  * `write_refused` (write_config answers FALSE), `write_failed` (file write fails: -1), `pfb_dns_off` (issue #3770: pfB-DNS is
  * stored Off, which the save leaves as it is); any other name saves with nothing interleaved.
  * The result holds disk config, the config before the save, lock events, input errors, pending marker presence, whether control
- * returned to render instead of exiting through the redirect, the submitted port rendered after a failure, the write_config()
+ * returned to render instead of exiting through the redirect, the submitted decision cache cap rendered after a failure, the write_config()
  * descriptions ("writes") and the record of a failed notice to Core the save left ("settingsFailed": the reason, or NULL).
  * "effects" holds the save's file side effects before and after it ran, in the sandbox: the TOP1M baseline files present
- * ("baseline"), the TOP1M rebuild marker ("updateMarker") and the blocked-page file DNSBL serves ("activePage": its content, or NULL
- * when there is none). The case's `webpageChanged` (default true) is whether the posted block page differs from the one stored when
- * the request loaded the form; `otherWebpage` is the block page the `interleave` scenario's other save stored meanwhile (default:
- * unchanged); `activePage` is the content seeded as the served block page (default "ACTIVE ORIGINAL", NULL for none). "effects.atUnlock" lists
+ * ("baseline") and the TOP1M rebuild marker ("updateMarker"). "effects.atUnlock" lists
  * the same state at each release of the DNS config lock. The case's `seed.migrated` (default true) is whether the stored DNSBL
  * policy is already migrated: when false the page's upgrade facade writes config.xml itself, mid-save.
- * The page's fresh read of config.xml under the lock gives back what is on disk: the block page chosen in the validation is in
- * memory only until the save writes it.
  */
 
 $workerArgv = $argv;
@@ -43,16 +38,14 @@ $pconfig = [];
 $effectsBefore = NULL;
 $effectsAtUnlock = [];
 
-/** @return array{baseline: list<string>, updateMarker: bool, activePage: ?string} the save's file side effects, as they stand */
+/** @return array{baseline: list<string>, updateMarker: bool} the save's file side effects, as they stand */
 function dnsbl_save_worker_effects(): array
 {
 	global $pfb;
 	$sidecars = ['.orig', '.xxhash128', '.md5', '.source', '.orig.etag', '.orig.lastmod'];
-	$active = @file_get_contents("{$pfb['dnsbl_www']}/dnsbl_active.php");
 	return [
 		'baseline'     => array_values(array_filter($sidecars, static fn (string $suffix): bool => file_exists("{$pfb['dbdir']}/top-1m.csv.zip{$suffix}"))),
 		'updateMarker' => file_exists("{$pfb['dbdir']}/top-1m.update"),
-		'activePage'   => $active === FALSE ? NULL : $active,
 	];
 }
 
@@ -65,7 +58,7 @@ register_shutdown_function(static function () use ($resultFile, &$disk, &$before
 		'inputErrors' => $input_errors,
 		'pendingMarked' => is_file($GLOBALS['pfb']['pending_marker'] ?? ''),
 		'returned'      => $returned,
-		'postedPort'    => $pconfig['pfb_dnsport'] ?? NULL,
+		'postedCacheMax' => $pconfig['pfb_py_cache_max'] ?? NULL,
 		'writes'        => $GLOBALS['pfb_test_write_config_calls'] ?? [],
 		'settingsFailed' => ($failed = @file_get_contents($GLOBALS['pfb']['core_settings_failed'] ?? '')) === FALSE ? NULL : $failed,
 		'effects'       => ['before' => $effectsBefore, 'after' => dnsbl_save_worker_effects(), 'atUnlock' => $effectsAtUnlock],
@@ -117,9 +110,7 @@ $dns = 'installedpackages/pfblockerngdns/config/0';
 $GLOBALS['config'] = [];
 (new DnsblSaveWorkerSeeder())->seed();
 config_set_path("{$dnsbl}/pfb_py_reply", 'on');
-config_set_path("{$dnsbl}/pfb_dnsport", '8081');
-// The block page stored when this request loaded the form: the posted alternative unless the case says it changed
-config_set_path("{$dnsbl}/dnsbl_webpage", ($case['webpageChanged'] ?? TRUE) ? 'dnsbl_default.php' : 'dnsbl_alt.php');
+config_set_path("{$dnsbl}/pfb_py_cache_max", '10000');
 config_set_path('unbound/active_interface', 'lan');
 config_set_path('unbound/custom_options', base64_encode('do-ip6: no'));
 if ($case['seed']['migrated'] ?? TRUE) {
@@ -135,10 +126,6 @@ $other['installedpackages']['pfblockerngdns']['config'][0]['pfb_dns_saved'] = ba
 	'enablessl'        => ['present' => FALSE, 'value' => ''],
 	'custom_options'   => ['present' => TRUE, 'value' => base64_encode('do-ip6: no')],
 ]));
-if (isset($case['otherWebpage'])) {
-	// issue #3998: another save chose (and served) this block page after this request loaded the form
-	$other['installedpackages']['pfblockerngdnsblsettings']['config'][0]['dnsbl_webpage'] = $case['otherWebpage'];
-}
 
 global $pfb;
 pfb_global();
@@ -148,27 +135,15 @@ $pfb['dconfig'] = PfbConfig::readSection($dnsbl);	// the page's first statement:
 // Core: the case's socket, else one nothing listens on (Core down); the failure record stays in the sandbox either way
 $pfb['core_socket'] = $case['core']['socket'] ?? "{$tmp}/core.sock";
 $pfb['core_settings_failed'] = "{$tmp}/core_settings_failed";
-// The save's file side effects land in the sandbox: the TOP1M baseline (six files beside the download), the block pages DNSBL serves
+// The save's file side effects land in the sandbox: the TOP1M baseline (six files beside the download)
 $pfb['dbdir'] = "{$tmp}/db/pfblockerng";
-$pfb['dnsbl_www'] = "{$tmp}/www";
-foreach ([$pfb['dbdir'], $pfb['dnsbl_www']] as $workerDir) {
-	is_dir($workerDir) || mkdir($workerDir, 0700, TRUE);
-}
+is_dir($pfb['dbdir']) || mkdir($pfb['dbdir'], 0700, TRUE);
 foreach (['.orig', '.xxhash128', '.md5', '.source', '.orig.etag', '.orig.lastmod'] as $workerSuffix) {
 	file_put_contents("{$pfb['dbdir']}/top-1m.csv.zip{$workerSuffix}", 'baseline');
-}
-file_put_contents("{$pfb['dnsbl_www']}/dnsbl_alt.php", 'ALTERNATIVE PAGE');
-$workerActive = array_key_exists('activePage', $case) ? $case['activePage'] : 'ACTIVE ORIGINAL';
-if ($workerActive !== NULL) {
-	file_put_contents("{$pfb['dnsbl_www']}/dnsbl_active.php", $workerActive);
 }
 $effectsBefore = dnsbl_save_worker_effects();
 
 // The page's validation, as it leaves them for the save.
-$dnsbl_webpage_file = 'dnsbl_alt.php';
-$dnsbl_webpage = $dnsbl_webpage_file != $pfb['dconfig']['dnsbl_webpage'];	// the validation compares with this request's copy
-$pfb['dconfig']['dnsbl_webpage'] = $dnsbl_webpage_file;
-$pfb_auto = FALSE;
 $pfb_top1m_token_post = '';
 $redir_ifaces_raw = [];
 $redir_alias_raw = '';
@@ -183,8 +158,6 @@ foreach (array_unique($posted[1]) as $key) {
 	$_POST[$key] = '';
 }
 $_POST['pfb_dnsbl'] = 'on';
-$_POST['pfb_dnsport'] = '8082';	// the unrelated field this save changes
-$_POST['pfb_dnsport_ssl'] = '8443';
 // The eight DNSBL policy fields, each different from the seeded section so a save that drops one shows on disk.
 $_POST['global_log'] = 'nxdomain';
 $_POST['global_log_mode'] = 'override';
@@ -194,7 +167,7 @@ $_POST['pfb_idn'] = 'confusable';
 $_POST['tld_allow'] = 'on';
 $_POST['tld_wildcard'] = 'on';
 $_POST['tld_wildcard_blacklist'] = 'zip';
-$_POST['pfb_py_cache_max'] = '10000';
+$_POST['pfb_py_cache_max'] = '777';	// the unrelated field this save changes
 $_POST['top1m_count'] = '1000';
 foreach ($case['post'] ?? [] as $field => $value) {
 	$_POST[$field] = $value;
@@ -205,7 +178,6 @@ if ($scenario === 'pfb_dns_off') {
 	config_set_path("{$dns}/pfb_dns", '');
 }
 $disk = $before = $GLOBALS['config'];
-config_set_path("{$dnsbl}/dnsbl_webpage", $dnsbl_webpage_file);	// the validation's write, in memory only: the fresh read under the lock drops it
 $GLOBALS['pfb_test_config_read_hook'] = static function () use (&$disk): void {
 	$GLOBALS['config'] = $disk;
 };

@@ -25,7 +25,6 @@ final class DnsblTabLayoutUiTest extends TestCase
 	{
 		$titles = [
 			'DNSBL',
-			'DNSBL Webserver Configuration',
 			'Public-suffix handling',
 			'TLD Allow list',
 			'DNSBL Control',
@@ -53,18 +52,18 @@ final class DnsblTabLayoutUiTest extends TestCase
 	{
 		$source = self::source();
 		$this->assertStringNotContainsString("new Form_Section('DNSBL Configuration'", $source);
-		$this->assertStringContainsString("new Form_Section('DNSBL Webserver Configuration'", $source);
+		$this->assertStringNotContainsString("new Form_Section('DNSBL Webserver Configuration'", $source, 'issue #4053: the web server is gone');
 	}
 
-	public function testWebserverIsSecondSectionAndFileWasNotTruncated(): void
+	public function testPublicSuffixHandlingIsSecondSectionAndFileWasNotTruncated(): void
 	{
 		$source = self::source();
 		$order = array_keys(self::sectionPositions($source));
 		$this->assertSame('DNSBL', $order[0]);
-		$this->assertSame('DNSBL Webserver Configuration', $order[1]);
+		$this->assertSame('Public-suffix handling', $order[1]);
 		$this->assertStringContainsString("\$tld_list['gTLD']", $source);
 		$this->assertStringContainsString("include('foot.inc')", $source);
-		$this->assertGreaterThan(150000, strlen($source), 'dnsbl.php must keep the TLD tables; a truncated cut-paste is a hard fail');
+		$this->assertGreaterThan(140000, strlen($source), 'dnsbl.php must keep the TLD tables; a truncated cut-paste is a hard fail');
 	}
 
 	public function testBypassPreventionAndDnsblIpsAreCollapsed(): void

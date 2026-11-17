@@ -129,12 +129,17 @@ final class MigrationRegistryTest extends TestCase
 			$registry[0]['sections']
 		);
 		$this->assertSame(
-			[self::DNSBL_SECTION, 'installedpackages/pfblockerngdnsbl/config'],
-			$registry[1]['sections']
+			[self::DNSBL_SECTION, 'installedpackages/pfblockerngdnsbl/config', 'installedpackages/pfblockerngblacklist'],
+			$registry[1]['sections'],
+			'issue #4053: the VIP removal spans the DNSBL settings, its groups and the Blacklist category'
 		);
-		$this->assertSame(self::DNSBL_SECTION, $registry[2]['section']);
+		$this->assertSame(
+			[self::DNSBL_SECTION, 'installedpackages/pfblockerngdnsbl/config'],
+			$registry[2]['sections']
+		);
 		$this->assertSame(self::DNSBL_SECTION, $registry[3]['section']);
 		$this->assertSame(self::DNSBL_SECTION, $registry[4]['section']);
+		$this->assertSame(self::DNSBL_SECTION, $registry[5]['section']);
 	}
 
 	// -----------------------------------------------------------------------
@@ -504,7 +509,7 @@ final class MigrationRegistryTest extends TestCase
 			'pfb_control_legacy_seeded' => 'on',
 			'pfb_dnsbl_lenient'         => 'on',
 			'global_log_mode'           => 'default',
-			'global_log'                => 'enabled',
+			'global_log'                => 'disabled_log',
 		]);
 		$this->seedGen([
 			'enable_cb' => 'on', 'pfb_keep' => 'on', 'skipfeed' => '0',

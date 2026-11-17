@@ -16,7 +16,6 @@ final class TimestampCosmeticNormalizationTest extends TestCase
 {
 	private const PFBLOCKERNG_APPLY  = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	private const PFBLOCKERNG_PHP    = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng.php';
-	private const INDEX_PHP          = __DIR__ . '/../../src/usr/local/www/pfblockerng/www/index.php';
 
 	private string $savedTz;
 
@@ -147,17 +146,4 @@ final class TimestampCosmeticNormalizationTest extends TestCase
 	// www/index.php:101 -- HTTP Expires header, explicitly OUT OF SCOPE (§1.8)
 	// -----------------------------------------------------------------------
 
-	/**
-	 * Confirms the RFC 7231/2822-mandated Expires header is left byte-for-byte
-	 * unchanged -- this phase's ISO sweep deliberately does NOT touch it.
-	 */
-	public function testExpiresHttpHeaderIsByteForByteUnchanged(): void
-	{
-		$source = $this->codeSource(self::INDEX_PHP);
-		$this->assertStringContainsString(
-			'header("Expires: Sat, 26 Jul 2014 05:00:00 GMT");',
-			$source,
-			'www/index.php\'s Expires header changed -- it must stay byte-for-byte (RFC 7231/2822-mandated, out of scope for ADR-60 §1.8)'
-		);
-	}
 }

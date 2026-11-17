@@ -128,7 +128,6 @@ final class DnsblFreshPconfigTest extends TestCase
 		// Axis 2 (populated key): the guard must be a no-op when the field IS
 		// present -- proves the fix didn't clobber real decode/explode output.
 		$dconfig = [
-			'dnsbl_allow_int'        => 'wan,lan',
 			'tld_allow_gtld'         => 'com,net',
 			'tld_allow_cctld'        => 'uk,de',
 			'tld_allow_itld'         => 'xn--p1ai',
@@ -148,7 +147,6 @@ final class DnsblFreshPconfigTest extends TestCase
 		);
 
 		$this->assertSame([], self::nullDeprecationsOnly($diagnostics));
-		$this->assertSame(['wan', 'lan'], $pconfig['dnsbl_allow_int']);
 		$this->assertSame(['com', 'net'], $pconfig['tld_allow_gtld']);
 		$this->assertSame(['uk', 'de'], $pconfig['tld_allow_cctld']);
 		$this->assertSame(['xn--p1ai'], $pconfig['tld_allow_itld']);
@@ -165,7 +163,6 @@ final class DnsblFreshPconfigTest extends TestCase
 	public function testListAndTextareaConsumersUseAuthoritativeGatewayValuesWithoutChangingFallbacks(): void
 	{
 		$mirror = [
-			'dnsbl_allow_int'        => 'mirror',
 			'tld_allow_gtld'         => 'mirror',
 			'tld_allow_cctld'        => 'mirror',
 			'tld_allow_itld'         => 'mirror',
@@ -179,7 +176,6 @@ final class DnsblFreshPconfigTest extends TestCase
 			'tld_wildcard_blacklist' => base64_encode('mirror'),
 		];
 		$stored = [
-			'dnsbl_allow_int'        => '0',
 			'tld_allow_gtld'         => '',
 			'tld_allow_cctld'        => 'uk,de',
 			'tld_allow_bgtld'        => 'app,dev',
@@ -195,7 +191,6 @@ final class DnsblFreshPconfigTest extends TestCase
 		[$pconfig, $diagnostics] = $this->runCapturingDiagnostics($mirror, $default_tlds, $stored);
 
 		$this->assertSame([], self::nullDeprecationsOnly($diagnostics));
-		$this->assertSame(['0'], $pconfig['dnsbl_allow_int'], "stored CSV '0' is one entry");
 		$this->assertSame($default_tlds, $pconfig['tld_allow_gtld'],
 			'an empty stored gTLD list keeps the local-domain-derived display fallback');
 		$this->assertSame(['uk', 'de'], $pconfig['tld_allow_cctld']);
