@@ -86,7 +86,6 @@ def deployed_vm(  # noqa: ARG001
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     h.snapshot_unbound_conf(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.set_package_enabled(smoke_vm, True)
     h.use_system_dns_upstream(smoke_vm)
     try:
@@ -108,7 +107,6 @@ def _ensure_pkg_installed(deployed_vm: SmokeVM) -> None:
     if not h.pkg_installed(deployed_vm):
         h.deploy(deployed_vm)
         h.snapshot_unbound_conf(deployed_vm)
-        h.ensure_dnsbl_vip(deployed_vm)
         h.set_package_enabled(deployed_vm, True)
         h.use_system_dns_upstream(deployed_vm)
 
@@ -385,7 +383,6 @@ def test_managed_objects_enable_creates_vip_and_nat(deployed_vm: SmokeVM) -> Non
         h.set_dnsbl_interface(vm, "lo0")
         h.set_dnsvip_auto(vm, False)
         h.set_dnsbl_enabled(vm, False)
-        h.ensure_dnsbl_vip(vm)
         h.reload(vm, "update")
 
 
@@ -442,7 +439,6 @@ def test_managed_objects_disable_removes_vip_and_nat(deployed_vm: SmokeVM) -> No
         h.set_dnsbl_interface(vm, "lo0")
         h.set_dnsvip_auto(vm, False)
         h.set_dnsbl_enabled(vm, False)
-        h.ensure_dnsbl_vip(vm)
         h.reload(vm, "update")
 
 
@@ -507,7 +503,6 @@ def test_managed_objects_nonat_skips_nat(deployed_vm: SmokeVM) -> None:
         h.set_dnsbl_interface(vm, "lo0")
         h.set_dnsvip_auto(vm, False)
         h.set_dnsbl_enabled(vm, False)
-        h.ensure_dnsbl_vip(vm)
         h.reload(vm, "update")
 
 

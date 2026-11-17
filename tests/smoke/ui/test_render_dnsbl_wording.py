@@ -28,7 +28,6 @@ CFG_DNSBL_ENABLE = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsb
 def _dnsbl_on(smoke_vm: SmokeVM) -> Iterator[None]:
     """DNSBL on, so the Alerts page renders its DNSBL panel; the toggle is restored afterwards."""
     prior = helpers.config_get(smoke_vm, CFG_DNSBL_ENABLE)
-    helpers.ensure_dnsbl_vip(smoke_vm)
     helpers.set_dnsbl_enabled(smoke_vm, True)
     yield
     helpers.config_set(smoke_vm, CFG_DNSBL_ENABLE, prior)

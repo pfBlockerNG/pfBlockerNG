@@ -40,7 +40,6 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
     try:
@@ -66,7 +65,7 @@ def test_plain_cidr_lines_collected_as_ranges_and_bad_mask_rejected(
       ``192.0.2.0/24``, ``2001:db8::/32``, ``198.51.100.0/99``, the control IP ``198.51.100.30``
       and a control domain,
     When the feed is reloaded,
-    Then the control domain is VIP-blocked (the feed loaded),
+    Then the control domain is null-blocked (the feed loaded),
       pfB_DNSBLIP_v4 holds the control IP and 192.0.2.0/24, pfB_DNSBLIP_v6 holds 2001:db8::/32,
       198.51.100.0 from the bad-mask line is in no table,
       and the parse-error log gains a line naming the bad-mask line only.
@@ -79,7 +78,7 @@ def test_plain_cidr_lines_collected_as_ranges_and_bad_mask_rejected(
     body = "\n".join([V4_CIDR, V6_CIDR, BAD_CIDR, PADDED_MASK_CIDR, CONTROL_IP, control]) + "\n"
     feed_url = h.write_local_feed(vm, f"smoke_dnsbl_plain_cidr_{mode}.txt", body)
     spec = h.DnsblCase(
-        aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.VIP, dnsbl_ip_action="Deny_Both"
+        aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.NULL_LOG, dnsbl_ip_action="Deny_Both"
     )
     bad_before = h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, BAD_CIDR)
     padded_before = h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, PADDED_MASK_CIDR)
@@ -93,7 +92,7 @@ def test_plain_cidr_lines_collected_as_ranges_and_bad_mask_rejected(
         h.flush_unbound_name(vm, control)
         # reload() waits for the swap, so the first answer is authoritative.
         ans = h.dns_probe_client(client_vm, control, "A")
-        assert h.is_vip(ans), f"control {control} expected VIP block (feed loaded), got {ans}"
+        assert h.is_null_ip(ans), f"control {control} expected a null block (feed loaded), got {ans}"
 
         h.apply_filter_sync(vm)
         v4 = h.pfctl_table_members(vm, "pfB_DNSBLIP_v4")

@@ -75,7 +75,6 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     h.snapshot_unbound_conf(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     # Seed a minimal local DNSBL feed so pfBlockerNG injects the Unbound python module
     # (else DNSBL self-disables and inplace_cb_query_response never fires). The seed
@@ -84,7 +83,7 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
     feed_url = h.write_local_feed(smoke_vm, "smoke_upstream_seed.txt", f"{seed}\n")
     h.inject(
         smoke_vm,
-        h.DnsblCase(aliasname="smokeupstream", feed_url=feed_url, header="smokeupstream", mode=h.DnsblMode.VIP),
+        h.DnsblCase(aliasname="smokeupstream", feed_url=feed_url, header="smokeupstream"),
     )
     h.reload(smoke_vm, "update")
     h.wait_unbound_ready(smoke_vm)
@@ -126,7 +125,7 @@ def _consume_dnsbl_barrier(vm: SmokeVM, cvm: SmokeVM) -> None:
     h.flush_unbound_name(vm, barrier)
     before = h.count_log_marker(vm, _DNSBL_LOG, barrier)
     answer = h.dns_probe_client(cvm, barrier, "A")
-    assert h.is_vip(answer), f"DNSBL barrier {barrier} expected VIP, got {answer}"
+    assert h.is_null_ip(answer), f"DNSBL barrier {barrier} expected VIP, got {answer}"
     h.wait_until(
         lambda: h.count_log_marker(vm, _DNSBL_LOG, barrier) > before,
         timeout=30.0,

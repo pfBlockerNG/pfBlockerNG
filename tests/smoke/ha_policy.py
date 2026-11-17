@@ -919,7 +919,6 @@ def arrange_baseline(pair: HaPair) -> Baseline:
     gateway = gateway_name(a)
     for tag, vm in (("A", a), ("B", b)):
         h.inject_ip_lists(vm, [])
-        h.ensure_dnsbl_vip(vm)
         for alias, addr in {**BASELINE_FEED_ADDR, **BASELINE_FEED_ADDR6}.items():
             write_feed(vm, alias, addr)
         seed_node(vm, tag, gateway)

@@ -74,7 +74,6 @@ def _seeded_idn_exclusion(smoke_vm: SmokeVM) -> Iterator[None]:
     # toggle needs a configured sinkhole VIP first -- same sequence as
     # test_alerts_render_verify.py's harness. Restored in teardown.
     prior_dnsbl = helpers.config_get(vm, CFG_DNSBL_ENABLE)
-    helpers.ensure_dnsbl_vip(vm)
     helpers.set_dnsbl_enabled(vm, True)
 
     prior_b64 = helpers.config_get(vm, CFG_TLD_WILDCARD_EXCLUSION)

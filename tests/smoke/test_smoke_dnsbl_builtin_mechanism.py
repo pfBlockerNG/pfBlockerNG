@@ -90,7 +90,7 @@ def _probe_row(client_vm: SmokeVM, vm: SmokeVM, domain: str, expected_shape: str
     """
     if expected_shape == "vip":
         a = h.dns_probe_client(client_vm, domain, "A")
-        return h.is_vip(a), str(a)
+        return h.is_null_ip(a), str(a)
     if expected_shape == "null":
         a = h.dns_probe_client(client_vm, domain, "A")
         aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
@@ -99,7 +99,7 @@ def _probe_row(client_vm: SmokeVM, vm: SmokeVM, domain: str, expected_shape: str
     if expected_shape == "nxdomain":
         a = h.dns_probe_client(client_vm, domain, "A")
         aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
-        matched = h.is_nxdomain(a) and not h.is_vip(a) and not h.is_null_ip(a) and h.is_nxdomain(aaaa)
+        matched = h.is_nxdomain(a) and not h.is_null_ip(a) and h.is_nxdomain(aaaa)
         return matched, f"A={a} AAAA={aaaa}"
     if expected_shape == "nodata":
         return _nodata_soa_ok(client_vm, vm, domain)

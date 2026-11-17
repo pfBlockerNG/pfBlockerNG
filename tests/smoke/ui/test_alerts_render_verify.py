@@ -770,7 +770,6 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
 
         # DNSBL panel requires a configured sinkhole VIP and enabled toggle.
         # Configure VIP before enabling DNSBL.
-        helpers.ensure_dnsbl_vip(vm)
         helpers.set_dnsbl_enabled(vm, True)
 
         error_log_guard.snapshot()

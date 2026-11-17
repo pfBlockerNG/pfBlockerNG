@@ -116,7 +116,6 @@ def download_loop_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     h.snapshot_unbound_conf(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.set_feed_internal_allowlist(smoke_vm, SLIRP_FEED_NET)
     try:
         yield smoke_vm
@@ -136,7 +135,6 @@ def _clean_slate(download_loop_vm: SmokeVM) -> Iterator[None]:
     so each test starts from an identical known baseline.
     """
     h.reset_pfb_baseline(download_loop_vm)
-    h.ensure_dnsbl_vip(download_loop_vm)
     h.set_feed_internal_allowlist(download_loop_vm, SLIRP_FEED_NET)
     yield
 
@@ -313,7 +311,6 @@ def test_710_dnsblip_auto_rule_keeps_configured_invert(download_loop_vm: SmokeVM
         aliasname="smoke710dnsbl",
         feed_url=dnsbl_feed,
         header="smoke710dnsbl",
-        mode=h.DnsblMode.VIP,
         dnsbl_ip_action="Deny_Both",
     )
     h.inject(vm, dnsbl_spec)
@@ -391,7 +388,7 @@ def test_712_dnsbl_source_interface_used_on_download(download_loop_vm: SmokeVM, 
     # Serve the DNSBL feed over HTTP so pfb_download takes the cURL branch (a local-file
     # feed never reaches the srcint log line, which lives only in the cURL path).
     feed_url = mock_feeds.register("smoke712_dnsbl.txt", f"{h.unique_domain()}\n")
-    spec = h.DnsblCase(aliasname="smoke712dnsbl", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smoke712dnsbl", feed_url=feed_url, header=header)
     h.inject(vm, spec)
 
     # Set the DNSBL group's Source Interface (srcint lives on the DNSBL list row, config/0).

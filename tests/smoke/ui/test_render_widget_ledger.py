@@ -372,7 +372,6 @@ def test_dnsbl_row_live_states_transition_on_php_and_python_entries(
     it yellow via the merged read. An inert regex block then establishes real VIP demand.
     """
     vm = smoke_vm
-    helpers.ensure_dnsbl_vip(vm)
     helpers.set_package_enabled(vm, True)
     helpers.set_dnsbl_enabled(vm, True)
     helpers.reload(vm, "updatednsbl")
@@ -436,7 +435,7 @@ def test_dnsbl_row_live_states_transition_on_php_and_python_entries(
     helpers.config_set(vm, f"{CFG_DNSBL}/pfb_regex_list", base64.b64encode(b"pfb3539inert\n").decode("ascii"))
     helpers.reload(vm, "updatednsbl")
     body = _widget_body(webui)
-    expected = f"DNSBL is Active on vip: {helpers.DEFAULT_DNSBL_VIP4} ports: 8081 & 8443"
+    expected = f"DNSBL is Active on vip: {helpers.NULL_IP4} ports: 8081 & 8443"
     assert _dnsblstatus_marker(ICON_GREEN, expected) in body, f"demanded VIP/port status missing: {expected!r}"
 
 

@@ -48,7 +48,6 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     # blocks. Allowlist the WAN SLIRP test network so the filter stays ON yet the
     # mock fetch is exempt (same fix test_smoke_feeds applies).
     h.set_feed_internal_allowlist(smoke_vm, "192.168.89.0/24")
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     try:
         yield smoke_vm
@@ -81,7 +80,6 @@ def test_pfb_trigger_verb_reloads_dnsbl(deployed_vm: SmokeVM, mock_feeds: _MockF
         aliasname="pfb_trigger_dnsbl",
         feed_url=feed_url,
         header="pfb_trigger_dnsbl",
-        mode=h.DnsblMode.VIP,
     )
     with h.CaseContext(deployed_vm, spec):
         # CaseContext.__enter__ already called reload("update") via pfb_trigger.
@@ -91,8 +89,8 @@ def test_pfb_trigger_verb_reloads_dnsbl(deployed_vm: SmokeVM, mock_feeds: _MockF
         # name so the block assertion is not order-dependent.
         h.flush_unbound_name(deployed_vm, domain)
         answer = h.dns_probe(deployed_vm, domain)
-        assert h.is_vip(answer), (
-            f"domain {domain!r} must be VIP-blocked after pfb_trigger reload\ngot answer: {answer!r}"
+        assert h.is_null_ip(answer), (
+            f"domain {domain!r} must be null-blocked after pfb_trigger reload\ngot answer: {answer!r}"
         )
 
 
@@ -142,7 +140,6 @@ def test_deprecated_update_verb_still_reloads_dnsbl(deployed_vm: SmokeVM, mock_f
         aliasname="pfb_dep_update_dnsbl",
         feed_url=feed_url,
         header="pfb_dep_update_dnsbl",
-        mode=h.DnsblMode.VIP,
     )
     # Inject manually (no CaseContext — we control the reload verb ourselves)
     h.inject(deployed_vm, spec)
@@ -150,6 +147,6 @@ def test_deprecated_update_verb_still_reloads_dnsbl(deployed_vm: SmokeVM, mock_f
     # Flush the shared fixed name (an earlier module may have cached it) before probing.
     h.flush_unbound_name(deployed_vm, domain)
     answer = h.dns_probe(deployed_vm, domain)
-    assert h.is_vip(answer), (
-        f"domain {domain!r} must be VIP-blocked after deprecated 'update' reload\ngot answer: {answer!r}"
+    assert h.is_null_ip(answer), (
+        f"domain {domain!r} must be null-blocked after deprecated 'update' reload\ngot answer: {answer!r}"
     )

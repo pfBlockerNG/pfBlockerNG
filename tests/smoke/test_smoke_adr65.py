@@ -77,7 +77,6 @@ def adr65_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]: 
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     try:
         yield smoke_vm
@@ -230,7 +229,7 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
     domain1 = h.unique_domain("adr65q1")
     domain2 = h.unique_domain("adr65q2")
     feed = h.write_local_feed(adr65_vm, "adr65_query.txt", f"{domain1}\n{domain2}\n")
-    spec = h.DnsblCase(aliasname="adr65query", feed_url=feed, header="adr65queryhdr", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="adr65query", feed_url=feed, header="adr65queryhdr")
 
     with h.CaseContext(adr65_vm, spec):
         # BEFORE: neither domain has ever been logged.
@@ -244,7 +243,7 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
 
         # Real block #1 (the query subject): domain1.
         answer1 = h.dns_probe(adr65_vm, domain1)
-        assert h.is_vip(answer1), f"expected VIP block for {domain1!r}, got {answer1!r}"
+        assert h.is_null_ip(answer1), f"expected null for {domain1!r}, got {answer1!r}"
 
         deadline = time.monotonic() + 30.0
         hits1 = 0
@@ -298,7 +297,7 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
         # its own log line + counter bump bound how far the query's side effects (if
         # any) could have reached by the time it settles.
         answer2 = h.dns_probe(adr65_vm, domain2)
-        assert h.is_vip(answer2), f"expected VIP block for {domain2!r}, got {answer2!r}"
+        assert h.is_null_ip(answer2), f"expected null for {domain2!r}, got {answer2!r}"
 
         deadline = time.monotonic() + 30.0
         hits2 = 0
@@ -570,13 +569,13 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
     """
     domain = h.unique_domain("adr65heal")
     feed = h.write_local_feed(adr65_vm, "adr65_heal.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="adr65heal", feed_url=feed, header="adr65healhdr", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="adr65heal", feed_url=feed, header="adr65healhdr")
 
     try:
         with h.CaseContext(adr65_vm, spec):
             # BEFORE: the domain blocks while the manifest is healthy.
             answer = h.dns_probe(adr65_vm, domain)
-            assert h.is_vip(answer), f"expected VIP block for {domain!r} before breaking the manifest, got {answer!r}"
+            assert h.is_null_ip(answer), f"expected null for {domain!r} before breaking the manifest, got {answer!r}"
 
             # BREAK: delete the manifest, then restart the DNSBL host so init() re-runs
             # dnsbl_build_from_manifest against the now-absent file: pfB-DNS while it
@@ -628,7 +627,7 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
             _wait_resolver_answers(adr65_vm)
 
             healed = h.dns_probe(adr65_vm, domain)
-            assert h.is_vip(healed), f"expected VIP block for {domain!r} again after the self-heal, got {healed!r}"
+            assert h.is_null_ip(healed), f"expected null for {domain!r} again after the self-heal, got {healed!r}"
 
             entries_after = _sync_status_list_open(adr65_vm)
             parse_after = [
@@ -696,7 +695,7 @@ def test_vip_hit_increments_widget_counter_with_query_group(adr65_vm: SmokeVM) -
     """
     domain = h.unique_domain("adr65vip")
     feed = h.write_local_feed(adr65_vm, "adr65_vip.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="adr65vip", feed_url=feed, header="adr65viphdr", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="adr65vip", feed_url=feed, header="adr65viphdr")
 
     # The webserver-hit event exists ONLY under pfb_py_nolog: it is what makes the sinkhole's
     # lighttpd emit the accesslog pipe that feeds pfb_log_event(). Set it BEFORE the update
@@ -723,7 +722,7 @@ def test_vip_hit_increments_widget_counter_with_query_group(adr65_vm: SmokeVM) -
                 f"event can ever be logged (pfb_py_nolog reads {still_on!r}); conf:\n{conf.stdout}"
             )
             answer = h.dns_probe(adr65_vm, domain)
-            assert h.is_vip(answer), f"expected VIP block for {domain!r}, got {answer!r}"
+            assert h.is_null_ip(answer), f"expected null for {domain!r}, got {answer!r}"
 
             verdict = _query_domain(adr65_vm, domain)
             assert verdict["blocked"] is True, f"expected blocked=true for {domain!r}, got {verdict!r}"
@@ -744,7 +743,7 @@ def test_vip_hit_increments_widget_counter_with_query_group(adr65_vm: SmokeVM) -
                 "8",
                 "-H",
                 f"Host: {domain}",
-                f"http://{h.DEFAULT_DNSBL_VIP4}/",
+                f"http://{h.NULL_IP4}/",
             )
             attempts, delay = 10, 1.5  # lighttpd's post-fork bind is normally sub-second; generous headroom
             result: subprocess.CompletedProcess[str] | None = None

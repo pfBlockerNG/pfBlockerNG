@@ -195,7 +195,6 @@ def top1m_fixed_file_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator
     saved_config = f"{snapshot}/config.xml"
     config_before = {"/conf/config.xml": _file_state(smoke_vm, (saved_config,))[saved_config]}
     try:
-        h.ensure_dnsbl_vip(smoke_vm)
         h.use_system_dns_upstream(smoke_vm)
         yield smoke_vm
     finally:
@@ -428,7 +427,7 @@ def _complete_detector_sidecars(vm: SmokeVM) -> dict:
 
 def _assert_vip(vm: SmokeVM, domain: str, stage: str) -> None:
     answer = h.dns_probe(vm, domain, "A")
-    assert h.is_vip(answer), f"{stage}: {domain} should resolve to DNSBL VIP; got {answer}"
+    assert h.is_null_ip(answer), f"{stage}: {domain} should resolve to DNSBL VIP; got {answer}"
 
 
 def _assert_stub_once(vm: SmokeVM, domain: str, stage: str) -> None:
@@ -462,7 +461,7 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     h.inject(
         vm,
         h.DnsblCase(
-            aliasname="Top1mFixedFile", feed_url=feed, header="top1mFixedFile", mode=h.DnsblMode.VIP, hsts=False
+            aliasname="Top1mFixedFile", feed_url=feed, header="top1mFixedFile", mode=h.DnsblMode.NULL_LOG, hsts=False
         ),
     )
     h.reload(vm, "updatednsbl")

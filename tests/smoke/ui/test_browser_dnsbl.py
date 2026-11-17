@@ -641,7 +641,6 @@ def dnsbl_vip_ready_browser(smoke_vm: helpers.SmokeVM) -> None:
     config.xml is never written — any gateway assertion would false-fail.
     Module-scoped so it runs once per collection of this module.
     """
-    helpers.ensure_dnsbl_vip(smoke_vm)
 
 
 def test_gateway_dnsbl_lenient_save_roundtrip(

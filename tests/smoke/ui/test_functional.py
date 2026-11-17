@@ -334,7 +334,6 @@ def dnsbl_vip_ready(smoke_vm: helpers.SmokeVM) -> None:
     as the matrix does (the default ``pfb_dnsvip_auto`` is OFF, so the manual VIP
     is required). Idempotent on the uniqid; module-scoped so it runs once.
     """
-    helpers.ensure_dnsbl_vip(smoke_vm)
 
 
 def _set_and_confirm(webui: WebUI, vm: helpers.SmokeVM, flow: ToggleFlow, target: str) -> None:
@@ -2359,7 +2358,7 @@ def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
     # A DNSBL list so the Force Update has work and runs the VIP-provisioning pass.
     domain = helpers.unique_domain("uiautovip")
     feed_path = helpers.write_local_feed(vm, "ui_autovip.txt", f"{domain}\n")
-    spec = helpers.DnsblCase(aliasname="uiautovip", feed_url=feed_path, header="uiautovip", mode=helpers.DnsblMode.VIP)
+    spec = helpers.DnsblCase(aliasname="uiautovip", feed_url=feed_path, header="uiautovip")
     # DNSBL must be enabled so the Force Update runs pfb_create_dnsbl in 'enabled'
     # mode; configure the alias; start from a known baseline (auto off).
     helpers.set_dnsbl_enabled(vm, True)

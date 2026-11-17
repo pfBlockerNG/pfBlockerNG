@@ -222,7 +222,6 @@ def deployed_vm(smoke_vm: SmokeVM) -> SmokeVM:
     from .. import helpers
 
     helpers.deploy(smoke_vm)
-    helpers.ensure_dnsbl_vip(smoke_vm)
     helpers.seed_geoip_dataset(smoke_vm)
     return smoke_vm
 

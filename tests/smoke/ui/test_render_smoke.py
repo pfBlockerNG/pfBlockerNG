@@ -1302,7 +1302,6 @@ def _seeded_dnsbl_stat_row(vm: SmokeVM, group: str, timestamp: str, counter: int
     ``SELECT * FROM dnsbl``); afterwards put back any rows the group already had and
     restore enable_cb/pfb_dnsbl. A real group such as Upstream may already hold stats on
     the session VM, so they are saved before the seed replaces them."""
-    helpers.ensure_dnsbl_vip(vm)
     orig_enable = helpers.config_get(vm, _CFG_PFB_ENABLE)
     orig_dnsbl = helpers.config_get(vm, CFG_PFB_DNSBL)
     orig_pfb_dns = helpers.config_get(vm, helpers.dns_config_path("pfb_dns"))
@@ -1839,7 +1838,6 @@ def test_alerts_unified_log_colour_fields_render(
     downgraded value — so without a VIP the gated ``unireply2`` row never renders and this
     test fails on a bare image. Seed the VIP first (idempotent, the standard harness fixture).
     """
-    helpers.ensure_dnsbl_vip(smoke_vm)
     original = helpers.config_get(smoke_vm, CFG_PFB_DNSBL)
     original_pfb_dns = helpers.config_get(smoke_vm, helpers.dns_config_path("pfb_dns"))
     helpers.php_eval(
@@ -2260,7 +2258,6 @@ def test_reports_dnsbl_on_keeps_both_filter_limits_and_the_reply_controls(
 ) -> None:
     """issue #3515: with DNSBL on, Reports keeps every limit and reply control it showed before the reply gate:
     the DNSBL Filter Limit and the DNS Reply Filter Limit render together with the reply-log controls."""
-    helpers.ensure_dnsbl_vip(smoke_vm)
     original = helpers.config_get_state(smoke_vm, CFG_PFB_DNSBL)
     _set_scalar_or_absent(smoke_vm, CFG_PFB_DNSBL, "on")
     try:
@@ -3865,7 +3862,7 @@ def test_wizard_dnsbl_step_renders_auto_vip(webui: WebUI, php_error_log_guard: P
     # issue #2869: the step must not name the sweep pool ADR-13 retired -- an admin who
     # reads it goes looking for an address pfb_dnsbl_vip_candidates() never returns.
     # Scoped to the retired claim, not to "10.10.": the harness provisions a manual VIP at
-    # DEFAULT_DNSBL_VIP4 (10.10.10.1) which the step's VIP dropdown legitimately lists.
+    # NULL_IP4 (10.10.10.1) which the step's VIP dropdown legitimately lists.
     for retired in ("10.10.X.53", "10.10.x.53", "fd00:X::53"):
         assert retired not in body, f"wizard DNSBL step still advertises the retired {retired} pool"
 

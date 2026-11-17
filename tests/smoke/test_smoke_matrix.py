@@ -64,7 +64,6 @@ and the smoke deps; without them they skip cleanly.
 from __future__ import annotations
 
 import base64
-import ipaddress
 import json
 import os
 import re
@@ -72,14 +71,13 @@ import shlex
 import time
 from collections.abc import Callable, Iterator
 from functools import partial
-from typing import Any
 
 import pytest
 
 from tests.test_issue3222_soa_wire import rr_has_type
 
 from . import helpers as h
-from .conftest import PFSENSE_LAN_IP, STUB_DNS_A, STUB_DNS_AAAA, SmokeVM, _MockFeedServer, _StubDnsServer
+from .conftest import PFSENSE_LAN_IP, STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
 
@@ -114,7 +112,6 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
     # auto-creates it when ON — ADR-13). The image does NOT bake one, so inject the
     # lo0 sinkhole VIP once for the matrix. dns_probe queries on-box (drill
     # @127.0.0.1) — no localhost exemption — so no WAN/ACL plumbing is needed.
-    h.ensure_dnsbl_vip(smoke_vm)
     # Point pfSense at the controlled mock via its System-DNS path BEFORE any per-test
     # unbound-config snapshot (test_dnsbl_unbound_config_immutable), so the forwarding
     # config is part of the baseline and the DNSBL reload still adds only python.
@@ -313,346 +310,15 @@ def test_dnsbl_python_exact_vip(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_f
         aliasname="smokeexact",
         feed_url=feed_url,
         header="smokeexact",
-        mode=h.DnsblMode.VIP,
         control_local_data={sub: {"A": sub_ip}},
     )
     with h.CaseContext(deployed_vm, spec):
         blocked = h.dns_probe_client(client_vm, domain, "A")
-        assert h.is_vip(blocked), f"{domain} expected VIP {h.DEFAULT_DNSBL_VIP4}, got {blocked}"
+        assert h.is_null_ip(blocked), f"{domain} expected {h.NULL_IP4}, got {blocked}"
         # EXACT match: subdomain NOT in dataDB, resolves to its control answer.
         passed = h.dns_probe_client(client_vm, sub, "A")
         assert h.resolves_to(passed, sub_ip), f"{sub} should resolve to {sub_ip} (exact != wildcard), got {passed}"
-        assert not h.is_vip(passed), f"{sub} wrongly VIP-blocked (exact match, not wildcard): {passed}"
-
-
-def test_dnsbl_python_vip_aaaa(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """Issue #3388 gap 2: a VIP-mode block answers AAAA with the configured v6 sinkhole VIP.
-
-    Given a v6 lo0 IP-Alias VIP selected as ``pfb_dnsvip6`` (ini ``dnsbl_ipv6``)
-      And a VIP-mode list carrying the domain,
-    When the client queries the domain for AAAA,
-    Then the answer is exactly that v6 VIP, not the ``::`` fallback pfb_unbound.py
-      uses when ``dnsbl_ipv6`` is empty (the same bytes as the NULL shape),
-      And the A answer is still the v4 VIP.
-    """
-    domain = h.unique_domain("vipaaaa")
-    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_vip_aaaa.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="smokevipaaaa", feed_url=feed_url, header="smokevipaaaa", mode=h.DnsblMode.VIP)
-    try:
-        h.set_dnsbl_vip6(deployed_vm, present=True)
-        with h.CaseContext(deployed_vm, spec):
-            aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
-            got = {ipaddress.ip_address(r) for r in aaaa.records}
-            assert got == {ipaddress.ip_address(h.DNSBL_VIP6)}, (
-                f"{domain} AAAA expected v6 VIP {h.DNSBL_VIP6}, got {aaaa}"
-            )
-            a = h.dns_probe_client(client_vm, domain, "A")
-            assert h.is_vip(a), f"{domain} A expected VIP {h.DEFAULT_DNSBL_VIP4}, got {a}"
-    finally:
-        h.set_dnsbl_vip6(deployed_vm, present=False)
-        h.reload(deployed_vm, "updatednsbl")
-
-
-def test_dnsbl_python_vip_over_ipv6_transport(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """Issue #3392 row A1: DNSBL answers a query that reaches pfSense over IPv6.
-
-    Given the v6 sinkhole VIP selected as ``pfb_dnsvip6`` and a VIP-mode list carrying the domain,
-      And civm's route to pfSense's LAN IPv6 (read from config) pinned to its LAN address,
-    When civm queries that address for A and AAAA,
-    Then A is the v4 VIP and AAAA is the v6 VIP,
-      And an unlisted name resolves to the stub upstream's sentinels over the same transport,
-      And dnsbl.log attributes both blocks to civm's pinned IPv6 source.
-    """
-    lan6 = h.get_lan_ipv6(deployed_vm)
-    domain = h.unique_domain("vip6transport")
-    unlisted = h.unique_domain("v6transportpass")
-    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_v6_transport.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="smokev6transport", feed_url=feed_url, header="smokev6transport")
-    expected = {
-        (domain, "A"): h.DEFAULT_DNSBL_VIP4,
-        (domain, "AAAA"): h.DNSBL_VIP6,
-        (unlisted, "A"): STUB_DNS_A,
-        (unlisted, "AAAA"): STUB_DNS_AAAA,
-    }
-
-    def blocked_rows() -> list[list[str]]:
-        rows = (row.split(",") for row in h.read_log_file(deployed_vm, f"{h.PFB_LOGDIR}/dnsbl.log").splitlines())
-        return [row for row in rows if row[2:3] == [domain]]
-
-    src6 = h.pin_client_route6(client_vm, lan6, lan6)
-    try:
-        try:
-            h.set_dnsbl_vip6(deployed_vm, present=True)
-            with h.CaseContext(deployed_vm, spec):
-                for (name, rtype), want in expected.items():
-                    got = h.dns_probe_client(client_vm, name, rtype, server=lan6)
-                    assert {ipaddress.ip_address(r) for r in got.records} == {ipaddress.ip_address(want)}, (
-                        f"{rtype} {name} @{lan6}: expected {want}, got {got}"
-                    )
-                # dnsbl.log is written off the DNS path: wait for both rows, then check who they name.
-                try:
-                    h.wait_until(lambda: {row[10] for row in blocked_rows()} >= {"A", "AAAA"})
-                except RuntimeError:
-                    raise AssertionError(
-                        f"dnsbl.log rows for {domain}: expected A and AAAA from {src6}, got {blocked_rows()}"
-                    ) from None
-                clients = {ipaddress.ip_address(row[3]) for row in blocked_rows()}
-                assert clients == {ipaddress.ip_address(src6)}, (
-                    f"dnsbl.log client for {domain}: expected {src6}, got {sorted(map(str, clients))}"
-                )
-        finally:
-            h.set_dnsbl_vip6(deployed_vm, present=False)
-            h.reload(deployed_vm, "updatednsbl")
-    finally:
-        h.unpin_client_route6(client_vm, lan6)
-
-
-@pytest.mark.timeout(420)  # CaseContext enter + two full updates (each restarts lighttpd) + retried HTTP probes
-def test_dnsbl_ipv6_vip_block_page(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """Issue #3407: a non-lo0 DNSBL AAAA block reaches the page directly on the IPv6 VIP.
-
-    Given DNSBL enabled on the LAN interface (non-lo0) with an IPv6 sinkhole VIP,
-      And a VIP-mode list blocking one unique AAAA name,
-    When civm resolves that name and fetches it over HTTP and HTTPS straight at the VIP6,
-    Then the AAAA answer is the VIP6 by value,
-      And pfBlockerNG emits NO managed IPv6 DNSBL NAT row (lighttpd already listens
-      directly on [VIP6]:80/443 -- pfblockerng.inc:9194-9211, unconditional on the
-      interface), only the two IPv4 rows unchanged,
-      And both HTTP and HTTPS reach the real block page,
-      And the IPv6 "packets that violated scope rules" counter does not move.
-
-    Before the fix, pfb_create_dnsbl() ALSO emitted a managed inet6 NAT row
-    redirecting VIP6:80/443 to ::1:{8081,8443}; FreeBSD rejects that rewritten LAN
-    packet as a loopback-scope violation before it ever reaches a listener, so the
-    client got neither a stable scope counter nor a block page.
-    """
-    vm = deployed_vm
-    lan6 = h.get_lan_ipv6(vm)
-    lan_if = h.config_get(vm, "interfaces/lan/if")
-    domain = h.unique_domain("vip6block3407")
-    feed_url = h.write_local_feed(vm, "smoke_dnsbl_vip6_block_3407.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="smokevip6block3407", feed_url=feed_url, header="smokevip6block3407")
-    scope_re = re.compile(r"^\s*(\d+) packets? that violated scope rules\s*$", re.MULTILINE)
-
-    def scope_violations() -> int:
-        result = vm.ssh("/usr/bin/netstat", "-s", "-p", "ip6", timeout=30.0)
-        match = scope_re.search(result.stdout)
-        assert match is not None, f"scope counter missing from netstat rc={result.returncode}:\n{result.stdout}"
-        return int(match.group(1))
-
-    def curl_page(scheme: str) -> dict[str, Any]:
-        port = 443 if scheme == "https" else 80
-        argv = (
-            "curl",
-            "-6",
-            "-g",
-            "--noproxy",
-            "*",
-            "-k",
-            "-sS",
-            "--connect-timeout",
-            "3",
-            "--max-time",
-            "8",
-            "--resolve",
-            f"{domain}:{port}:[{h.DNSBL_VIP6}]",
-            f"{scheme}://{domain}/",
-        )
-        # lighttpd self-daemonizes after restart_service('pfb_dnsbl') forks it (issue
-        # #1013); poll instead of one unbounded curl -- same shape as
-        # ui/test_dnsbl_block_page.py and test_smoke_adr65.py's sinkhole probes. Data is
-        # returned, never asserted here: every observation lands before any assertion.
-        attempts, delay = 10, 1.5
-        result = None
-        for attempt in range(attempts):
-            result = client_vm.ssh(*argv, timeout=15.0)
-            if result.returncode == 0 and "Site blocked via DNSBL" in result.stdout:
-                break
-            if attempt < attempts - 1:
-                time.sleep(delay)
-        assert result is not None  # attempts >= 1, loop always assigns
-        return {
-            "rc": result.returncode,
-            "marker": "Site blocked via DNSBL" in result.stdout,
-            "stderr": result.stderr.strip(),
-        }
-
-    def managed_nat_rows() -> list[dict[str, str]]:
-        prefix = h._php_str("pfB DNSBL")
-        result = h.php_eval(
-            vm,
-            "$rows = array();\n"
-            "foreach (config_get_path('nat/rule', array()) as $r) {\n"
-            "  if (strpos(($r['descr'] ?? ''), " + prefix + ") === 0) {\n"
-            "    $rows[] = array(\n"
-            "      'ipprotocol' => $r['ipprotocol'] ?? 'inet',\n"
-            "      'destination_address' => $r['destination']['address'] ?? '',\n"
-            "      'destination_port' => $r['destination']['port'] ?? '',\n"
-            "      'protocol' => $r['protocol'] ?? '',\n"
-            "      'target' => $r['target'] ?? '',\n"
-            "      'local_port' => $r['local-port'] ?? '',\n"
-            "      'interface' => $r['interface'] ?? '',\n"
-            "      'associated_rule_id' => $r['associated-rule-id'] ?? '',\n"
-            "      'natreflection' => $r['natreflection'] ?? '',\n"
-            "    );\n"
-            "  }\n"
-            "}\n"
-            "echo 'PFB3407_NAT=' . json_encode($rows);",
-            timeout=60.0,
-        )
-        match = re.search(r"PFB3407_NAT=(\[.*\])", result.stdout)
-        assert match is not None, (
-            f"managed NAT row dump failed: rc={result.returncode}\n{result.stdout}\n{result.stderr}"
-        )
-        return json.loads(match.group(1))
-
-    def move_vips(iface: str, uniqids: tuple[str, ...]) -> None:
-        """Move the live interface of the DNSBL VIPs named by ``uniqids`` (interfaces.inc dance)."""
-        ids_php = ", ".join(h._php_str(u) for u in uniqids)
-        result = h.php_eval(
-            vm,
-            f"""
-require_once('interfaces.inc');
-$vips = config_get_path('virtualip/vip', array());
-$hits = 0;
-foreach ($vips as &$vip) {{
-    if (in_array(($vip['uniqid'] ?? ''), array({ids_php}), TRUE)) {{
-        if (function_exists('interface_vip_bring_down')) {{
-            interface_vip_bring_down($vip);
-        }}
-        $vip['interface'] = {h._php_str(iface)};
-        if (function_exists('interface_vip_configure')) {{
-            interface_vip_configure($vip);
-        }}
-        $hits++;
-    }}
-}}
-unset($vip);
-config_set_path('virtualip/vip', $vips);
-write_config('pfBlockerNG smoke #3407: move DNSBL VIPs to {iface}');
-echo 'PFB3407_MOVE_HITS=' . $hits;
-""",
-            timeout=120.0,
-        )
-        assert result.returncode == 0 and "PFB3407_MOVE_HITS=" in result.stdout, (
-            f"could not move DNSBL VIPs {uniqids} to {iface!r}: rc={result.returncode}\n"
-            f"{result.stdout}\n{result.stderr}"
-        )
-
-    primary_exc: BaseException | None = None
-    try:
-        try:
-            h.set_dnsbl_vip6(vm, present=True)
-            src6 = h.pin_client_route6(client_vm, h.DNSBL_VIP6, lan6)
-            with h.CaseContext(vm, spec):
-                move_vips("lan", (h.SMOKE_VIP_UNIQID, h.SMOKE_VIP6_UNIQID))
-                h.set_dnsbl_interface(vm, "lan")
-                # Belt-and-suspenders live-alias move (issue #1013's fallback dance, the
-                # same shape ensure_dnsbl_vip/set_dnsbl_vip6 use): interface_vip_configure()
-                # has been observed to update config.xml but leave the OS-level alias on
-                # its old interface.
-                vm.ssh(
-                    f"/sbin/ifconfig lo0 -alias {shlex.quote(h.DEFAULT_DNSBL_VIP4)} >/dev/null 2>&1 || true; "
-                    f"/sbin/ifconfig lo0 inet6 {shlex.quote(h.DNSBL_VIP6)} -alias >/dev/null 2>&1 || true; "
-                    f"/sbin/ifconfig {shlex.quote(lan_if)} alias {shlex.quote(h.DEFAULT_DNSBL_VIP4 + '/32')} "
-                    ">/dev/null 2>&1 || true; "
-                    f"/sbin/ifconfig {shlex.quote(lan_if)} inet6 {shlex.quote(h.DNSBL_VIP6)} prefixlen 128 alias "
-                    ">/dev/null 2>&1 || true",
-                    timeout=30.0,
-                )
-                iface_snapshot = vm.ssh("/sbin/ifconfig", lan_if, timeout=30.0)
-                assert h.DEFAULT_DNSBL_VIP4 in iface_snapshot.stdout and h.DNSBL_VIP6 in iface_snapshot.stdout, (
-                    f"DNSBL VIP aliases not live on {lan_if}:\n{iface_snapshot.stdout}{iface_snapshot.stderr}"
-                )
-                h.unblock_egress()
-                h.reload(vm, "update")
-                h.apply_filter_sync(vm)
-                iface_cfg = h.config_get(vm, f"{h.CFG_DNSBL_SETTINGS}/dnsbl_interface")
-                assert iface_cfg == "lan", f"dnsbl_interface did not stick: {iface_cfg!r}"
-
-                # Collect EVERY main observation before any desired-behaviour assertion, so
-                # a RED artifact always carries the complete defect in one object.
-                scope_before = scope_violations()
-                answer = h.dns_probe_client(client_vm, domain, "AAAA", server=lan6)
-                nat_rows = managed_nat_rows()
-                http = curl_page("http")
-                https = curl_page("https")
-                scope_after = scope_violations()
-
-                observation = {
-                    "domain": domain,
-                    "client_source": src6,
-                    "dnsbl_interface": iface_cfg,
-                    "dnsbl_vip6": h.DNSBL_VIP6,
-                    "aaaa": answer.records,
-                    "nat_rows": nat_rows,
-                    "http": http,
-                    "https": https,
-                    "scope": {"before": scope_before, "after": scope_after},
-                }
-                print("PFB3407_OBSERVATION=" + json.dumps(observation, sort_keys=True))
-
-                assert {ipaddress.ip_address(r) for r in answer.records} == {ipaddress.ip_address(h.DNSBL_VIP6)}, (
-                    f"AAAA {domain} @{lan6}: expected {h.DNSBL_VIP6}, got {answer}"
-                )
-
-                v6_rows = [row for row in nat_rows if row["ipprotocol"] == "inet6"]
-                assert v6_rows == [], f"managed IPv6 DNSBL NAT rows still emitted: {v6_rows}"
-
-                v4_nat_rows = [row for row in nat_rows if row["ipprotocol"] != "inet6"]
-                assert len(v4_nat_rows) == 2, f"managed IPv4 DNSBL NAT rows missing/extra: {nat_rows}"
-                v4_rows = {row["destination_port"]: row for row in v4_nat_rows}
-                assert set(v4_rows) == {"80", "443"}, f"managed IPv4 DNSBL NAT rows have unexpected ports: {nat_rows}"
-                for port, local_port in (("80", h.DNSBL_PORT), ("443", h.DNSBL_PORT_SSL)):
-                    row = v4_rows[port]
-                    assert row == {
-                        "ipprotocol": "inet",
-                        "destination_address": h.DEFAULT_DNSBL_VIP4,
-                        "destination_port": port,
-                        "protocol": "tcp",
-                        "target": "127.0.0.1",
-                        "local_port": local_port,
-                        "interface": "lan",
-                        "associated_rule_id": "pass",
-                        "natreflection": "purenat",
-                    }, f"managed IPv4 DNSBL NAT row for port {port} changed shape: {row}"
-
-                assert http["rc"] == 0 and http["marker"], (
-                    f"VIP6:80 did not serve the DNSBL block page directly: {http}"
-                )
-                assert https["rc"] == 0 and https["marker"], (
-                    f"VIP6:443 did not serve the DNSBL block page directly: {https}"
-                )
-                assert scope_after == scope_before, (
-                    f"IPv6 scope violations moved: before={scope_before} after={scope_after}"
-                )
-        except BaseException as exc:
-            primary_exc = exc
-            raise
-        finally:
-            try:
-                h.set_dnsbl_vip6(vm, present=False)
-                move_vips("lo0", (h.SMOKE_VIP_UNIQID,))
-                h.set_dnsbl_interface(vm, "lo0")
-                vm.ssh(
-                    f"/sbin/ifconfig {shlex.quote(lan_if)} -alias {shlex.quote(h.DEFAULT_DNSBL_VIP4)} "
-                    ">/dev/null 2>&1 || true; "
-                    f"/sbin/ifconfig lo0 alias {shlex.quote(h.DEFAULT_DNSBL_VIP4 + '/32')} >/dev/null 2>&1 || true",
-                    timeout=30.0,
-                )
-                h.unblock_egress()
-                h.reload(vm, "update")
-                h.apply_filter_sync(vm)
-            except Exception as cleanup_exc:
-                if primary_exc is not None:
-                    print(
-                        f"[smoke] #3407 cleanup failed during teardown "
-                        f"(suppressed; original error stands): {cleanup_exc!r}"
-                    )
-                else:
-                    raise
-    finally:
-        h.unpin_client_route6(client_vm, h.DNSBL_VIP6)
+        assert not h.is_null_ip(passed), f"{sub} wrongly null-blocked (exact match, not wildcard): {passed}"
 
 
 _SECTION_COUNTS = re.compile(
@@ -684,7 +350,7 @@ def _raw_drill(vm: SmokeVM, name: str, rtype: str) -> str:
 
 
 def test_dnsbl_https_svcb_vip_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """Issue #3222: VIP-blocked HTTPS/SVCB is RFC 2308 Type-2 NODATA (SOA), not empty NOERROR.
+    """Issue #3222: null-blocked HTTPS/SVCB is RFC 2308 Type-2 NODATA (SOA), not empty NOERROR.
 
     Control: the listed name's A query is the VIP sinkhole, so DNSBL python-mode
     is armed. Then the same name is queried as HTTPS, TYPE64, and MX
@@ -702,11 +368,10 @@ def test_dnsbl_https_svcb_vip_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeV
         aliasname="smokehttps3222",
         feed_url=feed_url,
         header="smokehttps3222",
-        mode=h.DnsblMode.VIP,
     )
     with h.CaseContext(deployed_vm, spec):
         a = h.dns_probe_client(client_vm, blocked, "A")
-        assert h.is_vip(a), f"{blocked} A expected VIP {h.DEFAULT_DNSBL_VIP4}, got {a}"
+        assert h.is_null_ip(a), f"{blocked} A expected {h.NULL_IP4}, got {a}"
         hits_after_a = _dnsbl_log_hits(deployed_vm, blocked)
 
         dumps: list[str] = []
@@ -734,7 +399,7 @@ def test_dnsbl_https_svcb_vip_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeV
             assert rr_has_type(box, "SOA"), f"{blocked} {rtype} on-box expected an SOA in AUTHORITY\n{dump}"
 
         ctl_a = h.dns_probe_client(client_vm, control, "A")
-        assert not h.is_vip(ctl_a), f"{control} A must not be VIP (unlisted), got {ctl_a}"
+        assert not h.is_null_ip(ctl_a), f"{control} A must not be null-blocked (unlisted), got {ctl_a}"
 
         dump = "\n".join(dumps)
         h.wait_until(
@@ -793,7 +458,7 @@ def test_dnsbl_exact_nxdomain(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_fee
     with h.CaseContext(deployed_vm, spec):
         a = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_nxdomain(a), f"{domain} A expected NXDOMAIN (no records), got {a}"
-        assert not h.is_vip(a) and not h.is_null_ip(a), f"{domain} must be a bare NXDOMAIN, not a VIP/null record: {a}"
+        assert not h.is_null_ip(a), f"{domain} must be a bare NXDOMAIN, not a null record: {a}"
         aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
         assert h.is_nxdomain(aaaa), f"{domain} AAAA expected NXDOMAIN (no records), got {aaaa}"
 
@@ -843,7 +508,6 @@ def test_dnsbl_hsts_override_forces_null(deployed_vm: SmokeVM, client_vm: SmokeV
         aliasname="smokehsts",
         feed_url=feed_url,
         header="smokehsts",
-        mode=h.DnsblMode.VIP,  # logging='enabled' → would be VIP UNLESS HSTS forces NULL
         hsts=True,  # pfb_hsts on — the override under test
     )
     with h.CaseContext(deployed_vm, spec):
@@ -854,38 +518,9 @@ def test_dnsbl_hsts_override_forces_null(deployed_vm: SmokeVM, client_vm: SmokeV
         h.assert_hsts_loaded(deployed_vm, domain)
         a = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_null_ip(a), f"HSTS override should force A=0.0.0.0, got {a} (VIP leak?)"
-        assert not h.is_vip(a), f"HSTS-preload VIP-list block must NOT be the VIP {h.DEFAULT_DNSBL_VIP4}: {a}"
+        assert not h.is_null_ip(a), f"HSTS-preload VIP-list block must NOT be the VIP {h.NULL_IP4}: {a}"
         aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
         assert h.is_null_ip(aaaa, null_ip="::0"), f"{domain} AAAA expected ::0, got {aaaa}"
-
-
-def test_dnsbl_hsts_disabled_keeps_vip(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """Non-tautology guard: the SAME VIP-list HSTS-listed name, HSTS OFF → VIP.
-
-    With ``pfb_hsts`` off → ini ``python_hsts=off``, the decider neither loads the
-    preload list nor runs the HSTS check, so ``in_hsts`` stays False and the
-    ``logging='enabled'`` (VIP) list yields the VIP even for a name we pinned into
-    ``pfb_py_hsts.txt``. The name IS added to the HSTS file (then ignored) so the
-    ONLY difference from ``test_dnsbl_hsts_override_forces_null`` is the toggle —
-    proving that test exercises the HSTS branch, not an always-null path.
-    """
-    domain = h.unique_domain("hstsvip")
-    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_hstsoff.txt", f"{domain}\n")
-    spec = h.DnsblCase(
-        aliasname="smokehstsoff",
-        feed_url=feed_url,
-        header="smokehstsoff",
-        mode=h.DnsblMode.VIP,
-        hsts=False,  # pfb_hsts off → HSTS branch disabled
-    )
-    with h.CaseContext(deployed_vm, spec):
-        # Pin the name into the HSTS file too — with HSTS off it is IGNORED, so the
-        # only delta vs the positive case is pfb_hsts.
-        h.add_hsts_name(deployed_vm, domain)
-        h.reload(deployed_vm, "updatednsbl")
-        blocked = h.dns_probe_client(client_vm, domain, "A")
-        assert h.is_vip(blocked), f"HSTS off: VIP-list block should be the VIP {h.DEFAULT_DNSBL_VIP4}, got {blocked}"
-        assert not h.is_null_ip(blocked), f"HSTS off must NOT force NULL: {blocked}"
 
 
 # IDN homoglyph protection — Confusable mode (ADR-08). The block comes from the
@@ -897,7 +532,7 @@ def test_dnsbl_hsts_disabled_keeps_vip(deployed_vm: SmokeVM, client_vm: SmokeVM,
 def test_dnsbl_idn_confusable_blocks_homoglyph_resolves_legit(
     deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
 ) -> None:
-    """Confusable mode blocks a cross-script homoglyph (VIP) but resolves a legit IDN.
+    """Confusable mode blocks a cross-script homoglyph (null) but resolves a legit IDN.
 
     Scenario: ``pfb_idn='confusable'`` + ``block_malicious`` ON (default). The
     matcher decodes each ``xn--`` label, runs the TR39 analyzer per-label, and:
@@ -919,7 +554,6 @@ def test_dnsbl_idn_confusable_blocks_homoglyph_resolves_legit(
         aliasname="smokeidn",
         feed_url=feed_url,
         header="smokeidn",
-        mode=h.DnsblMode.VIP,
         idn_mode="confusable",
         idn_block_malicious=True,
         idn_escalate_suspicious=False,
@@ -930,12 +564,10 @@ def test_dnsbl_idn_confusable_blocks_homoglyph_resolves_legit(
         h.unblock_egress()
         legit_ans = h.dns_probe_client(client_vm, legit, "A")
         assert h.resolves_to(legit_ans, STUB_DNS_A), f"legit IDN {legit} should resolve via stub, got {legit_ans}"
-        assert not h.is_vip(legit_ans), f"legit IDN {legit} must NOT be homoglyph-blocked (FALSE POSITIVE): {legit_ans}"
+        assert not h.is_null_ip(legit_ans), f"legit IDN {legit} must NOT be blocked (FALSE POSITIVE): {legit_ans}"
         # The confusable homograph blocks with the DNSBL VIP.
         blocked = h.dns_probe_client(client_vm, homoglyph, "A")
-        assert h.is_vip(blocked), (
-            f"homoglyph {homoglyph} (Latin+Cyrillic) expected VIP {h.DEFAULT_DNSBL_VIP4}, got {blocked}"
-        )
+        assert h.is_null_ip(blocked), f"homoglyph {homoglyph} (Latin+Cyrillic) expected {h.NULL_IP4}, got {blocked}"
 
 
 def test_dnsbl_idn_confusable_block_malicious_off_alerts_only(
@@ -959,7 +591,6 @@ def test_dnsbl_idn_confusable_block_malicious_off_alerts_only(
         aliasname="smokeidnalert",
         feed_url=feed_url,
         header="smokeidnalert",
-        mode=h.DnsblMode.VIP,
         idn_mode="confusable",
         idn_block_malicious=False,  # malicious → ALERT only (no block)
     )
@@ -967,7 +598,7 @@ def test_dnsbl_idn_confusable_block_malicious_off_alerts_only(
         h.unblock_egress()
         ans = h.dns_probe_client(client_vm, homoglyph, "A")
         assert h.resolves_to(ans, STUB_DNS_A), f"block_malicious OFF: {homoglyph} should resolve via stub, got {ans}"
-        assert not h.is_vip(ans), f"block_malicious OFF must NOT block the homograph (alert only): {ans}"
+        assert not h.is_null_ip(ans), f"block_malicious OFF must NOT block the homograph (alert only): {ans}"
 
 
 def test_dnsbl_whitelist_passthrough(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
@@ -985,14 +616,13 @@ def test_dnsbl_whitelist_passthrough(deployed_vm: SmokeVM, client_vm: SmokeVM, m
         aliasname="smokewhite",
         feed_url=feed_url,
         header="smokewhite",
-        mode=h.DnsblMode.VIP,
         whitelist=[domain],
     )
     with h.CaseContext(deployed_vm, spec):
         h.unblock_egress()
         answer = h.dns_probe_client(client_vm, domain, "A")
         assert h.resolves_to(answer, STUB_DNS_A), f"whitelisted {domain} should resolve via stub, got {answer}"
-        assert not h.is_vip(answer), f"whitelisted {domain} wrongly VIP-blocked: {answer}"
+        assert not h.is_null_ip(answer), f"whitelisted {domain} wrongly null-blocked: {answer}"
         assert not h.is_null_ip(answer), f"whitelisted {domain} wrongly null-IP: {answer}"
 
 
@@ -1012,7 +642,6 @@ def test_dnsbl_whitelist_wildcard_not_demoted_by_www(
         aliasname="smokewlwild",
         feed_url=feed_url,
         header="smokewlwild",
-        mode=h.DnsblMode.VIP,
         whitelist=[f".{apex}", f"www.{apex}"],
     )
     with h.CaseContext(deployed_vm, spec):
@@ -1021,7 +650,7 @@ def test_dnsbl_whitelist_wildcard_not_demoted_by_www(
         assert h.resolves_to(answer, STUB_DNS_A), (
             f"wildcard-whitelisted {blocked} should resolve via stub, got {answer}"
         )
-        assert not h.is_vip(answer), f"wildcard-whitelisted {blocked} wrongly VIP-blocked: {answer}"
+        assert not h.is_null_ip(answer), f"wildcard-whitelisted {blocked} wrongly null-blocked: {answer}"
         assert not h.is_null_ip(answer), f"wildcard-whitelisted {blocked} wrongly null-IP: {answer}"
 
 
@@ -1035,9 +664,9 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
     """#51 FULL lifecycle, asserting the ACTUAL resolution at every transition:
 
       (a) BEFORE any list  -> the domain RESOLVES (forwarded to the stub sentinel);
-      (b) added to a feed  -> BLOCKED (VIP), no longer resolves;
+      (b) added to a feed  -> BLOCKED (null), no longer resolves;
       (c) temporary Unlock -> RESOLVES again (forwarded to the stub sentinel);
-      (d) re-Lock          -> BLOCKED again (VIP).
+      (d) re-Lock          -> BLOCKED again (null).
 
     Proving the domain resolves in (a) and again in (c) rules out a false-green: the
     VIP in (b)/(d) genuinely comes from the feed block, and the pass in (c) genuinely
@@ -1052,7 +681,7 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
     restarted, so its **pid is captured before and asserted UNCHANGED after** the whole
     Unlock/Lock sequence — proving the #51 flips apply with no restart. (Before the #51 fix
     step (c) was a NO-OP — it wrote files the manifest build no longer reads — so the domain
-    stayed VIP-blocked; here it must resolve again.) The helper returns only after the
+    stayed null-blocked; here it must resolve again.) The helper returns only after the
     applied-generation handshake; its targeted cache flush is conditional on Lock, so each
     following DNS probe is authoritative without a restart.
 
@@ -1070,11 +699,11 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
     #     sentinel (a real, observable baseline — not yet on any feed, not blocked).
     before = h.dns_probe_client(client_vm, domain, "A")
     assert h.resolves_to(before, STUB_DNS_A), f"{domain} should resolve via stub BEFORE listing, got {before}"
-    assert not h.is_vip(before) and not h.is_null_ip(before), f"{domain} unexpectedly blocked before any feed: {before}"
+    assert not h.is_null_ip(before), f"{domain} unexpectedly blocked before any feed: {before}"
 
-    # (b) Now put it on a DNSBL feed -> the SAME domain is now BLOCKED (VIP).
+    # (b) Now put it on a DNSBL feed -> the SAME domain is now BLOCKED (null).
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_unlock.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="smokeunlock", feed_url=feed_url, header="smokeunlock", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokeunlock", feed_url=feed_url, header="smokeunlock")
     with h.CaseContext(deployed_vm, spec):
         h.unblock_egress()  # the allowed probes (a-shape) must reach the controlled stub
         # Listing the name is the feed/swap allow->block direction: the module already
@@ -1082,7 +711,7 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
         # the pre-resolved answer before observing the new block.
         h.flush_unbound_name(deployed_vm, domain)
         blocked = h.dns_probe_client(client_vm, domain, "A")
-        assert h.is_vip(blocked), f"{domain} still resolving after block: {blocked}"
+        assert h.is_null_ip(blocked), f"{domain} still resolving after block: {blocked}"
 
         # NO-RESTART invariant: capture the DNSBL hosts' pids (Unbound's, the pfB-DNS gateway's) before the #51 flips.
         # Each flip takes the ADR-10 zero-downtime fast path, so neither pid may change.
@@ -1093,16 +722,14 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
         #     The helper returns only after the applied-generation handshake.
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "unlock")
         unlocked = h.dns_probe_client(client_vm, domain, "A")
-        assert not h.is_vip(unlocked) and not h.is_null_ip(unlocked), (
-            f"unlocked {domain} still VIP-blocked (the #51 no-op): {unlocked}"
-        )
+        assert not h.is_null_ip(unlocked), f"unlocked {domain} still null-blocked (the #51 no-op): {unlocked}"
 
-        # (d) Re-Lock -> the temporary allow is removed: blocked again (VIP). allow->block
+        # (d) Re-Lock -> the temporary allow is removed: blocked again (null). allow->block
         #     here clears the prior resolved answer via the caller-owned targeted C-cache
         #     flush, so the VIP block is observable.
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "lock")
         relocked = h.dns_probe_client(client_vm, domain, "A")
-        assert h.is_vip(relocked), f"re-locked {domain} still resolving: {relocked}"
+        assert h.is_null_ip(relocked), f"re-locked {domain} still resolving: {relocked}"
 
         # The whole Unlock/Lock sequence applied with NO restart: pids unchanged.
         pids_after = h.dns_host_pids(deployed_vm)
@@ -1146,7 +773,7 @@ def test_dnsbl_sentinel_flip_failure_clears_sync_marker(deployed_vm: SmokeVM, mo
     (mirroring ``helpers.dnsbl_alert_lock_toggle``, minus its trailing swap-applied wait --
     no swap occurs on this branch).
 
-    Given a DNSBL-listed domain already blocked (VIP) by the CaseContext setup,
+    Given a DNSBL-listed domain already blocked (null) by the CaseContext setup,
     When the ADR-10 sentinel is corrupted and a #51 temporary Unlock fires -- taking the
       fast path, which fails to flip and falls back to a full Unbound restart --
     Then the "sentinel flip failed" fallback log line appears (proving the branch under
@@ -1163,14 +790,12 @@ def test_dnsbl_sentinel_flip_failure_clears_sync_marker(deployed_vm: SmokeVM, mo
     """
     domain = h.unique_domain("sentinelfail")
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_sentinelfail.txt", f"{domain}\n")
-    spec = h.DnsblCase(
-        aliasname="smokesentinelfail", feed_url=feed_url, header="smokesentinelfail", mode=h.DnsblMode.VIP
-    )
+    spec = h.DnsblCase(aliasname="smokesentinelfail", feed_url=feed_url, header="smokesentinelfail")
     with h.CaseContext(deployed_vm, spec):
-        # Given: the domain is already VIP-blocked by CaseContext's own (healthy) reload.
+        # Given: the domain is already null-blocked by CaseContext's own (healthy) reload.
         blocked_before = h.dns_probe(deployed_vm, domain, "A")
-        assert h.is_vip(blocked_before), (
-            f"{domain} expected VIP block before the sentinel corruption, got {blocked_before}"
+        assert h.is_null_ip(blocked_before), (
+            f"{domain} expected a null block before the sentinel corruption, got {blocked_before}"
         )
 
         pids_before = h.dns_host_pids(deployed_vm)
@@ -1308,7 +933,7 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_unlocktmp.txt", f"{domain}\n")
     # No host override on the name — it would shadow the DNSBL block (served as
     # local-data before the python module); an allowed name resolves via the stub.
-    spec = h.DnsblCase(aliasname="smokeunlocktmp", feed_url=feed_url, header="smokeunlocktmp", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokeunlocktmp", feed_url=feed_url, header="smokeunlocktmp")
     with h.CaseContext(deployed_vm, spec), h.DnsblCacheFlushEnabled(deployed_vm):
         # Egress OPEN: the update path deadlocks under a dark egress, and the allowed
         # (unlock) probe must reach the controlled stub. The block probes return the VIP
@@ -1316,7 +941,7 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
         h.unblock_egress()
         # Blocked by the feed -> VIP (the "before" of the Unlock operation).
         blocked = h.dns_probe_client(client_vm, domain, "A")
-        assert h.is_vip(blocked), f"{domain} expected VIP block, got {blocked}"
+        assert h.is_null_ip(blocked), f"{domain} expected a null block, got {blocked}"
 
         # NO-RESTART invariant: capture the DNSBL hosts' pids before the Unlock + Force-update re-lock.
         pids_before = h.dns_host_pids(deployed_vm)
@@ -1325,7 +950,7 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
         # applied-generation handshake but flushes the native cache only for Lock.
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "unlock")
         unlocked = h.dns_probe_client(client_vm, domain, "A")
-        assert not h.is_vip(unlocked) and not h.is_null_ip(unlocked), f"unlocked {domain} still VIP-blocked: {unlocked}"
+        assert not h.is_null_ip(unlocked), f"unlocked {domain} still null-blocked: {unlocked}"
 
         # A Cron/Force update over the UNCHANGED feed re-locks it: the pending unlock store
         # forces the reload + clears the manifest's user_unlock. It is a config-clean
@@ -1334,7 +959,7 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
         # The enabled post-handshake full-cache flush clears the prior resolved answer
         # before the swapped re-block is observed.
         relocked = h.dns_probe_client(client_vm, domain, "A")
-        assert h.is_vip(relocked), f"re-locked {domain} still resolving: {relocked}"
+        assert h.is_null_ip(relocked), f"re-locked {domain} still resolving: {relocked}"
 
         # Both the Unlock and the Force-update re-lock applied with NO restart: pids unchanged.
         pids_after = h.dns_host_pids(deployed_vm)
@@ -1371,7 +996,7 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
       so PHP flips the sentinel and the watcher swaps the snapshot. The bulk
       caller then clears the full resolver cache after the applied-generation handshake
       because this test explicitly enables the default-off cache-flush option.
-    * AFTER: the name is BLOCKED (VIP), Unbound's pid is UNCHANGED (no restart), and the
+    * AFTER: the name is BLOCKED (null), Unbound's pid is UNCHANGED (no restart), and the
       pfBlockerNG log gained a ``zero-downtime swap`` fast-path line.
 
     NO-FALLBACK NOTE: a config-clean feed-content re-fetch reliably takes the no-restart
@@ -1384,14 +1009,14 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
     # so the list is live but the target is not yet blocked.
     feed_name = "smoke_dnsbl_feedupd.txt"
     feed_url = h.write_local_feed(deployed_vm, feed_name, f"{other}\n")
-    spec = h.DnsblCase(aliasname="smokefeedupd", feed_url=feed_url, header="smokefeedupd", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokefeedupd", feed_url=feed_url, header="smokefeedupd")
     with h.CaseContext(deployed_vm, spec), h.DnsblCacheFlushEnabled(deployed_vm):
         h.unblock_egress()  # the allowed (before-state) probe must reach the controlled stub
 
         # BEFORE: the target is not on the feed yet -> it RESOLVES via the stub sentinel.
         before = h.dns_probe_client(client_vm, domain, "A")
         assert h.resolves_to(before, STUB_DNS_A), f"{domain} should resolve via stub BEFORE the feed edit, got {before}"
-        assert not h.is_vip(before), f"{domain} unexpectedly VIP-blocked before being listed: {before}"
+        assert not h.is_null_ip(before), f"{domain} unexpectedly null-blocked before being listed: {before}"
 
         # NO-RESTART invariant + fast-path-log proof: capture the hosts' pids and the swap-log baseline.
         pids_before = h.dns_host_pids(deployed_vm)
@@ -1410,7 +1035,7 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
         # Reload returns only after the generation is applied. Probe FIRST so this
         # assertion cannot wait through a DNS TTL while unrelated probes run.
         blocked = h.dns_probe_client(client_vm, domain, "A")
-        assert h.is_vip(blocked), f"{domain} still not VIP-blocked after feed update: {blocked}"
+        assert h.is_null_ip(blocked), f"{domain} still not null-blocked after feed update: {blocked}"
         assert not h.resolves_to(blocked, STUB_DNS_A), f"{domain} still resolving after the feed block: {blocked}"
 
         fsync_probe = h.php_eval(
@@ -1480,7 +1105,7 @@ def test_dnsbl_config_change_restarts(deployed_vm: SmokeVM, client_vm: SmokeVM, 
 
     Before/after with the pid invariant:
 
-    * BEFORE: DNSBL is live with the name blocked (VIP) — capture Unbound's pid.
+    * BEFORE: DNSBL is live with the name blocked (null) — capture Unbound's pid.
     * CONFIG CHANGE: disable DNSBL (``pfb_dnsbl`` off) + ``updatednsbl`` (regenerates
       unbound.conf without the python module -> restart), then re-enable + ``updatednsbl``
       (regenerates WITH it -> restart). Both are config changes, so each restarts.
@@ -1493,11 +1118,11 @@ def test_dnsbl_config_change_restarts(deployed_vm: SmokeVM, client_vm: SmokeVM, 
     """
     domain = h.unique_domain("cfgrestart")
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_cfgrestart.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="smokecfgrestart", feed_url=feed_url, header="smokecfgrestart", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokecfgrestart", feed_url=feed_url, header="smokecfgrestart")
     with h.CaseContext(deployed_vm, spec):
-        # BEFORE: the name is blocked (VIP) and DNSBL is live. Capture the running pid.
+        # BEFORE: the name is blocked (null) and DNSBL is live. Capture the running pid.
         blocked = h.dns_probe_client(client_vm, domain, "A")
-        assert h.is_vip(blocked), f"{domain} expected VIP block before the config change, got {blocked}"
+        assert h.is_null_ip(blocked), f"{domain} expected a null block before the config change, got {blocked}"
         pids_before = h.dns_host_pids(deployed_vm)
 
         # CONFIG CHANGE: disable DNSBL -> regenerates unbound.conf (drops the python
@@ -1522,7 +1147,7 @@ def test_dnsbl_config_change_restarts(deployed_vm: SmokeVM, client_vm: SmokeVM, 
         )
         # The list is restored: the name blocks again after the config round-trip.
         reblocked = h.dns_probe_client(client_vm, domain, "A")
-        assert h.is_vip(reblocked), f"{domain} expected VIP block after re-enabling DNSBL, got {reblocked}"
+        assert h.is_null_ip(reblocked), f"{domain} expected a null block after re-enabling DNSBL, got {reblocked}"
 
 
 @pytest.mark.timeout(120)  # ADR-10: setup + a watcher build-fail observation window > the 30s cap.
@@ -1535,7 +1160,7 @@ def test_dnsbl_fail_closed_broken_manifest(
     the OLD snapshot live and never swaps to an empty/partial set ("never fail open to no
     blocking"). Before/after with the pid invariant:
 
-    * BEFORE: the name is BLOCKED (VIP) — the last-good snapshot. Capture Unbound's pid and
+    * BEFORE: the name is BLOCKED (null) — the last-good snapshot. Capture Unbound's pid and
       the py_error.log baseline.
     * CORRUPT + TRIGGER: overwrite ``/var/unbound/pfb_py_sources.json`` with invalid JSON
       (preserving unbound:unbound ownership so the chrooted module can still OPEN it — the
@@ -1552,11 +1177,11 @@ def test_dnsbl_fail_closed_broken_manifest(
     """
     domain = h.unique_domain("failclosed")
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_failclosed.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="smokefailclosed", feed_url=feed_url, header="smokefailclosed", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokefailclosed", feed_url=feed_url, header="smokefailclosed")
     with h.CaseContext(deployed_vm, spec):
-        # BEFORE: the name is blocked (VIP) by the last-good snapshot.
+        # BEFORE: the name is blocked (null) by the last-good snapshot.
         blocked = h.dns_probe_client(client_vm, domain, "A")
-        assert h.is_vip(blocked), f"{domain} expected VIP block before corrupting the manifest, got {blocked}"
+        assert h.is_null_ip(blocked), f"{domain} expected a null block before corrupting the manifest, got {blocked}"
         pids_before = h.dns_host_pids(deployed_vm)
         pyerr_before = h.count_log_marker(deployed_vm, h.PY_ERROR_LOG, "Failed to load DNSBL manifest")
 
@@ -1592,10 +1217,10 @@ def test_dnsbl_fail_closed_broken_manifest(
         still = h.dns_probe_client_until(
             client_vm,
             domain,
-            lambda a: h.is_vip(a) and _pyerr_logged(a),
+            lambda a: h.is_null_ip(a) and _pyerr_logged(a),
             timeout=45.0,
         )
-        assert h.is_vip(still), f"fail-closed: {domain} must STILL block on the old snapshot, got {still}"
+        assert h.is_null_ip(still), f"fail-closed: {domain} must STILL block on the old snapshot, got {still}"
 
         # Unbound is still UP and was NOT restarted by the failed build.
         h.wait_unbound_ready(deployed_vm)
@@ -1664,7 +1289,7 @@ def test_datapath_swap_budget_expiry_keeps_resolver_serving(
     under the test-only budget seam (``$GLOBALS['pfb_test_swap_wait_s'] = 1``) so the
     wait expires deterministically into the in-flight branch.
 
-    * BEFORE: the name is BLOCKED (VIP). Capture the pid, the fast-path / in-flight /
+    * BEFORE: the name is BLOCKED (null). Capture the pid, the fast-path / in-flight /
       stop / fallback log baselines, and the open apply-ledger count.
     * TRIGGER: corrupt the manifest, then run the reload with the 1 s seam budget.
     * AFTER: the reload returned FALSE, ``.sync`` is cleared, the fast-path AND
@@ -1674,11 +1299,11 @@ def test_datapath_swap_budget_expiry_keeps_resolver_serving(
     """
     domain = h.unique_domain("inflight")
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_inflight.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="smokeinflight", feed_url=feed_url, header="smokeinflight", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokeinflight", feed_url=feed_url, header="smokeinflight")
     with h.CaseContext(deployed_vm, spec):
-        # BEFORE: the name is blocked (VIP) by the live snapshot; capture every baseline.
+        # BEFORE: the name is blocked (null) by the live snapshot; capture every baseline.
         blocked = h.dns_probe_client(client_vm, domain, "A")
-        assert h.is_vip(blocked), f"{domain} expected VIP block before the forced expiry, got {blocked}"
+        assert h.is_null_ip(blocked), f"{domain} expected a null block before the forced expiry, got {blocked}"
         pids_before = h.dns_host_pids(deployed_vm)
         swap_before = h.count_log_marker(deployed_vm, h.PFB_LOG, h.SWAP_LOG_MARKER)
         inflight_before = h.count_log_marker(deployed_vm, h.PFB_LOG, _INFLIGHT_LINE)
@@ -1724,10 +1349,10 @@ def test_datapath_swap_budget_expiry_keeps_resolver_serving(
         # The in-flight line is the row's core signal: wait for it while confirming the
         # old snapshot still serves (combined predicate, fail-closed-row idiom).
         def _inflight_and_blocked(_a: h.DnsAnswer) -> bool:
-            return h.is_vip(_a) and h.count_log_marker(deployed_vm, h.PFB_LOG, _INFLIGHT_LINE) > inflight_before
+            return h.is_null_ip(_a) and h.count_log_marker(deployed_vm, h.PFB_LOG, _INFLIGHT_LINE) > inflight_before
 
         still = h.dns_probe_client_until(client_vm, domain, _inflight_and_blocked, timeout=45.0)
-        assert h.is_vip(still), f"the previous snapshot must keep serving during the in-flight swap, got {still}"
+        assert h.is_null_ip(still), f"the previous snapshot must keep serving during the in-flight swap, got {still}"
 
         # THE #3200 INVARIANT: no restart, no fallback, exactly one fresh swap line.
         pids_after = h.dns_host_pids(deployed_vm)
@@ -1833,76 +1458,6 @@ def _is_v4_literal(member: str) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def test_dnsbl_autovip_lifecycle(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """ADR-13 'Create VIPs automatically': provision a marked sinkhole VIP on
-    enable, sink a block to it, remove ONLY it on disable.
-
-    Full before/after lifecycle (CLAUDE.md test-coverage rules — assert the
-    before-state, then prove the transition caused the change):
-
-    * BEFORE: no package-owned ``pfB_AUTO_VIP_v4`` exists, and the listed name is
-      NOT blocked (it forwards to the stub upstream, so it resolves to a non-VIP
-      address).
-    * ENABLE (``pfb_dnsvip_auto`` on + DNSBL on): the package creates an IP-Alias
-      VIP at ``172.16.53.1/32`` on ``lo0`` (live in ``ifconfig``), points
-      ``pfb_dnsvip4`` at it, and the listed name now sinks to ``172.16.53.1`` —
-      the AUTO address, NOT the harness's manual ``10.10.10.1`` VIP.
-    * DISABLE: the marked VIP is removed from config AND ``lo0``.
-
-    The matrix's manual VIP at ``10.10.10.1`` is present throughout and is never
-    touched (only marker-owned VIPs are managed). Teardown restores the manual
-    VIP + auto-off so the rest of the matrix runs against its own baseline.
-
-    Auto-create picks ``172.16.53.1`` (issue #473's first Class-B candidate)
-    because this topology uses no 172.16/12 — it is free and distinct from the
-    manual ``10.10.10.1`` VIP, so the two coexist and this case needs no second
-    VM. Uses ``scope='update'`` (a full Force Update) so ``pfb_create_dnsbl`` ->
-    ``pfb_manage_dnsbl_vip`` actually runs.
-    """
-    vm = deployed_vm
-    domain = h.unique_domain("autovip")
-    feed_url = h.write_local_feed(vm, "smoke_autovip.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="smokeautovip", feed_url=feed_url, header="smokeautovip", mode=h.DnsblMode.VIP)
-    try:
-        # BEFORE: no auto VIP yet, and the name is not blocked to the auto address.
-        assert h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4) == "", (
-            "pfB_AUTO_VIP_v4 present before auto-create was ever enabled" + f"\n{h.fwobj_state_snapshot(vm)}"
-        )
-        pre = h.dns_probe_client(client_vm, domain, "A")
-        assert pre.records, f"{domain} did not resolve before listing: {pre}"
-        assert not h.is_vip(pre, vip=h.AUTO_VIP_IP4), f"{domain} already sinks to the auto VIP before enable: {pre}"
-
-        # ENABLE auto-create; the CaseContext's Force Update lists the name and
-        # runs pfb_create_dnsbl('enabled') -> the VIP is created + applied.
-        h.set_dnsvip_auto(vm, True)
-        with h.CaseContext(vm, spec, scope="update"):
-            assert h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4) == h.AUTO_VIP_IP4, (
-                f"auto VIP not created at {h.AUTO_VIP_IP4}: got {h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4)!r}"
-                + f"\n{h.fwobj_state_snapshot(vm)}"
-            )
-            assert h.vip_alias_live(vm, h.AUTO_VIP_IP4), f"auto VIP {h.AUTO_VIP_IP4} not live on lo0 (ifconfig)"
-            assert h.dnsvip4_address(vm) == h.AUTO_VIP_IP4, (
-                f"pfb_dnsvip4 does not point at the auto VIP: {h.dnsvip4_address(vm)!r}"
-            )
-            blocked = h.dns_probe_client(client_vm, domain, "A")
-            assert h.is_vip(blocked, vip=h.AUTO_VIP_IP4), f"{domain} expected auto VIP {h.AUTO_VIP_IP4}, got {blocked}"
-            assert not h.is_vip(blocked, vip=h.DEFAULT_DNSBL_VIP4), (
-                f"block leaked to the manual VIP {h.DEFAULT_DNSBL_VIP4} instead of the auto VIP: {blocked}"
-            )
-
-        # DISABLE DNSBL -> mode 'disabled' -> remove ONLY the marked + IP-matched VIP.
-        h.set_dnsbl_enabled(vm, False)
-        h.reload(vm, "update")
-        assert h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4) == "", "auto VIP not removed from config on disable"
-        assert not h.vip_alias_live(vm, h.AUTO_VIP_IP4), f"auto VIP {h.AUTO_VIP_IP4} still live on lo0 after disable"
-    finally:
-        # Restore the matrix baseline: auto off, DNSBL on, manual VIP repointed.
-        h.set_dnsvip_auto(vm, False)
-        h.set_dnsbl_enabled(vm, True)
-        h.ensure_dnsbl_vip(vm)
-        h.reset(vm)
-
-
 # A user's IP-alias VIP, with a description, at auto-create's first candidate (issue #3565).
 OCCUPIER_VIP = {
     "mode": "ipalias",
@@ -1916,84 +1471,6 @@ OCCUPIER_VIP = {
 AUTO_VIP_SECOND_IP4 = "192.168.53.1"
 
 
-def _set_occupier(vm: SmokeVM, present: bool) -> None:
-    """Drop the occupier and every marked v4 VIP from config and lo0; then add the occupier back if ``present``.
-
-    The interface_vip_* calls are guarded like ``h.set_dnsbl_vip6``'s; ifconfig then must show exactly the expected
-    candidate aliases, with a direct-alias fallback either way (issue #1013).
-    """
-    add = f"$add = {h._php_kv_array(OCCUPIER_VIP)};\n$keep[] = $add;\n" if present else ""
-    snippet = (
-        "require_once('interfaces.inc');\n"
-        "$keep = array();\n"
-        "foreach (config_get_path('virtualip/vip', array()) as $v) {\n"
-        f"  if (($v['uniqid'] ?? '') === {h._php_str(OCCUPIER_VIP['uniqid'])}"
-        f" || ($v['descr'] ?? '') === {h._php_str(h.AUTO_VIP_DESCR_V4)}) {{\n"
-        "    if (function_exists('interface_vip_bring_down')) { interface_vip_bring_down($v); }\n"
-        "    continue;\n"
-        "  }\n"
-        "  $keep[] = $v;\n"
-        "}\n"
-        f"{add}"
-        "config_set_path('virtualip/vip', $keep);\n"
-        "write_config('pfBlockerNG smoke: issue #3565 occupier VIP');\n"
-        + ("if (function_exists('interface_vip_configure')) { interface_vip_configure($add); }\n" if present else "")
-        + "echo 'OK';"
-    )
-    result = h.php_eval(vm, snippet)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"_set_occupier({present}): rc={result.returncode} {result.stderr!r} {result.stdout!r}")
-    for address in (h.AUTO_VIP_IP4, AUTO_VIP_SECOND_IP4):
-        if h.vip_alias_live(vm, address) and not (present and address == h.AUTO_VIP_IP4):
-            vm.ssh(f"/sbin/ifconfig {h.SMOKE_VIP_IFACE} inet {address} -alias")
-    if present and not h.vip_alias_live(vm, h.AUTO_VIP_IP4):
-        vm.ssh(f"/sbin/ifconfig {h.SMOKE_VIP_IFACE} inet {h.AUTO_VIP_IP4}/32 alias")
-    live = [a for a in (h.AUTO_VIP_IP4, AUTO_VIP_SECOND_IP4) if h.vip_alias_live(vm, a)]
-    expected = [h.AUTO_VIP_IP4] if present else []
-    assert live == expected, f"candidate aliases live on {h.SMOKE_VIP_IFACE}: expected {expected}, got {live}"
-
-
-def test_dnsbl_autovip_skips_a_candidate_held_by_a_vip(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """issue #3565: a user's VIP at the first candidate makes auto-create use the second one.
-
-    Given: the user's described IP-alias VIP at ``172.16.53.1/32`` on ``lo0`` (stored and live), and no auto VIP
-    When:  "Create VIPs automatically" is on and a Force Update lists a name answered with the VIP
-    Then:  the marked VIP is created at ``192.168.53.1``, is live, and ``pfb_dnsvip4`` points at it;
-           the user's VIP is untouched
-    """
-    vm = deployed_vm
-    domain = h.unique_domain("autovip3565")
-    feed_url = h.write_local_feed(vm, "smoke_autovip3565.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="smokeautovip3565", feed_url=feed_url, header="smokeautovip3565", mode=h.DnsblMode.VIP)
-    try:
-        _set_occupier(vm, True)
-        assert h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4) == "", (
-            "before-state: a marked VIP exists already" + f"\n{h.fwobj_state_snapshot(vm)}"
-        )
-        assert h.marked_vip_subnet(vm, OCCUPIER_VIP["descr"]) == h.AUTO_VIP_IP4, (
-            "before-state: the user's VIP is not stored at the first candidate" + f"\n{h.fwobj_state_snapshot(vm)}"
-        )
-
-        h.set_dnsvip_auto(vm, True)
-        with h.CaseContext(vm, spec, scope="update"):
-            marked = h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4)
-            assert marked == AUTO_VIP_SECOND_IP4, (
-                f"auto VIP: expected {AUTO_VIP_SECOND_IP4} (the user's VIP holds {h.AUTO_VIP_IP4}), got {marked!r}"
-                + f"\n{h.fwobj_state_snapshot(vm)}"
-            )
-            assert h.vip_alias_live(vm, AUTO_VIP_SECOND_IP4), f"auto VIP {AUTO_VIP_SECOND_IP4} not live on lo0"
-            assert h.dnsvip4_address(vm) == AUTO_VIP_SECOND_IP4, (
-                f"pfb_dnsvip4: expected it to resolve to {AUTO_VIP_SECOND_IP4}, got {h.dnsvip4_address(vm)!r}"
-            )
-            occupier = h.marked_vip_subnet(vm, OCCUPIER_VIP["descr"])
-            assert occupier == h.AUTO_VIP_IP4, f"user's VIP: expected it at {h.AUTO_VIP_IP4}, got {occupier!r}"
-    finally:
-        h.set_dnsvip_auto(vm, False)
-        _set_occupier(vm, False)
-        h.ensure_dnsbl_vip(vm)
-        h.reset(vm)
-
-
 # --------------------------------------------------------------------------- #
 # 4) FALSE-GREEN GUARD — a deliberately-wrong expectation MUST go red
 # --------------------------------------------------------------------------- #
@@ -2003,7 +1480,7 @@ def test_dnsbl_autovip_skips_a_candidate_held_by_a_vip(deployed_vm: SmokeVM, moc
 def test_false_green_guard_vm(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """STRICT-xfail guard: assert a real block RESOLVES — it must NOT.
 
-    Blocks a unique domain (VIP) then asserts it resolves to a pass IP.
+    Blocks a unique domain (null) then asserts it resolves to a pass IP.
     That assertion is FALSE on a working harness, so the test fails -> the
     ``strict=True`` xfail turns the failure into the expected outcome (green
     overall). If a broken/lenient harness silently let the block "pass", this
@@ -2017,7 +1494,6 @@ def test_false_green_guard_vm(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_fee
         aliasname="smokeguard",
         feed_url=feed_url,
         header="smokeguard",
-        mode=h.DnsblMode.VIP,
     )
     with h.CaseContext(deployed_vm, spec):
         answer = h.dns_probe_client(client_vm, domain, "A")
@@ -2072,14 +1548,14 @@ def test_dnsbl_block_writes_persistent_log_line(
     """
     domain = h.unique_domain("adr03log")
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr03_log.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="smokeadr03", feed_url=feed_url, header="smokeadr03", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokeadr03", feed_url=feed_url, header="smokeadr03")
 
     # BEFORE: the unique domain has never been blocked -> no dnsbl.log line names it.
     assert _dnsbl_log_hits(deployed_vm, domain) == 0, f"{domain} already in dnsbl.log before listing"
 
     with h.CaseContext(deployed_vm, spec):
         blocked = h.dns_probe_client(client_vm, domain, "A")
-        assert h.is_vip(blocked), f"{domain} expected VIP block, got {blocked}"
+        assert h.is_null_ip(blocked), f"{domain} expected a null block, got {blocked}"
         # The log write rides the async QueueListener -> poll briefly for the line.
         deadline = time.monotonic() + 20.0
         hits = 0

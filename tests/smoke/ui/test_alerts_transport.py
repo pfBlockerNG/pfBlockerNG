@@ -34,7 +34,6 @@ def test_transport_columns_filter_and_reset(smoke_vm: helpers.SmokeVM, webui: We
     original = helpers.config_get_state(vm, dnsbl_cfg)
     backups = _backup_seeded_files(vm, (DNSBL_LOG, DNS_REPLY_LOG, UNIFIED_LOG))
     try:
-        helpers.ensure_dnsbl_vip(vm)
         helpers.set_dnsbl_enabled(vm, True)
         groups: dict[bool, list[str]] = {}
         tokens: dict[bool, list[str]] = {}
@@ -159,7 +158,6 @@ def test_format_character_interface_renders_unavailable(smoke_vm: helpers.SmokeV
     original = helpers.config_get_state(vm, dnsbl_cfg)
     backups = _backup_seeded_files(vm, (DNSBL_LOG,))
     try:
-        helpers.ensure_dnsbl_vip(vm)
         helpers.set_dnsbl_enabled(vm, True)
         names = {label: helpers.unique_domain() for label in ("LAN\u200dJOINED", "LANPLAIN")}
         out = io.StringIO()

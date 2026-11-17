@@ -96,7 +96,6 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     h.deploy(smoke_vm)
     try:
         h.snapshot_unbound_conf(smoke_vm)
-        h.ensure_dnsbl_vip(smoke_vm)
         h.use_system_dns_upstream(smoke_vm)
 
         yield smoke_vm

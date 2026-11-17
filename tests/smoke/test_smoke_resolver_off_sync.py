@@ -72,7 +72,6 @@ def dnsbl_on_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
 
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.set_package_enabled(smoke_vm, True)
     h.set_dnsbl_enabled(smoke_vm, True)
     yield smoke_vm

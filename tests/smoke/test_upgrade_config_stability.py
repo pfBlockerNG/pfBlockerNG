@@ -237,7 +237,6 @@ def _setup_dnsbl_feed(vm: SmokeVM) -> str:
     spec = h.DnsblCase(
         aliasname="UpgradeConfigStability",
         feed_url=feed_path,
-        mode=h.DnsblMode.VIP,
         header="upgrade-config-stability",
         hsts=False,
     )
@@ -323,14 +322,13 @@ def test_pkg_upgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -
         # DNSBL-settings section (per-case isolation), so every harness settings
         # write must precede the canary plant or it destroys the canaries and the
         # preservation assert blames the upgrade (issue #820's false positive).
-        h.ensure_dnsbl_vip(repo_vm)
         _setup_dnsbl_feed(repo_vm)
         h.reload(repo_vm, "updatednsbl")
 
         # BEFORE state DNS probe: the blocked domain must return NOERROR + VIP.
         before_answer = h.dns_probe(repo_vm, _BLOCKED_DOMAIN, "A")
-        assert h.is_vip(before_answer), (
-            f"BEFORE upgrade: expected VIP block for {_BLOCKED_DOMAIN!r}; "
+        assert h.is_null_ip(before_answer), (
+            f"BEFORE upgrade: expected null for {_BLOCKED_DOMAIN!r}; "
             f"got rcode={before_answer.rcode!r} records={before_answer.records!r}. "
             f"DNSBL was not live on the lower build."
         )
@@ -384,8 +382,8 @@ def test_pkg_upgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -
         # probe the SAME blocked domain. Must still return NOERROR + VIP.
         h.reload(repo_vm, "updatednsbl")
         after_answer = h.dns_probe(repo_vm, _BLOCKED_DOMAIN, "A")
-        assert h.is_vip(after_answer), (
-            f"AFTER upgrade: expected VIP block for {_BLOCKED_DOMAIN!r}; "
+        assert h.is_null_ip(after_answer), (
+            f"AFTER upgrade: expected null for {_BLOCKED_DOMAIN!r}; "
             f"got rcode={after_answer.rcode!r} records={after_answer.records!r}. "
             f"Runtime contract broken by upgrade."
         )

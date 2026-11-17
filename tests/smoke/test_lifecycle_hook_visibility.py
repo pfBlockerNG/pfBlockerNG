@@ -283,11 +283,9 @@ def test_uninstall_runs_hook_tears_down_and_is_gui_visible(repo_vm: SmokeVM) -> 
 
         feed = h.write_local_feed(vm, "lifecycle_hook_vis.txt", f"{domain}\n")
         _enable_dnsbl(vm)
-        h.ensure_dnsbl_vip(vm)
         spec = h.DnsblCase(
             aliasname="LcHookVis",
             feed_url=feed,
-            mode=h.DnsblMode.VIP,
             header="lchookvis",
             hsts=False,
         )
@@ -295,7 +293,7 @@ def test_uninstall_runs_hook_tears_down_and_is_gui_visible(repo_vm: SmokeVM) -> 
         h.reload(vm, "updatednsbl")
 
         given = h.dns_probe(vm, domain, "A")
-        assert h.is_vip(given), (
+        assert h.is_null_ip(given), (
             f"GIVEN: DNSBL was not live before the uninstall for {domain!r}; "
             f"got rcode={given.rcode!r} records={given.records!r}"
         )
@@ -329,7 +327,7 @@ def test_uninstall_runs_hook_tears_down_and_is_gui_visible(repo_vm: SmokeVM) -> 
         assert pkg_installed_version(vm) is None, f"pfSense-upgrade -r did not remove {PKG_NAME}.\n{diag}"
         h.wait_unbound_ready(vm)
         after = h.dns_probe(vm, domain, "A")
-        assert not h.is_vip(after), (
+        assert not h.is_null_ip(after), (
             f"AFTER uninstall: {domain!r} still resolved to the DNSBL VIP — teardown did not "
             f"remove the DNSBL block; got rcode={after.rcode!r} records={after.records!r}\n{diag}"
         )

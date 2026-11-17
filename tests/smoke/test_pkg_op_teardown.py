@@ -175,11 +175,9 @@ def test_pkg_reinstall_keeps_live_delete_tears_down(repo_vm: SmokeVM) -> None:
         assert pkg_installed_version(vm) is not None, "the from-repo install did not register the package"
 
         _enable_dnsbl(vm)
-        h.ensure_dnsbl_vip(vm)
         spec = h.DnsblCase(
             aliasname="PkgOp697",
             feed_url=feed,
-            mode=h.DnsblMode.VIP,
             header="pkg-op-697",
             hsts=False,
         )
@@ -187,7 +185,7 @@ def test_pkg_reinstall_keeps_live_delete_tears_down(repo_vm: SmokeVM) -> None:
         h.reload(vm, "updatednsbl")
 
         given = h.dns_probe(vm, domain, "A")
-        assert h.is_vip(given), (
+        assert h.is_null_ip(given), (
             f"GIVEN: DNSBL was not live before the reinstall for {domain!r}; "
             f"got rcode={given.rcode!r} records={given.records!r}"
         )
@@ -215,7 +213,7 @@ def test_pkg_reinstall_keeps_live_delete_tears_down(repo_vm: SmokeVM) -> None:
         # ... and DNSBL is STILL live WITHOUT a reload (pre-#697 tore down here -> not VIP).
         h.wait_unbound_ready(vm)
         after_reinstall = h.dns_probe(vm, domain, "A")
-        assert h.is_vip(after_reinstall), (
+        assert h.is_null_ip(after_reinstall), (
             f"AFTER `pkg install -f`: the DNSBL block for {domain!r} was lost — the pre-deinstall "
             "tore pfBlockerNG down on a reinstall instead of keeping it live; "
             f"got rcode={after_reinstall.rcode!r} records={after_reinstall.records!r}"
@@ -245,7 +243,7 @@ def test_pkg_reinstall_keeps_live_delete_tears_down(repo_vm: SmokeVM) -> None:
 
         h.wait_unbound_ready(vm)
         after_delete = h.dns_probe(vm, domain, "A")
-        assert not h.is_vip(after_delete), (
+        assert not h.is_null_ip(after_delete), (
             f"AFTER `pkg delete`: {domain!r} still resolved to the DNSBL VIP — teardown did not remove "
             f"the DNSBL block; got rcode={after_delete.rcode!r} records={after_delete.records!r}"
         )

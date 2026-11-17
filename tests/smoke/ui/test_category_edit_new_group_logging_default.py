@@ -488,7 +488,7 @@ def test_legacy_group_explicit_vip_save_migrates_marker_and_survives_next_get(
 
     1. A raw legacy group is seeded WITHOUT going through the app; system
        stays legacy (marker absent) through the seed.
-    2. The group's FIRST-EVER Save is an EXPLICIT 'enabled' (VIP) choice --
+    2. The group's FIRST-EVER Save is an EXPLICIT 'enabled' (null) choice --
        skipping any 'default' round-trip entirely.
     3. Assert immediately: the facade ran (marker now 'default', shared
        mechanism now 'enabled' -- the grandfather values) AND the group's own

@@ -51,7 +51,6 @@ def _seeded_bidi_row(smoke_vm: SmokeVM) -> Iterator[None]:
     vm = smoke_vm
 
     prior_dnsbl = helpers.config_get(vm, CFG_DNSBL_ENABLE)
-    helpers.ensure_dnsbl_vip(vm)
     helpers.set_dnsbl_enabled(vm, True)
 
     log_dir = DNSBL_LOG.rsplit("/", 1)[0]

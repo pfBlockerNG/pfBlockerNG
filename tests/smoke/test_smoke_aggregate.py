@@ -98,7 +98,6 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     h.snapshot_unbound_conf(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     # Defensive: start from a known-clean hook list AND no aggregate selection so nothing
     # left over from an earlier module/run can fire or build during this module's reloads.

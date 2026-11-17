@@ -61,7 +61,6 @@ def dnsbl_vip_ready(smoke_vm: helpers.SmokeVM) -> None:
     valid VIP the save always aborts with an input error before any of the
     fields under test here are even reached. Idempotent on the fixed uniqid.
     """
-    helpers.ensure_dnsbl_vip(smoke_vm)
 
 
 def _decoded(b64_value: str) -> str:

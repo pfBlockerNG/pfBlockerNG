@@ -284,7 +284,6 @@ def test_dnsbl_page_legacy_prefill_get_and_unchanged_save_migrates_groups(
         base = f"{CFG_DNSBL}/{rowid}"
         try:
             _seed_raw_legacy_dnsbl_group(vm, rowid, "smoke3288dnsblprefill")
-            helpers.ensure_dnsbl_vip(vm)
 
             # (1) GET prefills the grandfathered effective values, read-only.
             mode_before = helpers.config_get_state(vm, GLOBAL_LOG_MODE_CFG)
@@ -486,7 +485,7 @@ def _seeded_unknown_agent_rows(smoke_vm: helpers.SmokeVM) -> Iterator[None]:
     keys = [f"{settings}/{key}" for key in ("pfb_dnsbl", "pfb_dnsvip4", "pfb_dnsport", "pfb_dnsport_ssl")]
     prior_keys = {key: helpers.config_get_state(vm, key) for key in keys}
     prior_vips = _snapshot_node(vm, "virtualip/vip")
-    vip4 = helpers.DEFAULT_DNSBL_VIP4
+    vip4 = helpers.NULL_IP4
     alias_before = vm.ssh(f"/sbin/ifconfig {helpers.SMOKE_VIP_IFACE}", timeout=15)
     alias_was_present = f"inet {vip4} " in alias_before.stdout
 
@@ -497,7 +496,6 @@ def _seeded_unknown_agent_rows(smoke_vm: helpers.SmokeVM) -> Iterator[None]:
         for n, (dom, agent) in enumerate(zip(domains, ("", "Unknown"), strict=True), 5)
     )
     try:
-        helpers.ensure_dnsbl_vip(vm)
         helpers.set_dnsbl_enabled(vm, True)
         log_dir = DNSBL_LOG.rsplit("/", 1)[0]
         ensure = vm.ssh(f"mkdir -p {log_dir} && touch {DNSBL_LOG}", timeout=15)

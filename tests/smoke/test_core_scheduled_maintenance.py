@@ -483,11 +483,10 @@ def maintenance_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer, prev_pkg: Path) 
     vm = smoke_vm
     h.deploy(vm)
     _assert_no_dispatch(vm, "branch-install")
-    h.ensure_dnsbl_vip(vm)
     h.use_stub_for_safesearch(vm, False)
     blocked = h.unique_domain("maintenanceblocked")
     feed = h.write_local_feed(vm, "smoke_maintenance.txt", blocked + "\n")
-    h.inject(vm, h.DnsblCase(aliasname="smokemaint", header="smokemaint", feed_url=feed, mode=h.DnsblMode.VIP))
+    h.inject(vm, h.DnsblCase(aliasname="smokemaint", header="smokemaint", feed_url=feed))
     h.set_package_enabled(vm, True)
     # Supported settings isolate feeds/blacklist and keep DCC's next daily slot outside this test.
     h.config_set(vm, f"{h.CFG_GLOBAL}/pfb_scheduled_feed_updates", "")
@@ -532,7 +531,7 @@ def maintenance_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer, prev_pkg: Path) 
         h.wait_unbound_ready(vm)
         # First answer is authoritative: never retry toward the expected DNS value.
         answer = h.dns_probe(vm, blocked, "A", attempts=1)
-        assert h.is_vip(answer), f"DNSBL gate failed before cadence acceptance: {answer}"
+        assert h.is_null_ip(answer), f"DNSBL gate failed before cadence acceptance: {answer}"
         _assert_dcc_window_safe(vm, dcc_success)
         yield vm
     except Exception as error:

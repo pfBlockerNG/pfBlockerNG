@@ -616,7 +616,6 @@ def test_dnsblip_global_suppression_cidr_limit_clamps_wide_dnsbl_feed_range(depl
     """
     vm = deployed_vm
     inside, base = "83.246.200.9", "83.246.7.0"
-    h.ensure_dnsbl_vip(vm)
     feed_url = h.write_local_feed(
         vm, "smoke_issue3413_dnsblip_cidr.txt", f"{base}/16\n{h.unique_domain('dnsblipcidr')}\n"
     )
@@ -624,7 +623,6 @@ def test_dnsblip_global_suppression_cidr_limit_clamps_wide_dnsbl_feed_range(depl
         aliasname="issue3413dnsblip",
         feed_url=feed_url,
         header="issue3413dnsblip",
-        mode=h.DnsblMode.VIP,
         dnsbl_ip_action="Deny_Both",
     )
     table = "pfB_DNSBLIP_v4"

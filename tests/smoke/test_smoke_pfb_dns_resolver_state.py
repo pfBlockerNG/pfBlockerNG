@@ -439,7 +439,7 @@ def test_a_foreign_listener_on_unbounds_port_moves_its_backend_pair_and_pfb_dns_
             # pfB-DNS serves port 53 through the moved pair: DNSBL blocks the listed name, the allowed one resolves
             for tcp in (False, True):
                 blocked, raw = _query(rig.client, rig.names.blocked, tcp=tcp)
-                assert h.is_vip(blocked), (
+                assert h.is_null_ip(blocked), (
                     f"the listed name must be blocked by pfB-DNS with the DNSBL VIP (tcp={tcp}): {raw}"
                 )
                 allowed, raw = _query(rig.client, h.unique_domain("upstream-moved"), tcp=tcp)
@@ -532,7 +532,7 @@ def test_every_free_pair_taken_stops_pfb_dns_without_restoring_the_resolver_and_
         port = _backend_port(vm)
         assert port is not None, f"before: the clause names no backend port: {before.resolver}"
         blocked, raw = _query(rig.client, rig.names.blocked)
-        assert h.is_vip(blocked), f"before: pfB-DNS must block the listed name with the DNSBL VIP: {raw}"
+        assert h.is_null_ip(blocked), f"before: pfB-DNS must block the listed name with the DNSBL VIP: {raw}"
         prior_notices = len(_notices(vm))
 
         try:
@@ -584,7 +584,7 @@ def test_every_free_pair_taken_stops_pfb_dns_without_restoring_the_resolver_and_
             h.wait_unbound_ready(vm)
             _wait_proxy_serves(rig)
             blocked, raw = _query(rig.client, rig.names.blocked)
-            assert h.is_vip(blocked), f"the listed name must be blocked again with the DNSBL VIP: {raw}"
+            assert h.is_null_ip(blocked), f"the listed name must be blocked again with the DNSBL VIP: {raw}"
             allowed, raw = _query(rig.client, h.unique_domain("pair-freed"))
             assert h.resolves_to(allowed, STUB_DNS_A), f"an allowed name must resolve: {raw}"
             assert _dns_status(vm)["service"] == "Running", f"the Service line: {_dns_status(vm)['service']!r}"
@@ -633,7 +633,7 @@ def test_the_boot_start_refuses_a_foreign_holder_and_the_boot_check_moves_the_ba
         port = _backend_port(vm)
         assert port is not None, f"before: the clause names no backend port: {before.resolver}"
         blocked, raw = _query(rig.client, rig.names.blocked)
-        assert h.is_vip(blocked), f"before: pfB-DNS must block the listed name with the DNSBL VIP: {raw}"
+        assert h.is_null_ip(blocked), f"before: pfB-DNS must block the listed name with the DNSBL VIP: {raw}"
         assert _blocked_marker(vm) is None, "before: no backend-blocked marker may stand"
         prior_notices = len(_notices(vm))
 
@@ -700,7 +700,7 @@ def test_the_boot_start_refuses_a_foreign_holder_and_the_boot_check_moves_the_ba
             assert (_config_text(vm, CFG_MARKER) or "") == before.marker, "the snapshot is kept byte for byte"
 
             blocked, raw = _query(rig.client, rig.names.blocked)
-            assert h.is_vip(blocked), f"the listed name must be blocked again with the DNSBL VIP: {raw}"
+            assert h.is_null_ip(blocked), f"the listed name must be blocked again with the DNSBL VIP: {raw}"
             allowed, raw = _query(rig.client, h.unique_domain("boot-moved"))
             assert h.resolves_to(allowed, STUB_DNS_A), f"an allowed name must resolve through port 53: {raw}"
             still = {s.pid for s in _listeners(vm, connected=True) if s.command == "nc" and s.port == port}
@@ -916,7 +916,7 @@ def test_the_resolver_pages_own_save_keeps_pfblockerngs_block_and_the_resolver_m
         )
         assert _moved_key(vm), "the Resolver is still on lo0"
         assert _snapshot_present(vm), "the snapshot is still there"
-        h.wait_until(lambda: h.is_vip(_query(rig.client, rig.names.blocked)[0]), timeout=120.0, interval=3.0)
+        h.wait_until(lambda: h.is_null_ip(_query(rig.client, rig.names.blocked)[0]), timeout=120.0, interval=3.0)
 
 
 def _moved_key(vm: SmokeVM) -> bool:

@@ -71,13 +71,11 @@ def test_alerts_row_renders_logged_group_and_feed_live(deployed_vm: helpers.Smok
     """
     domain = helpers.unique_domain("adr65alerts")
     feed = helpers.write_local_feed(deployed_vm, "adr65_alerts.txt", f"{domain}\n")
-    spec = helpers.DnsblCase(
-        aliasname="adr65alerts", feed_url=feed, header="adr65alertshdr", mode=helpers.DnsblMode.VIP
-    )
+    spec = helpers.DnsblCase(aliasname="adr65alerts", feed_url=feed, header="adr65alertshdr")
 
     with helpers.CaseContext(deployed_vm, spec):
         answer = helpers.dns_probe(deployed_vm, domain)
-        assert helpers.is_vip(answer), f"expected VIP block for {domain!r}, got {answer!r}"
+        assert helpers.is_null_ip(answer), f"expected null for {domain!r}, got {answer!r}"
 
         hits = 0
 

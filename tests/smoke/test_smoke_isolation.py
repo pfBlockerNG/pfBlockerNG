@@ -63,7 +63,6 @@ def deployed_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     try:
         yield smoke_vm
     finally:
@@ -150,7 +149,6 @@ def test_dnsbl_inject_replaces_leaked_toggle(deployed_vm: SmokeVM) -> None:
     # GIVEN the VIP infrastructure is in place. Establish it HERE (idempotent), not via the
     # module fixture alone: a sibling test's reset_pfb_baseline wipes CFG_DNSBL_SETTINGS (incl.
     # pfb_dnsvip4), so this test owns its own precondition rather than depending on test order.
-    h.ensure_dnsbl_vip(vm)
     assert h.config_get(vm, vip_key) != "", "precondition: ensure_dnsbl_vip should set pfb_dnsvip4"
 
     # WHEN a case that enables HSTS-null blocking is injected, THEN pfb_hsts is written 'on'.

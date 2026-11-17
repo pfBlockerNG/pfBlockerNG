@@ -95,7 +95,6 @@ def adr40_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     h.snapshot_unbound_conf(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     h.clear_update_hooks(smoke_vm)
     try:

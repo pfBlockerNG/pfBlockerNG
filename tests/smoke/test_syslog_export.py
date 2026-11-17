@@ -113,7 +113,6 @@ def deployed_vm(
 
     h.deploy(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
 
     _dnsbl_domain = h.unique_domain("pfbsyslogdnsbl")
     _dnsbl_domain_on = h.unique_domain("pfbsyslogdnsbl2")
@@ -130,7 +129,6 @@ def deployed_vm(
         h.DnsblCase(
             aliasname="pfb_syslog_test",
             feed_url=_dnsbl_feed_path,
-            mode=h.DnsblMode.VIP,
             header="pfb_syslog_dnsbl",
             hsts=False,  # explicit — test domain is not HSTS-preloaded
         ),
@@ -173,7 +171,7 @@ def deployed_vm(
     # Precondition: DNSBL is blocking the test domain (VIP shape), as seen by the
     # civm client behind the firewall (the realistic consumer path).
     ans = h.dns_probe_client(client_vm, _dnsbl_domain, "A")
-    if not h.is_vip(ans):
+    if not h.is_null_ip(ans):
         pytest.skip(
             f"DNSBL VIP block not observed for {_dnsbl_domain} (got {ans}) — "
             f"DNSBL precondition failed; skipping syslog tests"
@@ -660,11 +658,11 @@ def test_syslog_on_dnsbl_event_exported(deployed_vm: SmokeVM, client_vm: SmokeVM
     dnsbl_off_before = h.count_log_marker(vm, DNSBL_LOG, domain_off)
     h.flush_unbound_name(vm, domain_off)
     ans_off = h.dns_probe_client(client_vm, domain_off, "A")
-    assert h.is_vip(ans_off), f"DNSBL block shape unexpected before enabling syslog: expected VIP, got {ans_off}"
+    assert h.is_null_ip(ans_off), f"DNSBL block shape unexpected before enabling syslog: expected VIP, got {ans_off}"
     drain_dnsbl_before = h.count_log_marker(vm, DNSBL_LOG, drain_domain)
     h.flush_unbound_name(vm, drain_domain)
     drain_answer = h.dns_probe_client(client_vm, drain_domain, "A")
-    assert h.is_vip(drain_answer), f"DNSBL OFF-state drain should be VIP, got {drain_answer}"
+    assert h.is_null_ip(drain_answer), f"DNSBL OFF-state drain should be VIP, got {drain_answer}"
     _wait_for_unified_dnsbl(
         vm,
         drain_domain,
@@ -685,7 +683,7 @@ def test_syslog_on_dnsbl_event_exported(deployed_vm: SmokeVM, client_vm: SmokeVM
     ans = h.dns_probe_client(client_vm, barrier_domain, "A")
 
     # Then: DNSBL still blocks (additive).
-    assert h.is_vip(ans), f"DNSBL block shape changed after enabling syslog: expected VIP, got {ans}"
+    assert h.is_null_ip(ans), f"DNSBL block shape changed after enabling syslog: expected VIP, got {ans}"
 
     # Then: a NEW dedicated-file record (poll — tail/daemon latency). Match on
     # act=dnsbl + the queried name (qname=). NOTE: b_type is the MATCH type
@@ -1065,7 +1063,7 @@ def test_syslog_off_no_new_records(deployed_vm: SmokeVM, client_vm: SmokeVM) -> 
     _set_syslog_enabled(vm, on=True)
     h.flush_unbound_name(vm, domain)
     ans = h.dns_probe_client(client_vm, domain, "A")
-    assert h.is_vip(ans), f"DNSBL block should fire while seeding the ON record, got {ans}"
+    assert h.is_null_ip(ans), f"DNSBL block should fire while seeding the ON record, got {ans}"
     _wait_for_event(vm, baseline_len=seed_baseline, want=("act=dnsbl", f"qname={domain}", f"qip={civm_ip}"))
     unified_baseline = len(_unified_dnsbl_lines(vm))
     dnsbl_csv_before = h.count_log_marker(vm, DNSBL_LOG, domain_off)
@@ -1074,11 +1072,11 @@ def test_syslog_off_no_new_records(deployed_vm: SmokeVM, client_vm: SmokeVM) -> 
     _set_syslog_enabled(vm, on=False)
     h.flush_unbound_name(vm, domain_off)
     ans = h.dns_probe_client(client_vm, domain_off, "A")
-    assert h.is_vip(ans), f"DNSBL block should still work when syslog is OFF, got {ans}"
+    assert h.is_null_ip(ans), f"DNSBL block should still work when syslog is OFF, got {ans}"
     drain_dnsbl_before = h.count_log_marker(vm, DNSBL_LOG, drain_domain)
     h.flush_unbound_name(vm, drain_domain)
     drain_answer = h.dns_probe_client(client_vm, drain_domain, "A")
-    assert h.is_vip(drain_answer), f"DNSBL OFF-state drain should be VIP, got {drain_answer}"
+    assert h.is_null_ip(drain_answer), f"DNSBL OFF-state drain should be VIP, got {drain_answer}"
     _wait_for_unified_dnsbl(
         vm,
         drain_domain,
@@ -1098,7 +1096,7 @@ def test_syslog_off_no_new_records(deployed_vm: SmokeVM, client_vm: SmokeVM) -> 
     barrier_baseline = len(_pfb_event_lines(vm))
     h.flush_unbound_name(vm, barrier_domain)
     barrier_answer = h.dns_probe_client(client_vm, barrier_domain, "A")
-    assert h.is_vip(barrier_answer), f"DNSBL barrier should be VIP after re-enabling syslog, got {barrier_answer}"
+    assert h.is_null_ip(barrier_answer), f"DNSBL barrier should be VIP after re-enabling syslog, got {barrier_answer}"
     _wait_for_event(vm, baseline_len=barrier_baseline, want=("act=dnsbl", f"qname={barrier_domain}", f"qip={civm_ip}"))
 
     # This qname is unique to the module and queried only while export is OFF.
