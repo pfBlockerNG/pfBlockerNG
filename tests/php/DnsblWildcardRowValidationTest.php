@@ -90,8 +90,6 @@ final class DnsblWildcardRowValidationTest extends TestCase
 		}
 
 		PfbConfig::write('dnsbl/pfb_dnsbl', 'on');
-		PfbConfig::write('dnsbl/pfb_dnsvip_auto', '');
-		PfbConfig::write('dnsbl/dnsbl_interface', 'lo0');
 	}
 
 	private function setWhitelist(string $decoded): void

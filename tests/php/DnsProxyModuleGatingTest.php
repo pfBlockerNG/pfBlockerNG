@@ -674,7 +674,6 @@ final class DnsProxyModuleGatingTest extends TestCase
 	{
 		// Given a conf listening on the DNSBL VIP, and a snapshot.
 		config_set_path('virtualip/vip', [['uniqid' => 'abc', 'subnet' => '10.10.10.1']]);
-		PfbConfig::writeSystem('dnsbl/pfb_dnsvip4', '_vipabc');
 		$this->seedMovedResolver();
 		$conf = "server:\n\tinterface: 127.0.0.1\n\tinterface: 10.10.10.1\n\tmodule-config: \"validator iterator\"\n";
 
@@ -850,7 +849,6 @@ final class DnsProxyModuleGatingTest extends TestCase
 	private function enableDnsbl(): void
 	{
 		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', PfbToggle::On);
-		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::On);
 	}
 
 	/** @return array<string,array{string}> why pfB-DNS could not take the Resolver over, with the toggle on */
@@ -1378,7 +1376,6 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// Given pfBlockerNG fully on with a moved Resolver: on its own, the apply pass runs 'enabled' and wants pfB-DNS.
 		PfbConfig::writeSystem('gen/enable_cb', PfbToggle::On);
 		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', PfbToggle::On);
-		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::On);
 		$this->setProxy(TRUE);
 		$this->seedMovedResolver();
 		$this->assertSame(['enabled', TRUE], $this->applyDecisionsFor(FALSE), 'before: a normal pass is enabled');
@@ -1415,7 +1412,6 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// Given DNSBL stored On, the Resolver enabled, and the parent switches as the row says
 		PfbConfig::writeSystem('gen/enable_cb', $enable);
 		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', PfbToggle::On);
-		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::On);
 		$this->setProxy($pfbDns === PfbToggle::On);
 		$GLOBALS['config']['unbound'] = self::originalResolver();
 

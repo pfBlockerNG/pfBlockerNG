@@ -1824,7 +1824,7 @@ if ($alert_summary) {
 	if ($alert_view == 'dnsbl_stat' || $alert_view == 'dnsbl_reply_stat') {
 		if ($stats_data) {
 			$visible_stats = array_diff_key($stat_info, $stat_hidden);
-			$unknown_msg = $alert_view == 'dnsbl_stat' ? pfb_dnsbl_mechanism_labels()['enabled'] : 'Unknown';
+			$unknown_msg = 'Unknown';
 			// #3773: "Top Blocked Group" is a SQLite counter (cumulative, see the widget statistics below). In a bounded
 			// window it counts the window's own events instead: the group is column 7 of dnsbl.log (keyed with the
 			// b_type, column 6, so the widget statistics can leave IDN alerts out). A hidden panel is not scanned for,

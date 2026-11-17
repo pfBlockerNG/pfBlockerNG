@@ -85,9 +85,6 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		foreach (['suppression' => '', 'database_cc' => '', 'maxmind_locale' => 'en', 'asn_reporting' => 'disabled', 'asn_token' => '', 'maxmind_account' => '', 'maxmind_key' => ''] as $key => $value) {
 			config_set_path('installedpackages/pfblockerngipsettings/config/0/' . $key, $value);
 		}
-		foreach (['pfb_dnsvip4' => '', 'pfb_dnsvip6' => '', 'pfb_dnsport' => '8081', 'pfb_dnsport_ssl' => '8443'] as $key => $value) {
-			config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/' . $key, $value);
-		}
 		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
 		config_set_path('installedpackages/pfblockernglistsv4/config', []);
 		config_set_path('installedpackages/pfblockernglistsv6/config', []);
@@ -376,16 +373,13 @@ final class SyncPolicyApplyRecordTest extends TestCase
 
 	// ---- (d2) what a completed pass records for the receiver (#3453) ---------------------
 
-	/** Manual VIP mode with a VIP that fails validation: pfb_global() force-disables DNSBL (#331). */
-	private function seedInvalidVip(): void
+	/** An IP list row whose header is reserved: the pass skips it, which is a finding (#3453). */
+	private function seedReservedHeader(): void
 	{
-		$GLOBALS['pfb_test_vip_list'] = [];
-		PfbConfig::write('dnsbl/pfb_dnsbl', 'on');
-		PfbConfig::write('dnsbl/pfb_dnsvip_auto', '');
-		PfbConfig::write('dnsbl/dnsbl_interface', 'opt-double');
-		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4', '_vip_test_missing');
-		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/tld_allow', 'on');	// issue #3539: a built-in answers with the VIP, so it is validated
-		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/tld_allow_gtld', 'com');	// TLD Allow is on only with a selection
+		config_set_path('installedpackages/pfblockernglistsv4/config', [[
+			'aliasname' => 'Top', 'action' => 'Deny_Inbound', 'cron' => 'EveryDay', 'autoproto_in' => '', 'autoproto_out' => '', 'agateway_in' => 'default', 'agateway_out' => 'default',
+			'row'       => [['format' => 'auto', 'state' => 'Enabled', 'url' => 'https://feeds.example/top', 'header' => 'DNSBLIP']],
+		]]);
 	}
 
 	/** @return list<string> */
@@ -397,12 +391,12 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	public function testLocalApplyWithoutAReceiveRecordRecordsNoFindings(): void
 	{
 		$this->seedApplyEnvironment();
-		$this->seedInvalidVip();
+		$this->seedReservedHeader();
 
 		sync_package_pfblockerng();
 
 		$this->assertFalse(pfb_pending_changes(), 'before-state check: the pass completed');
-		$this->assertContains('pfBlockerNG DNSBL', $this->noticeTitles(), 'before-state check: the VIP failed validation');
+		$this->assertNotEmpty($GLOBALS['pfb']['reserved_header_skips'] ?? [], 'before-state check: the pass skipped a reserved header');
 		$this->assertNotContains('pfBlockerNG Sync', $this->noticeTitles(), 'a node that never received policy raises no Sync notice');
 		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_findings.json');
 		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_receive.json', 'and no receive record is created');
@@ -412,19 +406,14 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	{
 		$this->seedRecord('waiting');
 		$this->seedApplyEnvironment();
-		$this->seedInvalidVip();
-		config_set_path('installedpackages/pfblockernglistsv4/config', [[
-			'aliasname' => 'Top', 'action' => 'Deny_Inbound', 'cron' => 'EveryDay', 'autoproto_in' => '', 'autoproto_out' => '', 'agateway_in' => 'default', 'agateway_out' => 'default',
-			'row'       => [['format' => 'auto', 'state' => 'Enabled', 'url' => 'https://feeds.example/top', 'header' => 'DNSBLIP']],
-		]]);
+		$this->seedReservedHeader();
 
 		sync_package_pfblockerng();
 		$this->seedApplyEnvironment();
-		$this->seedInvalidVip();
+		$this->seedReservedHeader();
 		sync_package_pfblockerng();
 
 		$findings = pfb_sync_findings_read($this->dir)['findings'];
-		$this->assertContains('DNSBL disabled: the DNSBL VIP failed validation', $findings);
 		$this->assertContains('Header skipped as reserved: DNSBLIP (pfblockernglistsv4)', $findings, 'the pass captured its reserved-header skips');
 		$this->assertSame(1, count(array_keys($this->noticeTitles(), 'pfBlockerNG Sync', TRUE)), 'one notice for unchanged findings');
 	}
@@ -433,12 +422,12 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	{
 		$this->seedState(['accepted_digest' => NULL, 'last' => ['time' => time() - 100, 'outcome' => 'refused', 'reason' => 'syncscope is not policy']]);
 		$this->seedApplyEnvironment();
-		$this->seedInvalidVip();
+		$this->seedReservedHeader();
 
 		sync_package_pfblockerng();
 
 		$this->assertFalse(pfb_pending_changes(), 'before-state check: the pass completed');
-		$this->assertContains('pfBlockerNG DNSBL', $this->noticeTitles(), 'before-state check: the VIP failed validation');
+		$this->assertNotEmpty($GLOBALS['pfb']['reserved_header_skips'] ?? [], 'before-state check: the pass skipped a reserved header');
 		$this->assertNotContains('pfBlockerNG Sync', $this->noticeTitles(), 'a node that never accepted a policy raises no Sync notice');
 		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_findings.json');
 	}
@@ -447,7 +436,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	{
 		$this->seedRecord('waiting');
 		$this->seedApplyEnvironment();
-		$this->seedInvalidVip();
+		$this->seedReservedHeader();
 		sync_package_pfblockerng();
 		$this->assertFileExists($this->dir . '/pfb_sync_findings.json', 'before-state check: an accepting receiver records them');
 
@@ -469,7 +458,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	{
 		$this->seedRecord('waiting');
 		pfb_sync_receive_accepted_clear($this->dir);
-		pfb_sync_findings_record(['DNSBL disabled: the DNSBL VIP failed validation'], $this->dir);
+		pfb_sync_findings_record(['TOP1M: provider token missing'], $this->dir);
 		$this->assertFileExists($this->dir . '/pfb_sync_findings.json', 'before-state check: the late write landed');
 
 		$panel = pfb_sync_receiver_panel(pfb_sync_receive_state_read($this->dir), NULL, pfb_sync_findings_read($this->dir), []);

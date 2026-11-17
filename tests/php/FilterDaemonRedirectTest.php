@@ -11,8 +11,6 @@ use PHPUnit\Framework\TestCase;
  * Functions under test:
  *   pfb_filter_service() — generates /usr/local/etc/rc.d/pfb_filter.sh (the firewall
  *                          filter-log daemon: tail_pfb|php_pfb, or clog_pfb|php_pfb).
- *   pfb_dnsbl_service()  — generates /usr/local/etc/rc.d/pfb_dnsbl.sh (the DNSBL
- *                          lighttpd_pfb webserver).
  *
  * Intent: these daemons are (re)started via start_service() during a package
  * install/upgrade, which runs under the Package-Manager output capture pipe. A daemon
@@ -24,11 +22,10 @@ use PHPUnit\Framework\TestCase;
  * The test captures the generated rc 'start' body via the write_rcfile() double
  * (pfsense_doubles.php records each $rc into $GLOBALS['pfb_test_rcfiles']) and asserts
  * the redirect is present. Fail-before/pass-after: on the pre-fix code the daemons were
- * backgrounded as a bare `... filterlog &` / a bare `lighttpd_pfb -f ...`, so the redirect
+ * backgrounded as a bare `... filterlog &`, so the redirect
  * assertions fail; after the fix they pass.
  */
 #[CoversFunction('pfb_filter_service')]
-#[CoversFunction('pfb_dnsbl_service')]
 final class FilterDaemonRedirectTest extends TestCase
 {
 	private function startBody(string $rcfile, callable $generator): string
@@ -59,17 +56,4 @@ final class FilterDaemonRedirectTest extends TestCase
 		);
 	}
 
-	public function testDnsblWebserverDetachesStdFds(): void
-	{
-		// When the DNSBL rc.d script is generated
-		$start = $this->startBody('pfb_dnsbl.sh', 'pfb_dnsbl_service');
-
-		// Then the lighttpd_pfb webserver launch redirects its std fds, so its self-forked
-		// daemon child does not inherit and hold the caller's pipe (#662).
-		$this->assertMatchesRegularExpression(
-			'#lighttpd_pfb -f \S+ >/dev/null 2>&1 </dev/null#',
-			$start,
-			'the DNSBL lighttpd_pfb launch must detach its std fds (#662)'
-		);
-	}
 }

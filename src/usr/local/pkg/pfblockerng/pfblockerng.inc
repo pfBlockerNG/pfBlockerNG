@@ -6425,6 +6425,12 @@ function pfb_filter_service() {
 EOF;
 	$rc['stop']	= <<<EOF
 
+	# A RAM-disk install (use_mfs_tmpvar) restores this archive at boot: write it when none exists yet and DNSBL has a manifest (#3713; issue #4053: moved here from the retired DNSBL web server's stop, which ran at the same times)
+	if [ ! -f '{$pfb['dnsblarchive']}.zst' ] && [ ! -f '{$pfb['dnsblarchive']}.bz2' ] && [ -f '{$pfb['unbound_py_sources']}' ] &&
+	    [ "\$(/usr/local/sbin/read_xml_tag.sh boolean system/use_mfs_tmpvar)" = 'true' ]; then
+		/usr/bin/timeout -s TERM -k 5 60 {$pfb['php']} -f /usr/local/pkg/pfblockerng/pfblockerng.inc dnsbl_cache >/dev/null 2>&1
+	fi
+
 	# A RAM-disk install (use_mfs_tmpvar) restores this archive at boot: write it when none exists yet (#3713)
 	if [ ! -f '{$pfb['aliasarchive']}.zst' ] && [ ! -f '{$pfb['aliasarchive']}.bz2' ] &&
 	    [ "\$(/usr/local/sbin/read_xml_tag.sh boolean system/use_mfs_tmpvar)" = 'true' ]; then
@@ -7948,12 +7954,6 @@ EOF;
 EOF;
 	}
 	$rc['stop']	= <<<EOF
-
-	# A RAM-disk install (use_mfs_tmpvar) restores this archive at boot: write it when none exists yet and DNSBL has a manifest (#3713; issue #4053: moved here from the retired DNSBL web server's stop)
-	if [ ! -f '{$pfb['dnsblarchive']}.zst' ] && [ ! -f '{$pfb['dnsblarchive']}.bz2' ] && [ -f '{$pfb['unbound_py_sources']}' ] &&
-	    [ "\$(/usr/local/sbin/read_xml_tag.sh boolean system/use_mfs_tmpvar)" = 'true' ]; then
-		/usr/bin/timeout -s TERM -k 5 60 {$pfb['php']} -f /usr/local/pkg/pfblockerng/pfblockerng.inc dnsbl_cache >/dev/null 2>&1
-	fi
 
 	# pfSense stops package services while pkg upgrades or reinstalls this package (an ancestor is `rc.packages ... DEINSTALL`
 	# and the nearest pkg's operation is not a delete): the proxy keeps running and the next update applies the new version.

@@ -222,10 +222,10 @@ function worker_core_prelude(): void
 		}
 	}
 	write_config('Intermediate config write during package removal for pfBlockerNG.', FALSE, TRUE);
-	// Core then loads the package's include: its load-time block (pfblockerng.inc, "Create Firewall filter service" and
-	// "Create DNSBL service") writes the two rc scripts it finds missing. The proxy's rc script has no such writer.
+	// Core then loads the package's include: its load-time block (pfblockerng.inc, "Create Firewall filter service") writes
+	// the rc script it finds missing. The proxy's rc script has no such writer.
 	$GLOBALS['pfb_test_rcfile_dir'] = rtrim(RCFILEPREFIX, '/');
-	foreach (['pfb_filter.sh' => 'pfb_filter_service', 'pfb_dnsbl.sh' => 'pfb_dnsbl_service'] as $rcfile => $writer) {
+	foreach (['pfb_filter.sh' => 'pfb_filter_service'] as $rcfile => $writer) {
 		if (!file_exists(RCFILEPREFIX . $rcfile)) {
 			$writer();
 		}
@@ -478,7 +478,6 @@ if (!is_file("{$state}/baseline.json")) {
 	worker_dnsbl_inputs();
 	pfb_dns_proxy_service();
 	pfb_filter_service();
-	pfb_dnsbl_service();
 	if (pfb_dnsbl_active()) {
 		file_put_contents($pfb['unbound_py_conf'], pfb_unbound_python_ini('enabled', 'BASELINE'));
 	}
@@ -487,7 +486,7 @@ if (!is_file("{$state}/baseline.json")) {
 		'rc'  => (string) file_get_contents(PFB_DNS_PROXY_RCFILE),
 		'ini' => (string) @file_get_contents($pfb['unbound_py_conf']),
 	], JSON_THROW_ON_ERROR));
-	foreach (['pfb_dns_proxy', 'pfb_filter', 'pfb_dnsbl', 'squid', 'zeek'] as $running) {
+	foreach (['pfb_dns_proxy', 'pfb_filter', 'squid', 'zeek'] as $running) {
 		worker_service_up($running);
 	}
 	unset($pfb['dnsbl_tld_wildcard'], $pfb['dnsbl_control'], $pfb['dnsbl_control_legacy'], $pfb['dnsbl_decisiondb_max']);

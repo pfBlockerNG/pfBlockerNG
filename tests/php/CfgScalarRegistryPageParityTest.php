@@ -44,13 +44,7 @@ final class CfgScalarRegistryPageParityTest extends TestCase
 	 */
 	public static function absentDefaults(): iterable
 	{
-		yield 'pfb_dnsport' => ['dnsbl/pfb_dnsport', self::DNSBL . '/pfb_dnsport', '8081'];
-		yield 'pfb_dnsport_ssl' => ['dnsbl/pfb_dnsport_ssl', self::DNSBL . '/pfb_dnsport_ssl', '8443'];
 		yield 'aliaslog' => ['dnsbl/aliaslog', self::DNSBL . '/aliaslog', 'enabled'];
-		yield 'pfb_dnsbl_rule' => ['dnsbl/pfb_dnsbl_rule', self::DNSBL . '/pfb_dnsbl_rule', 'Disabled'];
-		yield 'pfb_dnsvip4' => ['dnsbl/pfb_dnsvip4', self::DNSBL . '/pfb_dnsvip4', ''];
-		yield 'pfb_dnsvip6' => ['dnsbl/pfb_dnsvip6', self::DNSBL . '/pfb_dnsvip6', ''];
-		yield 'dnsbl_interface' => ['dnsbl/dnsbl_interface', self::DNSBL . '/dnsbl_interface', 'lo0'];
 		yield 'action' => ['dnsbl/action', self::DNSBL . '/action', 'Disabled'];
 	}
 
@@ -71,39 +65,4 @@ final class CfgScalarRegistryPageParityTest extends TestCase
 		$this->assertSame($expected, PfbConfig::read($path_key), "{$path_key} absent -> {$expected}");
 	}
 
-	/**
-	 * Scenario:
-	 *   Given the DNSBL page save writes '' for an unchecked Permit Firewall
-	 *     Rules checkbox (pfb_filter ON_OFF ?: '').
-	 *   When PfbConfig::read('dnsbl/pfb_dnsbl_rule') resolves that stored empty.
-	 *   Then the checkbox still reads Off — '' and the registry default
-	 *        'Disabled' are the same toggle state.
-	 */
-	public function testDnsblRuleEmptyAndDisabledBothReadOff(): void
-	{
-		$this->assertSame(PfbToggle::Off, pfb_cfg_toggle_read(''));
-		$this->assertSame(PfbToggle::Off, pfb_cfg_toggle_read('Disabled'));
-
-		config_set_path(self::DNSBL . '/pfb_dnsbl_rule', '');
-		$this->assertSame(
-			PfbToggle::Off,
-			pfb_cfg_toggle_read(PfbConfig::read('dnsbl/pfb_dnsbl_rule')),
-			'stored empty Off token still renders the checkbox unchecked'
-		);
-	}
-
-	/**
-	 * Scenario:
-	 *   Given a stored empty string on a plain-scalar port key (the page
-	 *     `?: '8081'` treated '' as missing).
-	 *   When PfbConfig::read() resolves it.
-	 *   Then the registry default fills it the same way the page did.
-	 */
-	public function testEmptyPortStringResolvesToThePageDefault(): void
-	{
-		config_set_path(self::DNSBL . '/pfb_dnsport', '');
-		$this->assertSame('8081', PfbConfig::read('dnsbl/pfb_dnsport'));
-		config_set_path(self::DNSBL . '/pfb_dnsport_ssl', '');
-		$this->assertSame('8443', PfbConfig::read('dnsbl/pfb_dnsport_ssl'));
-	}
 }

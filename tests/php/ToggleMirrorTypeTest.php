@@ -36,8 +36,6 @@ final class ToggleMirrorTypeTest extends TestCase
 		'enable',
 		'keep',
 		'dnsbl',
-		'dnsbl_vip_auto',
-		'dnsbl_nonat',
 		'dnsbl_hsts',
 		// issue #3515: DNS-proxy toggle, sourced through PfbConfig::read().
 		'pfb_dns',
@@ -98,7 +96,6 @@ final class ToggleMirrorTypeTest extends TestCase
 			$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 		}
 
-		PfbConfig::write('dnsbl/dnsbl_interface', 'lo0');
 	}
 
 	/**
@@ -140,7 +137,6 @@ final class ToggleMirrorTypeTest extends TestCase
 		// production code is right to have turned Off, and proves nothing about typing.
 		// Same setup as DnsblVipDisableNoticeTest::testValidVipDoesNotSurfaceNotice().
 		$GLOBALS['pfb_test_vip_list'] = ['_vip_test_valid' => '203.0.113.10'];
-		PfbConfig::write('dnsbl/dnsbl_interface', 'opt-double');
 		config_set_path(
 			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4',
 			'_vip_test_valid'
@@ -164,39 +160,6 @@ final class ToggleMirrorTypeTest extends TestCase
 
 		$this->assertSame(PfbToggle::Off, $GLOBALS['pfb']['enable'], 'a disabled package reads as Off');
 		$this->assertSame(PfbToggle::Off, $GLOBALS['pfb']['dnsbl'], 'disabled DNSBL reads as Off');
-	}
-
-	/**
-	 * The force-disable path publishes PfbToggle::Off rather than assigning a bare ''.
-	 *
-	 * pfb_global() force-disables DNSBL on an invalid/unresolved VIP in manual mode.
-	 * That path assigned '' directly, which is how a third value entered a two-valued
-	 * vocabulary — and why a downstream !empty() check silently inverted. Driven through
-	 * the real validation failure (an unresolvable VIP id on the doubled interface), not
-	 * by writing the mirror, so the assignment site itself is covered.
-	 */
-	public function testForceDisableOnInvalidVipPublishesOffNotEmptyString(): void
-	{
-		PfbConfig::write('gen/enable_cb', PfbToggle::On);
-		PfbConfig::write('dnsbl/pfb_dnsbl', PfbToggle::On);
-		PfbConfig::write('dnsbl/pfb_dnsvip_auto', PfbToggle::Off);
-		PfbConfig::write('dnsbl/dnsbl_interface', 'opt-double');
-		config_set_path(
-			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4',
-			'_vip_test_missing'
-		);
-		// issue #3539: the VIP is only validated while a block answers with it; TLD Allow is such a block.
-		PfbConfig::write('dnsbl/tld_allow', PfbToggle::On);
-		PfbConfig::write('dnsbl/tld_allow_gtld', 'com');
-
-		pfb_global();
-
-		$this->assertSame(
-			PfbToggle::Off,
-			$GLOBALS['pfb']['dnsbl'],
-			'the force-disable path must publish PfbToggle::Off, not a bare empty string'
-		);
-		$this->assertNotSame('', $GLOBALS['pfb']['dnsbl'], "no mirror may hold '' once toggles are typed");
 	}
 
 	/**

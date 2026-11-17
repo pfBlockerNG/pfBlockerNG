@@ -156,7 +156,7 @@ final class CoreSettingsPolicyDnsblParityTest extends TestCase
 				'/\$pfb\[\'dnsbl_regex\'\]\s*=\s*PfbConfig::read/',
 				'/\$pfb\[\'dnsbl_tld_allow\'\]\s*=\s*PfbConfig::read/',
 			])),
-			'policy' => pfb_test_page_region(self::PFB, "\t\$pfb_dnsbl_groups = config_get_path(", "\t// issue #3539: TRUE while any effective DNSBL block"),
+			'policy' => pfb_test_page_region(self::PFB, "\t\$pfb_dnsbl_groups = config_get_path(", "\t\$pfb['dnsbl_top1m']\t= PfbConfig::read('dnsbl/top1m_enable');"),
 			'safesearch' => pfb_test_page_region(self::PFB, "\t// SafeSearch — read via gateway (ADR-29).", "\t// External DNS Server for TLD drill"),
 			'top1m' => implode('', array_map(static fn(string $pattern): string => pfb_test_page_statement(self::APPLY, $pattern), [
 				'/\$pfb\[\'dnsbl_ip\'\]\s*=\s*pfb_dnsblip_action_value/',
@@ -164,7 +164,7 @@ final class CoreSettingsPolicyDnsblParityTest extends TestCase
 				'/\$pfb\[\'dnsbl_top1m_inc\'\]\s*=\s*\$pfb\[\'dnsblconfig\'\]/',
 				'/\$pfb\[\'dnsbl_top1m_inc\'\]\s*=\s*pfb_filter/',
 			])),
-			'tldAllow' => pfb_test_page_region(self::PFB, "\t\$tld_allow = 'off';", "\n\t\$python_nolog"),
+			'tldAllow' => pfb_test_page_region(self::PFB, "\t\$tld_allow = 'off';", "\n\t\$regex_cap"),
 		];
 	}
 

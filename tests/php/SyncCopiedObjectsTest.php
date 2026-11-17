@@ -21,7 +21,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_sync_copied_digests')]
 #[CoversFunction('pfb_sync_copied_check')]
 #[CoversFunction('pfb_sync_copied_read')]
-#[CoversFunction('pfb_create_dnsbl')]
+#[CoversFunction('pfb_dnsbl_webserver_retire')]
 #[CoversFunction('pfb_managed_obj_rows')]
 final class SyncCopiedObjectsTest extends TestCase
 {
@@ -708,8 +708,6 @@ final class SyncCopiedObjectsTest extends TestCase
 		$this->assertSame(['filter'], array_keys(pfb_sync_copied_read($this->dir)['recorded']));
 	}
 
-	// ---- row 10: acceptance 12, the apply writes the same bytes -------------------------------
-
 	/**
 	 * Seeds the NAT writer with an externally edited copy of this node's NAT row in config.
 	 */
@@ -719,64 +717,6 @@ final class SyncCopiedObjectsTest extends TestCase
 			['descr' => 'user rule', 'interface' => 'wan', 'target' => '10.0.0.9'],
 			['descr' => 'pfB DNSBL - DO NOT EDIT', 'interface' => 'LEAK_IFACE_SENTINEL', 'target' => 'LEAK_DEST_SENTINEL'],
 		]);
-	}
-
-	/** @return array{nat: mixed, writes: mixed} */
-	private function runNatWriter(string $dir): array
-	{
-		$GLOBALS['pfb_test_write_config_calls'] = [];
-		$this->seedNatWriter($dir);
-		$this->applyDnsblEnabled();
-		return ['nat' => config_get_path('nat/rule'), 'writes' => $GLOBALS['pfb_test_write_config_calls']];
-	}
-
-	public function testNatWriterWritesTheSameRulesWithAndWithoutDetectorState(): void
-	{
-		$cleanDir = $this->makeDir();
-		$stateDir = $this->makeDir();
-		try {
-			// A prior write of this node: the copy in config now differs from it AND from the new expectation.
-			$prior = self::base('dnsbl_nat');
-			file_put_contents($this->stateFile($stateDir), json_encode([
-				'recorded' => ['dnsbl_nat' => pfb_sync_copied_digests([$prior])],
-				'findings' => [],
-			], JSON_THROW_ON_ERROR));
-
-			$clean = $this->runNatWriter($cleanDir);
-			$this->assertSame([], $this->copiedNotices(), 'no state -> nothing reported');
-			$this->assertFileExists($this->stateFile($cleanDir), 'the clean run still records its expectation');
-
-			$divergent = $this->runNatWriter($stateDir);
-
-			$this->assertSame($clean['nat'], $divergent['nat'], 'the stored nat/rule never depends on the detector');
-			$this->assertSame($clean['writes'], $divergent['writes'], 'the write_config calls never depend on the detector');
-			$this->assertSame(['pfB DNSBL - DO NOT EDIT#0'], array_keys(pfb_sync_copied_read($stateDir)['findings']['dnsbl_nat'] ?? []), 'the divergent run reported the copy');
-			$this->assertCount(1, $this->copiedNotices());
-			$this->assertNoValueLeak();
-			// opt-double and the VIP are generated-local values: the interface double binds the first, the VIP list the second.
-			foreach ([...self::SENTINELS, 'opt-double', '203.0.113.10'] as $value) {
-				foreach ([$cleanDir, $stateDir] as $dir) {
-					$this->assertStringNotContainsString($value, (string) file_get_contents($this->stateFile($dir)));
-				}
-				foreach ($this->emitted() as $text) {
-					$this->assertStringNotContainsString($value, $text);
-				}
-			}
-			$this->assertSame('user rule', $divergent['nat'][0]['descr'], 'user NAT rules are untouched');
-			$this->assertSame('opt-double', $divergent['nat'][1]['interface'], 'the copy is overwritten as before, never re-owned or skipped');
-
-			$written = array_slice($divergent['nat'], 1);
-			$this->assertCount(2, $written);
-			$recorded = [];
-			foreach ($written as $n => $row) {
-				$recorded[hash('sha256', "pfB DNSBL - DO NOT EDIT#{$n}")] = self::digestOf($row);
-			}
-			ksort($recorded, SORT_STRING);
-			$this->assertSame($recorded, pfb_sync_copied_read($stateDir)['recorded']['dnsbl_nat'], 'the state records exactly the digests of what the writer left in config');
-		} finally {
-			$this->removeDir($cleanDir);
-			$this->removeDir($stateDir);
-		}
 	}
 
 	// ---- removal writers: the managed rows are read before anything removes them ---------------
@@ -808,7 +748,7 @@ final class SyncCopiedObjectsTest extends TestCase
 		}
 	}
 
-	public function testDisabledDnsblWriterReportsTheExternalRowItRemoves(): void
+	public function testDnsblWebserverRetireReportsTheExternalRowItRemoves(): void
 	{
 		file_put_contents($this->stateFile(), json_encode([
 			'recorded' => ['dnsbl_nat' => pfb_sync_copied_digests([self::base('dnsbl_nat')])],
@@ -816,7 +756,7 @@ final class SyncCopiedObjectsTest extends TestCase
 		], JSON_THROW_ON_ERROR));
 		$this->seedNatWriter($this->dir);
 
-		pfb_create_dnsbl('disabled');
+		pfb_dnsbl_webserver_retire();
 
 		$this->assertSame(['user rule'], array_column(config_get_path('nat/rule'), 'descr'), 'the removal itself is unchanged');
 		$this->assertSame(['dnsbl_nat' => ['pfB DNSBL - DO NOT EDIT#0' => ['(unexpected)']]], pfb_sync_copied_read($this->dir)['findings']);

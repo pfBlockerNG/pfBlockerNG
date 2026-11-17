@@ -287,16 +287,6 @@ final class CfgToggleRegistryPageParityTest extends TestCase
 			'pfblockerng_dnsbl.php:52',
 			self::SHAPE_FALSY_EMPTY,
 		],
-		'dnsbl/pfb_dnsvip_auto' => [
-			'installedpackages/pfblockerngdnsblsettings/config/0',
-			'pfblockerng_dnsbl.php:58',
-			self::SHAPE_FALSY_EMPTY,
-		],
-		'dnsbl/pfb_dnsbl_nonat' => [
-			'installedpackages/pfblockerngdnsblsettings/config/0',
-			'pfblockerng_dnsbl.php:59',
-			self::SHAPE_FALSY_EMPTY,
-		],
 		'dnsbl/pfb_idn_escalate_suspicious' => [
 			'installedpackages/pfblockerngdnsblsettings/config/0',
 			'pfblockerng_dnsbl.php:89',
@@ -374,8 +364,6 @@ final class CfgToggleRegistryPageParityTest extends TestCase
 	{
 		$expected_defaults = [
 			'dnsbl/pfb_dnsbl'                   => '',
-			'dnsbl/pfb_dnsvip_auto'             => '',
-			'dnsbl/pfb_dnsbl_nonat'             => '',
 			'dnsbl/pfb_idn_escalate_suspicious' => '',
 			'dnsbl/pfb_regex_cap'               => '',
 			'dnsbl/pfb_dnsbl_lenient'           => 'off',
