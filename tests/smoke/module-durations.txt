@@ -7,6 +7,8 @@ test_core_process_lifetime.py::test_core_process_lifetime_on_freebsd[fstat] 62.8
 test_core_process_lifetime.py::test_core_process_lifetime_on_freebsd[prescript] 8.31
 test_core_process_lifetime.py::test_core_process_lifetime_on_freebsd[runner] 5.09
 test_core_process_lifetime.py::test_core_process_lifetime_on_freebsd[update] 5.18
+test_core_scheduled_maintenance.py 0.01
+test_core_scheduled_maintenance.py::test_core_scheduled_maintenance_preserves_tick_duties 0.01
 test_core_update.py 120.00
 test_core_update.py::test_a_manual_update_leaves_the_schedules_last_run_alone 50.00
 test_core_update.py::test_a_second_start_update_while_one_runs_gets_conflict 25.00

@@ -463,7 +463,7 @@ def maintenance_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer, prev_pkg: Path) 
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built package")
     if os.environ.get("SMOKE_SCHEDULED_EXCEPTION") != "allow":
-        pytest.fail("scheduled maintenance requires explicit --scheduled-exception allow")
+        pytest.skip("scheduled maintenance runs only under local-smoke.sh --scheduled-exception allow")
     vm = smoke_vm
     h.deploy(vm)
     _assert_no_dispatch(vm, "branch-install")

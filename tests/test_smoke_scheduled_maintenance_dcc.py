@@ -791,3 +791,12 @@ def test_jsonl_result_rejects_bad_prefix_or_missing_aggregate(
 )
 def test_next_quarter_hour_is_the_first_boundary_strictly_after(epoch: int, boundary: int) -> None:
     assert acceptance.next_quarter_hour(epoch) == boundary
+
+
+def test_maintenance_fixture_skips_without_the_scheduled_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An ordinary smoke run (CI included) skips the production-cadence case instead of failing every leg."""
+    monkeypatch.setenv("SMOKE_PKG", "/inert/pkg")
+    monkeypatch.delenv("SMOKE_SCHEDULED_EXCEPTION", raising=False)
+    fixture = getattr(acceptance.maintenance_vm, "__wrapped__")
+    with pytest.raises(pytest.skip.Exception, match="--scheduled-exception allow"):
+        next(fixture(object(), object(), Path("/tmp/previous.pkg")))
