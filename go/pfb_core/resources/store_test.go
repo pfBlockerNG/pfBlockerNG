@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
@@ -424,6 +425,15 @@ func TestCorruptIndex(t *testing.T) {
 		"not JSON":      func(t *testing.T, p string) { os.WriteFile(p, []byte("garbage"), 0o600) },
 		"array":         func(t *testing.T, p string) { os.WriteFile(p, []byte("[]"), 0o600) },
 		"other version": func(t *testing.T, p string) { os.WriteFile(p, []byte(`{"version":2,"resources":{}}`), 0o600) },
+		"symlink to a valid index": func(t *testing.T, p string) {
+			b, _ := os.ReadFile(p)
+			real := filepath.Join(t.TempDir(), "real")
+			os.WriteFile(real, b, 0o600)
+			os.Remove(p)
+			if err := os.Symlink(real, p); err != nil {
+				t.Fatal(err)
+			}
+		},
 		"a directory": func(t *testing.T, p string) {
 			os.Remove(p)
 			if err := os.MkdirAll(filepath.Join(p, "sub"), 0o700); err != nil {
@@ -498,6 +508,99 @@ func TestBrokenBodiesNeverServed(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFIFOBodyNeverServed(t *testing.T) {
+	fifo := func(t *testing.T, p string) {
+		os.Remove(p)
+		if err := syscall.Mkfifo(p, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("current", func(t *testing.T) {
+		s, dir := newStore(t)
+		publish(t, s, id, 1, nil)
+		fifo(t, filepath.Join(dir, bn(id, 1)))
+		_, err := s.Get(id, nil)
+		wantErr(t, "Get", err, resources.ErrUnavailable)
+	})
+	t.Run("baseline", func(t *testing.T) {
+		s, dir := newStore(t)
+		publish(t, s, id, 1, nil)
+		applied(t, s, id, 1)
+		publish(t, s, id, 2, nil, "20")
+		fifo(t, filepath.Join(dir, bn(id, 1)))
+		if r := mustGet(t, s, id, &resources.Cursor{1, dg()}); r.Kind != resources.KindFull || !slices.Equal(r.Members, []string{"20"}) {
+			t.Fatalf("reply = %+v; want the full current body", r)
+		}
+	})
+}
+
+func TestWriterKeepsTheStoreOnReadErrors(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := resources.Open(filepath.Join(file, "sub")) // ENOTDIR: not a content problem
+	if _, err := s.Publish(id, []string{"1"}, nil); !errors.Is(err, syscall.ENOTDIR) {
+		t.Fatalf("Publish error = %v; want ENOTDIR", err)
+	}
+	if b, _ := os.ReadFile(file); string(b) != "x" {
+		t.Fatalf("file changed: %q", b)
+	}
+}
+
+func TestPublishRefusesGenerationOverflow(t *testing.T) {
+	s, dir := newStore(t)
+	publish(t, s, id, 1, nil, "1")
+	idx := readIndex(t, dir)
+	idx["resources"].(map[string]any)[id].(map[string]any)["current"].(map[string]any)["generation"] = "18446744073709551615"
+	raw, _ := json.Marshal(idx)
+	if err := os.WriteFile(filepath.Join(dir, "index.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshot(t, dir)
+	if g, err := s.Publish(id, []string{"2"}, nil); err == nil {
+		t.Fatalf("Publish = %d, nil; want an error", g)
+	}
+	if fmt.Sprint(snapshot(t, dir)) != fmt.Sprint(before) {
+		t.Fatalf("store changed: %v -> %v", before, snapshot(t, dir))
+	}
+}
+
+func TestIdenticalPublishHealsALostBody(t *testing.T) {
+	lose := map[string]func(t *testing.T, p string){
+		"deleted":   func(t *testing.T, p string) { os.Remove(p) },
+		"truncated": func(t *testing.T, p string) { os.Truncate(p, 3) },
+	}
+	for name, f := range lose {
+		t.Run(name, func(t *testing.T) {
+			s, dir := newStore(t)
+			publish(t, s, id, 1, nil, "10", "20")
+			index := snapshot(t, dir)["index.json"]
+			f(t, filepath.Join(dir, bn(id, 1)))
+			publish(t, s, id, 1, nil, "10", "20")
+			if r := mustGet(t, s, id, nil); r.Kind != resources.KindFull || !slices.Equal(r.Members, []string{"10", "20"}) {
+				t.Fatalf("reply = %+v", r)
+			}
+			if got := snapshot(t, dir); got["index.json"] != index || len(got) != 2 {
+				t.Fatalf("store after heal: %v; index was %q", got, index)
+			}
+		})
+	}
+	t.Run("intact body is not rewritten", func(t *testing.T) {
+		s, dir := newStore(t)
+		publish(t, s, id, 1, nil, "10", "20")
+		p := filepath.Join(dir, bn(id, 1))
+		before, err := os.Lstat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		publish(t, s, id, 1, nil, "10", "20")
+		if after, err := os.Lstat(p); err != nil || !os.SameFile(before, after) {
+			t.Fatalf("body file was replaced: %v", err)
+		}
+	})
 }
 
 func TestCanonicalFixture(t *testing.T) {

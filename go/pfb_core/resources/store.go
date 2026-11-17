@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -48,6 +49,9 @@ const (
 	indexVersion = 1
 	maxRounds    = 8 // reads restarted because a publish raced them
 )
+
+// errCorrupt marks an index that was read and cannot be used; any other load error leaves the store untouched.
+var errCorrupt = errors.New("corrupt index")
 
 // Store is a resource store directory. Open does no I/O.
 type Store struct{ dir string }
@@ -166,7 +170,23 @@ func (s *Store) Publish(id string, members []string, metadata map[string]any) (u
 		return 0, err
 	}
 	e := idx.Resources[id]
+	if e != nil && e.Current.Generation == math.MaxUint64 {
+		return 0, fmt.Errorf("%w: %q generation space is exhausted", ErrUnavailable, id)
+	}
 	if e != nil && e.Current.Digest == dg && bytes.Equal(e.Current.Metadata, meta) {
+		// The index says a body is there that is not: write it back under the same generation, index untouched.
+		if fi, err := os.Lstat(s.bodyPath(id, e.Current.Generation)); err != nil || !fi.Mode().IsRegular() || fi.Size() != e.Current.Length {
+			path := s.bodyPath(id, e.Current.Generation)
+			if err := writeTmp(path, body); err != nil {
+				return 0, err
+			}
+			if err := os.Rename(path+".tmp", path); err != nil {
+				return 0, err
+			}
+			if err := s.syncDir(); err != nil {
+				return 0, err
+			}
+		}
 		if e.Removed {
 			e.Removed = false
 			if err := s.save(idx); err != nil {
@@ -369,16 +389,20 @@ func readFile(path string, size int64) ([]byte, error) {
 }
 
 func (s *Store) load() (*index, error) {
-	raw, err := readFile(filepath.Join(s.dir, indexName), -1)
+	path := filepath.Join(s.dir, indexName)
+	if fi, err := os.Lstat(path); err == nil && !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: %s is not a regular file", errCorrupt, path)
+	}
+	raw, err := readFile(path, -1)
 	if err != nil {
 		return nil, err
 	}
 	idx := &index{}
 	if err := json.Unmarshal(raw, idx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", errCorrupt, err)
 	}
 	if idx.Version != indexVersion {
-		return nil, fmt.Errorf("index version %d", idx.Version)
+		return nil, fmt.Errorf("%w: version %d", errCorrupt, idx.Version)
 	}
 	if idx.Resources == nil {
 		idx.Resources = map[string]*entry{}
@@ -387,12 +411,17 @@ func (s *Store) load() (*index, error) {
 }
 
 // loadWriter treats a missing index as an empty store and an unusable one as a lost store: every body is dropped.
+// A read error says nothing about the content and is returned with the store untouched.
 func (s *Store) loadWriter() (*index, error) {
 	idx, err := s.load()
 	if err == nil {
 		return idx, nil
 	}
-	if !errors.Is(err, fs.ErrNotExist) {
+	if !errors.Is(err, errCorrupt) {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+	} else {
 		files, _ := os.ReadDir(s.dir)
 		for _, f := range files {
 			if n := f.Name(); strings.HasSuffix(n, ".body") || strings.HasSuffix(n, ".tmp") {
@@ -419,6 +448,10 @@ func (s *Store) save(idx *index) error {
 		return err
 	}
 	step("index-renamed")
+	return s.syncDir()
+}
+
+func (s *Store) syncDir() error {
 	d, err := os.Open(s.dir)
 	if err != nil {
 		return err
