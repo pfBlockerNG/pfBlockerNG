@@ -69,6 +69,9 @@ if TYPE_CHECKING:
 _PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 _TEXTFILE_DIR = "/var/tmp/node_exporter"
 _PROM = f"{_TEXTFILE_DIR}/pfblockerng.prom"
+_CORE_LOG = "/var/log/pfblockerng/core.log"
+_LANE_SKIPS = "the metrics lane skips its runs:"
+_LANE_RUNS = "the metrics lane runs again:"
 _MINUTE_CAP = 150.0  # a hung-run cap for one guest minute boundary plus Core's run; never an expected wait
 _SENTINEL = "/usr/local/etc/pfb_metrics_enabled"
 _ERROR_LOG = f"{h.PFB_LOGDIR}/error.log"
@@ -164,14 +167,34 @@ def _prom_stamp(vm: SmokeVM) -> str:
     return result.stdout.strip() if result.returncode == 0 else "absent"
 
 
-def _across_next_minute_boundary(vm: SmokeVM) -> None:
-    """Poll the guest clock past the next minute boundary, plus 3 s for Core's run to settle.
+def _metrics_lane_flips(vm: SmokeVM) -> tuple[int, int]:
+    """How often Core's log says the metrics lane flipped to skipping and back to running."""
+    return h.count_log_marker(vm, _CORE_LOG, _LANE_SKIPS), h.count_log_marker(vm, _CORE_LOG, _LANE_RUNS)
 
-    Core logs nothing at a metrics boundary (``lanegate.go`` logs only a maintenance flip), so no event proves the
-    lane's decision point passed; the margin is the smallest that covered Core's PHP run in the live runs.
+
+def _await_lane_running(vm: SmokeVM) -> int:
+    """Poll until Core's metrics lane runs, and return how often it has logged a skip so far.
+
+    Core logs a line only when the lane flips, so the lane must be running before a switch-off for its skip to be
+    logged: no flip since Core started means it runs, and a skip is followed by a runs-again line.
     """
-    now = _guest_epoch(vm)
-    h.wait_guest_epoch(vm, (now // 60 + 1) * 60 + 3, cap=_MINUTE_CAP, interval=1.0)
+
+    def running() -> bool:
+        skips, runs = _metrics_lane_flips(vm)
+        return skips <= runs
+
+    h.wait_until(running, timeout=_MINUTE_CAP, interval=1.0, what="Core's metrics lane running before the switch-off")
+    return _metrics_lane_flips(vm)[0]
+
+
+def _await_lane_skip(vm: SmokeVM, skips_before: int) -> None:
+    """Poll until Core logs that its metrics lane skips: the minute boundary has decided against a run."""
+    h.wait_until(
+        lambda: _metrics_lane_flips(vm)[0] > skips_before,
+        timeout=_MINUTE_CAP,
+        interval=1.0,
+        what="Core logging that its metrics lane skips its runs",
+    )
 
 
 def _exists(vm: SmokeVM, path: str) -> bool:
@@ -338,7 +361,7 @@ def test_metrics_master_disable_removes_file(deployed_vm: SmokeVM) -> None:
     Scenario:
         Given the option is on and the file is published,
         When the master switch is turned off and a sync pass runs,
-        Then no pfblockerng.prom remains, also after the next guest minute boundary.
+        Then no pfblockerng.prom remains, also after Core logs that its metrics lane skips.
     """
     vm = deployed_vm
     _set_export(vm, True)
@@ -346,11 +369,12 @@ def test_metrics_master_disable_removes_file(deployed_vm: SmokeVM) -> None:
     _run_verb(vm)
     assert _exists(vm, _PROM), "precondition: the file must be published"
     try:
+        skips = _await_lane_running(vm)
         h.set_package_enabled(vm, False)
         h.tell_core_the_settings_changed(vm)  # what a settings save does: Core, not the sync, stops the lane
         _sync(vm)
         assert not _exists(vm, _PROM), "pfblockerng.prom must be removed while pfBlockerNG is disabled"
-        _across_next_minute_boundary(vm)
+        _await_lane_skip(vm, skips)
         assert not _exists(vm, _PROM), "Core republished pfblockerng.prom while pfBlockerNG is disabled"
         h.assert_no_pfb_cron_entry(vm, "master switch off")
     finally:
@@ -365,7 +389,7 @@ def test_metrics_toggle_off_removes_file(deployed_vm: SmokeVM) -> None:
     Scenario:
         Given the option is on and the file is published,
         When the option is turned off and a sync pass runs,
-        Then no pfblockerng.prom remains, also after the next guest minute boundary.
+        Then no pfblockerng.prom remains, also after Core logs that its metrics lane skips.
     """
     vm = deployed_vm
     _set_export(vm, True)
@@ -373,10 +397,11 @@ def test_metrics_toggle_off_removes_file(deployed_vm: SmokeVM) -> None:
     _run_verb(vm)
     assert _exists(vm, _PROM), "precondition: the file must be published"
 
+    skips = _await_lane_running(vm)
     _set_export(vm, False)
     _sync(vm)
     assert not _exists(vm, _PROM), "pfblockerng.prom must be removed when the option is off"
-    _across_next_minute_boundary(vm)
+    _await_lane_skip(vm, skips)
     assert not _exists(vm, _PROM), "Core republished pfblockerng.prom while the option is off"
     h.assert_no_pfb_cron_entry(vm, "option off")
 

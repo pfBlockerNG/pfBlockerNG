@@ -1927,19 +1927,6 @@ def restore_guest_clock(
     raise AssertionError(f"the guest clock is not restored: skew of {skew:+d}s after {attempts} attempts")
 
 
-def wait_guest_epoch(vm: SmokeVM, target: int, *, cap: float, interval: float = 2.0) -> int:
-    """Poll the guest clock until it reaches ``target`` (observing a lane's schedule); ``cap`` only fails a hung run."""
-    deadline = time.monotonic() + cap
-    while True:
-        result = vm.ssh("date", "+%s")
-        assert result.returncode == 0 and result.stdout.strip().isdigit(), result
-        now = int(result.stdout.strip())
-        if now >= target:
-            return now
-        assert time.monotonic() < deadline, f"guest clock did not reach {target} within {cap}s (now {now})"
-        time.sleep(min(interval, max(0.2, (target - now) / 2)))
-
-
 def _php_read_scalar(vm: SmokeVM, pre: str, expr: str, *, timeout: float = 60.0) -> str:
     """Run PHP statements ``pre`` then echo the DELIMITED string value of ``expr``.
 

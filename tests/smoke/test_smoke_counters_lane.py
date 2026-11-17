@@ -1,7 +1,7 @@
 """Core's day-change counters lane clears the widget counters with no crontab entry (#3996).
 
-At the first minute boundary of a new local day Core re-reads the settings and runs the counters
-program with the verbs due. The guest clock is stepped to 50 s before a minute boundary on the
+At the first minute boundary of a new local day Core re-reads the settings, logs its decision and runs the
+counters program with the verbs due. The guest clock is stepped to 50 s before a minute boundary on the
 target day, so the observed boundary is the lane's own schedule; the oracle is what
 ``pfBlockerNG_clearsqlite()`` writes: ``lastclear.lastipclear`` / ``lastdnsblclear`` (seeded with
 an old stamp so "cleared" differs from "never had any"). The clock is restored in a ``finally``.
@@ -10,6 +10,7 @@ an old stamp so "cleared" differs from "never had any"). The clock is restored i
 from __future__ import annotations
 
 import os
+import shlex
 import time
 from collections.abc import Iterator
 
@@ -23,6 +24,8 @@ _PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 _IP_CFG = "installedpackages/pfblockerngglobal/widget-clearip"
 _DNSBL_CFG = "installedpackages/pfblockerngglobal/widget-cleardnsbl"
 _OLD = "2000-01-01 00:00:00"
+_CORE_LOG = "/var/log/pfblockerng/core.log"
+_DAY_CHANGE = "the day changed:"
 _CAP = 180.0  # hung-run cap for one minute boundary plus Core's run; never an expected wait
 _SQLITE = f"require_once('{_PFB_INC}');pfb_global();$db = pfb_open_sqlite(6, 'smoke counters lane');"
 
@@ -65,13 +68,24 @@ def _guest(vm: SmokeVM, *argv: str) -> str:
     return result.stdout.strip()
 
 
+_stepped_to: list[int] = []  # midnights earlier cases stepped to: Core fires only on a date after the last it saw
+
+
 def _day_start(vm: SmokeVM, sunday: bool) -> int:
-    """Epoch of the guest's next local midnight whose day is a Sunday (``%u`` 7) or a weekday (1-6)."""
-    for ahead in range(1, 9):
+    """Epoch of a future local midnight on a Sunday (``%u`` 7) or a weekday (1-6), later than any earlier case's."""
+    for ahead in range(1, 30):
         weekday = int(_guest(vm, "date", f"-v+{ahead}d", "+%u"))
-        if (weekday == 7) == sunday:
-            return int(_guest(vm, "date", f"-v+{ahead}d", "-v0H", "-v0M", "-v0S", "+%s"))
-    raise AssertionError("no matching day within a week")
+        midnight = int(_guest(vm, "date", f"-v+{ahead}d", "-v0H", "-v0M", "-v0S", "+%s"))
+        if (weekday == 7) == sunday and midnight > max(_stepped_to, default=0):
+            _stepped_to.append(midnight)
+            return midnight
+    raise AssertionError("no matching day within 30 days")
+
+
+def _lines_ending(vm: SmokeVM, text: str) -> int:
+    """How many lines of Core's log end with ``text`` (letters, spaces and colons only)."""
+    result = vm.ssh(f"/usr/bin/grep -c -e {shlex.quote(text + '$')} {_CORE_LOG} || true")
+    return int(result.stdout.strip() or 0)
 
 
 @pytest.fixture
@@ -117,10 +131,20 @@ def test_core_clears_the_counters_at_a_day_change(
     h.config_set(vm, _DNSBL_CFG, dnsbl_cadence)
     _seed_stamps(vm)
 
+    verbs = " ".join(v for v, on in (("clearip", ip_cleared), ("cleardnsbl", dnsbl_cleared)) if on)
+    decision = f"{_DAY_CHANGE} " + (f"the counters lane clears {verbs}" if verbs else "no counter is due to clear")
+    decided = h.count_log_marker(vm, _CORE_LOG, _DAY_CHANGE)
+    decided_so = _lines_ending(vm, decision)
     midnight = _day_start(vm, sunday)
     _guest(vm, "date", "-f", "%s", str(midnight + 50))
-    boundary = midnight + 60
-    h.wait_guest_epoch(vm, boundary + 5, cap=_CAP, interval=1.0)
+    # Core logs its counters decision at the day change, so this poll ends on the decision, not on a margin.
+    h.wait_until(
+        lambda: h.count_log_marker(vm, _CORE_LOG, _DAY_CHANGE) > decided,
+        timeout=_CAP,
+        interval=1.0,
+        what="Core logging its counters decision at the day change",
+    )
+    assert int(_guest(vm, "date", "+%s")) >= midnight + 60, "Core decided before the day-change boundary"
 
     expected = (ip_cleared, dnsbl_cleared)
 
@@ -135,6 +159,7 @@ def test_core_clears_the_counters_at_a_day_change(
             interval=2.0,
             what="Core clearing the counters at the day-change boundary",
         )
-    # The boundary has passed (the guest clock is 5 s beyond it): what Core did not clear stayed uncleared.
+    assert _lines_ending(vm, decision) > decided_so, f"Core's day-change decision was not {decision!r}"
+    # Core decided this day change: what it did not start clearing stayed uncleared.
     assert cleared() == expected, f"cleared (ip, dnsbl) was {cleared()}, wanted {expected}"
     h.assert_no_pfb_cron_entry(vm, "counters lane done")

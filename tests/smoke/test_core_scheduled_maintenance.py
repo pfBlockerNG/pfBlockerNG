@@ -22,7 +22,7 @@ import pytest
 
 from . import helpers as h
 from .conftest import SmokeVM, _StubDnsServer
-from .test_smoke_core_api import await_core_up
+from .test_smoke_core_api import CORE_RC, await_core_up
 from .test_smoke_tick import (
     _drain_pending_apply,
     _remove_ss_row,
@@ -373,11 +373,6 @@ def _assert_dcc_window_safe(vm: SmokeVM, successful: int) -> None:
     )
 
 
-def next_quarter_hour(epoch: int) -> int:
-    """First Unix quarter-hour boundary strictly after ``epoch``."""
-    return (epoch // 900 + 1) * 900
-
-
 def _receipt_signature(vm: SmokeVM) -> str:
     """Identity of Core's last maintenance receipt (inode, size, mtime), or ``absent``."""
     result = vm.ssh("stat", "-f", "%i %z %m", MAINTENANCE_RECEIPT)
@@ -610,13 +605,24 @@ def test_core_scheduled_maintenance_preserves_tick_duties(maintenance_vm: SmokeV
             assert h.core_update_view(vm)["update"] == last_update, f"{phase}: maintenance minted an Update"
             h.assert_no_pfb_cron_entry(vm, phase)
 
-        # Observe an actual production quarter-hour boundary with the sentinel STILL PRESENT. Core logs nothing
-        # while it stays skipping (lanegate.go logs only a flip), so no event proves its decision point passed:
-        # the margin after the boundary is the smallest that covers its settings re-read and run start.
+        # Observe an actual production quarter-hour boundary with the sentinel STILL PRESENT. Core logs only a flip
+        # (lanegate.go), and a freshly started Core's gate starts as running, so after a restart its first skip
+        # decision is logged: that line is the event that the boundary was decided.
         runs_logged = h.count_log_marker(vm, CORE_LOG, FLIP_RUNS)
+        skips_logged = h.count_log_marker(vm, CORE_LOG, FLIP_SKIPS)
+        for verb in ("stop", "start"):
+            done = vm.ssh(f"{CORE_RC} {verb}", timeout=60)
+            assert done.returncode == 0, f"{CORE_RC} {verb} failed: {done.stdout}{done.stderr}"
+        await_core_up(vm)
         guarded_start = _epoch(vm, "sentinel-present-start")
-        h.wait_guest_epoch(vm, next_quarter_hour(guarded_start) + 30, cap=960)
-        _epoch(vm, "sentinel-present-end")
+        h.wait_until(
+            lambda: h.count_log_marker(vm, CORE_LOG, FLIP_SKIPS) > skips_logged,
+            timeout=990,
+            interval=5,
+            what="Core's quarter-hour logging its skip with the sentinel present",
+        )
+        guarded_end = _epoch(vm, "sentinel-present-end")
+        assert guarded_end // 900 > guarded_start // 900, "Core's skip came before an actual production boundary"
         assert_core_started_nothing("sentinel-present")
         _assert_no_dispatch(vm, "sentinel-present")
         assert h.count_log_marker(vm, CORE_LOG, FLIP_RUNS) == runs_logged, "Core logged a flip to running"

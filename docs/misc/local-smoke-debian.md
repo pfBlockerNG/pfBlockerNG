@@ -222,10 +222,11 @@ verifies the sentinel **before caller configuration cleanup**, rechecks dispatch
 absence, and requires the same running cron identity.
 
 The case skips in ordinary and CI smoke runs (`tests/skip-allowlist.txt` records the skip) and is exercised only by this explicit exception run.
-It observes three real guest quarter-hour boundaries (up to 15 minutes each, polled
-against the guest clock), records guest timestamps and has a 3300-second body cap: sentinel
-present (Core starts no maintenance worker), sentinel absent (Core runs the tick) and package
-disabled (Core starts nothing). Manual tick is only a compatibility control, never scheduled
+It observes three real guest quarter-hour boundaries (up to 15 minutes each), records guest
+timestamps and has a 3300-second body cap: sentinel present (Core, restarted so that its first
+skip is logged, starts no maintenance worker), sentinel absent (Core runs the tick) and package
+disabled (Core starts nothing). Each phase ends on an event (Core's flip line, the receipt and duty
+locks), never on a margin after the boundary. Manual tick is only a compatibility control, never scheduled
 proof. The evidence is the SafeSearch CSV effect, the Outpost's duty lock files
 (`pfb_ss_refresh.lock`, `pfb_apply_reconcile.lock`, removed before each window) and a new
 `maintenance.log.result` receipt in Core's state dir; the tick keeps no duty ledger (see

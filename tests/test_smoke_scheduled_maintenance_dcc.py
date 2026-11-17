@@ -785,14 +785,6 @@ def test_jsonl_result_rejects_bad_prefix_or_missing_aggregate(
         setup.run()
 
 
-@pytest.mark.parametrize(
-    ("epoch", "boundary"),
-    [(0, 900), (899, 900), (900, 1800), (1_700_000_001, 1_700_000_100)],
-)
-def test_next_quarter_hour_is_the_first_boundary_strictly_after(epoch: int, boundary: int) -> None:
-    assert acceptance.next_quarter_hour(epoch) == boundary
-
-
 def test_maintenance_fixture_skips_without_the_scheduled_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     """An ordinary smoke run (CI included) skips the production-cadence case instead of failing every leg."""
     monkeypatch.setenv("SMOKE_PKG", "/inert/pkg")
