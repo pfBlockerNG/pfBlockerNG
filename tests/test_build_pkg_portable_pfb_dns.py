@@ -790,6 +790,16 @@ CORE_VENDOR = "../go/pfb_core/vendor"
 XXH3 = ("github.com/pfBlockerNG/xxh3", "v1.1.1-pfblockerng.1")
 OLDER_XXH3 = ("github.com/pfBlockerNG/xxh3", "v1.1.0-pfblockerng.1")
 PIRES = ("github.com/pires/go-proxyproto", "v0.8.0")
+NETIPX = ("go4.org/netipx", "v0.0.0-20260823151212-3075585bcbeb")  # no tags: only pseudo-versions (#4033)
+NETIPX_REVISION = "3075585bcbeb"
+NETIPX_COMMIT = "3075585bcbeb7a9f042662e543b03efe900018be"
+OTHER_NETIPX = ("go4.org/netipx", "v0.0.0-20260101000000-0123456789ab")
+GO4_MEM = ("go4.org/mem", "v0.0.0-20260823151212-3075585bcbeb")
+
+
+def core_tuple(path: str, tag: str, *, escape: str = "") -> tuple[str, ...]:
+    """The one GH_TUPLE entry that unpacks ``path`` + ``escape`` at ``tag`` under Core's vendor/."""
+    return gh_tuples_for((path + escape, tag), vendor=CORE_VENDOR)
 
 
 def core_go_mod(*requires: tuple[str, str]) -> str:
@@ -833,6 +843,125 @@ CORE_PARITY_FAILURES = [
     ),
 ]
 
+_NETIPX = NETIPX[0]
+# go4.org/netipx (#4033), Core-only and untagged: its tuple names the revision its pseudo-version ends in
+CORE_PARITY_FAILURES += [
+    (
+        "netipx-requires-and-the-recipe-has-no-tuple",
+        (),
+        core_go_mod(NETIPX),
+        f"go.mod only: {_NETIPX} {NETIPX[1]}",
+    ),
+    (
+        "netipx-tuple-at-another-revision",
+        core_tuple(_NETIPX, "ffffffffffff"),
+        core_go_mod(NETIPX),
+        f"GH_TUPLE only: {_NETIPX} ffffffffffff",
+    ),
+    (
+        "netipx-tuple-at-another-commit",
+        core_tuple(_NETIPX, "f" * 40),
+        core_go_mod(NETIPX),
+        f"GH_TUPLE only: {_NETIPX} {'f' * 40}",
+    ),
+    (
+        "netipx-tuple-and-core-does-not-require-it",
+        core_tuple(_NETIPX, NETIPX_REVISION),
+        core_go_mod(),
+        f"GH_TUPLE only: {_NETIPX} {NETIPX_REVISION}",
+    ),
+    (
+        "netipx-tuple-in-the-gateways-vendor-dir",
+        gh_tuples_for((_NETIPX, NETIPX_REVISION)),
+        core_go_mod(NETIPX),
+        f"GH_TUPLE only: {_NETIPX} {NETIPX_REVISION}",
+    ),
+    (
+        "another-go4-module",
+        core_tuple(GO4_MEM[0], "3075585bcbeb"),
+        core_go_mod(GO4_MEM),
+        f"GH_TUPLE only: {GO4_MEM[0]} 3075585bcbeb",
+    ),
+    (
+        "lookalike-of-netipx",
+        core_tuple(_NETIPX + "x", NETIPX_REVISION),
+        core_go_mod((_NETIPX + "x", NETIPX[1])),
+        f"GH_TUPLE only: {_NETIPX}x {NETIPX_REVISION}",
+    ),
+    (
+        "netipx-in-another-case",
+        core_tuple("go4.org/NetIPx", NETIPX_REVISION),
+        core_go_mod(("go4.org/NetIPx", NETIPX[1])),
+        f"GH_TUPLE only: go4.org/NetIPx {NETIPX_REVISION}",
+    ),
+    (
+        "netipx-with-a-trailing-slash",
+        core_tuple(_NETIPX, NETIPX_REVISION, escape="/"),
+        core_go_mod((_NETIPX + "/", NETIPX[1])),
+        f"GH_TUPLE only: {_NETIPX}/ {NETIPX_REVISION}",
+    ),
+    (
+        "netipx-tuple-whose-destination-climbs-out-of-the-vendor-tree",
+        core_tuple(_NETIPX, NETIPX_REVISION, escape="/../../../pfb_dns_gateway/vendor/go4.org/netipx"),
+        core_go_mod(NETIPX),
+        f"GH_TUPLE only: {_NETIPX}/../",
+    ),
+    (
+        "netipx-revision-in-upper-case",
+        core_tuple(_NETIPX, NETIPX_REVISION.upper()),
+        core_go_mod(NETIPX),
+        f"GH_TUPLE only: {_NETIPX} {NETIPX_REVISION.upper()}",
+    ),
+    (
+        "netipx-commit-in-upper-case",
+        core_tuple(_NETIPX, NETIPX_COMMIT.upper()),
+        core_go_mod(NETIPX),
+        f"GH_TUPLE only: {_NETIPX} {NETIPX_COMMIT.upper()}",
+    ),
+    (
+        "netipx-revision-of-11-hex",
+        core_tuple(_NETIPX, NETIPX_REVISION[:11]),
+        core_go_mod(NETIPX),
+        f"GH_TUPLE only: {_NETIPX} {NETIPX_REVISION[:11]}",
+    ),
+    (
+        "netipx-revision-of-13-hex",
+        core_tuple(_NETIPX, NETIPX_COMMIT[:13]),
+        core_go_mod(NETIPX),
+        f"GH_TUPLE only: {_NETIPX} {NETIPX_COMMIT[:13]}",
+    ),
+    (
+        "netipx-go-mod-version-with-a-13-hex-revision",
+        core_tuple(_NETIPX, NETIPX_COMMIT[:13]),
+        core_go_mod((_NETIPX, NETIPX[1] + "e")),
+        f"GH_TUPLE only: {_NETIPX} {NETIPX_COMMIT[:13]}",
+    ),
+    (
+        "netipx-required-twice-at-two-versions",
+        core_tuple(_NETIPX, NETIPX_REVISION),
+        core_go_mod(NETIPX, OTHER_NETIPX),
+        f"go.mod only: {_NETIPX} {OTHER_NETIPX[1]}",
+    ),
+    (
+        "netipx-tuple-by-revision-and-a-tagged-go-mod",
+        core_tuple(_NETIPX, NETIPX_REVISION),
+        core_go_mod((_NETIPX, "v1.0.0")),
+        f"GH_TUPLE only: {_NETIPX} {NETIPX_REVISION}",
+    ),
+    (
+        "netipx-tuple-at-another-tag-than-a-tagged-go-mod",
+        core_tuple(_NETIPX, "v1.0.1"),
+        core_go_mod((_NETIPX, "v1.0.0")),
+        f"GH_TUPLE only: {_NETIPX} v1.0.1",
+    ),
+    (
+        "netipx-by-revision-from-gitlab",
+        (f"cznic:p:{NETIPX_COMMIT}:g/{CORE_VENDOR}/{_NETIPX}",),
+        core_go_mod(NETIPX),
+        "GL_TUPLE entry",
+    ),
+]
+
 # (id, the GH_TUPLE entries beside the gateway's, the source's go/pfb_core/go.mod) the builder accepts
 CORE_PARITY_ACCEPTED = [
     ("core-own-module-at-the-go-mod-tag", gh_tuples_for(XXH3, vendor=CORE_VENDOR), core_go_mod(XXH3)),
@@ -847,6 +976,24 @@ CORE_PARITY_ACCEPTED = [
         gh_tuples_for(XXH3, vendor=CORE_VENDOR),
         core_go_mod(XXH3).replace("require (", "require("),
     ),
+    ("netipx-by-the-revision-its-pseudo-version-ends-in", core_tuple(_NETIPX, NETIPX_REVISION), core_go_mod(NETIPX)),
+    ("netipx-by-the-commit-that-starts-with-it", core_tuple(_NETIPX, NETIPX_COMMIT), core_go_mod(NETIPX)),
+    (
+        "netipx-beside-xxh3",
+        (*gh_tuples_for(XXH3, vendor=CORE_VENDOR), *core_tuple(_NETIPX, NETIPX_REVISION)),
+        core_go_mod(XXH3, NETIPX),
+    ),
+    (
+        "netipx-required-directly",
+        core_tuple(_NETIPX, NETIPX_REVISION),
+        core_go_mod(NETIPX).replace(" // indirect", ""),
+    ),
+    (
+        "netipx-required-twice-at-one-version",
+        core_tuple(_NETIPX, NETIPX_REVISION),
+        core_go_mod(NETIPX, NETIPX),
+    ),
+    ("netipx-at-a-tag-named-by-the-tag", core_tuple(_NETIPX, "v1.0.0"), core_go_mod((_NETIPX, "v1.0.0"))),
 ]
 
 

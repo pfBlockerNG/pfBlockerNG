@@ -1131,18 +1131,26 @@ _DO_BUILD_LINE = re.compile(
 )
 _VENDOR_PREFIX = "../go/pfb_dns_gateway/vendor/"
 _CORE_VENDOR_PREFIX = "../go/pfb_core/vendor/"
-# Owner decision (#3925): the only module Core vendors itself, from a GH_TUPLE under its own vendor/ (the rest of
-# Core's vendor/ is cut from the gateway's). Widening is an owner call, like the GL_TUPLE allow-list below.
-_CORE_OWN_MODULES = frozenset({"github.com/pfBlockerNG/xxh3"})
+# Owner decisions (#3925, #4033): the only modules Core vendors itself, from a GH_TUPLE under its own vendor/ (the rest
+# of Core's vendor/ is cut from the gateway's). Widening is an owner call, like the GL_TUPLE allow-list below.
+_CORE_OWN_MODULES = frozenset({"github.com/pfBlockerNG/xxh3", "go4.org/netipx"})
 # Go's three pseudo-version forms: vX.0.0-<ts>-<rev>, vX.Y.Z-0.<ts>-<rev>, vX.Y.Z-pre.0.<ts>-<rev> (any rev).
 _PSEUDO_VERSION = re.compile(r"^v\d+\.(?:0\.0-|\d+\.\d+-(?:[^+]*\.)?0\.)\d{14}-[0-9A-Za-z]+(?:\+.*)?$")
-# Owner decision (#3511/#3779): the only modules GL_TUPLE may supply (their `go-import` is gitlab.com/cznic/<project>)
-# and the only module whose untagged pseudo-version a GH_TUPLE may name (by revision). Widening either is an owner call.
+# Owner decisions (#3511/#3779, #4033): the only modules GL_TUPLE may supply (their `go-import` is
+# gitlab.com/cznic/<project>) and the only modules whose untagged pseudo-version a GH_TUPLE may name (by revision).
+# Widening either is an owner call. Only the vendor/ destination names the module: a vanity path needs no table.
 _GITLAB_MODULE_HOSTS = frozenset({"modernc.org"})  # first path element of a module GL_TUPLE may fetch
-_PSEUDO_VERSION_MODULES = frozenset({"github.com/remyoudompheng/bigfft"})
+_PSEUDO_VERSION_MODULES = frozenset({"github.com/remyoudompheng/bigfft", "go4.org/netipx"})
 _GITLAB_SITE = "https://gitlab.com:"
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _REVISION = re.compile(r"[0-9a-f]{12}")
+
+
+def _names_revision(pseudo_version: str, tag: str) -> bool:
+    """Whether ``tag`` is the 12-hex revision a pseudo-version ends in, or a full commit starting with it."""
+    revision = pseudo_version.partition("+")[0].rsplit("-", 1)[1]
+    accepted = tag == revision or (_COMMIT.fullmatch(tag) and tag.startswith(revision))
+    return bool(_REVISION.fullmatch(revision) and accepted)
 
 
 def _parse_do_build(mk: Makefile) -> tuple[Path, Path | None]:
@@ -1231,7 +1239,17 @@ def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None, core_requires
                 raise BuildError(f"{variable} entry {entry!r} is not account:project:tag:group/subdir")
             _group, _, subdir = parts[3].partition("/")
             if variable == "GH_TUPLE" and subdir.startswith(_CORE_VENDOR_PREFIX):
-                core_unpacked.add((subdir[len(_CORE_VENDOR_PREFIX) :], parts[2]))
+                path, tag = subdir[len(_CORE_VENDOR_PREFIX) :], parts[2]
+                if path in _PSEUDO_VERSION_MODULES:  # a revision stands for the go.mod pseudo-version it ends
+                    tag = next(
+                        (
+                            v
+                            for m, v in core_requires
+                            if m == path and _PSEUDO_VERSION.search(v) and _names_revision(v, tag)
+                        ),
+                        tag,
+                    )
+                core_unpacked.add((path, tag))
                 continue
             if not subdir.startswith(_VENDOR_PREFIX):
                 core = f" or {_CORE_VENDOR_PREFIX} (Core's own modules)" if variable == "GH_TUPLE" else ""
@@ -1250,9 +1268,7 @@ def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None, core_requires
                     raise BuildError(f"GL_TUPLE entry {entry!r} names {path}, which modules.txt does not list")
                 tag = listed[path]
             elif path in _PSEUDO_VERSION_MODULES and _PSEUDO_VERSION.search(listed.get(path, "")):
-                revision = listed[path].partition("+")[0].rsplit("-", 1)[1]
-                accepted = tag == revision or (_COMMIT.fullmatch(tag) and tag.startswith(revision))
-                if not _REVISION.fullmatch(revision) or not accepted:
+                if not _names_revision(listed[path], tag):
                     raise BuildError(f"GH_TUPLE entry {entry!r} is not the revision of {path} {listed[path]}")
                 tag = listed[path]
             unpacked[path, tag] = variable

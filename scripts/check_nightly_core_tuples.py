@@ -5,7 +5,8 @@ Usage: check_nightly_core_tuples.py MAKEFILE MODULES_TXT SOURCE_ROOT
 
 Runs the portable builder's own tuple check (build-pkg-portable.py `_check_gh_tuple_parity`) at PR time instead of
 at the next nightly: the gateway's tuples must name the modules of the recipe's modules.txt, and the tuples under
-go/pfb_core/vendor/ exactly the modules go/pfb_core/go.mod requires beyond the gateway's (pfBlockerNG/xxh3).
+go/pfb_core/vendor/ exactly the modules go/pfb_core/go.mod requires beyond the gateway's (pfBlockerNG/xxh3 and
+go4.org/netipx).
 Exit 1 with one `::error::` naming the ports follow-up on any disagreement.
 """
 
