@@ -4983,11 +4983,19 @@ function pfb_core_ingest_settings(): array {
  * @return list<array{field: string, message: string}>
  */
 function pfb_core_ingest_faults(array $wanted, array $current, string $id = 'ingest'): array {
+	// Core's JSON lists an object's members in its own order: a list keeps its order, an object is compared by member
+	$sorted = static function (mixed $value) use (&$sorted): mixed {
+		if (is_array($value)) {
+			$value = array_map($sorted, $value);
+			array_is_list($value) || ksort($value);
+		}
+		return $value;
+	};
 	$faults = [];
 	foreach (array_unique(array_merge(array_keys($current), array_keys($wanted))) as $name) {
 		if (!array_key_exists($name, $current)) {
 			$faults[] = ['field' => "{$id}.{$name}", 'message' => 'no such field'];
-		} elseif (!array_key_exists($name, $wanted) || $wanted[$name] !== $current[$name]) {
+		} elseif (!array_key_exists($name, $wanted) || $sorted($wanted[$name]) !== $sorted($current[$name])) {
 			$faults[] = ['field' => "{$id}.{$name}", 'message' => 'read-only: config.xml and the platform own it'];
 		}
 	}
@@ -5324,7 +5332,9 @@ function pfb_core_table_faults(mixed $value, array $fields, string $id): array {
 		$seen = [];
 		foreach ($value[$name] as $i => $item) {
 			$itemFaults = $kind === 'objects' ? pfb_core_table_faults($item, $arg[1], "{$id}.{$name}[{$i}]")
-				: pfb_core_object_faults($item, [$arg[0] => static fn(mixed $v): ?string => is_string($v) && $arg[1]($v) ? NULL : 'not a valid value'], "{$id}.{$name}[{$i}]");
+				: pfb_core_object_faults($item, [$arg[0] => static fn(mixed $v): ?string => is_string($v) && $arg[1]($v)
+					// a text entry its own reader would cut or skip (a `#`) would not be read back
+					&& ($kind !== 'text' || ($arg[2] ?? 'pfb_core_table_line_entry')($v) === $v) ? NULL : 'not a valid value'], "{$id}.{$name}[{$i}]");
 			$faults = array_merge($faults, $itemFaults);
 			if ($itemFaults !== []) {
 				continue;
@@ -6400,6 +6410,7 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
  * @return array<string, mixed> the reply
  */
 function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tmp/node_exporter', ?callable $interfaces = NULL): array {
+	global $pfb;
 	$lookup = $interfaces ?? 'pfb_core_interface_addresses';
 	$addresses = NULL;
 	// One answer per request: an address the request was validated against cannot vanish before it is stored as its interface
@@ -6496,6 +6507,11 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		}
 		foreach ($lists as $projection => $was) {
 			pfb_core_custom_list_flag($projection, $was, $interfaces);
+		}
+		// As the DNSBL page's save: a changed TOP1M switch, count or inclusion list rebuilds the whitelist on the next Update
+		$top1m = array_flip(['top1m', 'top1mCount', 'top1mInclusions']);
+		if (array_intersect_key($request['settings']['policy/dnsbl'], $top1m) != array_intersect_key($now['policy/dnsbl'], $top1m)) {
+			touch("{$pfb['dbdir']}/top-1m.update");
 		}
 		pfb_mark_pending_changes();	// applies on the next Update, as the DNSBL and DNS General saves
 		return ['version' => 1, 'revision' => pfb_core_settings_revision(pfb_core_settings($interfaces))];

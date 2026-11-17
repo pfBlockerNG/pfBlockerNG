@@ -71,7 +71,7 @@ var dnsblMechanisms = []string{"enabled", "disabled_log", "disabled", "nxdomain_
 // tests/core/fixtures/settings_policy_dnsbl_parity.json is the parity fixture.
 func policyDNSBLProjection() Projection {
 	const (
-		lowerToken = `^[^\p{C}\p{Z}A-Z]+$`
+		lowerToken = `^[^\p{C}\p{Z}A-Z#]+$` // the Outpost's text area cuts a line at #
 		listToken  = `^[^\p{C}\p{Z},]+$`
 	)
 	logging := func(name string) Field {

@@ -61,14 +61,14 @@ type Result struct {
 // revision. Initialize, Save and Reload hold wmu across their backend call and mu only to swap the state in, so a slow
 // backend never blocks Get or Validate.
 type Store struct {
-	wmu         sync.Mutex
-	mu          sync.Mutex // guards the state below; it changes only with wmu and mu both held
-	backend     Backend
-	schema      Schema
-	initialized bool
-	revision    uint64
-	values      map[string]map[string]any // projection → field → value; replaced whole, never changed in place
-	token       json.RawMessage           // Stored.PendingToken of the last read
+	wmu          sync.Mutex
+	mu           sync.Mutex // guards the state below; it changes only with wmu and mu both held
+	backend      Backend
+	schema       Schema
+	initialized  bool
+	revision     uint64
+	values       map[string]map[string]any // projection → field → value; replaced whole, never changed in place
+	pendingToken json.RawMessage           // Stored.PendingToken of the last read
 }
 
 // Load reads b once. An empty FileBackend is an uninitialized Core; a configuration that does not read whole under schema
@@ -110,7 +110,7 @@ func (s *Store) fetch(ctx context.Context) error {
 	}
 	s.set(stored.Initialized, stored.Revision, values)
 	s.mu.Lock()
-	s.token = stored.PendingToken
+	s.pendingToken = stored.PendingToken
 	s.mu.Unlock()
 	return nil
 }
@@ -120,7 +120,7 @@ func (s *Store) fetch(ctx context.Context) error {
 func (s *Store) PendingToken() json.RawMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.Clone(s.token)
+	return slices.Clone(s.pendingToken)
 }
 
 func (s *Store) set(initialized bool, revision uint64, values map[string]map[string]any) {

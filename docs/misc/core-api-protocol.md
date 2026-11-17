@@ -465,7 +465,10 @@ the only projection of the IDN mode.
   (pfB-DNS would take it) is not listed. The TLD Allow buckets and the DoH list take the stored CSV's tokens (the DoH ones
   trimmed), the gtld bucket's empty token after `arpa` (no local TLD) is dropped, and an array where a scalar is stored reads as no
   entry. A write of a text area follows the rule of `policy/ip`: lines whose entry stays are kept, lines that hold no entry are
-  kept, and the other entries are appended; a CSV is stored in the given order. A stored regex list pfB-DNS cannot decode (text
+  kept, and the other entries are appended; a CSV is stored in the given order. A text entry its own reader would cut or skip (one
+  holding `#`: the text area ends a line there) is refused, since it would not be read back. A write that changes `top1m`,
+  `top1mCount` or `top1mInclusions` flags the TOP1M whitelist for a rebuild on the next Update (`top-1m.update`), as the DNSBL
+  page's save does. A stored regex list pfB-DNS cannot decode (text
   that is not strict base64, as a hand edit can leave it) reads as no entries, and a write of the list replaces that text.
 - **TOP1M count.** Plain digits whose value is 1 to 1000000 are the count; anything else (`-1`, `abc`, `1e1`, `5abc`, `+5`,
   `1000001`, an array, `0`, empty) is 1000. Today's PHP keeps `-1`, `abc`, `1e1`, `1000001` as typed, and an array.
