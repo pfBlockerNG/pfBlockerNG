@@ -13,16 +13,18 @@ import (
 )
 
 // The Core boundary (map #3813): Core runs unchanged off pfSense, so its code imports nothing but the standard library, its
-// own packages, the golang.org/x modules the feed parser's UTS #46 conversion needs (owner decision, #3906) and the
-// pfBlockerNG fork of xxh3 for the xxh128 feed digest the PHP side writes (owner decision, #3925), and
-// names no pfSense path. A path reaches Core only as a flag value. Every non-test Go file of the module is read, whatever
+// own packages and the owner-approved modules of allowedModules, and names no pfSense path. A path reaches Core only as a flag value. Every non-test Go file of the module is read, whatever
 // its build constraints, so a file built only for FreeBSD is held to the rule on any host.
 
 const coreModule = "github.com/pfBlockerNG/pfBlockerNG/go/pfb_core"
 
-// The only third-party modules Core may import or require: the golang.org/x ones (x/sys for the fork's CPU detection)
-// are pinned in go.mod to the versions of go/pfb_dns_gateway; the fork is vendored by Core itself, at any version.
-var allowedModules = []string{"golang.org/x/net", "golang.org/x/sys", "golang.org/x/text", "github.com/pfBlockerNG/xxh3"}
+// The owner-approved module list (.agents/policy/coding.md "Third-party libraries"): a library comes from a reputable
+// source or is a thoroughly reviewed pfBlockerNG fork, and joins this list only with the owner's approval of that library.
+// golang.org/x/net and x/text: the feed parser's UTS #46 conversion (#3906); x/sys: the xxh3 fork's CPU detection; all
+// three pinned in go.mod to the versions of go/pfb_dns_gateway. github.com/pfBlockerNG/xxh3: the xxh128 feed digest the
+// PHP side writes (#3925), vendored by Core itself. go4.org/netipx: IP set union and subtraction (#4033), vendored by
+// Core itself at a pinned pseudo-version.
+var allowedModules = []string{"golang.org/x/net", "golang.org/x/sys", "golang.org/x/text", "github.com/pfBlockerNG/xxh3", "go4.org/netipx"}
 
 func moduleAllowed(path string) bool {
 	for _, m := range allowedModules {
@@ -167,9 +169,8 @@ func TestCoreImportsNothingPfSenseSpecificAndNamesNoPfSensePath(t *testing.T) {
 	}
 }
 
-// The rule on synthetic modules: golang.org/x/net, x/text and x/sys, and the pfBlockerNG xxh3 fork, in imports and in
-// go.mod, are the only third-party code Core may take (owner decisions #3906 and #3925: the feed parser's UTS #46
-// conversion; the xxh128 digest through the fork); everything else, lookalikes and upstream xxh3 included, still fails.
+// The rule on synthetic modules: the modules of allowedModules, in imports and in go.mod, are the only third-party code
+// Core may take; everything else, lookalikes, upstream xxh3 and other go4.org modules included, still fails.
 func TestBoundaryRuleAllowsOnlyTheNamedModules(t *testing.T) {
 	const idnImport = "import _ \"golang.org/x/net/idna\"\n"
 	cases := []struct {
@@ -193,6 +194,10 @@ func TestBoundaryRuleAllowsOnlyTheNamedModules(t *testing.T) {
 		{"upstream xxh3 imported", "module m\n", "import _ \"github.com/zeebo/xxh3\"\n", "imports github.com/zeebo/xxh3"},
 		{"lookalike of the xxh3 fork imported", "module m\n", "import _ \"github.com/pfBlockerNG/xxh3x\"\n", "imports github.com/pfBlockerNG/xxh3x"},
 		{"lookalike module path", "module m\n", "import _ \"golang.org/x/netx/idna\"\n", "imports golang.org/x/netx/idna"},
+		{"netipx import and require", "module m\n\nrequire go4.org/netipx v0.0.0-20260823151212-3075585bcbeb\n", "import _ \"go4.org/netipx\"\n", ""},
+		{"other go4.org module required", "module m\n\nrequire go4.org/mem v0.0.0-20240501181205-ae6ca9944745\n", "", "go.mod: require go4.org/mem"},
+		{"other go4.org module imported", "module m\n", "import _ \"go4.org/mem\"\n", "imports go4.org/mem"},
+		{"lookalike of netipx imported", "module m\n", "import _ \"go4.org/netipxx\"\n", "imports go4.org/netipxx"},
 		{"replace", "module m\n\nreplace golang.org/x/net => ../net\n", "", "go.mod: replace golang.org/x/net"},
 		{"pfSense path", "module m\n", "var _ = \"/usr/local/etc\"\n", "pfSense path literal"},
 		{"etc tree named without its trailing slash", "module m\n", "var _ = \"/etc\"\n", "pfSense path literal"},
