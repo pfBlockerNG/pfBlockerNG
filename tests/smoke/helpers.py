@@ -1791,21 +1791,6 @@ def _php_read_scalar(vm: SmokeVM, pre: str, expr: str, *, timeout: float = 60.0)
     return out[start + len(_CFG_VAL_OPEN) : end]
 
 
-def set_dnsvip_auto(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
-    """Toggle the ADR-13 'Create VIPs automatically' setting (``pfb_dnsvip_auto``)."""
-    val = "on" if on else ""
-    snippet = (
-        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        f"$d['pfb_dnsvip_auto'] = {_php_str(val)};\n"
-        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
-        "write_config('pfBlockerNG smoke: toggle pfb_dnsvip_auto');\n"
-        "echo 'OK';"
-    )
-    result = php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"set_dnsvip_auto({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
-
-
 def set_dnsbl_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     """Toggle the DNSBL component (``pfb_dnsbl``) so the next reload runs
     pfb_create_dnsbl in 'enabled' / 'disabled' mode (mode keys on dnsbl=='on').
@@ -2046,49 +2031,6 @@ def set_ip_continent(
         )
 
 
-def set_dnsbl_interface(vm: SmokeVM, iface: str, *, timeout: float = 60.0) -> None:
-    """Set the DNSBL interface (``dnsbl_interface``) in the DNSBL-settings section.
-
-    ``iface`` is the pfSense friendly interface name, e.g. ``'lo0'`` (the default)
-    or ``'lan'``.  The DNSBL NAT redirect rule is only emitted when this is not
-    ``'lo0'``, so tests that assert NAT creation must set it to a real LAN interface
-    before the reload that enables DNSBL.
-    """
-    snippet = (
-        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        f"$d['dnsbl_interface'] = {_php_str(iface)};\n"
-        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
-        "write_config('pfBlockerNG smoke: set dnsbl_interface');\n"
-        "echo 'OK';"
-    )
-    result = php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(
-            f"set_dnsbl_interface({iface!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
-        )
-
-
-def set_dnsbl_nonat(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
-    """Set the issue-#381 DNSBL NAT opt-out toggle (``pfb_dnsbl_nonat``).
-
-    When ``on`` is True, the package skips creating the DNSBL
-    ``pfB DNSBL - DO NOT EDIT`` NAT port-forward rules and removes any existing
-    managed ``pfB DNSBL`` NAT on the next reload.  When False (the default),
-    the NAT is created whenever ``dnsbl_interface`` is not ``lo0``.
-    """
-    val = "on" if on else ""
-    snippet = (
-        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        f"$d['pfb_dnsbl_nonat'] = {_php_str(val)};\n"
-        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
-        "write_config('pfBlockerNG smoke: set pfb_dnsbl_nonat');\n"
-        "echo 'OK';"
-    )
-    result = php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"set_dnsbl_nonat({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
-
-
 def set_dnsbl_lenient(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     """Set the ADR-22 ``pfb_dnsbl_lenient`` toggle in the DNSBL-settings section.
 
@@ -2235,12 +2177,6 @@ def marked_vip_subnet(vm: SmokeVM, descr: str = AUTO_VIP_DESCR_V4, *, timeout: f
         "}"
     )
     return _php_read_scalar(vm, pre, "$out", timeout=timeout)
-
-
-def dnsvip4_address(vm: SmokeVM, *, timeout: float = 60.0) -> str:
-    """The IPv4 the stored ``pfb_dnsvip4`` id currently resolves to (or '')."""
-    pre = f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());"
-    return _php_read_scalar(vm, pre, "get_configured_vip_ipv4($d['pfb_dnsvip4'] ?? '') ?? ''", timeout=timeout)
 
 
 def fwobj_state_snapshot(vm: SmokeVM, *, timeout: float = 60.0) -> str:
@@ -3348,31 +3284,18 @@ def _dnsbl_list_php(spec: DnsblCase, row_action: str = "Deny") -> str:
     )
 
 
-# DNSBL settings keys that are INFRASTRUCTURE (set by ensure_dnsbl_vip / set_dnsbl_vip6 /
-# set_dnsvip_auto), not per-case behaviour. _dnsbl_settings_replace_php preserves these across
-# a settings replace — dropping them would leave DNSBL with no VIP/ports and force-disable it.
-_DNSBL_INFRA_KEYS = ("pfb_dnsvip4", "pfb_dnsvip6", "pfb_dnsport", "pfb_dnsport_ssl", "pfb_dnsvip_auto")
-
-
 def _dnsbl_settings_replace_php(settings: dict[str, str]) -> str:
-    """PHP that sets the DNSBL settings to EXACTLY ``{infra keys} + settings`` (replace, not merge).
+    """PHP that sets the DNSBL settings to EXACTLY ``settings`` (replace, not merge).
 
-    Keeps only the VIP/port infrastructure (:data:`_DNSBL_INFRA_KEYS`) the deployed_vm fixture
-    set and REPLACES every behaviour toggle. A plain ``array_merge`` would let a prior case's
+    REPLACES every behaviour toggle. A plain ``array_merge`` would let a prior case's
     ``pfb_idn`` / ``pfb_hsts`` / ``pfb_regex`` survive into this one — :func:`reset` never clears
     config, so within a module a case would inherit toggles it never declared. Shared by
     :func:`_dnsbl_inject_snippet`, :func:`inject_dnsbl_lists` and the test-local writers.
 
     A replace that turns DNSBL on (``pfb_dnsbl`` 'on') also turns pfB-DNS on in the same write: DNSBL runs only through
     pfB-DNS (#3770). Without ``pfb_dnsbl`` 'on' the PHP never mentions pfB-DNS."""
-    keep = ", ".join(_php_str(k) for k in _DNSBL_INFRA_KEYS)
     return (
-        f"$prev = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        "$keep = array();\n"
-        f"foreach (array({keep}) as $k) {{\n"
-        "  if (isset($prev[$k])) { $keep[$k] = $prev[$k]; }\n"
-        "}\n"
-        f"$s = array_merge($keep, {_php_kv_array(settings)});\n"
+        f"$s = {_php_kv_array(settings)};\n"
         f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $s);\n"
         f"{_pfb_dns_on_php() if settings.get('pfb_dnsbl') == 'on' else ''}"
     )
@@ -3830,8 +3753,8 @@ def reset(vm: SmokeVM, *, timeout: float = 60.0) -> None:
 
 # Whole config sections a smoke case injects into. reset_pfb_baseline DELETES these — they
 # are pure test-injected (feed lists) or fully re-established by each module's deployed_vm
-# fixture on setup (the DNSBL VIP/ports via ensure_dnsbl_vip, the IP/DNSBL settings via
-# inject()), so wiping them between modules costs nothing the next setup does not rebuild.
+# fixture on setup (the IP/DNSBL settings via inject()), so wiping them between modules
+# costs nothing the next setup does not rebuild.
 # CFG_GLOBAL (config/0) is deliberately NOT here: it also holds the package's install
 # defaults + wizard flag, so only the toggles a case writes are unset there (below).
 _BASELINE_DEL_SECTIONS = (
@@ -4023,8 +3946,7 @@ def restore_pfb_config_baseline(vm: SmokeVM, *, snapshot_path: str, timeout: flo
     :func:`reset_pfb_baseline` WIPES pfBlockerNG config to empty — correct for the
     module-scoped SMOKE tier, where the next module's ``deployed_vm`` re-establishes
     whatever infrastructure (VIP, ports, ...) it needs. The UI tier is ONE session: a
-    wipe deletes ``pfb_dnsvip4``/``pfb_dnsport``/``pfb_dnsport_ssl`` (the
-    :data:`_DNSBL_INFRA_KEYS`) with nothing left in the session to re-provision them,
+    wipe deleted the DNSBL VIP and ports (removed by issue #4053) with nothing left in the session to re-provision them,
     so every LATER ``pfblockerng_dnsbl.php``/SafeSearch save runs ``pfb_validate_vips``
     against a VIP-less config and gets rejected — 23 functional-leg tests failed this
     way in ui-tests.yml run 28900064099, all reading back ``''`` after the FIRST
@@ -4415,7 +4337,7 @@ def snap_state(vm: SmokeVM, tag: str, *, timeout: float = 30.0) -> None:
         f"/sbin/pfctl -sn  > {dest_sh}/pf_nat.txt     2>/dev/null; "
         f"/sbin/pfctl -sTables > {dest_sh}/pf_tables.txt 2>/dev/null; "
         f"/sbin/ifconfig > {dest_sh}/ifconfig.txt 2>/dev/null; "
-        f"/usr/bin/sockstat | /usr/bin/grep -E ':53|unbound|lighttpd' > {dest_sh}/sockets.txt 2>/dev/null; "
+        f"/usr/bin/sockstat | /usr/bin/grep -E ':53|unbound' > {dest_sh}/sockets.txt 2>/dev/null; "
         # Value-redaction over ALL text files in the snapshot dir (Plus only — no-op
         # for CE). Must run AFTER all files are captured so it covers ifconfig.txt too.
         + build_redact_sed
@@ -6263,7 +6185,6 @@ def dump_diagnostics(vm: SmokeVM) -> None:
             "config.xml virtualip section",
             "sed -n '/<virtualip>/,/<\\/virtualip>/p' /conf/config.xml 2>/dev/null | head -40 || true",
         ),
-        ("config.xml pfb_dnsvip refs", "grep -nE 'pfb_dnsvip|ifconfig.*alias' /conf/config.xml 2>/dev/null || true"),
         ("lo0 aliases (is the VIP plumbed?)", "/sbin/ifconfig lo0 2>/dev/null || true"),
         (
             "config.xml pfBlockerNG section",

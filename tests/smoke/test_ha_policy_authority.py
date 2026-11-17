@@ -66,7 +66,6 @@ from .ha_pair import (
     xmlrpc_call,
 )
 from .ha_policy import (
-    B_VIP_UNIQID,
     DNSBL,
     FINDINGS_FILE,
     GEN,
@@ -203,13 +202,6 @@ def expected_rule_findings(copied: list[dict[str, Any]], generated: list[dict[st
 # --------------------------------------------------------------------------- #
 
 
-def assert_dnsbl_vips(pair: HaPair, when: str) -> None:
-    """Each node still owns the DNSBL VIP object its policy refers to (B's has another uniqid than A's, #3441)."""
-    for name, vm, expected in (("A", pair.primary, h.SMOKE_VIP_UNIQID), ("B", pair.secondary, B_VIP_UNIQID)):
-        owned = php_json(vm, emit("array_column(config_get_path('virtualip/vip', array()), 'uniqid')"))
-        assert expected in owned, f"{when}: node {name} lost its DNSBL VIP {expected!r}; its virtual IPs are {owned!r}"
-
-
 @pytest.fixture(scope="module")
 def baseline(ha_pair: HaPair) -> Baseline:
     """Both nodes at one policy and different local values; A also holds the HA user, so B can send to A (R12).
@@ -223,20 +215,18 @@ def baseline(ha_pair: HaPair) -> Baseline:
     set_leaves(ha_pair.primary, {"hasync": None}, "pfBlockerNG smoke: HA A without core HA sync")
     base = arrange_baseline(ha_pair)
     reset_pair(ha_pair, base)
-    assert_dnsbl_vips(ha_pair, "at the module baseline")
     return base
 
 
 def undo_per_test(pair: HaPair, baseline: Baseline, stack: ExitStack) -> None:
-    """Run the test's undo callbacks, reset both nodes to the baseline, then check the VIPs and the CARP roles.
+    """Run the test's undo callbacks, reset both nodes to the baseline, then check the CARP roles.
 
-    Every step runs even when an earlier one fails (a reset that did not take must not hide which VIP is gone or that
+    Every step runs even when an earlier one fails (a reset that did not take must not hide that
     the roles did not come back); the failures are raised together by the ExitStack, last one first.
     """
     with ExitStack() as steps:
         steps.callback(wait_carp_state, pair.secondary, "BACKUP", node="secondary")
         steps.callback(wait_carp_state, pair.primary, "MASTER", node="primary")
-        steps.callback(assert_dnsbl_vips, pair, "after the per-test reset")
         steps.callback(reset_pair, pair, baseline)
         steps.callback(stack.close)
 

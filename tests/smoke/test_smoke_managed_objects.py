@@ -2,12 +2,9 @@
 
 Proves on a real pfSense CE VM that:
 
-* Enable (needs VIP demand: a DNSBL group answering with the VIP, #3539) → the
-  pfBlockerNG-owned sinkhole VIP (``pfB_AUTO_VIP_v4``) and DNSBL NAT rule
-  (``pfB DNSBL - DO NOT EDIT``) are created in config.xml. (The harness
-  provisions only the v4 auto-VIP; the symmetric v6 path is pinned off-box by
-  ``DnsblMarkedVipTest``.)
-* Disable → the VIP and NAT are removed; no pfB-owned VIP of either family remains.
+* Upgrade (issue #4053) → an apply removes the auto-VIP (``pfB_AUTO_VIP_v4``) at the
+  address its stored id names, the DNSBL NAT rule (``pfB DNSBL - DO NOT EDIT``), the
+  lighttpd conf and the retired settings keys; a manual VIP stays.
 * Uninstall → a seeded ORPHAN VIP is swept (before-and-after); user-created VIP
   and NAT rule survive; ``installedpackages/pfblockerng*`` sections are gone.
 
@@ -35,7 +32,6 @@ import pytest
 from . import helpers as h
 from .conftest import SmokeVM, _StubDnsServer
 from .pkg_identity import branch_pkg_name
-from .test_smoke_dnsbl_policy_default_override import _group_php
 
 pytestmark = pytest.mark.smoke
 
@@ -45,7 +41,7 @@ _PKG_NAME = branch_pkg_name(os.environ.get("SMOKE_PKG"))
 # Descr markers that identify pfBlockerNG-owned objects (mirrors pfb_is_managed_obj in pfblockerng.inc).
 _AUTO_VIP_DESCR_V4 = "pfB_AUTO_VIP_v4"
 _AUTO_VIP_DESCR_V6 = "pfB_AUTO_VIP_v6"
-_DNSBL_NAT_DESCR_PFX = "pfB DNSBL"  # pfb_create_dnsbl uses 'pfB DNSBL - DO NOT EDIT'
+_DNSBL_NAT_DESCR_PFX = "pfB DNSBL"  # PFB_MANAGED_NAT_DESCR: 'pfB DNSBL - DO NOT EDIT'
 
 # User-object descriptors seeded in Scenario C to prove they survive uninstall.
 _USER_VIP_DESCR = "my-test-user-vip-do-not-delete"
@@ -69,15 +65,12 @@ def deployed_vm(  # noqa: ARG001
     provisioned before these tests run (the single-NIC smoke image boots with
     no LAN assigned; these tests create LAN-scoped VIP and NAT rules).
 
-    Egress stays OPEN across reloads: ``pkg add`` pulls RUN_DEPENDS and the
-    DNSBL update path runs ``pfb_create_dnsbl`` which touches pfSense state.
-    ``ensure_dnsbl_vip`` + ``use_system_dns_upstream`` give DNSBL a sinkhole
-    VIP and a reachable upstream so the full update completes cleanly.
+    Egress stays OPEN across reloads: ``pkg add`` pulls RUN_DEPENDS.
+    ``use_system_dns_upstream`` gives DNSBL a reachable upstream so the full update completes cleanly.
 
     The master switch ``enable_cb`` is turned ON here so DNSBL ``$mode`` can
     reach ``'enabled'`` (the enable chain is ``enable_cb`` AND ``pfb_dnsbl`` AND
-    the resolver up). The per-test toggles then flip ``pfb_dnsbl`` /
-    ``pfb_dnsvip_auto`` / the interface. Without this the module silently relied
+    the resolver up). The per-test toggles then flip ``pfb_dnsbl``. Without this the module silently relied
     on an earlier test in the full fan-out leaking ``enable_cb='on'`` — so the
     managed-object legs failed when run in isolation (the #487 selective-dispatch
     leg).
@@ -132,26 +125,6 @@ def _nat_pfb_dnsbl_present(vm: SmokeVM, *, timeout: float = 60.0) -> bool:
     )
     val = h._php_read_scalar(vm, pre, "$found ? 'yes' : 'no'", timeout=timeout)
     return val == "yes"
-
-
-def _set_vip_demand(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
-    """Make one DNSBL group answer with the VIP (``on``) or drop every group (#3539).
-
-    The auto-VIP and the DNSBL NAT exist only while an effective block answers with
-    the VIP (``pfb_dnsbl_vip_demand()``); enabling DNSBL + auto-VIP alone creates neither.
-    """
-    group = ""
-    if on:
-        feed = h.write_local_feed(vm, "smoke_managed_objects_demand.txt", f"{h.unique_domain('mobjdemand')}\n")
-        group = _group_php(aliasname="smokemobj", header="smokemobj", url=feed, logging="enabled")
-    snippet = (
-        f"config_set_path({h._php_str(h.CFG_DNSBL_LISTS)}, array({group}));\n"
-        "write_config('pfBlockerNG smoke #3539: managed-objects VIP demand');\n"
-        "echo 'OK';"
-    )
-    result = h.php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"_set_vip_demand({on}) failed: rc={result.returncode} {result.stderr!r}")
 
 
 def _pfb_sections_present(vm: SmokeVM, *, timeout: float = 60.0) -> bool:
@@ -266,9 +239,9 @@ def _remove_nat_by_descr(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> N
 def _seed_orphan_vip(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> None:
     """Inject an orphan VIP: carries the pfBlockerNG marker but pfb_dnsvip4 is cleared.
 
-    The VIP double-guard in pfb_manage_dnsbl_vip checks that the VIP's subnet ==
-    the address stored in pfb_dnsvip4/pfb_dnsvip6. With pfb_dnsvip4 cleared the
-    guard would SKIP this entry, making it a genuine orphan that only the ADR-35
+    The upgrade cleanup (pfb_dnsbl_vip_retire) checks that the VIP's subnet ==
+    the address stored in pfb_dnsvip4/pfb_dnsvip6. With pfb_dnsvip4 cleared it
+    SKIPS this entry, making it a genuine orphan that only the ADR-35
     marker sweep can catch. The sweep reads descr only — so the orphan IS swept
     despite the double-guard miss.
     """
@@ -328,182 +301,83 @@ def _pkg_delete(vm: SmokeVM, *, timeout: float = 300.0) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Scenario A — enable → VIP + NAT present in config.xml
+# Scenario A — upgrade cleanup of the retired DNSBL web server (issue #4053)
 # --------------------------------------------------------------------------- #
 
+# The objects an earlier version left: the auto-VIP at the address its stored id names, a manual VIP the operator
+# made, the DNSBL NAT redirect, and the lighttpd conf.
+_LEGACY_VIP_UNIQID = "pfblegacyvip"
+_LEGACY_VIP_SUBNET = "10.10.10.1"
+_MANUAL_VIP_DESCR = "pfBlockerNG DNSBL (manual, issue 4053)"
+_LIGHTY_CONF = "/var/unbound/pfb_dnsbl_lighty.conf"
 
-def test_managed_objects_enable_creates_vip_and_nat(deployed_vm: SmokeVM) -> None:
-    """ADR-35 Scenario A: enabling DNSBL with pfb_dnsvip_auto creates pfB-owned objects.
 
-    Scenario: enable creates pfB-owned VIP and DNSBL NAT.
-      Background: pfBlockerNG installed; auto-VIP feature enabled.
+def _seed_legacy_webserver(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Write what a pre-#4053 config carried: auto-VIP + its stored id, a manual VIP, the DNSBL NAT and the conf."""
+    snippet = (
+        f"$d = config_get_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, array());\n"
+        f"$d['pfb_dnsvip4'] = {h._php_str('_vip' + _LEGACY_VIP_UNIQID)};\n"
+        "$d['pfb_dnsvip_auto'] = 'on'; $d['pfb_dnsport'] = '8081'; $d['pfb_dnsport_ssl'] = '8443';\n"
+        f"config_set_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, $d);\n"
+        "$vips = config_get_path('virtualip/vip', array());\n"
+        "$vips[] = array('descr' => PFB_AUTO_VIP_DESCR_V4, 'mode' => 'ipalias', 'interface' => 'lo0',"
+        " 'type' => 'single',"
+        f" 'subnet' => {h._php_str(_LEGACY_VIP_SUBNET)}, 'subnet_bits' => '32',"
+        f" 'uniqid' => {h._php_str(_LEGACY_VIP_UNIQID)});\n"
+        f"$vips[] = array('descr' => {h._php_str(_MANUAL_VIP_DESCR)}, 'mode' => 'ipalias', 'interface' => 'lo0',"
+        " 'type' => 'single', 'subnet' => '127.0.0.201', 'subnet_bits' => '32', 'uniqid' => 'pfbmanualvip');\n"
+        "config_set_path('virtualip/vip', $vips);\n"
+        "$rules = config_get_path('nat/rule', array());\n"
+        "$rules[] = array('descr' => PFB_MANAGED_NAT_DESCR, 'interface' => 'lan', 'protocol' => 'tcp',"
+        " 'destination' => array('address' => '10.10.10.1', 'port' => '80'),"
+        " 'target' => '127.0.0.1', 'local-port' => '8081');\n"
+        "config_set_path('nat/rule', $rules);\n"
+        "write_config('pfBlockerNG smoke #4053: seed the retired DNSBL web server');\n"
+        f"file_put_contents({h._php_str(_LIGHTY_CONF)}, '# legacy');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_seed_legacy_webserver failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
-      Given pfb_dnsvip_auto is OFF and DNSBL is disabled,
-        Then pfB_AUTO_VIP_v4 is absent from virtualip/vip[] (before-state).
-        And no nat/rule[] entry has a 'pfB DNSBL' descr prefix (before-state).
 
-      When pfb_dnsvip_auto is toggled ON and DNSBL is enabled, then a full reload runs,
+def test_upgrade_cleanup_removes_the_retired_webserver_objects(deployed_vm: SmokeVM) -> None:
+    """Issue #4053: an apply strips the block-page web server an earlier version left, and nothing the operator owns.
 
-      Then virtualip/vip[] contains an entry with descr='pfB_AUTO_VIP_v4'.
-        And nat/rule[] contains an entry whose descr starts with 'pfB DNSBL'.
+    Scenario: upgrade cleanup.
+      Given the auto-VIP (marker + the address pfb_dnsvip4 names), a manual VIP, the DNSBL NAT redirect,
+        the lighttpd conf and the retired settings keys are present (before-state asserted),
+      When a full reload runs,
+      Then the auto-VIP, the DNSBL NAT, the conf and the retired keys are gone,
+        And the manual VIP is still present,
+        And a second reload changes nothing.
     """
     vm = deployed_vm
     try:
-        # GIVEN — disable DNSBL, auto-VIP off; assert the before-state.
-        h.set_dnsvip_auto(vm, False)
-        h.set_dnsbl_enabled(vm, False)
+        _seed_legacy_webserver(vm)
+        assert h.marked_vip_subnet(vm, _AUTO_VIP_DESCR_V4) == _LEGACY_VIP_SUBNET, h.fwobj_state_snapshot(vm)
+        assert _nat_pfb_dnsbl_present(vm), h.fwobj_state_snapshot(vm)
+        assert vm.ssh("test", "-e", _LIGHTY_CONF, timeout=30.0).returncode == 0, "seeding the lighttpd conf failed"
+
         h.reload(vm, "update")
 
         assert not _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
-            "pfB_AUTO_VIP_v4 present before enable — before-state is not clean" + f"\n{h.fwobj_state_snapshot(vm)}"
+            "the auto-VIP survived the apply\n" + h.fwobj_state_snapshot(vm)
         )
-        assert not _nat_pfb_dnsbl_present(vm), (
-            "pfB DNSBL NAT rule present before enable — before-state is not clean" + f"\n{h.fwobj_state_snapshot(vm)}"
+        assert _vip_descr_present(vm, _MANUAL_VIP_DESCR), "the apply deleted an operator VIP that carries no marker"
+        assert not _nat_pfb_dnsbl_present(vm), "the DNSBL NAT redirect survived the apply\n" + h.fwobj_state_snapshot(
+            vm
         )
+        assert vm.ssh("test", "-e", _LIGHTY_CONF, timeout=30.0).returncode != 0, f"{_LIGHTY_CONF} survived the apply"
+        for key in ("pfb_dnsvip4", "pfb_dnsvip_auto", "pfb_dnsport", "pfb_dnsport_ssl"):
+            assert h.config_get(vm, f"{h.CFG_DNSBL_SETTINGS}/{key}") == "", f"retired key {key} survived the apply"
+        assert vm.ssh("pgrep", "-f", "lighttpd_pfb", timeout=30.0).returncode != 0, "lighttpd_pfb is still running"
 
-        # WHEN — set dnsbl_interface to 'lan' (NAT is only emitted when iface != 'lo0'),
-        # enable auto-VIP + DNSBL, and run a full reload.
-        _set_vip_demand(vm, True)
-        h.set_dnsbl_interface(vm, "lan")
-        h.set_dnsvip_auto(vm, True)
-        h.set_dnsbl_enabled(vm, True)
         h.reload(vm, "update")
-
-        # THEN — both owned objects must now be present.
-        assert _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
-            "pfB_AUTO_VIP_v4 not created in virtualip/vip after enabling DNSBL + auto-VIP"
-            + f"\n{h.fwobj_state_snapshot(vm)}"
-        )
-        assert _nat_pfb_dnsbl_present(vm), (
-            "pfB DNSBL NAT rule not created in nat/rule after enabling DNSBL" + f"\n{h.fwobj_state_snapshot(vm)}"
-        )
+        assert _vip_descr_present(vm, _MANUAL_VIP_DESCR), "a second apply deleted the operator VIP"
     finally:
-        # Restore to a known baseline so Scenario B and C start clean.
-        _set_vip_demand(vm, False)
-        h.set_dnsbl_interface(vm, "lo0")
-        h.set_dnsvip_auto(vm, False)
-        h.set_dnsbl_enabled(vm, False)
-        h.reload(vm, "update")
-
-
-# --------------------------------------------------------------------------- #
-# Scenario B — disable → VIP + NAT removed from config.xml
-# --------------------------------------------------------------------------- #
-
-
-def test_managed_objects_disable_removes_vip_and_nat(deployed_vm: SmokeVM) -> None:
-    """ADR-35 Scenario B: disabling DNSBL removes pfB-owned VIP and DNSBL NAT.
-
-    Scenario: disable removes pfB-owned VIP and DNSBL NAT.
-
-      Given DNSBL is enabled with pfb_dnsvip_auto ON (auto-VIP in config.xml),
-        And pfB_AUTO_VIP_v4 is present in virtualip/vip[] (before-state),
-        And a pfB DNSBL NAT entry is present in nat/rule[] (before-state),
-
-      When DNSBL is disabled and a full reload runs,
-
-      Then virtualip/vip[] has NO entry with a pfB-owned marker.
-        And nat/rule[] has NO entry whose descr starts with 'pfB DNSBL'.
-    """
-    vm = deployed_vm
-    try:
-        # GIVEN — set dnsbl_interface to 'lan' (NAT is only emitted when iface != 'lo0'),
-        # enable auto-VIP + DNSBL; assert both objects present (before-state).
-        _set_vip_demand(vm, True)
-        h.set_dnsbl_interface(vm, "lan")
-        h.set_dnsvip_auto(vm, True)
-        h.set_dnsbl_enabled(vm, True)
-        h.reload(vm, "update")
-
-        assert _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
-            "pfB_AUTO_VIP_v4 absent before disable — before-state setup failed" + f"\n{h.fwobj_state_snapshot(vm)}"
-        )
-        assert _nat_pfb_dnsbl_present(vm), (
-            "pfB DNSBL NAT absent before disable — before-state setup failed" + f"\n{h.fwobj_state_snapshot(vm)}"
-        )
-
-        # WHEN — disable DNSBL and reload.
-        h.set_dnsbl_enabled(vm, False)
-        h.reload(vm, "update")
-
-        # THEN — both must be gone.
-        assert not _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
-            "pfB_AUTO_VIP_v4 still present in config.xml after disabling DNSBL"
-        )
-        assert not _vip_descr_present(vm, _AUTO_VIP_DESCR_V6), (
-            "pfB_AUTO_VIP_v6 still present in config.xml after disabling DNSBL"
-        )
-        assert not _nat_pfb_dnsbl_present(vm), "pfB DNSBL NAT still present in nat/rule after disabling DNSBL"
-    finally:
-        _set_vip_demand(vm, False)
-        h.set_dnsbl_interface(vm, "lo0")
-        h.set_dnsvip_auto(vm, False)
-        h.set_dnsbl_enabled(vm, False)
-        h.reload(vm, "update")
-
-
-# --------------------------------------------------------------------------- #
-# Scenario B2 — pfb_dnsbl_nonat opt-out skips NAT creation (issue #381)
-# --------------------------------------------------------------------------- #
-
-
-def test_managed_objects_nonat_skips_nat(deployed_vm: SmokeVM) -> None:
-    """Issue #381 Scenario B2: pfb_dnsbl_nonat=on skips the managed DNSBL NAT rule.
-
-    Scenario: DNSBL NAT opt-out prevents pfB DNSBL port-forward creation.
-      Background: pfBlockerNG installed; DNSBL interface set to lan.
-
-      Given pfb_dnsbl_nonat is OFF, DNSBL is disabled, and interface is lo0,
-        Then no nat/rule[] entry starts with 'pfB DNSBL' (before-state is clean).
-
-      When pfb_dnsbl_nonat is OFF, interface=lan, auto-VIP ON, and DNSBL is enabled,
-        Then nat/rule[] CONTAINS a 'pfB DNSBL' entry — the NAT is created by default.
-        (This is the before-state for the opt-out; it would remain True on pre-fix code.)
-
-      Then (opt-out ON) pfb_dnsbl_nonat is set ON and a reload runs,
-        Then nat/rule[] has NO 'pfB DNSBL' entry — the managed NAT is removed.
-        (This assertion is RED on pre-fix code where the toggle is ignored.)
-    """
-    vm = deployed_vm
-    try:
-        # GIVEN — baseline: DNSBL off, opt-out cleared, interface lo0.
-        h.set_dnsbl_nonat(vm, False)
-        h.set_dnsbl_interface(vm, "lo0")
-        h.set_dnsbl_enabled(vm, False)
-        h.reload(vm, "update")
-
-        assert not _nat_pfb_dnsbl_present(vm), (
-            "pfB DNSBL NAT present before test — before-state is not clean" + f"\n{h.fwobj_state_snapshot(vm)}"
-        )
-
-        # WHEN (opt-out OFF) — enable DNSBL on lan with auto-VIP: NAT must be created.
-        _set_vip_demand(vm, True)
-        h.set_dnsbl_interface(vm, "lan")
-        h.set_dnsvip_auto(vm, True)
-        h.set_dnsbl_nonat(vm, False)
-        h.set_dnsbl_enabled(vm, True)
-        h.reload(vm, "update")
-
-        assert _nat_pfb_dnsbl_present(vm), (
-            "pfB DNSBL NAT not created when pfb_dnsbl_nonat=off — default NAT path broken"
-            + f"\n{h.fwobj_state_snapshot(vm)}"
-        )
-
-        # THEN (opt-out ON) — flip pfb_dnsbl_nonat and reload: NAT must be gone.
-        h.set_dnsbl_nonat(vm, True)
-        h.reload(vm, "update")
-
-        assert not _nat_pfb_dnsbl_present(vm), (
-            "pfB DNSBL NAT still present after pfb_dnsbl_nonat=on reload"
-            " — expected: no pfB DNSBL nat/rule[]; actual:" + f"\n{h.fwobj_state_snapshot(vm)}"
-        )
-    finally:
-        _set_vip_demand(vm, False)
-        h.set_dnsbl_nonat(vm, False)
-        h.set_dnsbl_interface(vm, "lo0")
-        h.set_dnsvip_auto(vm, False)
-        h.set_dnsbl_enabled(vm, False)
-        h.reload(vm, "update")
+        _remove_vip_by_descr(vm, _MANUAL_VIP_DESCR)
+        _remove_vip_by_descr(vm, _AUTO_VIP_DESCR_V4)
 
 
 # --------------------------------------------------------------------------- #
@@ -536,11 +410,10 @@ def test_managed_objects_uninstall_sweeps_orphan_preserves_user_objects(deployed
     h.set_pfb_keep(vm, False)
     # GIVEN — seed the three objects; first confirm DNSBL is disabled / clean.
     h.set_dnsbl_enabled(vm, False)
-    h.set_dnsvip_auto(vm, False)
     h.reload(vm, "update")
 
     # Seed the orphan VIP (pfB marker, but pfb_dnsvip4 cleared so the double-guard
-    # in pfb_manage_dnsbl_vip would skip it — only the ADR-35 sweep catches it).
+    # in pfb_dnsbl_vip_retire would skip it — only the ADR-35 sweep catches it).
     # The USER VIP/NAT (below) are deliberately NOT pfB-owned, so the uninstall sweep
     # never removes them (that is the behaviour under test) — everything from here on
     # is wrapped so the finally can remove them itself; otherwise they leak into
@@ -645,7 +518,6 @@ def test_managed_objects_uninstall_keep_on_removes_orphan_retains_sections(deplo
     # GIVEN — set keep=on; confirm DNSBL is disabled; seed orphan + user objects.
     h.set_pfb_keep(vm, True)
     h.set_dnsbl_enabled(vm, False)
-    h.set_dnsvip_auto(vm, False)
     h.reload(vm, "update")
 
     # The USER VIP/NAT (seeded below) are deliberately NOT pfB-owned, so the uninstall
