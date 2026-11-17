@@ -587,13 +587,14 @@ def test_core_scheduled_maintenance_preserves_tick_duties(maintenance_vm: SmokeV
             assert h.SS_BAKED_A in _row(vm, source), f"{phase}: SafeSearch duty ran"
             assert h.count_log_marker(vm, h.PFB_LOG, MARKER) == marker_before, f"{phase}: SafeSearch marker grew"
             assert h.core_update_view(vm)["update"] == last_update, f"{phase}: maintenance minted an Update"
-            _assert_no_dispatch(vm, phase)
+            h.assert_no_pfb_cron_entry(vm, phase)
 
         # Observe an actual production quarter-hour boundary with the sentinel STILL PRESENT.
         guarded_start = _epoch(vm, "sentinel-present-start")
         h.wait_guest_epoch(vm, next_quarter_hour(guarded_start) + 30, cap=960)
         _epoch(vm, "sentinel-present-end")
         assert_core_started_nothing("sentinel-present")
+        _assert_no_dispatch(vm, "sentinel-present")
         assert h.count_log_marker(vm, CORE_LOG, FLIP_SKIPS) >= 1, "Core never logged that maintenance skips its runs"
         runs_logged = h.count_log_marker(vm, CORE_LOG, FLIP_RUNS)
         with vm.scheduled_maintenance():
@@ -609,7 +610,7 @@ def test_core_scheduled_maintenance_preserves_tick_duties(maintenance_vm: SmokeV
             assert h.count_log_marker(vm, h.PFB_LOG, MARKER) > marker_before
             assert h.core_update_view(vm)["update"] == last_update, "maintenance minted a public Update"
             assert h.count_log_marker(vm, CORE_LOG, FLIP_RUNS) > runs_logged, "Core logged no maintenance flip to runs"
-            _assert_no_dispatch(vm, "scheduled-window")
+            h.assert_no_pfb_cron_entry(vm, "scheduled-window")
             skips_logged = h.count_log_marker(vm, CORE_LOG, FLIP_SKIPS)
             # A disabled package: Core still reads the settings every boundary and starts nothing.
             h.set_package_enabled(vm, False)
