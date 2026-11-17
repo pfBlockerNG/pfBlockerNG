@@ -562,6 +562,8 @@ func TestInconsistentIndexNeverServed(t *testing.T) {
 			edit(t, dir, "current", f)
 			r, err := s.Get(id, nil)
 			wantErr(t, fmt.Sprintf("Get (reply %+v)", r), err, resources.ErrUnavailable)
+			r, err = s.Get(id, &resources.Cursor{1, dg("10", "20")})
+			wantErr(t, fmt.Sprintf("Get at the current cursor (reply %+v)", r), err, resources.ErrUnavailable)
 		})
 	}
 	for name, f := range edits {
