@@ -488,6 +488,7 @@ test_smoke_ip_recompute.py::test_recompute_geoip_restored_clears_match_artifacts
 test_smoke_ip_recompute.py::test_recompute_rewrites_unchanged_sibling_across_passes 3.27
 test_smoke_ip_recompute.py::test_recompute_suppression_realigns_across_sibling_change 3.23
 test_smoke_ip_recompute.py::test_recompute_v6_snapshot_round_trips_across_static_pass 2.68
+test_smoke_ipset_corpus.py 290.00
 test_smoke_ipv6_alerts.py 5.91
 test_smoke_ipv6_alerts.py::test_collect_localip_recognises_ipv6_address_and_subnet 5.91
 test_smoke_ipv6_filterlog.py 7.57
