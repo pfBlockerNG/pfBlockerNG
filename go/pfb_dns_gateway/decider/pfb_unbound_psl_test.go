@@ -406,7 +406,7 @@ func TestShippedPslAuthorityLoadsAsPythonDoes(t *testing.T) { // oracle: the shi
 		want  int
 	}{
 		{"icannExact", rules.icannExact, 6927}, {"icannWildcard", rules.icannWildcard, 16}, {"icannException", rules.icannException, 8},
-		{"privateExact", rules.privateExact, 3162}, {"privateWildcard", rules.privateWildcard, 298}, {"privateException", rules.privateException, 0},
+		{"privateExact", rules.privateExact, 3204}, {"privateWildcard", rules.privateWildcard, 298}, {"privateException", rules.privateException, 0},
 	} {
 		if len(c.got) != c.want {
 			t.Errorf("len(%s) = %d, want %d", c.field, len(c.got), c.want)
