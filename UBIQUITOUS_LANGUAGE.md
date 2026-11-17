@@ -1,6 +1,28 @@
 # Ubiquitous Language
 
-Domain: agent reasoning-effort and model-selection configuration (Claude Code, Codex, and GitHub Copilot in this repository).
+Domains: pfBlockerNG's Core/Outpost architecture (map #3813), and agent reasoning-effort and model-selection configuration (Claude Code, Codex, and GitHub Copilot in this repository).
+
+## Core and Outpost
+
+Owner terminology, 2026-11-17 (map #3813). Name the process that does a step; never write "Core decides" or "PHP decides" for a
+step of an Update.
+
+| Term | Definition | Aliases to avoid |
+| ---- | ---------- | ---------------- |
+| **Core** | The platform-neutral Go side of pfBlockerNG. It owns every business decision and stays on the Core host when Core and Outpost run on separate hosts. Today it runs co-located with the Outpost on pfSense, as the **Core API**, the **Core Updater** and **pfB-DNS** | Go side, the daemon |
+| **Core API** | The `pfb-core` process that admits and schedules Updates, holds settings in memory, and serves settings and resources (generations, deltas) over the versioned API (`docs/misc/core-api-protocol.md`) | Core (when the process is meant), the server |
+| **Core Updater** | The `pfb-core --update-worker` process that owns one **Update** from start to finish: work list, Extras, every download and parse, pre- and post-scripts, hooks, DNSBL, DNSBLIP, aggregation, suppression, publishing generations, then triggering the **Outpost apply** and settling. A Core API restart does not stop it | Update program, worker, FeedPhase |
+| **Update** | One run of the Core Updater, admitted by the Core API (scheduled, manual, apply or retry) | Cron run, sync |
+| **pfB-DNS** | The DNS engine (`pfb-dns`, `go/pfb_dns_gateway`): part of Core as a product, its own process, and a Core API client for `dnsbl/*` and `settings/dns` | DNS proxy (for the engine), the decider (for the whole process) |
+| **Outpost** | The platform-specific side; on pfSense, the PHP package. It turns Core's published state into platform state (alias tables, `pfctl`, rules, filter reload, services, the Resolver move, listeners, certificates), runs the GUI, and decides nothing about an Update | PHP layer, the package (for this role) |
+| **Outpost apply** | The Outpost step that applies Core's published generations to the platform and advances its cursors. While co-located, the Core Updater triggers it once at the end of an Update | Update program, sync_package (for the role) |
+| **Settings backend** | Where Core's settings are stored. On pfSense it is `config.xml`, read and written through the Outpost's adapter command; Core keeps no store of its own. A standalone Core uses its own file store. This is the one concession the Outpost makes beyond applying | Core config, settings mirror |
+
+### Relationships
+
+- **Core** = **Core API** + **Core Updater** + **pfB-DNS**; the **Outpost** reaches Core only through the **Core API**.
+- An **Update** runs entirely in the **Core Updater**; the **Outpost** takes part only through the **Settings backend** read and the **Outpost apply**.
+- A download, parse or policy decision in Outpost code is a defect against map #3813, not a design choice.
 
 ## Effort and model selection
 
