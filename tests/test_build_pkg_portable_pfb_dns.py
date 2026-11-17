@@ -884,6 +884,12 @@ CORE_PARITY_FAILURES += [
         f"GH_TUPLE only: {_NETIPX} {NETIPX_REVISION}",
     ),
     (
+        "netipx-tuple-at-the-pseudo-version-itself",  # no tag can be a pseudo-version: only its revision names it
+        core_tuple(_NETIPX, NETIPX[1]),
+        core_go_mod(NETIPX),
+        "pseudo-version",
+    ),
+    (
         "bigfft-by-revision-under-cores-vendor-dir",  # the gateway's pseudo-version module is not Core's
         core_tuple(BIGFFT[0], BIGFFT_REVISION),
         core_go_mod(BIGFFT),

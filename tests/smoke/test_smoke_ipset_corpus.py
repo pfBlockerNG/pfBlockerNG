@@ -825,11 +825,9 @@ def validate(doc: dict[str, Any]) -> list[str]:
 
 
 def _scrub(value: Any) -> Any:
-    """The comparable form of a result: bookkeeping keys (leading underscore) removed."""
+    """The comparable form of a result: the harness's timing key removed at the root only (a file may have any name)."""
     if isinstance(value, dict):
-        return {k: _scrub(v) for k, v in value.items() if not k.startswith("_")}
-    if isinstance(value, list):
-        return [_scrub(v) for v in value]
+        return {k: v for k, v in value.items() if k != "_seconds"}
     return value
 
 
@@ -846,17 +844,21 @@ def diff(want: Any, got: Any, path: str = "") -> list[str]:
                 out.extend(diff(want[key], got[key], f"{path}/{key}"))
         return out
     if isinstance(want, list) and isinstance(got, list) and all(isinstance(x, str) for x in want + got):
-        name = path.rsplit("/", 1)[-1]
-        a, b = (want, got) if name in ORDERED else (sorted(want), sorted(got))
+        # a pipeline pass names its canonical sets by alias, so the parent key decides there
+        ordered = path.rsplit("/", 1)[-1] in ORDERED or path.rsplit("/", 2)[-2:-1] == ["canonical"]
+        a, b = (want, got) if ordered else (sorted(want), sorted(got))
         if a == b:
             return []
         extra = [x for x in b if x not in a]
         lost = [x for x in a if x not in b]
-        how = "in order" if name in ORDERED else "as a multiset"
+        how = "in order" if ordered else "as a multiset"
         return [
             f"{path}: lists differ {how}: expected {len(want)} rows, actual {len(got)}; "
             f"only in expected {lost[:5]!r}, only in actual {extra[:5]!r}"
         ]
+    if isinstance(want, list) and isinstance(got, list) and len(want) == len(got):
+        # a list of results (the pipeline's passes): position by position, so the lists inside keep their own rule
+        return [d for i, (w, g) in enumerate(zip(want, got, strict=True)) for d in diff(w, g, f"{path}[{i}]")]
     if want == got:
         return []
     return [f"{path}: expected {want!r} actual {got!r}"]

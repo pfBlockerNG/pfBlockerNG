@@ -1242,6 +1242,11 @@ def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None, core_requires
             _group, _, subdir = parts[3].partition("/")
             if variable == "GH_TUPLE" and subdir.startswith(_CORE_VENDOR_PREFIX):
                 path, tag = subdir[len(_CORE_VENDOR_PREFIX) :], parts[2]
+                if _PSEUDO_VERSION.search(tag):
+                    raise BuildError(
+                        f"GH_TUPLE entry {entry!r} names a pseudo-version, which no GH_TUPLE tag can name: "
+                        "name the revision it ends in"
+                    )
                 if path in _CORE_PSEUDO_VERSION_MODULES:  # a revision stands for the go.mod pseudo-version it ends
                     tag = next(
                         (

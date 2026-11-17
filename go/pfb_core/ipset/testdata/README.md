@@ -30,7 +30,7 @@ frozen. A one-member difference is a failure, never a tolerance.
   `{"count": n, "sha256": "<hex>"}`: `n` lines, and the SHA-256 of the lines sorted bytewise (`LC_ALL=C sort`) and joined with
   `\n`, no trailing newline (the empty list is `count` 0 and the hash of the empty string). Digests are order-insensitive
   on purpose.
-- Bookkeeping keys that begin with `_` are never part of an `expect`.
+- The harness's timing key `_seconds`, at the root of a result, is never part of an `expect`.
 - Time stamps the script writes into its error log (`[ <date time> ]`) are recorded as `[ TS ]`.
 
 ### Generator recipes
@@ -253,18 +253,10 @@ To refreeze after an intended change of the oracle (never to make a failing case
    import json
 
 
-   def strip(v):
-       if isinstance(v, dict):
-           return {k: strip(x) for k, x in v.items() if not k.startswith("_")}
-       if isinstance(v, list):
-           return [strip(x) for x in v]
-       return v
-
-
    doc = json.load(open("ipset.json"))
    act = json.load(open("ipset_corpus_actual.json"))["results"]
    for c in doc["cases"]:
-       c["expect"] = strip(act[c["id"]])
+       c["expect"] = {k: v for k, v in act[c["id"]].items() if k != "_seconds"}
    with open("ipset.json", "w") as f:
        json.dump(doc, f, indent=1, ensure_ascii=False)
        f.write("\n")
