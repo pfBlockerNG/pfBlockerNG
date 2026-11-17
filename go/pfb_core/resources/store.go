@@ -124,11 +124,11 @@ func validSeg(s string) bool {
 }
 
 // Canonical returns members sorted in byte order without duplicates, the order of PHP's pfb_canonical_alias_set. It sorts
-// and compacts members in place, so the input slice is spent. A member that is empty, not UTF-8 or holds a control
-// character is refused.
+// and compacts members in place, so the input slice is spent. A member that is empty, not UTF-8, holds a control
+// character or starts with "#" (PHP drops such a line, so the Outpost could not mirror it) is refused.
 func Canonical(members []string) ([]string, error) {
 	for _, m := range members {
-		if m == "" || !utf8.ValidString(m) || strings.IndexFunc(m, unicode.IsControl) >= 0 {
+		if m == "" || m[0] == '#' || !utf8.ValidString(m) || strings.IndexFunc(m, unicode.IsControl) >= 0 {
 			return nil, fmt.Errorf("invalid member %q", m)
 		}
 	}
@@ -209,6 +209,9 @@ func (s *Store) Publish(id string, members []string, metadata map[string]any) (u
 	}
 	step("body-written")
 	if err := os.Rename(path+".tmp", path); err != nil {
+		return 0, err
+	}
+	if err := s.syncDir(); err != nil {
 		return 0, err
 	}
 	step("body-renamed")
@@ -330,12 +333,10 @@ func (s *Store) Get(id string, cursor *Cursor) (Reply, error) {
 
 // lines splits a canonical body: one string allocation, the members are substrings of it.
 func lines(body []byte) []string {
-	all, out := string(body), []string{}
-	for len(all) > 0 {
-		m, rest, _ := strings.Cut(all, "\n")
-		out, all = append(out, m), rest
+	if len(body) == 0 {
+		return []string{}
 	}
-	return out
+	return strings.Split(strings.TrimSuffix(string(body), "\n"), "\n")
 }
 
 // diff is one merge pass over two canonical bodies; only the differing lines become strings.
@@ -364,9 +365,15 @@ func diff(base, cur []byte) (add, remove []string) {
 }
 
 func (s *Store) readBody(id string, g gen) ([]byte, error) {
+	if g.Length < 0 {
+		return nil, errors.New("negative body length in the index")
+	}
 	b, err := readFile(s.bodyPath(id, g.Generation), g.Length)
 	if err == nil && digest.Bytes(b) != g.Digest {
 		err = errors.New("body digest differs from the index")
+	}
+	if err == nil && bytes.Count(b, []byte{'\n'}) != g.Entries {
+		err = errors.New("body line count differs from the index")
 	}
 	return b, err
 }

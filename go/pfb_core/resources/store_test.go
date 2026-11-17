@@ -359,6 +359,23 @@ func TestRetentionTransitions(t *testing.T) {
 			t.Fatalf("metadata = %s", r.Metadata)
 		}
 	})
+	t.Run("C13 pruning one id leaves a sibling whose escaped name it prefixes", func(t *testing.T) {
+		s, dir := newStore(t)
+		publish(t, s, "dnsbl/x", 1, nil, "1")
+		publish(t, s, "dnsbl/xy", 1, nil, "1")
+		publish(t, s, "dnsbl/x", 2, nil, "2")
+		wantNames(t, dir, "index.json", "dnsbl~x.2.body", "dnsbl~xy.1.body")
+		if r := mustGet(t, s, "dnsbl/xy", nil); !slices.Equal(r.Members, []string{"1"}) {
+			t.Fatalf("sibling reply = %+v", r)
+		}
+		if err := s.Remove("dnsbl/x"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RemovalApplied("dnsbl/x"); err != nil {
+			t.Fatal(err)
+		}
+		wantNames(t, dir, "index.json", "dnsbl~xy.1.body")
+	})
 	t.Run("C12 empty body is a generation", func(t *testing.T) {
 		s, _ := newStore(t)
 		publish(t, s, id, 1, nil, "1")
@@ -396,7 +413,7 @@ func TestInvalidIDsTouchNothing(t *testing.T) {
 }
 
 func TestInvalidMembersAreRefused(t *testing.T) {
-	for _, m := range []string{"", "1.2.3.4\n5.6.7.8", "a\rb", "a\tb", "a\x00b", "\xff\xfe", "a\u0085b", "a\x7fb"} {
+	for _, m := range []string{"", "1.2.3.4\n5.6.7.8", "a\rb", "a\tb", "a\x00b", "\xff\xfe", "a\u0085b", "a\x7fb", "#x", "#"} {
 		s, dir := newStore(t)
 		publish(t, s, id, 1, nil, "1")
 		before := snapshot(t, dir)
@@ -408,6 +425,9 @@ func TestInvalidMembersAreRefused(t *testing.T) {
 		}
 	}
 	s, _ := newStore(t)
+	if g, err := s.Publish(id, []string{"a#b", "b"}, nil); err != nil || g != 1 {
+		t.Fatalf("a member with # past its first byte: %d, %v", g, err)
+	}
 	if _, err := s.Publish(id, []string{"a"}, map[string]any{"f": func() {}}); err == nil {
 		t.Fatal("Publish accepted metadata that cannot be marshalled")
 	}
@@ -502,6 +522,46 @@ func TestBrokenBodiesNeverServed(t *testing.T) {
 			applied(t, s, id, 1)
 			publish(t, s, id, 2, nil, "20", "30")
 			corrupt(t, filepath.Join(dir, bn(id, 1)))
+			r := mustGet(t, s, id, &resources.Cursor{1, dg("10", "20")})
+			if r.Kind != resources.KindFull || !slices.Equal(r.Members, []string{"20", "30"}) {
+				t.Fatalf("reply = %+v; want the full current body", r)
+			}
+		})
+	}
+}
+
+func TestInconsistentIndexNeverServed(t *testing.T) {
+	edits := map[string]func(g map[string]any){
+		"negative length":  func(g map[string]any) { g["length"] = -1 },
+		"entries one more": func(g map[string]any) { g["entries"] = g["entries"].(float64) + 1 },
+		"entries negative": func(g map[string]any) { g["entries"] = -1 },
+	}
+	edit := func(t *testing.T, dir, which string, f func(map[string]any)) {
+		t.Helper()
+		idx := readIndex(t, dir)
+		f(idx["resources"].(map[string]any)[id].(map[string]any)[which].(map[string]any))
+		b, err := json.Marshal(idx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "index.json"), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, f := range edits {
+		t.Run("current "+name, func(t *testing.T) {
+			s, dir := newStore(t)
+			publish(t, s, id, 1, nil, "10", "20")
+			edit(t, dir, "current", f)
+			r, err := s.Get(id, nil)
+			wantErr(t, fmt.Sprintf("Get (reply %+v)", r), err, resources.ErrUnavailable)
+		})
+		t.Run("baseline "+name, func(t *testing.T) {
+			s, dir := newStore(t)
+			publish(t, s, id, 1, nil, "10", "20")
+			applied(t, s, id, 1)
+			publish(t, s, id, 2, nil, "20", "30")
+			edit(t, dir, "applied", f)
 			r := mustGet(t, s, id, &resources.Cursor{1, dg("10", "20")})
 			if r.Kind != resources.KindFull || !slices.Equal(r.Members, []string{"20", "30"}) {
 				t.Fatalf("reply = %+v; want the full current body", r)
@@ -701,6 +761,8 @@ func TestDeltaRebuildsTheNewBodyExactly(t *testing.T) {
 	}
 }
 
+// It exercises the reader's restart on a raced publish as often as the scheduler interleaves them, and asserts only that
+// no torn reply is ever seen.
 func TestReadersNeverSeeATornPublish(t *testing.T) {
 	var x, y []string
 	for i := range 2000 {
