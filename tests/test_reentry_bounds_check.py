@@ -39,6 +39,7 @@ _SH = f"{_PKG}/pfblockerng.sh"
 _UPDATE = "src/usr/local/www/pfblockerng/pfblockerng_update.php"
 _IP_PAGE = "src/usr/local/www/pfblockerng/pfblockerng_ip.php"
 _WIDGET = "src/usr/local/www/widgets/widgets/pfblockerng.widget.php"
+_METRICS_SH = f"{_PKG}/pfb_core_metrics.sh"
 
 # The two token halves a re-entry composition needs: an interpreter and the target.
 _PHP_BIN = "/usr/local/bin/php"
@@ -233,7 +234,7 @@ def test_mwexec_bg_three_physical_lines_above_does_not_reach_the_composition() -
 
 
 # --------------------------------------------------------------------------- #
-# The allowlist: eight entries, each load-bearing. Every one gets three rows --
+# The allowlist: two entries, each load-bearing. Every one gets three rows --
 # the real line is clean, a near-miss in the SAME file still flags (needle-
 # scoped, not file-scoped), and emptying `_ALLOWLIST` brings the real line back
 # (so a dead entry cannot rot unnoticed).
@@ -259,42 +260,6 @@ _ALLOWLIST_ROWS: tuple[_AllowRow, ...] = (
         '\t"${pathphp}" "${pathpfbphp}" "$@"',
     ),
     _AllowRow(
-        "pfblockerng.inc/$pfb_tick_cmd",
-        _INC,
-        '\t$pfb_tick_cmd = "' + _SPAWN + ' cron-tick >> {$log} 2>&1";',
-        '\t$tick_command = "' + _SPAWN + ' cron-tick >> {$log} 2>&1";',
-    ),
-    _AllowRow(
-        "pfblockerng_apply.inc/$pfb_cmd",
-        _APPLY,
-        '\t\t$pfb_cmd = "' + _SPAWN + ' {$type} >/dev/null 2>&1";',
-        '\t\t$widget_cmd = "' + _SPAWN + ' {$type} >/dev/null 2>&1";',
-    ),
-    _AllowRow(
-        "pfblockerng_install.inc/$pfb_cmd_esc",
-        _INSTALL,
-        '\t\t$pfb_cmd_esc = "' + _SPAWN + " '{$type}' >/dev/null 2>&1\";",
-        '\t\t$stale_needle = "' + _SPAWN + " '{$type}' >/dev/null 2>&1\";",
-    ),
-    _AllowRow(
-        "pfblockerng_install.inc/$pfb_cmd",
-        _INSTALL,
-        '\t\t\t$pfb_cmd = "' + _SPAWN + ' {$type} >/dev/null 2>&1";',
-        '\t\t\t$widget_cmd = "' + _SPAWN + ' {$type} >/dev/null 2>&1";',
-    ),
-    _AllowRow(
-        "pfblockerng_update.php/$pfb_cmd",
-        _UPDATE,
-        '$pfb_cmd = "' + _SPAWN + " cron-tick >> {$pfb['log']} 2>&1\";",
-        '$cron_needle = "' + _SPAWN + " cron-tick >> {$pfb['log']} 2>&1\";",
-    ),
-    _AllowRow(
-        "pfblockerng.widget.php/$pfb_cmd",
-        _WIDGET,
-        '\t\t\t$pfb_cmd = "' + _SPAWN + ' {$type} >/dev/null 2>&1";',
-        '\t\t\t$widget_clear_cmd = "' + _SPAWN + ' {$type} >/dev/null 2>&1";',
-    ),
-    _AllowRow(
         "pfb_core_metrics.sh/exec timeout",
         f"{_PKG}/pfb_core_metrics.sh",
         "exec /usr/bin/timeout -s TERM -k 5 50 " + _SPAWN + " metrics",
@@ -305,9 +270,9 @@ _ALLOWLIST_ROWS: tuple[_AllowRow, ...] = (
 _ALLOW_IDS = [row.entry for row in _ALLOWLIST_ROWS]
 
 
-def test_allowlist_holds_exactly_the_eight_recorded_entries() -> None:
-    """Eight entries, no more: a new one is a decision, never a convenience."""
-    assert len(crb._ALLOWLIST) == 8
+def test_allowlist_holds_exactly_the_two_recorded_entries() -> None:
+    """Two entries, no more: a new one is a decision, never a convenience."""
+    assert len(crb._ALLOWLIST) == 2
 
 
 @pytest.mark.parametrize("row", _ALLOWLIST_ROWS, ids=_ALLOW_IDS)
@@ -385,8 +350,8 @@ def test_single_token_line_needs_no_allowlist_entry(row: _InertRow, monkeypatch:
 
 def test_allowlist_needle_on_a_different_line_leaves_that_line_flagged() -> None:
     """Hostile row: the needle exempts ITS line, never every line of the file."""
-    text = '\t\t\t$pfb_cmd = "' + _SPAWN + ' {$type} >/dev/null 2>&1";\n\t\texec("' + _SPAWN + ' dc scheduled");'
-    violations = _find(text, _WIDGET)
+    text = "exec /usr/bin/timeout -s TERM -k 5 50 " + _SPAWN + " metrics\nexec " + _SPAWN + " dc scheduled"
+    violations = _find(text, _METRICS_SH)
     assert len(violations) == 1
     assert violations[0].line == 2
 
@@ -474,10 +439,10 @@ def test_hostile_non_utf8_bytes_do_not_crash_the_scan(tmp_path: Path) -> None:
 
 def test_hostile_tabs_do_not_defeat_needle_or_token_matching() -> None:
     """Tabs around `=` and inside the command change nothing on either side."""
-    clean = '\t\t\t$pfb_cmd\t=\t"' + _PHP_BIN + "\t" + _TARGET + '\t{$type}";'
-    assert _find(clean, _WIDGET) == []
-    flagged = '\t\t\t$widget_cmd\t=\t"' + _PHP_BIN + "\t" + _TARGET + '\t{$type}";'
-    assert len(_find(flagged, _WIDGET)) == 1
+    clean = "exec\t/usr/bin/timeout\t-s\tTERM\t-k\t5\t50\t" + _PHP_BIN + "\t" + _TARGET + "\tmetrics"
+    assert _find(clean.replace("\t", " "), _METRICS_SH) == []
+    flagged = "exec\t" + _PHP_BIN + "\t" + _TARGET + "\tmetrics"
+    assert len(_find(flagged, _METRICS_SH)) == 1
     assert len(_find("\t" + _PHP_BIN + "\t" + _TARGET + "\tasn", _SH)) == 1
 
 

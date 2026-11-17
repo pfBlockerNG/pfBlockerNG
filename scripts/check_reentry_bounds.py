@@ -3,7 +3,7 @@
 
 A physical line is a composition when it names both a PHP interpreter and the
 re-entry target. Compositions are clean only when backgrounded or matched by one
-of eight repository-path-and-line exemptions for the bounded shell seam and
+of two repository-path-and-line exemptions for the bounded shell seam and
 crontab command strings. Commented compositions still flag.
 
 With no paths, scan tracked `.php`, `.inc`, and `.sh` files under `src/`.
@@ -59,43 +59,13 @@ class _Exempt(NamedTuple):
     why: str
 
 
-# Exactly eight entries, every one load-bearing (each exempts a line that the token rule
-# alone would flag). Adding a ninth is a decision, never a convenience.
+# Exactly two entries, every one load-bearing (each exempts a line that the token rule
+# alone would flag). Adding a third is a decision, never a convenience.
 _ALLOWLIST: tuple[_Exempt, ...] = (
     _Exempt(
         "src/usr/local/pkg/pfblockerng/pfblockerng.sh",
         '"${_pfbre_tmo}"',
         "pfb_reentry(): the bounded shell seam itself -- this IS the timeout(1) spawn.",
-    ),
-    _Exempt(
-        "src/usr/local/pkg/pfblockerng/pfblockerng.inc",
-        "$pfb_tick_cmd =",
-        "crontab command string for install_cron_job(); never executed by this process.",
-    ),
-    _Exempt(
-        "src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc",
-        "$pfb_cmd =",
-        "crontab command string for the widget clear jobs; never executed here.",
-    ),
-    _Exempt(
-        "src/usr/local/pkg/pfblockerng/pfblockerng_install.inc",
-        "$pfb_cmd_esc =",
-        "crontab needle for stale-entry removal; a string compared, never executed.",
-    ),
-    _Exempt(
-        "src/usr/local/pkg/pfblockerng/pfblockerng_install.inc",
-        "$pfb_cmd =",
-        "crontab command string for the widget clear jobs; never executed here.",
-    ),
-    _Exempt(
-        "src/usr/local/www/pfblockerng/pfblockerng_update.php",
-        "$pfb_cmd =",
-        "crontab needle for the 'Missing cron task' check; a string compared, never run.",
-    ),
-    _Exempt(
-        "src/usr/local/www/widgets/widgets/pfblockerng.widget.php",
-        "$pfb_cmd =",
-        "crontab command string for the widget clear jobs; never executed here.",
     ),
     _Exempt(
         "src/usr/local/pkg/pfblockerng/pfb_core_metrics.sh",

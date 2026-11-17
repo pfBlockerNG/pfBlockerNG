@@ -34,7 +34,7 @@ STUB
   End
 
   It 'runs the metrics verb under the 50 s timeout while the export is on'
-    : > "$work/sentinel"
+    true > "$work/sentinel"
     When call run_wrapper
     The status should equal 7
     The output should equal "$(printf '%s\n' "$work/timeout" '-s' 'TERM' '-k' '5' '50' '/usr/local/bin/php' '/usr/local/www/pfblockerng/pfblockerng.php' 'metrics')"

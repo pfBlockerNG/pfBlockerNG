@@ -6385,7 +6385,7 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir, float $t
  * no schedule state and no schedule cache, reserves nothing and runs no Extra or feed pass.
  *
  * Lives here (not in the www/ dispatcher script) so the PHPUnit bootstrap can load and call the real entrypoint off-appliance
- * (review finding ADR43-5). Both www dispatch verbs -- the direct `pfblockerng.php tick` and the crontab's `cron-tick` (gated by
+ * (review finding ADR43-5). Both www dispatch verbs -- the direct `pfblockerng.php tick` and the by-hand `cron-tick` (gated by
  * .pfb_cron_disable) -- just call this function.
  *
  * Scheduled log maintenance (pfb_log_mgmt) is skipped while an Update runs (the one this tick asked for, one Core reports in

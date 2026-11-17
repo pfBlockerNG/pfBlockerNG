@@ -410,8 +410,8 @@ $pfb['dnsblarchive']	= '/usr/local/etc/pfb_dnsbl_cache.tar';
 // marker here survives a reboot (the change really is still unapplied) until a real Update clears
 // it. See pfb_pending_changes_marker().
 $pfb['pending_marker']	= '/usr/local/etc/pfb_pending_changes';
-// #3522: metrics export state, also in /usr/local/etc and not $pfb['dbdir'] (RAM-disked /var): the cron entry survives
-// a reboot in config.xml, so the enabled sentinel that lets it publish and the pass times must survive it too.
+// #3522: metrics export state, also in /usr/local/etc and not $pfb['dbdir'] (RAM-disked /var): Core schedules the
+// export from the enabled sentinel, so it and the pass times must survive a reboot.
 $pfb['metrics_enabled']		= '/usr/local/etc/pfb_metrics_enabled';
 $pfb['metrics_lock']		= '/usr/local/etc/pfb_metrics.lock';
 $pfb['metrics_dir_missing']	= '/usr/local/etc/pfb_metrics_dir_missing';
@@ -4282,11 +4282,12 @@ const PFB_CORE_MAINTENANCE_CMD = '/usr/local/pkg/pfblockerng/pfb_core_maintenanc
 // issue #3996: the every-minute metrics export and the day-change counter clearing Core runs (--metrics-cmd, --counters-cmd); the package installs no crontab entry
 const PFB_CORE_METRICS_CMD = '/usr/local/pkg/pfblockerng/pfb_core_metrics.sh';
 const PFB_CORE_COUNTERS_CMD = '/usr/local/pkg/pfblockerng/pfb_core_counters.sh';
-// Every crontab command an earlier version installed, as the substring install_cron_job() matches on (issue #3996).
+// Every crontab command an earlier version installed, as the substring install_cron_job() matches on (issue #3996); the trailing space
+// after a verb keeps a user's own `clearip_backup` or `metrics_x` job out of reach.
 const PFB_LEGACY_CRON_NEEDLES = [
 	'pfblockerng.php cron-tick', 'pfblockerng.php tick', 'pfblockerng.php cron ', 'pfblockerng.php dcc', 'pfblockerng.php ss_refresh',
-	'pfblockerng.php bl', 'pfblockerng.php metrics', 'pfblockerng.php clearip', 'pfblockerng.php cleardnsbl',
-	"pfblockerng.php 'clearip'", "pfblockerng.php 'cleardnsbl'",
+	'pfblockerng.php bl', 'pfblockerng.php metrics ', 'pfblockerng.php clearip ', 'pfblockerng.php cleardnsbl ',
+	"pfblockerng.php 'clearip' ", "pfblockerng.php 'cleardnsbl' ",
 ];
 // The adapter reads at most this many bytes of request from stdin
 const PFB_CORE_SETTINGS_MAX_REQUEST = 33554432;	// 32 MiB, as Core takes a reply: the feed projections carry custom lists
@@ -15173,9 +15174,9 @@ function pfb_apply_alias_delta(
 function pfblockerng_retire_cron_jobs(): void {
 	foreach (PFB_LEGACY_CRON_NEEDLES as $needle) {
 		// install_cron_job() removes only the first entry holding the needle; a daily and a weekly clear entry may both exist
-		for ($entries = count(config_get_path('cron/item', [])); $entries > 0; $entries--) {
+		for ($entries = count(config_get_path('cron/item', [])); $entries > 0; $entries--) { // foreign key — out of ADR-29 gateway scope
 			$found = FALSE;
-			foreach (config_get_path('cron/item', []) as $item) {
+			foreach (config_get_path('cron/item', []) as $item) { // foreign key — out of ADR-29 gateway scope
 				if (strpos((string) ($item['command'] ?? ''), $needle) !== FALSE) {
 					$found = TRUE;
 					break;

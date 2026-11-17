@@ -75,7 +75,11 @@ final class RetireCronJobsTest extends TestCase
 	public function testItRemovesEveryLegacyEntryIncludingSeveralOfOneVerbAndKeepsOtherJobs(): void
 	{
 		$legacy = $this->legacyEntries();
-		$others = ['/usr/sbin/newsyslog', '/usr/local/bin/php /usr/local/www/otherpackage.php clearip-cache'];
+	$others = [
+			'/usr/sbin/newsyslog', '/usr/local/bin/php /usr/local/www/otherpackage.php clearip-cache',
+			self::PHP . 'clearip_backup >/dev/null 2>&1', self::PHP . 'cleardnsbl2 >/dev/null 2>&1', self::PHP . 'metrics_x >> /dev/null 2>&1',
+			self::PHP . "'clearip'x >/dev/null 2>&1", self::PHP . "'cleardnsbl'x >/dev/null 2>&1",
+		];
 		$this->seed(array_merge($legacy, $others));
 		$this->assertSame(array_merge($legacy, $others), $this->commands(), 'before: daily and weekly entries of one verb, quoted and not');
 
