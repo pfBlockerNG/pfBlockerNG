@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os/exec"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -69,9 +70,11 @@ func cadencesDue(prev, boundary time.Time, loc *time.Location) []string {
 // runClock, until ctx ends, starts metrics at each Unix minute boundary when ls (from memory, never reloaded per minute) says the
 // package is enabled and exports metrics, and counters at each boundary whose local date in zone() (nil func or result: the local
 // zone) is later than the previous boundary's, kept in memory only, with the counter verbs due, after reading ls again. With
-// no usable ls values nothing starts. It never touches a running child.
+// no usable ls values nothing starts. It logs each flip of the metrics lane between starting and skipping and each day change's
+// counters decision, so an observer can wait for a decision instead of a margin. It never touches a running child.
 func runClock(ctx context.Context, now func() time.Time, after func(time.Duration) <-chan time.Time, zone func() *time.Location, metrics, counters *lane, ls *laneSettings) {
 	var prev time.Time
+	var skipping bool // the metrics lane's last decision, logged only when it flips
 	for {
 		n := now()
 		b := time.Unix((n.Unix()/60+1)*60, 0)
@@ -100,11 +103,26 @@ func runClock(ctx context.Context, now func() time.Time, after func(time.Duratio
 		} else {
 			cur, ok = ls.read()
 		}
-		if ok && cur.Enabled && cur.MetricsExport {
-			metrics.start()
+		if ok {
+			run := cur.Enabled && cur.MetricsExport
+			if metrics.path != "" && skipping != !run {
+				if skipping = !run; skipping {
+					metrics.logf("the metrics lane skips its runs: the package is disabled or the export is off")
+				} else {
+					metrics.logf("the metrics lane runs again: the package is enabled and the export is on")
+				}
+			}
+			if run {
+				metrics.start()
+			}
 		}
-		if verbs := counterVerbs(cur, due); ok && len(verbs) > 0 {
-			counters.start(verbs...)
+		if verbs := counterVerbs(cur, due); ok && len(due) > 0 && counters.path != "" {
+			if len(verbs) == 0 {
+				counters.logf("the day changed: no counter is due to clear")
+			} else {
+				counters.logf("the day changed: the counters lane clears %s", strings.Join(verbs, " "))
+				counters.start(verbs...)
+			}
 		}
 		prev = b
 	}

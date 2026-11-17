@@ -352,3 +352,62 @@ func TestRunClockStartsNothingWhenCancelledDuringTheDayChangeReload(t *testing.T
 		t.Errorf("a stopped Core still started programs after the reload: %q", got)
 	}
 }
+
+// The metrics lane logs one line when it flips between starting and skipping its runs, none while it stays as it is, so an
+// observer knows a minute boundary has decided against a run without waiting for a margin.
+func TestMetricsLogsOneLinePerFlipAndNoneWhileSteady(t *testing.T) {
+	on := map[string]any{"enabled": true, "metricsExport": true}
+	st, b := laneStoreOver(t, on)
+	rec := &logRecorder{}
+	out := filepath.Join(t.TempDir(), "out")
+	metrics := &lane{name: "metrics", path: laneProgram(t, t.TempDir(), "prog", `echo run >> `+out), logf: rec.logf}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := &fakeClock{cur: time.Date(2024, 5, 6, 12, 0, 30, 0, time.UTC), ticks: 6, cancel: cancel, lanes: []*lane{metrics}}
+	// before boundary 3 the export goes off, before boundary 5 it comes back
+	plan := map[int]map[string]any{2: {"enabled": true, "metricsExport": false}, 4: on}
+	after := func(d time.Duration) <-chan time.Time {
+		if v, ok := plan[len(f.waits)]; ok {
+			b.set(v, nil)
+			if _, err := st.Reload(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return f.after(d)
+	}
+	runClock(ctx, f.now, after, func() *time.Location { return time.UTC }, metrics, &lane{}, newLaneSettings(st, rec.logf))
+	within(t, "the metrics lane to be reaped", idle(metrics))
+	want := []string{
+		"the metrics lane skips its runs: the package is disabled or the export is off",
+		"the metrics lane runs again: the package is enabled and the export is on",
+	}
+	if !reflect.DeepEqual(rec.lines, want) {
+		t.Errorf("logged %q, want %q", rec.lines, want)
+	}
+	if got := len(lines(readFile(t, out))); got != 4 {
+		t.Errorf("metrics started %d times over 6 boundaries, want 4", got)
+	}
+}
+
+// At each local day change the counters lane logs what it clears, or that nothing is due, so an observer knows the day change
+// was decided; ordinary minute boundaries log nothing.
+func TestCountersLogTheirDecisionAtEachDayChange(t *testing.T) {
+	for _, c := range []struct {
+		ip, dnsbl, want string
+	}{
+		{"never", "never", "the day changed: no counter is due to clear"},
+		{"daily", "weekly", "the day changed: the counters lane clears clearip"},
+		{"daily", "daily", "the day changed: the counters lane clears clearip cleardnsbl"},
+	} {
+		t.Run(c.ip+"-"+c.dnsbl, func(t *testing.T) {
+			st, _ := laneStoreOver(t, map[string]any{"clearIpCounters": c.ip, "clearDnsblCounters": c.dnsbl})
+			rec := &logRecorder{}
+			counters := &lane{name: "counters", path: laneProgram(t, t.TempDir(), "prog", `:`), logf: rec.logf}
+			start := time.Date(2024, 3, 5, 23, 58, 30, 0, time.UTC) // a weekday; the second of 3 boundaries is the day change
+			drive(t, start, 3, func() *time.Location { return time.UTC }, &lane{}, counters, newLaneSettings(st, rec.logf))
+			if want := []string{c.want}; !reflect.DeepEqual(rec.lines, want) {
+				t.Errorf("logged %q, want %q", rec.lines, want)
+			}
+		})
+	}
+}
