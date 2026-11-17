@@ -626,7 +626,7 @@ def measure_resource(vm: SmokeVM, work: str, mode: str, digest: str) -> dict[str
         deadline = time.monotonic() + READY_WATCHDOG
         while True:  # the real condition: the API answers; a Core that exited fails at once, the watchdog only salvages
             up = vm.ssh(
-                f"{CURL} -s -o /dev/null -w %{{http_code}} --unix-socket {api} -X POST http://localhost/v1/GetVersion"
+                f"{CURL} -s -o /dev/null -w '%{{http_code}}' --unix-socket {api} -X POST http://localhost/v1/GetVersion"
             )
             if up.stdout.strip() == "200":
                 break
@@ -670,8 +670,8 @@ def test_a_php_caller_holds_a_full_body_of_two_million_entries_and_its_one_perce
     Given a store of two generations of 2,000,000 IPv4 members (generation 2 replaces 1 % of generation 1), on a private
     directory under /root (never a RAM disk), served by a fresh Core for each measurement;
     when curl and then a PHP caller (plain ``php``, no ini override) ask for the 1 % delta and for the full body;
-    then both are served as the protocol says, and the PHP caller held the decoded reply and verified the body's digest.
-    Wall time and peak memory are printed for the PR (PFB_RESOURCE_MEASURE), never asserted.
+    then both are served as the protocol says, the PHP caller held each decoded reply, and it verified the full body's
+    digest. Wall time and peak memory are printed (PFB_RESOURCE_MEASURE), never asserted.
     """
     missing = core_vm.ssh(f"for tool in {CURL} {PROCSTAT}; do test -x $tool || echo $tool; done", timeout=30)
     assert missing.stdout.split() == [], f"the box lacks {missing.stdout.split()}: the measurement needs them"
@@ -699,7 +699,7 @@ def test_a_php_caller_holds_a_full_body_of_two_million_entries_and_its_one_perce
         assert {k: delta[k] for k in want} == want, f"delta: want {want}, got {delta}"
         want = {"kind": "full", "generation": "2", "members": MEASURE_ENTRIES, "digest_ok": True}
         assert {k: full[k] for k in want} == want, f"full: want {want}, got {full}"
-        # A diagnostic, never an assertion: durations and memory are what the PR records
+        # A diagnostic, never an assertion
         print(
             "PFB_RESOURCE_MEASURE "
             + json.dumps(
