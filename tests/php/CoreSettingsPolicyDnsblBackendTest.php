@@ -405,6 +405,43 @@ final class CoreSettingsPolicyDnsblBackendTest extends TestCase
 		$this->assertSame('on', config_get_path('installedpackages/pfblockerngipsettings/config/0/enable_dup'));
 	}
 
+	/** @return array<string, array{0: array<string, mixed>, 1: bool}> a change of the projection, and whether the DNSBL page's save would flag TOP1M for it */
+	public static function top1mInputs(): array
+	{
+		return [
+			'the count'         => [['top1mCount' => 5000], TRUE],
+			'the switch'        => [['top1m' => TRUE], TRUE],
+			'the inclusions'    => [['top1mInclusions' => [['tld' => 'com'], ['tld' => 'net']]], TRUE],
+			'the regex switch'  => [['regex' => TRUE], FALSE],
+			'the SafeSearch'    => [['safeSearch' => TRUE], FALSE],
+		];
+	}
+
+	/** @param array<string, mixed> $change */
+	#[DataProvider('top1mInputs')]
+	public function testAWriteThatChangesATop1mInputFlagsTheWhitelistForTheNextUpdateAsTheDnsblPageDoes(array $change, bool $flagged): void
+	{
+		$GLOBALS['pfb']['dbdir'] = $this->dir;
+		$marker = "{$this->dir}/top-1m.update";
+		$this->assertFileDoesNotExist($marker, 'before-state: no marker');
+
+		$reply = $this->writePolicy(static fn(array $policy): array => $change + $policy);
+
+		$this->assertArrayNotHasKey('error', $reply, json_encode($reply));
+		$this->assertSame($flagged, file_exists($marker), $flagged ? 'the next Update rebuilds the TOP1M whitelist' : 'TOP1M is not flagged for a setting it does not read');
+	}
+
+	public function testARefusedWriteOfATop1mInputFlagsNothing(): void
+	{
+		$GLOBALS['pfb']['dbdir'] = $this->dir;
+		$this->configXmlOnDisk(FALSE);
+
+		$reply = $this->writePolicy(static fn(array $policy): array => ['top1mCount' => 5000] + $policy);
+
+		$this->assertSame('unavailable', $reply['error']['code'] ?? NULL, json_encode($reply));
+		$this->assertFileDoesNotExist("{$this->dir}/top-1m.update", 'config.xml did not change: nothing to rebuild');
+	}
+
 	public function testTheAdapterTakesTheDnsblProjectionAfterGeoipInTheProtocolsOrder(): void
 	{
 		$this->assertSame(['dns', 'feeds/ipv4', 'feeds/ipv6', 'feeds/dnsbl', 'schedule', 'ingest', 'policy/ip', 'feeds/geoip', 'policy/dnsbl', 'extras', 'hooks', 'maintenance'], array_keys($this->read()['settings']));

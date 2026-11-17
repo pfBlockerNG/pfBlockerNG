@@ -182,6 +182,9 @@
   ],
   "refused": [
     {"id":"whitelist-newline","description":"A whitelist entry holding a line break is two entries.","policyDnsbl":{"whitelist":[{"domain":"a.example\nb.example"}]},"field":"whitelist[0].domain"},
+    {"id":"tld-blacklist-comment","description":"A TLD starting with # is a comment line to the reader: it would not be read back.","policyDnsbl":{"tldBlacklist":[{"tld":"#com"}]},"field":"tldBlacklist[0].tld"},
+    {"id":"tld-blacklist-inline-comment","description":"The reader cuts a line at #: the entry would be read back as another.","policyDnsbl":{"tldBlacklist":[{"tld":"com#note"}]},"field":"tldBlacklist[0].tld"},
+    {"id":"tld-exclusions-inline-comment","description":"The reader cuts a line at #: the entry would be read back as another.","policyDnsbl":{"tldExclusions":[{"domain":"a.example#x"}]},"field":"tldExclusions[0].domain"},
     {"id":"whitelist-label-64","description":"A whitelist domain's label is at most 63 characters, as the Outpost's domain filter holds it.","policyDnsbl":{"whitelist":[{"domain":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example"}]},"field":"whitelist[0].domain"},
     {"id":"whitelist-nul","description":"A whitelist entry holding a NUL cannot be stored.","policyDnsbl":{"whitelist":[{"domain":"a\u0000.example"}]},"field":"whitelist[0].domain"},
     {"id":"whitelist-empty-entry","description":"A whitelist entry is not empty.","policyDnsbl":{"whitelist":[{"domain":""}]},"field":"whitelist[0].domain"},

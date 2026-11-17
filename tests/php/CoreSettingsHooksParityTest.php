@@ -57,7 +57,8 @@ final class CoreSettingsHooksParityTest extends TestCase
 	{
 		$GLOBALS['config'] = $this->priorConfig;
 		$GLOBALS['pfb'] = $this->priorPfb;
-		foreach (['write_config_calls', 'write_config_args', 'write_config_result', 'write_config_hook', 'lock_events', 'lock_held', 'try_lock_fail'] as $global) {
+		foreach (['write_config_calls', 'write_config_args', 'write_config_result', 'write_config_hook', 'config_read_hook', 'config_read_calls',
+			'config_read_lock_held', 'lock_events', 'lock_held', 'try_lock_fail'] as $global) {
 			unset($GLOBALS["pfb_test_{$global}"]);
 		}
 		rmdir_recursive($this->dir);
@@ -249,6 +250,25 @@ final class CoreSettingsHooksParityTest extends TestCase
 		$this->assertArrayNotHasKey('error', $reply, json_encode($reply));
 		$this->assertSame(self::ROWS, config_get_path(self::HOOKS . '/row'), 'the stored rows are untouched');
 		$this->assertSame($read['settings']['hooks'], $this->read()['settings']['hooks'], 'hooks is as it was');
+	}
+
+	public function testAWriteWhoseRowsListTheirMembersInAnotherOrderIsUnchanged(): void
+	{
+		config_set_path(self::HOOKS . '/row', self::ROWS);
+		$this->configXmlOnDisk();
+		$read = $this->read();
+		$settings = $read['settings'];
+		// Core's JSON lists an object's members in sorted order, not the adapter's
+		$settings['hooks']['rows'] = array_map(static function (array $row): array {
+			ksort($row);
+			return $row;
+		}, $settings['hooks']['rows']);
+		$this->assertNotSame(array_keys($read['settings']['hooks']['rows'][0]), array_keys($settings['hooks']['rows'][0]), 'the members are in another order');
+
+		$reply = $this->backend(['version' => 1, 'op' => 'write', 'expectedRevision' => $read['revision'], 'settings' => $settings]);
+
+		$this->assertSame(['version' => 1, 'revision' => $read['revision']], $reply, 'the same rows are no change, whatever order their members come in');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'nothing is written');
 	}
 
 	public function testAChangedHooksBeneathAStaleRevisionIsAConflictNotARefusal(): void
