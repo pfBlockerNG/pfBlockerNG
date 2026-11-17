@@ -22,9 +22,18 @@ type laneBackend struct {
 	reads         int
 	err           error
 	uninitialized bool
+	onRead        func(ctx context.Context) error // called outside the lock, before the read answers; an error fails it
 }
 
-func (b *laneBackend) Read(context.Context) (settings.Stored, error) {
+func (b *laneBackend) Read(ctx context.Context) (settings.Stored, error) {
+	b.mu.Lock()
+	hook := b.onRead
+	b.mu.Unlock()
+	if hook != nil {
+		if err := hook(ctx); err != nil {
+			return settings.Stored{}, err
+		}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.reads++
@@ -295,5 +304,51 @@ func TestLanesStartNothingWithoutUsableSettingsAndLogOnce(t *testing.T) {
 	}
 	if rec.count() != 1 {
 		t.Errorf("the missing settings were logged %d times %q over 4 boundaries, want once", rec.count(), rec.lines)
+	}
+}
+
+// A Core that is stopped while a day change reads the settings starts nothing after the read, and the loop returns.
+func TestRunClockStartsNothingWhenCancelledDuringTheDayChangeReload(t *testing.T) {
+	st, b := laneStoreOver(t, map[string]any{"enabled": true, "metricsExport": true, "clearIpCounters": "daily"})
+	entered := make(chan struct{})
+	b.mu.Lock()
+	b.onRead = func(ctx context.Context) error {
+		close(entered)
+		<-ctx.Done() // the reload is blocked until Core is stopped
+		return ctx.Err()
+	}
+	b.mu.Unlock()
+	dir := t.TempDir()
+	metricsOut, countersOut := filepath.Join(dir, "m"), filepath.Join(dir, "c")
+	rec := &logRecorder{}
+	metrics := &lane{name: "metrics", path: laneProgram(t, dir, "metrics", `echo run >> `+metricsOut), logf: rec.logf}
+	counters := &lane{name: "counters", path: laneProgram(t, dir, "counters", `echo "$*" >> `+countersOut), logf: rec.logf}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first := make(chan time.Time, 1)
+	first <- time.Time{}
+	calls := 0
+	after := func(time.Duration) <-chan time.Time {
+		if calls++; calls == 1 {
+			return first
+		}
+		return nil
+	}
+	ended := make(chan struct{})
+	go func() {
+		now := func() time.Time { return time.Date(2024, 3, 9, 23, 59, 30, 0, time.UTC) } // the boundary is a day change
+		runClock(ctx, now, after, func() *time.Location { return time.UTC }, metrics, counters, newLaneSettings(st, rec.logf))
+		close(ended)
+	}()
+	<-entered
+	cancel()
+	select {
+	case <-ended:
+	case <-time.After(20 * time.Second):
+		t.Fatal("STUCK/ENVIRONMENT: runClock did not return after its context was cancelled during the reload")
+	}
+	within(t, "the lanes to be idle", func() bool { return !metrics.busy.Load() && !counters.busy.Load() })
+	if got := readFile(t, metricsOut) + readFile(t, countersOut); got != "" {
+		t.Errorf("a stopped Core still started programs after the reload: %q", got)
 	}
 }

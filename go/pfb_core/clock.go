@@ -94,6 +94,9 @@ func runClock(ctx context.Context, now func() time.Time, after func(time.Duratio
 		var ok bool
 		if len(due) > 0 {
 			cur, ok = ls.reload(ctx)
+			if ctx.Err() != nil { // a stopped Core starts nothing on a read it cut short
+				return
+			}
 		} else {
 			cur, ok = ls.read()
 		}

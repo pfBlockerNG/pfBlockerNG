@@ -82,7 +82,8 @@ func gateMaintenance(run func(context.Context) error, ls *laneSettings, logf fun
 	}
 }
 
-// counterVerbs are the counter programs due at a day change whose due cadences are due: clearip, then cleardnsbl.
+// counterVerbs names the counters to clear for the cadences due at this boundary: clearip when s.ClearIP is among them, then
+// cleardnsbl likewise.
 func counterVerbs(s maintenanceSettings, due []string) []string {
 	var verbs []string
 	for _, c := range []struct{ verb, cadence string }{{"clearip", s.ClearIP}, {"cleardnsbl", s.ClearDNSBL}} {

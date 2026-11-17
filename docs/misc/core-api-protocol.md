@@ -463,6 +463,7 @@ The worker receives this request on stdin and reports progress and results as fo
 - **Timed lanes.** Core, not the Outpost, decides when each program is due, from `maintenance` in memory or, at a day change, read again.
   With `--metrics-cmd PATH`, Core starts PATH with no arguments at every Unix minute boundary while `enabled` and `metricsExport` are true; `scheduledWorkDisabled` does not stop it, and a minute boundary never reads the backend.
   With `--counters-cmd PATH`, at each boundary that falls on a later local date (in the `--zoneinfo` zone) than the previous boundary, Core reads `maintenance` again and starts PATH with the verbs due as arguments, `clearip` when `clearIpCounters` is `daily` (or `weekly` on a Sunday), then `cleardnsbl` likewise; none due starts nothing. It ignores `enabled` and `scheduledWorkDisabled`.
+  A day-change read that fails keeps the values read last (logged once per outage), and a Core stopped during it starts nothing after it.
   A lane whose previous run is still alive skips the boundary rather than queueing it. Core only starts and observes: it never signals the program, a Core stop leaves a running one alone, and its output is discarded.
   A failure to start or a non-zero exit is logged once per outage, as is settings that cannot be read, in which case nothing starts. The bound of a run belongs to the program Core is given.
 
