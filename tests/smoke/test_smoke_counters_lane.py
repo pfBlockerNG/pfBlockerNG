@@ -50,7 +50,8 @@ def _stamps(vm: SmokeVM) -> tuple[str, str]:
 def _seed_stamps(vm: SmokeVM) -> None:
     result = h.php_eval(
         vm,
-        _SQLITE
+        _SQLITE + "$db->exec(\"INSERT INTO lastclear (row, lastipclear, lastdnsblclear) SELECT 0, '', '' "
+        'WHERE NOT EXISTS (SELECT 1 FROM lastclear WHERE row = 0)");'
         + f"$db->exec(\"UPDATE lastclear SET lastipclear = '{_OLD}', lastdnsblclear = '{_OLD}' WHERE row = 0\");"
         "echo 'OK';",
     )

@@ -143,6 +143,8 @@ def _set_export(vm: SmokeVM, on: bool) -> None:
     )
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(f"_set_export({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    # The General page's save tells Core at once; a bare config write does not (Core reads it at the next quarter hour).
+    h.tell_core_the_settings_changed(vm)
 
 
 def _sync(vm: SmokeVM) -> None:

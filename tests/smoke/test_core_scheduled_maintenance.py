@@ -34,6 +34,9 @@ SENTINEL = "/var/db/pfblockerng/.pfb_cron_disable"
 PHP = "/usr/local/bin/php"
 CLI = "/usr/local/www/pfblockerng/pfblockerng.php"
 DUTY_LOCKS = (f"{h.PFB_DBDIR}/pfb_ss_refresh.lock", f"{h.PFB_DBDIR}/pfb_apply_reconcile.lock")
+CORE_LOG = "/var/log/pfblockerng/core.log"
+FLIP_RUNS = "maintenance runs again:"
+FLIP_SKIPS = "maintenance skips its runs:"
 MAINTENANCE_RECEIPT = f"{h.CORE_STATE_DIR}/maintenance.log.result"
 MARKER = "SafeSearch CNAME fallback IPs refreshed"
 SCHEDULE_HOUR = f"{h.CFG_GLOBAL}/pfb_schedule_hour"
@@ -591,6 +594,8 @@ def test_core_scheduled_maintenance_preserves_tick_duties(maintenance_vm: SmokeV
         h.wait_guest_epoch(vm, next_quarter_hour(guarded_start) + 30, cap=960)
         _epoch(vm, "sentinel-present-end")
         assert_core_started_nothing("sentinel-present")
+        assert h.count_log_marker(vm, CORE_LOG, FLIP_SKIPS) >= 1, "Core never logged that maintenance skips its runs"
+        runs_logged = h.count_log_marker(vm, CORE_LOG, FLIP_RUNS)
         with vm.scheduled_maintenance():
             started = _epoch(vm, "scheduled-window-start")
             assert h.wait_until(
@@ -603,7 +608,9 @@ def test_core_scheduled_maintenance_preserves_tick_duties(maintenance_vm: SmokeV
             assert h.SS_TARGET_A in _row(vm, source), "maintenance ran without the real SafeSearch CSV effect"
             assert h.count_log_marker(vm, h.PFB_LOG, MARKER) > marker_before
             assert h.core_update_view(vm)["update"] == last_update, "maintenance minted a public Update"
+            assert h.count_log_marker(vm, CORE_LOG, FLIP_RUNS) > runs_logged, "Core logged no maintenance flip to runs"
             _assert_no_dispatch(vm, "scheduled-window")
+            skips_logged = h.count_log_marker(vm, CORE_LOG, FLIP_SKIPS)
             # A disabled package: Core still reads the settings every boundary and starts nothing.
             h.set_package_enabled(vm, False)
             vm.ssh("rm", "-f", *DUTY_LOCKS)
@@ -615,6 +622,7 @@ def test_core_scheduled_maintenance_preserves_tick_duties(maintenance_vm: SmokeV
             h.wait_guest_epoch(vm, next_quarter_hour(disabled_start) + 30, cap=960)
             _epoch(vm, "package-disabled-end")
             assert_core_started_nothing("package-disabled")
+            assert h.count_log_marker(vm, CORE_LOG, FLIP_SKIPS) > skips_logged, "Core logged no flip to skipping"
         _assert_no_dispatch(vm, "after-scheduled-window")
     finally:
         # Context finally MUST have restored+verified sentinel before any config cleanup.

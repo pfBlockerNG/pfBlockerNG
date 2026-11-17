@@ -18,10 +18,11 @@ from .conftest import SmokeVM
 from .test_core_scheduled_maintenance import _force_install
 
 _PHP_CLI = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php"
-# What the previous package installed: the tick, the metrics export, and the two counter clearings.
+# The exact commands the previous package installed (minute, hour, weekday): the tick, the metrics export
+# and the two counter clearings. The retirement needles end in a space, so these must be historical verbatim.
 LEGACY_JOBS = (
     (f"{_PHP_CLI} cron-tick >> /var/log/pfblockerng/pfblockerng.log 2>&1", "*/15", "*", "*"),
-    (f"/usr/bin/timeout -s TERM -k 5 50 {_PHP_CLI} metrics", "*", "*", "*"),
+    (f"/usr/bin/timeout -s TERM -k 5 50 {_PHP_CLI} metrics >> /dev/null 2>&1", "*", "*", "*"),
     (f"{_PHP_CLI} clearip >/dev/null 2>&1", "0", "0", "*"),
     (f"{_PHP_CLI} cleardnsbl >/dev/null 2>&1", "0", "0", "7"),
 )
@@ -40,8 +41,9 @@ def installed_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
 
 def _seed_legacy_jobs(vm: SmokeVM) -> None:
     calls = "".join(
-        f"install_cron_job({h._php_str(cmd)}, TRUE, {h._php_str(minute)}, '*', '*', '*', {h._php_str(wday)}, 'root');"
-        for cmd, minute, _hour, wday in LEGACY_JOBS
+        f"install_cron_job({h._php_str(cmd)}, TRUE, {h._php_str(minute)}, {h._php_str(hour)}, '*', '*', "
+        f"{h._php_str(wday)}, 'root');"
+        for cmd, minute, hour, wday in LEGACY_JOBS
     )
     result = h.php_eval(vm, f"require_once('services.inc');{calls}echo 'OK';")
     assert result.returncode == 0 and "OK" in result.stdout, f"seeding the legacy cron jobs failed: {result}"
