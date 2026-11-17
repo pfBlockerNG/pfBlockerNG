@@ -412,6 +412,27 @@ def _assert_no_dispatch(vm: SmokeVM, phase: str) -> None:
     assert vm.ssh("test", "-f", SENTINEL).returncode == 0, f"{phase}: sentinel missing"
 
 
+def _update_page_status(vm: SmokeVM) -> str:
+    """The Update page body, fetched through the webConfigurator with the admin credentials of the environment."""
+    from .ui.credgate import admin_password_decision
+    from .ui.webui import WebUI
+
+    action, password = admin_password_decision(os.environ)
+    if action == "fail":
+        pytest.fail(password)
+    protocol = h.config_get(vm, "system/webgui/protocol").strip().lower() or "http"
+    client = WebUI(
+        host=vm.host,
+        port=vm.web_port,
+        username=os.environ.get("SMOKE_ADMIN_USER") or "admin",
+        password=password,
+        scheme=protocol,
+        verify=protocol != "https",
+    )
+    client.login()
+    return client.get("/pfblockerng/pfblockerng_update.php").text
+
+
 def _force_install(vm: SmokeVM, pkg: Path) -> None:
     """Same forced pkg replacement as ha_versions, without its unrelated HA markers."""
     assert vm.ssh("test", "-f", SENTINEL).returncode == 0
@@ -589,41 +610,54 @@ def test_core_scheduled_maintenance_preserves_tick_duties(maintenance_vm: SmokeV
             assert h.core_update_view(vm)["update"] == last_update, f"{phase}: maintenance minted an Update"
             h.assert_no_pfb_cron_entry(vm, phase)
 
-        # Observe an actual production quarter-hour boundary with the sentinel STILL PRESENT.
+        # Observe an actual production quarter-hour boundary with the sentinel STILL PRESENT. Core logs nothing
+        # while it stays skipping (lanegate.go logs only a flip), so no event proves its decision point passed:
+        # the margin after the boundary is the smallest that covers its settings re-read and run start.
+        runs_logged = h.count_log_marker(vm, CORE_LOG, FLIP_RUNS)
         guarded_start = _epoch(vm, "sentinel-present-start")
         h.wait_guest_epoch(vm, next_quarter_hour(guarded_start) + 30, cap=960)
         _epoch(vm, "sentinel-present-end")
         assert_core_started_nothing("sentinel-present")
         _assert_no_dispatch(vm, "sentinel-present")
-        assert h.count_log_marker(vm, CORE_LOG, FLIP_SKIPS) >= 1, "Core never logged that maintenance skips its runs"
-        runs_logged = h.count_log_marker(vm, CORE_LOG, FLIP_RUNS)
+        assert h.count_log_marker(vm, CORE_LOG, FLIP_RUNS) == runs_logged, "Core logged a flip to running"
         with vm.scheduled_maintenance():
             started = _epoch(vm, "scheduled-window-start")
-            assert h.wait_until(
+            h.wait_until(
                 lambda: _receipt_signature(vm) != receipt_before and _duty_locks(vm) == list(DUTY_LOCKS),
                 timeout=990,
                 interval=5,
-            ), "Core's quarter-hour never ran the maintenance (no new receipt and duty locks)"
+                what="Core's quarter-hour running the maintenance (a new receipt and both duty locks)",
+            )
             ended = _epoch(vm, "scheduled-window-end")
             assert ended // 900 > started // 900, "effect appeared before an actual production boundary"
             assert h.SS_TARGET_A in _row(vm, source), "maintenance ran without the real SafeSearch CSV effect"
             assert h.count_log_marker(vm, h.PFB_LOG, MARKER) > marker_before
             assert h.core_update_view(vm)["update"] == last_update, "maintenance minted a public Update"
-            assert h.count_log_marker(vm, CORE_LOG, FLIP_RUNS) > runs_logged, "Core logged no maintenance flip to runs"
+            assert h.count_log_marker(vm, CORE_LOG, FLIP_RUNS) > runs_logged, "Core logged no flip to running"
             h.assert_no_pfb_cron_entry(vm, "scheduled-window")
+            # Enabled package, sentinel absent, no crontab entry: the page shows the next check, not a missing task.
+            page = _update_page_status(vm)
+            assert "Next schedule check" in page, "the Update page lost its Next schedule check status"
+            assert "Missing cron task" not in page, "the Update page reports a cron task Core replaced as missing"
+            assert "[ Disabled" not in page, "the Update page reports the enabled package as disabled"
+            # A disabled package: Core re-reads the settings at the boundary and starts nothing; its flip line is
+            # the event that its decision was taken.
             skips_logged = h.count_log_marker(vm, CORE_LOG, FLIP_SKIPS)
-            # A disabled package: Core still reads the settings every boundary and starts nothing.
             h.set_package_enabled(vm, False)
             vm.ssh("rm", "-f", *DUTY_LOCKS)
             _remove_ss_row(vm, source)
             source = _seed_ss_refresh_positive_control(vm, target, h.SS_BAKED_A)
             receipt_before = _receipt_signature(vm)
             marker_before = h.count_log_marker(vm, h.PFB_LOG, MARKER)
-            disabled_start = _epoch(vm, "package-disabled-start")
-            h.wait_guest_epoch(vm, next_quarter_hour(disabled_start) + 30, cap=960)
+            _epoch(vm, "package-disabled-start")
+            h.wait_until(
+                lambda: h.count_log_marker(vm, CORE_LOG, FLIP_SKIPS) > skips_logged,
+                timeout=990,
+                interval=5,
+                what="Core's quarter-hour logging the flip to skipping for the disabled package",
+            )
             _epoch(vm, "package-disabled-end")
             assert_core_started_nothing("package-disabled")
-            assert h.count_log_marker(vm, CORE_LOG, FLIP_SKIPS) > skips_logged, "Core logged no flip to skipping"
         _assert_no_dispatch(vm, "after-scheduled-window")
     finally:
         # Context finally MUST have restored+verified sentinel before any config cleanup.

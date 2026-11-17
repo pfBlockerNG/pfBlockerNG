@@ -86,9 +86,8 @@ def stepped_clock(counters_vm: SmokeVM) -> Iterator[SmokeVM]:
     try:
         yield vm
     finally:
-        restored = guest_before + int(time.monotonic() - host_before)
         try:
-            _guest(vm, "date", "-f", "%s", str(restored))
+            h.restore_guest_clock(vm, guest_before=guest_before, elapsed=lambda: time.monotonic() - host_before)
         finally:
             if ntp:
                 h.php_eval(vm, "require_once('system.inc');system_ntp_configure();echo 'OK';")
@@ -130,8 +129,11 @@ def test_core_clears_the_counters_at_a_day_change(
         return ip != _OLD, dnsbl != _OLD
 
     if any(expected):
-        assert h.wait_until(lambda: cleared() == expected, timeout=_CAP, interval=2.0), (
-            f"Core did not clear the counters at the day-change boundary: cleared (ip, dnsbl) is {cleared()}"
+        h.wait_until(
+            lambda: cleared() == expected,
+            timeout=_CAP,
+            interval=2.0,
+            what="Core clearing the counters at the day-change boundary",
         )
     # The boundary has passed (the guest clock is 5 s beyond it): what Core did not clear stayed uncleared.
     assert cleared() == expected, f"cleared (ip, dnsbl) was {cleared()}, wanted {expected}"

@@ -2421,18 +2421,22 @@ def test_update_page_cron_status_reports_permanent_suppression_with_no_cron_entr
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """Cron Status reports the smoke suppression, never "Missing cron task", with no crontab entry.
+    """Cron Status reports the smoke suppression while no crontab entry exists.
 
     Core runs the quarter-hour tick while pfBlockerNG is enabled (issue #3996), so the
     package installs no crontab entry and the Update page no longer looks for one.
     Issue #1204 added the harness's always-on ``.pfb_cron_disable`` sentinel.
 
+    The sentinel outranks the missing-cron branch of the page, so the status without it is asserted in the
+    scheduled window of test_core_scheduled_maintenance_preserves_tick_duties; this case keeps the no-entry
+    precondition and the suppression banner.
+
     Scenario:
       Given pfBlockerNG is enabled and a full reload has run,
       And root's crontab, /etc/crontab and config.xml hold no pfBlockerNG entry
-        (precondition: the box really has none, so the absence of "Missing" is the new behaviour),
+        (precondition: the box really has none),
       When the Update page is rendered,
-      Then the Cron Status reports the permanent smoke suppression and never ``[ Missing cron task ]``.
+      Then the Cron Status reports the permanent smoke suppression.
 
     """
     vm = smoke_vm
@@ -2447,7 +2451,6 @@ def test_update_page_cron_status_reports_permanent_suppression_with_no_cron_entr
         body = webui.get(UPDATE_PAGE).text
         assert not looks_like_login_page(body), "Update page GET returned the login form (session lost)"
         assert f"[ Disabled by {flag} ]" in body, "Cron Status must report the permanent smoke suppression"
-        assert "Missing cron task" not in body, "the Update page still looks for a crontab entry Core replaced"
     finally:
         if original_enabled != "on":
             helpers.set_package_enabled(vm, False)

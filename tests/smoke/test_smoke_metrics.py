@@ -165,7 +165,11 @@ def _prom_stamp(vm: SmokeVM) -> str:
 
 
 def _across_next_minute_boundary(vm: SmokeVM) -> None:
-    """Poll the guest clock past the next minute boundary (plus 3 s for Core's run to settle)."""
+    """Poll the guest clock past the next minute boundary, plus 3 s for Core's run to settle.
+
+    Core logs nothing at a metrics boundary (``lanegate.go`` logs only a maintenance flip), so no event proves the
+    lane's decision point passed; the margin is the smallest that covered Core's PHP run in the live runs.
+    """
     now = _guest_epoch(vm)
     h.wait_guest_epoch(vm, (now // 60 + 1) * 60 + 3, cap=_MINUTE_CAP, interval=1.0)
 
@@ -223,12 +227,18 @@ def test_metrics_core_publishes_with_no_cron_entry(deployed_vm: SmokeVM) -> None
 
     removed = vm.ssh("/bin/rm", "-f", _PROM)
     assert removed.returncode == 0, f"could not remove {_PROM}: {removed.stderr!r}"
-    assert h.wait_until(lambda: _exists(vm, _PROM), timeout=_MINUTE_CAP, interval=1.0), (
-        "Core never republished the export at a minute boundary"
+    h.wait_until(
+        lambda: _exists(vm, _PROM),
+        timeout=_MINUTE_CAP,
+        interval=1.0,
+        what="Core republishing the export at a minute boundary",
     )
     first = _prom_stamp(vm)
-    assert h.wait_until(lambda: _prom_stamp(vm) != first, timeout=_MINUTE_CAP, interval=1.0), (
-        f"Core did not publish the export again at the next minute boundary (stamp stayed {first})"
+    h.wait_until(
+        lambda: _prom_stamp(vm) != first,
+        timeout=_MINUTE_CAP,
+        interval=1.0,
+        what=f"Core publishing the export again at the next minute boundary (stamp stayed {first})",
     )
     h.assert_no_pfb_cron_entry(vm, "after Core published")
 
@@ -337,6 +347,7 @@ def test_metrics_master_disable_removes_file(deployed_vm: SmokeVM) -> None:
     assert _exists(vm, _PROM), "precondition: the file must be published"
     try:
         h.set_package_enabled(vm, False)
+        h.tell_core_the_settings_changed(vm)  # what a settings save does: Core, not the sync, stops the lane
         _sync(vm)
         assert not _exists(vm, _PROM), "pfblockerng.prom must be removed while pfBlockerNG is disabled"
         _across_next_minute_boundary(vm)

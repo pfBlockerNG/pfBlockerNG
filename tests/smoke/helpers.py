@@ -1906,6 +1906,27 @@ def assert_no_pfb_cron_entry(vm: SmokeVM, phase: str) -> None:
     assert not found, f"{phase}: competing pfBlockerNG cron entry (Core runs every schedule): {found}"
 
 
+def restore_guest_clock(
+    vm: SmokeVM, *, guest_before: int, elapsed: Callable[[], float], tolerance: int = 5, attempts: int = 2
+) -> None:
+    """Set the guest clock back to ``guest_before`` plus the time elapsed since, then VERIFY it.
+
+    A module that stepped the clock must never leak a skew into later modules: a clock still off by more than
+    ``tolerance`` seconds after ``attempts`` tries fails loudly, naming the skew.
+    """
+    skew = 0
+    for _ in range(attempts):
+        expected = guest_before + int(elapsed())
+        vm.ssh("date", "-f", "%s", str(expected))
+        result = vm.ssh("date", "+%s")
+        now = int(result.stdout.strip()) if result.returncode == 0 and result.stdout.strip().isdigit() else None
+        if now is not None:
+            skew = now - (guest_before + int(elapsed()))
+            if abs(skew) <= tolerance:
+                return
+    raise AssertionError(f"the guest clock is not restored: skew of {skew:+d}s after {attempts} attempts")
+
+
 def wait_guest_epoch(vm: SmokeVM, target: int, *, cap: float, interval: float = 2.0) -> int:
     """Poll the guest clock until it reaches ``target`` (observing a lane's schedule); ``cap`` only fails a hung run."""
     deadline = time.monotonic() + cap
@@ -5748,7 +5769,7 @@ def _rule_line_has_alias(line: str, alias: str) -> bool:
     return alias.startswith("pfB_") and re.search(rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])", line) is not None
 
 
-def wait_until(predicate: Callable[[], bool], *, timeout: float = 12.0, interval: float = 2.0) -> bool:
+def wait_until(predicate: Callable[[], bool], *, timeout: float = 12.0, interval: float = 2.0, what: str = "") -> bool:
     """Poll until the predicate event is observed; expiry is salvage only.
 
     A rule-changing ``reload()`` launches ``/etc/rc.filter_configure_sync`` detached, so a
@@ -5762,7 +5783,10 @@ def wait_until(predicate: Callable[[], bool], *, timeout: float = 12.0, interval
             return True
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise RuntimeError(f"stuck/environment: wait_until predicate not observed before salvage cap {timeout}s")
+            awaited = f": {what}" if what else ""
+            raise RuntimeError(
+                f"stuck/environment: wait_until predicate not observed before salvage cap {timeout}s{awaited}"
+            )
         # Clamp the sleep to the time left so the salvage cap is not overshot by a full interval.
         time.sleep(min(interval, remaining))
 

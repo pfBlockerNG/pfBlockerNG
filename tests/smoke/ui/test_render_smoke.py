@@ -779,10 +779,9 @@ def test_update_page_cron_status_reports_harness_disable_flag(
     assert f"[ Disabled by {flag} ]" in resp.text, (
         f"Update page cron-status line is missing the harness disable banner for {flag}"
     )
-    # Issue #3996: Core runs the tick and no crontab entry exists, so the page must not report one missing.
+    # Issue #3996: no crontab entry exists. The sentinel outranks the missing-cron branch, so the page's status
+    # without it is asserted inside test_core_scheduled_maintenance_preserves_tick_duties's scheduled window.
     helpers.assert_no_pfb_cron_entry(smoke_vm, "update page render")
-    assert "Next schedule check" in resp.text, "Update page lost its Next schedule check status"
-    assert "Missing cron task" not in resp.text, "Update page reports a missing cron task Core replaced"
 
 
 def test_geoip_page_renders_current_maxmind_document_link(webui: WebUI) -> None:
