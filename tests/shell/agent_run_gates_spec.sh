@@ -347,6 +347,7 @@ Describe 'run-gates.sh gates_for()'
       '.github/workflows/test.yml'
       '.codex/config.toml'
       '.codex/agents/planner.toml'
+      '.agents/model-tiers.conf'
       '.claude/workflows/review.js'
       '.claude/skills/release'
       'AGENTS.md'
@@ -1064,8 +1065,8 @@ CHECK
   go_gate='cd go/pfb_dns_gateway && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && go test -race -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .'
 
   It 'plans ShellSpec for a committed deletion of a config only ShellSpec reads'
-    seed .codex/config.toml
-    gitc rm -q .codex/config.toml; gitc commit -qm gone
+    seed .agents/model-tiers.conf
+    gitc rm -q .agents/model-tiers.conf; gitc commit -qm gone
     When run sh "$script" --worktree "$repo" --diff "$seed_sha" --plan
     The status should equal 0
     The line 3 of output should equal "$shellspec_gate"
