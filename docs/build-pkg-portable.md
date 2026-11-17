@@ -411,13 +411,14 @@ unpacks under `../go/pfb_dns_gateway/vendor/` except Core's own modules (`_CORE_
 its versions; `=>` replace lines and pseudo-versions (which no
 tag can name) are refused, and so are a tuple without a `modules.txt` line and the reverse. Two
 narrow exceptions, both allowlists in the builder (`_GITLAB_MODULE_HOSTS`,
-`_PSEUDO_VERSION_MODULES`; changing either is an owner decision):
+`_PSEUDO_VERSION_MODULES`; changing either is an owner decision, as is `_CORE_PSEUDO_VERSION_MODULES`):
 
 - `GL_TUPLE` (`[https://gitlab.com:]account:project:<40 lower-case hex commit>:group/subdir`) may supply
   modules under `modernc.org/` only (the first path element, never the bare host). A module listed twice in `modules.txt` is refused. A commit cannot be compared with a tag offline, so only its
   shape is checked, and the module counts at the version `modules.txt` lists.
-- `github.com/remyoudompheng/bigfft` (the gateway's) and `go4.org/netipx` (Core's own, #4033) have no tags: a
-  `GH_TUPLE` entry names the 12-hex revision the pseudo-version ends in (or the full commit that starts with it).
+- `github.com/remyoudompheng/bigfft` has no tags: its `GH_TUPLE` entry names the 12-hex
+  revision its pseudo-version ends in (or the full commit that starts with it). Core's own `go4.org/netipx` (#4033)
+  is the same for Core's `vendor/` only (`_CORE_PSEUDO_VERSION_MODULES`); the gateway may not vendor it.
 
 A `do-build` without `--modules-txt` is refused when the source vendors modules, because a real
 `make` would have no vendor tree to build from.

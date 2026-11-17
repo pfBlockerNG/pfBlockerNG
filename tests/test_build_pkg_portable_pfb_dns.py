@@ -603,6 +603,9 @@ MODERNC = ("modernc.org/x", "v1.2.3")
 BIGFFT = ("github.com/remyoudompheng/bigfft", "v0.0.0-20230129092748-24d4a6f8daec")
 BIGFFT_REVISION = "24d4a6f8daec"
 BIGFFT_COMMIT = BIGFFT_REVISION + "0123456789abcdef0123456789ab"
+NETIPX = ("go4.org/netipx", "v0.0.0-20260823151212-3075585bcbeb")  # no tags: only pseudo-versions (#4033)
+NETIPX_REVISION = "3075585bcbeb"
+NETIPX_COMMIT = "3075585bcbeb7a9f042662e543b03efe900018be"
 PSEUDO_AFTER_A_TAG = ("example.test/dep", "v1.2.4-0.20260101000000-0123456789ab")
 PSEUDO_AFTER_A_PRERELEASE = ("example.test/dep", "v1.2.3-pre.0.20260101000000-0123456789ab")
 PSEUDO_LONG_REVISION = ("example.test/dep", "v0.0.0-20260101000000-0123456789abcdef")
@@ -719,6 +722,19 @@ PARITY_FAILURES = [
         modules_txt_for(BIGFFT),
         "revision",
     ),
+    # netipx is approved for Core's own vendor/ only (#4033): the gateway may not vendor it
+    (
+        "gateway-netipx-pseudo-version-by-revision",
+        gh_tuples_for((NETIPX[0], NETIPX_REVISION)),
+        modules_txt_for(NETIPX),
+        "pseudo-version",
+    ),
+    (
+        "gateway-netipx-pseudo-version-by-commit",
+        gh_tuples_for((NETIPX[0], NETIPX_COMMIT)),
+        modules_txt_for(NETIPX),
+        "pseudo-version",
+    ),
     (
         "github-pseudo-version-off-the-allowlist-by-revision",
         gh_tuples_for((PSEUDO[0], "0123456789ab")),
@@ -790,9 +806,6 @@ CORE_VENDOR = "../go/pfb_core/vendor"
 XXH3 = ("github.com/pfBlockerNG/xxh3", "v1.1.1-pfblockerng.1")
 OLDER_XXH3 = ("github.com/pfBlockerNG/xxh3", "v1.1.0-pfblockerng.1")
 PIRES = ("github.com/pires/go-proxyproto", "v0.8.0")
-NETIPX = ("go4.org/netipx", "v0.0.0-20260823151212-3075585bcbeb")  # no tags: only pseudo-versions (#4033)
-NETIPX_REVISION = "3075585bcbeb"
-NETIPX_COMMIT = "3075585bcbeb7a9f042662e543b03efe900018be"
 OTHER_NETIPX = ("go4.org/netipx", "v0.0.0-20260101000000-0123456789ab")
 GO4_MEM = ("go4.org/mem", "v0.0.0-20260823151212-3075585bcbeb")
 
@@ -869,6 +882,12 @@ CORE_PARITY_FAILURES += [
         core_tuple(_NETIPX, NETIPX_REVISION),
         core_go_mod(),
         f"GH_TUPLE only: {_NETIPX} {NETIPX_REVISION}",
+    ),
+    (
+        "bigfft-by-revision-under-cores-vendor-dir",  # the gateway's pseudo-version module is not Core's
+        core_tuple(BIGFFT[0], BIGFFT_REVISION),
+        core_go_mod(BIGFFT),
+        f"GH_TUPLE only: {BIGFFT[0]} {BIGFFT_REVISION}",
     ),
     (
         "netipx-tuple-in-the-gateways-vendor-dir",

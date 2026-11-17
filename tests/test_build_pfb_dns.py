@@ -1401,8 +1401,11 @@ def test_a_go4_module_that_is_not_netipx_is_refused_and_writes_nothing(tmp_path:
     assert_refused(run_helper(root, tmp_path / "out"), tmp_path / "out", [f"requires {module}; Core may require only"])
 
 
-def test_a_vendored_core_may_hold_netipx_and_no_sibling_of_it(tmp_path: Path, vendored_x_gateway: Path) -> None:
-    root = netipx_source(tmp_path, "vendored", vendored_x_gateway, None)
+def test_a_vendored_core_is_refused_for_a_go4_sibling_of_netipx_beside_it(
+    tmp_path: Path, vendored_x_gateway: Path, netipx_tree: Path
+) -> None:
+    # the tree is otherwise the accepted one (test_a_core_requiring_netipx_builds_in_both_modes[vendored])
+    root = netipx_source(tmp_path, "vendored", vendored_x_gateway, netipx_tree)
     stray = root / "go" / "pfb_core" / "vendor" / "go4.org" / "mem" / "mem.go"
     stray.parent.mkdir(parents=True)
     stray.write_text("")
