@@ -158,3 +158,35 @@ func TestAFailedDirectorySyncAfterTheRenameServesWhatIsOnDisk(t *testing.T) {
 		t.Errorf("memory %s, disk %s: want both at revision 2", jsonOf(t, mem), jsonOf(t, disk))
 	}
 }
+
+// A standalone Core whose settings.json still holds a field the schema has dropped (logViaWebserver with #4054,
+// hstsNullBlocking with #4056) starts without it and keeps the rest; its next save no longer stores it. The API still
+// refuses the name (#4055).
+func TestOpenDropsARetiredFieldAndKeepsTheRest(t *testing.T) {
+	dir := writeStore(t, `{"format":1,"revision":3,"projections":{"dns":{"values":`+
+		`{"hstsNullBlocking":true,"logViaWebserver":false,"replyLogging":false}}}}`)
+	st, err := Open(dir, Production())
+	if err != nil {
+		t.Fatalf("Open of a store holding retired fields: %v", err)
+	}
+	dns := projection(t, get(t, st), "dns")
+	_, hsts := dns.Value["hstsNullBlocking"]
+	_, webserver := dns.Value["logViaWebserver"]
+	if hsts || webserver || dns.Value["replyLogging"] != false {
+		t.Errorf("dns read as %s, want no retired field and replyLogging still off", jsonOf(t, dns))
+	}
+	if _, err := st.Save(t.Context(), 3, changes(t, `{"dns": {"tldWildcard": true}}`)); err != nil {
+		t.Fatalf("save after the load: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, storeFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "hstsNullBlocking") || strings.Contains(string(raw), "logViaWebserver") {
+		t.Errorf("the saved store still holds a retired field: %s", raw)
+	}
+	var invalid *ValidationError
+	if _, err := st.Save(t.Context(), 4, changes(t, `{"dns": {"hstsNullBlocking": false}}`)); !errors.As(err, &invalid) {
+		t.Errorf("a save naming a retired field = %v, want a validation error", err)
+	}
+}
