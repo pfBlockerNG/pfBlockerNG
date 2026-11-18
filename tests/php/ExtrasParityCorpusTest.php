@@ -178,6 +178,16 @@ final class ExtrasParityCorpusTest extends TestCase
 		}
 	}
 
+	/** The negative control of a null expectation: a directory where nothing is expected must not read as absent. */
+	public function testStateTellsADirectoryFromNothing(): void
+	{
+		$this->assertTrue(mkdir("{$this->root}/db/asn.update"));
+		file_put_contents("{$this->root}/db/f", 'x');
+		$this->assertSame('<not a regular file>', self::state("{$this->root}/db/asn.update"));
+		$this->assertNull(self::state("{$this->root}/db/missing"));
+		$this->assertSame('x', self::state("{$this->root}/db/f"));
+	}
+
 	/** The settings pfb_global() reads (pfblockerng_download_extras() calls it), stored where it reads them. */
 	private function settings(array $s): void
 	{

@@ -71,3 +71,43 @@ func TestAMergeThatFailsPartWayRestoresWhatItReplaced(t *testing.T) {
 		t.Errorf("the share holds %d entries after the failed merge, want the 2 live files only", len(entries))
 	}
 }
+
+// A rollback whose own rename fails keeps the backup: the old file is not lost with it (CodeRabbit on #4059).
+func TestAFailedRollbackKeepsTheBackup(t *testing.T) {
+	share := t.TempDir()
+	for name, content := range map[string]string{"a.csv": "old a\n", "b.csv": "old b\n"} {
+		if err := os.WriteFile(filepath.Join(share, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	real := rename
+	rename = func(from, to string) error {
+		if strings.Contains(from, ".pfbstagedir_") && filepath.Base(to) == "b.csv" {
+			return os.ErrPermission // the publication fails part-way
+		}
+		if strings.Contains(from, ".pfbbackup_") {
+			return os.ErrPermission // and so does putting a.csv back
+		}
+		return real(from, to)
+	}
+	t.Cleanup(func() { rename = real })
+	f := &Fetcher{}
+	ok := f.mergeIntoDir(share, func(dir string) error {
+		for name, content := range map[string]string{"a.csv": "new a\n", "b.csv": "new b\n"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if ok {
+		t.Fatal("the merge succeeded, want a failure")
+	}
+	kept, _ := filepath.Glob(filepath.Join(share, ".pfbbackup_*", "a.csv"))
+	if len(kept) != 1 {
+		t.Fatalf("backups of a.csv after the failed rollback: %v, want the one copy kept", kept)
+	}
+	if got, err := os.ReadFile(kept[0]); err != nil || string(got) != "old a\n" {
+		t.Errorf("kept backup = (%q, %v), want the old a.csv", got, err)
+	}
+}

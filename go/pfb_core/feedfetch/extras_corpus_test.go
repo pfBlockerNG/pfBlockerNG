@@ -327,3 +327,19 @@ func inode(path string) uint64 {
 	}
 	return info.Sys().(*syscall.Stat_t).Ino
 }
+
+// The negative control of a null expectation: a directory where nothing is expected must not read as absent.
+func TestObserveTellsADirectoryFromNothing(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "asn.update"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]any{"asn.update": "<not a regular file>", "missing": nil, "f": "x"} {
+		if got := observe(t, filepath.Join(root, path)); got != want {
+			t.Errorf("observe(%s) = %#v, want %#v", path, got, want)
+		}
+	}
+}
