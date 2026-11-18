@@ -31,6 +31,7 @@ final class ExtrasParityCorpusTest extends TestCase
 {
 	private string $root = '';
 	private string $tools = '';
+	private string $top1mToken = '';
 	/** @var array<string,resource> */
 	private array $servers = [];
 	/** @var array<string,int> */
@@ -119,6 +120,9 @@ final class ExtrasParityCorpusTest extends TestCase
 		}
 		$this->settings($case['settings'] ?? []);
 		$this->seed($case['seed'] ?? []);
+		if (isset($case['ledger'])) {
+			pfb_sync_status_open('dnsbl', 'top1m', 'download', $case['ledger'], $GLOBALS['pfb']['dbdir']);
+		}
 		$routes = $case['routes'] ?? [];
 
 		foreach ($case['steps'] as $i => $step) {
@@ -143,14 +147,20 @@ final class ExtrasParityCorpusTest extends TestCase
 				$before[$rel] = @fileinode("{$this->root}/{$rel}");
 			}
 
-			$this->assertSame('download', $step['run'], "{$label}: unknown run");
-			$GLOBALS['argv'] = ['pfblockerng.php', 'extras'];
+			$this->assertContains($step['run'], ['download', 'dcc'], "{$label}: unknown run");
+			// dcc is the cron verb whose TOP1M row runs the change detector first.
+			$GLOBALS['argv'] = ['pfblockerng.php', $step['run'] === 'dcc' ? 'dcc' : 'extras'];
 			$GLOBALS['pfb']['extras'] = [];
 			foreach ($step['extras'] as $extra) {
 				$GLOBALS['pfb']['extras'][] = $this->extra($extra);
 			}
 			$actual = ['ok' => pfblockerng_download_extras(30, 3)];
 			$actual['maxmind_error'] = (bool) ($GLOBALS['pfb']['maxmind_feed_error'] ?? FALSE);
+			$actual['top1m_changed'] = (bool) ($GLOBALS['pfb']['top1m_changed'] ?? FALSE);
+			if (array_key_exists('ledger', $want)) {
+				$ledger = json_decode((string) @file_get_contents("{$GLOBALS['pfb']['dbdir']}/pfb_sync_status.json"), TRUE);
+				$actual['ledger'] = $ledger['dnsbl']['top1m']['download']['message'] ?? NULL;
+			}
 			clearstatcache();
 			$actual['files'] = [];
 			foreach (array_keys($want['files'] ?? []) as $rel) {
@@ -170,7 +180,7 @@ final class ExtrasParityCorpusTest extends TestCase
 					: (is_string($content) ? $this->expand($content) : $content);
 			}
 			$want += ['files' => []];
-			$want += ['maxmind_error' => FALSE];
+			$want += ['maxmind_error' => FALSE, 'top1m_changed' => FALSE];
 			ksort($want);
 			ksort($actual);
 			$this->assertSame($want, $actual, "{$label}: {$case['description']}\nlog:\n" .
@@ -194,6 +204,9 @@ final class ExtrasParityCorpusTest extends TestCase
 		PfbConfig::write('ip/maxmind_account', $s['maxmind_account'] ?? '');
 		PfbConfig::write('ip/maxmind_key', $s['maxmind_key'] ?? '');
 		PfbConfig::write('ip/asn_token', $s['asn_token'] ?? '');
+		PfbConfig::write('dnsbl/top1m_source', PfbTop1mSource::from($s['top1m_source'] ?? 'tranco'));
+		PfbConfig::write('dnsbl/top1m_token', $s['top1m_token'] ?? '');
+		$this->top1mToken = $s['top1m_token'] ?? '';
 		if (($s['sanity'] ?? FALSE) === TRUE) {
 			PfbConfig::write('gen/pfb_feed_sanity', PfbToggle::On);
 		}
@@ -208,16 +221,21 @@ final class ExtrasParityCorpusTest extends TestCase
 		$GLOBALS['pfb']['script'] = "{$this->tools}/pfblockerng.sh";
 	}
 
-	/** One $pfb['extras'] row as the Extras table builds it. */
+	/** One $pfb['extras'] row as the Extras table builds it: a TOP1M row carries its provider and auth headers. */
 	private function extra(array $e): array
 	{
-		return [
+		$row = [
 			'url'      => $this->expand($e['url']),
 			'file_dwn' => $e['file_dwn'],
 			'file'     => $e['file'],
 			'folder'   => "{$this->root}/{$e['folder']}",
 			'type'     => $e['type'],
 		];
+		if (isset($e['provider'])) {
+			$row['provider'] = $e['provider'];
+			$row['headers'] = pfb_top1m_auth_headers(pfb_top1m_providers()[$e['provider']], $this->top1mToken);
+		}
+		return $row;
 	}
 
 	private function seed(array $files): void
@@ -282,6 +300,14 @@ final class ExtrasParityCorpusTest extends TestCase
 	private static function loadDownloadExtras(): void
 	{
 		$source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php');
+		if (!function_exists('pfb_top1m_detector_decision')) {
+			// The dcc detector's helpers, the block Top1mDccDetectorTest loads too.
+			$start = strpos($source, "\nfunction pfb_top1m_detector_decision");
+			$end = strpos($source, "\nfunction pfblockerng_download_extras", $start === FALSE ? 0 : $start);
+			self::assertNotFalse($start);
+			self::assertNotFalse($end);
+			eval("\n" . substr($source, $start + 1, $end - $start - 1));
+		}
 		if (!function_exists('pfblockerng_download_extras')) {
 			$start = strpos($source, "\nfunction pfblockerng_download_extras");
 			$end = strpos($source, "\n// Function to process the downloaded MaxMind", $start === FALSE ? 0 : $start);

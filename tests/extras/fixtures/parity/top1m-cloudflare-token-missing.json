@@ -1,0 +1,59 @@
+{
+	"schema": 1,
+	"description": "No Cloudflare token sends no Authorization header; the 401 fails the download, keeps top-1m.csv and opens the ledger.",
+	"hosts": {
+		"api.cloudflare.com": [
+			"127.0.0.1",
+			"203.0.113.15"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "cloudflare"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/client/v4/radar/datasets/ranking_top_1000000": {
+				"status": 401,
+				"body": "unauthorized\n"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://api.cloudflare.com:{port:origin}/client/v4/radar/datasets/ranking_top_1000000",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "cloudflare"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"ledger": "TOP1M download failed",
+				"files": {
+					"db/top-1m.csv": "1,old.example.com\n",
+					"db/top-1m.csv.zip.orig": null,
+					"db/top-1m.csv.zip.raw": null,
+					"db/top-1m.update": null,
+					"db/top-1m.csv.zip.source": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/client/v4/radar/datasets/ranking_top_1000000"
+					}
+				]
+			}
+		}
+	]
+}

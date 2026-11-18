@@ -1,0 +1,70 @@
+{
+	"schema": 1,
+	"description": "dcc whose baseline no longer matches its xxh128 while its ETag still answers 304: the detector reads changed, but the download reuses the 304's empty probe body, which is invalid, so the run fails and keeps failing for as long as the server answers 304 (today's PHP, pinned).",
+	"hosts": {
+		"tranco-list.eu": [
+			"127.0.0.1",
+			"203.0.113.11"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "tranco"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n",
+		"db/top-1m.csv.zip.orig": {
+			"b64": "UEsDBBQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQoyLGZhY2Vib29rLmNvbQozLGV4YW1wbGUub3JnClBLAQIUAxQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAFIAAAAAAA=="
+		},
+		"db/top-1m.csv.zip.xxhash128": "00000000000000000000000000000000",
+		"db/top-1m.csv.zip.source": "{\"provider\":\"tranco\",\"url\":\"http://tranco-list.eu:{port:origin}/top-1m.csv.zip\",\"headers\":[]}",
+		"db/top-1m.csv.zip.orig.etag": "\"v1\""
+	},
+	"routes": {
+		"origin": {
+			"/top-1m.csv.zip": {
+				"body_b64": "UEsDBBQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQoyLGZhY2Vib29rLmNvbQozLGV4YW1wbGUub3JnClBLAQIUAxQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAFIAAAAAAA==",
+				"etag": "\"v1\""
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "dcc",
+			"extras": [
+				{
+					"url": "http://tranco-list.eu:{port:origin}/top-1m.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "tranco"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"top1m_changed": false,
+				"ledger": "TOP1M download failed",
+				"files": {
+					"db/top-1m.csv": "1,old.example.com\n",
+					"db/top-1m.csv.zip.orig": {
+						"b64": "UEsDBBQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQoyLGZhY2Vib29rLmNvbQozLGV4YW1wbGUub3JnClBLAQIUAxQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAFIAAAAAAA=="
+					},
+					"db/top-1m.csv.zip.xxhash128": "00000000000000000000000000000000",
+					"db/top-1m.csv.zip.raw": null,
+					"db/top-1m.update": null,
+					"db/top-1m.csv.zip.md5.raw": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip",
+						"if_none_match": "\"v1\""
+					}
+				]
+			}
+		}
+	]
+}

@@ -1,0 +1,63 @@
+{
+	"schema": 1,
+	"description": "dcc whose probe gets a 500: nothing is downloaded or changed, the run fails and the ledger opens with the probe's message.",
+	"hosts": {
+		"tranco-list.eu": [
+			"127.0.0.1",
+			"203.0.113.11"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "tranco"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n",
+		"db/top-1m.csv.zip.orig": {
+			"b64": "UEsDBBQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQoyLGZhY2Vib29rLmNvbQozLGV4YW1wbGUub3JnClBLAQIUAxQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAFIAAAAAAA=="
+		},
+		"db/top-1m.csv.zip.xxhash128": "e1712341769adb69f0593d90ea5c480c",
+		"db/top-1m.csv.zip.source": "{\"provider\":\"tranco\",\"url\":\"http://tranco-list.eu:{port:origin}/top-1m.csv.zip\",\"headers\":[]}"
+	},
+	"routes": {
+		"origin": {
+			"/top-1m.csv.zip": {
+				"status": 500,
+				"body": "oops\n"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "dcc",
+			"extras": [
+				{
+					"url": "http://tranco-list.eu:{port:origin}/top-1m.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "tranco"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"top1m_changed": false,
+				"ledger": "TOP1M probe failed",
+				"files": {
+					"db/top-1m.csv": "1,old.example.com\n",
+					"db/top-1m.update": null,
+					"db/top-1m.csv.zip.md5.raw": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			}
+		}
+	]
+}
