@@ -1,6 +1,7 @@
 package feedfetch
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -95,7 +96,14 @@ func (f *Fetcher) extra(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 	if !ok {
 		return false
 	}
-	if f.Sanity && (mime == mimeText || mime == mimeHTML) {
+	archive := mime == mimeGzip || mime == mimeBzip2 || mime == mimeZip || mime == mimeTar
+	if isDatabase(target) {
+		// A database row takes a MaxMind DB and nothing else: a text page is not one, and a database is never scanned as
+		// text (owner, #4058; PHP renames any text body over it, and its sanity scan refuses the binary asn.mmdb).
+		if !archive && !maxMindDB(raw) {
+			return false
+		}
+	} else if f.Sanity && (mime == mimeText || mime == mimeHTML) {
 		if sane(raw) != "" {
 			return false
 		}
@@ -104,7 +112,6 @@ func (f *Fetcher) extra(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 	if !t.lastMod.IsZero() {
 		os.Chtimes(raw, t.lastMod, t.lastMod)
 	}
-	archive := mime == mimeGzip || mime == mimeBzip2 || mime == mimeZip || mime == mimeTar
 	if archive && f.extractShort(raw, x.Dir, cfg.DBDir, target, filepath.Dir(target)) {
 		return false
 	}
@@ -183,4 +190,29 @@ func rawURLEncode(s string) string {
 		fmt.Fprintf(&b, "%%%02X", c)
 	}
 	return b.String()
+}
+
+// maxMindMarker opens a MaxMind DB's metadata section, which the format puts within the file's last 128 KiB.
+var maxMindMarker = []byte("\xab\xcd\xefMaxMind.com")
+
+// isDatabase tells a row whose published file is a MaxMind DB (GeoLite2-Country.mmdb, asn.mmdb).
+func isDatabase(target string) bool { return strings.HasSuffix(target, ".mmdb") }
+
+// maxMindDB tells that the file at path carries the MaxMind DB metadata marker in its last 128 KiB.
+func maxMindDB(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	off := max(info.Size()-128<<10, 0)
+	tail := make([]byte, info.Size()-off)
+	if _, err := f.ReadAt(tail, off); err != nil {
+		return false
+	}
+	return bytes.Contains(tail, maxMindMarker)
 }
