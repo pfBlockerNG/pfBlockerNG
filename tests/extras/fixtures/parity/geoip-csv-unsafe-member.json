@@ -41,7 +41,6 @@
 				"maxmind_error": true,
 				"files": {
 					"share/GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id\n1.0.0.0/24,2077456\n",
-					"evil.csv": null,
 					"share/evil.csv": null
 				},
 				"requests": [

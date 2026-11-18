@@ -53,6 +53,9 @@
 						"path": "/data/free/asn.mmdb",
 						"query": "token=tok123"
 					}
+				],
+				"replaced": [
+					"share/asn.mmdb"
 				]
 			}
 		}

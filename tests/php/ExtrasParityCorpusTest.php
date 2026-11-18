@@ -35,12 +35,10 @@ final class ExtrasParityCorpusTest extends TestCase
 	private array $servers = [];
 	/** @var array<string,int> */
 	private array $ports = [];
+	/** @var array<string,mixed> every global this test or pfb_global() changes, restored whole in tearDown */
 	private array $savedGlobals = [];
-	private array $savedPfb = [];
 
-	private const PFB_KEYS = ['log', 'errlog', 'extraslog', 'pnow', 'dbdir', 'geoipshare', 'mime_types', 'curl_defaults',
-		'curl_retry_sleep', 'script', 'extras', 'top1m_changed', 'maxmind_feed_error', 'maxmind_account', 'maxmind_key',
-		'asn_token', 'dnsbl_top1m_type', 'dnsbl_top1m_inc', 'dnsbl_top1m_cnt', 'top1m_dispatch_done', 'cc'];
+	private const GLOBALS = ['pfb', 'g', 'config', 'pfb_test_resolve_map', 'pfb_test_configured_ips', 'argv'];
 
 	public static function corpus(): array
 	{
@@ -64,18 +62,10 @@ final class ExtrasParityCorpusTest extends TestCase
 		}
 		$this->root = (string) realpath($base);
 		$this->tools = "{$this->root}/tools";
-		foreach (['config', 'pfb_test_resolve_map', 'pfb_test_configured_ips', 'argv'] as $g) {
+		foreach (self::GLOBALS as $g) {
 			if (array_key_exists($g, $GLOBALS)) {
 				$this->savedGlobals[$g] = $GLOBALS[$g];
 			}
-		}
-		foreach (self::PFB_KEYS as $k) {
-			if (array_key_exists($k, $GLOBALS['pfb'] ?? [])) {
-				$this->savedPfb[$k] = $GLOBALS['pfb'][$k];
-			}
-		}
-		foreach ([CURLOPT_PROXY, CURLOPT_PROXYPORT, CURLOPT_PROXYAUTH, CURLOPT_PROXYUSERPWD, CURLOPT_TCP_FASTOPEN] as $opt) {
-			unset($GLOBALS['pfb']['curl_defaults'][$opt]);
 		}
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb']['dbdir'] = "{$this->root}/db";
@@ -100,14 +90,7 @@ final class ExtrasParityCorpusTest extends TestCase
 			proc_terminate($server);
 			proc_close($server);
 		}
-		foreach (self::PFB_KEYS as $k) {
-			if (array_key_exists($k, $this->savedPfb)) {
-				$GLOBALS['pfb'][$k] = $this->savedPfb[$k];
-			} else {
-				unset($GLOBALS['pfb'][$k]);
-			}
-		}
-		foreach (['config', 'pfb_test_resolve_map', 'pfb_test_configured_ips', 'argv'] as $g) {
+		foreach (self::GLOBALS as $g) {
 			if (array_key_exists($g, $this->savedGlobals)) {
 				$GLOBALS[$g] = $this->savedGlobals[$g];
 			} else {
@@ -145,8 +128,20 @@ final class ExtrasParityCorpusTest extends TestCase
 			$this->seed($step['seed'] ?? []);
 			file_put_contents("{$this->tools}/requests.log", '');
 			file_put_contents($GLOBALS['pfb']['log'], '');
-			$GLOBALS['pfb']['curl_defaults'] = [CURLOPT_MAXFILESIZE_LARGE => PFB_DOWNLOAD_MAX_BYTES]
-				+ ($this->savedPfb['curl_defaults'] ?? []);
+			// No proxy of the developer's (a saved option or http_proxy) may stand between cURL and the corpus servers.
+			$curl = $this->savedGlobals['pfb']['curl_defaults'] ?? [];
+			foreach ([CURLOPT_PROXYPORT, CURLOPT_PROXYAUTH, CURLOPT_PROXYUSERPWD, CURLOPT_TCP_FASTOPEN] as $opt) {
+				unset($curl[$opt]);
+			}
+			$GLOBALS['pfb']['curl_defaults'] = [CURLOPT_MAXFILESIZE_LARGE => PFB_DOWNLOAD_MAX_BYTES, CURLOPT_PROXY => ''] + $curl;
+			// A step where Core deliberately differs (an owner decision) records today's answer as old_expect: it is what
+			// PHP is held to, and what decides which files and request fields are observed.
+			$want = $step['old_expect'] ?? $step['expect'];
+			clearstatcache();
+			$before = [];
+			foreach ($want['replaced'] ?? [] as $rel) {
+				$before[$rel] = @fileinode("{$this->root}/{$rel}");
+			}
 
 			$this->assertSame('download', $step['run'], "{$label}: unknown run");
 			$GLOBALS['argv'] = ['pfblockerng.php', 'extras'];
@@ -158,13 +153,16 @@ final class ExtrasParityCorpusTest extends TestCase
 			$actual['maxmind_error'] = (bool) ($GLOBALS['pfb']['maxmind_feed_error'] ?? FALSE);
 			clearstatcache();
 			$actual['files'] = [];
-			foreach (array_keys($step['expect']['files'] ?? []) as $rel) {
+			foreach (array_keys($want['files'] ?? []) as $rel) {
 				$actual['files'][$rel] = self::state("{$this->root}/{$rel}");
 			}
-			$actual['requests'] = $this->requests($step['expect']['requests'] ?? []);
+			$actual['requests'] = $this->requests($want['requests'] ?? []);
+			if (isset($want['replaced'])) {
+				// A path counts as replaced when a new file now stands there: an identical download is still published.
+				$actual['replaced'] = array_values(array_filter($want['replaced'],
+					fn (string $rel): bool => @fileinode("{$this->root}/{$rel}") !== $before[$rel]));
+			}
 
-			// A step where Core deliberately differs (an owner decision) records today's answer as old_expect.
-			$want = $step['old_expect'] ?? $step['expect'];
 			$want += ['requests' => []];
 			$want['requests'] = array_map(fn (array $r): array => $this->expandRecord($r), $want['requests']);
 			foreach ($want['files'] ?? [] as $rel => $content) {
@@ -221,9 +219,13 @@ final class ExtrasParityCorpusTest extends TestCase
 		}
 	}
 
+	/** A file's content, NULL when nothing is at the path, or a marker for an entry that is not a regular file. */
 	private static function state(string $path): ?string
 	{
-		return is_file($path) ? (string) file_get_contents($path) : NULL;
+		if (!file_exists($path) && !is_link($path)) {
+			return NULL;
+		}
+		return (is_file($path) && !is_link($path)) ? (string) file_get_contents($path) : '<not a regular file>';
 	}
 
 	private function expand(string $text): string

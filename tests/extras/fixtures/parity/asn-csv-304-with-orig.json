@@ -41,7 +41,8 @@
 				"ok": true,
 				"files": {
 					"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n",
-					"db/asn.update": null
+					"db/asn.update": null,
+					"share/asn.csv.gz.orig": "x\n"
 				},
 				"requests": [
 					{

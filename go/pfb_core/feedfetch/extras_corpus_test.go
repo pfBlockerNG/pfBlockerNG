@@ -15,9 +15,10 @@ package feedfetch_test
 //
 // A step: run ("download"), extras ([{url, file_dwn, file, folder ("db" or "share"), type}]), routes and seed (replacing or
 // adding before the step), expect and, where Core deliberately differs (an owner decision), old_expect (today's PHP answer,
-// which only the PHP runner reads): ok, maxmind_error, files ({path: content,
-// {"b64": bytes} or null when absent}: only the files named), and requests (what the servers recorded; host and query
-// only where named). `pfblockerng.sh asn_table`, the ASN conversion's step (#4034), is recorded as a line in
+// which only the PHP runner reads): ok, maxmind_error, replaced (paths that must hold a new file afterwards, even when its
+// bytes are the same), files ({path: content, {"b64": bytes}, or null when nothing is there; any other entry reads
+// "<not a regular file>"}: only the paths named), and requests (what the servers recorded; host and query only where
+// named). `pfblockerng.sh asn_table`, the ASN conversion's step (#4034), is recorded as a line in
 // db/script.calls.
 
 import (
@@ -35,6 +36,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
@@ -53,6 +55,7 @@ type extrasExtra struct {
 type extrasExpect struct {
 	OK           bool                `json:"ok"`
 	MaxmindError bool                `json:"maxmind_error"`
+	Replaced     []string            `json:"replaced"`
 	Files        map[string]any      `json:"files"`
 	Requests     []map[string]string `json:"requests"`
 }
@@ -105,6 +108,20 @@ func runExtrasScenario(t *testing.T, file string) {
 	}
 	if sc.Schema != 1 || sc.Description == "" || len(sc.Steps) == 0 {
 		t.Fatalf("%s: schema 1 with a description and steps required", file)
+	}
+	// A typo in body_b64 would serve a short body that a refusal row still accepts.
+	checkRoutes := func(rs routes) {
+		for server, paths := range rs {
+			for path, rt := range paths {
+				if _, err := base64.StdEncoding.DecodeString(rt.BodyB64); err != nil {
+					t.Fatalf("%s: route %s %s: body_b64: %v", file, server, path, err)
+				}
+			}
+		}
+	}
+	checkRoutes(sc.Routes)
+	for _, st := range sc.Steps {
+		checkRoutes(st.Routes)
 	}
 
 	root := t.TempDir()
@@ -185,7 +202,7 @@ func runExtrasScenario(t *testing.T, file string) {
 		for server, paths := range tab {
 			expanded[server] = map[string]route{}
 			for p, rt := range paths {
-				rt.Location = expand(rt.Location)
+				rt.Location, rt.Body = expand(rt.Location), expand(rt.Body)
 				expanded[server][p] = rt
 			}
 		}
@@ -197,6 +214,10 @@ func runExtrasScenario(t *testing.T, file string) {
 			t.Fatalf("%s: unknown run %q", label, st.Run)
 		}
 
+		inodes := map[string]uint64{}
+		for _, rel := range st.Expect.Replaced {
+			inodes[rel] = inode(filepath.Join(root, rel))
+		}
 		var extras []feedfetch.Extra
 		for _, e := range st.Extras {
 			extras = append(extras, feedfetch.Extra{
@@ -207,13 +228,18 @@ func runExtrasScenario(t *testing.T, file string) {
 		actual := map[string]any{"ok": res.OK, "maxmind_error": res.MaxMindError}
 		files := map[string]any{}
 		for rel := range st.Expect.Files {
-			if b, err := os.ReadFile(filepath.Join(root, rel)); err == nil {
-				files[rel] = string(b)
-			} else {
-				files[rel] = nil
-			}
+			files[rel] = observe(t, filepath.Join(root, rel))
 		}
 		actual["files"] = files
+		if st.Expect.Replaced != nil {
+			replaced := []string{}
+			for _, rel := range st.Expect.Replaced {
+				if inode(filepath.Join(root, rel)) != inodes[rel] {
+					replaced = append(replaced, rel)
+				}
+			}
+			actual["replaced"] = replaced
+		}
 		reqs := log.read(t)
 		for n, rec := range reqs {
 			for _, optional := range []string{"host", "query"} {
@@ -246,6 +272,9 @@ func runExtrasScenario(t *testing.T, file string) {
 			wantReqs = append(wantReqs, rec)
 		}
 		wantMap := map[string]any{"ok": want.OK, "maxmind_error": want.MaxmindError, "files": wantFiles, "requests": wantReqs}
+		if want.Replaced != nil {
+			wantMap["replaced"] = want.Replaced
+		}
 		if !reflect.DeepEqual(wantMap, actual) {
 			t.Errorf("%s: %s\nwant %#v\n got %#v", label, sc.Description, wantMap, actual)
 		}
@@ -267,4 +296,34 @@ func contentBytes(t *testing.T, content any, expand func(string) string) []byte 
 	}
 	t.Fatalf("content %#v is neither text nor {b64}", content)
 	return nil
+}
+
+// observe is what a path holds: its content, nil when nothing is there, or a marker for an entry that is not a regular
+// file (a directory left where a file was expected to be gone must not read as absent).
+func observe(t *testing.T, path string) any {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		return "<not a regular file>"
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// inode is the file's inode number, 0 when nothing is there: a publication by rename gives the path a new one.
+func inode(path string) uint64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Sys().(*syscall.Stat_t).Ino
 }

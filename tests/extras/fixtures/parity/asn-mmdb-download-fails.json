@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "A 500 keeps asn.mmdb and marks no update.",
+	"description": "A 500 keeps asn.mmdb and marks no update. The body is a real database, so only the status refuses it.",
 	"hosts": {
 		"ipinfo.io": [
 			"127.0.0.1",
@@ -22,7 +22,7 @@
 		"origin": {
 			"/data/free/asn.mmdb": {
 				"status": 500,
-				"body": "error\n"
+				"body_b64": "AAJORVctTU1EQgCrze9NYXhNaW5kLmNvbQAAAAAAAAAA"
 			}
 		}
 	},

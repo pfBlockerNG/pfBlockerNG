@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "With no token the server refuses; asn.mmdb stays.",
+	"description": "With no token the server refuses; asn.mmdb stays. The body is a real database, so only the status refuses it.",
 	"hosts": {
 		"ipinfo.io": [
 			"127.0.0.1",
@@ -22,7 +22,7 @@
 		"origin": {
 			"/data/free/asn.mmdb": {
 				"status": 403,
-				"body": "forbidden\n"
+				"body_b64": "AAJORVctTU1EQgCrze9NYXhNaW5kLmNvbQAAAAAAAAAA"
 			}
 		}
 	},

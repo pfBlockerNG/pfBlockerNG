@@ -52,6 +52,9 @@
 						"path": "/geoip/databases/GeoLite2-Country/download",
 						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
 					}
+				],
+				"replaced": [
+					"share/GeoLite2-Country.mmdb"
 				]
 			}
 		}

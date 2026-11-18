@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "The same CSV zip publishes the same members again.",
+	"description": "The same CSV zip publishes the same members again, twice: the second download restores a member changed in between.",
 	"hosts": {
 		"download.maxmind.com": [
 			"127.0.0.1",
@@ -49,7 +49,44 @@
 						"path": "/geoip/databases/GeoLite2-Country-CSV/download",
 						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
 					}
+				],
+				"replaced": [
+					"share/GeoLite2-Country-Blocks-IPv4.csv"
 				]
+			}
+		},
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://download.maxmind.com:{port:origin}/geoip/databases/GeoLite2-Country-CSV/download?suffix=zip",
+					"file_dwn": "GeoLite2-Country-CSV.zip",
+					"file": "",
+					"folder": "share",
+					"type": "geoip"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"share/GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id\n1.0.0.0/24,2077456\n",
+					"share/LICENSE.txt": "licence\n",
+					"db/geoip.update": ""
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country-CSV/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					}
+				],
+				"replaced": [
+					"share/GeoLite2-Country-Blocks-IPv4.csv",
+					"share/LICENSE.txt"
+				]
+			},
+			"seed": {
+				"share/LICENSE.txt": "stale\n"
 			}
 		}
 	]

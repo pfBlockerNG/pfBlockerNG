@@ -49,6 +49,9 @@
 						"path": "/data/free/asn.csv.gz",
 						"query": "token=tok123"
 					}
+				],
+				"replaced": [
+					"share/asn.csv"
 				]
 			}
 		}
