@@ -389,19 +389,19 @@ func top1mCommit(stage, target, base, raw string) bool {
 	active := filepath.Join(backup, "active")
 	_, err = os.Lstat(target)
 	hadActive := err == nil
-	if hadActive && os.Rename(target, active) != nil {
+	if hadActive && rename(target, active) != nil {
 		return false
 	}
-	if os.Rename(stage, target) != nil {
+	if rename(stage, target) != nil {
 		if hadActive {
-			os.Rename(active, target)
+			rename(active, target)
 		}
 		return false
 	}
 	if !top1mPersistBaseline(base, raw) {
 		os.Remove(target)
 		if hadActive {
-			os.Rename(active, target)
+			rename(active, target)
 		}
 		for _, suffix := range []string{".orig", ".xxhash128", ".md5"} {
 			path := base + suffix

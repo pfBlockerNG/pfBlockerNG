@@ -1,0 +1,85 @@
+{
+	"schema": 1,
+	"description": "dcc against a server that answers 304 unasked, with no validator stored: the 304 cannot be trusted, so it reads changed; Core's full download gets the 304 again, which with a baseline in place is a success that publishes nothing. Today's PHP reuses the empty probe body and fails (old_expect; owner, 2026-11-18).",
+	"hosts": {
+		"tranco-list.eu": [
+			"127.0.0.1",
+			"203.0.113.11"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "tranco"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n",
+		"db/top-1m.csv.zip.orig": {
+			"b64": "UEsDBBQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQoyLGZhY2Vib29rLmNvbQozLGV4YW1wbGUub3JnClBLAQIUAxQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAFIAAAAAAA=="
+		},
+		"db/top-1m.csv.zip.xxhash128": "e1712341769adb69f0593d90ea5c480c",
+		"db/top-1m.csv.zip.source": "{\"provider\":\"tranco\",\"url\":\"http://tranco-list.eu:{port:origin}/top-1m.csv.zip\",\"headers\":[]}"
+	},
+	"routes": {
+		"origin": {
+			"/top-1m.csv.zip": {
+				"status": 304,
+				"body": ""
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "dcc",
+			"extras": [
+				{
+					"url": "http://tranco-list.eu:{port:origin}/top-1m.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "tranco"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"top1m_changed": true,
+				"ledger": null,
+				"files": {
+					"db/top-1m.csv": "1,old.example.com\n",
+					"db/top-1m.update": null,
+					"db/top-1m.csv.zip.md5.raw": null,
+					"db/top-1m.csv.zip.raw": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					},
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			},
+			"old_expect": {
+				"ok": false,
+				"top1m_changed": false,
+				"ledger": "TOP1M download failed",
+				"files": {
+					"db/top-1m.csv": "1,old.example.com\n",
+					"db/top-1m.update": null,
+					"db/top-1m.csv.zip.md5.raw": null,
+					"db/top-1m.csv.zip.raw": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			}
+		}
+	]
+}

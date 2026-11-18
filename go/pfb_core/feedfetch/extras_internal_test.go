@@ -1,6 +1,7 @@
 package feedfetch
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,4 +174,40 @@ func TestALiveSymlinkIsBackedUpAsALink(t *testing.T) {
 			t.Errorf("(merged, a.csv link) = (%v, %q, %v), want a failed merge and the link to %s", ok, to, err, elsewhere)
 		}
 	})
+}
+
+// A TOP1M publication whose new list cannot be renamed into place, and whose old list then cannot be put back, still
+// leaves the old list on disk beside the target, as PHP's ".pfbtop1m_active_" does (#3978 review).
+func TestATop1MListThatCannotBePutBackStaysOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	target, base := filepath.Join(dir, "top-1m.csv"), filepath.Join(dir, "top-1m.csv.zip")
+	stage, raw := filepath.Join(dir, "stage"), filepath.Join(dir, "top-1m.csv.zip.raw")
+	for path, content := range map[string]string{target: "old\n", stage: "new\n", raw: "raw"} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	real := rename
+	rename = func(from, to string) error {
+		if to == target {
+			return os.ErrPermission // neither the new list nor the old one reaches the target
+		}
+		return real(from, to)
+	}
+	t.Cleanup(func() { rename = real })
+	if top1mCommit(stage, target, base, raw) {
+		t.Fatal("the commit succeeded, want a failure")
+	}
+	var kept []string
+	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if b, _ := os.ReadFile(p); string(b) == "old\n" {
+				kept = append(kept, p)
+			}
+		}
+		return nil
+	})
+	if len(kept) == 0 {
+		t.Error("no file holds the old list after the failed commit")
+	}
 }

@@ -1,0 +1,58 @@
+{
+	"schema": 1,
+	"description": "OpenPageRank's first line is its header even when it reads as a row: a file whose only valid-looking line is the first is no list.",
+	"hosts": {
+		"openpagerank.keywordseverywhere.com": [
+			"127.0.0.1",
+			"203.0.113.13"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "openpagerank"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/downloads/top10milliondomains.csv.zip": {
+				"body_b64": "UEsDBBQAAAAAAAAAIVyzrIDIJwAAACcAAAAXAAAAdG9wMTBtaWxsaW9uZG9tYWlucy5jc3YxLGdvb2dsZS5jb20sY29tLDEwLjAwLDEwMAp4LG5vdCBhIHJvdwpQSwECFAMUAAAAAAAAACFcs6yAyCcAAAAnAAAAFwAAAAAAAAAAAAAAgAEAAAAAdG9wMTBtaWxsaW9uZG9tYWlucy5jc3ZQSwUGAAAAAAEAAQBFAAAAXAAAAAAA"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://openpagerank.keywordseverywhere.com:{port:origin}/downloads/top10milliondomains.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "openpagerank"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"ledger": "TOP1M download failed",
+				"files": {
+					"db/top-1m.csv": "1,old.example.com\n",
+					"db/top-1m.csv.zip.orig": null,
+					"db/top-1m.csv.zip.raw": null,
+					"db/top-1m.update": null,
+					"db/top-1m.csv.zip.source": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/downloads/top10milliondomains.csv.zip"
+					}
+				]
+			}
+		}
+	]
+}

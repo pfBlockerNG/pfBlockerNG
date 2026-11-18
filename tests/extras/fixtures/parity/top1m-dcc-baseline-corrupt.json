@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "dcc whose baseline no longer matches its xxh128 while its ETag still answers 304: the detector reads changed, but the download reuses the 304's empty probe body, which is invalid, so the run fails and keeps failing for as long as the server answers 304 (today's PHP, pinned).",
+	"description": "dcc whose baseline no longer matches its xxh128 while its ETag still answers 304: the detector reads changed, and Core then downloads the list in full and publishes it. Today's PHP reuses the 304's empty probe body, fails, and keeps failing while the server answers 304 (old_expect; owner, 2026-11-18).",
 	"hosts": {
 		"tranco-list.eu": [
 			"127.0.0.1",
@@ -44,6 +44,33 @@
 				}
 			],
 			"expect": {
+				"ok": true,
+				"top1m_changed": true,
+				"ledger": null,
+				"files": {
+					"db/top-1m.csv": "1,google.com\n2,facebook.com\n3,example.org\n",
+					"db/top-1m.csv.zip.orig": {
+						"b64": "UEsDBBQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQoyLGZhY2Vib29rLmNvbQozLGV4YW1wbGUub3JnClBLAQIUAxQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAFIAAAAAAA=="
+					},
+					"db/top-1m.csv.zip.xxhash128": "e1712341769adb69f0593d90ea5c480c",
+					"db/top-1m.csv.zip.source": "{\"provider\":\"tranco\",\"url\":\"http://tranco-list.eu:{port:origin}/top-1m.csv.zip\",\"headers\":[]}",
+					"db/top-1m.csv.zip.raw": null,
+					"db/top-1m.update": "",
+					"db/top-1m.csv.zip.md5.raw": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip",
+						"if_none_match": "\"v1\""
+					},
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			},
+			"old_expect": {
 				"ok": false,
 				"top1m_changed": false,
 				"ledger": "TOP1M download failed",

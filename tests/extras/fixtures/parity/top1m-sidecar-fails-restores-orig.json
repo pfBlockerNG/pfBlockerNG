@@ -1,0 +1,65 @@
+{
+	"schema": 1,
+	"description": "The xxh128 sidecar cannot be written (a directory stands there): the list and the old baseline are both put back.",
+	"hosts": {
+		"tranco-list.eu": [
+			"127.0.0.1",
+			"203.0.113.11"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "tranco"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n",
+		"db/top-1m.csv.zip.orig": {
+			"b64": "UEsDBBQAAAAAAAAAIVx4t5fXEgAAABIAAAAKAAAAdG9wLTFtLmNzdjEsb2xkLmV4YW1wbGUuY29tClBLAQIUAxQAAAAAAAAAIVx4t5fXEgAAABIAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAADoAAAAAAA=="
+		},
+		"db/top-1m.csv.zip.md5": "kept-md5",
+		"db/top-1m.csv.zip.xxhash128/keep": "x"
+	},
+	"routes": {
+		"origin": {
+			"/top-1m.csv.zip": {
+				"body_b64": "UEsDBBQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQoyLGZhY2Vib29rLmNvbQozLGV4YW1wbGUub3JnClBLAQIUAxQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAFIAAAAAAA=="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://tranco-list.eu:{port:origin}/top-1m.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "tranco"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"ledger": "TOP1M download failed",
+				"files": {
+					"db/top-1m.csv": "1,old.example.com\n",
+					"db/top-1m.csv.zip.orig": {
+						"b64": "UEsDBBQAAAAAAAAAIVx4t5fXEgAAABIAAAAKAAAAdG9wLTFtLmNzdjEsb2xkLmV4YW1wbGUuY29tClBLAQIUAxQAAAAAAAAAIVx4t5fXEgAAABIAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAADoAAAAAAA=="
+					},
+					"db/top-1m.csv.zip.md5": "kept-md5",
+					"db/top-1m.csv.zip.raw": null,
+					"db/top-1m.update": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			}
+		}
+	]
+}
