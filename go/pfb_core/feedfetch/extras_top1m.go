@@ -173,7 +173,8 @@ func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 			os.Remove(probeBody)
 		}
 	}
-	if !f.top1mDownload(ctx, cfg, x, req, p, base, probeBody) {
+	ok, fetched := f.top1mDownload(ctx, cfg, x, req, p, base, probeBody)
+	if !ok {
 		ledger(top1mDownloadFailed)
 		return false
 	}
@@ -184,6 +185,9 @@ func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 		os.Remove(base + ".orig.etag")
 		os.Remove(base + ".orig.lastmod")
 		return true
+	}
+	if fetched != nil {
+		probe = *fetched // the list came from its own download (after an untrusted 304): its validators describe it
 	}
 	writeValidatorsAt(base+".orig", probe.etag, probe.lastMod)
 	res.Top1MChanged = true
@@ -248,58 +252,60 @@ func top1mDropBaseline(base string) {
 }
 
 // top1mDownload is pfb_download() for the TOP1M row: the body (the probe's, when dcc kept one) through the content gates,
-// then the list it holds staged, checked as the provider's and published with the body as its baseline.
-func (f *Fetcher) top1mDownload(ctx context.Context, cfg ExtrasConfig, x Extra, req Request, p top1mProvider, base, probeBody string) bool {
+// then the list it holds staged, checked as the provider's and published with the body as its baseline. It returns the
+// transfer it made, nil when it reused the probe's body.
+func (f *Fetcher) top1mDownload(ctx context.Context, cfg ExtrasConfig, x Extra, req Request, p top1mProvider, base, probeBody string) (bool, *transfer) {
 	raw, target := base+".raw", filepath.Join(x.Dir, x.File)
 	defer os.Remove(raw)
 	status := 200
+	var fetched *transfer
 	if _, err := os.Stat(probeBody); err == nil {
 		// The probe already downloaded the body: it is used instead of downloading twice.
 		if os.Rename(probeBody, raw) != nil {
-			return false
+			return false, nil
 		}
 	} else {
 		src, _ := f.entry(ctx, req)
 		if src == nil || f.proxyUnusableFor(src) {
-			return false
+			return false, nil
 		}
 		t := f.fetch(ctx, src, req, raw, nil)
 		if t.reason != "" {
-			return false
+			return false, nil
 		}
-		status = t.status
+		status, fetched = t.status, &t
 	}
 	if status == 304 {
 		_, err := os.Stat(base + ".orig")
-		return err == nil
+		return err == nil, fetched
 	}
 	if status != 200 && status != 221 && status != 226 {
-		return false
+		return false, nil
 	}
 	mime, _, ok := verdict(ctx, raw)
 	if !ok {
-		return false
+		return false, nil
 	}
 	archive := mime == mimeGzip || mime == mimeBzip2 || mime == mimeZip || mime == mimeTar
 	if !archive && f.Sanity && (mime == mimeText || mime == mimeHTML) && sane(raw) != "" {
-		return false
+		return false, nil
 	}
 	if archive && f.extractShort(raw, x.Dir, cfg.DBDir, target, filepath.Dir(target)) {
-		return false
+		return false, nil
 	}
 	stage, err := f.top1mStage(ctx, mime, raw, target)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	defer os.Remove(stage)
 	if !top1mCandidate(stage, p) {
-		return false
+		return false, nil
 	}
 	if !top1mCommit(stage, target, base, raw) {
-		return false
+		return false, nil
 	}
 	touch(filepath.Join(cfg.DBDir, "top-1m.update"))
-	return true
+	return true, fetched
 }
 
 var errTop1MArchive = errors.New("archive is not one TOP1M list")
