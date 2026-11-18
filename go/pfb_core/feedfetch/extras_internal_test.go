@@ -1,12 +1,20 @@
 package feedfetch
 
 import (
+	"archive/zip"
+	"bytes"
+	"context"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 )
 
 // writeMember refuses a member name that would leave the staging directory, whatever checked the names before it
@@ -236,4 +244,60 @@ func TestATop1MCommitLeavesNoResidue(t *testing.T) {
 	if !slices.Equal(names, want) {
 		t.Errorf("the directory holds %v, want %v", names, want)
 	}
+}
+
+// After a 304 that reads changed, the list comes from a second, full download: the validators stored with it are that
+// download's, not the 304's (#4066 review).
+func TestATop1MFullDownloadAfterA304StoresItsOwnValidators(t *testing.T) {
+	body := zipOf(t, "top-1m.csv", "1,google.com\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			w.Header().Set("ETag", `"v1"`)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", `"v2"`)
+		w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	port := srv.URL[strings.LastIndex(srv.URL, ":")+1:]
+	dir := t.TempDir()
+	url := "http://tranco-list.eu:" + port + "/top-1m.csv.zip"
+	base := filepath.Join(dir, "top-1m.csv.zip")
+	sum := digest.Bytes(body)
+	for path, content := range map[string]string{ // a trusted baseline, but the published list is gone: reads changed
+		base + ".orig": string(body), base + ".xxhash128": sum, base + ".orig.etag": `"v1"`,
+		base + ".source": top1mIdentity("tranco", url, nil),
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := &Fetcher{RetryDelay: 1}
+	f.Resolve = func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("203.0.113.11")}, nil
+	}
+	res := f.DownloadExtras(context.Background(), ExtrasConfig{DBDir: dir, Detect: true},
+		[]Extra{{Kind: "top1m", URL: url, Dir: dir, Download: "top-1m.csv.zip", File: "top-1m.csv", Provider: "tranco"}})
+	etag, _ := os.ReadFile(base + ".orig.etag")
+	if !res.OK || !res.Top1MChanged || string(etag) != `"v2"` {
+		t.Errorf("(ok, changed, stored ETag) = (%v, %v, %s), want (true, true, \"v2\")", res.OK, res.Top1MChanged, etag)
+	}
+}
+
+func zipOf(t *testing.T, name, content string) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	zw := zip.NewWriter(&b)
+	w, err := zw.Create(name)
+	if err == nil {
+		_, err = w.Write([]byte(content))
+	}
+	if err == nil {
+		err = zw.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
 }
