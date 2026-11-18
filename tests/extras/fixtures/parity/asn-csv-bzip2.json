@@ -1,0 +1,76 @@
+{
+	"schema": 1,
+	"description": "A bzip2 body on the asn.csv row: today's PHP reports success, keeps the archive and writes it to asn.csv.bz2.orig, which nothing reads, so asn.csv stays stale (old_expect). Core refuses the type before the update marker (#4059 review).",
+	"hosts": {
+		"ipinfo.io": [
+			"127.0.0.1",
+			"203.0.113.5"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"asn_token": "tok123"
+	},
+	"seed": {
+		"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/data/free/asn.csv.bz2": {
+				"body_b64": "QlpoOTFBWSZTWQhpK7UAACTfgAAQAAVzYCCACACup9wAIABUNSZNM1MTJkwnkGqflJo0NpA09TQO8ZaWqTgwuWe2KM2MAJtQjWv29FGUFfYLwF3GhyGfp180H4ZPBCqQ2LuSKcKEgENJXag="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://ipinfo.io:{port:origin}/data/free/asn.csv.bz2?token=",
+					"file_dwn": "asn.csv.bz2",
+					"file": "asn.csv",
+					"folder": "share",
+					"type": "asn"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"files": {
+					"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n",
+					"share/asn.csv.bz2.raw": null,
+					"share/asn.csv.bz2.orig": null,
+					"db/asn.update": null,
+					"db/script.calls": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.csv.bz2",
+						"query": "token=tok123"
+					}
+				]
+			},
+			"old_expect": {
+				"ok": true,
+				"files": {
+					"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n",
+					"share/asn.csv.bz2.raw": {
+						"b64": "QlpoOTFBWSZTWQhpK7UAACTfgAAQAAVzYCCACACup9wAIABUNSZNM1MTJkwnkGqflJo0NpA09TQO8ZaWqTgwuWe2KM2MAJtQjWv29FGUFfYLwF3GhyGfp180H4ZPBCqQ2LuSKcKEgENJXag="
+					},
+					"share/asn.csv.bz2.orig": "start_ip,end_ip,asn,name,domain\n8.8.8.0,8.8.8.255,AS15169,Google,google.com\n",
+					"db/asn.update": "",
+					"db/script.calls": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.csv.bz2",
+						"query": "token=tok123"
+					}
+				]
+			}
+		}
+	]
+}

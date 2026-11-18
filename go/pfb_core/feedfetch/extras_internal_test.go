@@ -111,3 +111,66 @@ func TestAFailedRollbackKeepsTheBackup(t *testing.T) {
 		t.Errorf("kept backup = (%q, %v), want the old a.csv", got, err)
 	}
 }
+
+// freeBSDLink is link(2) as FreeBSD has it: it follows a symbolic link (Linux's links the link itself).
+func freeBSDLink(t *testing.T) {
+	real := link
+	link = func(from, to string) error {
+		p, err := filepath.EvalSymlinks(from)
+		if err != nil {
+			return err
+		}
+		return os.Link(p, to)
+	}
+	t.Cleanup(func() { link = real })
+}
+
+// A live symlink is backed up as the link it is: a dangling one does not refuse every later merge, and a rollback puts it
+// back as a link, not as a copy of what it points at (#4059 review).
+func TestALiveSymlinkIsBackedUpAsALink(t *testing.T) {
+	t.Run("a dangling link is replaced", func(t *testing.T) {
+		freeBSDLink(t)
+		share := t.TempDir()
+		if err := os.Symlink(filepath.Join(t.TempDir(), "gone.mmdb"), filepath.Join(share, "GeoLite2-Country.mmdb")); err != nil {
+			t.Fatal(err)
+		}
+		ok := (&Fetcher{}).mergeIntoDir(share, func(dir string) error {
+			return os.WriteFile(filepath.Join(dir, "GeoLite2-Country.mmdb"), []byte("new"), 0o644)
+		})
+		got, err := os.ReadFile(filepath.Join(share, "GeoLite2-Country.mmdb"))
+		if !ok || err != nil || string(got) != "new" {
+			t.Errorf("(merged, database) = (%v, %q, %v), want the new database", ok, got, err)
+		}
+	})
+	t.Run("a rollback restores the link", func(t *testing.T) {
+		freeBSDLink(t)
+		share := t.TempDir()
+		elsewhere := filepath.Join(t.TempDir(), "a.csv")
+		if err := os.WriteFile(elsewhere, []byte("old a\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(elsewhere, filepath.Join(share, "a.csv")); err != nil {
+			t.Fatal(err)
+		}
+		real := rename
+		rename = func(from, to string) error {
+			if strings.Contains(from, ".pfbstagedir_") && filepath.Base(to) == "b.csv" {
+				return os.ErrPermission
+			}
+			return real(from, to)
+		}
+		t.Cleanup(func() { rename = real })
+		ok := (&Fetcher{}).mergeIntoDir(share, func(dir string) error {
+			for _, name := range []string{"a.csv", "b.csv"} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte("new\n"), 0o644); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		to, err := os.Readlink(filepath.Join(share, "a.csv"))
+		if ok || err != nil || to != elsewhere {
+			t.Errorf("(merged, a.csv link) = (%v, %q, %v), want a failed merge and the link to %s", ok, to, err, elsewhere)
+		}
+	})
+}

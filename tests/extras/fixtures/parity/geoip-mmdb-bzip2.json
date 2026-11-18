@@ -1,0 +1,81 @@
+{
+	"schema": 1,
+	"description": "A bzip2 body on the GeoLite2-Country.mmdb row: today's PHP fails it after touching the update marker (old_expect). Core refuses the type before the marker and keeps the database (#4059 review).",
+	"hosts": {
+		"download.maxmind.com": [
+			"127.0.0.1",
+			"203.0.113.7"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"maxmind_account": "123456",
+		"maxmind_key": "abcdef"
+	},
+	"seed": {
+		"share/GeoLite2-Country.mmdb": {
+			"b64": "AE9MRC1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+		}
+	},
+	"routes": {
+		"origin": {
+			"/geoip/databases/GeoLite2-Country/download": {
+				"body_b64": "QlpoOTFBWSZTWZuQ2NkAAABXlUAAAAMeA5agLCOAQAAIAAIAAKAAMUAAAZMgoTTRmptJvVMeon0FqJdJ45+ygUd2sEGXkkrrf4u5IpwoSE3IbGyA"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://download.maxmind.com:{port:origin}/geoip/databases/GeoLite2-Country/download?suffix=tar.bz2",
+					"file_dwn": "GeoLite2-Country.mmdb.bz2",
+					"file": "GeoLite2-Country.mmdb",
+					"folder": "share",
+					"type": "geoip"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"maxmind_error": true,
+				"files": {
+					"share/GeoLite2-Country.mmdb": {
+						"b64": "AE9MRC1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+					},
+					"db/geoip.update": null,
+					"share/GeoLite2-Country.mmdb.bz2.raw": null,
+					"share/GeoLite2-Country.mmdb.bz2.orig": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					}
+				]
+			},
+			"old_expect": {
+				"ok": false,
+				"maxmind_error": true,
+				"files": {
+					"share/GeoLite2-Country.mmdb": {
+						"b64": "AE9MRC1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+					},
+					"db/geoip.update": "",
+					"share/GeoLite2-Country.mmdb.bz2.raw": null,
+					"share/GeoLite2-Country.mmdb.bz2.orig": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					}
+				]
+			}
+		}
+	]
+}

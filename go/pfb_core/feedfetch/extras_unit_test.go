@@ -89,3 +89,21 @@ func TestAnExtraOfAnUntranslatedKindIsRefusedBeforeItIsFetched(t *testing.T) {
 		t.Errorf("(ok, fetched, files) = (%v, %v, %d), want (false, false, 0)", res.OK, asked.Load(), len(entries))
 	}
 }
+
+// A run whose context has ended is aborted, not failed by MaxMind: no geoip row reports a MaxMind error that would read
+// as a bad key or a bad download (#4059 review).
+func TestAnEndedContextIsNoMaxMindError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f := &feedfetch.Fetcher{RetryDelay: 1}
+	f.Resolve = func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("203.0.113.7")}, nil
+	}
+	share := t.TempDir()
+	res := f.DownloadExtras(ctx, feedfetch.ExtrasConfig{DBDir: t.TempDir(), MaxMindAccount: "1", MaxMindKey: "k"},
+		[]feedfetch.Extra{{Kind: "geoip", URL: "http://download.maxmind.com:9/geoip/databases/GeoLite2-Country/download?suffix=tar.gz",
+			Dir: share, Download: "GeoLite2-Country.tar.gz", File: "GeoLite2-Country.mmdb"}})
+	if res.OK || res.MaxMindError {
+		t.Errorf("(ok, maxmind error) = (%v, %v), want (false, false)", res.OK, res.MaxMindError)
+	}
+}

@@ -1,0 +1,76 @@
+{
+	"schema": 1,
+	"description": "A zip body on the asn.csv row: today's PHP reports success, keeps the archive and writes its members, commas made newlines, to asn.csv.zip.orig, which nothing reads, so asn.csv stays stale (old_expect). Core refuses the type before the update marker (#4059 review).",
+	"hosts": {
+		"ipinfo.io": [
+			"127.0.0.1",
+			"203.0.113.5"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"asn_token": "tok123"
+	},
+	"seed": {
+		"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/data/free/asn.csv.zip": {
+				"body_b64": "UEsDBBQAAAAIAJGEcl0gHJnqQQAAAEwAAAAHAAAAYXNuLmNzdisuSSwqic8s0EnNSwFRicV5OnmJuak6Kfm5iZl5XBZ6IGigA6GNTE11HIMNTQ3NLHXc8/PTc1J10sGUXnJ+LhcAUEsBAhQDFAAAAAgAkYRyXSAcmepBAAAATAAAAAcAAAAAAAAAAAAAAIABAAAAAGFzbi5jc3ZQSwUGAAAAAAEAAQA1AAAAZgAAAAAA"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://ipinfo.io:{port:origin}/data/free/asn.csv.zip?token=",
+					"file_dwn": "asn.csv.zip",
+					"file": "asn.csv",
+					"folder": "share",
+					"type": "asn"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"files": {
+					"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n",
+					"share/asn.csv.zip.raw": null,
+					"share/asn.csv.zip.orig": null,
+					"db/asn.update": null,
+					"db/script.calls": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.csv.zip",
+						"query": "token=tok123"
+					}
+				]
+			},
+			"old_expect": {
+				"ok": true,
+				"files": {
+					"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n",
+					"share/asn.csv.zip.raw": {
+						"b64": "UEsDBBQAAAAIAJGEcl0gHJnqQQAAAEwAAAAHAAAAYXNuLmNzdisuSSwqic8s0EnNSwFRicV5OnmJuak6Kfm5iZl5XBZ6IGigA6GNTE11HIMNTQ3NLHXc8/PTc1J10sGUXnJ+LhcAUEsBAhQDFAAAAAgAkYRyXSAcmepBAAAATAAAAAcAAAAAAAAAAAAAAIABAAAAAGFzbi5jc3ZQSwUGAAAAAAEAAQA1AAAAZgAAAAAA"
+					},
+					"share/asn.csv.zip.orig": "start_ip\nend_ip\nasn\nname\ndomain\n8.8.8.0\n8.8.8.255\nAS15169\nGoogle\ngoogle.com\n",
+					"db/asn.update": "",
+					"db/script.calls": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.csv.zip",
+						"query": "token=tok123"
+					}
+				]
+			}
+		}
+	]
+}

@@ -81,6 +81,9 @@ var (
 // rename is os.Rename, a test seam for a publication that fails part-way.
 var rename = os.Rename
 
+// link is os.Link, a test seam for link(2) as FreeBSD has it.
+var link = os.Link
+
 // unsafeMember is pfb_archive_unsafe_member(): an absolute name, a ".." component, a component over 255 bytes or a name
 // over 1024 bytes.
 func unsafeMember(names []string) bool {
@@ -308,7 +311,7 @@ func (f *Fetcher) mergeIntoDir(target string, extract func(dir string) error) bo
 	for _, e := range entries {
 		live := filepath.Join(target, e.Name())
 		if _, err := os.Lstat(live); err == nil {
-			if os.Link(live, filepath.Join(backup, e.Name())) != nil {
+			if link(live, filepath.Join(backup, e.Name())) != nil {
 				return false
 			}
 			kept[e.Name()] = true
