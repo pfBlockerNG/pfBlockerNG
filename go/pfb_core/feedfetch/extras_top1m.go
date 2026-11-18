@@ -189,6 +189,9 @@ func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 	if fetched != nil {
 		probe = *fetched // the list came from its own download (after an untrusted 304): its validators describe it
 	}
+	// Only the published body's own validators stay: one its response did not carry would be the old version's.
+	os.Remove(base + ".orig.etag")
+	os.Remove(base + ".orig.lastmod")
 	writeValidatorsAt(base+".orig", probe.etag, probe.lastMod)
 	res.Top1MChanged = true
 	ledger("")
