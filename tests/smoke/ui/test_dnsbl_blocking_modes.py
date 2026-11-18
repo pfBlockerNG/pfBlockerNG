@@ -368,6 +368,8 @@ def test_dnsbl_page_offers_no_vip_mechanism_or_webserver_section(webui: WebUI) -
     assert "DNSBL Webserver Configuration" not in resp.text, "the web server section is still rendered"
     for name in ("dnsbl_interface", "pfb_dnsvip4", "pfb_dnsvip6", "pfb_dnsport", "dnsbl_webpage", "pfb_dnsvip_auto"):
         assert f'name="{name}"' not in resp.text, f"the DNSBL page still renders the {name} field"
+    # issue #4053 slice 3: the HSTS list went with the block page.
+    assert 'name="pfb_hsts"' not in resp.text, "the DNSBL page still renders the HSTS mode field"
 
 
 @pytest.mark.ui_render

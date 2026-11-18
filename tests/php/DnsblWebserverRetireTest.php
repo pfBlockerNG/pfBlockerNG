@@ -55,6 +55,23 @@ final class DnsblWebserverRetireTest extends TestCase
 		config_set_path('nat/rule', $nat);
 	}
 
+	public function testTheRetiredHstsSettingAndItsStagedListAreRemoved(): void
+	{
+		// Issue #4053 slice 3: the HSTS list existed only for the block page.
+		$saved = $GLOBALS['pfb']['unbound_py_hsts'] ?? NULL;
+		$GLOBALS['pfb']['unbound_py_hsts'] = "{$this->dir}/pfb_py_hsts.txt";
+		$this->assertNotFalse(file_put_contents($GLOBALS['pfb']['unbound_py_hsts'], "bank.example\n"));
+		$this->seed(['pfb_dnsbl' => 'on', 'pfb_hsts' => 'on', 'pfb_py_reply' => 'on'], []);
+
+		try {
+			pfb_dnsbl_webserver_retire();
+			$this->assertFileDoesNotExist("{$this->dir}/pfb_py_hsts.txt");
+		} finally {
+			$GLOBALS['pfb']['unbound_py_hsts'] = $saved;
+		}
+		$this->assertSame(['pfb_dnsbl' => 'on', 'pfb_py_reply' => 'on'], config_get_path(self::DNSBL));
+	}
+
 	public function testTheMarkedAutoVipAtTheStoredAddressIsRemoved(): void
 	{
 		$this->seed(['pfb_dnsbl' => 'on', 'pfb_dnsvip4' => '_vip4a', 'pfb_dnsvip6' => '_vip6a'], [
