@@ -1,0 +1,59 @@
+{
+	"schema": 1,
+	"description": "The same database is published again.",
+	"hosts": {
+		"download.maxmind.com": [
+			"127.0.0.1",
+			"203.0.113.7"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"maxmind_account": "123456",
+		"maxmind_key": "abcdef"
+	},
+	"seed": {
+		"share/GeoLite2-Country.mmdb": {
+			"b64": "AE9MRC1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+		}
+	},
+	"routes": {
+		"origin": {
+			"/geoip/databases/GeoLite2-Country/download": {
+				"body_b64": "H4sIAAAAAAAC/+3RPQ6CQBBA4T0KFwB3N/xYCwkNK4nRwsqgUFAACUKiZ/IsnsUrSCwxNEaNie9rZpIppnhx0SRlV2g7bPq6a887LbWvlJrPxNvIQeB5jzkYz+ddaSldYXniC/pjl7XDe/Gf4sn+44tTVfn+5f6+6073d8f9vUBpYUn6f16aRHaYbpbr1dY2JlqIy/VmspMp69w5NJUAAAAAAAAAAAAAAAAA8LPu0XDKiQAoAAA="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://download.maxmind.com:{port:origin}/geoip/databases/GeoLite2-Country/download?suffix=tar.gz",
+					"file_dwn": "GeoLite2-Country.tar.gz",
+					"file": "GeoLite2-Country.mmdb",
+					"folder": "share",
+					"type": "geoip"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"share/GeoLite2-Country.mmdb": {
+						"b64": "AE9MRC1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+					},
+					"db/geoip.update": ""
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					}
+				]
+			}
+		}
+	]
+}

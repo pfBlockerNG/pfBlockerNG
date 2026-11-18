@@ -1,0 +1,57 @@
+{
+	"schema": 1,
+	"description": "A 500 keeps the CSV files and reports the MaxMind error.",
+	"hosts": {
+		"download.maxmind.com": [
+			"127.0.0.1",
+			"203.0.113.7"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"maxmind_account": "123456",
+		"maxmind_key": "abcdef"
+	},
+	"seed": {
+		"share/GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id\n1.0.0.0/24,2077456\n"
+	},
+	"routes": {
+		"origin": {
+			"/geoip/databases/GeoLite2-Country-CSV/download": {
+				"status": 500,
+				"body": "error\n"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://download.maxmind.com:{port:origin}/geoip/databases/GeoLite2-Country-CSV/download?suffix=zip",
+					"file_dwn": "GeoLite2-Country-CSV.zip",
+					"file": "",
+					"folder": "share",
+					"type": "geoip"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"maxmind_error": true,
+				"files": {
+					"share/GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id\n1.0.0.0/24,2077456\n",
+					"db/geoip.update": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country-CSV/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					}
+				]
+			}
+		}
+	]
+}

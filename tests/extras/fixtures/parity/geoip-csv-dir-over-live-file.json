@@ -1,0 +1,57 @@
+{
+	"schema": 1,
+	"description": "A member directory whose name is a live file refuses the whole publication.",
+	"hosts": {
+		"download.maxmind.com": [
+			"127.0.0.1",
+			"203.0.113.7"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"maxmind_account": "123456",
+		"maxmind_key": "abcdef"
+	},
+	"seed": {
+		"share/GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id\n1.0.0.0/24,2077456\n",
+		"share/sub": "live file\n"
+	},
+	"routes": {
+		"origin": {
+			"/geoip/databases/GeoLite2-Country-CSV/download": {
+				"body_b64": "UEsDBBQAAAAAAAAAcl0AAAAAAAAAAAAAAAAeAAAAR2VvTGl0ZTItQ291bnRyeS1DU1ZfMjAyNjExMTgvUEsDBBQAAAAAAAAAcl3IUAo0BAAAAAQAAAA+AAAAR2VvTGl0ZTItQ291bnRyeS1DU1ZfMjAyNjExMTgvR2VvTGl0ZTItQ291bnRyeS1CbG9ja3MtSVB2NC5jc3ZuZXcKUEsDBBQAAAAAAAAAcl0HoerdAgAAAAIAAAAnAAAAR2VvTGl0ZTItQ291bnRyeS1DU1ZfMjAyNjExMTgvc3ViL2EuY3N2YQpQSwECFAMUAAAAAAAAAHJdAAAAAAAAAAAAAAAAHgAAAAAAAAAAAAAAgAEAAAAAR2VvTGl0ZTItQ291bnRyeS1DU1ZfMjAyNjExMTgvUEsBAhQDFAAAAAAAAAByXchQCjQEAAAABAAAAD4AAAAAAAAAAAAAAIABPAAAAEdlb0xpdGUyLUNvdW50cnktQ1NWXzIwMjYxMTE4L0dlb0xpdGUyLUNvdW50cnktQmxvY2tzLUlQdjQuY3N2UEsBAhQDFAAAAAAAAAByXQeh6t0CAAAAAgAAACcAAAAAAAAAAAAAAIABnAAAAEdlb0xpdGUyLUNvdW50cnktQ1NWXzIwMjYxMTE4L3N1Yi9hLmNzdlBLBQYAAAAAAwADAA0BAADjAAAAAAA="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://download.maxmind.com:{port:origin}/geoip/databases/GeoLite2-Country-CSV/download?suffix=zip",
+					"file_dwn": "GeoLite2-Country-CSV.zip",
+					"file": "",
+					"folder": "share",
+					"type": "geoip"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"maxmind_error": true,
+				"files": {
+					"share/GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id\n1.0.0.0/24,2077456\n",
+					"share/sub": "live file\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country-CSV/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					}
+				]
+			}
+		}
+	]
+}
