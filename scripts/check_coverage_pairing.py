@@ -48,6 +48,8 @@ _DATA_ONLY = frozenset(
     {
         # Public Suffix List snapshot; regenerated weekly by psl-refresh.yml.
         "src/usr/local/pkg/pfblockerng/dnsbl_psl",
+        # Chromium HSTS preload snapshot; regenerated weekly by hsts-refresh.yml.
+        "src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt",
         # Vendored-asset digest manifest; guarded by its own webassets drift job.
         "src/usr/local/www/pfblockerng/vendor/codemirror/MANIFEST.sha256",
     }

@@ -12,6 +12,7 @@ name: Nightly failure alert
 on:
   workflow_run:
     workflows:
+      - "HSTS preload refresh (pfb_py_hsts)"
       - "PSL Refresh (dnsbl_psl)"
       - "Smoke fan-out (all CI legs, live pfSense VM)"
       - "TLD List Refresh"
