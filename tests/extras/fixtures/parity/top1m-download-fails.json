@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "A 500 fails the download: top-1m.csv stays, nothing of the baseline is written, and the ledger opens.",
+	"description": "A 500 fails the download even though its body is a valid list: top-1m.csv stays, nothing of the baseline is written, and the ledger opens.",
 	"hosts": {
 		"tranco-list.eu": [
 			"127.0.0.1",
@@ -20,7 +20,7 @@
 		"origin": {
 			"/top-1m.csv.zip": {
 				"status": 500,
-				"body": "oops\n"
+				"body_b64": "UEsDBBQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQoyLGZhY2Vib29rLmNvbQozLGV4YW1wbGUub3JnClBLAQIUAxQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAFIAAAAAAA=="
 			}
 		}
 	},

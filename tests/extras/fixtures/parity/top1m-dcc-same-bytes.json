@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "dcc where the server ignores the ETag and sends the same bytes: the body's xxh128 matches the baseline, so it is unchanged.",
+	"description": "dcc where the server ignores the stored ETag and sends the same bytes: the body's xxh128 matches the baseline, so it is unchanged.",
 	"hosts": {
 		"tranco-list.eu": [
 			"127.0.0.1",
@@ -19,7 +19,8 @@
 			"b64": "UEsDBBQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQoyLGZhY2Vib29rLmNvbQozLGV4YW1wbGUub3JnClBLAQIUAxQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAFIAAAAAAA=="
 		},
 		"db/top-1m.csv.zip.xxhash128": "e1712341769adb69f0593d90ea5c480c",
-		"db/top-1m.csv.zip.source": "{\"provider\":\"tranco\",\"url\":\"http://tranco-list.eu:{port:origin}/top-1m.csv.zip\",\"headers\":[]}"
+		"db/top-1m.csv.zip.source": "{\"provider\":\"tranco\",\"url\":\"http://tranco-list.eu:{port:origin}/top-1m.csv.zip\",\"headers\":[]}",
+		"db/top-1m.csv.zip.orig.etag": "\"v1\""
 	},
 	"routes": {
 		"origin": {
@@ -52,7 +53,8 @@
 				"requests": [
 					{
 						"server": "origin",
-						"path": "/top-1m.csv.zip"
+						"path": "/top-1m.csv.zip",
+						"if_none_match": "\"v1\""
 					}
 				]
 			}
