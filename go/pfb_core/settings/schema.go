@@ -40,6 +40,9 @@ type Field struct {
 	Key      string   `json:"key,omitempty"`
 	Items    []Field  `json:"items,omitempty"`
 
+	// Legacy maps a stored token the schema no longer takes to its current value, as PfbConfig's read adapters absorb
+	// legacy tokens: a load reads it so, the next save stores the current value, and the API refuses the token.
+	Legacy    map[string]string                      `json:"-"`
 	Check     func(item map[string]any) []FieldError `json:"-"`
 	CheckList func(list []any) []FieldError          `json:"-"` // field names relative to the list: "[i].…"
 }

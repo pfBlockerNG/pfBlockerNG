@@ -94,7 +94,9 @@ Core's native settings (issue #3842). Core holds them in memory, loaded from a [
   *Amendment 2026-11-18 (issue #4055): a field the schema retires is listed as retired in its projection, and a load
   drops it instead of refusing (`dns.logViaWebserver`, `dns.hstsNullBlocking`, `ingest.sinkholeV4`,
   `ingest.sinkholeV6`); the next save stores the settings without it. The API still refuses the name. Any other
-  unknown field still stops the start.*
+  unknown field still stops the start. Likewise a field may map a legacy stored token to its current value, as
+  `PfbConfig`'s read adapters do (#4060): a DNSBL mechanism `enabled`, the removed VIP response, loads as
+  `disabled_log`, and the API refuses `enabled`.*
 - **Replay and restarts.** The `requestId` memory is the process's own. A retry after a restart gets `conflict` (the
   revision moved, or the settings are initialized) instead of the first result; the client then reads `GetSettings`.
 

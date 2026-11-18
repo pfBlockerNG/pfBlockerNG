@@ -75,7 +75,8 @@ func policyDNSBLProjection() Projection {
 		listToken  = `^[^\p{C}\p{Z},]+$`
 	)
 	logging := func(name string) Field {
-		return Field{Name: name, Type: TypeEnum, Default: "disabled_log", Enum: dnsblMechanisms}
+		return Field{Name: name, Type: TypeEnum, Default: "disabled_log", Enum: dnsblMechanisms,
+			Legacy: map[string]string{"enabled": "disabled_log"}} // the VIP response (#4060), as config.xml's migration
 	}
 	whitelist := stringList("whitelist", "domain", `^[a-z0-9_.-]{1,254}$`)
 	whitelist.Check = checkWhitelistDomain
