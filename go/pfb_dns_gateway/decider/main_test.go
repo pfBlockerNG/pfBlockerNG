@@ -17,8 +17,7 @@ func stopModule(t *testing.T, m *pfbUnbound) {
 	t.Cleanup(m.restoreStderr) // registered first, it runs last: a module's late errors still reach its py_error.log
 	t.Cleanup(m.closeMaxmind)
 	t.Cleanup(m.stopLogging)
-	t.Cleanup(m.closeDb) // a module holds its stats databases open: a test that leaves them lets the descriptors add up
-	t.Cleanup(m.stopQueryWatcher)
+	t.Cleanup(m.closeDb)           // a module holds its stats databases open: a test that leaves them lets the descriptors add up
 	t.Cleanup(m.stopReloadWatcher) // registered last, it runs first: a watcher mid-build must not meet a closed database
 }
 

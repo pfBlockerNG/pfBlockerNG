@@ -3,7 +3,7 @@
 ``sync_package_pfblockerng()`` derives ``$mode`` from an if/elseif that does not cover
 every enable-state: with the master switch ON and DNSBL ON but Unbound disabled
 (``$pfb['unbound_state'] == ''``), neither branch matches. Pre-fix ``$mode`` stayed
-UNDEFINED (null) and the typed ``pfb_manage_dnsbl_vip(string $mode)`` raised a
+UNDEFINED (null) and a typed ``string $mode`` consumer (then ``pfb_manage_dnsbl_vip``) raised a
 ``TypeError`` that aborted the whole sync pass — every Update/save-sync crashed until
 the resolver was re-enabled. The fix defaults ``$mode = ''`` (a no-op mode for every
 consumer).
@@ -63,7 +63,7 @@ def dnsbl_on_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
     """Deploy the branch .pkg with the #703 trigger preconditions: master ON + DNSBL ON.
 
     Given: the smoke VM is booted and the branch .pkg is available.
-    When:  we deploy, provision the sinkhole VIP, and switch on the master enable and the
+    When:  we deploy and switch on the master enable and the
            DNSBL component (no lists needed — the $mode derivation crashes before any
            feed work).
     Then:  the module VM is one resolver-disable away from the pre-fix crash state.
@@ -72,7 +72,6 @@ def dnsbl_on_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
 
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.set_package_enabled(smoke_vm, True)
     h.set_dnsbl_enabled(smoke_vm, True)
     yield smoke_vm
@@ -86,7 +85,7 @@ def test_sync_with_resolver_disabled_completes_without_typeerror(dnsbl_on_vm: Sm
            attributable to the resolver state alone).
     When:  the Resolver is disabled in config and the same sync runs again.
     Then:  the sync completes with rc 0 and no TypeError/Fatal on its output — pre-fix,
-           $mode was undefined for pfb_manage_dnsbl_vip(string $mode) and the pass
+           $mode was undefined for a typed string $mode consumer and the pass
            aborted with 'TypeError ... must be of type string' (rc 255).
     Finally: the Resolver is restored (loud check) so later modules keep working DNS.
     """

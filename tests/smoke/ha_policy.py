@@ -209,14 +209,10 @@ LOCAL_SEEDS: dict[str, tuple[str, str]] = {
     f"{IP}/enable_rdns": ("on", ""),
     f"{IP}/inbound_interface": ("lan", "wan"),
     f"{IP}/outbound_interface": ("lan", "wan"),
-    f"{DNSBL}/dnsbl_allow_int": ("lan", ""),
     f"{DNSBL}/dnsbl_redir_int": ("lan", ""),
     f"{DNSBL}/dnsbl_dot_block_int": ("lan", ""),
-    f"{DNSBL}/pfb_dnsport": ("8082", "8083"),
-    f"{DNSBL}/pfb_dnsport_ssl": ("8444", "8445"),
     f"{DNSBL}/pfb_cache_flush": ("on", ""),
     f"{DNSBL}/pfb_py_reply": ("on", ""),
-    f"{DNSBL}/pfb_py_nolog": ("on", ""),
     f"{DNSBL}/pfb_py_cache_max": ("5000", "20000"),
     f"{DNSBL}/pfb_control": ("on", ""),
     f"{DNSBL}/pfb_control_legacy": ("on", ""),
@@ -241,9 +237,6 @@ GATEWAY_LEAVES = (f"{DNSBL}/agateway_in", f"{DNSBL}/agateway_out")
 UNSEEDED_LOCAL_KEYS = {
     f"{GEN}/settings_family": "the installer's own mode marker (pfb_settings_family_record() owns it), not a setting",
     f"{GEN}/pfb_reuse": "a one-shot flag the update pass clears itself, so a seeded 'on' does not outlive the baseline pass",
-    f"{DNSBL}/pfb_dnsvip_auto": "turns VIP management on, which rewrites the DNSBL VIP object whose uniqid the tests pin",
-    f"{DNSBL}/dnsbl_interface": "must be the interface of the node's DNSBL VIP (lo0): pfb_validate_vips() disables DNSBL otherwise",
-    f"{DNSBL}/pfb_dnsvip6": "names a VIP object the guests do not have: a dangling reference disables DNSBL",
     f"{GEN}/pfb_metrics_export": "'on' needs pfSense-pkg-node_exporter on the node (the save gate refuses it without), and no HA guest installs that package",
     f"{DNS}/pfb_dns_saved": "the Resolver snapshot the apply writes itself when it moves the Resolver; a seeded value reads as a moved one",
     f"{DNS}/pfb_dns_dnsbl_migrated": "the #3770 migration's one-shot marker the installer writes itself; a seeded value skips that migration",
@@ -286,7 +279,7 @@ UNSEEDED_LOCAL_KEYS = {
 }
 
 
-def node_local_leaves(tag: str, *, vip_uniqid: str) -> dict[str, Any]:
+def node_local_leaves(tag: str) -> dict[str, Any]:
     """The local leaves the two nodes hold apart, ``tag`` = ``A`` or ``B``: every :data:`LOCAL_SEEDS` key but the gateways.
 
     The four scalar credentials carry per-node sentinels, and so do the widget and hook leaves the registry does not
@@ -306,8 +299,6 @@ def node_local_leaves(tag: str, *, vip_uniqid: str) -> dict[str, Any]:
             "timeout": "5",
         }
     ]
-    if tag == "B":
-        leaves[f"{DNSBL}/pfb_dnsvip4"] = f"_vip{vip_uniqid}"
     return leaves
 
 
@@ -785,7 +776,6 @@ BASELINE_FEED_ADDR = {
 }
 BASELINE_FEED_ADDR6 = {"pfbha_s1": "2001:db8:ffff::21", "pfbha_s2": "2001:db8:ffff::22"}
 BLACKLIST_XML = ("bl_alpha", "bl_beta", "bl_gamma")
-B_VIP_UNIQID = "pfbhaB3455"
 
 
 # Policy scalars both nodes start with (inert while their feature is off): the tests delete or blank them on A.
@@ -869,26 +859,16 @@ def seed_node(vm: SmokeVM, tag: str, gateway: str) -> None:
         },
         "pfBlockerNG smoke: HA policy baseline",
     )
-    leaves = node_local_leaves(tag, vip_uniqid=B_VIP_UNIQID)
+    leaves = node_local_leaves(tag)
     leaves.update(BASELINE_POLICY_LEAVES)
     leaves.update(dict.fromkeys(GATEWAY_LEAVES, gateway if tag == "A" else "default"))
     set_leaves(vm, leaves, "pfBlockerNG smoke: HA node local values", secret_values=credential_values(tag))
 
 
-def assert_dnsbl_vip(vm: SmokeVM, node: str, uniqid: str) -> None:
-    """The node owns its DNSBL VIP object, references it and has DNSBL on: a stale write must not have undone them."""
-    state = php_json(
-        vm,
-        emit(
-            "array('uniqids' => array_column(config_get_path('virtualip/vip', array()), 'uniqid'), "
-            f"'ref' => config_get_path('{DNSBL}/pfb_dnsvip4'), 'dnsbl' => config_get_path('{DNSBL}/pfb_dnsbl'))"
-        ),
-    )
-    assert uniqid in state["uniqids"], (
-        f"{node}: DNSBL VIP uniqid {uniqid!r} is not among its virtual IPs {state['uniqids']}"
-    )
-    assert state["ref"] == f"_vip{uniqid}", f"{node}: pfb_dnsvip4: expected {f'_vip{uniqid}'!r}, got {state['ref']!r}"
-    assert state["dnsbl"] == "on", f"{node}: pfb_dnsbl: expected 'on', got {state['dnsbl']!r}"
+def assert_dnsbl_on(vm: SmokeVM, node: str) -> None:
+    """The node has DNSBL on: a stale write must not have undone it."""
+    dnsbl = php_json(vm, emit(f"config_get_path('{DNSBL}/pfb_dnsbl')"))
+    assert dnsbl == "on", f"{node}: pfb_dnsbl: expected 'on', got {dnsbl!r}"
 
 
 def copy_policy(source: SmokeVM, target: SmokeVM) -> None:
@@ -908,7 +888,7 @@ def arrange_baseline(pair: HaPair) -> Baseline:
 
     Core's HA sync is taken off A for the whole arrangement and stays off in the snapshot: with it on, every apply pass
     on A makes core run ``rc.filter_synchronize`` by itself, and its stale ``restore_config_section`` lands on B in the
-    middle of B's own reload (unbound left stopped, B's DNSBL VIP overwritten). ``configure_sender`` turns it on again
+    middle of B's own reload (unbound left stopped). ``configure_sender`` turns it on again
     for the tests that ride it.
     """
     a, b = pair.primary, pair.secondary
@@ -919,18 +899,9 @@ def arrange_baseline(pair: HaPair) -> Baseline:
     gateway = gateway_name(a)
     for tag, vm in (("A", a), ("B", b)):
         h.inject_ip_lists(vm, [])
-        h.ensure_dnsbl_vip(vm)
         for alias, addr in {**BASELINE_FEED_ADDR, **BASELINE_FEED_ADDR6}.items():
             write_feed(vm, alias, addr)
         seed_node(vm, tag, gateway)
-    # B keeps its own VIP object: same address, another uniqid (#3441). seed_node set only the reference.
-    php_write(
-        b,
-        "$vips = config_get_path('virtualip/vip', array());\n"
-        f"foreach ($vips as $i => $v) {{ if (($v['uniqid'] ?? '') === {h._php_str(h.SMOKE_VIP_UNIQID)}) {{ $vips[$i]['uniqid'] = {h._php_str(B_VIP_UNIQID)}; }} }}\n"
-        "config_set_path('virtualip/vip', $vips);",
-        "pfBlockerNG smoke: HA node B VIP uniqid",
-    )
     try:
         for vm in (a, b):
             h.set_dnsbl_enabled(vm, True)
@@ -942,8 +913,8 @@ def arrange_baseline(pair: HaPair) -> Baseline:
             with contextlib.suppress(Exception):  # the pass failure is the story; restore_node clears again, loudly
                 clear_pending_marker(vm)
         raise
-    assert_dnsbl_vip(a, "primary", h.SMOKE_VIP_UNIQID)
-    assert_dnsbl_vip(b, "secondary", B_VIP_UNIQID)
+    assert_dnsbl_on(a, "primary")
+    assert_dnsbl_on(b, "secondary")
     # Last write to B before the snapshots: the baseline both nodes return to must hold one policy projection.
     copy_policy(a, b)
     marker = str(php_json(b, emit("pfb_pending_changes_marker()")))
@@ -955,7 +926,7 @@ def arrange_baseline(pair: HaPair) -> Baseline:
     return Baseline(gateway, digests, marker)
 
 
-def _reset_node(name: str, vm: SmokeVM, uniqid: str, baseline: Baseline) -> None:
+def _reset_node(name: str, vm: SmokeVM, baseline: Baseline) -> None:
     # The mark first: a failed apply keeps it set, and settle() would wait for that for ever.
     marked = vm.ssh(f"rm -f {baseline.marker}")
     assert marked.returncode == 0, f"{name}: could not clear the pending mark: {marked.stderr!r}"
@@ -969,7 +940,7 @@ def _reset_node(name: str, vm: SmokeVM, uniqid: str, baseline: Baseline) -> None
     expected = baseline.digests[name]
     assert digest == expected, f"{name}: baseline restore did not take: config digest {digest} != baseline {expected}"
     assert in_flight(vm) == [], f"{name}: an apply is still in flight after the baseline restore"
-    assert_dnsbl_vip(vm, name, uniqid)
+    assert_dnsbl_on(vm, name)
 
 
 def reset_pair(pair: HaPair, baseline: Baseline) -> None:
@@ -979,12 +950,9 @@ def reset_pair(pair: HaPair, baseline: Baseline) -> None:
     does: a node that did not come back must not leave the other one at its test state.
     """
     failures: list[str] = []
-    for name, vm, uniqid in (
-        ("secondary", pair.secondary, B_VIP_UNIQID),
-        ("primary", pair.primary, h.SMOKE_VIP_UNIQID),
-    ):
+    for name, vm in (("secondary", pair.secondary), ("primary", pair.primary)):
         try:
-            _reset_node(name, vm, uniqid, baseline)
+            _reset_node(name, vm, baseline)
         except Exception as exc:
             text = str(exc)
             failures.append(text if text.startswith(f"{name}:") else f"{name}: {text}")

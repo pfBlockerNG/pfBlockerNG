@@ -88,7 +88,6 @@ def tld_row(smoke_vm: SmokeVM, request: pytest.FixtureRequest) -> tuple[str, str
     # cleanup errors separately, preserving the original setup/test failure.
     request.addfinalizer(restore_dnsbl)
     request.addfinalizer(restore_log)
-    helpers.ensure_dnsbl_vip(vm)
     helpers.set_dnsbl_enabled(vm, True)
     ensure = vm.ssh(f"mkdir -p {DNSBL_LOG.rsplit('/', 1)[0]} && touch {DNSBL_LOG}", timeout=15)
     assert ensure.returncode == 0, f"failed to ensure {DNSBL_LOG} exists: {ensure.stderr!r}"

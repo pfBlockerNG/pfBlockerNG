@@ -309,8 +309,6 @@ _PFB_DNS_SETTINGS_PAGE = "/pfblockerng/pfblockerng_dns_general.php"  # holds the
 
 _SWEPT_DNSBL_TOGGLES = {
     "pfb_dnsbl": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl",
-    "pfb_dnsvip_auto": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto",
-    "pfb_dnsbl_nonat": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat",
     "pfb_idn_escalate_suspicious": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_escalate_suspicious",
     "pfb_regex_cap": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex_cap",
     "pfb_dnsbl_lenient": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient",
@@ -318,7 +316,6 @@ _SWEPT_DNSBL_TOGGLES = {
     "pfb_regex": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex",
     "pfb_cname": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_cname",
     "tld_allow": "installedpackages/pfblockerngdnsblsettings/config/0/tld_allow",
-    "pfb_py_nolog": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_nolog",
     "pfb_noaaaa": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_noaaaa",
     "pfb_gp": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_gp",
 }
@@ -338,11 +335,11 @@ def test_swept_dnsbl_toggle_renders_on_when_stored_and_off_when_absent(
     """
     path = _SWEPT_DNSBL_TOGGLES[name]
     node_state(path, "on")
-    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Group Policy")
     assert _checkbox_is_checked(html, name), f"control: a stored 'on' {name} must render checked"
 
     node_state(path, None)
-    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Group Policy")
     assert not _checkbox_is_checked(html, name), (
         f"an absent {name} must render UNCHECKED -- the registered default "
         "must reproduce the page default #2812 deleted"
@@ -377,7 +374,7 @@ def test_swept_pfb_dnsbl_lenient_off_spellings_render_unchecked(
     stored spellings render UNCHECKED (the equivalence the sweep relied on)."""
     for stored in ("off", ""):
         node_state(_SWEPT_DNSBL_TOGGLES["pfb_dnsbl_lenient"], stored)
-        html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
+        html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Group Policy")
         assert not _checkbox_is_checked(html, "pfb_dnsbl_lenient"), (
             f"a stored {stored!r} pfb_dnsbl_lenient must render UNCHECKED -- both Off "
             "spellings agree under the #2120 toggle contract"
@@ -412,54 +409,20 @@ _CFG_DNSBL = "installedpackages/pfblockerngdnsblsettings/config/0"
 
 
 @pytest.mark.ui_e2e
-def test_absent_dnsbl_ports_render_the_page_defaults(
-    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
-) -> None:
-    """issue #2994: absent pfb_dnsport/ssl still render 8081/8443 from the registry."""
-    node_state(f"{_CFG_DNSBL}/pfb_dnsport", None)
-    node_state(f"{_CFG_DNSBL}/pfb_dnsport_ssl", None)
-    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
-    assert _input_value(html, "pfb_dnsport") == "8081"
-    assert _input_value(html, "pfb_dnsport_ssl") == "8443"
-
-
-@pytest.mark.ui_e2e
 def test_absent_aliaslog_renders_enabled(
     smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
 ) -> None:
     """issue #2994: absent aliaslog still selects Enable (the page/help default)."""
     node_state(f"{_CFG_DNSBL}/aliaslog", None)
-    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Group Policy")
     assert _select_selected(html, "aliaslog") == "enabled"
-
-
-@pytest.mark.ui_e2e
-def test_absent_dnsbl_rule_renders_unchecked(
-    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
-) -> None:
-    """issue #2994: absent pfb_dnsbl_rule stays Off under the registry Disabled token."""
-    node_state(f"{_CFG_DNSBL}/pfb_dnsbl_rule", None)
-    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
-    assert not _checkbox_is_checked(html, "pfb_dnsbl_rule")
-
-
-@pytest.mark.ui_e2e
-def test_absent_dnsbl_vips_render_the_none_sentinel(
-    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
-) -> None:
-    """issue #2994: absent pfb_dnsvip4/6 still select the widget none sentinel."""
-    node_state(f"{_CFG_DNSBL}/pfb_dnsvip4", None)
-    node_state(f"{_CFG_DNSBL}/pfb_dnsvip6", None)
-    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
-    assert _select_selected(html, "pfb_dnsvip4") == "none"
-    assert _select_selected(html, "pfb_dnsvip6") == "none"
 
 
 @pytest.mark.ui_e2e
 @pytest.mark.parametrize(
     ("path", "page", "title", "field", "stored", "expected"),
     [
-        (f"{_CFG_DNSBL}/whitelist", _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration", "whitelist", "MA==", "0"),
+        (f"{_CFG_DNSBL}/whitelist", _DNSBL_SETTINGS_PAGE, "DNSBL Group Policy", "whitelist", "MA==", "0"),
         (
             "installedpackages/pfblockerng/config/0/pfb_feed_internal_allowlist",
             _GENERAL_SETTINGS_PAGE,
@@ -510,7 +473,7 @@ def test_gateway_backed_dnsbl_csv_list_keeps_selected_entries(
 ) -> None:
     node_state(f"{_CFG_DNSBL}/top1m_inclusion", "com,net")
 
-    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Group Policy")
 
     assert _select_selected_values(html, "top1m_inclusion") == {"com", "net"}
 

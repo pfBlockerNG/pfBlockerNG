@@ -7,15 +7,13 @@
         "python_enable": "true",
         "python_blocking": "true",
         "python_cname": "true",
-        "python_tld_seg": "3",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "python_tld_seg": "3"
       }
     },
     "manifest": {
       "version": 1,
       "config": {"user_whitelist": [".wild-ok.example", ".deep.seg-ok.example"]},
-      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "0"}]
     },
     "files": {
       "pfb_py_raw/feed.txt": ["sub.wild-ok.example", "x.deep.seg-ok.example"]
@@ -34,7 +32,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["sub.wild-ok.example. 3600 IN A 10.10.10.1"],
+        "answer": ["sub.wild-ok.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },

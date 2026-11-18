@@ -13,7 +13,7 @@ use PHPUnit\Framework\TestCase;
  * PFB_MANAGED_NAT_DESCR (or carries the pfB_ prefix). A user rule whose descr merely contains
  * 'pfB DNSBL' (e.g. 'my pfB DNSBL test') is never rebuilt on enable and never removed on disable.
  */
-#[CoversFunction('pfb_create_dnsbl')]
+#[CoversFunction('pfb_dnsbl_webserver_retire')]
 #[CoversFunction('pfb_is_managed_obj')]
 final class DnsblNatOwnershipTest extends TestCase
 {
@@ -76,36 +76,13 @@ final class DnsblNatOwnershipTest extends TestCase
 		unset($GLOBALS['pfb_test_file_notices'], $GLOBALS['pfb_test_logger_calls'], $GLOBALS['pfb_test_write_config_calls'], $GLOBALS['pfb_test_vip_list']);
 	}
 
-	public function testEnabledApplyKeepsAUserRuleWhoseDescrOnlyContainsTheMarker(): void
+	public function testRetireKeepsAUserRuleWhoseDescrOnlyContainsTheMarker(): void
 	{
-		// GIVEN user rules resembling the package descr and another feature's NAT, next to a stale package rule
+		// GIVEN the user rules and a DNSBL NAT rule an earlier version wrote
 		$this->seedDnsblNatWriter($this->dir, [...self::KEPT_ROWS, self::STALE_ROW]);
-		$this->assertContains(self::USER_ROW, config_get_path('nat/rule'), 'before-state: the user rule is in config');
-		$this->assertContains(self::STALE_ROW, config_get_path('nat/rule'), 'before-state: the stale package rule is in config');
 
-		// WHEN DNSBL is applied enabled
-		$this->applyDnsblEnabled();
-
-		// THEN the rules it does not own survive byte-identical and in order, ahead of the generated rows
-		$nat = config_get_path('nat/rule');
-		$this->assertSame(self::KEPT_ROWS, array_slice($nat, 0, 4));
-		// AND exactly the two generated rows (HTTP + HTTPS) carry the package descr; the stale row is replaced
-		$this->assertCount(6, $nat);
-		$this->assertSame([4, 5], array_keys(array_filter(array_column($nat, 'descr'), static fn (string $descr): bool => $descr === PFB_MANAGED_NAT_DESCR)));
-		$this->assertSame(['80', '443'], array_map(static fn (array $row): string => $row['destination']['port'], array_slice($nat, 4)));
-		$this->assertNotContains('STALE_IFACE', array_column($nat, 'interface'));
-	}
-
-	public function testDisabledApplyKeepsAUserRuleWhoseDescrOnlyContainsTheMarker(): void
-	{
-		// GIVEN the same rules after an enabled apply, so the copied-object detector holds recorded state
-		$this->seedDnsblNatWriter($this->dir, [...self::KEPT_ROWS, self::STALE_ROW]);
-		$this->applyDnsblEnabled();
-		$this->assertSame(self::KEPT_ROWS, array_slice(config_get_path('nat/rule'), 0, 4), 'before-state: the user rules are in config');
-		$this->assertCount(6, config_get_path('nat/rule'), 'before-state: the generated package rules are in config');
-
-		// WHEN DNSBL is applied disabled
-		pfb_create_dnsbl('disabled');
+		// WHEN the retired web server's leftovers are stripped (issue #4053)
+		pfb_dnsbl_webserver_retire();
 
 		// THEN only the package rules are removed; the others survive byte-identical and in order
 		$this->assertSame(self::KEPT_ROWS, config_get_path('nat/rule'));

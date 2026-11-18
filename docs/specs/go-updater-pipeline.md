@@ -233,7 +233,7 @@ through the Settings backend's adapter, each with a parity fixture frozen agains
 | DNSBL build policy: whitelist, TOP1M count and inclusions, TLD lists, regex list, IDN mode, SafeSearch, per-group logging mechanism, DNSBLIP action | `apply.inc:1536-1543,2238-2462,2690-2699` | `policy/dnsbl` |
 | Hook rows | `pfb.inc:12305` | `hooks` |
 | Scheduled work disabled (`.pfb_cron_disable`) | `extra.inc:6744-6747` | read-only field in `ingest` |
-| Sinkhole addresses (§12) | `pfb.inc:19714` | read-only box fact |
+| Sinkhole addresses (§12) | `pfb.inc:19714` | read-only box fact; withdrawn 2026-11-17 (issue #4053) |
 
 Interfaces reach Core only as `bindAddress` and `selfAddresses`, and the proxy is in `ingest`; all three exist
 (`protocol.md:194,297-301`). Rule interfaces, gateways, rule selectors, alias names, the placeholder address
@@ -390,6 +390,8 @@ The apply settles exactly that token (`apply.inc:5617`), so a change marked whil
   from fetched data. The build is not moved or redesigned.
 - The Outpost apply keeps the VIP, NAT, certificate and webserver from `sinkholeRequired`, with the hold-down while the
   previous generation still answers (`apply.inc:3350-3384,3730`), the Resolver move, and the re-lock of temporary unlocks.
+  *Amendment 2026-11-17 (issue #4053): the WebServer/VIP response is removed, so there is no VIP, NAT, certificate,
+  webserver or hold-down to keep; the Outpost apply keeps the Resolver move and the re-lock.*
 - The reload sentinel, applied marker and fingerprint (`apply.inc:3626-3709`) go. pfB-DNS asks the Core API and reports the
   generation it serves; that report is the applied baseline of `dnsbl/*`.
 
@@ -415,7 +417,8 @@ code under the apply lock. The uninstall disable pass fires its hooks through `p
    acceptance item of the resource-store slice; a line-per-member body for member lists is the fallback if it fails.
    `dnsbl/*` follows the same rule.
 2. **Sinkhole addresses.** A read-only box fact in a settings projection, as `selfAddresses` is; pfB-DNS gets it with
-   `settings/dns`. The control socket stays for listeners, certificates and the Resolver move.
+   `settings/dns`. The control socket stays for listeners, certificates and the Resolver move. *Amendment 2026-11-17
+   (issue #4053): withdrawn; with the VIP response removed, every block answers `0.0.0.0` / `::` or NXDOMAIN/NODATA.*
 3. **Alerts read the feed folders** the Core Updater writes, for IP-to-feed attribution, during the MVP. It is a recorded
    transitional coupling, replaced when Reports move.
 4. **Software-update check** (`cron.inc:469`): Outpost, in the maintenance lane of #3996. It is a package-manager call, not a
@@ -550,7 +553,7 @@ with the PHP sequencing.
 | Group statistics, IDN, TLD Allow, Regex rows | `apply.inc:3130-3199`; `pfb.inc:15300` | Core Updater counts; Outpost apply writes the rows |
 | DNSBLIP | `apply.inc:3209-3266`; `pfb.inc:2793-2850` | Core Updater |
 | Manifest and raw files for pfB-DNS | `apply.inc:3273-3330`; `pfb.inc:17798-18067` | Gone: `dnsbl/*` |
-| VIP, NAT, certificate, webserver | `apply.inc:3350-3384,3730` | Outpost apply |
+| VIP, NAT, certificate, webserver | `apply.inc:3350-3384,3730` | Gone (issue #4053, 2026-11-17) |
 | `pfb_unbound.ini`, Resolver integration | `apply.inc:3377-3380`; `pfb.inc:19714,15990` | Ini Gone (`settings/dns`); Resolver move Outpost apply |
 | DNS redirect NAT, DoT/DoQ rules | `apply.inc:3401-3483,3499-3616` | Outpost apply |
 | Reload sentinel, applied marker, re-lock, cache flush | `apply.inc:3626-3709`; `pfb.inc:20802-20940` | Handshake Gone; re-lock and flush Outpost apply |

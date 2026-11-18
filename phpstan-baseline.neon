@@ -373,24 +373,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
 
 		-
-			message: '#^Parameter \#2 \$timestamp of function date expects int\|null, string given\.$#'
-			identifier: argument.type
-			count: 1
-			path: src/usr/local/www/pfblockerng/www/index.php
-
-		-
-			message: '#^Variable \$data in empty\(\) always exists and is not falsy\.$#'
-			identifier: empty.variable
-			count: 1
-			path: src/usr/local/www/pfblockerng/www/index.php
-
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 2
-			path: src/usr/local/www/pfblockerng/www/index.php
-
-		-
 			message: '#^Parameter \#1 \$num of function number_format expects float, string given\.$#'
 			identifier: argument.type
 			count: 1

@@ -7,16 +7,14 @@
         "python_enable": "true",
         "python_blocking": "true",
         "python_cname": "true",
-        "python_tld_wildcard": "true",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "python_tld_wildcard": "true"
       }
     },
     "manifest": {
       "version": 1,
       "config": {"top1m_enabled": true},
       "feeds": [
-        {"raw": "pfb_py_raw/marked.txt", "feed": "MarkedFeed", "group": "MarkedGroup", "log_flag": "1", "top1m": true},
+        {"raw": "pfb_py_raw/marked.txt", "feed": "MarkedFeed", "group": "MarkedGroup", "log_flag": "0", "top1m": true},
         {"raw": "pfb_py_raw/unmarked.txt", "feed": "UnmarkedFeed", "group": "UnmarkedGroup", "log_flag": "0"}
       ]
     },

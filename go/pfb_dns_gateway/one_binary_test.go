@@ -22,18 +22,18 @@ import (
 
 const (
 	blockedName = "blocked.example."
-	moduleVIP   = "10.10.10.1"
+	nullAnswer  = "0.0.0.0"
 )
 
 // writeModuleDir shapes dir like /var/unbound for the decider: an ini, the manifest and one raw feed that lists blocked.example
-// as a VIP block (log flag 1: no log row, so the test writes no log).
+// as a silent null block (log flag 2: no log row, so the test writes no log).
 func writeModuleDir(t *testing.T, dir string) {
 	t.Helper()
 	ini := "[MAIN]\npython_enable = true\npython_blocking = true\npython_reply = true\npython_cname = true\npython_control = true\n" +
-		"python_control_legacy = true\ndnsbl_ipv4 = " + moduleVIP + "\ndnsbl_ipv6 = fd00::1\n"
+		"python_control_legacy = true\n"
 	manifest, err := json.Marshal(map[string]any{
 		"version": 1, "config": map[string]any{},
-		"feeds": []map[string]string{{"raw": "pfb_py_raw/feed.txt", "feed": "TestFeed", "group": "TestGroup", "log_flag": "1"}},
+		"feeds": []map[string]string{{"raw": "pfb_py_raw/feed.txt", "feed": "TestFeed", "group": "TestGroup", "log_flag": "2"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -99,8 +99,8 @@ func TestOneBinaryBlocksAListedNameAndRelaysTheRest(t *testing.T) {
 	gw.waitLine("ready upstream ")
 
 	blocked := buildQuery(t, 0x0b0b, blockedName, true)
-	if got := answerA(t, udpQuery(t, serving, blocked)); got != moduleVIP {
-		t.Fatalf("blocked name over UDP: A %q, want the module's VIP %s\n%s", got, moduleVIP, gw.logText())
+	if got := answerA(t, udpQuery(t, serving, blocked)); got != nullAnswer {
+		t.Fatalf("blocked name over UDP: A %q, want the null answer %s\n%s", got, nullAnswer, gw.logText())
 	}
 	c, err := net.Dial("tcp4", serving.String())
 	if err != nil {
@@ -108,8 +108,8 @@ func TestOneBinaryBlocksAListedNameAndRelaysTheRest(t *testing.T) {
 	}
 	defer c.Close()
 	tcpSend(t, c, blocked)
-	if got := answerA(t, tcpReply(t, c)); got != moduleVIP {
-		t.Fatalf("blocked name over TCP: A %q, want the module's VIP %s", got, moduleVIP)
+	if got := answerA(t, tcpReply(t, c)); got != nullAnswer {
+		t.Fatalf("blocked name over TCP: A %q, want the null answer %s", got, nullAnswer)
 	}
 	select {
 	case seen := <-up.queries:

@@ -441,7 +441,6 @@ final class CoreUpdateServeTest extends TestCase
 		PfbConfig::writeSystem('gen/enable_cb', PfbToggle::On);
 		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::On);
 		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', PfbToggle::On);
-		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::On);
 		$keys = [];
 		foreach (['active_interface' => 'lan', 'enablessl' => NULL, 'custom_options' => NULL] as $key => $value) {
 			$keys[$key] = ['present' => $value !== NULL, 'value' => $value];

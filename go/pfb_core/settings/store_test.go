@@ -94,7 +94,7 @@ func TestTheSchemaNamesEveryDnsFieldWithItsTypeAndDefault(t *testing.T) {
 		"pslIncludePrivate": "bool true", "pslAllowPrivate": "bool false",
 		"pslFeedPrivatePolicy": `enum "honor" [ignore apex honor]`, "pslFeedIcannPolicy": `enum "honor" [ignore apex honor]`,
 		"idnMode": `enum "off" [off confusable on]`, "idnBlockMalicious": "bool true", "idnEscalateSuspicious": "bool false",
-		"decisionCacheMax": "int 10000 0..5000000", "logViaWebserver": "bool false", "cnameValidation": "bool false",
+		"decisionCacheMax": "int 10000 0..5000000", "cnameValidation": "bool false",
 		"control": "bool false", "controlLegacy": "bool false requires control", "regexCap": "bool false",
 		"metricsClientIp": "bool false",
 	}

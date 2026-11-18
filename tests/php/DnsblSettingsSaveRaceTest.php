@@ -14,7 +14,7 @@ require_once __DIR__ . '/support/ProcessRunner.php';
  * The DNSBL save takes the same config lock as those writers (pfb_dns_config_lock()), reads config.xml afresh under it,
  * applies the posted DNSBL fields to that fresh section and holds the lock through write_config():
  *   - the user's privacy choice (logging Off), the moved Resolver and its snapshot survive an unrelated DNSBL save, while
- *     the fields the user posted (a port, the block page) are saved;
+ *     the fields the user posted (the decision cache cap) are saved;
  *   - a lock that stays taken, or a failed fresh read, is an input error: nothing is written and nothing stays locked.
  *
  * The save runs in a child process (support/DnsblSaveWorker.php: the page's real save code over the doubles), because the
@@ -62,24 +62,11 @@ final class DnsblSettingsSaveRaceTest extends TestCase
 		$result = $this->runScenario('interleave');
 
 		// Then the unrelated posted fields were saved ...
-		$this->assertSame('8082', self::at($result['disk'], self::DNSBL . '/pfb_dnsport'), 'the posted DNSBL port is saved');
-		$this->assertSame('dnsbl_alt.php', self::at($result['disk'], self::DNSBL . '/dnsbl_webpage'), 'so is the block page chosen on the form');
+		$this->assertSame('777', self::at($result['disk'], self::DNSBL . '/pfb_py_cache_max'), 'the posted decision cache cap is saved');
 		// ... and nothing the other writers saved was put back
 		$this->assertSame('', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'), 'the user\'s Off for DNS Reply Logging stays Off');
 		$this->assertSame('lo0', self::at($result['disk'], 'unbound/active_interface'), 'the moved Resolver stays moved');
 		$this->assertNotEmpty(self::at($result['disk'], self::SAVED), 'and its snapshot is kept');
-	}
-
-	public function testASaveOfAnUnchangedBlockPageServesItWhenAnotherSaveChoseAnotherMeanwhile(): void
-	{
-		// Given a form loaded with the alternative block page stored, then another save stored and served the default one,
-		// and this save posts the alternative unchanged (issue #3998)
-		$result = $this->runScenario('interleave', ['webpageChanged' => FALSE, 'otherWebpage' => 'dnsbl_default.php', 'activePage' => 'DEFAULT PAGE']);
-
-		// Then the page config.xml names is the page DNSBL serves
-		$this->assertSame([], $result['inputErrors']);
-		$this->assertSame('dnsbl_alt.php', self::at($result['disk'], self::DNSBL . '/dnsbl_webpage'), 'the save stores the alternative page');
-		$this->assertSame('ALTERNATIVE PAGE', $result['effects']['after']['activePage'], 'so DNSBL must serve it, not the default the other save copied');
 	}
 
 	public function testASaveWritesTheEightPostedPolicyFieldsToDiskInTheirStoredForm(): void
@@ -121,7 +108,7 @@ final class DnsblSettingsSaveRaceTest extends TestCase
 		$this->assertStringContainsString('another save', $result['inputErrors'][0]);
 		$this->assertSame([['try_lock', 'pfb_dns_config', 10]], $result['events'], 'only the bounded attempt: no read, no write');
 		$this->assertSame('', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'), 'what the other writer saved is untouched');
-		$this->assertNotSame('8082', self::at($result['disk'], self::DNSBL . '/pfb_dnsport'), 'nothing posted was saved');
+		$this->assertNotSame('777', self::at($result['disk'], self::DNSBL . '/pfb_py_cache_max'), 'nothing posted was saved');
 	}
 
 	public function testAFailedFreshReadIsAnInputErrorThatSavesNothingAndReleasesTheLock(): void
@@ -132,7 +119,7 @@ final class DnsblSettingsSaveRaceTest extends TestCase
 		$this->assertSame(['try_lock', 'unlock'], array_map(static fn (array $event): string => $event[0], $result['events']),
 			'locked, the read failed, released, never written');
 		$this->assertFalse($result['lockHeld']);
-		$this->assertNotSame('8082', self::at($result['disk'], self::DNSBL . '/pfb_dnsport'), 'nothing posted was saved');
+		$this->assertNotSame('777', self::at($result['disk'], self::DNSBL . '/pfb_py_cache_max'), 'nothing posted was saved');
 	}
 
 	public function testAWriteThatThrowsStillReleasesTheConfigLock(): void

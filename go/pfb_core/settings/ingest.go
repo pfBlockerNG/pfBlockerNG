@@ -28,20 +28,7 @@ func ingestProjection() Projection {
 		{Name: "proxyPassword", Type: TypeString, Default: "", Secret: true},
 		{Name: "proxyUnusable", Type: TypeBool, Default: false},
 		{Name: "scheduledWorkDisabled", Type: TypeBool, Default: false},
-		{Name: "sinkholeV4", Type: TypeString, Default: "", Check: checkSinkhole("sinkholeV4", true)},
-		{Name: "sinkholeV6", Type: TypeString, Default: "", Check: checkSinkhole("sinkholeV6", false)},
 	}}
-}
-
-// checkSinkhole holds a sinkhole address to none or to an IP address of its family without a zone.
-func checkSinkhole(name string, v4 bool) func(map[string]any) []FieldError {
-	return func(v map[string]any) []FieldError {
-		a := v[name].(string)
-		if addr, err := netip.ParseAddr(a); a == "" || err == nil && addr.Zone() == "" && addr.Is4() == v4 {
-			return nil
-		}
-		return []FieldError{{Field: name, Message: "must be empty or an IP address of its family without a zone"}}
-	}
 }
 
 // checkAllowEntry holds an allowlist entry to an IP address or a CIDR: the forms the feed policy parses, with no zone.

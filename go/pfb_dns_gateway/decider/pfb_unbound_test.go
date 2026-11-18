@@ -78,8 +78,6 @@ func modDefaults(dir string) pfbSettings {
 		pfbPyReloadApplied:  in("pfb_py_reload.applied"),
 		pfbPyControl:        in("pfb_py_control"),
 		pfbPyControlApplied: in("pfb_py_control.applied"),
-		pfbPyQuery:          in("pfb_py_query"),
-		pfbPyQueryReply:     in("pfb_py_query.reply"),
 		pfbPyCount:          in("pfb_py_count"),
 		pfbPyRegexCount:     in("pfb_py_regex_count"),
 		pfbPyRejectStats:    in("pfb_py_reject_stats.json"),
@@ -296,7 +294,7 @@ func TestInitStandardWithoutAnIniFile(t *testing.T) {
 	logs := modCaptureLog(t)
 	dir := t.TempDir()
 	m := modMust(t, dir)
-	modDiff(t, "no ini", m.pfb, modDefaults(dir)) // including dnsbl_ipv6 "": the "::" fallback lives inside the MAIN branch
+	modDiff(t, "no ini", m.pfb, modDefaults(dir))
 	if len(m.rcodeDB) != 0 {
 		t.Errorf("rcodeDB = %v, want unset: it is only built under a [MAIN] section", m.rcodeDB)
 	}
@@ -322,7 +320,6 @@ func TestInitStandardEmptyMainSection(t *testing.T) {
 	dir := modIniDir(t, "[MAIN]\n")
 	m := modMust(t, dir)
 	want := modDefaults(dir)
-	want.dnsblIpv6 = "::" // pfb_unbound.py 1981: an unset or empty dnsbl_ipv6 becomes "::"
 	modDiff(t, "empty [MAIN]", m.pfb, want)
 	wantRcodes := map[int]string{
 		0: "NoError", 1: "FormErr", 2: "ServFail", 3: "NXDOMAIN", 4: "NotImp", 5: "Refused", 6: "YXDomain", 7: "YXRRSet",
@@ -353,7 +350,6 @@ var modBoolKeys = []modBoolKey{
 	{"tld_allow", func(p *pfbSettings) bool { return p.tldAllow }, false},
 	{"psl_include_private", func(p *pfbSettings) bool { return p.pslIncludePrivate }, true},
 	{"psl_allow_private", func(p *pfbSettings) bool { return p.pslAllowPrivate }, false},
-	{"python_nolog", func(p *pfbSettings) bool { return p.pythonNolog }, false},
 	{"python_cname", func(p *pfbSettings) bool { return p.pythonCname }, false},
 	{"python_control", func(p *pfbSettings) bool { return p.pythonControl }, false},
 	{"python_control_legacy", func(p *pfbSettings) bool { return p.pythonControlLegacy }, false},
@@ -383,27 +379,24 @@ func TestInitStandardReadsEveryMainBoolean(t *testing.T) {
 }
 
 func TestInitStandardReadsStringIntAndFloatKeys(t *testing.T) {
-	dir := modIniDir(t, "[MAIN]\ndnsbl_ipv4 = 10.10.10.1\ndnsbl_ipv6 = 2001:db8::1\npython_tld_seg = 3\ndecisiondb_max = 500\nregex_warn_ms = 2.5\ntld_allow_list = COM, net\n")
+	dir := modIniDir(t, "[MAIN]\npython_tld_seg = 3\ndecisiondb_max = 500\nregex_warn_ms = 2.5\ntld_allow_list = COM, net\n")
 	want := modDefaults(dir)
-	want.dnsblIpv4 = "10.10.10.1"
-	want.dnsblIpv6 = "2001:db8::1"
 	want.pythonTldSeg = 3
 	want.decisiondbMax = 500
 	want.regexWarnMs = 2.5
 	want.tldAllowList = []string{"com", "net"}
 	modDiff(t, "string, int and float keys", modMust(t, dir).pfb, want)
 
-	// 0 is a valid decisiondb_max (an unbounded cache), and an empty dnsbl_ipv6 falls back to "::".
-	m := modMain(t, "decisiondb_max = 0", "dnsbl_ipv6 =")
-	if m.pfb.decisiondbMax != 0 || m.pfb.dnsblIpv6 != "::" {
-		t.Errorf("(decisiondb_max, dnsbl_ipv6) = (%d, %q), want (0, \"::\")", m.pfb.decisiondbMax, m.pfb.dnsblIpv6)
+	// 0 is a valid decisiondb_max (an unbounded cache).
+	m := modMain(t, "decisiondb_max = 0")
+	if m.pfb.decisiondbMax != 0 {
+		t.Errorf("decisiondb_max = %d, want 0", m.pfb.decisiondbMax)
 	}
 }
 
 func TestInitStandardMalformedNumbersKeepTheirDefaults(t *testing.T) {
 	dir := modIniDir(t, "[MAIN]\npython_tld_seg = abc\ndecisiondb_max = 1.5\nregex_warn_ms = abc\nforwarding = on\n")
 	want := modDefaults(dir)
-	want.dnsblIpv6 = "::"
 	want.forwarding = true // the read went on past the three malformed numbers
 	modDiff(t, "malformed numbers", modMust(t, dir).pfb, want)
 }
@@ -462,8 +455,6 @@ func TestInitStandardFailsWhereTheIniReadRaisesInPython(t *testing.T) {
 		{"python_tld_seg = 5%", "python_tld_seg", "'%' must be followed by '%' or '('"}, // _parse_ini_int only swallows ValueError
 		{"decisiondb_max = %(nope)s", "decisiondb_max", "Bad value substitution"},
 		{"regex_warn_ms = 5%", "regex_warn_ms", "'%' must be followed by '%' or '('"},
-		{"dnsbl_ipv4 = %(nope)s", "dnsbl_ipv4", "Bad value substitution"},
-		{"dnsbl_ipv6 = %(nope)s", "dnsbl_ipv6", "Bad value substitution"},
 		{"idn_mode = 5%", "idn_mode", "'%' must be followed by '%' or '('"},
 		{"tld_allow_list = %q", "tld_allow_list", "'%' must be followed by '%' or '('"},
 		{"psl_feed_private_policy = %z", "psl_feed_private_policy", "'%' must be followed by '%' or '('"},

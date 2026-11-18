@@ -630,7 +630,7 @@ def _wait_proxy_serves(rig: Rig) -> None:
 
     def serves() -> bool:
         answer, _ = _query(rig.client, rig.names.blocked)
-        return h.is_vip(answer)
+        return h.is_null_ip(answer)
 
     try:
         h.wait_until(serves, timeout=240.0, interval=3.0)
@@ -663,7 +663,6 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     vm = smoke_vm
     h.deploy(vm)
-    h.ensure_dnsbl_vip(vm)
     h.use_system_dns_upstream(vm)  # Unbound forwards to the stub upstream; nothing needs the internet
     h.assert_link_health(client_vm, vm, control_name=h.unique_domain())
     names = Names(
@@ -697,7 +696,7 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
         )
         assert trusted.returncode == 0, f"copying the certificate to the client failed: {trusted.stderr!r}"
         _configure_resolver(vm, refid)
-        h.inject(vm, h.DnsblCase(aliasname=FEED_HEADER, feed_url=feed_url, header=FEED_HEADER, mode=h.DnsblMode.VIP))
+        h.inject(vm, h.DnsblCase(aliasname=FEED_HEADER, feed_url=feed_url, header=FEED_HEADER))
         # inject turns pfB-DNS on with DNSBL; this module starts from pfB-DNS off and toggles it itself
         _set_proxy_toggle(vm, False)
         # A package delete drops the manifest, so the next apply reuses a cached `.orig` of the module that ran
@@ -937,7 +936,7 @@ def test_listed_name_gets_the_vip_and_a_feed_attributed_log_row(rig: Rig, proxy_
     rows_before = len(_dnsbl_rows(rig.vm, rig.names.blocked))
     unbound_lines_before = _unbound_clients(rig.vm, rig.names.blocked)
     answer, raw = _query(rig.client, rig.names.blocked)
-    assert h.is_vip(answer), f"{rig.names.blocked}: expected VIP {h.DEFAULT_DNSBL_VIP4}, got {answer}\n{raw}"
+    assert h.is_null_ip(answer), f"{rig.names.blocked}: expected {h.NULL_IP4}, got {answer}\n{raw}"
     try:
         h.wait_until(lambda: len(_dnsbl_rows(rig.vm, rig.names.blocked)) > rows_before, timeout=30.0)
     except RuntimeError as exc:
@@ -989,7 +988,7 @@ def test_group_policy_bypassed_and_filtered_clients_asking_at_once_each_get_thei
                 answers = {label: future.result() for label, future in futures.items()}
             filtered, filtered_raw = answers["filtered"]
             bypassed, bypassed_raw = answers["bypassed"]
-            assert h.is_vip(filtered), f"{name}: filtered client expected the VIP, got {filtered}\n{filtered_raw}"
+            assert h.is_null_ip(filtered), f"{name}: filtered client expected the VIP, got {filtered}\n{filtered_raw}"
             assert h.resolves_to(bypassed, STUB_DNS_A), (
                 f"{name}: bypassed client expected the upstream's {STUB_DNS_A}, got {bypassed}\n{bypassed_raw}"
             )
@@ -1017,7 +1016,7 @@ def test_alerts_whitelist_reload_takes_the_zero_downtime_swap_without_restarting
     """
     vm, name = rig.vm, rig.names.whitelisted
     answer, raw = _query(rig.client, name)
-    assert h.is_vip(answer), f"{name}: expected the VIP before the whitelist, got {answer}\n{raw}"
+    assert h.is_null_ip(answer), f"{name}: expected the VIP before the whitelist, got {answer}\n{raw}"
     pids = (proxy_on.proxy_pid, proxy_on.daemon_pid, h.unbound_pid(vm))
     swaps = h.count_log_marker(vm, h.PFB_LOG, h.SWAP_LOG_MARKER)
     original = h.config_get_state(vm, CFG_WHITELIST)
@@ -1638,7 +1637,7 @@ def test_after_a_reboot_the_proxy_answers_before_the_packages_start_and_the_pack
       does the client's.
     """
     vm = rig.vm
-    expected = h.DEFAULT_DNSBL_VIP4 if dnsbl_on else STUB_DNS_A
+    expected = h.NULL_IP4 if dnsbl_on else STUB_DNS_A
     stem = h.unique_domain("bootprobe").removesuffix(".com")  # the probe asks <stem>-<n>.com, a new name every time
     _set_dnsbl(vm, dnsbl_on)
     try:
@@ -1868,12 +1867,12 @@ class _Probe:
 
 def _assert_probe_answered(rows: list[str], what: str) -> None:
     """Every probe row got the VIP, and there were enough rows for that to mean something."""
-    misses = [row for row in rows if not _answered(row.partition(" ")[2], h.DEFAULT_DNSBL_VIP4)]
+    misses = [row for row in rows if not _answered(row.partition(" ")[2], h.NULL_IP4)]
     assert len(rows) >= UPGRADE_PROBE_MIN_ROWS, (
         f"{what}: the probe logged {len(rows)} rows, expected at least {UPGRADE_PROBE_MIN_ROWS}"
     )
     assert not misses, (
-        f"{what}: {len(misses)} of {len(rows)} probes did not get NOERROR:{h.DEFAULT_DNSBL_VIP4} "
+        f"{what}: {len(misses)} of {len(rows)} probes did not get NOERROR:{h.NULL_IP4} "
         f"(row = epoch answer):\n" + "\n".join(misses[:20])
     )
 
@@ -1930,7 +1929,7 @@ def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: Stat
             f"the proxy is not serving the moved Resolver after the upgrade: {after.service}\n{diagnostics}"
         )
         blocked, raw = _query(rig.client, rig.names.blocked)
-        assert h.is_vip(blocked), f"after the upgrade the listed name is not blocked: {blocked}\n{raw}\n{diagnostics}"
+        assert h.is_null_ip(blocked), f"listed name not blocked after the upgrade: {blocked}\n{raw}\n{diagnostics}"
         during = _settled_pids(vm)
         assert during == before, (
             f"the upgrade restarted pfB-DNS: (gateway, supervisor) {before} -> {during}\n{diagnostics}"
@@ -2002,7 +2001,7 @@ def test_a_gateway_binary_change_restarts_the_pair_once(rig: Rig, proxy_on: Stat
         )
         assert _is_on(_capture(vm)), f"the proxy is not serving after its restart\n{diagnostics}"
         blocked, raw = _query(rig.client, rig.names.blocked)
-        assert h.is_vip(blocked), f"after the restart {rig.names.blocked} is not blocked: {blocked}\n{raw}"
+        assert h.is_null_ip(blocked), f"after the restart {rig.names.blocked} is not blocked: {blocked}\n{raw}"
         h.reload(vm, "update")
         again = _settled_pids(vm)
         assert again == after, f"a second update pass restarted the pair again: {after} -> {again}\n{_diagnostics(vm)}"
@@ -2312,7 +2311,7 @@ def test_boot_check_without_a_gateway_keeps_the_resolver_moved_and_files_the_sta
         assert found is not None, f"no validated Resolver snapshot in {valid!r}"
         assert json.loads(found.group(1)) == saved, f"the shipped validator rejected the original snapshot: {valid}"
         blocked, raw = _query(rig.client, rig.names.blocked)
-        assert h.is_vip(blocked), f"blocked name before stopping pfB-DNS: {blocked}\n{raw}"
+        assert h.is_null_ip(blocked), f"blocked name before stopping pfB-DNS: {blocked}\n{raw}"
         allowed, raw = _query(rig.client, h.unique_domain("bootcheck-before"))
         assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name before stopping pfB-DNS: {allowed}\n{raw}"
         notices = _php_ok(vm, clear_notices + read_notices, "clear startup and Resolver notices")
@@ -2496,7 +2495,7 @@ def test_a_corrupt_dnsbl_manifest_leaves_pfb_dns_answering_with_dnsbl_not_blocki
     try:
         assert _is_on(proxy_on) and proxy_on.marker, f"pfB-DNS is not serving with a saved Resolver: {proxy_on}"
         before, raw = _drill_local(vm, names.blocked)
-        assert h.is_vip(before), f"before the corruption {names.blocked}: expected the block {before}\n{raw}"
+        assert h.is_null_ip(before), f"before the corruption {names.blocked}: expected the block {before}\n{raw}"
         assert "dnsbl" not in _degraded(_dns_status(vm)), "DNSBL is degraded before the test corrupts anything"
         _close_startup_notices(vm)
 
@@ -2512,7 +2511,7 @@ def test_a_corrupt_dnsbl_manifest_leaves_pfb_dns_answering_with_dnsbl_not_blocki
         listed, raw = _drill_local(
             vm, names.blocked
         )  # the first answer is authoritative: asked for the first time here
-        assert h.resolves_to(listed, STUB_DNS_A) and not h.is_vip(listed), (
+        assert h.resolves_to(listed, STUB_DNS_A) and not h.is_null_ip(listed), (
             f"listed {names.blocked}: expected the upstream's {STUB_DNS_A} (DNSBL not blocking), got {listed}\n{raw}"
         )
     finally:
@@ -2542,7 +2541,7 @@ def test_an_unusable_tls_certificate_leaves_pfb_dns_answering_with_dot_not_serve
     try:
         assert _is_on(proxy_on) and proxy_on.marker, f"pfB-DNS is not serving with a saved Resolver: {proxy_on}"
         blocked, raw = _query(client, names.blocked, dot=True)
-        assert h.is_vip(blocked), f"before the corruption, DoT {names.blocked}: expected the block {blocked}\n{raw}"
+        assert h.is_null_ip(blocked), f"before the corruption, DoT {names.blocked}: expected the block {blocked}\n{raw}"
         assert "tls_certificate" not in _degraded(_dns_status(vm)), "the certificate is degraded before the test"
         _close_startup_notices(vm)
 
@@ -2562,7 +2561,7 @@ def test_an_unusable_tls_certificate_leaves_pfb_dns_answering_with_dot_not_serve
         try:
             _apply(vm)  # a normal Update writes the certificate again and pushes it to the running gateway
             _wait_proxy_serves(rig)
-            h.wait_until(lambda: h.is_vip(_query(client, names.blocked, dot=True)[0]), timeout=120.0, interval=3.0)
+            h.wait_until(lambda: h.is_null_ip(_query(client, names.blocked, dot=True)[0]), timeout=120.0, interval=3.0)
             after = _degraded(_dns_status(vm))
             assert "tls_certificate" not in after, f"after the Update: expected no tls_certificate row, got {after}"
         finally:
@@ -2588,7 +2587,7 @@ def test_restored_valid_marker_starts_the_existing_rc_script_and_serves_dns(rig:
         assert found is not None, f"no validated Resolver snapshot in {valid!r}"
         assert json.loads(found.group(1)) == saved_a, f"the shipped validator rejected snapshot A: {valid}"
         blocked, raw = _query(rig.client, rig.names.blocked)
-        assert h.is_vip(blocked), f"blocked name before replacing the saved Resolver: {blocked}\n{raw}"
+        assert h.is_null_ip(blocked), f"blocked name before replacing the saved Resolver: {blocked}\n{raw}"
         allowed, raw = _query(rig.client, h.unique_domain("marker-before"))
         assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name before replacing the saved Resolver: {allowed}\n{raw}"
         original_rc = vm.ssh("cat", PROXY_RC)
@@ -2646,7 +2645,7 @@ def test_restored_valid_marker_starts_the_existing_rc_script_and_serves_dns(rig:
         assert running_rc.returncode == 0, f"reading rc after start failed: {running_rc.stderr!r}"
         assert running_rc.stdout == original_rc.stdout, "rc start rewrote the staged rc script"
         blocked, raw = _query(rig.client, rig.names.blocked)
-        assert h.is_vip(blocked), f"blocked name with restored snapshot B: {blocked}\n{raw}"
+        assert h.is_null_ip(blocked), f"blocked name with restored snapshot B: {blocked}\n{raw}"
         allowed, raw = _query(rig.client, h.unique_domain("marker-restored"))
         assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name with restored snapshot B: {allowed}\n{raw}"
     finally:
@@ -2999,7 +2998,7 @@ def test_an_aborted_removal_keeps_pfb_dns_serving_and_a_retry_removes_the_packag
     delete_pid = ""  # the background pkg delete the `finally` must see finished
     try:
         before, raw = _query(client, rig.names.blocked)
-        assert h.is_vip(before), f"before: the listed name is not blocked with the VIP: {before}\n{raw}"
+        assert h.is_null_ip(before), f"before: the listed name is not blocked with the VIP: {before}\n{raw}"
         assert pkg_installed_version(vm) is not None, "before: the package is not installed"
 
         # lock() takes "{$g['tmp_path']}/pfb_dns_config.lock": $g needs globals.inc first, as pkg-utils.inc loads it.
@@ -3040,12 +3039,12 @@ def test_an_aborted_removal_keeps_pfb_dns_serving_and_a_retry_removes_the_packag
         assert pkg_installed_version(vm) is not None, f"pkg removed the package although the hook aborted:\n{out}"
         state = _capture(vm)
         assert state.service == "running", f"the proxy is not running after the aborted removal:\n{_diagnostics(vm)}"
-        assert {"pfb_dnsbl", "pfb_dns_proxy", "pfb_filter"} <= set(_registered_services(vm)), _registered_services(vm)
+        assert {"pfb_dns_proxy", "pfb_filter"} <= set(_registered_services(vm)), _registered_services(vm)
         assert state.resolver["active_interface"] == "lo0" and state.marker, (
             f"the Resolver is not still moved: {state.resolver}"
         )
         blocked, raw = _query(client, rig.names.blocked)
-        assert h.is_vip(blocked), f"after the aborted removal the listed name is not blocked: {blocked}\n{raw}"
+        assert h.is_null_ip(blocked), f"after the aborted removal the listed name is not blocked: {blocked}\n{raw}"
         allowed, raw = _query(client, h.unique_domain("aborted"))
         assert h.resolves_to(allowed, STUB_DNS_A), (
             f"after the aborted removal an allowed name is not answered: {allowed}\n{raw}"

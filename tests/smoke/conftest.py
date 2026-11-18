@@ -132,14 +132,12 @@ DEFAULT_DNS_PORT = _lane_port(5353, _LANE)  # host -> guest 53 (tcp+udp); no env
 # The WAN SLIRP host alias the guest uses to reach the runner (mock feed server,
 # stub DNS, webhook sink). Corresponds to boot_vm.sh net0: net=192.168.89.0/24,
 # host=192.168.89.2. The old 10.0.2.2 was the classic libslirp default; the two-VM
-# topology uses 192.168.89.0/24 — it avoids the management net (192.168.43.0/24) AND
-# leaves the DNSBL sinkhole VIP 10.10.10.1 outside the WAN subnet (an overlap
-# makes pfBlockerNG disable DNSBL).
+# topology uses 192.168.89.0/24 — it avoids the management net (192.168.43.0/24).
 GUEST_TO_HOST_ALIAS = "192.168.89.2"
 
 # Sentinel answers the runner-side stub upstream returns for any forwarded query
 # (see _StubDnsServer / helpers.configure_upstream). Distinct from every DNSBL
-# block shape (NXDOMAIN / 0.0.0.0 / the VIP), so a name that should be blocked
+# block shape (NXDOMAIN / 0.0.0.0), so a name that should be blocked
 # but ISN'T resolves to the sentinel — a true pass, never a false-green block.
 # Single source: stub_responses (shared with the off-box shape tests).
 STUB_DNS_A = stub_responses.STUB_DNS_A  # RFC 5737 documentation range

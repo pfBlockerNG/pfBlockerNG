@@ -55,13 +55,12 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     h.snapshot_unbound_conf(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     seed = h.unique_domain("pfbsmoke-replylog-seed")
     feed_url = h.write_local_feed(smoke_vm, "smoke_replylog_seed.txt", f"{seed}\n")
     h.inject(
         smoke_vm,
-        h.DnsblCase(aliasname="smokereplylog", feed_url=feed_url, header="smokereplylog", mode=h.DnsblMode.VIP),
+        h.DnsblCase(aliasname="smokereplylog", feed_url=feed_url, header="smokereplylog"),
     )
     h.reload(smoke_vm, "update")
     h.wait_unbound_ready(smoke_vm)
@@ -189,7 +188,7 @@ class TestDnsReplyLogEscape:
 
         ans = h.dns_probe_client(cvm, seed, "A")
 
-        assert h.is_vip(ans), f"DNSBL seed {seed} expected VIP, got {ans}"
+        assert h.is_null_ip(ans), f"DNSBL seed {seed} expected VIP, got {ans}"
         rows = _wait_rows(vm, _DNSBL_LOG, "DNSBL-python,", seed, 2)
         for row in rows:
             assert len(row) == 14 and row[11:14] == endpoint, row

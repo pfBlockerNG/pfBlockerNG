@@ -46,16 +46,16 @@ from frontend_constants import (
     ALLOWED,
     BLOCKED,
     BYPASSED_CLIENT,
-    DNSBL_IPV4,
     FILTERED_CLIENT,
+    NULL_IPV4,
     REPO_ROOT,
 )
 from frontend_helpers import WATCHDOG, build_query, tcp_concurrent, tcp_exchange, udp_concurrent, udp_exchange, watched
 from test_integration_unbound import (  # noqa: F401  (fixtures: the Docker Unbound and its gated zone)
     ALLOWED_CLIENT,
     ALLOWED_CLIENT_TCP,
+    NULL4,
     REFUSED_CLIENT,
-    VIP4,
     RunningUnbound,
     _open_gate_once_logged,
     gated_authoritative,
@@ -303,7 +303,7 @@ def test_blocked_name_gets_the_block_answer_over_udp_and_tcp_and_unbound_never_s
     tcp = _tcp(gateway.server, BLOCKED, ALLOWED_CLIENT_TCP)
     _tcp(gateway.server, ALLOWED, ALLOWED_CLIENT_TCP)  # the barrier: Unbound is asked about the next name
     for reply in (udp, tcp):
-        assert _answers(reply) == [(BLOCKED, dnswire.TYPE_A, VIP4)]
+        assert _answers(reply) == [(BLOCKED, dnswire.TYPE_A, NULL4)]
     logged = unbound.tail.wait_for(f"{ALLOWED_CLIENT_TCP} {ALLOWED} A IN", since=mark)
     assert [line for line in logged if "blocked.example" in line] == []
     rows = gateway.dnsbl_rows(2)
@@ -418,7 +418,7 @@ def _is_refused(wire: bytes) -> bool:
 def test_a_client_no_acl_row_names_is_refused_even_for_a_listed_name(
     gateway: Running, nomatch_client: str, send: Callable[..., bytes]
 ) -> None:
-    assert _answers(send(gateway.server, BLOCKED, ALLOWED_CLIENT)) == [(BLOCKED, dnswire.TYPE_A, VIP4)]  # before-state
+    assert _answers(send(gateway.server, BLOCKED, ALLOWED_CLIENT)) == [(BLOCKED, dnswire.TYPE_A, NULL4)]  # before-state
     for name in (BLOCKED, ALLOWED):
         wire = send(gateway.server, name, nomatch_client)
         assert _is_refused(wire), (
@@ -432,7 +432,7 @@ def test_a_client_no_acl_row_names_is_refused_over_dot_and_doh(
     tls_gateway: TlsRunning, nomatch_client: str, transport: str
 ) -> None:
     assert tls_gateway.a_records(transport, BLOCKED) == [
-        f"{BLOCKED} A {DNSBL_IPV4}"
+        f"{BLOCKED} A {NULL_IPV4}"
     ]  # before-state: a client with a row
     if transport == "dot":
         wire = tls_gateway.dot_wire(BLOCKED, nomatch_client)
@@ -459,14 +459,14 @@ def test_a_client_granted_only_by_a_row_of_unbound_conf_itself_gets_the_vip(
 ) -> None:
     """The same client and name as E9, refused there: only this unbound.conf row (in no included file) differs."""
     for send in (_udp, _tcp):
-        assert _answers(send(granted_gateway.server, BLOCKED, nomatch_client)) == [(BLOCKED, dnswire.TYPE_A, VIP4)]
+        assert _answers(send(granted_gateway.server, BLOCKED, nomatch_client)) == [(BLOCKED, dnswire.TYPE_A, NULL4)]
 
 
 # E5
 def test_cname_chain_reaching_a_blocked_name_gets_the_block_answer(gateway: Running, unbound: RunningUnbound) -> None:
     mark = unbound.tail.mark()
     reply = _udp(gateway.server, "alias.example.", ALLOWED_CLIENT)
-    assert _answers(reply) == [("alias.example.", dnswire.TYPE_A, VIP4)]
+    assert _answers(reply) == [("alias.example.", dnswire.TYPE_A, NULL4)]
     unbound.tail.wait_for(f"{ALLOWED_CLIENT} alias.example. A IN", since=mark)  # Unbound resolved the chain
     [row] = gateway.dnsbl_rows(1)
     assert (row[0], row[2], row[3]) == ("DNSBL-python", "alias.example", ALLOWED_CLIENT)
@@ -525,7 +525,7 @@ def test_bypassed_and_filtered_clients_asking_at_once_each_get_their_own_answer(
 
     for name, replies in zip(names, rounds, strict=True):
         by_client = dict(zip(clients, replies, strict=True))
-        assert _answers(by_client[FILTERED_CLIENT]) == [(name, dnswire.TYPE_A, VIP4)], name
+        assert _answers(by_client[FILTERED_CLIENT]) == [(name, dnswire.TYPE_A, NULL4)], name
         assert _answers(by_client[BYPASSED_CLIENT]) == [
             (name, dnswire.TYPE_CNAME, dnswire.encode_name(BLOCKED)),
             (BLOCKED, dnswire.TYPE_A, bytes([192, 0, 2, 99])),
@@ -975,7 +975,7 @@ def test_blocked_name_gets_the_block_answer_over_every_tls_transport(
     tls_gateway: TlsRunning, unbound: RunningUnbound, transport: str
 ) -> None:
     mark = unbound.tail.mark()
-    assert tls_gateway.a_records(transport, BLOCKED) == [f"{BLOCKED} A {DNSBL_IPV4}"]
+    assert tls_gateway.a_records(transport, BLOCKED) == [f"{BLOCKED} A {NULL_IPV4}"]
     _tcp(tls_gateway.server, ALLOWED, ALLOWED_CLIENT_TCP)  # the barrier: Unbound is asked about the next name
     logged = unbound.tail.wait_for(f"{ALLOWED_CLIENT_TCP} {ALLOWED} A IN", since=mark)
     assert [line for line in logged if "blocked.example" in line] == []

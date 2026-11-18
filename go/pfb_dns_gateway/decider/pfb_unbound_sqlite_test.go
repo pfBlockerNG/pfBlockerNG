@@ -867,7 +867,7 @@ func statsOutageModule(t *testing.T) *pfbUnbound {
 		}
 	}
 	files := map[string]string{
-		"pfb_unbound.ini":      "[MAIN]\npython_enable = true\npython_blocking = true\npython_reply = true\ndnsbl_ipv4 = 10.10.10.1\nmetrics_client_ip = true\n",
+		"pfb_unbound.ini":      "[MAIN]\npython_enable = true\npython_blocking = true\npython_reply = true\nmetrics_client_ip = true\n",
 		"pfb_py_raw/feed0.txt": "lf1.example\n",
 		"pfb_py_sources.json":  `{"version": 1, "config": {}, "feeds": [{"raw": "pfb_py_raw/feed0.txt", "feed": "F1", "group": "G1", "log_flag": "1"}]}`,
 	}
@@ -917,8 +917,8 @@ func TestSqliteDnsKeepsAnsweringWhenTheStatsDatabasesCannotOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the answer does not parse: %v", err)
 	}
-	if reply.Rcode() != 0 || len(reply.Answers) != 1 || reply.Answers[0].Rtype != dnswire.TYPE_A || !bytes.Equal(reply.Answers[0].Rdata, []byte{10, 10, 10, 1}) {
-		t.Errorf("the blocked name was answered %+v, want NOERROR with the DNSBL address 10.10.10.1", reply)
+	if reply.Rcode() != 0 || len(reply.Answers) != 1 || reply.Answers[0].Rtype != dnswire.TYPE_A || !bytes.Equal(reply.Answers[0].Rdata, []byte{0, 0, 0, 0}) {
+		t.Errorf("the blocked name was answered %+v, want NOERROR with 0.0.0.0", reply)
 	}
 	m.dbEnqueue(resolverEvent("A", "UDP")) // with the flags off nothing is counted, and nothing breaks
 }
@@ -1037,13 +1037,6 @@ func TestSqliteRowWritersEnqueueTheMetricDimensions(t *testing.T) {
 			{qtype: "A", transport: "TCP", listenerIP: "192.0.2.1", listenerInterface: "em0", client: "192.0.2.10", clientEpoch: "pe"},
 			{dnsbl: true, group: "G1", owner: "G1", origin: "custom", epoch: "e", qtype: "A", transport: "TCP", listenerIP: "192.0.2.1", listenerInterface: "em0", client: "192.0.2.10", clientEpoch: "pe"},
 		}},
-		{"python_nolog VIP block: no group counter", true, "e", block(func(*dnsblDecision) {}), []dbEvent{
-			{qtype: "A", transport: "TCP", listenerIP: "192.0.2.1", listenerInterface: "em0", client: "192.0.2.10", clientEpoch: "pe"},
-		}},
-		{"python_nolog null block counts", true, "e", block(func(d *dnsblDecision) { d.nullBlocking = true }), []dbEvent{
-			{qtype: "A", transport: "TCP", listenerIP: "192.0.2.1", listenerInterface: "em0", client: "192.0.2.10", clientEpoch: "pe"},
-			{dnsbl: true, group: "G1", owner: "G1", origin: "custom", epoch: "e", qtype: "A", transport: "TCP", listenerIP: "192.0.2.1", listenerInterface: "em0", client: "192.0.2.10", clientEpoch: "pe"},
-		}},
 		{"no group", false, "e", block(func(d *dnsblDecision) { d.group = "" }), []dbEvent{
 			{qtype: "A", transport: "TCP", listenerIP: "192.0.2.1", listenerInterface: "em0", client: "192.0.2.10", clientEpoch: "pe"},
 		}},
@@ -1065,7 +1058,6 @@ func TestSqliteRowWritersEnqueueTheMetricDimensions(t *testing.T) {
 			m.sqlite3DnsblCon.Store(true)
 			m.metricsPrivacyEpochs = map[int]string{dbResolver: "pe", dbDnsbl: "pe"}
 			settings := *m.snapshot.Load().settings
-			settings.pythonNolog = c.nolog
 			snap := *m.snapshot.Load()
 			snap.settings = &settings
 			m.snapshot.Store(&snap)

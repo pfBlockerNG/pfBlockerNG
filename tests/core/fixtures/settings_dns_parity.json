@@ -20,7 +20,6 @@
 				"idnBlockMalicious": true,
 				"idnEscalateSuspicious": false,
 				"decisionCacheMax": 10000,
-				"logViaWebserver": false,
 				"cnameValidation": false,
 				"control": false,
 				"controlLegacy": false,
@@ -350,60 +349,6 @@
 			"valid": true,
 			"native": {
 				"idnEscalateSuspicious": false
-			}
-		},
-		{
-			"id": "logViaWebserver-on",
-			"description": "dnsbl/pfb_py_nolog stored 'on' is on.",
-			"source": "stored",
-			"values": {
-				"dnsbl/pfb_py_nolog": "on"
-			},
-			"input": {
-				"logViaWebserver": true
-			},
-			"valid": true,
-			"native": {
-				"logViaWebserver": true
-			}
-		},
-		{
-			"id": "logViaWebserver-empty",
-			"description": "dnsbl/pfb_py_nolog stored '' is a deliberate off, whatever the default.",
-			"source": "stored",
-			"values": {
-				"dnsbl/pfb_py_nolog": ""
-			},
-			"input": {
-				"logViaWebserver": false
-			},
-			"valid": true,
-			"native": {
-				"logViaWebserver": false
-			}
-		},
-		{
-			"id": "logViaWebserver-case",
-			"description": "dnsbl/pfb_py_nolog stored 'ON' reads on: either toggle token in any case (issue #1887).",
-			"source": "stored",
-			"values": {
-				"dnsbl/pfb_py_nolog": "ON"
-			},
-			"valid": true,
-			"native": {
-				"logViaWebserver": true
-			}
-		},
-		{
-			"id": "logViaWebserver-junk",
-			"description": "dnsbl/pfb_py_nolog stored 'yes' is junk and reads off, never on.",
-			"source": "stored",
-			"values": {
-				"dnsbl/pfb_py_nolog": "yes"
-			},
-			"valid": true,
-			"native": {
-				"logViaWebserver": false
 			}
 		},
 		{

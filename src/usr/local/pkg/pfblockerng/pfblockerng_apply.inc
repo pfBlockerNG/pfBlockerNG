@@ -1209,8 +1209,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// shortcut: second resolution, a receive whose record opens in the pass's first second has it settled here, while its surviving pending mark re-applies it next pass.
 	$pfb_pass_started = time();
 	pfb_global();
-	// A no-demand generation hold skips VIP management; it must not report a conflict from an earlier pass.
-	$pfb['dnsbl_vip_conflict'] = array();
 
 	// Preserve the internal bool contract: an unattended trigger=cron force=false
 	// deferral is benign and retains TRUE with its durable retry state intact.
@@ -1395,17 +1393,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 	// Detect boot process or package installation
 	if (is_platform_booting() || $g['pfblockerng_install']) {
-		// Create DNSBL NAT, VIP, Lighttpd service and certs if required on reboot (pfb_create_dnsbl() applies the VIP demand rule).
-		// issue #3539: no demand but a conf on disk -> the on-disk generation may still answer with the VIP; the next publishing pass tears down.
-		if (pfb_dnsbl_active() && $pfb['unbound_state'] === PfbToggle::On) {
-			if (!empty($pfb['dnsbl_vip_demand']) || !file_exists($pfb['dnsbl_conf'])) {
-				pfb_create_dnsbl('enabled');
-			}
-		}
-		else {
-			// Package, pfB-DNS, DNSBL or resolver off: nothing may serve, so strip what an older version left (conf, certificate, NAT, auto-VIP).
-			pfb_create_dnsbl('disabled');
-		}
+		// issue #4053: strip the block-page web server, NAT and auto-VIP an older version left.
+		pfb_dnsbl_webserver_retire();
 		if ($pfb_sync_absorb) {
 			pfb_sync_receive_legacy_absorb($pfb['dbdir']);
 		}
@@ -1534,7 +1523,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 	// DNSBL settings
 	$pfb['dnsbl_ip']	= pfb_dnsblip_action_value($pfb['dnsblconfig']['action'] ?? NULL);	// Enable/Disable IP blocking from DNSBL lists
-	$pfb['dnsbl_rule']	= $pfb['dnsblconfig']['pfb_dnsbl_rule'] ?: 'Disabled';		// Auto create a Floating Pass Rule for other Lan subnets
 	$pfb['dnsbl_top1m_cnt']	= $pfb['dnsblconfig']['top1m_count']	?: '1000';		// TOP1M whitelist domain setting
 	$pfb['dnsbl_top1m_inc']	= $pfb['dnsblconfig']['top1m_inclusion']?: '';			// TOP1M TLDs inclusions for whitelisting
 	pfb_dnsbl_ini_inputs();	// the module's ini inputs, derived by the same loader the removal's recovery uses
@@ -1651,8 +1639,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		}
 	}
 
-	// Check if DNSBL auto permit rule or DNSBL 'Auto Deny' rules for DNSBL IPs are defined
-	if (!empty($pfb['dnsblconfig']['dnsbl_allow_int']) || strpos($pfb['dnsbl_ip'], 'Deny_') !== FALSE) {
+	// Check if DNSBL 'Auto Deny' rules for DNSBL IPs are defined
+	if (strpos($pfb['dnsbl_ip'], 'Deny_') !== FALSE) {
 		$pfb['autorules'] = TRUE;
 	}
 
@@ -2126,18 +2114,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$safesearch_update		= FALSE;	// Flag: SafeSearch CSV changed -> force an Unbound restart (issue #149)
 	$pfb_fp_old			= null;		// Fingerprint of loaded input files BEFORE this pass (null => DNSBL not active this pass)
 
-	$dnsbl_error = FALSE;
 	if (pfb_dnsbl_active() && !$pfb['save']) {
-
-		// Terminate if DNSBL VIP is empty (issue #3539: the ports matter only while a block answers with the VIP)
-		if (!empty($pfb['dnsbl_vip_demand']) && (empty($pfb['dnsbl_port']) || empty($pfb['dnsbl_port_ssl']))) {
-			$log = "\n\n===[  DNSBL Ports are not defined. Exiting  ]======\n";
-			pfb_logger("{$log}", 1);
-			$dnsbl_error = TRUE;
-		}
-	}
-
-	if (pfb_dnsbl_active() && !$pfb['save'] && !$dnsbl_error) {
 		$configured = array();
 		$config_complete = TRUE;
 		$source_groups = config_get_path('installedpackages/pfblockerngdnsbl/config', array());
@@ -3343,8 +3320,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	#################################
 
 	$pfbupdate = $pfbpython = FALSE;
-	// $mode must be a defined string for the consumers below (incl. the typed
-	// pfb_manage_dnsbl_vip(string $mode)); the if/elseif does not cover every state
+	// $mode must be a defined string for the consumers below; the if/elseif does not cover every state
 	// (e.g. DNSBL enabled while the DNS Resolver is disabled). '' is a no-op mode.
 	$mode = '';
 	if (pfb_dnsbl_active() && $pfb['unbound_state'] === PfbToggle::On) {
@@ -3358,31 +3334,14 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// turned pfBlockerNG off in it), and handed to pfb_unbound_python(), which re-reads config.xml and would see it back on.
 	$pfb_dns_wanted = pfb_dns_wanted();
 
-	// issue #3539: demand just ended while the web server still serves (its conf exists). The previous generation keeps
-	// answering with the VIP until the reload below has made the new one live, so VIP, NAT and web server stay until then.
-	$pfb_dnsbl_vip_hold = $mode === 'enabled' && empty($pfb['dnsbl_vip_demand']) && file_exists($pfb['dnsbl_conf']);
-
-	// [ ADR-13 ] Provision (or remove) the auto-created DNSBL sinkhole VIP(s) BEFORE the
-	// DNSBL config consumers below. pfb_unbound_python() bakes the sinkhole IP
-	// ($pfb['dnsbl_vip4']/[vip6]) into the module ini, so the marked VIP must already exist
-	// and pfb_dnsvip4/6 must be repointed FIRST — otherwise the module answers blocks with
-	// the stale VIP (a one-pass lag). pfb_manage_dnsbl_vip() refreshes $pfb (via pfb_global)
-	// so every consumer below sees the provisioned address. No-op when auto-create is off.
-	// pfb_create_dnsbl($mode) calls it again idempotently (covers the boot/install path).
-	if (!$pfb_dnsbl_vip_hold) {
-		pfb_manage_dnsbl_vip($mode);
-	}
-
 	// Modify Unbound's python settings (the upstream observer) and mount lib/bin folders, as required
 	$pfbpython = pfb_unbound_python($mode, $pfb_dns_wanted);
 
 	// Modify Unbound.conf file, as required
 	$pfbupdate = pfb_unbound_dnsbl($mode);
 
-	// Modify DNSBL NAT and VIP and lighttpd web server conf, as required (held: after the reload below).
-	if (!$pfb_dnsbl_vip_hold) {
-		pfb_create_dnsbl($mode);
-	}
+	// issue #4053: strip the block-page web server, NAT and auto-VIP an older version left.
+	pfb_dnsbl_webserver_retire();
 
 	// Sync DNS-redirect NAT rules (create / reconcile / prune / remove).
 	// Each rule uses associated-rule-id='pass' — pfSense emits an inline rdr pass and
@@ -3628,14 +3587,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		? ($pfb['domain_update'] || $pfb['domain_clear'])
 		: ($pfb_fp_old !== $pfb_fp_new);
 	$pfb_accounting_retry = @file_get_contents("{$pfb['dnsbl_file']}.reload") === 'accounting';
-	if (!$pfb_accounting_retry && $pfb_accounting_reconciled && $pfb_dnsbl_published
-	    && $pfb_dnsbl_vip_hold && !$pfb_data_changed && @file_get_contents($pfb['unbound_py_vip']) !== '0') {
-		if (pfb_unbound_py_atomic_write_root("{$pfb['dnsbl_file']}.reload", 'accounting')) {
-			$pfb_accounting_retry = TRUE;
-		} else {
-			pfb_dnsbl_accounting_failure(FALSE);
-		}
-	}
 
 	// An explicit forced DNSBL reload (the updatednsbl trigger — Run Now with Force: Parse) bypasses
 	// fingerprint gating, and only yields while publication failed: the operator is applying a change
@@ -3670,12 +3621,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		}
 
 		pfb_update_unbound($mode, $pfbupdate, $pfbpython, $dnsbl_tld_group_counts);
-
-		// Only intent submitted for activation can later be trusted by the convergence gate.
-		if (($pfb_dnsbl_published || ($pfb_accounting_retry && $pfb_accounting_reconciled)) && empty($pfb['dnsbl_publish_failed'])
-		    && @file_put_contents($pfb['unbound_py_vip'], empty($pfb['dnsbl_vip_demand']) ? '0' : '1') === FALSE) {
-			unlink_if_exists($pfb['unbound_py_vip']);
-		}
 
 		// #468: DNSBL actually changed this pass and the reload above has applied (the
 		// zero-downtime swap waited / Unbound restarted). On a RAM-disk /var, re-archive
@@ -3721,17 +3666,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		    ? "\npfB-DNS is not serving: a foreign process holds Unbound's backend port; see the notices"
 		    : "\npfB-DNS: the DNS proxy did not become ready; see the notices", 2);
 	}
-
-	// issue #3539: the conf means "the last published generation may still answer with the VIP". The hold is released once the
-	// last published generation is recorded as answering with no VIP and the resolver has converged on it -- by this pass or
-	// a later one. A failed publication leaves the previous record, and a missing record keeps the hold.
-	if ($pfb_dnsbl_vip_hold && empty($pfb['dnsbl_publish_failed'])
-	    && @file_get_contents($pfb['unbound_py_vip']) === '0' && pfb_dnsbl_converged()) {
-		pfb_create_dnsbl($mode);
-		$pfb_dnsbl_vip_hold = FALSE;
-	}
-	// issue #3539: the VIP's port alias and floating rules stay for as long as the web server serves (demand, or a generation still held).
-	$pfb_dnsbl_vip_served = !empty($pfb['dnsbl_vip_demand']) || $pfb_dnsbl_vip_hold;
 
 
 	#################################
@@ -4941,29 +4875,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// Clear variables
 	$alias_ips = '';
 
-	// Define DNSBL VIP Ports alias (issue #3539: only while the VIP is served)
-	if ($pfb['dnsbl_rule'] != 'Disabled' && $pfb_dnsbl_vip_served && !empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl'])
-	    && !empty($pfb['dnsblconfig']['dnsbl_allow_int']) && ($pfb['dnsbl'] === PfbToggle::On)) {
-
-		$new_aliases_list[] = 'pfB_DNSBL_Ports';
-		$new_aliases[] = array( 'name'		=> 'pfB_DNSBL_Ports',
-					'address'	=> $pfb['dnsbl_iface'] != 'lo0' ? "{$pfb['dnsbl_port']} {$pfb['dnsbl_port_ssl']}" : '80 443',
-					'descr'		=> 'pfBlockerNG DNSBL VIP Ports',
-					'type'		=> 'port',
-					'detail'	=> 'DO NOT EDIT THIS PORT||DO NOT EDIT THIS PORT'
-					);
-
-		if (!empty($pfb['dnsbl_vip6'])) {
-			$new_aliases_list[] = 'pfB_DNSBL_VIPs';
-			$new_aliases[] = array(	'name'		=> 'pfB_DNSBL_VIPs',
-						'address'	=> "{$pfb['dnsbl_vip4']} {$pfb['dnsbl_vip6']}",
-						'descr'		=> 'pfBlockerNG DNSBL VIPs',
-						'type'		=> 'host',
-						'detail'	=> 'DO NOT EDIT THIS HOST||DO NOT EDIT THIS HOST'
-						);
-		}
-	}
-
 	#########################################################################
 	#  ADR-11: per-type aggregate ("Uber") Native aliases (opt-in)		#
 	#  Wired here -- after every member alias materialises (Deny AFTER the	#
@@ -5064,41 +4975,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 				}
 			}
 
-			// Build the DNSBL floating pass rules (ping + permit pair) to pass into the helper.
 			$pfb_dnsbl_float = [];
-			if (pfb_dnsbl_active() && $pfb['dnsbl_rule'] != 'Disabled'
-			    && $pfb_dnsbl_vip_served
-			    && !empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl'])
-			    && !empty($pfb['dnsblconfig']['dnsbl_allow_int'])) {
-
-				$rule			= $pfb['base_rule_float'];
-				$rule['tracker']	= pfb_tracker('pfB_DNSBL_Ping', '', '');
-				$rule['type']		= 'pass';
-				$rule['direction']	= 'any';
-				$rule['interface']	= "{$pfb['dnsblconfig']['dnsbl_allow_int']}";
-				$rule['ipprotocol']	= (!empty($pfb['dnsbl_vip6']) ? $rule['ipprotocol'] = 'inet46' : $rule['ipprotocol'] = 'inet');
-				$rule['descr']		= "pfB_DNSBL_Ping{$pfb['suffix']}";
-				$rule['protocol']	= 'icmp';
-				$rule['icmptype']	= 'echoreq';
-				$rule['source']		= array('any' => '');
-				$rule['destination']	= array('address' => (!empty($pfb['dnsbl_vip6']) ? 'pfB_DNSBL_VIPs' : $pfb['dnsbl_vip4']));
-				$rule['created']	= array('time' => (int)microtime(TRUE), 'username' => 'Auto');
-				$pfb_dnsbl_float[]	= $rule;
-
-				$rule			= $pfb['base_rule_float'];
-				$rule['tracker']	= pfb_tracker('pfB_DNSBL_Permit', '', '');
-				$rule['type']		= 'pass';
-				$rule['direction']	= 'any';
-				$rule['interface']	= "{$pfb['dnsblconfig']['dnsbl_allow_int']}";
-				$rule['ipprotocol']	= (!empty($pfb['dnsbl_vip6']) ? $rule['ipprotocol'] = 'inet46' : $rule['ipprotocol'] = 'inet');
-				$rule['descr']		= "pfB_DNSBL_Permit{$pfb['suffix']}";
-				$rule['protocol']	= 'tcp/udp';
-				$rule['source']		= array('any' => '');
-				$rule['destination']	= array('address' => (!empty($pfb['dnsbl_vip6']) ? 'pfB_DNSBL_VIPs' : $pfb['dnsbl_vip4']),
-								 'port' => 'pfB_DNSBL_Ports');
-				$rule['created']	= array('time' => (int)microtime(TRUE), 'username' => 'Auto');
-				$pfb_dnsbl_float[]	= $rule;
-			}
 
 			// Build the pfB-generated rule templates (produced by pfb_firewall_rule() above).
 			$pfb_generated = [

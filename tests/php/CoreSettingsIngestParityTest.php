@@ -177,18 +177,17 @@ final class CoreSettingsIngestParityTest extends TestCase
 			'proxy-trailing-slash', 'proxy-path-is-ignored', 'proxy-query-is-ignored', 'proxy-fragment-is-ignored',
 			'self-interface-and-vip', 'self-link-local-excluded', 'self-hostile-addresses',
 			'scheduled-work-no-marker', 'scheduled-work-empty-marker', 'scheduled-work-marker-with-content', 'scheduled-work-marker-is-a-directory',
-			'scheduled-work-marker-is-a-symlink', 'sinkhole-none', 'sinkhole-v4', 'sinkhole-v4-and-v6', 'sinkhole-v6-only', 'sinkhole-id-unresolved',
-			'sinkhole-v4-id-names-an-ipv6-vip', 'sinkhole-v6-zoned', 'sinkhole-id-array'] as $id) {
+			'scheduled-work-marker-is-a-symlink'] as $id) {
 			$this->assertContains($id, $ids, "the coverage matrix row {$id}");
 		}
 		$refused = array_column($doc['refused'], 'id');
 		$this->assertSame(array_values(array_unique($refused)), $refused, 'a refused row id appears once');
 		foreach (['proxy-url-with-userinfo', 'proxy-url-with-crlf', 'allowlist-with-spaces', 'allowlist-ipv6-zone', 'self-unspecified-v4', 'self-unspecified-v6', 'self-mapped-ipv4',
-			'scheduled-work-disabled-string', 'sinkhole-v4-not-an-address', 'sinkhole-v4-ipv6-address', 'sinkhole-v6-ipv4-address', 'sinkhole-v6-zoned'] as $id) {
+			'scheduled-work-disabled-string'] as $id) {
 			$this->assertContains($id, $refused, "the hostile row {$id}");
 		}
 		$this->assertSame(['suppression', 'suppressionCidrV4', 'suppressionCidrV6', 'dnsblIp', 'dnsblLenient', 'feedHostFilter', 'feedHostAllowlist', 'selfAddresses',
-			'proxyUrl', 'proxyUser', 'proxyPassword', 'proxyUnusable', 'scheduledWorkDisabled', 'sinkholeV4', 'sinkholeV6'], array_keys($doc['defaults']), 'the defaults name every field in the protocol order');
+			'proxyUrl', 'proxyUser', 'proxyPassword', 'proxyUnusable', 'scheduledWorkDisabled'], array_keys($doc['defaults']), 'the defaults name every field in the protocol order');
 	}
 
 	/** @param array<string, mixed> $case */
@@ -375,13 +374,10 @@ final class CoreSettingsIngestParityTest extends TestCase
 		$this->assertSame($base, $this->read()['revision'], 'the same box gives the same revision');
 	}
 
-	public function testTheRevisionMovesWhenScheduledWorkIsDisabledOrASinkholeAddressChanges(): void
+	public function testTheRevisionMovesWhenScheduledWorkIsDisabled(): void
 	{
-		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4', '_vip4a');
-		config_set_path('virtualip/vip', [['uniqid' => '4a', 'subnet' => '10.10.10.1']]);
 		$base = $this->read();
 		$this->assertFalse($base['settings']['ingest']['scheduledWorkDisabled'], 'before-state: no marker');
-		$this->assertSame('10.10.10.1', $base['settings']['ingest']['sinkholeV4'], 'before-state: the VIP address');
 
 		touch(pfb_cron_disable_path());
 		$disabled = $this->read();
@@ -390,10 +386,5 @@ final class CoreSettingsIngestParityTest extends TestCase
 
 		unlink(pfb_cron_disable_path());
 		$this->assertSame($base['revision'], $this->read()['revision'], 'the marker going moves it back');
-
-		config_set_path('virtualip/vip', [['uniqid' => '4a', 'subnet' => '10.10.10.2']]);
-		$moved = $this->read();
-		$this->assertSame('10.10.10.2', $moved['settings']['ingest']['sinkholeV4']);
-		$this->assertNotSame($base['revision'], $moved['revision'], 'a changed sinkhole address moves the revision');
 	}
 }

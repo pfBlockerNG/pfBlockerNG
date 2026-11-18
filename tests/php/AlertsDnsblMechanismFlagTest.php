@@ -29,7 +29,6 @@ final class AlertsDnsblMechanismFlagTest extends TestCase
 	public static function concreteMechanismFlags(): array
 	{
 		return [
-			'enabled'      => ['enabled', '1'],
 			'disabled_log' => ['disabled_log', '0'],
 			'disabled'     => ['disabled', '2'],
 			'nxdomain_log' => ['nxdomain_log', '3'],

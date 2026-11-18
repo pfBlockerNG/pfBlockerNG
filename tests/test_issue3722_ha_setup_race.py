@@ -110,12 +110,11 @@ def seams(hp: ModuleType, ha: ModuleType, monkeypatch: pytest.MonkeyPatch) -> No
         "seed_node",
         "php_write",
         "wait_filter_idle",
-        "assert_dnsbl_vip",
+        "assert_dnsbl_on",
     ):
         monkeypatch.setattr(hp, name, lambda *_a, **_k: None)
     for name in (
         "inject_ip_lists",
-        "ensure_dnsbl_vip",
         "set_dnsbl_enabled",
         "wait_unbound_ready",
         "_require_pfb_dns_serving",

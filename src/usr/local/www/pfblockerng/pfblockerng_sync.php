@@ -201,7 +201,6 @@ if (pfblockerng_sync_dnsblip_mismatch($pconfig['syncscope'], $pconfig['varsyncon
 		. '<p><strong>System &gt; High Availability Sync</strong> copies firewall rules, but <strong>Lists and global settings only (legacy)</strong> omits the DNSBL settings needed for the <code>pfB_DNSBLIP_v4</code> and <code>pfB_DNSBLIP_v6</code> aliases.</p>'
 		. '<ul>'
 		. '<li>Enable matching DNSBL IP settings on both nodes, or choose a scope that copies those settings.</li>'
-		. '<li>If the peer still reports <code>DNSBL disabled</code>, re-select its <strong>IPv4 VIP</strong> or <strong>IPv6 VIP</strong> under <strong>DNSBL Virtual IP</strong> and save; a re-created VIP can leave a stale selection.</li>'
 		. '</ul>'), 'warning');
 }
 

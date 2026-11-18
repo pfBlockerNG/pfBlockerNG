@@ -133,12 +133,11 @@ def _undo_rig(ha: ModuleType, monkeypatch: pytest.MonkeyPatch, *, reset_fails: b
             raise AssertionError("reset did not take")
 
     monkeypatch.setattr(ha, "reset_pair", reset)
-    monkeypatch.setattr(ha, "assert_dnsbl_vips", lambda _pair, when: calls.append(f"vips: {when}"))
     monkeypatch.setattr(ha, "wait_carp_state", lambda _vm, state, node: calls.append(f"carp {node} {state}"))
     return calls
 
 
-def test_the_per_test_undo_runs_its_callbacks_then_the_reset_then_the_vip_and_carp_checks(
+def test_the_per_test_undo_runs_its_callbacks_then_the_reset_then_the_carp_checks(
     ha: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = _undo_rig(ha, monkeypatch, reset_fails=False)
@@ -150,22 +149,21 @@ def test_the_per_test_undo_runs_its_callbacks_then_the_reset_then_the_vip_and_ca
     assert calls == [
         "test callback",
         "reset",
-        "vips: after the per-test reset",
         "carp primary MASTER",
         "carp secondary BACKUP",
     ]
 
 
-def test_a_failed_reset_still_runs_the_vip_and_carp_checks_and_is_raised(
+def test_a_failed_reset_still_runs_the_carp_checks_and_is_raised(
     ha: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A reset that does not take must not hide which VIP is gone or that the roles did not come back."""
+    """A reset that does not take must not hide that the roles did not come back."""
     calls = _undo_rig(ha, monkeypatch, reset_fails=True)
 
     with pytest.raises(AssertionError, match="reset did not take"):
         ha.undo_per_test(SimpleNamespace(primary=object(), secondary=object()), object(), ExitStack())
 
-    assert calls == ["reset", "vips: after the per-test reset", "carp primary MASTER", "carp secondary BACKUP"]
+    assert calls == ["reset", "carp primary MASTER", "carp secondary BACKUP"]
 
 
 def test_a_failed_test_callback_still_resets_the_pair(ha: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:

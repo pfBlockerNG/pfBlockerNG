@@ -48,12 +48,10 @@ func opInstall(t *testing.T, m *pfbUnbound, set func(*pfbSettings), fill func(*s
 	}
 }
 
-// opEnable is the Python tests' _enable: the DNSBL gate on, Python blocking on, the VIP addresses set.
+// opEnable is the Python tests' _enable: the DNSBL gate on, Python blocking on.
 func opEnable(s *pfbSettings) {
 	s.pythonBlacklist = true
 	s.pythonBlocking = true
-	s.dnsblIpv4 = "10.10.10.1"
-	s.dnsblIpv6 = "2001:db8::10"
 }
 
 func opBlockData(s *snapshot, name, log string, index int) {
@@ -1204,9 +1202,9 @@ func TestOperateDnsblDataBlockAnswers(t *testing.T) {
 		answer []string
 		soa    bool
 	}{
-		{"A", RR_TYPE_A, []string{"evil.com. 3600 IN A 10.10.10.1"}, false},
-		{"AAAA", RR_TYPE_AAAA, []string{"evil.com. 3600 IN AAAA 2001:db8::10"}, false},
-		{"ANY", RR_TYPE_ANY, []string{"evil.com. 3600 IN A 10.10.10.1", "evil.com. 3600 IN AAAA 2001:db8::10"}, false},
+		{"A", RR_TYPE_A, []string{"evil.com. 3600 IN A 0.0.0.0"}, false},
+		{"AAAA", RR_TYPE_AAAA, []string{"evil.com. 3600 IN AAAA ::"}, false},
+		{"ANY", RR_TYPE_ANY, []string{"evil.com. 3600 IN A 0.0.0.0", "evil.com. 3600 IN AAAA ::"}, false},
 		// issue #3222: a non-address type of a VIP hit is NODATA with the SOA, never an empty NOERROR.
 		{"SVCB", 64, nil, true}, {"HTTPS", 65, nil, true}, {"MX", RR_TYPE_MX, nil, true}, {"TXT", RR_TYPE_TXT, nil, true}, {"SRV", RR_TYPE_SRV, nil, true},
 	} {
@@ -1340,7 +1338,7 @@ func TestOperateDnsblMemo(t *testing.T) {
 	opSeed(m, "cached-block.com", opBlockVerdict(func(d *dnsblDecision) { d.bEval = "cached-block.com" }))
 	q := opQstate("cached-block.com.", RR_TYPE_A, "192.0.2.1")
 	opWantState(t, "cached block", opOperate(m, MODULE_EVENT_NEW, q), MODULE_FINISHED)
-	opSections(t, "cached block", q, []string{"cached-block.com. 3600 IN A 10.10.10.1"}, nil)
+	opSections(t, "cached block", q, []string{"cached-block.com. 3600 IN A 0.0.0.0"}, nil)
 
 	// issue #1074: a foreign-generation memo is recomputed against the live snapshot, not served.
 	m = opDnsblModule(t, nil, nil)
@@ -1440,7 +1438,7 @@ func TestOperateCnameTargetBlocksAndMarksTheOriginal(t *testing.T) {
 	if opIsBlock(opMemo(t, m, "evil-cname.com")) {
 		t.Errorf("memo for evil-cname.com is a block, want it keyed on the original only")
 	}
-	opSections(t, "cname block", q, []string{"orig.com. 3600 IN A 10.10.10.1"}, nil)
+	opSections(t, "cname block", q, []string{"orig.com. 3600 IN A 0.0.0.0"}, nil)
 }
 
 func TestOperateCnameValidationIsOffByDefault(t *testing.T) {
@@ -1496,7 +1494,7 @@ func TestOperateCnameMemoizedTargetAnswersInTheOriginalsBailiwick(t *testing.T) 
 		q.returnMsg = opCnameReply(t, "orig.com", "evil-cname.com")
 		opWantState(t, "log "+log, opOperate(m, MODULE_EVENT_NEW, q), MODULE_FINISHED)
 		if log == "1" {
-			opSections(t, "log 1", q, []string{"orig.com. 3600 IN A 10.10.10.1"}, nil)
+			opSections(t, "log 1", q, []string{"orig.com. 3600 IN A 0.0.0.0"}, nil)
 		} else {
 			opSections(t, "log "+log, q, nil, []string{"orig.com. 3600 IN SOA " + opSOA})
 		}
@@ -1536,7 +1534,7 @@ func TestOperateCnameContextAllowIsNotMemoizedAsTheTargetsVerdict(t *testing.T) 
 
 	direct := opQstate("evil-cname.com.", RR_TYPE_A, "192.0.2.10")
 	opWantState(t, "the target, queried directly after the alias", opOperate(m, MODULE_EVENT_NEW, direct), MODULE_FINISHED)
-	opSections(t, "direct target", direct, []string{"evil-cname.com. 3600 IN A 10.10.10.1"}, nil)
+	opSections(t, "direct target", direct, []string{"evil-cname.com. 3600 IN A 0.0.0.0"}, nil)
 }
 
 // --- operate(): one snapshot per query ---
@@ -1552,9 +1550,9 @@ func TestOperateKeepsOneSnapshotForAllEventsOfAQuery(t *testing.T) {
 		t.Fatalf("the query's snapshot = %p after NEW, want the one live then (%p)", q.snap, first)
 	}
 
-	// The swap lands between the events: the new lists no longer block the target, and the new settings carry another
-	// sinkhole address, so a reply that mixed generations would show it.
-	opInstall(t, m, func(s *pfbSettings) { opEnable(s); s.pythonCname = true; s.dnsblIpv4 = "10.10.10.99" }, nil)
+	// The swap lands between the events: the new lists no longer block the target, so a reply from the new generation
+	// would pass it.
+	opInstall(t, m, func(s *pfbSettings) { opEnable(s); s.pythonCname = true }, nil)
 	if m.snapshot.Load() == first {
 		t.Fatalf("the swap did not install a new snapshot")
 	}
@@ -1563,7 +1561,7 @@ func TestOperateKeepsOneSnapshotForAllEventsOfAQuery(t *testing.T) {
 	if q.snap != first {
 		t.Errorf("the query's snapshot = %p after MODDONE, want the first one %p", q.snap, first)
 	}
-	opSections(t, "MODDONE on the first generation", q, []string{"orig.com. 3600 IN A 10.10.10.1"}, nil)
+	opSections(t, "MODDONE on the first generation", q, []string{"orig.com. 3600 IN A 0.0.0.0"}, nil)
 	if dec, ok := m.decisionDB.get("orig.com"); ok && dec.snapGen == m.snapshot.Load().gen {
 		t.Errorf("the first generation's verdict was memoized under the new generation %d", dec.snapGen)
 	}
@@ -1616,17 +1614,16 @@ func TestOperateReadsGroupPolicyFromTheQuerysOwnSnapshot(t *testing.T) {
 // --- the swap race ---
 
 type raceSide struct {
-	name     string
-	sinkhole string
+	name string
 }
 
 var (
-	raceA = raceSide{"A", "192.0.2.1"}
-	raceB = raceSide{"B", "192.0.2.2"}
+	raceA = raceSide{"A"}
+	raceB = raceSide{"B"}
 )
 
-// raceSnapshot is one generation: the two generations block different names and answer with different sinkholes, so
-// a torn mix (A's list with B's address, or a memo of one served under the other) matches neither.
+// raceSnapshot is one generation: the two generations block different names, so each name is blocked (0.0.0.0) in one
+// and passed (the upstream's 192.0.2.99) in the other, and a memo of one served under the other matches neither.
 func raceSnapshot(t *testing.T, side raceSide) func() (*snapshot, error) {
 	return func() (*snapshot, error) {
 		s := newSnapshot()
@@ -1647,7 +1644,6 @@ func raceSettings(t *testing.T, side raceSide) pfbSettings {
 	var s pfbSettings
 	opEnable(&s)
 	s.pythonCname = true
-	s.dnsblIpv4 = side.sinkhole
 	s.rrTypes = []uint16{RR_TYPE_A, RR_TYPE_AAAA}
 	return s
 }
@@ -1714,9 +1710,9 @@ func TestSwapRaceEveryAnswerIsOneGenerationsVerdict(t *testing.T) {
 	}
 	// name -> the addresses its answer carries on each generation
 	want := map[string]map[string]string{
-		"n.example.": {"A": "192.0.2.1", "B": "192.0.2.99"},
-		"m.example.": {"A": "192.0.2.99", "B": "192.0.2.2"},
-		"c.example.": {"A": "192.0.2.1", "B": "CNAME,192.0.2.99"},
+		"n.example.": {"A": "0.0.0.0", "B": "192.0.2.99"},
+		"m.example.": {"A": "192.0.2.99", "B": "0.0.0.0"},
+		"c.example.": {"A": "0.0.0.0", "B": "CNAME,192.0.2.99"},
 		"u.example.": {"A": "192.0.2.99", "B": "192.0.2.99"},
 	}
 	names := []string{"n.example.", "m.example.", "c.example.", "u.example."}
@@ -1861,7 +1857,7 @@ func TestInitStandardLoadsTheMainRegexList(t *testing.T) {
 
 func TestInitStandardInstallsTheManifestBuildAndBlocksFromIt(t *testing.T) {
 	modCaptureLog(t)
-	m := modMust(t, opManifestModule(t, []string{"python_blocking = true", "dnsbl_ipv4 = 10.10.10.1"},
+	m := modMust(t, opManifestModule(t, []string{"python_blocking = true"},
 		map[string][]string{"feed.txt": {"evil.example", `/^bad[0-9]+\.example$/`}}))
 	snap := m.snapshot.Load()
 	if snap.counts != 1 || snap.regexDB.len() != 1 || snap.regexCount != 1 || !snap.settings.pythonBlacklist || !snap.importantRules {
@@ -1874,7 +1870,7 @@ func TestInitStandardInstallsTheManifestBuildAndBlocksFromIt(t *testing.T) {
 	// A feed line blocks with the VIP; a regex rule is a built-in block, which the build logs as a null block (the
 	// fail-safe flag of issue #3539 when no mechanism is configured).
 	for _, tc := range []struct{ name, answer string }{
-		{"evil.example.", "10.10.10.1"}, {"bad42.example.", "0.0.0.0"}, {"good.example.", ""},
+		{"evil.example.", "0.0.0.0"}, {"bad42.example.", "0.0.0.0"}, {"good.example.", ""},
 	} {
 		q := opQstate(tc.name, RR_TYPE_A, "192.0.2.1")
 		want := MODULE_WAIT_MODULE

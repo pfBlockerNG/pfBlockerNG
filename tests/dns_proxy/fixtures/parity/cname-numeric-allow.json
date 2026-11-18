@@ -6,17 +6,15 @@
       "MAIN": {
         "python_enable": "true",
         "python_blocking": "true",
-        "python_cname": "true",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "python_cname": "true"
       }
     },
     "manifest": {
       "version": 1,
       "config": {"user_whitelist": ["trusted.example"]},
       "feeds": [
-        {"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"},
-        {"raw": "pfb_py_raw/abp.txt", "feed": "AbpFeed", "group": "AbpFeedGroup", "log_flag": "1"}
+        {"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "0"},
+        {"raw": "pfb_py_raw/abp.txt", "feed": "AbpFeed", "group": "AbpFeedGroup", "log_flag": "0"}
       ]
     },
     "files": {
@@ -38,7 +36,7 @@
         "decision": "rewrite",
         "forwards": ["other.example. A"],
         "rcode": "NOERROR",
-        "answer": ["other.example. 3600 IN A 10.10.10.1"],
+        "answer": ["other.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },

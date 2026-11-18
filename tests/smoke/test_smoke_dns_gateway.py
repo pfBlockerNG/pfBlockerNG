@@ -749,9 +749,9 @@ def _assert_no_rows_for(gw: Gateway, barrier: str, names: dict[str, str], alive:
     with _client_alias(gw.client, BYPASSED_ALIAS_IP):
         if alive:
             results = {transport: _ask_from_alias(gw, transport, alive[transport]) for transport in TRANSPORTS}
-            _expect_everywhere(f"{BYPASSED_ALIAS_IP}, named by no row,", results, h.is_vip, "the VIP")
+            _expect_everywhere(f"{BYPASSED_ALIAS_IP}, named by no row,", results, h.is_null_ip, "the VIP")
         answer, raw = _ask(gw.client, "udp", barrier, source=BYPASSED_ALIAS_IP)
-    assert h.is_vip(answer), f"{BYPASSED_ALIAS_IP} is named by no ACL row and should get the VIP: {answer}\n{raw}"
+    assert h.is_null_ip(answer), f"{BYPASSED_ALIAS_IP} is named by no ACL row and should get the VIP: {answer}\n{raw}"
     _wait_dnsbl_row(gw.vm, barrier)
     rows = {name: _dnsbl_rows(gw.vm, name) for name in names.values()}
     assert not any(rows.values()), f"dnsbl.log has rows for names the gateway answered itself: {rows}"
@@ -770,7 +770,7 @@ def _toggle_on(gw: Gateway) -> None:
         raise RuntimeError(f"{exc}\n{_unbound_conf_report(gw.vm)}") from exc
 
     def serves() -> bool:
-        return h.is_vip(_ask(gw.client, "udp", gw.names.ready)[0])
+        return h.is_null_ip(_ask(gw.client, "udp", gw.names.ready)[0])
 
     try:
         h.wait_until(serves, timeout=240.0, interval=3.0)
@@ -785,7 +785,6 @@ def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, probe_bi
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     vm = smoke_vm
     h.deploy(vm)
-    h.ensure_dnsbl_vip(vm)
     h.use_system_dns_upstream(vm)  # Unbound forwards to the stub upstream; nothing needs the internet
     h.assert_link_health(client_vm, vm, control_name=h.unique_domain())
     _record_client_tools(client_vm)
@@ -834,7 +833,7 @@ def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, probe_bi
         assert trusted.returncode == 0, f"copying the certificate to the client failed: {trusted.stderr!r}"
         _configure_resolver(vm, refid)
         _put_reply_logging(vm, "on")
-        h.inject(vm, h.DnsblCase(aliasname=feed_header, feed_url=feed_url, header=feed_header, mode=h.DnsblMode.VIP))
+        h.inject(vm, h.DnsblCase(aliasname=feed_header, feed_url=feed_url, header=feed_header))
         # inject turns pfB-DNS on with DNSBL; this module starts from pfB-DNS off and toggles it itself
         _set_proxy_toggle(vm, False)
         _set_listeners(vm)
@@ -1065,7 +1064,7 @@ def test_the_status_panel_lists_each_transport_the_gateway_serves_with_a_localho
     """issue #3555: the status panel is one table per transport, a row per interface.
 
     Given the gateway serves plain DNS and DoT, DoH and DoQ (the toggles this module turns on, none off),
-    Then each table has a Localhost row with exactly its served lo0 VIP and loopbacks at the transport's port and a LAN
+    Then each table has a Localhost row with exactly its loopbacks at the transport's port and a LAN
       row that holds the LAN address at it, both reading `Listening` for a screen reader.
     """
     ports = {"plain": 53, "dot": DOT_PORT, "doh": DOH_PORT, "doq": DOQ_PORT}
@@ -1081,10 +1080,8 @@ def test_the_status_panel_lists_each_transport_the_gateway_serves_with_a_localho
         rows = _status_rows(page, transport)
         _say(f"status panel, {transport}: {rows}")
         loopback = [row for row in rows if row[0] == "Localhost"]
+        # Issue #4053: no lo0 VIP any more, so the Localhost row holds only the loopbacks.
         localhost_addresses = [f"127.0.0.1:{port}", f"[::1]:{port}"]
-        # Plain DNS and DoT select all addresses; the LAN-only DoH/DoQ lists exclude the lo0 VIP.
-        if transport in ("plain", "dot"):
-            localhost_addresses.insert(0, f"{h.DEFAULT_DNSBL_VIP4}:{port}")
         assert loopback == [("Localhost", localhost_addresses, "Listening")], (
             f"{transport}: the Localhost row is {loopback}; all rows: {rows}"
         )
@@ -1254,9 +1251,9 @@ def test_the_firewalls_own_lookup_of_a_listed_name_gets_the_vip_from_the_gateway
     assert re.search(r"^nameserver\s+127\.0\.0\.1\s*$", resolv, re.MULTILINE), f"/etc/resolv.conf:\n{resolv}"
     name = gw.names.firewall
     drilled = gw.vm.ssh(f"drill @127.0.0.1 {name} A 2>&1").stdout
-    assert h.DEFAULT_DNSBL_VIP4 in drilled, f"drill @127.0.0.1 {name}:\n{drilled}"
+    assert h.NULL_IP4 in drilled, f"drill @127.0.0.1 {name}:\n{drilled}"
     looked_up = _firewall_lookup(gw.vm, name)
-    assert looked_up == h.DEFAULT_DNSBL_VIP4, f"the firewall's own lookup of the listed {name}: {looked_up!r}"
+    assert looked_up == h.NULL_IP4, f"the firewall's own lookup of the listed {name}: {looked_up!r}"
     _wait_dnsbl_row(gw.vm, name)
     clients = {row[3] for row in _dnsbl_rows(gw.vm, name)}
     assert clients == {"127.0.0.1"}, f"dnsbl.log rows for {name} name {sorted(clients)}, not the firewall's 127.0.0.1"
@@ -1317,7 +1314,7 @@ def test_receiving_endpoint_survives_dedicated_syslog_export(gw: Gateway, gatewa
         _publish_listener_owner_table(vm, {PFSENSE_LAN_IP: SYSLOG_OWNER_DESCRIPTION})
         for transport, name in names.items():
             answer, raw = _ask(gw.client, transport, name)
-            assert h.is_vip(answer), f"{transport} {name}: expected DNSBL VIP, got {answer}\n{raw}"
+            assert h.is_null_ip(answer), f"{transport} {name}: expected DNSBL VIP, got {answer}\n{raw}"
         _drain_logs(gw)
         try:
             h.wait_until(exported, timeout=30.0)
@@ -1375,7 +1372,7 @@ def test_receiving_ipv6_endpoint_survives_logs_unified_and_reports(
         _assert_report_row(gui, name, LAN_V6_CLIENT, LOG_TRANSPORT[transport], LAN_V6_ADDR, LAN_DESCRIPTION)
         blocked = gw.names.logged_v6[transport]
         answer, raw = _ask(gw.client, transport, blocked, server=LAN_V6_ADDR)
-        assert h.is_vip(answer), raw
+        assert h.is_null_ip(answer), raw
         _drain_logs(gw)
         [row] = _dnsbl_rows(gw.vm, blocked)
         assert len(row) == 14 and row[3] == LAN_V6_CLIENT, row
@@ -1434,7 +1431,7 @@ def test_a_listed_name_gets_the_vip_and_a_log_row_naming_the_client(
     name = gw.names.logged[transport]
     answer, raw = _ask(gw.client, transport, name)
     _say(f"listed name, {transport}: {answer.rcode} {answer.records}")
-    assert h.is_vip(answer), f"{transport} {name}: expected VIP {h.DEFAULT_DNSBL_VIP4}, got {answer}\n{raw}"
+    assert h.is_null_ip(answer), f"{transport} {name}: expected {h.NULL_IP4}, got {answer}\n{raw}"
     _drain_logs(gw)
     [row] = _dnsbl_rows(gw.vm, name)
     assert len(row) == 14 and row[3] == CLIENT_LAN_IP and row[11] == LOG_TRANSPORT[transport], row
@@ -1565,7 +1562,7 @@ def test_doq_from_a_client_that_does_not_trust_the_certificate_gets_no_answer(gw
     """
     name = gw.names.hostile[0]
     trusted, raw = _ask_doq(gw.client, name)
-    assert h.is_vip(trusted), f"premise: DoQ with the Resolver's certificate trusted: {trusted}\n{raw}"
+    assert h.is_null_ip(trusted), f"premise: DoQ with the Resolver's certificate trusted: {trusted}\n{raw}"
     answer, raw = _ask_doq(gw.client, name, ca=None)
     _say(f"DoQ without trust in the certificate: {raw.strip()}")
     assert _no_answer(answer) and "x509" in raw, f"DoQ without trust in the certificate: {answer}\n{raw}"
@@ -1580,7 +1577,7 @@ def test_doh_spoken_as_plain_http_gets_no_answer(gw: Gateway, gateway_on: State)
     """
     name = gw.names.hostile[1]
     tls, raw = _ask(gw.client, "doh-post", name)
-    assert h.is_vip(tls), f"premise: DoH with TLS: {tls}\n{raw}"
+    assert h.is_null_ip(tls), f"premise: DoH with TLS: {tls}\n{raw}"
     answer, raw = _ask(gw.client, "doh-plain", name)
     _say(f"DoH without TLS: {raw.strip()}")
     assert _no_answer(answer) and "no servers could be reached" in raw, (
@@ -1607,7 +1604,7 @@ def test_a_resolver_refuse_row_gets_refused_on_every_transport_and_removing_it_b
     Then the VIP is back on every transport.
     """
     names = gw.names
-    _expect_everywhere("before the refuse row", _ask_all(gw, names.blocked), h.is_vip, "the VIP")
+    _expect_everywhere("before the refuse row", _ask_all(gw, names.blocked), h.is_null_ip, "the VIP")
     with _resolver_acl(gw.vm, "refuse"):
         _wait_udp(gw, names.refuse_poll, _refused, "REFUSED")
         results = _ask_all(gw, names.refused)
@@ -1618,8 +1615,8 @@ def test_a_resolver_refuse_row_gets_refused_on_every_transport_and_removing_it_b
             f"the REFUSED reply to the TCP query on port 53 should echo the question {question}:\n{tcp_raw}"
         )
         _assert_no_rows_for(gw, names.refuse_barrier, names.refused)
-    _wait_udp(gw, names.refuse_poll, h.is_vip, "the VIP again")
-    _expect_everywhere("after the refuse row", _ask_all(gw, names.restored), h.is_vip, "the VIP")
+    _wait_udp(gw, names.refuse_poll, h.is_null_ip, "the VIP again")
+    _expect_everywhere("after the refuse row", _ask_all(gw, names.restored), h.is_null_ip, "the VIP")
 
 
 @pytest.mark.timeout(900)
@@ -1633,7 +1630,7 @@ def test_a_resolver_deny_row_gets_no_answer_on_every_transport(gw: Gateway, gate
       every transport (so no listener is dead), and dnsbl.log has no row for the denied names.
     """
     names = gw.names
-    _expect_everywhere("before the deny row", _ask_all(gw, names.blocked), h.is_vip, "the VIP")
+    _expect_everywhere("before the deny row", _ask_all(gw, names.blocked), h.is_null_ip, "the VIP")
     with _resolver_acl(gw.vm, "deny"):
         _wait_udp(gw, names.deny_poll, _no_answer, "no answer")
         _expect_everywhere("deny row", _ask_all(gw, names.denied), _no_answer, "no answer")
@@ -1662,7 +1659,7 @@ def test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an
     assert LAN_V6_ROW not in _lines(gateway_on.access_lists), (
         f"premise: so does access_lists.conf:\n{gateway_on.access_lists}"
     )
-    _expect_everywhere("before the lists change", _ask_all(gw, names.blocked), h.is_vip, "the VIP")
+    _expect_everywhere("before the lists change", _ask_all(gw, names.blocked), h.is_null_ip, "the VIP")
     unlisted = {transport: h.unique_domain(f"nomatch-allowed-{transport}") for transport in TRANSPORTS}
     with _resolver_acls(vm, [_acl(f"{ACL_NAME} other", "allow", *OTHER_ACL_NET)], auto_rows=False):
         written = _lines(vm.ssh("cat", ACCESS_LISTS).stdout)
@@ -1677,14 +1674,14 @@ def test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an
                 transport: _ask(gw.client, transport, names.v6[transport], source=LAN_V6_CLIENT, server=LAN_V6_ADDR)
                 for transport in TRANSPORTS
             }
-            _expect_everywhere("IPv6 LAN client, the client VM", via_vm, h.is_vip, "the VIP")
+            _expect_everywhere("IPv6 LAN client, the client VM", via_vm, h.is_null_ip, "the VIP")
         via_firewall = {
             transport: _firewall_ask(vm, name, tcp=transport == "tcp")
             for transport, name in zip(("udp", "tcp"), names.fw_v6)
         }
-        _expect_everywhere("IPv6 LAN client, the firewall itself", via_firewall, h.is_vip, "the VIP")
+        _expect_everywhere("IPv6 LAN client, the firewall itself", via_firewall, h.is_null_ip, "the VIP")
         barrier, raw = _firewall_ask(vm, names.v6_barrier, tcp=False)
-        assert h.is_vip(barrier), f"the firewall's last IPv6 query should get the VIP: {barrier}\n{raw}"
+        assert h.is_null_ip(barrier), f"the firewall's last IPv6 query should get the VIP: {barrier}\n{raw}"
         _wait_dnsbl_row(vm, names.v6_barrier)
         refused_rows = {name: _dnsbl_rows(vm, name) for name in (*names.nomatch.values(), *unlisted.values())}
         assert not any(refused_rows.values()), f"dnsbl.log has rows for names the gateway refused: {refused_rows}"
@@ -1704,8 +1701,8 @@ def test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an
             [row] = _dnsbl_rows(vm, name)
             assert len(row) == 14 and row[11] == LOG_TRANSPORT[transport], row
             assert row[12:14] == [LAN_V6_ADDR, LAN_DESCRIPTION], row
-    _wait_udp(gw, names.nomatch_poll, h.is_vip, "the VIP again")
-    _expect_everywhere("after the lists are back", _ask_all(gw, names.nomatch_restored), h.is_vip, "the VIP")
+    _wait_udp(gw, names.nomatch_poll, h.is_null_ip, "the VIP again")
+    _expect_everywhere("after the lists are back", _ask_all(gw, names.nomatch_restored), h.is_null_ip, "the VIP")
 
 
 # --------------------------------------------------------------------------- #
@@ -1891,7 +1888,7 @@ def _ensure_ddr(gw: Gateway, *, on: bool, doh_443: bool = False) -> None:
     )
 
     def serves() -> bool:
-        return h.is_vip(_ask(client, "udp", gw.names.ready)[0])
+        return h.is_null_ip(_ask(client, "udp", gw.names.ready)[0])
 
     try:
         h.wait_until(serves, timeout=240.0, interval=3.0)
@@ -2059,7 +2056,7 @@ def test_ddr_query_from_a_client_the_resolver_acl_refuses_gets_refused(gw: Gatew
                 f"{transport}: the refused client should get REFUSED and no answer, got {reply.rcode} "
                 f"{_rows(reply.answer)}\n{reply.raw}"
             )
-    _wait_udp(gw, gw.names.refuse_poll, h.is_vip, "the VIP again")
+    _wait_udp(gw, gw.names.refuse_poll, h.is_null_ip, "the VIP again")
 
 
 @pytest.mark.timeout(900)
@@ -2125,7 +2122,7 @@ def test_ddr_doh_on_port_443_leaves_the_port_out_of_the_doh_record_and_nothing_e
         f"{reply.raw}"
     )
     answer, raw = _ask(gw.client, "doh-post", gw.names.ready)
-    assert h.is_vip(answer), (
+    assert h.is_null_ip(answer), (
         f"DoH at {PFSENSE_LAN_IP}:{DOH_PORT} after the selection: expected the DNSBL VIP, got {answer}\n{raw}"
     )
 
@@ -2184,7 +2181,7 @@ def _sockets_on_dns_ports(vm: SmokeVM) -> str:
 
 
 def _serves(gw: Gateway, server: str = PFSENSE_LAN_IP) -> bool:
-    return h.is_vip(_ask(gw.client, "udp", gw.names.ready, server=server)[0])
+    return h.is_null_ip(_ask(gw.client, "udp", gw.names.ready, server=server)[0])
 
 
 @pytest.mark.timeout(1500)
@@ -2264,7 +2261,7 @@ def test_a_resolver_vip_joins_the_interface_addresses_and_ddr_follows_the_addres
                     answer, raw = _ask(client, transport, gw.names.ready, server=address)
                     _say(f"{transport} to {address}: {answer.rcode} {answer.records}")
                     expect(
-                        h.is_vip(answer),
+                        h.is_null_ip(answer),
                         f"{transport} to {address}: expected the VIP, got {answer} "
                         f"(UNKNOWN is no answer, REFUSED the ACL)\n{raw}",
                     )
@@ -2469,7 +2466,7 @@ def test_an_automatic_resolver_vip_serves_doh_on_443_and_ddr_advertises_it_there
                 answer, raw = _ask(client, "doh-post", gw.names.ready, server=vip, port=port)
                 _say(f"DoH to {vip}:{port}, listed name: {answer.rcode} {answer.records}")
                 expect(
-                    h.is_vip(answer),
+                    h.is_null_ip(answer),
                     f"DoH to https://{vip}:{port}/dns-query, listed name: expected the DNSBL VIP, got {answer} "
                     f"(UNKNOWN is no answer)\n{raw}",
                 )
@@ -2639,7 +2636,7 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
         for transport, port in (("udp", 1053), ("tcp", 1053), ("dot", 1853), ("doh-post", 5443), ("doq", 2853)):
             answer, raw = _ask(client, transport, gw.names.ready, port=port)
             _say(f"ordinary {transport} at {PFSENSE_LAN_IP}:{port}\n{raw}")
-            assert h.is_vip(answer), f"ordinary {transport} on {port}: expected DNSBL VIP, got {answer}\n{raw}"
+            assert h.is_null_ip(answer), f"ordinary {transport} on {port}: expected DNSBL VIP, got {answer}\n{raw}"
         gui.post(
             DNS_GENERAL_PAGE,
             {
@@ -2697,7 +2694,7 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
             for transport, port in (("udp", 53), ("tcp", 53), ("dot", 853), ("doh-post", 443), ("doq", 853)):
                 answer, raw = _ask(client, transport, gw.names.ready, server=vips[0], port=port)
                 _say(f"managed {transport} at {vips[0]}:{port}\n{raw}")
-                assert h.is_vip(answer), f"managed {transport} on {port}: expected DNSBL VIP, got {answer}\n{raw}"
+                assert h.is_null_ip(answer), f"managed {transport} on {port}: expected DNSBL VIP, got {answer}\n{raw}"
                 name = h.unique_domain("vip-endpoint")
                 answer, raw = _ask(client, transport, name, server=vips[0], port=port)
                 assert h.resolves_to(answer, STUB_DNS_A), raw
@@ -2763,7 +2760,7 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
             for transport, port in (("udp", 53), ("tcp", 53), ("dot", 853), ("doh-post", 443), ("doq", 853)):
                 answer, raw = _ask(client, transport, gw.names.ready, server=vips[0], port=port)
                 _say(f"VIP-only managed {transport} at {vips[0]}:{port}\n{raw}")
-                assert h.is_vip(answer), f"VIP-only {transport} failed: {answer}\n{raw}"
+                assert h.is_null_ip(answer), f"VIP-only {transport} failed: {answer}\n{raw}"
         status = gui.get(STATUS_PAGE)
         assert status.status_code == 200, status.text
         refreshed = gui.get(f"{STATUS_PAGE}?ajax=ddr")

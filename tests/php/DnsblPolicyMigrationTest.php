@@ -20,7 +20,7 @@ final class DnsblPolicyMigrationTest extends TestCase
 
 	/** The seven concrete DNSBL blocking/logging mechanisms (issue #3288 Constraints: unchanged). */
 	private const CONCRETE_MECHANISMS = [
-		'enabled', 'disabled_log', 'disabled', 'nxdomain_log', 'nxdomain', 'nodata_log', 'nodata',
+		'disabled_log', 'disabled', 'nxdomain_log', 'nxdomain', 'nodata_log', 'nodata',
 	];
 
 	protected function setUp(): void
@@ -78,14 +78,14 @@ final class DnsblPolicyMigrationTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// C — old settings WITHOUT an active override (Default policy + 'enabled' mechanism)
+	// C — old settings WITHOUT an active override (Default policy + the legacy VIP mechanism, Null Blocking since issue #4053)
 	// -----------------------------------------------------------------------
 
 	/**
 	 * Row: "Old no-global-override => Default policy + enabled shared mechanism"
 	 * (issue #3288 Required semantics). global_log absent entirely.
 	 */
-	public function testMigrateAbsentGlobalLogDerivesDefaultModeAndEnabledMechanism(): void
+	public function testMigrateAbsentGlobalLogDerivesDefaultModeAndNullBlockingMechanism(): void
 	{
 		$sections = [
 			self::DNSBL_SECTION  => ['pfb_dnsbl' => 'on'],
@@ -96,12 +96,12 @@ final class DnsblPolicyMigrationTest extends TestCase
 
 		$this->assertIsArray($result);
 		$this->assertSame('default', $result[self::DNSBL_SECTION]['global_log_mode'] ?? null);
-		$this->assertSame('enabled', $result[self::DNSBL_SECTION]['global_log'] ?? null,
+		$this->assertSame('disabled_log', $result[self::DNSBL_SECTION]['global_log'] ?? null,
 			'the migration must materialise a CONCRETE global_log value itself, never leave it \'\'');
 	}
 
 	/** Same row, global_log explicitly stored as '' (the retired no-override sentinel). */
-	public function testMigrateExplicitEmptyGlobalLogDerivesDefaultModeAndEnabledMechanism(): void
+	public function testMigrateExplicitEmptyGlobalLogDerivesDefaultModeAndNullBlockingMechanism(): void
 	{
 		$sections = [
 			self::DNSBL_SECTION  => ['pfb_dnsbl' => 'on', 'global_log' => ''],
@@ -111,7 +111,7 @@ final class DnsblPolicyMigrationTest extends TestCase
 		$result = pfb_dnsbl_policy_migrate($sections);
 
 		$this->assertSame('default', $result[self::DNSBL_SECTION]['global_log_mode'] ?? null);
-		$this->assertSame('enabled', $result[self::DNSBL_SECTION]['global_log'] ?? null);
+		$this->assertSame('disabled_log', $result[self::DNSBL_SECTION]['global_log'] ?? null);
 	}
 
 	/** Existing groups must inherit the legacy VIP default, not the fresh null default. */
@@ -129,7 +129,7 @@ final class DnsblPolicyMigrationTest extends TestCase
 
 		$this->assertIsArray($result, 'a settings-empty, groups-present box must not be treated as fresh');
 		$this->assertSame('default', $result[self::DNSBL_SECTION]['global_log_mode'] ?? null);
-		$this->assertSame('enabled', $result[self::DNSBL_SECTION]['global_log'] ?? null);
+		$this->assertSame('disabled_log', $result[self::DNSBL_SECTION]['global_log'] ?? null);
 		$this->assertSame('default', $result[self::GROUPS_SECTION][0]['logging'] ?? null);
 		$this->assertSame('default', $result[self::GROUPS_SECTION][1]['logging'] ?? null);
 	}
@@ -231,7 +231,7 @@ final class DnsblPolicyMigrationTest extends TestCase
 		$this->assertIsArray($result);
 		$after = array_replace($sections, $result);
 		$this->assertSame('default', $after[self::DNSBL_SECTION]['global_log_mode'] ?? NULL);
-		$this->assertSame('enabled', $after[self::DNSBL_SECTION]['global_log'] ?? NULL);
+		$this->assertSame('disabled_log', $after[self::DNSBL_SECTION]['global_log'] ?? NULL);
 		$this->assertSame($token, $after[self::GROUPS_SECTION][0]['logging'] ?? NULL);
 	}
 
@@ -463,7 +463,7 @@ final class DnsblPolicyMigrationTest extends TestCase
 
 		$this->assertIsArray($result);
 		$this->assertSame('default', $result[self::DNSBL_SECTION]['global_log_mode'] ?? NULL);
-		$this->assertSame('enabled', $result[self::DNSBL_SECTION]['global_log'] ?? NULL);
+		$this->assertSame('disabled_log', $result[self::DNSBL_SECTION]['global_log'] ?? NULL);
 	}
 
 	// A valid write upgrades the policy before persisting current-schema group choices.
@@ -562,7 +562,7 @@ final class DnsblPolicyMigrationTest extends TestCase
 		$this->assertTrue($ran);
 		$this->assertCount(1, $persisted, 'policy and group conversion must persist together');
 		$this->assertSame('default', $persisted[0]['settings']['global_log_mode'] ?? NULL);
-		$this->assertSame('enabled', $persisted[0]['settings']['global_log'] ?? NULL);
+		$this->assertSame('disabled_log', $persisted[0]['settings']['global_log'] ?? NULL);
 		$this->assertSame('default', $persisted[0]['groups'][0]['logging'] ?? NULL);
 	}
 

@@ -214,7 +214,7 @@ def _not_blocked(answer: helpers.DnsAnswer) -> bool:
     is no longer sinkholed -- whatever it resolves to (or NXDOMAIN/SERVFAIL with no
     upstream), it is not the VIP and not 0.0.0.0/::.
     """
-    return not helpers.is_vip(answer) and not helpers.is_null_ip(answer)
+    return not helpers.is_null_ip(answer)
 
 
 @pytest.mark.ui_render
@@ -226,15 +226,15 @@ def test_dnsbl_lock_unlock_lifecycle_via_alerts(
 
     True transition lifecycle (CLAUDE.md before/after + the lock/unlock example):
 
-    * SETUP: a local DNSBL feed lists ``domain`` (VIP mode) with DNSBL enabled and a
-      valid sinkhole VIP, then a full Force Update mounts it.
-    * BEFORE: ``domain`` is VIP-BLOCKED (the deterministic local block shape, the
+    * SETUP: a local DNSBL feed lists ``domain`` with DNSBL enabled, then a full
+      Force Update mounts it.
+    * BEFORE: ``domain`` is BLOCKED (the deterministic local block shape, the
       authoritative first answer after the restart-class reload).
     * UNLOCK via the form (``dnsbl_remove=unlock``): the handler toggles the unlock
       store, patches the manifest's ``user_unlock``, and applies the generation; blocked
       answers are not cached, so the name stops being sinkholed without a native flush.
     * RE-LOCK via the form (``dnsbl_remove=lock``): the temporary allow is removed,
-      the applied generation is targeted-flushed, and the name is VIP-blocked again.
+      the applied generation is targeted-flushed, and the name is null-blocked again.
 
     Oracle = the on-box DNS answer shape, never the HTTP body. ``reset(vm)`` in
     ``finally`` drops the derived state (tables/sqlite + a filter sync) so the session VM
@@ -243,17 +243,16 @@ def test_dnsbl_lock_unlock_lifecycle_via_alerts(
     vm = smoke_vm
     domain = helpers.unique_domain("uilock")
     feed_path = helpers.write_local_feed(vm, "ui_lock.txt", f"{domain}\n")
-    spec = helpers.DnsblCase(aliasname="uilock", feed_url=feed_path, header="uilock", mode=helpers.DnsblMode.VIP)
+    spec = helpers.DnsblCase(aliasname="uilock", feed_url=feed_path, header="uilock")
 
-    helpers.ensure_dnsbl_vip(vm)
     helpers.set_dnsbl_enabled(vm, True)
     helpers.inject(vm, spec)
     helpers.reload(vm, "update")
     try:
-        # BEFORE: the feed-listed name is VIP-blocked (authoritative first answer
+        # BEFORE: the feed-listed name is null-blocked (authoritative first answer
         # after the restart-class Force Update).
         blocked = helpers.dns_probe(vm, domain, "A")
-        assert helpers.is_vip(blocked), f"{domain} expected VIP block before unlock, got {blocked}"
+        assert helpers.is_null_ip(blocked), f"{domain} expected a null block before unlock, got {blocked}"
 
         # UNLOCK via the real alerts handler -> the sinkhole is lifted. dnsbl_type is
         # PFB_FILTER_WORD and must be non-empty (handler rejects empty); 'python' is
@@ -267,7 +266,7 @@ def test_dnsbl_lock_unlock_lifecycle_via_alerts(
         # The handler returns only after the applied-generation handshake. Blocked
         # answers are not cached, so Unlock needs no native-cache flush.
         unlocked = helpers.dns_probe(vm, domain, "A")
-        assert _not_blocked(unlocked), f"unlocked {domain} still VIP-blocked via the alerts handler: {unlocked}"
+        assert _not_blocked(unlocked), f"unlocked {domain} still null-blocked via the alerts handler: {unlocked}"
 
         # RE-LOCK via the handler -> blocked again (allow->block; the handler's
         # targeted delta-flush clears the prior resolved answer).
@@ -280,7 +279,7 @@ def test_dnsbl_lock_unlock_lifecycle_via_alerts(
         # Lock likewise returns after the applied-generation handshake and targeted
         # domain/www cache flush.
         relocked = helpers.dns_probe(vm, domain, "A")
-        assert helpers.is_vip(relocked), f"re-locked {domain} not VIP-blocked again: {relocked}"
+        assert helpers.is_null_ip(relocked), f"re-locked {domain} not null-blocked again: {relocked}"
     finally:
         # Drop the test feed/alias and rebuild from baseline so the unlock store and
         # the session VM are clean for the sibling flows.
@@ -301,21 +300,20 @@ def test_dnsbl_remove_rejects_missing_type(
     ``pfb_unlock()``, so comparing its content before/after proves the handler did
     NOT run that far -- a single un-polled DNS probe right after the POST cannot
     rule out the async swap simply not having landed yet (a false pass). The DNS
-    shape is kept as a corroborating check (still VIP-blocked).
+    shape is kept as a corroborating check (still null-blocked).
     """
     vm = smoke_vm
     domain = helpers.unique_domain("uireject")
     feed_path = helpers.write_local_feed(vm, "ui_reject.txt", f"{domain}\n")
-    spec = helpers.DnsblCase(aliasname="uireject", feed_url=feed_path, header="uireject", mode=helpers.DnsblMode.VIP)
+    spec = helpers.DnsblCase(aliasname="uireject", feed_url=feed_path, header="uireject")
 
-    helpers.ensure_dnsbl_vip(vm)
     helpers.set_dnsbl_enabled(vm, True)
     helpers.inject(vm, spec)
     helpers.reload(vm, "update")
     try:
-        # BEFORE: VIP-blocked, and the (synchronous) unlock store at its pre-POST content.
+        # BEFORE: null-blocked, and the (synchronous) unlock store at its pre-POST content.
         before = helpers.dns_probe(vm, domain, "A")
-        assert helpers.is_vip(before), f"{domain} expected VIP block before the rejected POST, got {before}"
+        assert helpers.is_null_ip(before), f"{domain} expected a null block before the rejected POST, got {before}"
         store_before = helpers.read_log_file(vm, DNSBL_UNLOCK_STORE)
 
         # Reject: empty dnsbl_type. The handler must exit before toggling the store.
@@ -329,9 +327,9 @@ def test_dnsbl_remove_rejects_missing_type(
             f"dnsbl_unlock store changed after a REJECTED unlock POST: before={store_before!r} after={store_after!r}"
         )
 
-        # Corroborating: still VIP-blocked.
+        # Corroborating: still null-blocked.
         after = helpers.dns_probe(vm, domain, "A")
-        assert helpers.is_vip(after), f"{domain} no longer VIP-blocked after a REJECTED unlock POST: {after}"
+        assert helpers.is_null_ip(after), f"{domain} no longer null-blocked after a REJECTED unlock POST: {after}"
     finally:
         helpers.reset(vm)
 

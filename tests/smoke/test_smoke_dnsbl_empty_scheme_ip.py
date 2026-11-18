@@ -36,7 +36,6 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
     try:
@@ -62,7 +61,7 @@ def test_empty_scheme_ip_collected_and_embedded_url_ignored(
       ``://192.0.2.10^``, ``://[2001:db8::10]^$third-party``,
       ``<redirector>/x?u=http://198.51.100.20/`` and a control domain,
     When the feed is reloaded,
-    Then the control domain is VIP-blocked (the feed loaded),
+    Then the control domain is null-blocked (the feed loaded),
       pfB_DNSBLIP_v4 holds 192.0.2.10 and pfB_DNSBLIP_v6 holds 2001:db8::10,
       and 198.51.100.20 is in neither table.
     """
@@ -78,7 +77,7 @@ def test_empty_scheme_ip_collected_and_embedded_url_ignored(
     )
     feed_url = h.write_local_feed(vm, f"smoke_dnsbl_empty_scheme_ip_{mode}.txt", body)
     spec = h.DnsblCase(
-        aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.VIP, dnsbl_ip_action="Deny_Both"
+        aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.NULL_LOG, dnsbl_ip_action="Deny_Both"
     )
     try:
         h.inject(vm, spec)
@@ -88,9 +87,9 @@ def test_empty_scheme_ip_collected_and_embedded_url_ignored(
         h.flush_unbound_name(vm, control)
         # reload() waits for the swap, so the first answer is authoritative.
         ans = h.dns_probe_client(client_vm, control, "A")
-        assert h.is_vip(ans), f"control {control} expected VIP block (feed loaded), got {ans}"
+        assert h.is_null_ip(ans), f"control {control} expected a null block (feed loaded), got {ans}"
         ans = h.dns_probe_client(client_vm, redirector, "A")
-        assert h.is_vip(ans), f"{mode}: redirector {redirector} expected VIP block (domain listed), got {ans}"
+        assert h.is_null_ip(ans), f"{mode}: redirector {redirector} expected a null block (domain listed), got {ans}"
 
         h.apply_filter_sync(vm)
         v4 = h.pfctl_table_members(vm, "pfB_DNSBLIP_v4")

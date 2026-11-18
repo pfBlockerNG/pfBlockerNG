@@ -34,9 +34,10 @@ func TestBuiltInHstsTldNullBlocksWhateverThePreloadFileHolds(t *testing.T) {
 			if !got.isFound || got.logType != "1" {
 				t.Fatalf("(isFound, logType) = (%v, %q), want the VIP-flagged block (true, \"1\")", got.isFound, got.logType)
 			}
-			if got.nullBlocking != tc.wantNull || got.inHsts != tc.wantNull || got.pType != tc.wantPType {
-				t.Errorf("(nullBlocking, inHsts, pType) = (%v, %v, %q), want (%v, %v, %q)",
-					got.nullBlocking, got.inHsts, got.pType, tc.wantNull, tc.wantNull, tc.wantPType)
+			// issue #4053: every flag-1 block answers null; HSTS only marks the row.
+			if !got.nullBlocking || got.inHsts != tc.wantNull || got.pType != tc.wantPType {
+				t.Errorf("(nullBlocking, inHsts, pType) = (%v, %v, %q), want (true, %v, %q)",
+					got.nullBlocking, got.inHsts, got.pType, tc.wantNull, tc.wantPType)
 			}
 		})
 	}

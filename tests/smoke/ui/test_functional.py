@@ -109,19 +109,16 @@ class ToggleFlow:
 #            maxmind_locale and fires a MaxMind conversion ONLY on a locale
 #            CHANGE -- re-posting the page's own (unchanged) locale avoids it, so
 #            the toggle is hermetic under the egress block.
-#   dnsbl    pfb_dnsbl_rule installedpackages/pfblockerngdnsblsettings/config/0
-#            "Create Floating Pass rule". The DNSBL save validates the sinkhole
-#            VIP (pfb_validate_vips, always in manual mode) and the lighttpd
-#            ports, so the box MUST have a valid VIP first -- the fixture calls
-#            helpers.ensure_dnsbl_vip(). The DNSBL settings save only
-#            write_config()s (no reload), so config.xml is the oracle.
+#   dnsbl    pfb_idn_*      installedpackages/pfblockerngdnsblsettings/config/0
+#            The DNSBL settings save only write_config()s (no reload), so
+#            config.xml is the oracle.
 # Page URLs (DRY -- the validator tests below reuse them).
 GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
 IP_PAGE = "/pfblockerng/pfblockerng_ip.php"
 SAFESEARCH_PAGE = "/pfblockerng/pfblockerng_safesearch.php"
 UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
 WIDGET_PAGE = "/widgets/widgets/pfblockerng.widget.php"
-# DNSBL_PAGE is defined further down (used by the auto-VIP test too).
+DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 
 FLOWS: tuple[ToggleFlow, ...] = (
     # ---- General settings (installedpackages/pfblockerng/config/0) ------------
@@ -197,16 +194,7 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngipsettings/config/0/killstates",
     ),
     # ---- DNSBL settings (installedpackages/pfblockerngdnsblsettings/config/0) -
-    # The DNSBL save validates the sinkhole VIP (pfb_validate_vips, always in manual
-    # mode) and the lighttpd ports, so the box MUST have a valid VIP first -- the
-    # dnsbl_vip_ready fixture calls helpers.ensure_dnsbl_vip(). The save only
-    # write_config()s (no reload), so config.xml is the oracle.
-    ToggleFlow(
-        name="dnsbl_floating_pass_rule",
-        page="/pfblockerng/pfblockerng_dnsbl.php",
-        field="pfb_dnsbl_rule",
-        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_rule",
-    ),
+    # The save only write_config()s (no reload), so config.xml is the oracle.
     ToggleFlow(
         name="dnsbl_enable",
         page="/pfblockerng/pfblockerng_dnsbl.php",
@@ -272,12 +260,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         # Registry default 'on': an absent key means the feature is ON.
         absent="on",
     ),
-    ToggleFlow(
-        name="dnsbl_py_nolog",
-        page="/pfblockerng/pfblockerng_dnsbl.php",
-        field="pfb_py_nolog",
-        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_nolog",
-    ),
     # ADR-08 Confusable sub-toggles (on/off checkboxes). The DNSBL save only
     # write_config()s, so config.xml is the oracle. block_malicious defaults 'on',
     # escalate_suspicious defaults '' -- the flow flips from whatever is stored.
@@ -297,15 +279,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_escalate_suspicious",
         # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
-    # issue #381: opt out of automatic DNSBL NAT-rule creation (default '' = NAT on).
-    # The form POST exercises the new save handler; config.xml is the oracle.
-    ToggleFlow(
-        name="dnsbl_nonat",
-        page="/pfblockerng/pfblockerng_dnsbl.php",
-        field="pfb_dnsbl_nonat",
-        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat",
-        # Adapter-backed unchecked saves use the canonical empty Off token.
-    ),
     # ---- Reputation settings (installedpackages/pfblockerngreputation/config/0) -
     # issue #1896: enable_dedup ("dMAX") joined the toggle-adapter registry
     # alongside enable_rep/enable_pdup. The Reputation save only write_config()s +
@@ -321,20 +294,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
 )
-
-
-@pytest.fixture(scope="module")
-def dnsbl_vip_ready(smoke_vm: helpers.SmokeVM) -> None:
-    """Ensure the DNSBL sinkhole VIP exists so the DNSBL settings save validates.
-
-    The DNSBL save runs ``pfb_validate_vips`` in manual mode on EVERY save (and
-    ``is_port`` on the lighttpd ports). Without a valid VIP the save fails with
-    an input error and config.xml is never written -- the flow would false-fail.
-    ``ensure_dnsbl_vip`` injects the lo0 IP-Alias VIP + the default ports exactly
-    as the matrix does (the default ``pfb_dnsvip_auto`` is OFF, so the manual VIP
-    is required). Idempotent on the uniqid; module-scoped so it runs once.
-    """
-    helpers.ensure_dnsbl_vip(smoke_vm)
 
 
 def _set_and_confirm(webui: WebUI, vm: helpers.SmokeVM, flow: ToggleFlow, target: str) -> None:
@@ -369,7 +328,6 @@ def test_toggle_flow_changes_effective_config(
     flow: ToggleFlow,
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
 ) -> None:
     """A CSRF-POST form toggle changes the EFFECTIVE config.xml value, both ways.
 
@@ -497,7 +455,6 @@ def test_software_page_toggle_post_roundtrip(
 def test_reply_logging_off_survives_unrelated_dnsbl_save(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
 ) -> None:
     """DNS Reply Logging stored Off on DNS General survives an unrelated DNSBL save and a reload.
 
@@ -596,7 +553,6 @@ def _post_and_get(
 def test_dnsbl_idn_mode_select_round_trips_all_modes(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
 ) -> None:
     """The 'IDN Blocking' select (``pfb_idn``) round-trips all three modes via config.xml.
 
@@ -606,8 +562,7 @@ def test_dnsbl_idn_mode_select_round_trips_all_modes(
     Confusable and Always. The 4.0.0-alpha ``'all'`` token no longer
     exists. Drives EACH mode and asserts the effective config node (branch coverage: every
     selectable value, not just one), restoring the original at the end. The DNSBL save only
-    write_config()s (config.xml is the oracle) and needs the sinkhole VIP -- supplied by
-    ``dnsbl_vip_ready``.
+    write_config()s (config.xml is the oracle).
     """
     page = "/pfblockerng/pfblockerng_dnsbl.php"
     cfg = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn"
@@ -623,7 +578,6 @@ def test_dnsbl_idn_mode_select_round_trips_all_modes(
 def test_dnsbl_top1m_token_masked_field_persists_and_is_never_echoed(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
 ) -> None:
     """The masked ``top1m_token`` field (ADR-59 P5) persists via config.xml -- the
     HTTP body is never proof of a save (ADR §1 fact 3) -- and is a WRITE-ONLY field
@@ -1540,8 +1494,7 @@ def test_ip_fw_self_outbound_requires_an_inbound_interface(
 #
 # The DoH/DoT/DoQ fields (safesearch_doh / safesearch_doh_list) live in the SAME
 # bare section but are rendered and SAVED ON THE DNSBL PAGE (ADR-29 foreign-section
-# write via PfbConfig::write) -- so their tests POST to DNSBL_PAGE and need the
-# sinkhole VIP (dnsbl_vip_ready), exactly like the other DNSBL-page saves. That save
+# write via PfbConfig::write) -- so their tests POST to DNSBL_PAGE. That save
 # is ALL-OR-NOTHING: the doh-Enable-needs-a-list guard aborts the ENTIRE save (no
 # field written); a non-key safesearch_doh coerces to 'Disable', a bogus doh_list key
 # coerces to ''. write_config() only -- hermetic.
@@ -1633,7 +1586,6 @@ def test_safesearch_nested_select_post_coerces_to_disable(
 def test_safesearch_doh_select_valid_needs_list_and_bogus_coerces(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
 ) -> None:
     """``safesearch_doh`` stores 'Enable' (with a list) and coerces a bogus value to 'Disable'.
 
@@ -1643,8 +1595,7 @@ def test_safesearch_doh_select_valid_needs_list_and_bogus_coerces(
     valid branch MUST also supply a valid list (overrides include
     ``safesearch_doh_list='dns.google'``) -> node == 'Enable'. The BOGUS branch ('Bogus')
     is not a key of $options_safesearch_doh -> coerced to 'Disable' (the empty-list guard
-    compares to the literal 'Enable', so a bogus value does not trip it). Needs the sinkhole
-    VIP (``dnsbl_vip_ready``) -- every DNSBL save runs pfb_validate_vips. write_config()
+    compares to the literal 'Enable', so a bogus value does not trip it). write_config()
     only -- hermetic.
     """
     vm = smoke_vm
@@ -1672,12 +1623,10 @@ def test_safesearch_doh_select_valid_needs_list_and_bogus_coerces(
 def test_safesearch_doh_list_multiselect_valid_and_bogus_clears(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
 ) -> None:
     """``safesearch_doh_list`` stores a valid key (CSV); a bogus key coerces to ''.
 
-    Rendered and saved on the DNSBL page (ADR-29 foreign-section write); needs the
-    sinkhole VIP (``dnsbl_vip_ready``) since every DNSBL save runs pfb_validate_vips.
+    Rendered and saved on the DNSBL page (ADR-29 foreign-section write).
     Multi-select, valid keys are the ~180 entries of ``$options_safesearch_doh_list``
     (e.g. 'dns.google', 'cloudflare-dns.com'), stored as a CSV via
     ``implode(',', (array)$_POST[...])``. The validator sets the field to '' when a
@@ -1719,12 +1668,10 @@ def test_safesearch_doh_list_multiselect_valid_and_bogus_clears(
 def test_safesearch_doh_enable_requires_list_guard(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
 ) -> None:
     """Enabling DoH with an EMPTY list aborts the whole save (config unchanged).
 
-    Rendered and saved on the DNSBL page (ADR-29 foreign-section write); needs the
-    sinkhole VIP (``dnsbl_vip_ready``) since every DNSBL save runs pfb_validate_vips.
+    Rendered and saved on the DNSBL page (ADR-29 foreign-section write).
     The input_error guard: ``$_POST['safesearch_doh']=='Enable' &&
     empty($_POST['safesearch_doh_list'])`` -> ``$input_errors`` -> the
     ``if (!$input_errors)`` save block is skipped -> NO write_config, config
@@ -1770,92 +1717,13 @@ def test_safesearch_doh_enable_requires_list_guard(
 # --------------------------------------------------------------------------- #
 # DNSBL settings (installedpackages/pfblockerngdnsblsettings/config/0). Save is
 # ALL-OR-NOTHING: any validation failure aborts the ENTIRE save -> config
-# UNCHANGED (so each reject_result is 'unchanged'). PRECONDITION: dnsbl_vip_ready
-# (the lo0 VIP + ports) -- every save runs pfb_validate_vips + is_port, else an
-# unrelated input_error aborts every save. write_config() only -- hermetic.
+# UNCHANGED (so each reject_result is 'unchanged'). write_config() only -- hermetic.
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.parametrize(
-    ("field", "valid", "current_default", "bogus", "errlabel"),
-    [
-        ("pfb_dnsport", "8082", "8081", "99999", "DNSBL Port"),
-        ("pfb_dnsport_ssl", "8444", "8443", "abc", "DNSBL SSL Port"),
-    ],
-    ids=["pfb_dnsport", "pfb_dnsport_ssl"],
-)
-def test_dnsbl_port_is_port_valid_and_reject_unchanged(
-    field: str,
-    valid: str,
-    current_default: str,
-    bogus: str,
-    errlabel: str,
-    webui: WebUI,
-    smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
-) -> None:
-    """A DNSBL port field accepts a valid port; a bad port aborts the whole save.
-
-    ``is_port($_POST[field])``: a bogus value (99999 > 65535, or non-numeric 'abc')
-    -> is_port FALSE -> ``$input_errors`` ('<label> is invalid!') -> the WHOLE save
-    aborts -> node UNCHANGED. A valid port is stored verbatim. The fixture default
-    is the listed ``current_default`` (8081/8443), so the VALID probe is a DIFFERENT
-    valid port (8082/8444) to satisfy the before/after transition rule (prove the
-    POST CAUSED the change). Restore to the fixture default afterward.
-    """
-    vm = smoke_vm
-    cfg = f"installedpackages/pfblockerngdnsblsettings/config/0/{field}"
-    original = helpers.config_get(vm, cfg)
-    # Restore target: whatever was there, else the documented default.
-    restore = original or current_default
-    try:
-        assert original != valid, f"{field} already {valid!r} before the valid POST (original={original!r})"
-        # VALID port distinct from the current value -> stored verbatim.
-        assert _post_and_get(webui, vm, DNSBL_PAGE, {field: valid}, cfg) == valid
-        # Restore the original valid port.
-        assert _post_and_get(webui, vm, DNSBL_PAGE, {field: restore}, cfg) == restore
-        # REJECT: a bad port aborts the whole save -> config UNCHANGED.
-        got = _post_and_get(webui, vm, DNSBL_PAGE, {field: bogus}, cfg)
-        assert got == restore, f"bogus {field} must leave config unchanged at {restore!r}, got {got!r}"
-    finally:
-        webui.post(DNSBL_PAGE, {field: restore}, timeout=SAVE_TIMEOUT)
-
-
-def test_dnsbl_ports_are_optional_only_without_vip_demand(
-    webui: WebUI,
-    smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
-) -> None:
-    """issue #3539: empty web server ports save without VIP demand and are rejected with it.
-
-    The posted Regex List is a built-in block, so it answers with the global mechanism:
-    under Override WebServer/VIP it demands the web server and an empty port aborts the
-    whole save; under Override Null Blocking nothing answers with the VIP, so the same
-    empty port is accepted and the save stores the 8081 default.
-    """
-    vm = smoke_vm
-    settings = "installedpackages/pfblockerngdnsblsettings/config/0"
-    cfg = f"{settings}/pfb_dnsport"
-    keys = ("global_log_mode", "global_log", "pfb_regex", "pfb_regex_list")
-    saved = {path: helpers.config_get_state(vm, path) for path in [cfg, *(f"{settings}/{key}" for key in keys)]}
-    regex = {"global_log_mode": "override", "pfb_regex": "on", "pfb_regex_list": "pfb3539inert", "pfb_dnsport": ""}
-    try:
-        assert _post_and_get(webui, vm, DNSBL_PAGE, {"pfb_dnsport": "8082"}, cfg) == "8082"
-
-        got = _post_and_get(webui, vm, DNSBL_PAGE, {**regex, "global_log": "enabled"}, cfg)
-        assert got == "8082", f"with VIP demand an empty port must abort the save, got {got!r}"
-
-        got = _post_and_get(webui, vm, DNSBL_PAGE, {**regex, "global_log": "disabled_log"}, cfg)
-        assert got == "8081", f"without VIP demand an empty port must save as the 8081 default, got {got!r}"
-    finally:
-        for path, state in saved.items():
-            helpers.config_restore_state(vm, path, state)
 
 
 def test_dnsbl_py_cache_max_unlimited_and_reject_unchanged(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
 ) -> None:
     """``pfb_py_cache_max`` accepts 0 (unlimited); a >5M value aborts the whole save.
 
@@ -2158,7 +2026,6 @@ def test_pfb_dns_name_is_saved_without_its_trailing_dot_and_ddr_needs_one(
 def test_dnsbl_regex_list_ascii_base64_and_reject_unchanged(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
 ) -> None:
     """``pfb_regex_list`` accepts ASCII (stored base64); a non-ASCII value aborts the save.
 
@@ -2209,7 +2076,6 @@ def test_dnsbl_regex_list_runtime_dropped_entry_rejected_on_save(
     why: str,
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
 ) -> None:
     """A regex entry the resolver would DROP at load is REJECTED at save (issue #1656).
 
@@ -2257,7 +2123,6 @@ def test_dnsbl_regex_list_runtime_dropped_entry_rejected_on_save(
 def test_dnsbl_adv_inbound_proto_any_guard(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
 ) -> None:
     """Advanced inbound rules with protocol 'Any' abort the save; a real proto persists.
 
@@ -2303,109 +2168,6 @@ def test_dnsbl_adv_inbound_proto_any_guard(
         webui.post(DNSBL_PAGE, {"autoports_in": ports_orig, "autoproto_in": proto_orig or "any"}, timeout=SAVE_TIMEOUT)
 
 
-# --------------------------------------------------------------------------- #
-# ADR-13 "Create VIPs automatically" (pfb_dnsvip_auto) -- driven via the DNSBL FORM
-#
-# The auto-VIP LIFECYCLE (config toggle -> VIP created/removed -> DNS sinks) is
-# already covered by the smoke matrix (test_smoke_matrix.py) via the config helper
-# `set_dnsvip_auto`. The UI tier's DISTINCT value is proving the DNSBL settings
-# PAGE persists pfb_dnsvip_auto through a real CSRF form POST, with the same
-# package machinery (pfb_create_dnsbl -> pfb_manage_dnsbl_vip) then provisioning
-# the marked VIP end-to-end. Auto picks 172.16.53.1 (issue #473's first Class-B
-# candidate, free in this topology), distinct from the manual VIP at 10.10.10.1
-# (dnsbl_vip_ready), so the two coexist on one VM.
-#
-# TODO(ADR-12): add update-hooks UI coverage (add/toggle/remove a hook row + its
-# config persistence) once ADR-12 lands on devel -- it is not merged there yet.
-# --------------------------------------------------------------------------- #
-
-DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
-AUTO_VIP_CFG = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto"
-
-
-def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
-    webui: WebUI,
-    smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
-) -> None:
-    """Ticking 'Create VIPs automatically' in the DNSBL FORM provisions the marked VIP.
-
-    UI-faithful end-to-end with the CLAUDE.md transition rule (assert before-state,
-    then prove the form POST caused the change):
-
-    * BEFORE: pfb_dnsvip_auto is off in config and no package-owned pfB_AUTO_VIP_v4
-      exists.
-    * ENABLE via the form: the CSRF POST must PERSIST pfb_dnsvip_auto=on (the
-      UI-specific assertion -- config.xml, not the HTTP body); the next Force
-      Update runs pfb_create_dnsbl('enabled') -> pfb_manage_dnsbl_vip, which
-      creates the marked VIP at 172.16.53.1 and brings it up live on lo0.
-    * DISABLE via the form: the POST persists it off; a Force Update removes the
-      marked VIP from config AND lo0.
-
-    Oracle = effective box state (marked_vip_subnet / ifconfig), never the HTTP
-    response. The manual VIP at 10.10.10.1 (dnsbl_vip_ready) is untouched. Left
-    clean (auto off, marked VIP gone) for the sibling flows in `finally`.
-
-    A DNSBL alias must be configured (write_local_feed + inject) for the Force
-    Update to actually run pfb_create_dnsbl('enabled') -> pfb_manage_dnsbl_vip: a
-    bare `update` with no DNSBL list does NOT reach the VIP-provisioning pass (the
-    same setup the smoke matrix uses via CaseContext). The feed is a LOCAL file
-    under /var/db/pfblockerng, so the update needs no egress. reload uses the full
-    `update` scope (not the targeted `updatednsbl`, which skips the VIP pass), with
-    egress open -- so this drives inject()+reload() directly rather than via
-    CaseContext (whose body runs with egress BLOCKED).
-    """
-    vm = smoke_vm
-    # A DNSBL list so the Force Update has work and runs the VIP-provisioning pass.
-    domain = helpers.unique_domain("uiautovip")
-    feed_path = helpers.write_local_feed(vm, "ui_autovip.txt", f"{domain}\n")
-    spec = helpers.DnsblCase(aliasname="uiautovip", feed_url=feed_path, header="uiautovip", mode=helpers.DnsblMode.VIP)
-    # DNSBL must be enabled so the Force Update runs pfb_create_dnsbl in 'enabled'
-    # mode; configure the alias; start from a known baseline (auto off).
-    helpers.set_dnsbl_enabled(vm, True)
-    helpers.set_dnsvip_auto(vm, False)
-    helpers.inject(vm, spec)
-    try:
-        # BEFORE.
-        assert helpers.config_get(vm, AUTO_VIP_CFG) != "on", "pfb_dnsvip_auto already on before the form POST"
-        assert helpers.marked_vip_subnet(vm, helpers.AUTO_VIP_DESCR_V4) == "", (
-            "pfB_AUTO_VIP_v4 present before auto-create was enabled via the form"
-        )
-
-        # ENABLE through the real DNSBL form; the PAGE must persist the setting.
-        resp = webui.post(DNSBL_PAGE, {"pfb_dnsvip_auto": "on"}, timeout=300.0)
-        assert not looks_like_login_page(resp.text), "DNSBL POST returned the login form (session lost)"
-        assert helpers.config_get(vm, AUTO_VIP_CFG) == "on", (
-            "the DNSBL form POST did not persist pfb_dnsvip_auto=on to config.xml"
-        )
-        # The next full Force Update provisions the marked VIP (same path as the matrix).
-        helpers.reload(vm, "update")
-        assert helpers.marked_vip_subnet(vm, helpers.AUTO_VIP_DESCR_V4) == helpers.AUTO_VIP_IP4, (
-            f"auto VIP not created at {helpers.AUTO_VIP_IP4} after the form enabled it: "
-            f"got {helpers.marked_vip_subnet(vm, helpers.AUTO_VIP_DESCR_V4)!r}"
-        )
-        assert helpers.vip_alias_live(vm, helpers.AUTO_VIP_IP4), (
-            f"auto VIP {helpers.AUTO_VIP_IP4} not live on lo0 (ifconfig) after the form enabled it"
-        )
-
-        # DISABLE through the form; persisted off, then the Force Update removes it.
-        resp = webui.post(DNSBL_PAGE, {"pfb_dnsvip_auto": ""}, timeout=300.0)
-        assert not looks_like_login_page(resp.text), "DNSBL un-POST returned the login form"
-        assert helpers.config_get(vm, AUTO_VIP_CFG) != "on", "the DNSBL form POST did not clear pfb_dnsvip_auto"
-        helpers.reload(vm, "update")
-        assert helpers.marked_vip_subnet(vm, helpers.AUTO_VIP_DESCR_V4) == "", (
-            "auto VIP not removed from config after unticking the form setting"
-        )
-        assert not helpers.vip_alias_live(vm, helpers.AUTO_VIP_IP4), (
-            f"auto VIP {helpers.AUTO_VIP_IP4} still live on lo0 after the form disabled it"
-        )
-    finally:
-        # Leave the box clean for the sibling flows: auto off + drop the derived
-        # state (reset = clearip/cleardnsbl + a blocking filter sync).
-        helpers.set_dnsvip_auto(vm, False)
-        helpers.reset(vm)
-
-
 # ---------------------------------------------------------------------------
 # Update page Cron Status
 #
@@ -2413,6 +2175,9 @@ def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
 # state (issue #3941): Core records scheduled outcomes, and tests/smoke/test_core_update.py holds the same boundary
 # (a manual Update leaves the schedule's lastRun alone).
 # ---------------------------------------------------------------------------
+
+# TODO(ADR-12): add update-hooks UI coverage (add/toggle/remove a hook row + its
+# config persistence) once ADR-12 lands on devel -- it is not merged there yet.
 
 _ENABLE_CB_CFG = "installedpackages/pfblockerng/config/0/enable_cb"
 
@@ -2942,34 +2707,16 @@ def test_a_wizard_finish_with_no_concurrent_save_writes_the_reset_and_sweeps_the
 WIZARD_DNSBL_STEP = "/wizard.php?xml=pfblockerng_wizard.xml&stepid=3"
 
 
-def test_wizard_dnsbl_step_needs_no_vip_or_ports(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    """issue #3539: the wizard's setup blocks with Null Blocking, so its DNSBL step needs no VIP and no ports.
-
-    A manual-mode DNSBL step with neither a VIP nor ports moves on to the Finalize step; a port that is given
-    must still be valid, so an invalid one keeps the step.
-    """
+def test_wizard_dnsbl_step_offers_no_vip_or_ports(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """issue #4053: the wizard's DNSBL step has no VIP or web server port fields and moves on to Finalize."""
     vm = smoke_vm
     _guest_ok(vm, "/bin/cp", "/conf/config.xml", WIZARD_CONFIG_BACKUP)
-    fields = {
-        "pfb_dnsvip_auto": "",
-        "pfb_dnsvip4": "none",
-        "pfb_dnsvip6": "none",
-        "pfb_dnsport": "",
-        "pfb_dnsport_ssl": "",
-    }
     try:
-        resp = webui.post(WIZARD_DNSBL_STEP, fields, submit=("next", "Next"), timeout=SAVE_TIMEOUT)
+        page = webui.get(WIZARD_DNSBL_STEP, timeout=SAVE_TIMEOUT)
+        for field in ("pfb_dnsvip_auto", "pfb_dnsvip4", "pfb_dnsvip6", "pfb_dnsport", "pfb_dnsport_ssl"):
+            assert f'name="{field}"' not in page.text, f"the wizard's DNSBL step still renders {field}"
+        resp = webui.post(WIZARD_DNSBL_STEP, {}, submit=("next", "Next"), timeout=SAVE_TIMEOUT)
         assert not looks_like_login_page(resp.text), "DNSBL step POST returned the login form (session lost)"
-        assert re.search(r"<h2[^>]*>\s*pfBlockerNG Finalize\s*<", resp.text), (
-            "without a VIP or ports the DNSBL step must move on to Finalize; "
-            f"no VIP error shown={'no VIP configured' in resp.text}"
-        )
-
-        resp = webui.post(
-            WIZARD_DNSBL_STEP, {**fields, "pfb_dnsport": "abc"}, submit=("next", "Next"), timeout=SAVE_TIMEOUT
-        )
-        assert "DNSBL Ports: A valid port must be defined." in resp.text, (
-            "an invalid given port must keep the DNSBL step"
-        )
+        assert re.search(r"<h2[^>]*>\s*pfBlockerNG Finalize\s*<", resp.text), "the DNSBL step must move on to Finalize"
     finally:
         helpers.restore_pfb_config_baseline(vm, snapshot_path=WIZARD_CONFIG_BACKUP)

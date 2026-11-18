@@ -88,8 +88,8 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     """Deploy the branch .pkg once for the aggregate module (mirrors the hooks module).
 
     Egress stays OPEN across every reload: the update path builds DNSBL too
-    (``pfb_create_dnsbl``) and a dark egress deadlocks the guest. ``ensure_dnsbl_vip`` +
-    ``use_system_dns_upstream`` give DNSBL a sinkhole VIP + a reachable upstream so the
+    and a dark egress deadlocks the guest. ``use_system_dns_upstream`` gives DNSBL a
+    reachable upstream so the
     DNSBLIP leg has real work. Hooks AND the aggregate selector are cleared up front AND
     on teardown so no stray hook/selection bleeds into another module's reloads. The
     session VM is torn down at end of run, so collect a full guest snapshot on teardown.
@@ -98,7 +98,6 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     h.snapshot_unbound_conf(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     # Defensive: start from a known-clean hook list AND no aggregate selection so nothing
     # left over from an earlier module/run can fire or build during this module's reloads.

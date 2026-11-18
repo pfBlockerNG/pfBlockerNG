@@ -8,15 +8,13 @@
         "python_blocking": "true",
         "python_cname": "true",
         "tld_allow": "true",
-        "tld_allow_list": "org,uk",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "tld_allow_list": "org,uk"
       }
     },
     "manifest": {
       "version": 1,
       "config": {"builtin_log_flag": "1"},
-      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "0"}]
     },
     "files": {
       "dnsbl_psl": [
@@ -51,7 +49,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["site.com. 3600 IN A 10.10.10.1"],
+        "answer": ["site.com. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },

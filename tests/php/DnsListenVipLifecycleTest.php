@@ -432,7 +432,7 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$fail = FALSE;
 		$this->assertTrue(pfb_dns_listen_vips_apply());
 		PfbConfig::write('gen/pfb_dns_listen_vip', '');
-		pfb_manage_dnsbl_vip('disabled', TRUE);
+		pfb_manage_dns_listen_vip('disabled');
 		$this->assertSame([], config_get_path('virtualip/vip'));
 	}
 

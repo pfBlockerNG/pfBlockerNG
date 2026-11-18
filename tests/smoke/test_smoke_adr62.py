@@ -106,7 +106,6 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
     try:
@@ -143,7 +142,7 @@ def test_adr62_abp_full_shape_set_no_marker(deployed_vm: SmokeVM, client_vm: Smo
     When a feed carrying the ``[Adblock Plus 2.0]`` header plus a ``||anchor^``
       block, a ``/^regex$/`` block, and a ``elem##.ad-banner`` element-hiding line
       loads (Force Update),
-    Then the anchor and regex targets are VIP-blocked (per-line capture routes both
+    Then the anchor and regex targets are null-blocked (per-line capture routes both
       to ``parse_abp``, unchanged from before this ADR — the header line itself is
       now an ordinary skippable ``[...]`` control line, ADR-62 Decision 1/2), the
       element-hiding target STILL RESOLVES (its domain-shaped prefix must never
@@ -158,22 +157,22 @@ def test_adr62_abp_full_shape_set_no_marker(deployed_vm: SmokeVM, client_vm: Smo
     body = h.abp_feed(f"||{anchor}^", regex_line, f"{elem}##.ad-banner")
     header = "adr62row2"
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr62_row2.txt", body)
-    spec = h.DnsblCase(aliasname="adr62row2", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="adr62row2", feed_url=feed_url, header=header)
 
     for name in (anchor, regex_target, elem):
         before = h.dns_probe_client(client_vm, name, "A")
         assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
-        assert not h.is_vip(before), f"{name} unexpectedly VIP-blocked before any feed: {before}"
+        assert not h.is_null_ip(before), f"{name} unexpectedly null-blocked before any feed: {before}"
 
     with h.CaseContext(deployed_vm, spec):
         h.unblock_egress()  # the "resolves" probes (elem) must reach the controlled stub
         for name in (anchor, regex_target, elem):
             h.flush_unbound_name(deployed_vm, name)
 
-        ans_anchor = h.dns_probe_client_until(client_vm, anchor, h.is_vip)
+        ans_anchor = h.dns_probe_client_until(client_vm, anchor, h.is_null_ip)
         assert not h.resolves_to(ans_anchor, STUB_DNS_A), f"{anchor} still resolving after ||{anchor}^: {ans_anchor}"
 
-        ans_regex = h.dns_probe_client_until(client_vm, regex_target, h.is_vip)
+        ans_regex = h.dns_probe_client_until(client_vm, regex_target, h.is_null_ip)
         assert not h.resolves_to(ans_regex, STUB_DNS_A), (
             f"{regex_target} still resolving after its feed /regex/ block: {ans_regex}"
         )
@@ -182,7 +181,7 @@ def test_adr62_abp_full_shape_set_no_marker(deployed_vm: SmokeVM, client_vm: Smo
         assert h.resolves_to(ans_elem, STUB_DNS_A), (
             f"element-hiding line {elem}##.ad-banner must NOT block {elem} (D2/D3 no-spurious-domain): {ans_elem}"
         )
-        assert not h.is_vip(ans_elem), f"{elem} wrongly VIP-blocked by an element-hiding line: {ans_elem}"
+        assert not h.is_null_ip(ans_elem), f"{elem} wrongly null-blocked by an element-hiding line: {ans_elem}"
 
         marker = f"{h.PFB_DBDIR}/dnsbl/{header}.abp"
         marker_check = deployed_vm.ssh("/bin/test", "-e", marker)
@@ -206,7 +205,7 @@ def test_adr62_mixed_plain_feed_all_block_delta_d2(deployed_vm: SmokeVM, client_
     Given (before the feed loads) all three names RESOLVE via the controlled stub.
     When a feed with NO ABP header (``[Adblock``/``! Title:``) mixing a hosts-format
       line, a stray ``||anchor^`` anchor, and a ``/^regex$/`` block loads,
-    Then all three are VIP-blocked: the hosts line via the unaffected plain
+    Then all three are null-blocked: the hosts line via the unaffected plain
       pipeline, the anchor via the pre-existing ADR-21 per-line capture, and the
       regex line via ADR-62's broadened capture (delta D2 — pre-ADR-62 this line
       was host-mangled + parse-fail-logged, never a block; the D2 delta's own
@@ -226,18 +225,18 @@ def test_adr62_mixed_plain_feed_all_block_delta_d2(deployed_vm: SmokeVM, client_
         + "\n"
     )
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr62_row3.txt", body)
-    spec = h.DnsblCase(aliasname="adr62row3", feed_url=feed_url, header="adr62row3", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="adr62row3", feed_url=feed_url, header="adr62row3")
 
     for name in (hosts_dom, anchor_dom, regex_dom, inline_dom):
         before = h.dns_probe_client(client_vm, name, "A")
         assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
-        assert not h.is_vip(before), f"{name} unexpectedly VIP-blocked before any feed: {before}"
+        assert not h.is_null_ip(before), f"{name} unexpectedly null-blocked before any feed: {before}"
 
     with h.CaseContext(deployed_vm, spec):
         h.unblock_egress()
         for name in (hosts_dom, anchor_dom, regex_dom, inline_dom):
             h.flush_unbound_name(deployed_vm, name)
-            ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
+            ans = h.dns_probe_client_until(client_vm, name, h.is_null_ip)
             assert not h.resolves_to(ans, STUB_DNS_A), f"{name} still resolving after the mixed feed loaded: {ans}"
 
 
@@ -260,7 +259,7 @@ def test_adr62_bracketed_ipv6_dnsblip_vs_adblock_marker(deployed_vm: SmokeVM, cl
     Given the domain RESOLVES via the stub before the feed loads.
     When the feed loads with ``dnsbl_ip_action="Deny_Both"`` (the "DNSBL IP"
       firewall feature) and a Force Update runs,
-    Then the domain is VIP-blocked (feed loaded), the UNWRAPPED IPv6 address
+    Then the domain is null-blocked (feed loaded), the UNWRAPPED IPv6 address
       is present in ``pfB_DNSBLIP_v6`` (``pfb_dnsbl_unbracket_ip6`` — unaffected
       by this ADR, still runs BEFORE the universal control-line skip), and NO
       DNSBLIP_v6 member contains the literal ``Adblock`` text (the header line
@@ -276,7 +275,6 @@ def test_adr62_bracketed_ipv6_dnsblip_vs_adblock_marker(deployed_vm: SmokeVM, cl
         aliasname="adr62row4",
         feed_url=feed_url,
         header="adr62row4",
-        mode=h.DnsblMode.VIP,
         dnsbl_ip_action="Deny_Both",
     )
 
@@ -285,7 +283,7 @@ def test_adr62_bracketed_ipv6_dnsblip_vs_adblock_marker(deployed_vm: SmokeVM, cl
 
     with h.CaseContext(deployed_vm, spec):
         h.flush_unbound_name(deployed_vm, domain)
-        ans = h.dns_probe_client_until(client_vm, domain, h.is_vip)
+        ans = h.dns_probe_client_until(client_vm, domain, h.is_null_ip)
         assert not h.resolves_to(ans, STUB_DNS_A), f"{domain} still resolving after the feed loaded: {ans}"
 
         h.apply_filter_sync(deployed_vm)
@@ -321,21 +319,21 @@ def test_adr62_csv_bambenek_feed_blocks(deployed_vm: SmokeVM, client_vm: SmokeVM
     Given the CSV row's domain (col 0) RESOLVES via the stub before the feed loads.
     When a single-line 4-column CSV body (``domain,comment,date,url``, with col 3
       containing ``osint.bambenekconsulting.com`` — the bbc detection marker) loads,
-    Then the domain is VIP-blocked — ``pfb_dnsbl_csv_extract()`` (issue #1118)
+    Then the domain is null-blocked — ``pfb_dnsbl_csv_extract()`` (issue #1118)
       extracts col 0 and the extracted domain flows through the SAME plain
       pipeline (host-prefix/scheme/IDN/pfb_filter) as any other domain line.
     """
     domain = h.unique_domain("adr62r5csv")
     body = f"{domain},bambenek-comment,20260101,http://osint.bambenekconsulting.com/manual/index.php\n"
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr62_row5.txt", body)
-    spec = h.DnsblCase(aliasname="adr62row5", feed_url=feed_url, header="adr62row5", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="adr62row5", feed_url=feed_url, header="adr62row5")
 
     before = h.dns_probe_client(client_vm, domain, "A")
     assert h.resolves_to(before, STUB_DNS_A), f"{domain} should resolve via stub BEFORE listing, got {before}"
 
     with h.CaseContext(deployed_vm, spec):
         h.flush_unbound_name(deployed_vm, domain)
-        ans = h.dns_probe_client_until(client_vm, domain, h.is_vip)
+        ans = h.dns_probe_client_until(client_vm, domain, h.is_null_ip)
         assert not h.resolves_to(ans, STUB_DNS_A), (
             f"CSV-extracted domain {domain} still resolving after the bbc feed loaded: {ans}"
         )
@@ -360,7 +358,7 @@ def test_adr62_idn_raw_unicode_blocks_under_punycode(deployed_vm: SmokeVM, clien
     Given the punycode name RESOLVES via the stub before the feed loads.
     When a feed containing the RAW UTF-8 line ``café-adr62row6.com`` loads,
     Then a query for ``xn--caf-adr62row6-dhb.com`` (PHP's ``idn_to_ascii()``
-      conversion, verified against the real function) is VIP-blocked — proving
+      conversion, verified against the real function) is null-blocked — proving
       the plain pipeline's IDN conversion (unaffected by this ADR) still runs
       for a bare domain line reaching the plain path.
     """
@@ -368,14 +366,14 @@ def test_adr62_idn_raw_unicode_blocks_under_punycode(deployed_vm: SmokeVM, clien
     punycode = "xn--caf-adr62row6-dhb.com"
     body = f"{raw}\n"
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr62_row6.txt", body)
-    spec = h.DnsblCase(aliasname="adr62row6", feed_url=feed_url, header="adr62row6", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="adr62row6", feed_url=feed_url, header="adr62row6")
 
     before = h.dns_probe_client(client_vm, punycode, "A")
     assert h.resolves_to(before, STUB_DNS_A), f"{punycode} should resolve via stub BEFORE listing, got {before}"
 
     with h.CaseContext(deployed_vm, spec):
         h.flush_unbound_name(deployed_vm, punycode)
-        ans = h.dns_probe_client_until(client_vm, punycode, h.is_vip)
+        ans = h.dns_probe_client_until(client_vm, punycode, h.is_null_ip)
         assert not h.resolves_to(ans, STUB_DNS_A), (
             f"punycode form {punycode} of raw IDN line {raw!r} still resolving after the feed loaded: {ans}"
         )
@@ -414,9 +412,9 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
       re-ingests (that is what makes the pass rebuild the DNSBL database at all),
       while the unchanged main row takes the VERBATIM-REUSE fork (current-
       generation staging passes the #1083 generation guard, so no rebuild is forced).
-    Then B is VIP-blocked (the staged NDJSON line was consumed as-is, never
+    Then B is null-blocked (the staged NDJSON line was consumed as-is, never
       re-downloaded or re-parsed), A now RESOLVES again (its row exists only in
-      the '.orig' download cache — reuse never touches it), X2 is VIP-blocked
+      the '.orig' download cache — reuse never touches it), X2 is null-blocked
       (proof the pass genuinely ran), and no new 'Rebuild' log line appears for
       the header (the generation guard accepted the staging as current).
     """
@@ -435,7 +433,6 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
         aliasname="adr62row7reuse",
         feed_url=feed_url,
         header=header,
-        mode=h.DnsblMode.VIP,
         extra_rows=[(sib_header, sib_feed_url)],
     )
 
@@ -449,7 +446,7 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
         # Baseline: both rows genuinely loaded via the normal download path.
         for name in (loaded_domain, sib1_domain):
             h.flush_unbound_name(deployed_vm, name)
-            ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
+            ans = h.dns_probe_client_until(client_vm, name, h.is_null_ip)
             assert not h.resolves_to(ans, STUB_DNS_A), (
                 f"baseline feed domain {name} still resolving after the initial load: {ans}"
             )
@@ -474,14 +471,14 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
         h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec), h.feed_id("dnsbl", sib_header)])
 
         h.flush_unbound_name(deployed_vm, reused_domain)
-        ans_reused = h.dns_probe_client_until(client_vm, reused_domain, h.is_vip)
+        ans_reused = h.dns_probe_client_until(client_vm, reused_domain, h.is_null_ip)
         assert not h.resolves_to(ans_reused, STUB_DNS_A), (
             f"current-generation staged domain {reused_domain} still resolving after the cron pass "
             f"(the reuse fork should have consumed the staged NDJSON '.txt' as-is): {ans_reused}"
         )
 
         h.flush_unbound_name(deployed_vm, sib2_domain)
-        ans_sib2 = h.dns_probe_client_until(client_vm, sib2_domain, h.is_vip)
+        ans_sib2 = h.dns_probe_client_until(client_vm, sib2_domain, h.is_null_ip)
         assert not h.resolves_to(ans_sib2, STUB_DNS_A), (
             f"changed sibling domain {sib2_domain} not blocked — the cron pass never re-ingested the "
             f"sibling feed, so this run rebuilt nothing and proves nothing: {ans_sib2}"
@@ -552,7 +549,6 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: Smoke
         aliasname="adr62rebuilda",
         feed_url=feed_url,
         header=header,
-        mode=h.DnsblMode.VIP,
         extra_rows=[(sib_header, sib_feed_url)],
     )
 
@@ -570,7 +566,7 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: Smoke
         # is what populates '.orig' with both target domains.
         for name in (domain_csv, domain_bare, sib1_domain):
             h.flush_unbound_name(deployed_vm, name)
-            ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
+            ans = h.dns_probe_client_until(client_vm, name, h.is_null_ip)
             assert not h.resolves_to(ans, STUB_DNS_A), f"baseline domain {name} still resolving: {ans}"
 
         _set_dnsbl_row_state(deployed_vm, header, "Hold")
@@ -608,12 +604,12 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: Smoke
         )
 
         h.flush_unbound_name(deployed_vm, sib2_domain)
-        ans_sib2 = h.dns_probe_client_until(client_vm, sib2_domain, h.is_vip)
+        ans_sib2 = h.dns_probe_client_until(client_vm, sib2_domain, h.is_null_ip)
         assert not h.resolves_to(ans_sib2, STUB_DNS_A), f"sibling {sib2_domain} not re-ingested: {ans_sib2}"
 
         for name in (domain_csv, domain_bare):
             h.flush_unbound_name(deployed_vm, name)
-            ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
+            ans = h.dns_probe_client_until(client_vm, name, h.is_null_ip)
             assert not h.resolves_to(ans, STUB_DNS_A), (
                 f"{name} not blocked after the stale-generation rebuild (the #1105 dropped-line class "
                 f"would show here): {ans}"
@@ -651,7 +647,6 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_absent_preserves_staging(
         aliasname="adr62rebuildb",
         feed_url=feed_url,
         header=header,
-        mode=h.DnsblMode.VIP,
         extra_rows=[(sib_header, sib_feed_url)],
     )
 
@@ -667,7 +662,7 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_absent_preserves_staging(
 
         for name in (domain_csv, domain_bare, sib1_domain):
             h.flush_unbound_name(deployed_vm, name)
-            ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
+            ans = h.dns_probe_client_until(client_vm, name, h.is_null_ip)
             assert not h.resolves_to(ans, STUB_DNS_A), f"baseline domain {name} still resolving: {ans}"
 
         _set_dnsbl_row_state(deployed_vm, header, "Hold")
@@ -708,7 +703,7 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_absent_preserves_staging(
         )
 
         h.flush_unbound_name(deployed_vm, sib2_domain)
-        ans_sib2 = h.dns_probe_client_until(client_vm, sib2_domain, h.is_vip)
+        ans_sib2 = h.dns_probe_client_until(client_vm, sib2_domain, h.is_null_ip)
         assert not h.resolves_to(ans_sib2, STUB_DNS_A), f"sibling {sib2_domain} not re-ingested: {ans_sib2}"
 
 
@@ -735,7 +730,7 @@ def test_adr62_tld_enabled_run_keeps_plain_row_classification(deployed_vm: Smoke
       feed (a hosts line + a verbatim ``||anchor^`` line — no ABP-classified
       feed anywhere in this pass, matching issue #1060's exact trigger shape)
       loads,
-    Then both the hosts-line domain and the anchor domain are VIP-blocked — the
+    Then both the hosts-line domain and the anchor domain are null-blocked — the
       TLD-analysis pass's unconditional empty-feed-column skip (ADR-62 Phase 5,
       the surviving half of issue #1060) does not misclassify the comma-first
       plain row just because a verbatim-captured line coexists in the same feed.
@@ -748,7 +743,6 @@ def test_adr62_tld_enabled_run_keeps_plain_row_classification(deployed_vm: Smoke
         aliasname="adr62row7btld",
         feed_url=feed_url,
         header="adr62row7btld",
-        mode=h.DnsblMode.VIP,
         tld_enabled=True,
     )
 
@@ -759,7 +753,7 @@ def test_adr62_tld_enabled_run_keeps_plain_row_classification(deployed_vm: Smoke
     with h.CaseContext(deployed_vm, spec):
         for name in (hosts_dom, anchor_dom):
             h.flush_unbound_name(deployed_vm, name)
-            ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
+            ans = h.dns_probe_client_until(client_vm, name, h.is_null_ip)
             assert not h.resolves_to(ans, STUB_DNS_A), (
                 f"{name} still resolving with tld_wildcard=on (TLD mode broke ordinary plain-row blocking): {ans}"
             )
@@ -790,7 +784,7 @@ def test_adr62_liteparser_first_url_line_salvaged_not_dropped(deployed_vm: Smoke
       then ``https://<second>`` — both RESOLVING via the stub before the feed loads,
     When the feed loads (col 3 carries the Bambenek marker that selects the formerly
       liteparser-trusted 'bbc' type),
-    Then BOTH domains are VIP-blocked. Pre-#1117 the SECOND URL line was salvaged (the
+    Then BOTH domains are null-blocked. Pre-#1117 the SECOND URL line was salvaged (the
       adaptive reset had flipped the flag) while the FIRST was dropped — so the
       second-line block is the control proving the feed loaded and the URL pipeline
       works, and the first-line block is the fix.
@@ -803,7 +797,7 @@ def test_adr62_liteparser_first_url_line_salvaged_not_dropped(deployed_vm: Smoke
         f"https://{second_dom},bambenek-comment,20260102,{marker}\n"
     )
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr62_row8.txt", body)
-    spec = h.DnsblCase(aliasname="adr62row8", feed_url=feed_url, header="adr62row8", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="adr62row8", feed_url=feed_url, header="adr62row8")
 
     for name in (first_dom, second_dom):
         before = h.dns_probe_client(client_vm, name, "A")
@@ -813,18 +807,18 @@ def test_adr62_liteparser_first_url_line_salvaged_not_dropped(deployed_vm: Smoke
         # Control: the SECOND URL line is salvaged even pre-fix. Poll it to VIP — this is
         # the feed-load/settle transition; once it holds, the whole feed is in place.
         h.flush_unbound_name(deployed_vm, second_dom)
-        ans_second = h.dns_probe_client_until(client_vm, second_dom, h.is_vip)
+        ans_second = h.dns_probe_client_until(client_vm, second_dom, h.is_null_ip)
         assert not h.resolves_to(ans_second, STUB_DNS_A), (
             f"control: second URL line {second_dom} did not block — the feed failed to load, "
             f"so this test cannot isolate the #1117 first-line bug: {ans_second}"
         )
         # The fix: with the feed settled, the FIRST line's block state is authoritative on
         # the first read (smoke rule: do not loop for the expected value). Pre-#1117 it was
-        # dropped and stays resolving via the stub; after the fix it is VIP-blocked.
+        # dropped and stays resolving via the stub; after the fix it is null-blocked.
         h.flush_unbound_name(deployed_vm, first_dom)
         ans_first = h.dns_probe_client(client_vm, first_dom, "A")
-        assert h.is_vip(ans_first), (
+        assert h.is_null_ip(ans_first), (
             f"issue #1117: first URL-form line {first_dom} was dropped, not salvaged — "
             f"$liteparser skipped host-munging for the feed's first trusted line; "
-            f"expected VIP block, got {ans_first}"
+            f"expected a null block, got {ans_first}"
         )

@@ -60,8 +60,8 @@ func stringList(name, item, pattern string) Field {
 		Items: []Field{{Name: item, Type: TypeString, Default: "", Pattern: pattern}}}
 }
 
-// dnsblMechanisms are the logging mechanisms of the Outpost's DNSBL, the first being the VIP response it deprecates.
-var dnsblMechanisms = []string{"enabled", "disabled_log", "disabled", "nxdomain_log", "nxdomain", "nodata_log", "nodata"}
+// dnsblMechanisms are the logging mechanisms of the Outpost's DNSBL (issue #4053 removed the VIP response, "enabled").
+var dnsblMechanisms = []string{"disabled_log", "disabled", "nxdomain_log", "nxdomain", "nodata_log", "nodata"}
 
 // policyDNSBLProjection is settings/policy/dnsbl (issue #4031): the DNSBL build policy the Update loop applies, as the Outpost reads it
 // from its configuration: the switch, the whitelist, TOP1M, the TLD wildcard lists, TLD Allow, the Regex list, SafeSearch and the DNSBL-IP

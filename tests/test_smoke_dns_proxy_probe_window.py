@@ -15,7 +15,7 @@ from tests.smoke import helpers as h
 from tests.smoke import test_smoke_dns_proxy as dns
 
 PERIOD = 0.2  # the probe's pause between two questions (an answer takes a few ms on top)
-ANSWER = f"NOERROR:{h.DEFAULT_DNSBL_VIP4}"
+ANSWER = f"NOERROR:{h.NULL_IP4}"
 
 
 class _Clock:

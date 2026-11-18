@@ -143,12 +143,14 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
   `asn_reporting`, `asn_token`, `inbound_interface`, `inbound_deny_action`, `outbound_interface`,
   `outbound_deny_action`, `pass_order`, `autorule_suffix`; DNSBL `agateway_in`, `agateway_out`,
   `aliasaddr_in`, `aliasaddr_out`, `aliasports_in`, `aliasports_out`, `autoproto_in`,
-  `autoproto_out`. `dnsbl_webpage` stays foreign (ADR-29 §2.5).
+  `autoproto_out`. `dnsbl_webpage` stays foreign (ADR-29 §2.5). *Amendment 2026-11-17 (issue #4053):
+  `dnsbl_webpage` is removed.*
 - Rule: **local** is an interface, VIP, listener port, gateway, filesystem or script reference,
   credential, runtime or one-shot marker, log, display, or per-node performance tuning value.
   **Policy** is what is blocked, permitted, logged, or transformed, and the shape of generated
   objects. Exception: the auto-created DNSBL VIP's address (`pfb_dnsvip_auto4/6`, #3540) is policy so
-  both nodes sinkhole to one address; its VIP ids stay local.
+  both nodes sinkhole to one address; its VIP ids stay local. *Amendment 2026-11-17 (issue #4053): the DNSBL VIP is
+  removed, and with it these keys.*
 - Settings sections (`gen`, `ip`, `dnsbl`, and `dns` since #3770) use an allowlist: a key syncs if and only if its
   registry entry says `policy`. Unregistered keys there (`dnsbl_webpage`, the retired markers
   `dnsbl_mode`, `pfb_py_block`, `pfb_control_legacy_seeded`, and the `hooks` subtree) never sync.
@@ -179,7 +181,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 | --- | --- |
 | `gen` | `settings_family`, every `log_max_*` and `log_max_days_*`, `pfb_log_trim_margin_pct`, `pfb_reentry_timeout`, `pfb_software_check`, `pfb_reuse`, `pfb_alias_delta_mode`, `pfb_alias_delta_batch`, `pfb_syntax_highlight`, `log_syslog`, `pfb_metrics_export` |
 | `ip` | `enable_rdns`, `maxmind_locale`, `asn_reporting`, `inbound_interface`, `outbound_interface`, `maxmind_account`, `maxmind_key`, `asn_token` |
-| `dnsbl` | `pfb_dnsvip_auto`, `dnsbl_interface`, `pfb_dnsvip4`, `pfb_dnsvip6`, `pfb_dnsport`, `pfb_dnsport_ssl`, `pfb_cache`, `pfb_cache_flush`, `pfb_py_reply`, `pfb_py_nolog`, `pfb_control`, `pfb_control_legacy`, `pfb_py_cache_max`, `dnsbl_allow_int`, `dnsbl_redir_int`, `dnsbl_dot_block_int`, `agateway_in`, `agateway_out`, `top1m_token` |
+| `dnsbl` | `pfb_cache`, `pfb_cache_flush`, `pfb_py_reply`, `pfb_control`, `pfb_control_legacy`, `pfb_py_cache_max`, `dnsbl_redir_int`, `dnsbl_dot_block_int`, `agateway_in`, `agateway_out`, `top1m_token` |
 | `rep`, `ss` | none |
 | `global` | every key except `feed_*`: `alertrefresh`, every `widget-*` |
 | `pfblockerngblacklist` | `item/*/username`, `item/*/password` (the `item` list is matched by its `xml` leaf) |
@@ -616,8 +618,8 @@ never elapsed time.
 
 1. **Automatic transport.** A policy change on A, such as a DNSBL whitelist entry or an IP deny
    action, makes B's stored policy equal A's. B's interfaces, VIPs, ports, gateways, scripts,
-   credentials, alert preferences, and hooks remain byte-identical, except that B's auto-created
-   DNSBL VIP follows A's synced address (#3540).
+   credentials, alert preferences, and hooks remain byte-identical (issue #4053 removed the auto-created DNSBL VIP that
+   once followed A's synced address, #3540).
 2. **Manual transport.** The automatic transport row passes with "Sync to host(s) defined below".
 3. **Apply within one receive.** With no apply window, B enforces the change after the receive,
    proven by B's record of a receive-triggered apply and an on-box probe, without any cron tick.

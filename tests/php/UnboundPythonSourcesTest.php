@@ -293,7 +293,6 @@ final class UnboundPythonSourcesTest extends TestCase
 	public static function globalMechanismFlagProvider(): array
 	{
 		return [
-			'enabled'      => ['enabled', '1'],
 			'disabled'     => ['disabled', '2'],
 			'nxdomain_log' => ['nxdomain_log', '3'],
 			'nodata'       => ['nodata', '6'],

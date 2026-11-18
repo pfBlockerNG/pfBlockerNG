@@ -113,7 +113,7 @@ def test_install_from_repo_registers_canonical_package(smoke_vm: SmokeVM) -> Non
 
 @pytest.mark.timeout(900)
 def test_cleanup_lets_the_next_deploy_register_the_services(smoke_vm: SmokeVM) -> None:
-    """The module cleanup must leave a box on which the next ``deploy()`` registers pfb_filter/pfb_dnsbl (#3724).
+    """The module cleanup must leave a box on which the next ``deploy()`` registers pfb_filter (#3724).
 
     Given the branch package is installed and install-from-repo.sh registered it under its short name on top,
     When this module's cleanup runs,
@@ -141,5 +141,5 @@ def test_cleanup_lets_the_next_deploy_register_the_services(smoke_vm: SmokeVM) -
     finally:
         helpers.undeploy(vm)
 
-    missing = [name for name in ("pfb_filter", "pfb_dnsbl") if f"SERVICE={name}\n" not in services + "\n"]
+    missing = [name for name in ("pfb_filter",) if f"SERVICE={name}\n" not in services + "\n"]
     assert not missing, f"services {missing} not registered after cleanup + deploy; box lists:\n{services}"

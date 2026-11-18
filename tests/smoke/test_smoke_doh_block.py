@@ -72,7 +72,6 @@ def _doh_deployed(smoke_vm: SmokeVM, client_vm: SmokeVM) -> Iterator[tuple[Smoke
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
     yield smoke_vm, client_vm
 

@@ -703,13 +703,9 @@ if (!function_exists('get_configured_vip_ipv6')) {
 	}
 }
 
-// --- VIP doubles for pfb_validate_vips() (ADR-13) ---
+// --- VIP doubles (ADR-13; the DNS listen VIPs and the issue #4053 upgrade cleanup) ---
 //
-// The v6-recommendation tests (DnsblV6RequiredTest) drive pfb_validate_vips() and the
-// early "no VIP configured" branch with NO pfSense call. The few assertions that pass a
-// non-empty VIP id continue past those early returns into the per-VIP checks; these
-// conservative doubles make that continuation deterministic without coupling to real
-// pfSense state. They are reached ONLY by tests that supply a '_vip_test_*' sentinel id.
+// Conservative doubles that keep VIP lookups deterministic without coupling to real pfSense state.
 
 if (!function_exists('get_configured_vip_interface')) {
 	// pfSense util.inc: the friendly interface a VIP id lives on. The test sentinels are
@@ -1055,8 +1051,7 @@ if (!defined('SPECIALNET_VIPS')) {
 //
 // pfb_manage_dnsbl_vip() calls interface_vip_bring_down() on disable and
 // interface_ipalias_configure() on enable (after VIP create).
-// pfb_create_dnsbl() calls is_service_running(), restart_service(), stop_service(),
-// and pfb_create_dnsbl_cert() which in turn calls cert_create().
+// The apply calls is_service_running(), restart_service() and stop_service().
 // These are all pfSense runtime functions absent off-appliance; doubles here make
 // the VIP/NAT oracle tests in DnsblMarkedVipTest runnable without a live box.
 
@@ -1155,12 +1150,8 @@ if (!function_exists('cert_create')) {
 
 if (!function_exists('get_configured_vip_list')) {
 	// pfSense util.inc: map of VIP id ('_vip<uniqid>') => bare address (the row's subnet) for
-	// every CARP and IP-alias VIP. Used by pfb_get_vips() and pfb_pick_free_dnsbl_vip().
-	// Tests seed $GLOBALS['pfb_test_vip_list'] (map of id => addr); default empty map
-	// → pfb_get_vips() returns no VIPs, which combined with a '_vip_test_*' id causes
-	// pfb_validate_vips to return an 'invalid IPv4 VIP' error and force-disable DNSBL.
-	// Tests that need DNSBL to stay enabled must seed a matching id => addr entry AND
-	// use the 'opt-double' interface (matched by the get_configured_vip_interface double).
+	// every CARP and IP-alias VIP. Used by pfb_get_vips() and pfb_pick_free_vip().
+	// Tests seed $GLOBALS['pfb_test_vip_list'] (map of id => addr); default empty map.
 	// $family filters as upstream does: 'inet' keeps IPv4 addresses, 'inet6' IPv6, anything else all.
 	function get_configured_vip_list($family = 'all', $type = '') {
 		$list = $GLOBALS['pfb_test_vip_list'] ?? [];
@@ -1212,7 +1203,7 @@ if (!function_exists('get_specialnet')) {
 
 if (!function_exists('where_is_ipaddr_configured')) {
 	// pfSense interfaces.inc: returns a list of interface names where $addr is configured
-	// (including subnet membership). Used by pfb_validate_vips() and pfb_pick_free_dnsbl_vip()
+	// (including subnet membership). Used by pfb_pick_free_vip()
 	// to detect VIP/subnet overlap.
 	//
 	// Seedable for picker tests: if $GLOBALS['pfb_test_configured_subnets'] is set to an

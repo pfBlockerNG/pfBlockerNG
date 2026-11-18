@@ -54,21 +54,11 @@ $pconfig['tld_wildcard']		= PfbConfig::read('dnsbl/tld_wildcard');
 $pconfig['pfb_control']		= PfbConfig::read('dnsbl/pfb_control');
 $pconfig['pfb_control_legacy']	= PfbConfig::read('dnsbl/pfb_control_legacy');
 // Widget empty-option sentinel 'none'; stored default is '' (save maps none to '').
-$pconfig['pfb_dnsvip4'] = PfbConfig::read('dnsbl/pfb_dnsvip4') ?: 'none';
-$pconfig['pfb_dnsvip6'] = PfbConfig::read('dnsbl/pfb_dnsvip6') ?: 'none';
-$pconfig['pfb_dnsvip_auto']	= PfbConfig::read('dnsbl/pfb_dnsvip_auto');
-$pconfig['pfb_dnsbl_nonat']	= PfbConfig::read('dnsbl/pfb_dnsbl_nonat');
-$pconfig['pfb_dnsport']		= PfbConfig::read('dnsbl/pfb_dnsport');
-$pconfig['pfb_dnsport_ssl']	= PfbConfig::read('dnsbl/pfb_dnsport_ssl');
-$pconfig['dnsbl_interface']	= PfbConfig::read('dnsbl/dnsbl_interface');
-$pconfig['pfb_dnsbl_rule']	= PfbConfig::read('dnsbl/pfb_dnsbl_rule');
-$pconfig['dnsbl_allow_int']	= pfb_csv_list(PfbConfig::read('dnsbl/dnsbl_allow_int'));
 // issue #3288: the normalized, grandfather-prefilled policy cache -- NOT a bare
 // PfbConfig::read(), which would show the raw (possibly still-legacy) stored
 // bytes instead of the effective Default/Override-ready values.
 $pconfig['global_log']		= $pfb['dnsbl_global_log'];
 $pconfig['global_log_mode']	= $pfb['dnsbl_global_mode']->toStored();
-$pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default.php';
 $pconfig['pfb_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');
 
 $pconfig['pfb_hsts']		= PfbConfig::read('dnsbl/pfb_hsts');
@@ -102,7 +92,6 @@ $pconfig['tld_allow_gtld']	= pfb_csv_list(PfbConfig::read('dnsbl/tld_allow_gtld'
 $pconfig['tld_allow_cctld']	= pfb_csv_list(PfbConfig::read('dnsbl/tld_allow_cctld'));
 $pconfig['tld_allow_itld']	= pfb_csv_list(PfbConfig::read('dnsbl/tld_allow_itld'));
 $pconfig['tld_allow_bgtld']	= pfb_csv_list(PfbConfig::read('dnsbl/tld_allow_bgtld'));
-$pconfig['pfb_py_nolog']	= PfbConfig::read('dnsbl/pfb_py_nolog');
 $pconfig['pfb_regex_list']	= pfb_b64_text(PfbConfig::read('dnsbl/pfb_regex_list'));
 $pconfig['pfb_noaaaa_list']	= pfb_b64_text(PfbConfig::read('dnsbl/pfb_noaaaa_list'));
 $pconfig['pfb_gp_bypass_list']	= pfb_b64_text(PfbConfig::read('dnsbl/pfb_gp_bypass_list'));
@@ -168,15 +157,12 @@ $pconfig['dnsbl_dot_block_floating']	= PfbConfig::read('dnsbl/dnsbl_dot_block_fl
 // Select field options
 
 $options_dnsbl_interface	= pfb_build_if_list(FALSE, FALSE);
-$options_dnsbl_interface_all	= array_merge(array('lo0' => 'Localhost'), $options_dnsbl_interface);
 $options_dnsbl_interface_cnt	= count($options_dnsbl_interface) ?: '1';
 
-$options_dnsbl_allow_int	= $options_dnsbl_interface;
-
-// [ ADR-36 ] DNS Redirect: WAN-excluded interface list (same filter as Permit Firewall Rules).
+// [ ADR-36 ] DNS Redirect: WAN-excluded interface list.
 $options_dnsbl_redir_int	= $options_dnsbl_interface;
 
-// [ ADR-37 ] DoT/DoQ Block: WAN-excluded interface list (same filter as Permit Firewall Rules).
+// [ ADR-37 ] DoT/DoQ Block: WAN-excluded interface list.
 $options_dnsbl_dot_block_int	= $options_dnsbl_interface;
 
 // [ ADR-37 ] DoT/DoQ Block: rule action selector (mirrors the IP-settings Rule Action).
@@ -200,25 +186,6 @@ $options_global_log_mode_txt = 'Choose how <strong>Global Logging/Blocking Mode<
 
 $options_global_log_mode	= [	'default'	=> 'Default',
 					'override'	=> 'Override'];
-
-$options_dnsbl_webpage = array();
-$indexdir = $pfb['dnsbl_www'];
-if (is_dir("{$indexdir}")) {
-	$list = glob("{$indexdir}/*.{php,html}", GLOB_BRACE);
-	if (!empty($list)) {
-		foreach ($list as $line) {
-			if (strpos($line, 'index.php') !== FALSE || strpos($line, 'dnsbl_active.php') !== FALSE) {
-				continue;
-			} else {
-				$file = basename($line);
-				if (@filesize("{$pfb['dnsbl_www']}/{$file}") > 0) {
-					$options_dnsbl_webpage = array_merge($options_dnsbl_webpage, array($file => $file));
-				}
-			}
-		}
-	}
-}
-$options_dnsbl_webpage_cnt = count($options_dnsbl_webpage) ?: '1';
 
 $options_top1m_source		= [ 'tranco' => 'Tranco TOP1M', 'cisco' => 'Cisco Umbrella TOP1M',
 					    'openpagerank' => 'OpenPageRank TOP1M', 'majestic' => 'Majestic Million TOP1M',
@@ -561,7 +528,7 @@ if ($_POST) {
 	if (isset($_POST['save'])) {
 
 		// issue #1723: sanitize at ingestion -- first step, before any evaluation.
-		foreach (array('pfb_dnsvip4', 'pfb_dnsvip6', 'dnsbl_webpage', 'dnsbl_redir_exclude', 'dnsbl_dot_block_exclude',
+		foreach (array('dnsbl_redir_exclude', 'dnsbl_dot_block_exclude',
 				'top1m_token', 'aliasaddr_in', 'aliasaddr_out', 'aliasports_in', 'aliasports_out') as $pfb_text_field) {
 			$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));
 		}
@@ -570,10 +537,8 @@ if ($_POST) {
 		}
 
 		// Validate Select field options
-		$select_options = array(						'dnsbl_interface'	=> 'lo0',
-						'global_log'		=> $pconfig['global_log'],
+		$select_options = array(	'global_log'		=> $pconfig['global_log'],
 						'global_log_mode'	=> $pconfig['global_log_mode'],
-						'dnsbl_webpage'		=> 'dnsbl_default.php',
 						'top1m_source'		=> 'tranco',
 						'top1m_count'		=> '1000',
 						'action'		=> 'Disabled',
@@ -599,8 +564,7 @@ if ($_POST) {
 		}
 
 		// Validate Select field (array) options
-		$select_options = array(	'dnsbl_allow_int'	=> '',
-						'top1m_inclusion'	=> $default_tlds
+		$select_options = array(	'top1m_inclusion'	=> $default_tlds
 						);
 
 		foreach ($select_options as $s_option => $s_default) {
@@ -620,20 +584,6 @@ if ($_POST) {
 			elseif (!array_key_exists($_POST[$s_option] ?? '', ${"options_$s_option"})) {
 				$_POST[$s_option] = $s_default;
 			}
-		}
-
-		// Validate DNSBL webserver block page
-		// issue #1723: already sanitized by the ingestion prologue above -- plain read.
-		$dnsbl_webpage_file	= pfb_filter(basename($_POST['dnsbl_webpage'] ?? ''), PFB_FILTER_WORD_DOT, 'dnsbl', 'dnsbl_default.php');
-		if (file_exists("{$pfb['dnsbl_www']}/{$dnsbl_webpage_file}") &&
-		    @filesize("{$pfb['dnsbl_www']}/{$dnsbl_webpage_file}") > 0 &&
-		    pfb_filter(array("{$pfb['dnsbl_www']}/{$dnsbl_webpage_file}", 'text/html'), PFB_FILTER_FILE_MIME_COMPARE, 'dnsbl')) {
-			$pfb['dconfig']['dnsbl_webpage'] = $dnsbl_webpage_file;
-			// foreign key — out of ADR-29 gateway scope (dnsbl_webpage is out-of-scope; see CfgGatewayTest $out_of_scope)
-			config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_webpage', $pfb['dconfig']['dnsbl_webpage']);
-		}
-		else {
-			$input_errors[] = 'DNSBL Web Server page is invalid!';
 		}
 
 		foreach (array('aliasports_in', 'aliasaddr_in', 'aliasports_out', 'aliasaddr_out') as $value) {
@@ -743,42 +693,7 @@ if ($_POST) {
 			}
 		}
 
-		// Validate DNSBL VIP address
-		// [ ADR-13 ] Auto-create mode: pfBlockerNG owns the DNSBL sinkhole VIP(s) and
-		// provisions them server side on the next pfb_create_dnsbl('enabled') pass
-		// (pfb_manage_dnsbl_vip). The manual dropdowns are disabled in the UI (a disabled
-		// control is not submitted), so the manual VIP validation (existence / interface /
-		// overlap) does NOT apply — the package picks a conflict-free address and
-		// provisions the v6 VIP itself when the resolver listens on IPv6. In manual mode
-		// (box off) the validator runs, but only while a block answers with the VIP (issue #3539); a missing IPv6 VIP is NOT a save
-		// error (ADR-13 §7 pivot — it is a non-blocking runtime warning from pfb_global).
-		$pfb_auto = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on');
-		// issue #3539: the saved configuration needs a VIP only while a block answers with it.
 		$pfb_posted_policy = pfb_dnsbl_policy_from_post($_POST, $local_tld, $default_tlds);
-		$pfb_vip_demand = pfb_dnsbl_candidate_vip_demand($pfb['dconfig'], $pfb_posted_policy);
-		if (!$pfb_auto) {
-			// issue #1723: already sanitized by the ingestion prologue above.
-			if (($_POST['pfb_dnsvip4'] ?? '') == 'none') {
-				$_POST['pfb_dnsvip4'] = '';
-			}
-			if (($_POST['pfb_dnsvip6'] ?? '') == 'none') {
-				$_POST['pfb_dnsvip6'] = '';
-			}
-			if ($pfb_vip_demand) {
-				list($vips_valid, $error) = pfb_validate_vips($_POST['dnsbl_interface'], $_POST['pfb_dnsvip4'] ?? '', $_POST['pfb_dnsvip6'] ?? '');
-				if (!$vips_valid) {
-					$input_errors[] = "DNSBL: {$error}";
-				}
-			}
-		}
-
-		// The web server ports are required only while a block answers with the VIP; a value given must still be valid.
-		foreach (array('pfb_dnsport' => 'DNSBL Port', 'pfb_dnsport_ssl' => 'DNSBL SSL Port') as $port_key => $port_label) {
-			// issue #4000: a crafted array is invalid (is_port() hands it to getservbyname(), which throws)
-			if (!is_string($_POST[$port_key] ?? '') || ($pfb_vip_demand || ($_POST[$port_key] ?? '') !== '') && !is_port($_POST[$port_key] ?? '')) {
-				$input_errors[] = "{$port_label} is invalid!";
-			}
-		}
 
 		// Validate Adv. firewall rule 'Protocol' setting
 		if (!empty($_POST['autoports_in']) || !empty($_POST['autoaddr_in'])) {
@@ -852,7 +767,7 @@ if ($_POST) {
 		}
 
 		if (!$input_errors) {
-			// The fresh read replaced the config the validation above chose the block page in: take the section from it again.
+			// The fresh read replaced the config the validation above read: take the section from it again.
 			$pfb['dconfig'] = PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
 
 			// issue #3288: facade runs BEFORE persisting the submitted policy choice.
@@ -861,10 +776,6 @@ if ($_POST) {
 			if (pfb_dnsbl_policy_upgrade()) {
 				$pfb['dconfig'] = PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
 			}
-			// The chosen block page is saved with the section below, never before: the facade above writes config.xml by itself.
-			// issue #3998: whether it changed is judged against this locked read, as another save may have served another page since.
-			$dnsbl_webpage = $dnsbl_webpage_file != ($pfb['dconfig']['dnsbl_webpage'] ?? '');
-			$pfb['dconfig']['dnsbl_webpage'] = $dnsbl_webpage_file;
 
 			$pfb_top1m_settings_before = array(
 				'enable'   => PfbConfig::read('dnsbl/top1m_enable')->toStored(),
@@ -886,22 +797,6 @@ if ($_POST) {
 			$psl_feed_icann_policy = pfb_filter($_POST['pfb_psl_feed_icann_policy'] ?? '', PFB_FILTER_WORD, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_control']		= pfb_filter($_POST['pfb_control'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_control_legacy']	= pfb_filter($_POST['pfb_control_legacy'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			$pfb['dconfig']['pfb_dnsbl_nonat']	= pfb_filter($_POST['pfb_dnsbl_nonat'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-
-			// [ ADR-13 ] Persist the auto-create decision. When ON, leave the stored
-			// pfb_dnsvip4/6 ids untouched here (the manual dropdowns are disabled): the
-			// next pfb_create_dnsbl('enabled') pass (pfb_manage_dnsbl_vip) provisions the
-			// marked VIP(s) and repoints pfb_dnsvip4/6 to the new _vip{uniqid} ids. When
-			// OFF, the manual dropdown selections are saved below exactly as before.
-			$pfb['dconfig']['pfb_dnsvip_auto']	= $pfb_auto ? 'on' : '';
-			if (!$pfb_auto) {
-				$pfb['dconfig']['pfb_dnsvip6'] = $_POST['pfb_dnsvip6'] ?: '';
-			}
-
-			$pfb['dconfig']['pfb_dnsport']		= $_POST['pfb_dnsport']							?: '8081';
-			$pfb['dconfig']['pfb_dnsport_ssl']	= $_POST['pfb_dnsport_ssl']						?: '8443';
-			$pfb['dconfig']['pfb_dnsbl_rule']	= pfb_filter($_POST['pfb_dnsbl_rule'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			$pfb['dconfig']['dnsbl_allow_int']	= implode(',', (array)$_POST['dnsbl_allow_int'])			?: '';
 			unset($pfb['dconfig']['pfb_cache']);
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
@@ -917,7 +812,6 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_gp']		= pfb_filter($_POST['pfb_gp'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 
 			$pfb['dconfig']['tld_allow_sort']	= pfb_filter($_POST['tld_allow_sort'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			$pfb['dconfig']['pfb_py_nolog']		= pfb_filter($_POST['pfb_py_nolog'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			$pfb['dconfig']['action']		= $_POST['action']							?: 'Disabled';
 			$pfb['dconfig']['aliaslog']		= $_POST['aliaslog']							?: 'enabled';
@@ -978,19 +872,12 @@ if ($_POST) {
 				'tld'      => $pfb['dconfig']['top1m_inclusion'],
 				'provider' => $pfb['dconfig']['top1m_source'],
 			);
-			// issue #3922: the TOP1M baseline, the rebuild marker and the served block page change only once write_config() succeeded (below)
+			// issue #3922: the TOP1M baseline and the rebuild marker change only once write_config() succeeded (below)
 			$pfb_top1m_reprocess = pfb_top1m_settings_reprocess($pfb_top1m_settings_before, $pfb_top1m_settings_after);
 			// 0 (unlimited) is meaningful; ctype_digit keeps "0", else fall back to the default.
 			$pfb['dconfig']['pfb_py_cache_max']	= ctype_digit((string) $_POST['pfb_py_cache_max']) ? (string) ((int) $_POST['pfb_py_cache_max']) : '10000';
 
 
-			if (!$pfb_auto) {
-				$pfb['dconfig']['pfb_dnsvip4']	= $_POST['pfb_dnsvip4']							?: '';
-			}
-			$pfb['dconfig']['dnsbl_interface']	= $_POST['dnsbl_interface']						?: 'lo0';
-
-			// Replace DNSBL active blocked webpage with user selection
-			$pfb_dnsbl_page_copy = $dnsbl_webpage || !file_exists("{$pfb['dnsbl_www']}/dnsbl_active.php");
 
 			// Flush the bulk DNSBL settings snapshot FIRST. writeSection() replaces the whole
 			// pfblockerngdnsblsettings/config/0 section with $pfb['dconfig'], which does NOT carry
@@ -1027,16 +914,13 @@ if ($_POST) {
 				if (!$input_errors) {
 					$pfb_written = write_config('[pfBlockerNG] save DNSBL settings');
 				}
-				// Under the lock, so two saves cannot leave the served block page out of step with config.xml
+				// Under the lock, so two saves cannot leave the TOP1M baseline out of step with config.xml
 				if ($pfb_written !== FALSE && $pfb_written !== -1) {
 					if ($pfb_top1m_identity_changed) {
 						pfb_top1m_invalidate_baseline("{$pfb['dbdir']}/top-1m.csv.zip");
 					}
 					if ($pfb_top1m_reprocess) {
 						touch("{$pfb['dbdir']}/top-1m.update");
-					}
-					if ($pfb_dnsbl_page_copy) {
-						@copy("{$pfb['dnsbl_www']}/{$pfb['dconfig']['dnsbl_webpage']}", "{$pfb['dnsbl_www']}/dnsbl_active.php");
 					}
 				}
 			} finally {
@@ -2650,11 +2534,6 @@ if (isset($_REQUEST['savemsg'])) {
 	print_info_box($savemsg);
 }
 
-$pfb_stale_vip_warning = pfb_dnsbl_stale_vip_warning(PfbConfig::read('dnsbl/pfb_dnsvip_auto'), PfbConfig::read('dnsbl/pfb_dnsvip4'), PfbConfig::read('dnsbl/pfb_dnsvip6'), !empty($pfb['dnsbl_vip_demand']));
-if ($pfb_stale_vip_warning !== '') {
-	print_info_box($pfb_stale_vip_warning, 'warning');
-}
-
 $form = new Form('Save DNSBL settings');
 
 $section = new Form_Section('DNSBL');
@@ -2678,19 +2557,17 @@ $dnsbl_text = '<div class="infoblock">'
 		. '</ol>'
 		. 'Feed exact and wildcard matching (1–2) run only while DNSBL blocking is enabled; TLD Allow, IDN, and Regex (3–5) still run.<br /><br />'
 		. 'If a block is found, a whitelist entry, an ABP allow rule (<code>@@</code>) or an allow-regex can override it. If several rules match, the one with the highest priority decides; <code>$important</code> rules and Custom List entries outrank ordinary feed rules.<br /><br />'
-		. 'If the name is still blocked, the reply is shaped last: HSTS may use null-blocking to avoid browser certificate errors; NXDOMAIN and NODATA replies (logged or silent) replace a VIP or null answer; a hit via a CNAME chain is tagged <code>_CNAME</code>. Null-blocking is not a property of which stage matched.<br /><br />'
+		. 'If the name is still blocked, the reply is shaped last: HSTS may use null-blocking to avoid browser certificate errors; NXDOMAIN and NODATA replies (logged or silent) replace a null answer; a hit via a CNAME chain is tagged <code>_CNAME</code>. Null-blocking is not a property of which stage matched.<br /><br />'
 		. '<strong>CNAME Validation</strong> and <strong>no-AAAA</strong> are separate features, not steps in this order. Feed-at-suffix (PSL) policies, the regex cap, and <strong>Download Schemes</strong> shape what is loaded, not the per-query order.'
 		. '</div><br /><br />'
 		. '<strong>Note:</strong> '
-		. 'DNSBL runs in pfB-DNS, in front of the DNS Resolver (Unbound), so both must be used as the DNS service.<br />'
-		. 'If browsing is slow <strong>in VIP mode</strong>, check for Firewall LAN Rules/Limiters that might be blocking access to the DNSBL VIP.<br /><br />'
+		. 'DNSBL runs in pfB-DNS, in front of the DNS Resolver (Unbound), so both must be used as the DNS service.<br /><br />'
 		. '<strong>Note:</strong> '
-		. 'DNSBL will block and <u>partially</u> log Alerts for HTTPS requests. '
 		. 'To debug issues with \'False Positives\', the following tools below can be used:<br />'
 		. '<ol>'
 		. '<li>Browser Developer tools, Console tab, for error messages.</li>'
-		. '<li>Execute the following from the pfSense Shell, substituting your LAN interface for <code>re1</code> and the DNSBL Virtual IP under <strong>DNSBL Webserver Configuration</strong> below (applies only to the VIP response):<br />'
-		. '<code>tcpdump -nnvli re1 port 53 | grep -B1 \'A &lt;VIP&gt;\'</code></li>'
+		. '<li>Execute the following from the pfSense Shell, substituting your LAN interface for <code>re1</code>:<br />'
+		. '<code>tcpdump -nnvli re1 port 53 | grep -B1 \'A 0.0.0.0\'</code></li>'
 		. '<li>Packet capture software such as Wireshark.</li>'
 		. '</ol>'
 		. '</div>';
@@ -2885,159 +2762,6 @@ $section->addInput(new Form_Checkbox(
 		. 'This will block all TLDs that are not specifically selected. '
 		. pfb_list_section_help_note(['TLD Allow list'], TRUE));
 
-$form->add($section);
-
-$section = new Form_Section('DNSBL Webserver Configuration', 'dnsbl_webserver', COLLAPSIBLE|SEC_CLOSED);
-$section->addInput(new Form_StaticText(
-	'Deprecated',
-	'<i class="fa fa-exclamation-triangle text-warning"></i> <span class="text-warning">The DNSBL WebServer/VIP response is deprecated: prefer Null Blocking. '
-	. 'The web server, its NAT rules and the VIP run only while a DNSBL Group, the Blacklist category or a built-in block answers with it.</span>'
-));
-
-$section->addInput(new Form_Select(
-	'dnsbl_interface',
-	gettext('Web Server Interface'),
-	$pconfig['dnsbl_interface'],
-	$options_dnsbl_interface_all
-))->setHelp('Select the interface which DNSBL Web Server will Listen on.<br />'
-	. 'Default: <strong>Localhost (ports 80/443)</strong> - Selected Interface should be a Local Interface only.');
-
-$section->addInput(new Form_Checkbox(
-	'pfb_dnsbl_nonat',
-	gettext('Auto NAT'),
-	gettext('Disable automatic NAT rule creation'),
-	(pfb_cfg_toggle_read($pconfig['pfb_dnsbl_nonat']) === PfbToggle::On),
-	'on'
-))->setHelp('When set, pfBlockerNG will not auto-create the DNSBL NAT port-forward rules (non-Localhost interface only); manage them manually.');
-
-// [ ADR-13 ] Compute the address(es) the package WOULD auto-create, for the currently
-// selected DNSBL Web Server interface, so the UI can pre-fill them and detect conflict
-// exhaustion. pfb_dnsbl_auto_vip_address() returns a family's existing marked VIP address, else the
-// first free candidate from pfb_dnsbl_vip_candidates() (null when every candidate conflicts). A v6 VIP
-// is only relevant when the DNS Resolver listens on IPv6 (pfb_unbound_listens_v6()); otherwise v6 is not required.
-$pfb_auto_iface		= $pconfig['dnsbl_interface'] ?: 'lo0';
-$pfb_auto_v6_needed	= pfb_unbound_listens_v6();
-$pfb_auto_vip4		= pfb_dnsbl_auto_vip_address(AF_INET, $pfb_auto_iface);
-$pfb_auto_vip6		= $pfb_auto_v6_needed ? pfb_dnsbl_auto_vip_address(AF_INET6, $pfb_auto_iface) : null;
-
-// Conflict exhaustion: v4 is always required; v6 only when the resolver listens on it.
-// When no free candidate exists for a required family the checkbox is rendered disabled
-// with a warning, so auto-create can never be enabled into a known-conflicting state.
-$pfb_auto_exhausted	= ($pfb_auto_vip4 === null) || ($pfb_auto_v6_needed && $pfb_auto_vip6 === null);
-
-$vips = pfb_get_vips();
-
-// [ ADR-13 ] The "Create VIPs automatically" toggle on its OWN row, above the
-// manual VIP selects. Its explanation lives in the group help UNDER the fields,
-// not on the checkbox: a long inline checkbox help renders as a very tall, narrow
-// column that towers over the rest of the section.
-$pfb_auto_chk = new Form_Checkbox(
-	'pfb_dnsvip_auto',
-	gettext('Auto VIP'),
-	gettext('Create VIPs automatically'),
-	(!$pfb_auto_exhausted && pfb_cfg_toggle_read($pconfig['pfb_dnsvip_auto']) === PfbToggle::On),
-	'on'
-);
-if ($pfb_auto_exhausted) {
-	$pfb_auto_chk->setAttribute('disabled', 'disabled');
-}
-$section->addInput($pfb_auto_chk);
-
-$group = new Form_Group('DNSBL Virtual IP');
-$group->add(new Form_Select(
-	'pfb_dnsvip4',
-	gettext('IPv4 VIP'),
-	$pconfig['pfb_dnsvip4'],
-	pfb_get_vip_options(AF_INET)
-))->setWidth(4)->setHelp('IPv4 Virtual IP');
-$group->add(new Form_Select(
-	'pfb_dnsvip6',
-	gettext('IPv6 VIP'),
-	$pconfig['pfb_dnsvip6'],
-	pfb_get_vip_options(AF_INET6)
-))->setWidth(4)->setHelp('IPv6 Virtual IP (optional)');
-
-// Help under the side-by-side VIP fields: the original intro, a line break at the
-// SENTENCE boundary (never mid-sentence), then one concise line covering both
-// modes. "VIP"/"Virtual IP" used consistently (no "IP-Alias VIP" jargon); the
-// address/lifecycle detail belongs in the docs.
-$pfb_vip_help = 'Deprecated: a VIP is only needed while a DNSBL block answers with the WebServer/VIP mechanism. '
-	. 'Blocked names are answered with the selected VIP address, where the DNSBL web server shows the block page. '
-	. 'It should be in an isolated range not already used on the network.<br />'
-	. 'Enable <strong>Create VIPs automatically</strong> to have pfBlockerNG manage it, or select one '
-	. 'manually — create it first at '
-	. '<a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>.';
-if ($pfb_auto_exhausted) {
-	$pfb_vip_help .= '<br /><i class="fa fa-exclamation-triangle text-warning"></i> '
-		. '<span class="text-warning">No free auto-create address is available — free one of the '
-		. 'auto-create candidates, or select a VIP manually.</span>';
-}
-$group->setHelp($pfb_vip_help);
-$section->add($group);
-
-$section->addInput(new Form_Input(
-	'pfb_dnsport',
-	gettext('Port'),
-	'number',
-	$pconfig['pfb_dnsport'],
-	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DNSBL Listening Port' ]
-))->setHelp('Example ( 8081 ) &mdash; a single PORT in the range 1 - 65535. '
-		. 'Applies when <strong>Web Server Interface</strong> is not <strong>Localhost</strong>.'
-		. '<div class="infoblock">This Port must not be in use by any other process.</div>'
-);
-
-$section->addInput(new Form_Input(
-	'pfb_dnsport_ssl',
-	gettext('SSL Port'),
-	'number',
-	$pconfig['pfb_dnsport_ssl'],
-	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DNSBL SSL Listening Port' ]
-))->setHelp('Example ( 8443 ) &mdash; a single PORT in the range 1 - 65535. '
-		. 'Applies when <strong>Web Server Interface</strong> is not <strong>Localhost</strong>.'
-		. '<div class="infoblock">This Port must not be in use by any other process.</div>'
-);
-
-// Add option to disable DNSBL logging and utilize the DNSBL Webserver (excluding nullblocking events)
-$section->addInput(new Form_Checkbox(
-	'pfb_py_nolog',
-	gettext('Log VIP blocks via web server'),
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_py_nolog']) === PfbToggle::On,
-	'on'
-))->setHelp('Stop the DNS Resolver from logging blocks answered with the DNSBL VIP (<strong>DNSBL WebServer/VIP (deprecated)</strong> mode); the DNSBL web server logs the requests that reach it instead. Other modes\' logging is unchanged: Null Blocking, NXDOMAIN and NODATA (logging) events are still logged. Use this when clients query through another LAN DNS server.');
-
-
-$section->addInput(new Form_Checkbox(
-	'pfb_dnsbl_rule',
-	gettext('Permit Firewall Rules'),
-	gettext('Enable'),
-	pfb_cfg_toggle_read($pconfig['pfb_dnsbl_rule']) === PfbToggle::On,
-	'on'
-))->setHelp('<p><strong>Permit Firewall Rules</strong> creates floating permit rules so clients on the selected <strong>Interface(s)</strong> can reach the DNSBL web server.</p>'
-		. '<div class="infoblock">'
-		. '<p>For example, a guest VLAN may block access to other local networks. If a blocked name resolves to the DNSBL VIP, these rules let clients reach its block page without opening access to the rest of the network. ICMP echo requests are also allowed so you can test reachability with ping.</p>'
-		. '<p>Use this only when <strong>DNSBL WebServer/VIP (deprecated)</strong> is in use and existing firewall rules prevent access to its address. Multiple VLANs alone do not require it. It is not needed for null responses, NXDOMAIN or NODATA, and it does not let clients bypass DNSBL.</p>'
-		. '</div>');
-
-$section->addInput(new Form_Select(
-	'dnsbl_allow_int',
-	gettext('Interface(s)'),
-	$pconfig['dnsbl_allow_int'],
-	$options_dnsbl_interface,
-	TRUE
-))->setAttribute('style', 'width: auto')
-  ->setAttribute('size', $options_dnsbl_interface_cnt)
-  ->setHelp('Interface(s) permitted to reach the DNSBL web server by <strong>Permit Firewall Rules</strong> above.');
-
-$section->addInput(new Form_Select(
-	'dnsbl_webpage',
-	'Blocked Webpage',
-	$pconfig['dnsbl_webpage'],
-	$options_dnsbl_webpage
-))->sethelp('Default: <code>dnsbl_default.php</code><br />Select the <strong>Blocked Webpage</strong>.<br /><br />'
-	. 'Custom block web pages can be added to <code>/usr/local/www/pfblockerng/www/</code>.')
-  ->setAttribute('style', 'width: auto')
-  ->setAttribute('size', $options_dnsbl_webpage_cnt);
 $form->add($section);
 
 $section = new Form_Section('Public-suffix handling', 'dnsbl_suffix', COLLAPSIBLE|SEC_CLOSED);
@@ -3795,43 +3519,6 @@ function pfb_fill_interfaces(selectName, fillSet) {
 	$('select[name="' + selectName + '[]"]').val(fillSet).trigger('change');
 }
 
-// [ ADR-13 ] Address(es) the package would auto-create for the selected interface, so
-// the "Create VIPs automatically" checkbox can pre-fill the (display-only) VIP fields.
-// Empty string => no candidate / family not required.
-var pfb_auto_vip4 = "<?=htmlspecialchars($pfb_auto_vip4 ?? '', ENT_QUOTES)?>";
-var pfb_auto_vip6 = "<?=htmlspecialchars($pfb_auto_vip6 ?? '', ENT_QUOTES)?>";
-
-// [ ADR-13 ] On check: pre-fill the VIP dropdown(s) with the address pfBlockerNG would
-// create (a synthetic, selected option for display) and disable the manual dropdowns; on
-// uncheck: remove the synthetic option, restore the prior manual selection, and re-enable.
-function enable_dnsvip_auto() {
-	var on = $('#pfb_dnsvip_auto').prop('checked');
-	var fields = [['pfb_dnsvip4', pfb_auto_vip4], ['pfb_dnsvip6', pfb_auto_vip6]];
-	$.each(fields, function(i, f) {
-		var id = f[0], addr = f[1];
-		var $sel = $('#' + id);
-		if (on) {
-			// Remember the manual selection once, then show the auto address.
-			if (typeof $sel.data('pfbManualVal') === 'undefined') {
-				$sel.data('pfbManualVal', $sel.val());
-			}
-			$sel.find('option.pfb-auto-opt').remove();
-			if (addr !== '') {
-				$sel.append($('<option>', { 'class': 'pfb-auto-opt', value: '_pfb_auto', text: addr }));
-				$sel.val('_pfb_auto');
-			}
-			disableInput(id, true);
-		} else {
-			disableInput(id, false);
-			$sel.find('option.pfb-auto-opt').remove();
-			if (typeof $sel.data('pfbManualVal') !== 'undefined') {
-				$sel.val($sel.data('pfbManualVal'));
-				$sel.removeData('pfbManualVal');
-			}
-		}
-	});
-}
-
 function enable_tld() {
 	if ($('#tld_wildcard').prop('checked')) {
 		$('#TLD_Exclusion').show();
@@ -3841,16 +3528,6 @@ function enable_tld() {
 		$('#TLD_Exclusion').hide();
 		$('#TLD_BW_list').hide();
 		disableInput('pfb_psl_include_private', true);
-	}
-}
-
-function enable_ports() {
-	if ($('#dnsbl_interface').val() == 'lo0') {
-		disableInput('pfb_dnsport', true);
-		disableInput('pfb_dnsport_ssl', true);
-	} else {
-		disableInput('pfb_dnsport', false);
-		disableInput('pfb_dnsport_ssl', false);
 	}
 }
 
@@ -3937,11 +3614,6 @@ events.push(function(){
 	});
 	enable_tld();
 
-	$('#dnsbl_interface').click(function() {
-		enable_ports();
-	});
-	enable_ports();
-
 	$('#tld_allow').click(function() {
 		enable_tld_allow();
 	});
@@ -3978,7 +3650,7 @@ events.push(function(){
 	enable_dnsblip();
 
 	var pfb_gated_ids = [
-		'pfb_psl_include_private', 'pfb_dnsport', 'pfb_dnsport_ssl',
+		'pfb_psl_include_private',
 		'pfb_psl_allow_private', 'aliaslog'
 	];
 	$('form').submit(function() {
@@ -3986,11 +3658,6 @@ events.push(function(){
 			disableInput(id, false);
 		});
 	});
-
-	$('#pfb_dnsvip_auto').click(function() {
-		enable_dnsvip_auto();
-	});
-	enable_dnsvip_auto();
 
 	(function() {
 		var $title = $('#pfb_dnsbl').closest('.panel').children('.panel-heading').find('.panel-title').first();

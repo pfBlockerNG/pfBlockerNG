@@ -112,7 +112,7 @@ def test_dns_assert_helpers_pure() -> None:
     assert not h.is_nxdomain(h.DnsAnswer("NOERROR", ["0.0.0.0"]))
     assert h.is_null_ip(h.DnsAnswer("NOERROR", ["0.0.0.0"]))
     assert not h.is_null_ip(h.DnsAnswer("NOERROR", ["192.0.2.1"]))
-    assert h.is_vip(h.DnsAnswer("NOERROR", [h.DEFAULT_DNSBL_VIP4]))
+    assert h.is_null_ip(h.DnsAnswer("NOERROR", [h.NULL_IP4]))
     assert h.resolves_to(h.DnsAnswer("NOERROR", ["192.0.2.1"]), "192.0.2.1")
 
 
@@ -127,7 +127,7 @@ def test_false_green_guard() -> None:
     # The block is real; asserting it "resolves to" a pass IP must be false.
     assert not h.resolves_to(nxdomain_block, "192.0.2.1")
     assert not h.is_null_ip(nxdomain_block)
-    assert not h.is_vip(nxdomain_block)
+    assert not h.is_null_ip(nxdomain_block)
     # And a real pass must NOT read as a block.
     real_pass = h.DnsAnswer("NOERROR", ["192.0.2.1"])
     assert not h.is_nxdomain(real_pass)

@@ -112,7 +112,6 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 		// ADR-13 auto-VIP: without it, pfb_global()'s manual-mode VIP validation force-disables
 		// DNSBL at runtime for these VIP-less fixtures, so the box under test would not be one
 		// where DNSBL is actually live.
-		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::On);
 		$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 		config_set_path('installedpackages/pfblockernglistsv4/config', [[
 			'action' => 'Deny_Inbound',
@@ -260,7 +259,6 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 	 */
 	public function testMissingManifestIsIgnoredWhenAnInvalidVipDisablesDnsblAtRuntime(): void
 	{
-		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::Off);
 		$GLOBALS['pfb']['dnsbl'] = PfbToggle::Off;
 		$this->assertSame(PfbToggle::On, PfbConfig::read('dnsbl/pfb_dnsbl'),
 			'before-state: the stored setting still says DNSBL is enabled');

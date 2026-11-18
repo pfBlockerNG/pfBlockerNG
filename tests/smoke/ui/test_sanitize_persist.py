@@ -52,18 +52,6 @@ SETTINGS_SAVE_TIMEOUT = 120.0
 GENERAL_SAVE_TIMEOUT = 300.0
 
 
-@pytest.fixture(scope="module")
-def dnsbl_vip_ready(smoke_vm: helpers.SmokeVM) -> None:
-    """Ensure the DNSBL sinkhole VIP exists so a DNSBL settings save validates.
-
-    Mirrors :func:`tests.smoke.ui.test_functional.dnsbl_vip_ready` -- the DNSBL
-    save runs ``pfb_validate_vips`` (manual mode) on every save; without a
-    valid VIP the save always aborts with an input error before any of the
-    fields under test here are even reached. Idempotent on the fixed uniqid.
-    """
-    helpers.ensure_dnsbl_vip(smoke_vm)
-
-
 def _decoded(b64_value: str) -> str:
     """UTF-8-decode a base64 config blob (empty string decodes to '')."""
     return base64.b64decode(b64_value).decode("utf-8") if b64_value else ""
@@ -100,7 +88,6 @@ def _hook_script_bytes(vm: helpers.SmokeVM, path: str) -> str:
 def test_dnsbl_textarea_save_normalizes_line_endings_and_controls(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,  # noqa: ARG001
 ) -> None:
     """``pfb_regex_list`` save normalizes line endings and strips control chars.
 
@@ -159,7 +146,6 @@ def test_dnsbl_textarea_save_normalizes_line_endings_and_controls(
 def test_dnsbl_whitelist_comment_control_char_stripped(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,  # noqa: ARG001
 ) -> None:
     """DNSBL ``whitelist`` save strips a control char from a comment, keeps Unicode.
 
@@ -586,7 +572,6 @@ def test_category_edit_rowhelper_url_sanitized(
 def test_dnsbl_whitelist_accepts_single_dot_wildcard_row(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,  # noqa: ARG001
 ) -> None:
     """The Whitelist list keeps taking the single-dot wildcard row (issue #1741).
 
@@ -612,7 +597,6 @@ def test_dnsbl_whitelist_accepts_single_dot_wildcard_row(
 def test_dnsbl_whitelist_rejects_double_dot_row(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,  # noqa: ARG001
 ) -> None:
     """The Whitelist list refuses a multi-dot row (issue #1741).
 
@@ -651,7 +635,6 @@ def test_dnsbl_whitelist_rejects_double_dot_row(
 def test_dnsbl_tld_exclusion_accepts_idn_row(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,  # noqa: ARG001
 ) -> None:
     """TLD Exclusion (hostname-typed) keeps taking a Unicode/IDN row (issue #1731).
 
@@ -681,7 +664,6 @@ def test_dnsbl_tld_exclusion_accepts_idn_row(
 def test_dnsbl_group_policy_bypass_accepts_cidr_row(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,  # noqa: ARG001
 ) -> None:
     """The Group Policy bypass list saves an IPv4 CIDR row verbatim (issue #3508).
 
@@ -706,7 +688,6 @@ def test_dnsbl_group_policy_bypass_accepts_cidr_row(
 def test_dnsbl_group_policy_bypass_rejects_out_of_range_prefix_row(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,  # noqa: ARG001
 ) -> None:
     """The Group Policy bypass list refuses a CIDR whose prefix is out of range (issue #3508).
 

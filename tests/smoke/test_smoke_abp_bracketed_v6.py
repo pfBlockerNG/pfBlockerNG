@@ -37,7 +37,6 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
     try:
@@ -59,7 +58,7 @@ def test_abp_bracketed_v6_anchor_collects_into_dnsblip_v6(deployed_vm: SmokeVM, 
     Given a DNSBL feed, loaded with DNSBL IP = Deny_Both, that holds ``||[2001:db8::1]^``
       and a control domain,
     When a Force Reload loads it,
-    Then the control domain is VIP-blocked (the feed loaded),
+    Then the control domain is null-blocked (the feed loaded),
       pfB_DNSBLIP_v6 holds 2001:db8::1,
       and the Python staging file carries the control but not 2001:db8::1.
     """
@@ -68,12 +67,12 @@ def test_abp_bracketed_v6_anchor_collects_into_dnsblip_v6(deployed_vm: SmokeVM, 
     body = h.abp_feed(V6_LINE, control)
     feed_url = h.write_local_feed(vm, "smoke_abp_bracketed_v6.txt", body)
     spec = h.DnsblCase(
-        aliasname=HEADER, feed_url=feed_url, header=HEADER, mode=h.DnsblMode.VIP, dnsbl_ip_action="Deny_Both"
+        aliasname=HEADER, feed_url=feed_url, header=HEADER, mode=h.DnsblMode.NULL_LOG, dnsbl_ip_action="Deny_Both"
     )
     with h.CaseContext(vm, spec):
         # The first answer after the reload is authoritative.
         ans = h.dns_probe_client(client_vm, control, "A")
-        assert h.is_vip(ans), f"control {control} expected VIP block (feed loaded), got {ans}"
+        assert h.is_null_ip(ans), f"control {control} expected a null block (feed loaded), got {ans}"
 
         h.apply_filter_sync(vm)
         v6 = h.pfctl_table_members(vm, "pfB_DNSBLIP_v6")

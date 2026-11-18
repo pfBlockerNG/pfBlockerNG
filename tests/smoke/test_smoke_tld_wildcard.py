@@ -47,13 +47,12 @@ def tld_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> I
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
 
     domain = h.unique_domain("tldwild")
     feed = h.write_local_feed(smoke_vm, "smoke_tldwild_feed.txt", f"{domain}\n")
     spec = h.DnsblCase(
-        aliasname="smoketldwild", feed_url=feed, header="smoketldwild", mode=h.DnsblMode.VIP, tld_enabled=True
+        aliasname="smoketldwild", feed_url=feed, header="smoketldwild", mode=h.DnsblMode.NULL_LOG, tld_enabled=True
     )
     h.inject(smoke_vm, spec)
     h.reload(smoke_vm, "update")
@@ -78,23 +77,23 @@ def test_tld_wildcard_toggle_governs_subdomain_blocking(tld_vm: tuple[SmokeVM, s
     Background: DNSBL Wildcard Blocking (TLD) is ON (the fixture baseline) and
     ``domain`` (a 2-label registrable ``uuid-*.com``) is feed-listed; ``sub`` (a fresh
     label prepended to ``domain``) is never itself listed.
-    Given TLD-Wildcard ON, ``domain`` is VIP-blocked AND ``sub`` is ALSO VIP-blocked --
+    Given TLD-Wildcard ON, ``domain`` is null-blocked AND ``sub`` is ALSO null-blocked --
     the wildcard ZONE covers it (the before-state, so the toggle's effect below is
     provably causal, not a pre-existing accident).
     When TLD-Wildcard is turned OFF and a NORMAL Update runs (``reload(vm, "update")``
     -- force=false, NOT a Force Reload),
-    Then ``domain`` STAYS VIP-blocked (the exact DATA entry survives the toggle) but
+    Then ``domain`` STAYS null-blocked (the exact DATA entry survives the toggle) but
     ``sub`` now RESOLVES via the controlled stub upstream -- proving OFF collapses to
     exact-only matching, no wildcard.
     """
     vm, domain = tld_vm
     sub = "x." + domain
 
-    # GIVEN: TLD-Wildcard ON -- domain AND its never-listed sub-domain both VIP-blocked.
+    # GIVEN: TLD-Wildcard ON -- domain AND its never-listed sub-domain both null-blocked.
     before_domain = h.dns_probe_client(client_vm, domain, "A")
-    assert h.is_vip(before_domain), f"{domain} expected VIP block with TLD-Wildcard on, got {before_domain}"
+    assert h.is_null_ip(before_domain), f"{domain} expected a null block with TLD-Wildcard on, got {before_domain}"
     before_sub = h.dns_probe_client(client_vm, sub, "A")
-    assert h.is_vip(before_sub), f"{sub} expected VIP block (wildcard ZONE) with TLD-Wildcard on, got {before_sub}"
+    assert h.is_null_ip(before_sub), f"{sub} expected null (wildcard ZONE) with TLD-Wildcard on, got {before_sub}"
 
     # WHEN: TLD-Wildcard OFF + a NORMAL Update (scope=update -> force=false; never Force Reload).
     h.set_dnsbl_tld_wildcard(vm, False)
@@ -103,10 +102,10 @@ def test_tld_wildcard_toggle_governs_subdomain_blocking(tld_vm: tuple[SmokeVM, s
     # it took the restart or in-place-reinit path -- flush before the after-state probes.
     h.flush_unbound_cache(vm)
 
-    # THEN: domain (the exact DATA entry) is UNCHANGED -- still VIP-blocked.
+    # THEN: domain (the exact DATA entry) is UNCHANGED -- still null-blocked.
     after_domain = h.dns_probe_client(client_vm, domain, "A")
-    assert h.is_vip(after_domain), (
-        f"{domain} should STAY VIP-blocked (exact DATA) with TLD-Wildcard off, got {after_domain}"
+    assert h.is_null_ip(after_domain), (
+        f"{domain} should STAY null-blocked (exact DATA) with TLD-Wildcard off, got {after_domain}"
     )
 
     # AND: sub now resolves via the stub -- the PRIMARY discriminator (the wildcard
@@ -115,7 +114,7 @@ def test_tld_wildcard_toggle_governs_subdomain_blocking(tld_vm: tuple[SmokeVM, s
     assert h.resolves_to(after_sub, STUB_DNS_A), (
         f"{sub} should resolve via the stub with TLD-Wildcard off, got {after_sub}"
     )
-    assert not h.is_vip(after_sub), f"{sub} unexpectedly still VIP-blocked with TLD-Wildcard off: {after_sub}"
+    assert not h.is_null_ip(after_sub), f"{sub} unexpectedly still null-blocked with TLD-Wildcard off: {after_sub}"
     assert not h.is_null_ip(after_sub), f"{sub} unexpectedly NULL-blocked with TLD-Wildcard off: {after_sub}"
 
     # Attribution (reached only once the behavioural transition above is proven): the

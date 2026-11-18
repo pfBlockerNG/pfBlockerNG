@@ -75,18 +75,17 @@ class DnsblRebootObservation:
 
 def _sinkholes(vm: SmokeVM, domain: str) -> bool:
     try:
-        return h.resolves_to(h.dns_probe(vm, domain, "A"), h.DEFAULT_DNSBL_VIP4)
+        return h.resolves_to(h.dns_probe(vm, domain, "A"), h.NULL_IP4)
     except Exception:  # noqa: BLE001 -- mid-restart no-answer counts as "not yet"
         return False
 
 
 @pytest.fixture(scope="module")
 def dnsbl_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:  # noqa: ARG001
-    """Deploy the branch .pkg with DNSBL infra (sinkhole VIP + system upstream), once."""
+    """Deploy the branch .pkg with DNSBL infra (system upstream), once."""
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     try:
         yield smoke_vm
@@ -137,7 +136,7 @@ def reboot_observation(dnsbl_vm: SmokeVM) -> DnsblRebootObservation:
     h.set_ramdisk(vm, True)
     feed_url = h.write_local_feed(vm, "issue468.txt", f"{domain}\n{wild_domain}\n")
     spec = h.DnsblCase(
-        aliasname="smoke468", feed_url=feed_url, header="smoke468", mode=h.DnsblMode.VIP, tld_enabled=True
+        aliasname="smoke468", feed_url=feed_url, header="smoke468", mode=h.DnsblMode.NULL_LOG, tld_enabled=True
     )
     h.inject(vm, spec)
     h.reload(vm, "update")
@@ -221,7 +220,7 @@ def test_dnsbl_survives_ramdisk_var_reboot(reboot_observation: DnsblRebootObserv
     obs = reboot_observation
 
     # Precondition: DNSBL worked BEFORE the reboot (else the after-state proves nothing).
-    assert obs.sinkholes_before, f"precondition: {obs.domain} must sinkhole to {h.DEFAULT_DNSBL_VIP4} before the reboot"
+    assert obs.sinkholes_before, f"precondition: {obs.domain} must sinkhole to {h.NULL_IP4} before the reboot"
     # The leg is genuinely a RAM-disk /var (MFS wiped the sentinel).
     assert obs.var_wiped, (
         f"{VAR_WIPE_SENTINEL} survived the reboot — use_mfs_tmpvar did not engage; not a RAM-disk /var"

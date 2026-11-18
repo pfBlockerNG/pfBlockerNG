@@ -111,26 +111,7 @@ CFG_IP_REPUTATION = "installedpackages/pfblockerngreputation/config/0"
 # DNS-Resolver Host Overrides: control names go here (see set_control_records).
 CFG_UNBOUND_HOSTS = "unbound/hosts"
 
-# The configured DNSBL VIP a "vip" block answers with == the IPv4 the harness-
-# injected lo0 IP-Alias VIP carries (ensure_dnsbl_vip). Env-overridable, but
-# `or` (not get's default): smoke-single.yml SETS this var to "" when the secret/var is
-# unset, and get(key, default) returns "" for a set-but-empty var — which left
-# the VIP subnet blank ("invalid IPv4 VIP"). Treat empty as unset.
-DEFAULT_DNSBL_VIP4 = os.environ.get("SMOKE_DNSBL_VIP4") or "10.10.10.1"
 NULL_IP4 = "0.0.0.0"
-
-# The pfSense Virtual IP the harness injects so DNSBL has the sinkhole VIP it
-# requires (pfb_validate_vips, inc:725). By default pfBlockerNG does NOT
-# auto-create one (pfb_dnsvip_auto is OFF by default; when ON, pfb_manage_dnsbl_vip
-# auto-creates it), so we add an lo0 IP-Alias VIP and point pfb_dnsvip4 at it via
-# the "_vip<uniqid>" id convention get_configured_vip_list() uses. Kept OUT of the
-# image so the "no VIP configured" scenario stays testable (just skip ensure_dnsbl_vip).
-SMOKE_VIP_UNIQID = "pfbsmokevip"
-SMOKE_VIP_IFACE = "lo0"
-# DNSBL lighttpd sinkhole ports — DNSBL skips ALL feed processing if these are
-# empty (inc:7558). GUI defaults (pfblockerng_dnsbl.php:47).
-DNSBL_PORT = "8081"
-DNSBL_PORT_SSL = "8443"
 
 # pfBlockerNG only builds the IP deny rule when an inbound/outbound interface is
 # configured (inc:10132 "Inbound interface option not configured"); the alias
@@ -210,8 +191,8 @@ class DnsblMode(str, Enum):
     * ``NULL`` — NOERROR + ``0.0.0.0`` / ``::0``; per-list
       ``logging='disabled'`` → ``logging_type='2'`` → ``null_blocking=True``
       in ``pfb_unbound.py:evaluate_domain``.
-    * ``VIP`` — NOERROR + the DNSBL sinkhole VIP (``pfb_dnsvip4``); per-list
-      ``logging='enabled'`` → ``logging_type='1'`` → ``null_blocking=False``.
+    * ``NULL_LOG`` — the ``NULL`` shape, logged; per-list ``logging='disabled_log'`` →
+      ``logging_type='0'``. Issue #4053 removed the VIP shape this replaced as the default.
     * ``NXDOMAIN`` — a bare NXDOMAIN rcode, no records (issue #31); per-list
       ``logging='nxdomain_log'`` → ``logging_type='3'`` → ``operate()`` returns
       ``RCODE_NXDOMAIN`` with no DNSMessage. (The ``nxdomain`` / no-logging
@@ -224,7 +205,7 @@ class DnsblMode(str, Enum):
     """
 
     NULL = "null"
-    VIP = "vip"
+    NULL_LOG = "null_log"
     NXDOMAIN = "nxdomain"
 
 
@@ -237,7 +218,7 @@ class DnsblCase:
       aliasname     -> CFG_DNSBL_LISTS/<n>/aliasname  (alias = DNSBL_<aliasname>)
       feed_url      -> CFG_DNSBL_LISTS/<n>/row/0/url  (a mock_feeds.feed_url)
       header        -> CFG_DNSBL_LISTS/<n>/row/0/header
-      mode          -> response shape: NULL/VIP, set via per-list 'logging'
+      mode          -> response shape: NULL/NULL_LOG/NXDOMAIN, set via per-list 'logging'
                        (on ``next`` python mode is always on; dnsbl_mode /
                        pfb_py_block are dead config keys)
       wildcard      -> feed entry style; a wildcard feed line blocks subdomains
@@ -285,7 +266,7 @@ class DnsblCase:
 
     aliasname: str
     feed_url: str
-    mode: DnsblMode = DnsblMode.VIP
+    mode: DnsblMode = DnsblMode.NULL_LOG
     header: str = "smoketest"
     wildcard: bool = False
     whitelist: list[str] = field(default_factory=list)
@@ -1730,156 +1711,13 @@ def set_control_records(
         raise RuntimeError(f"set_control_records failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
-@timed_step("ensure_dnsbl_vip")
-def ensure_dnsbl_vip(vm: SmokeVM, *, ip4: str = DEFAULT_DNSBL_VIP4, timeout: float = 120.0) -> None:
-    """Inject the lo0 IP-Alias VIP DNSBL requires and point pfb_dnsvip4 at it.
-
-    pfBlockerNG force-disables DNSBL when ``pfb_validate_vips`` finds no VIP
-    (inc:725). By default (``pfb_dnsvip_auto`` OFF) it does not auto-create one;
-    the harness adds it exactly as a user would in Firewall > Virtual IPs: a
-    ``virtualip/vip`` entry on the DNSBL interface (lo0), referenced by
-    ``pfb_dnsvip4`` as ``_vip<uniqid>`` (the ``get_configured_vip_list()`` id
-    convention). When ``pfb_dnsvip_auto`` is ON, ``pfb_manage_dnsbl_vip`` creates
-    a marked VIP automatically (ADR-13). Idempotent on the uniqid.
-
-    Then APPLY it (as the GUI's Firewall > Virtual IPs save does): the VIP must
-    be realized for ``pfb_get_vips`` (-> ``get_specialnet``) to list it —
-    config-only left it "invalid IPv4 VIP". ``interface_vip_configure`` lives in
-    ``interfaces.inc`` (not auto-loaded by pfSsh.php), so require_once it first
-    and guard the call so a missing symbol can't abort the eval. Verified via
-    ``ifconfig`` with a direct-alias fallback (issue #1013): on this image
-    ``interface_vip_configure()`` alone left the OS-level alias absent even
-    though config.xml was correct, so a caller needing a REACHABLE (not just
-    resolvable) VIP could not rely on this returning cleanly meaning "live".
-    """
-    vip = {
-        "mode": "ipalias",
-        "interface": SMOKE_VIP_IFACE,
-        "type": "single",
-        "subnet": ip4,
-        "subnet_bits": "32",
-        "descr": "pfBlockerNG DNSBL",
-        "uniqid": SMOKE_VIP_UNIQID,
-    }
-    vip_id = f"_vip{SMOKE_VIP_UNIQID}"
-    snippet = (
-        "$vips = config_get_path('virtualip/vip', array());\n"
-        "$found = FALSE;\n"
-        f"foreach ($vips as $v) {{\n"
-        f"  if (($v['uniqid'] ?? '') === {_php_str(SMOKE_VIP_UNIQID)}) {{ $found = TRUE; break; }}\n"
-        "}\n"
-        f"if (!$found) {{ $vips[] = {_php_kv_array(vip)}; config_set_path('virtualip/vip', $vips); }}\n"
-        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        f"$d['pfb_dnsvip4'] = {_php_str(vip_id)};\n"
-        # DNSBL aborts ("DNSBL Ports are not defined. Exiting", inc:7558 ->
-        # $dnsbl_error) and skips ALL feed processing when the lighttpd sinkhole
-        # ports are empty. The GUI defaults them; the harness must too.
-        f"$d['pfb_dnsport'] = {_php_str(DNSBL_PORT)};\n"
-        f"$d['pfb_dnsport_ssl'] = {_php_str(DNSBL_PORT_SSL)};\n"
-        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
-        "write_config('pfBlockerNG smoke: DNSBL VIP');\n"
-        "require_once('interfaces.inc');\n"
-        f"if (function_exists('interface_vip_configure')) {{ interface_vip_configure({_php_kv_array(vip)}); }}\n"
-        # issue #1013: interface_vip_configure() has been observed to leave config.xml
-        # updated but the OS-level alias absent (ifconfig lo0 shows no `ip4` after the
-        # call) -- verify directly and add the alias ourselves if it didn't take, so a
-        # caller that needs a REACHABLE (not just resolvable) VIP can rely on this.
-        f"$vipif = escapeshellarg({_php_str(SMOKE_VIP_IFACE)});\n"
-        f"$vipaddr = escapeshellarg({_php_str(ip4)} . '/32');\n"
-        f"$viptoken = 'inet ' . {_php_str(ip4)} . ' ';\n"
-        "$vipup = shell_exec('/sbin/ifconfig ' . $vipif . ' 2>/dev/null');\n"
-        "if (strpos((string) $vipup, $viptoken) === FALSE) {\n"
-        "  exec('/sbin/ifconfig ' . $vipif . ' alias ' . $vipaddr);\n"
-        # Re-check: the fallback itself can fail (permissions, a bad interface) and would
-        # otherwise report 'OK' with the VIP still unreachable -- a much less diagnostic
-        # failure surfaces later (a bare connect timeout) instead of here, with a reason.
-        "  $vipup = shell_exec('/sbin/ifconfig ' . $vipif . ' 2>/dev/null');\n"
-        "  if (strpos((string) $vipup, $viptoken) === FALSE) {\n"
-        "    fwrite(STDERR, 'ensure_dnsbl_vip: alias fallback did not bring up ' . $viptoken . "
-        "'on ' . $vipif . \"\\n\");\n"
-        "    exit(1);\n"
-        "  }\n"
-        "}\n"
-        "echo 'OK';"
-    )
-    result = php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"ensure_dnsbl_vip failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
-
-
-# The v6 DNSBL sinkhole VIP (issue #3388): what a VIP-mode AAAA block answers with once
-# pfb_dnsvip6 points at it (ini ``dnsbl_ipv6``). RFC 3849, never routed. Without it,
-# pfb_unbound.py falls back to ``::`` — indistinguishable from the NULL shape.
-DNSBL_VIP6 = "2001:db8:53::1"
-SMOKE_VIP6_UNIQID = "pfbsmokevip6"
-
-
-@timed_step("set_dnsbl_vip6")
-def set_dnsbl_vip6(vm: SmokeVM, present: bool, *, ip6: str = DNSBL_VIP6, timeout: float = 120.0) -> None:
-    """Add (``present``) or remove the lo0 /128 IP-Alias VIP and set/clear ``pfb_dnsvip6``.
-
-    The v6 sibling of :func:`ensure_dnsbl_vip`, kept separate because the v4 VIP is
-    session infrastructure while this one is per-test: callers remove it in ``finally``.
-    Verifies the OS alias via ``ifconfig`` and applies the same direct-alias fallback
-    (issue #1013) in both directions.
-    """
-    vip = {
-        "mode": "ipalias",
-        "interface": SMOKE_VIP_IFACE,
-        "type": "single",
-        "subnet": ip6,
-        "subnet_bits": "128",
-        "descr": "pfBlockerNG DNSBL v6",
-        "uniqid": SMOKE_VIP6_UNIQID,
-    }
-    add = (
-        f"$vip = {_php_kv_array(vip)};\n$keep[] = $vip;\n$d['pfb_dnsvip6'] = {_php_str('_vip' + SMOKE_VIP6_UNIQID)};\n"
-        if present
-        else "unset($d['pfb_dnsvip6']);\n"
-    )
-    snippet = (
-        "require_once('interfaces.inc');\n"
-        "$keep = array();\n"
-        "foreach (config_get_path('virtualip/vip', array()) as $v) {\n"
-        f"  if (($v['uniqid'] ?? '') === {_php_str(SMOKE_VIP6_UNIQID)}) {{\n"
-        "    if (function_exists('interface_vip_bring_down')) { interface_vip_bring_down($v); }\n"
-        "    continue;\n"
-        "  }\n"
-        "  $keep[] = $v;\n"
-        "}\n"
-        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        f"{add}"
-        "config_set_path('virtualip/vip', $keep);\n"
-        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
-        "write_config('pfBlockerNG smoke: DNSBL v6 VIP');\n"
-        + ("if (function_exists('interface_vip_configure')) { interface_vip_configure($vip); }\n" if present else "")
-        + "echo 'OK';"
-    )
-    result = php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"set_dnsbl_vip6 failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
-    if vip_alias_live(vm, ip6) != present:
-        verb = "alias" if present else "-alias"
-        vm.ssh(f"/sbin/ifconfig {SMOKE_VIP_IFACE} inet6 {shlex.quote(ip6)} prefixlen 128 {verb}", timeout=timeout)
-    if vip_alias_live(vm, ip6) != present:
-        raise RuntimeError(f"set_dnsbl_vip6: {ip6} live on {SMOKE_VIP_IFACE} != {present} after fallback")
-
-
 # --------------------------------------------------------------------------- #
-# ADR-13 auto-VIP ("Create VIPs automatically") — live introspection helpers
+# Package-owned VIP markers — live introspection helpers
 # --------------------------------------------------------------------------- #
 
-# The descr marker the package stamps on an auto-created v4 sinkhole VIP and the
-# first candidate address pfb_pick_free_dnsbl_vip() returns. Mirror the PHP
-# constants (PFB_AUTO_VIP_DESCR_V4) / fixed candidate list in pfblockerng.inc
-# (issue #473): Class B 172.16.53.1, then Class C 192.168.53.1, then Class A
-# 10.53.53.1. This two-VM topology uses 192.168.89.0/24 (WAN) + 192.168.1.0/24
-# (LAN) and no 172.16/12, so the first candidate 172.16.53.1 is free and is the
-# one auto-create picks — distinct from the matrix's MANUAL VIP at 10.10.10.1
-# (DEFAULT_DNSBL_VIP4), so the two coexist and the auto-VIP case runs on the same
-# VM without disturbing the manual-VIP matrix.
+# The descr marker an earlier version stamped on its auto-created v4 DNSBL VIP (PFB_AUTO_VIP_DESCR_V4); the
+# upgrade cleanup (issue #4053) removes that VIP.
 AUTO_VIP_DESCR_V4 = "pfB_AUTO_VIP_v4"
-AUTO_VIP_IP4 = "172.16.53.1"
 
 
 def pfb_cron_entries(vm: SmokeVM) -> list[str]:
@@ -1943,21 +1781,6 @@ def _php_read_scalar(vm: SmokeVM, pre: str, expr: str, *, timeout: float = 60.0)
             f"_php_read_scalar: no delimited value: rc={result.returncode} out={out!r} err={result.stderr!r}"
         )
     return out[start + len(_CFG_VAL_OPEN) : end]
-
-
-def set_dnsvip_auto(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
-    """Toggle the ADR-13 'Create VIPs automatically' setting (``pfb_dnsvip_auto``)."""
-    val = "on" if on else ""
-    snippet = (
-        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        f"$d['pfb_dnsvip_auto'] = {_php_str(val)};\n"
-        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
-        "write_config('pfBlockerNG smoke: toggle pfb_dnsvip_auto');\n"
-        "echo 'OK';"
-    )
-    result = php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"set_dnsvip_auto({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
 def set_dnsbl_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
@@ -2200,49 +2023,6 @@ def set_ip_continent(
         )
 
 
-def set_dnsbl_interface(vm: SmokeVM, iface: str, *, timeout: float = 60.0) -> None:
-    """Set the DNSBL interface (``dnsbl_interface``) in the DNSBL-settings section.
-
-    ``iface`` is the pfSense friendly interface name, e.g. ``'lo0'`` (the default)
-    or ``'lan'``.  The DNSBL NAT redirect rule is only emitted when this is not
-    ``'lo0'``, so tests that assert NAT creation must set it to a real LAN interface
-    before the reload that enables DNSBL.
-    """
-    snippet = (
-        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        f"$d['dnsbl_interface'] = {_php_str(iface)};\n"
-        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
-        "write_config('pfBlockerNG smoke: set dnsbl_interface');\n"
-        "echo 'OK';"
-    )
-    result = php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(
-            f"set_dnsbl_interface({iface!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
-        )
-
-
-def set_dnsbl_nonat(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
-    """Set the issue-#381 DNSBL NAT opt-out toggle (``pfb_dnsbl_nonat``).
-
-    When ``on`` is True, the package skips creating the DNSBL
-    ``pfB DNSBL - DO NOT EDIT`` NAT port-forward rules and removes any existing
-    managed ``pfB DNSBL`` NAT on the next reload.  When False (the default),
-    the NAT is created whenever ``dnsbl_interface`` is not ``lo0``.
-    """
-    val = "on" if on else ""
-    snippet = (
-        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        f"$d['pfb_dnsbl_nonat'] = {_php_str(val)};\n"
-        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
-        "write_config('pfBlockerNG smoke: set pfb_dnsbl_nonat');\n"
-        "echo 'OK';"
-    )
-    result = php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"set_dnsbl_nonat({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
-
-
 def set_dnsbl_lenient(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     """Set the ADR-22 ``pfb_dnsbl_lenient`` toggle in the DNSBL-settings section.
 
@@ -2391,21 +2171,13 @@ def marked_vip_subnet(vm: SmokeVM, descr: str = AUTO_VIP_DESCR_V4, *, timeout: f
     return _php_read_scalar(vm, pre, "$out", timeout=timeout)
 
 
-def dnsvip4_address(vm: SmokeVM, *, timeout: float = 60.0) -> str:
-    """The IPv4 the stored ``pfb_dnsvip4`` id currently resolves to (or '')."""
-    pre = f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());"
-    return _php_read_scalar(vm, pre, "get_configured_vip_ipv4($d['pfb_dnsvip4'] ?? '') ?? ''", timeout=timeout)
-
-
 def fwobj_state_snapshot(vm: SmokeVM, *, timeout: float = 60.0) -> str:
     """On-box DNSBL-mode inputs + pfB-owned firewall objects, for failure diagnostics.
 
-    Reports the resolved DNSBL ``mode`` and the five inputs that decide whether
-    ``pfb_manage_dnsbl_vip`` / ``pfb_create_dnsbl`` create the auto-VIP and DNSBL
-    NAT (pfblockerng.inc:12542 mode gate; :3834 NAT iface gate), plus the live
+    Reports the resolved DNSBL ``mode`` and its three inputs, plus the live
     ``virtualip/vip`` and pfB-owned ``nat/rule`` rows. Embed in a 'setup failed'
     / before-state assertion message so a red leg shows WHY an object was (not)
-    created instead of asserting a bare boolean.
+    removed instead of asserting a bare boolean.
     """
     pre = (
         f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
@@ -2415,9 +2187,7 @@ def fwobj_state_snapshot(vm: SmokeVM, *, timeout: float = 60.0) -> str:
         "$unb = config_path_enabled('unbound') ? 'on' : '';\n"
         "$mode = ($enable === 'on' && $dnsbl === 'on' && $unb === 'on') ? 'enabled' : 'disabled';\n"
         "$out = 'mode=' . $mode . ' enable_cb=' . $enable . ' pfb_dnsbl=' . $dnsbl"
-        " . ' unbound=' . $unb . ' pfb_dnsvip_auto=' . ($d['pfb_dnsvip_auto'] ?? '')"
-        " . ' dnsbl_interface=' . ($d['dnsbl_interface'] ?? 'lo0')"
-        " . ' pfb_dnsvip4=' . ($d['pfb_dnsvip4'] ?? '') . \"\\nVIPs:\";\n"
+        " . ' unbound=' . $unb . \"\\nVIPs:\";\n"
         "foreach (config_get_path('virtualip/vip', array()) as $v) {\n"
         "  $out .= ' [' . ($v['descr'] ?? '') . '@' . ($v['subnet'] ?? '') . '/' . ($v['interface'] ?? '') . ']';\n"
         "}\n"
@@ -2433,24 +2203,6 @@ def fwobj_state_snapshot(vm: SmokeVM, *, timeout: float = 60.0) -> str:
         # Best-effort: a probe failure must never replace the real assertion
         # error with a RuntimeError raised from the failure-message path.
         return f"fwobj_state_snapshot_error={exc!r}"
-
-
-def vip_alias_live(vm: SmokeVM, ip: str, iface: str = "lo0", *, timeout: float = 30.0) -> bool:
-    """True iff ``ip`` is a live alias on ``iface`` per ``ifconfig`` (the realized VIP).
-
-    Matches the address as a whole ``inet``/``inet6`` token, NOT a bare substring:
-    ``ip in stdout`` would prefix-false-positive (e.g. ``10.10.10.53`` reported live
-    because the iface carries ``10.10.10.530`` or ``110.10.10.53``). ``ifconfig``
-    prints ``inet <ip> netmask ...`` / ``inet6 <ip> prefixlen ...``, so an exact
-    token right after ``inet``/``inet6`` is the address itself.
-    """
-    result = vm.ssh("/sbin/ifconfig", iface, timeout=timeout)
-    for line in result.stdout.splitlines():
-        toks = line.split()
-        for i, tok in enumerate(toks[:-1]):
-            if tok in ("inet", "inet6") and toks[i + 1] == ip:
-                return True
-    return False
 
 
 def set_feed_internal_allowlist(vm: SmokeVM, value: str, *, timeout: float = 60.0) -> None:
@@ -3369,9 +3121,9 @@ def set_aggregate_types(vm: SmokeVM, types: list[str], *, timeout: float = 60.0)
 
 def _dnsbl_mode_settings(mode: DnsblMode) -> dict[str, str]:
     """Drive dnsbl/global_log from the case's mode (#3291/#3332: built-ins inherit
-    the global mechanism instead of hardcoding VIP)."""
+    the global mechanism)."""
     global_log = {
-        DnsblMode.VIP: "enabled",
+        DnsblMode.NULL_LOG: "disabled_log",
         DnsblMode.NXDOMAIN: "nxdomain_log",
         DnsblMode.NULL: "disabled_log",
     }[mode]
@@ -3380,11 +3132,11 @@ def _dnsbl_mode_settings(mode: DnsblMode) -> dict[str, str]:
 
 def _dnsbl_list_logging(mode: DnsblMode) -> str:
     """Per-list ``logging`` value driving the block shape: 'disabled' → null
-    0.0.0.0; 'nxdomain_log' → NXDOMAIN rcode (issue #31); 'enabled' → VIP."""
+    0.0.0.0; 'disabled_log' → the same, logged; 'nxdomain_log' → NXDOMAIN rcode (issue #31)."""
     return {
         DnsblMode.NULL: "disabled",
         DnsblMode.NXDOMAIN: "nxdomain_log",
-        DnsblMode.VIP: "enabled",
+        DnsblMode.NULL_LOG: "disabled_log",
     }[mode]
 
 
@@ -3502,31 +3254,18 @@ def _dnsbl_list_php(spec: DnsblCase, row_action: str = "Deny") -> str:
     )
 
 
-# DNSBL settings keys that are INFRASTRUCTURE (set by ensure_dnsbl_vip / set_dnsbl_vip6 /
-# set_dnsvip_auto), not per-case behaviour. _dnsbl_settings_replace_php preserves these across
-# a settings replace — dropping them would leave DNSBL with no VIP/ports and force-disable it.
-_DNSBL_INFRA_KEYS = ("pfb_dnsvip4", "pfb_dnsvip6", "pfb_dnsport", "pfb_dnsport_ssl", "pfb_dnsvip_auto")
-
-
 def _dnsbl_settings_replace_php(settings: dict[str, str]) -> str:
-    """PHP that sets the DNSBL settings to EXACTLY ``{infra keys} + settings`` (replace, not merge).
+    """PHP that sets the DNSBL settings to EXACTLY ``settings`` (replace, not merge).
 
-    Keeps only the VIP/port infrastructure (:data:`_DNSBL_INFRA_KEYS`) the deployed_vm fixture
-    set and REPLACES every behaviour toggle. A plain ``array_merge`` would let a prior case's
+    REPLACES every behaviour toggle. A plain ``array_merge`` would let a prior case's
     ``pfb_idn`` / ``pfb_hsts`` / ``pfb_regex`` survive into this one — :func:`reset` never clears
     config, so within a module a case would inherit toggles it never declared. Shared by
     :func:`_dnsbl_inject_snippet`, :func:`inject_dnsbl_lists` and the test-local writers.
 
     A replace that turns DNSBL on (``pfb_dnsbl`` 'on') also turns pfB-DNS on in the same write: DNSBL runs only through
     pfB-DNS (#3770). Without ``pfb_dnsbl`` 'on' the PHP never mentions pfB-DNS."""
-    keep = ", ".join(_php_str(k) for k in _DNSBL_INFRA_KEYS)
     return (
-        f"$prev = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        "$keep = array();\n"
-        f"foreach (array({keep}) as $k) {{\n"
-        "  if (isset($prev[$k])) { $keep[$k] = $prev[$k]; }\n"
-        "}\n"
-        f"$s = array_merge($keep, {_php_kv_array(settings)});\n"
+        f"$s = {_php_kv_array(settings)};\n"
         f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $s);\n"
         f"{_pfb_dns_on_php() if settings.get('pfb_dnsbl') == 'on' else ''}"
     )
@@ -3984,8 +3723,8 @@ def reset(vm: SmokeVM, *, timeout: float = 60.0) -> None:
 
 # Whole config sections a smoke case injects into. reset_pfb_baseline DELETES these — they
 # are pure test-injected (feed lists) or fully re-established by each module's deployed_vm
-# fixture on setup (the DNSBL VIP/ports via ensure_dnsbl_vip, the IP/DNSBL settings via
-# inject()), so wiping them between modules costs nothing the next setup does not rebuild.
+# fixture on setup (the IP/DNSBL settings via inject()), so wiping them between modules
+# costs nothing the next setup does not rebuild.
 # CFG_GLOBAL (config/0) is deliberately NOT here: it also holds the package's install
 # defaults + wizard flag, so only the toggles a case writes are unset there (below).
 _BASELINE_DEL_SECTIONS = (
@@ -4176,11 +3915,10 @@ def restore_pfb_config_baseline(vm: SmokeVM, *, snapshot_path: str, timeout: flo
 
     :func:`reset_pfb_baseline` WIPES pfBlockerNG config to empty — correct for the
     module-scoped SMOKE tier, where the next module's ``deployed_vm`` re-establishes
-    whatever infrastructure (VIP, ports, ...) it needs. The UI tier is ONE session: a
-    wipe deletes ``pfb_dnsvip4``/``pfb_dnsport``/``pfb_dnsport_ssl`` (the
-    :data:`_DNSBL_INFRA_KEYS`) with nothing left in the session to re-provision them,
-    so every LATER ``pfblockerng_dnsbl.php``/SafeSearch save runs ``pfb_validate_vips``
-    against a VIP-less config and gets rejected — 23 functional-leg tests failed this
+    whatever infrastructure it needs. The UI tier is ONE session: a wipe deleted the
+    infrastructure (then the DNSBL VIP and ports, removed by issue #4053) with nothing
+    left in the session to re-provision it, so every LATER DNSBL/SafeSearch save
+    was rejected — 23 functional-leg tests failed this
     way in ui-tests.yml run 28900064099, all reading back ``''`` after the FIRST
     dirty-path reset (that run's one browser-leg failure was the unrelated,
     pre-existing issue #964 vocabulary bug, fixed separately). So the UI tier's
@@ -4569,7 +4307,7 @@ def snap_state(vm: SmokeVM, tag: str, *, timeout: float = 30.0) -> None:
         f"/sbin/pfctl -sn  > {dest_sh}/pf_nat.txt     2>/dev/null; "
         f"/sbin/pfctl -sTables > {dest_sh}/pf_tables.txt 2>/dev/null; "
         f"/sbin/ifconfig > {dest_sh}/ifconfig.txt 2>/dev/null; "
-        f"/usr/bin/sockstat | /usr/bin/grep -E ':53|unbound|lighttpd' > {dest_sh}/sockets.txt 2>/dev/null; "
+        f"/usr/bin/sockstat | /usr/bin/grep -E ':53|unbound' > {dest_sh}/sockets.txt 2>/dev/null; "
         # Value-redaction over ALL text files in the snapshot dir (Plus only — no-op
         # for CE). Must run AFTER all files are captured so it covers ifconfig.txt too.
         + build_redact_sed
@@ -4669,15 +4407,10 @@ def assert_unbound_adds_only_python_config(vm: SmokeVM, *, timeout: float = 30.0
 
     added = current_lines - setup_lines
 
-    # Allow: python module directives, pfBlockerNG managed includes, VIP interface.
+    # Allow: python module directives and pfBlockerNG managed includes (issue #4053 removed the VIP interface).
     def _is_allowed(line: str) -> bool:
         low = line.lower()
-        return (
-            "python" in low
-            or "module-config" in low
-            or ("include:" in low and "pfb" in low)
-            or (low.startswith("interface:") and DEFAULT_DNSBL_VIP4 in low)
-        )
+        return "python" in low or "module-config" in low or ("include:" in low and "pfb" in low)
 
     unexpected = [ln for ln in added if not _is_allowed(ln)]
     assert not unexpected, (
@@ -5491,11 +5224,6 @@ def is_null_ip(answer: DnsAnswer, null_ip: str = NULL_IP4) -> bool:
         except ValueError:
             continue
     return False
-
-
-def is_vip(answer: DnsAnswer, vip: str = DEFAULT_DNSBL_VIP4) -> bool:
-    """True iff the answer is the DNSBL webserver VIP."""
-    return vip in answer.records
 
 
 def resolves_to(answer: DnsAnswer, addr: str) -> bool:
@@ -6427,7 +6155,6 @@ def dump_diagnostics(vm: SmokeVM) -> None:
             "config.xml virtualip section",
             "sed -n '/<virtualip>/,/<\\/virtualip>/p' /conf/config.xml 2>/dev/null | head -40 || true",
         ),
-        ("config.xml pfb_dnsvip refs", "grep -nE 'pfb_dnsvip|ifconfig.*alias' /conf/config.xml 2>/dev/null || true"),
         ("lo0 aliases (is the VIP plumbed?)", "/sbin/ifconfig lo0 2>/dev/null || true"),
         (
             "config.xml pfBlockerNG section",

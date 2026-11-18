@@ -173,7 +173,7 @@ def test_dnsbl_policy_default_and_override_lifecycle(deployed_vm: SmokeVM, clien
                 f"phase1: 'default' group AAAA should inherit NULL (disabled_log), got {a1_aaaa}"
             )
             v1 = h.dns_probe_client(client_vm, vip_domain, "A")
-            assert h.is_vip(v1), f"phase1: explicit VIP group must resolve VIP regardless of shared NULL, got {v1}"
+            assert h.is_null_ip(v1), f"phase1: explicit VIP group must resolve VIP regardless of shared NULL, got {v1}"
 
         # ---- Phase 2: shared mechanism -> logged NODATA; ONLY the 'default' group tracks it ----
         _set_global_policy(deployed_vm, mode="default", mechanism="nodata_log")
@@ -181,7 +181,7 @@ def test_dnsbl_policy_default_and_override_lifecycle(deployed_vm: SmokeVM, clien
         with _hermetic_probe():
             _assert_nodata_soa(client_vm, deployed_vm, default_domain, context="phase2 (default group)")
             v2 = h.dns_probe_client(client_vm, vip_domain, "A")
-            assert h.is_vip(v2), f"phase2: a shared-mechanism change must NOT alter the explicit VIP group, got {v2}"
+            assert h.is_null_ip(v2), f"phase2: a shared-mechanism change must NOT alter the explicit group, got {v2}"
 
         # Keep the mechanism fixed: this transition must react to the mode alone.
         _set_global_policy(deployed_vm, mode="override", mechanism="nodata_log")
@@ -205,7 +205,7 @@ def test_dnsbl_policy_default_and_override_lifecycle(deployed_vm: SmokeVM, clien
         with _hermetic_probe():
             _assert_nodata_soa(client_vm, deployed_vm, default_domain, context="phase4 (default group)")
             v4 = h.dns_probe_client(client_vm, vip_domain, "A")
-            assert h.is_vip(v4), f"phase4: returning to Default must restore the VIP group's PRESERVED choice, got {v4}"
+            assert h.is_null_ip(v4), f"phase4: returning to Default must restore the group's PRESERVED choice, got {v4}"
     finally:
         h.reset(deployed_vm)
 
@@ -284,7 +284,7 @@ def test_dnsbl_policy_install_preserves_legacy_mechanisms(
     expected_mode: str,
     expected_group: str,
 ) -> None:
-    """The actual installer converts VIP groups without losing overrides or VIP defaults."""
+    """The installer keeps the override mode and the groups' choices; the retired VIP moves to Null (#4053)."""
     pkg = os.environ.get("SMOKE_PKG")
     assert pkg and Path(pkg).is_file(), "SMOKE_PKG must name the branch package"
     try:
@@ -306,8 +306,9 @@ def test_dnsbl_policy_install_preserves_legacy_mechanisms(
             h.config_get(smoke_vm, f"{h.CFG_DNSBL_SETTINGS}/global_log"),
             h.config_get(smoke_vm, f"{h.CFG_DNSBL_LISTS}/0/logging"),
         )
-        assert actual == (expected_mode, "enabled", expected_group), (
-            f"installer lost the legacy mechanism: expected {(expected_mode, 'enabled', expected_group)!r}, "
+        # Issue #4053: the retired VIP mechanism ('enabled') lands on Null Blocking (logging).
+        assert actual == (expected_mode, "disabled_log", expected_group), (
+            f"installer lost the legacy mechanism: expected {(expected_mode, 'disabled_log', expected_group)!r}, "
             f"got {actual!r}"
         )
     finally:

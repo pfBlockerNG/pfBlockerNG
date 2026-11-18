@@ -179,7 +179,7 @@ The DNSBL resolver settings `pfb-dns` reads from `pfb_unbound.ini` today. `pfb-d
 | Field | Type, default |
 |---|---|
 | `replyLogging`, `hstsNullBlocking`, `pslIncludePrivate`, `idnBlockMalicious` | bool, `true` |
-| `tldWildcard`, `pslAllowPrivate`, `idnEscalateSuspicious`, `logViaWebserver`, `cnameValidation`, `control`, `regexCap`, `metricsClientIp` | bool, `false` |
+| `tldWildcard`, `pslAllowPrivate`, `idnEscalateSuspicious`, `cnameValidation`, `control`, `regexCap`, `metricsClientIp` | bool, `false` |
 | `controlLegacy` | bool, `false`; `requires` `control` |
 | `pslFeedPrivatePolicy`, `pslFeedIcannPolicy` | enum `ignore` / `apex` / `honor`, `honor` |
 | `idnMode` | enum `off` / `confusable` / `on`, `off` |
@@ -296,6 +296,9 @@ as `null`, separately from the valid defaulted projection.
 
 ### Projection `ingest`
 
+**Amendment 2026-11-17 (issue #4053):** the DNSBL WebServer/VIP response is removed, and with it the `sinkholeV4` and
+`sinkholeV6` fields, and `dns`'s `logViaWebserver`.
+
 What the feed phase (the Core translation of the download and parse stages, map #3813) reads of the package settings and of the
 platform it runs on (issue #3975), published as `settings/ingest`. It is **read-only** ([`readOnly`](#settings)): Core never
 changes it, the adapter never writes it, and a change set that names it is refused. A fact that is the box's own (an interface
@@ -317,8 +320,6 @@ once and reads again, and the Update's start reads the backend again ([Update an
 | `proxyPassword` | secret string, `""` | System `proxypass`, or decoded proxy URL userinfo |
 | `proxyUnusable` | bool, `false` | A configured proxy that Core cannot represent; remote transfers refuse instead of bypassing it |
 | `scheduledWorkDisabled` | bool, `false` | The `.pfb_cron_disable` marker is a file (`pfb_cron_disabled()`); its content is ignored (issue #4031) |
-| `sinkholeV4` | string, an IPv4 address or `""`; `""` | The address of the stored DNSBL VIP `pfb_dnsvip4` (`$pfb['dnsbl_vip4']`) |
-| `sinkholeV6` | string, an IPv6 address without a zone or `""`; `""` | The address of the stored DNSBL VIP `pfb_dnsvip6` (`$pfb['dnsbl_vip6']`) |
 
 - **Suppression limits.** A limit beyond what the IP page offers (hand-edited config.xml: 18, 8.5, `1e1`, negative) reads as
   0, as a group's own `suppressionCidr` reads a value out of its range; today's PHP applies such a number as typed. A limit
@@ -336,7 +337,7 @@ once and reads again, and the Update's start reads the backend again ([Update an
 - `feedfetch` refuses remote feeds with `proxy_unusable` when the configured proxy cannot be used, preserving last-known-good; for FTP it supports only an HTTP proxy and refuses HTTPS/SOCKS rather than sending Basic credentials in cleartext. The proxy is not applied to local files, self-hosted feeds (PHP uses its stream wrapper), or rsync. An empty URL (`""` or `"0"`) means no proxy.
 - **Sinkhole addresses.** What `pfb_global()` resolves from the stored VIP ids, whatever the DNSBL state. A VIP id that resolves to
   nothing, or to an address of the other family or with a zone (a link-local VIP: today's PHP writes it as typed), reads as `""`.
-- **Core refuses what it reads.** `proxyUrl` must use `http`, `https`, `socks5` or `socks5h` with a port from 1 to 65535 and no userinfo; a listed self address an IP address that is not unspecified, link-local, IPv4-mapped or zoned; an allowlist entry an address or a CIDR without a zone; a sinkhole address an address of its family without a zone, or empty. A backend answer that breaks a rule fails the read ([Settings backends](#settings-backends)).
+- **Core refuses what it reads.** `proxyUrl` must use `http`, `https`, `socks5` or `socks5h` with a port from 1 to 65535 and no userinfo; a listed self address an IP address that is not unspecified, link-local, IPv4-mapped or zoned; an allowlist entry an address or a CIDR without a zone. A backend answer that breaks a rule fails the read ([Settings backends](#settings-backends)).
 
 Parity fixture: `tests/core/fixtures/settings_ingest_parity.json`. `CoreSettingsIngestParityTest` (PHPUnit) freezes it
 against today's readers (`pfb_global()`, `pfb_list_cidr_floors()`, `pfb_feed_internal_allowlist()`, `pfb_ip_is_self()`, the
@@ -452,7 +453,7 @@ the only projection of the IDN mode.
 | `safeSearchDoh` | bool, `false` | SafeSearch `safesearch_doh` is exactly `Enable` |
 | `safeSearchDohList` | list keyed by `host`, `[]`; item without control character, space or comma | SafeSearch `safesearch_doh_list` (CSV, each token trimmed) |
 | `dnsblIpAction` | enum of the IP group actions, `Disabled` | dnsbl `action`, as `pfb_dnsblip_action_value()` |
-| `logging` (derived) | enum `enabled` `disabled_log` `disabled` `nxdomain_log` `nxdomain` `nodata_log` `nodata`, `disabled_log` | the mechanism of `pfb_dnsbl_policy_config()` (dnsbl `global_log_mode`, `global_log`) |
+| `logging` (derived) | enum `disabled_log` `disabled` `nxdomain_log` `nxdomain` `nodata_log` `nodata`, `disabled_log` (issue #4053 removed `enabled`, the VIP) | the mechanism of `pfb_dnsbl_policy_config()` (dnsbl `global_log_mode`, `global_log`) |
 | `blacklistLogging` (derived) | same enum | what the Blacklist categories log with: `pfb_dnsbl_effective_logging()` over their stored `blacklist_logging` |
 | `groups` (derived) | list keyed by `name`, `[]`; item `{name, logging: the enum above, primary: bool, top1mFilter: bool}` | the groups `feeds/dnsbl` projects, in its order: the effective logging of the group, whether its stored `order` is `primary`, whether its `filter_top1m` toggle is on |
 
@@ -904,7 +905,7 @@ of `metricsClientIp` goes through `pfb_metrics_client_save()`, as the General pa
 run runs under the DNS config lock, which other saves wait for at most `PFB_DNS_CONFIG_LOCK_WAIT` (10 s), so it asks with
 `PFB_CORE_VALIDATE_TIMEOUT` (3 s) instead of the default 30 s: a Core that has not answered by then could not judge, and the
 page's own checks decide. A save's other side effects wait for the written config too: DNS > DNSBL invalidates the TOP1M
-baseline, requests the TOP1M rebuild and replaces the served block page only after `write_config()` succeeded. After
+baseline and requests the TOP1M rebuild only after `write_config()` succeeded. After
 a written save they call `pfb_core_settings_changed(NULL, TRUE)` (`SettingsChanged`); the tick calls it unforced (compare,
 then notify). The Groups pages and the DNSBL Category (Blacklist) page notify the same way after their written saves, pinned
 by `CoreSettingsFeedPageSavesTest`. A save works while Core is down. A failed notice is logged once per outage and kept in

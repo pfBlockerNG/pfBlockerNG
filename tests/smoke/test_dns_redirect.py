@@ -101,15 +101,13 @@ def deployed_vm(  # noqa: ARG001
     no LAN assigned; DNS redirect tests create LAN-scoped NAT/VIP rules).
 
     Egress stays OPEN across reloads: ``pkg add`` pulls RUN_DEPENDS from the
-    pfSense repo. ``ensure_dnsbl_vip`` gives DNSBL a sinkhole VIP (required for
-    the package to accept a reload). ``use_system_dns_upstream`` points Unbound
+    pfSense repo. ``use_system_dns_upstream`` points Unbound
     at the runner-side mock so the DNSBL update path completes cleanly.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     h.snapshot_unbound_conf(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     try:
         yield smoke_vm
@@ -144,7 +142,6 @@ def _ensure_pkg_installed(deployed_vm: SmokeVM) -> None:
     if not h.pkg_installed(deployed_vm):
         h.deploy(deployed_vm)
         h.snapshot_unbound_conf(deployed_vm)
-        h.ensure_dnsbl_vip(deployed_vm)
         h.use_system_dns_upstream(deployed_vm)
 
 
@@ -1093,7 +1090,7 @@ def test_dns_redirect_master_disable_removes_rules_despite_toggle_on(deployed_vm
 
       Note: the redirect TOGGLE (dnsbl_redir) remains ON throughout; the removal is caused
       solely by the master switch, proving the $mode-coupling in pfblockerng_php_pre_deinstall
-      and pfb_create_dnsbl (devel: DNS-redirect/DoT rules coupled to $mode==='enabled').
+      and the apply (DNS-redirect/DoT rules coupled to $mode==='enabled').
     """
     vm = deployed_vm
     iface = primary_iface
@@ -1352,8 +1349,8 @@ def test_dns_redirect_answers_foreign_ipv6_resolver_query(deployed_vm: SmokeVM, 
 
             # THEN — the same query is answered by pfSense with the block shape.
             after = client_vm.ssh(dig)
-            assert h.is_vip(h._parse_dig(after.stdout, "A")), (
-                f"expected A {h.DEFAULT_DNSBL_VIP4} from {_FOREIGN_RESOLVER6} with redirect on, "
+            assert h.is_null_ip(h._parse_dig(after.stdout, "A")), (
+                f"expected A {h.NULL_IP4} from {_FOREIGN_RESOLVER6} with redirect on, "
                 f"got rc={after.returncode}:\n{after.stdout}"
             )
             # dnsbl.log is written off the DNS path: wait for the row, then check who it names.
@@ -1393,9 +1390,9 @@ _RESOLVER_KEYS = tuple(f"unbound/{key}" for key in MOVED_KEYS)
 
 
 def _answers_listed_name_with_vip(vm: SmokeVM, domain: str) -> bool:
-    """On the box: does pfB-DNS, asked at 127.0.0.1, answer an A query for the listed ``domain`` with the DNSBL VIP?"""
+    """On the box: does pfB-DNS, asked at 127.0.0.1, answer an A query for the listed ``domain`` with 0.0.0.0?"""
     result = vm.ssh(f"{h.DRILL_BIN} {domain} A @127.0.0.1", timeout=30.0)
-    return h.is_vip(h._parse_drill(result.stdout, "A"))
+    return h.is_null_ip(h._parse_drill(result.stdout, "A"))
 
 
 def _ipv6_dns_report(vm: SmokeVM, vip6: str) -> str:
@@ -1527,8 +1524,8 @@ def test_dns_redirect_under_pfb_dns_answers_foreign_ipv6_resolver_query(
                 + _redir_match_report(vm, "lan", expected_present=False)
             )
             before = client_vm.ssh(dig)
-            assert not h.is_vip(h._parse_dig(before.stdout, "A")), (
-                f"expected no A {h.DEFAULT_DNSBL_VIP4} from {_FOREIGN_RESOLVER6} with redirect off, "
+            assert not h.is_null_ip(h._parse_dig(before.stdout, "A")), (
+                f"expected no A {h.NULL_IP4} from {_FOREIGN_RESOLVER6} with redirect off, "
                 f"got rc={before.returncode}:\n{before.stdout}"
             )
             access_paths = (
@@ -1561,12 +1558,12 @@ def test_dns_redirect_under_pfb_dns_answers_foreign_ipv6_resolver_query(
             after = client_vm.ssh(dig)
             answer = h._parse_dig(after.stdout, "A")
             if lan_listens:
-                assert h.is_vip(answer), (
-                    f"expected A {h.DEFAULT_DNSBL_VIP4} from {_FOREIGN_RESOLVER6} with redirect on, "
+                assert h.is_null_ip(answer), (
+                    f"expected A {h.NULL_IP4} from {_FOREIGN_RESOLVER6} with redirect on, "
                     f"got rc={after.returncode}:\n{after.stdout}\n{_ipv6_dns_report(vm, vip6)}"
                 )
             else:
-                assert answer.rcode == "REFUSED" and not h.is_vip(answer), (
+                assert answer.rcode == "REFUSED" and not h.is_null_ip(answer), (
                     f"expected REFUSED from {_FOREIGN_RESOLVER6} for a LAN no listener admits, "
                     f"got rc={after.returncode}:\n{after.stdout}\n{_ipv6_dns_report(vm, vip6)}"
                 )

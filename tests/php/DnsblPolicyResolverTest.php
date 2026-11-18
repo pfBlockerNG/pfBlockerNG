@@ -19,7 +19,7 @@ final class DnsblPolicyResolverTest extends TestCase
 {
 	/** The seven concrete DNSBL blocking/logging mechanisms (issue #3288 Constraints: unchanged). */
 	private const CONCRETE_MECHANISMS = [
-		'enabled', 'disabled_log', 'disabled', 'nxdomain_log', 'nxdomain', 'nodata_log', 'nodata',
+		'disabled_log', 'disabled', 'nxdomain_log', 'nxdomain', 'nodata_log', 'nodata',
 	];
 
 	protected function setUp(): void
@@ -169,16 +169,14 @@ final class DnsblPolicyResolverTest extends TestCase
 	}
 
 	/**
-	 * issue #3288 Constraints: "historical absent/empty/Enabled retain VIP as
-	 * 'enabled'" -- a group the migration never converted (or a fixture/hand-edit
-	 * bypassing it) reads as the concrete mechanism, NOT the new inheritance token.
-	 * Conflating the two would silently turn a static VIP choice into live
-	 * inheritance the operator never opted into.
+	 * issue #3288 Constraints: a historical absent/empty/Enabled VIP marker on a group the migration never converted (or
+	 * a fixture/hand-edit bypassing it) reads as a concrete mechanism, NOT the inheritance token. Issue #4053 removed the
+	 * VIP response, so that mechanism is Null Blocking (logging).
 	 */
 	#[DataProvider('vipMarkerProvider')]
-	public function testGroupLoggingHistoricalVipMarkersReadAsEnabledNotDefault($stored): void
+	public function testGroupLoggingHistoricalVipMarkersReadAsNullBlockingNotDefault($stored): void
 	{
-		$this->assertSame('enabled', pfb_dnsbl_group_logging($stored));
+		$this->assertSame('disabled_log', pfb_dnsbl_group_logging($stored));
 	}
 
 	/** @return array<string,array{0:mixed}> */
@@ -297,17 +295,15 @@ final class DnsblPolicyResolverTest extends TestCase
 	}
 
 	/**
-	 * A historical VIP-marker group (never migrated) under Default policy: it
-	 * normalizes to 'enabled' (NOT 'default'), so it does NOT inherit -- it reads as
-	 * its own explicit 'enabled' choice, exactly like a genuinely migrated group that
-	 * explicitly selected VIP would.
+	 * A historical VIP-marker group (never migrated) under Default policy does NOT inherit: it reads as its own concrete
+	 * choice, which since issue #4053 is Null Blocking (logging).
 	 */
 	#[DataProvider('vipMarkerProvider')]
-	public function testDefaultPolicyUnmigratedVipMarkerResolvesToEnabledNotGlobal($stored): void
+	public function testDefaultPolicyUnmigratedVipMarkerResolvesToNullBlockingNotGlobal($stored): void
 	{
 		$effective = pfb_dnsbl_effective_logging($stored, 'disabled_log', PfbDnsblGlobalMode::Default);
 
-		$this->assertSame('enabled', $effective);
+		$this->assertSame('disabled_log', $effective);
 	}
 
 	/** A junk group under Default policy never inherits the global mechanism, even a VIP one (issue #3539). */
@@ -340,12 +336,12 @@ final class DnsblPolicyResolverTest extends TestCase
 
 	/** Row: "Old no-global-override => Default policy + enabled shared mechanism". */
 	#[DataProvider('legacyNoOverrideProvider')]
-	public function testConfigLegacyNoOverrideIsDefaultEnabledLegacy(array $dconfig, array $groups): void
+	public function testConfigLegacyNoOverrideIsDefaultNullBlockingLegacy(array $dconfig, array $groups): void
 	{
 		$config = pfb_dnsbl_policy_config($dconfig, $groups);
 
 		$this->assertSame(PfbDnsblGlobalMode::Default, $config['mode']);
-		$this->assertSame('enabled', $config['mechanism']);
+		$this->assertSame('disabled_log', $config['mechanism']);
 		$this->assertTrue($config['legacy']);
 	}
 
@@ -397,14 +393,14 @@ final class DnsblPolicyResolverTest extends TestCase
 		];
 	}
 
-	/** Malformed/non-scalar global_log on a legacy (not fresh, mode absent) section fails safe -- Default/'enabled', never a TypeError. */
+	/** Malformed/non-scalar global_log on a legacy (not fresh, mode absent) section fails safe -- Default/'disabled_log' (issue #4053), never a TypeError. */
 	#[DataProvider('nonScalarMalformedProvider')]
 	public function testConfigLegacyNonScalarMalformedMechanismFailsSafe($malformed): void
 	{
 		$config = pfb_dnsbl_policy_config(['pfb_dnsbl' => 'on', 'global_log' => $malformed], []);
 
 		$this->assertSame(PfbDnsblGlobalMode::Default, $config['mode']);
-		$this->assertSame('enabled', $config['mechanism']);
+		$this->assertSame('disabled_log', $config['mechanism']);
 		$this->assertTrue($config['legacy']);
 	}
 
@@ -459,25 +455,19 @@ final class DnsblPolicyResolverTest extends TestCase
 
 	/** legacy=FALSE (the parameter's default) is completely unaffected -- unchanged from Section C above. */
 	#[DataProvider('vipMarkerProvider')]
-	public function testGroupLoggingNonLegacyStillReadsVipMarkersAsEnabled($stored): void
+	public function testGroupLoggingNonLegacyReadsVipMarkersAsNullBlocking($stored): void
 	{
-		$this->assertSame('enabled', pfb_dnsbl_group_logging($stored, FALSE));
+		$this->assertSame('disabled_log', pfb_dnsbl_group_logging($stored, FALSE));
 	}
 
 	/**
-	 * An operator's genuine explicit choice -- ANY of the seven concrete mechanisms,
-	 * 'enabled' (VIP) included once it is the group's OWN literal stored token, not
-	 * an absence/empty/case-variant -- must never be reinterpreted by the legacy
-	 * flag. Only the historical ABSENCE-CLASS markers project; an explicit stored
-	 * 'enabled' is indistinguishable in storage from the legacy marker by design
-	 * (issue #3288 Constraints), so this is intentionally the SAME projection as
-	 * the VIP-marker test above for that one token -- documented here to make clear
-	 * it is not an oversight.
+	 * An operator's genuine explicit choice -- any of the concrete mechanisms -- must never be reinterpreted by the
+	 * legacy flag. Only the historical VIP markers project (issue #4053 removed 'enabled' from the concrete set).
 	 */
 	#[DataProvider('concreteMechanismProvider')]
 	public function testGroupLoggingLegacyNeverAffectsAnExplicitNonAbsenceToken(string $token): void
 	{
-		$expected = $token === 'enabled' ? 'default' : $token;
+		$expected = $token;
 
 		$this->assertSame($expected, pfb_dnsbl_group_logging($token, TRUE));
 	}
@@ -511,7 +501,7 @@ final class DnsblPolicyResolverTest extends TestCase
 	/**
 	 * The regression this closes: WITHOUT the legacy flag (legacy=FALSE, the
 	 * default -- what an already-migrated or never-legacy box always uses), that
-	 * SAME unmigrated group would resolve to its own literal 'enabled' instead,
+	 * SAME unmigrated group resolves to its own concrete mechanism (Null Blocking (logging) since issue #4053),
 	 * never seeing a later global mechanism change. This test documents that this
 	 * IS the pre-#3288-review behaviour for legacy=FALSE, so a future edit cannot
 	 * silently widen legacy=FALSE into also projecting -- the two call sites
@@ -519,11 +509,11 @@ final class DnsblPolicyResolverTest extends TestCase
 	 * box) must stay genuinely distinguishable.
 	 */
 	#[DataProvider('vipMarkerProvider')]
-	public function testEffectiveLoggingNonLegacyLeavesAnUnmigratedVipGroupOnItsOwnMechanism($stored): void
+	public function testEffectiveLoggingNonLegacyGivesAnUnmigratedVipGroupNullBlocking($stored): void
 	{
 		$effective = pfb_dnsbl_effective_logging($stored, 'disabled_log', PfbDnsblGlobalMode::Default, FALSE);
 
-		$this->assertSame('enabled', $effective);
+		$this->assertSame('disabled_log', $effective);
 	}
 
 	/** Override policy already forces the global mechanism regardless of the group -- legacy is irrelevant there too. */
@@ -554,7 +544,6 @@ final class DnsblPolicyResolverTest extends TestCase
 	public static function mechanismFlagProvider(): array
 	{
 		return [
-			'enabled'      => ['enabled', '1'],
 			'disabled_log' => ['disabled_log', '0'],
 			'disabled'     => ['disabled', '2'],
 			'nxdomain_log' => ['nxdomain_log', '3'],

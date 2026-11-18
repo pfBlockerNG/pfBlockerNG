@@ -114,7 +114,7 @@ def _seed_single_dnsbl_row(vm: helpers.SmokeVM, aliasname: str, action: str) -> 
         "aliasname": aliasname,
         "action": action,
         "cron": "Never",
-        "logging": "enabled",
+        "logging": "disabled_log",
         "description": "pfBlockerNG smoke ledger-close dnsbl row",
     }
     snippet = (

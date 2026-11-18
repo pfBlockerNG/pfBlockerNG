@@ -8,9 +8,7 @@
         "python_blocking": "true",
         "python_cname": "true",
         "idn_mode": "confusable",
-        "python_idn_block_malicious": "false",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "python_idn_block_malicious": "false"
       }
     },
     "manifest": {

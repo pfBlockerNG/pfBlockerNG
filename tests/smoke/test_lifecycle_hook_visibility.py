@@ -253,7 +253,7 @@ def test_uninstall_runs_hook_tears_down_and_is_gui_visible(repo_vm: SmokeVM) -> 
       Background: our NONE-signed file:// repo above the Netgate repo (repo_vm).
 
     Given pfBlockerNG installed from our repo with a live DNSBL block (a
-      ``unique_domain()`` name resolves to the sinkhole VIP) and pre+post visibility
+      ``unique_domain()`` name resolves to the null answer) and pre+post visibility
       hooks configured,
     When the GUI delete path (``pfSense-upgrade -y -l <log> -r <name>``) removes the
       package,
@@ -283,11 +283,9 @@ def test_uninstall_runs_hook_tears_down_and_is_gui_visible(repo_vm: SmokeVM) -> 
 
         feed = h.write_local_feed(vm, "lifecycle_hook_vis.txt", f"{domain}\n")
         _enable_dnsbl(vm)
-        h.ensure_dnsbl_vip(vm)
         spec = h.DnsblCase(
             aliasname="LcHookVis",
             feed_url=feed,
-            mode=h.DnsblMode.VIP,
             header="lchookvis",
             hsts=False,
         )
@@ -295,7 +293,7 @@ def test_uninstall_runs_hook_tears_down_and_is_gui_visible(repo_vm: SmokeVM) -> 
         h.reload(vm, "updatednsbl")
 
         given = h.dns_probe(vm, domain, "A")
-        assert h.is_vip(given), (
+        assert h.is_null_ip(given), (
             f"GIVEN: DNSBL was not live before the uninstall for {domain!r}; "
             f"got rcode={given.rcode!r} records={given.records!r}"
         )
@@ -329,8 +327,8 @@ def test_uninstall_runs_hook_tears_down_and_is_gui_visible(repo_vm: SmokeVM) -> 
         assert pkg_installed_version(vm) is None, f"pfSense-upgrade -r did not remove {PKG_NAME}.\n{diag}"
         h.wait_unbound_ready(vm)
         after = h.dns_probe(vm, domain, "A")
-        assert not h.is_vip(after), (
-            f"AFTER uninstall: {domain!r} still resolved to the DNSBL VIP — teardown did not "
+        assert not h.is_null_ip(after), (
+            f"AFTER uninstall: {domain!r} still resolved to the DNSBL null answer — teardown did not "
             f"remove the DNSBL block; got rcode={after.rcode!r} records={after.records!r}\n{diag}"
         )
         assert _TEARDOWN_LINE in gui_log, (

@@ -340,7 +340,7 @@ if (($action == 'add' || $action == 'addgroup') && !empty($atype) && !isset($_PO
 // of legacy state. $pfb_row_is_fresh feeds the render block below, which
 // resolves an EXISTING row's stored choice via the legacy-aware normalizer.
 $pfb_row_is_fresh = ($gtype == 'dnsbl' && config_get_path("installedpackages/{$conf_type}/config/{$rowid}") === NULL);
-$pfb_logging_default = $pfb_row_is_fresh ? 'default' : 'Enabled';
+$pfb_logging_default = $pfb_row_is_fresh ? 'default' : 'disabled_log';	// issue #4053: never the retired VIP marker
 
 $pgtype = 'IP';
 $pg_url = '/pfblockerng/pfblockerng_category.php?type=ipv4';

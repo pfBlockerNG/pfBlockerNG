@@ -527,10 +527,7 @@ function pfBlockerNG_get_header($mode='') {
 			$dnsbl_msg	= sprintf('DNSBL has %d open issue(s). See the Failed Downloads list below.', count($pfb_dnsbl_open));
 		} else {
 			$dnsbl_status	= 'fa-solid fa-check-circle text-success';
-			// issue #3539: the VIP and ports are only meaningful while a block answers with the VIP.
-			$dnsbl_msg	= empty($pfb['dnsbl_vip_demand'])
-				? 'DNSBL is Active.'
-				: "DNSBL is Active on vip: {$pfb['dnsbl_vip4']} ports: {$pfb['dnsbl_port']} & {$pfb['dnsbl_port_ssl']}";
+			$dnsbl_msg	= 'DNSBL is Active.';
 		}
 	} else {
 		$dnsbl_status		= 'fa-solid fa-times-circle text-danger';

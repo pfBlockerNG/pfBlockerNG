@@ -9,17 +9,6 @@ never actually runs there. This module seeds real ISO-format rows and asserts
 the ACTUAL corrected grouping, not merely "the page didn't crash": before this
 phase's fix, every row bucketed to its own distinct second and the hourly chart
 showed an empty hour field -- both regressions this test would catch.
-
-The DNSBL sinkhole block page (``www/index.php``) is a *different* consumer
-this phase also fixes, but it is NOT reachable from this harness: it is served
-by the DNSBL VIP sinkhole lighttpd on a separate port, never the authenticated
-webConfigurator session (see ``test_render_smoke.py``'s
-``EXCLUDED_FROM_TIER_A`` "dnsbl_vip_sinkhole_pages" entry, verified pre-existing
-and unrelated to this phase). Its correlation-grep fix is proven instead by
-``tests/php/LogFormatConsumersTest.php``'s red/green shell-pipeline execution
-tests; live confirmation against a real block is this ADR's own Phase 9
-live-VM smoke item (and ADR-14's separate Tier-B VIP-sinkhole leg) -- not a gap
-in this phase.
 """
 
 from __future__ import annotations

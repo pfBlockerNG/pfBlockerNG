@@ -22,7 +22,7 @@ final class DnsblPolicyMigrationPipelineOrderingTest extends TestCase
 
 	/** The seven concrete DNSBL blocking/logging mechanisms (issue #3288 Constraints: unchanged). */
 	private const CONCRETE_MECHANISMS = [
-		'enabled', 'disabled_log', 'disabled', 'nxdomain_log', 'nxdomain', 'nodata_log', 'nodata',
+		'disabled_log', 'disabled', 'nxdomain_log', 'nxdomain', 'nodata_log', 'nodata',
 	];
 
 	protected function setUp(): void
@@ -182,14 +182,14 @@ final class DnsblPolicyMigrationPipelineOrderingTest extends TestCase
 		$this->assertSame([], $result['groups'], 'a genuinely fresh install has no groups to convert');
 	}
 
-	public function testOldNoOverrideEndsWithDefaultModeAndEnabledMechanism(): void
+	public function testOldNoOverrideEndsWithDefaultModeAndNullBlockingMechanism(): void
 	{
 		$this->seedDnsbl(['pfb_dnsbl' => 'on']); // global_log absent entirely.
 
 		$result = $this->runInstallSequence();
 
 		$this->assertSame('default', $result['dnsbl']['global_log_mode'] ?? null);
-		$this->assertSame('enabled', $result['dnsbl']['global_log'] ?? null);
+		$this->assertSame('disabled_log', $result['dnsbl']['global_log'] ?? null);
 	}
 
 	#[DataProvider('concreteMechanismProvider')]
@@ -227,7 +227,7 @@ final class DnsblPolicyMigrationPipelineOrderingTest extends TestCase
 
 		$this->assertSame('default', $result['dnsbl']['global_log_mode'] ?? null,
 			'the corrected OLDCFG classification must survive pfb_registry_pass() intact');
-		$this->assertSame('enabled', $result['dnsbl']['global_log'] ?? null,
+		$this->assertSame('disabled_log', $result['dnsbl']['global_log'] ?? null,
 			'must be the grandfathered VIP mechanism, never the fresh disabled_log default');
 		$this->assertSame('default', $result['groups'][0]['logging'] ?? null);
 		$this->assertSame('disabled_log', $result['groups'][1]['logging'] ?? null,
@@ -265,9 +265,9 @@ final class DnsblPolicyMigrationPipelineOrderingTest extends TestCase
 	}
 
 	/**
-	 * "a later explicit VIP choice must not be reconverted upon subsequent upgrades"
+	 * "a later explicit choice must not be reconverted upon subsequent upgrades"
 	 * at the FULL pipeline level: after the first install run converts the group to
-	 * 'default', the operator explicitly re-selects 'enabled'; a second install run
+	 * 'default', the operator explicitly selects 'nxdomain'; a second install run
 	 * (the next package upgrade) must leave that choice alone.
 	 */
 	public function testSecondPipelineRunDoesNotReconvertAnExplicitPostMigrationChoice(): void
@@ -278,12 +278,12 @@ final class DnsblPolicyMigrationPipelineOrderingTest extends TestCase
 		$first = $this->runInstallSequence();
 		$this->assertSame('default', $first['groups'][0]['logging'] ?? null, 'sanity: first run converts');
 
-		// Operator explicitly re-selects VIP via the group editor.
-		$this->seedGroups([0 => ['aliasname' => 'X', 'logging' => 'enabled']]);
+		// Operator explicitly selects NXDOMAIN via the group editor.
+		$this->seedGroups([0 => ['aliasname' => 'X', 'logging' => 'nxdomain']]);
 
 		$second = $this->runInstallSequence();
 
-		$this->assertSame('enabled', $second['groups'][0]['logging'] ?? null,
+		$this->assertSame('nxdomain', $second['groups'][0]['logging'] ?? null,
 			'the marker (global_log_mode already present) must block reconversion on the next upgrade');
 	}
 }

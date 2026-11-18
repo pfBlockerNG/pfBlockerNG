@@ -69,12 +69,12 @@ final class DnsblSaveWithPfbDnsOffTest extends TestCase
 		$result = $this->runWorker('DnsblSaveWorker', $scenario);
 		$this->assertNotSame('on', self::at($result['before'], self::DNS . '/pfb_dns'), 'before: pfB-DNS is not On');
 		$this->assertNotSame('on', self::at($result['before'], self::DNSBL . '/pfb_dnsbl'), 'before: DNSBL is not On');
-		$this->assertNotSame('8082', self::at($result['before'], self::DNSBL . '/pfb_dnsport'), 'before: not the posted port');
+		$this->assertNotSame('777', self::at($result['before'], self::DNSBL . '/pfb_py_cache_max'), 'before: not the posted cache cap');
 
 		// Then the save goes through with no error: DNSBL On and the posted port are stored
 		$this->assertSame([], $result['inputErrors']);
 		$this->assertSame('on', self::at($result['disk'], self::DNSBL . '/pfb_dnsbl'), 'DNSBL is saved On');
-		$this->assertSame('8082', self::at($result['disk'], self::DNSBL . '/pfb_dnsport'), 'with the posted port');
+		$this->assertSame('777', self::at($result['disk'], self::DNSBL . '/pfb_py_cache_max'), 'with the posted cache cap');
 
 		// and the pfB-DNS enable is exactly what it was: a save of DNSBL never moves it
 		$this->assertSame(self::at($result['before'], self::DNS . '/pfb_dns'), self::at($result['disk'], self::DNS . '/pfb_dns'));

@@ -41,7 +41,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 	private const PKG_ABORT = 3;
 
 	/** What the package registers, next to the two services of other packages the worker seeds. */
-	private const OURS = ['pfb_core', 'pfb_dnsbl', 'pfb_dns_proxy', 'pfb_filter'];
+	private const OURS = ['pfb_core', 'pfb_dns_proxy', 'pfb_filter'];
 	private const THEIRS = ['squid', 'zeek'];
 
 	/** @var list<string> */
@@ -124,7 +124,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		$this->assertSame(self::PKG_ABORT, $removal['exit'], 'before: the removal aborted');
 		$services = $removal['services'];
 		sort($services);
-		$this->assertSame(['pfb_core', 'pfb_dns_proxy', 'pfb_dnsbl', 'pfb_filter', 'squid', 'zeek'], $services,
+		$this->assertSame(['pfb_core', 'pfb_dns_proxy', 'pfb_filter', 'squid', 'zeek'], $services,
 			'the package\'s four services are registered again, once each, and the other packages\' are all still there: ' . json_encode($removal['services']));
 		$this->assertSame(1, count(array_keys($removal['menus'], 'Firewall:pfBlockerNG', TRUE)), 'its menu entry is back, once: ' . json_encode($removal['menus']));
 		$this->assertTrue($removal['foreign'], 'another package\'s service and menu entry are untouched, field for field');
@@ -145,8 +145,8 @@ final class DnsProxyUninstallAbortTest extends TestCase
 			. 'registration is ignored, which is the defect): ' . json_encode($removal['events']));
 		$this->assertFalse($removal['noModule'], 'it hosts the DNSBL module config.xml says is on, not the uninstall\'s "pfBlockerNG is off" view');
 		$this->assertTrue($removal['rcSameAsBaseline'], 'its rc script is the one the last apply wrote');
-		$this->assertTrue($removal['iniSameAsBaseline'], 'and the module\'s ini is the one the last apply wrote: VIP and client logging as they were');
-		$this->assertStringContainsString("dnsbl_ipv4\t= 10.10.10.1", $removal['ini'], 'the DNSBL VIP');
+		$this->assertTrue($removal['iniSameAsBaseline'], 'and the module\'s ini is the one the last apply wrote: the cache cap and client logging as they were');
+		$this->assertStringContainsString("decisiondb_max\t= 777", $removal['ini'], 'the decision cache cap');
 		$this->assertStringContainsString("python_reply\t= on", $removal['ini'], 'DNS reply logging');
 	}
 
@@ -157,9 +157,8 @@ final class DnsProxyUninstallAbortTest extends TestCase
 
 		$this->assertSame(self::PKG_ABORT, $removal['exit'], 'before: the removal aborted');
 		$this->assertContains('pfb_filter', $removal['running'], 'the filter daemon: pfBlockerNG is enabled');
-		$this->assertContains('pfb_dnsbl', $removal['running'], 'the DNSBL web server: DNSBL is enabled');
 		$this->assertContains('pfb_core', $removal['running'], 'the Core API: it runs whatever the settings say (issue #3841)');
-		$this->assertEqualsCanonicalizing(['pfb_core', 'pfb_dns_proxy', 'pfb_filter', 'pfb_dnsbl', 'squid', 'zeek'], $removal['running'], 'and nothing else comes up');
+		$this->assertEqualsCanonicalizing(['pfb_core', 'pfb_dns_proxy', 'pfb_filter', 'squid', 'zeek'], $removal['running'], 'and nothing else comes up');
 		$this->assertNotSame([], array_filter($removal['notices'], static fn (string $notice): bool => str_contains($notice, 'removal was stopped')
 			&& str_contains($notice, 'service entries were registered again') && str_contains($notice, 'DNS proxy is running')),
 			'the notice says the removal stopped and that the registrations and the proxy are back: ' . json_encode($removal['notices']));
@@ -176,7 +175,6 @@ final class DnsProxyUninstallAbortTest extends TestCase
 
 		$this->assertTrue($removal['iniSameAsBaseline'], 'the ini is written again with what config.xml stores: VIP, logging and control as they were');
 		$this->assertStringContainsString("python_enable\t= on", $removal['ini'], 'with the module enabled, not the removal\'s disabled view');
-		$this->assertStringContainsString("dnsbl_ipv4\t= 10.10.10.1", $removal['ini']);
 		$this->assertStringContainsString("decisiondb_max\t= 777", $removal['ini'], 'and the recovery writes that cap, not the default');
 	}
 
@@ -208,7 +206,6 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		$this->assertSame(self::PKG_ABORT, $removal['exit'], 'before: the removal aborted');
 		$this->assertEqualsCanonicalizing(array_merge($started, self::THEIRS), $removal['running'], 'exactly the services the stored settings need run: ' . json_encode($removal['events']));
 		$this->assertTrue($removal['noModule'], 'the proxy forwards only: DNSBL is not on in config.xml');
-		$this->assertNotContains('start:pfb_dnsbl', $removal['events'], 'the DNSBL web server is not started');
 		$this->assertEqualsCanonicalizing(array_merge(self::OURS, self::THEIRS), $removal['services'], 'the registrations come back whatever is on');
 	}
 
@@ -308,7 +305,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		$this->assertContains('pfb_dns_proxy', $removal['running'], 'the proxy that answers the moved Resolver\'s clients is running');
 		$services = $removal['services'];
 		sort($services);
-		$this->assertSame(['pfb_core', 'pfb_dns_proxy', 'pfb_dnsbl', 'pfb_filter', 'squid', 'zeek'], $services, 'the package\'s services are registered again, once each: ' . json_encode($removal['services']));
+		$this->assertSame(['pfb_core', 'pfb_dns_proxy', 'pfb_filter', 'squid', 'zeek'], $services, 'the package\'s services are registered again, once each: ' . json_encode($removal['services']));
 		$this->assertFalse($removal['lockHeld'], 'no config lock is left held');
 
 		// ... and the operator is told why the Resolver was not put back, and that the removal stopped
@@ -366,7 +363,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		// ... what pfSense took before the hook is put back, but no proxy is started: there is no snapshot for it to serve
 		$services = $removal['services'];
 		sort($services);
-		$this->assertSame(['pfb_core', 'pfb_dns_proxy', 'pfb_dnsbl', 'pfb_filter', 'squid', 'zeek'], $services, 'the package\'s services are registered again, once each: ' . json_encode($removal['services']));
+		$this->assertSame(['pfb_core', 'pfb_dns_proxy', 'pfb_filter', 'squid', 'zeek'], $services, 'the package\'s services are registered again, once each: ' . json_encode($removal['services']));
 		$this->assertNotContains('pfb_dns_proxy', $removal['running'], 'nothing is started for a proxy that has nothing to serve');
 		$this->assertFalse($removal['lockHeld'], 'no config lock is left held');
 
@@ -457,7 +454,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 
 		// When the removal runs: the restore ahead of the pass succeeds, the pass moves the Resolver again, the restore after the pass is refused.
 		$baseline = $this->baseline($removal['state']);
-		$this->assertStringContainsString("dnsbl_ipv4\t= 10.10.10.1", $baseline['ini'], 'before: the DNSBL VIP is the blocking mechanism');
+		$this->assertStringContainsString("decisiondb_max\t= 777", $baseline['ini'], 'before: the decision cache cap the apply wrote');
 		$writes = $this->writes($removal);
 		$restored = array_search('Restored the DNS Resolver settings the DNS proxy had moved', $writes, TRUE);
 		$moved = array_search('Moved the DNS Resolver onto loopback for the DNS proxy', $writes, TRUE);
@@ -480,10 +477,9 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		$this->assertTrue($removal['rcSameAsBaseline'], 'exactly as the last apply wrote it');
 		$this->assertTrue($removal['iniSameAsBaseline'], 'with the module\'s ini of the last apply: VIP and logging as they were');
 		$this->assertContains('pfb_dns_proxy', $removal['running'], 'the proxy runs');
-		$this->assertContains('pfb_dnsbl', $removal['running'], 'with the DNSBL web server');
 		$services = $removal['services'];
 		sort($services);
-		$this->assertSame(['pfb_core', 'pfb_dns_proxy', 'pfb_dnsbl', 'pfb_filter', 'squid', 'zeek'], $services, 'the package\'s four services are registered again');
+		$this->assertSame(['pfb_core', 'pfb_dns_proxy', 'pfb_filter', 'squid', 'zeek'], $services, 'the package\'s three services are registered again');
 		$this->assertFalse($removal['lockHeld'], 'no config lock is left held');
 		$this->assertNotSame([], array_filter($removal['notices'], static fn (string $notice): bool => str_contains($notice, 'removal was stopped')
 			&& str_contains($notice, 'service entries were registered again') && str_contains($notice, 'DNS proxy is running')),
@@ -578,7 +574,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		$aborted = $this->removal('lock', 'on');
 		$state = $aborted['state'];
 		$baseline = $this->baseline($state);
-		$this->assertStringContainsString("dnsbl_ipv4\t= 10.10.10.1", $baseline['ini'], 'before: the DNSBL VIP is the blocking mechanism');
+		$this->assertStringContainsString("decisiondb_max\t= 777", $baseline['ini'], 'before: the decision cache cap the apply wrote');
 		$this->assertStringContainsString("python_reply\t= on", $baseline['ini'], 'before: clients\' DNS replies are logged');
 		$this->assertSame(self::PKG_ABORT, $aborted['exit'], 'the first removal aborted');
 		$this->assertContains('pfb_dns_proxy', $aborted['running'], 'and left the proxy answering');

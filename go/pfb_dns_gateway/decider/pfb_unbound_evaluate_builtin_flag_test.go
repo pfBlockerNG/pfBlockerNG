@@ -36,11 +36,7 @@ func TestNumericReattributionToHigherBandRegexTakesTheBuiltinLogFlag(t *testing.
 					t.Errorf("logType = %q, want the builtin flag %q", got.logType, flag)
 				}
 				switch flag {
-				case "1":
-					if got.nullBlocking != hsts || got.nxdomain || got.inHsts != hsts {
-						t.Errorf("(nullBlocking, nxdomain, inHsts) = (%v, %v, %v), want (%v, false, %v): flag 1 is VIP unless the name is HSTS", got.nullBlocking, got.nxdomain, got.inHsts, hsts, hsts)
-					}
-				case "0", "2":
+				case "0", "1", "2": // issue #4053: flag 1 (the removed VIP) answers null like 0 and 2
 					if !got.nullBlocking || got.nxdomain || got.inHsts != hsts {
 						t.Errorf("(nullBlocking, nxdomain, inHsts) = (%v, %v, %v), want (true, false, %v)", got.nullBlocking, got.nxdomain, got.inHsts, hsts)
 					}

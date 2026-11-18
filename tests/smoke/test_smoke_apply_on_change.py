@@ -43,7 +43,6 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     # One real feed group, as a configured box has; the scenarios below arrange their own pending apply.
     feed_url = h.write_local_feed(smoke_vm, "smoke_apply_ip.txt", "192.0.2.20/32\n192.0.2.21/32\n")

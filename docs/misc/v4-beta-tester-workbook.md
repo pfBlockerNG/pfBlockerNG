@@ -417,12 +417,11 @@ Two controls sit in the main **DNSBL** section of the DNSBL tab, just below
 
 **Global Logging/Blocking Mechanism** — how a blocked name is answered:
 
-- **DNSBL WebServer/VIP (deprecated)** — send the client to the sinkhole IP (block page). Still works while a block uses it; see Auto VIP below
 - **Null Blocking (logging)** / **(no logging)** — answer `0.0.0.0`
 - **NXDOMAIN (logging)** / **(no logging)** — answer “this name does not
-  exist” (no block page)
+  exist”
 - **NODATA (logging)** / **(no logging)** — answer “the name exists but has
-  no address” (an empty reply; no block page)
+  no address” (an empty reply)
 
 **Global Application Mode** — how that mechanism is applied:
 
@@ -434,8 +433,9 @@ Two controls sit in the main **DNSBL** section of the DNSBL tab, just below
 The **Blacklist** category has its own **Default** choice on the **Blacklist** tab. Default follows the global mechanism, as a DNSBL group does.
 
 New installs start on Default with Null Blocking (logging). An upgraded box
-keeps what it had: no previous override means Default with DNSBL
-WebServer/VIP; an active override stays as Override with the same answer.
+keeps what it had, except that the removed DNSBL WebServer/VIP response becomes
+Null Blocking (logging) wherever it was used (globally, on a group or on the
+Blacklist category); an active override stays as Override.
 After changing either control, save and run a DNSBL update (**Update → Run
 Now**, Scope **DNSBL** or **Both**).
 
@@ -444,8 +444,7 @@ edit page (**DNSBL → DNSBL Groups**, then the pencil on a group). New groups
 start on Default. **Group Order** (Primary) on that page decides which group
 is considered first.
 
-**HSTS mode** (still there) answers known HSTS-preload names with `0.0.0.0`
-instead of the VIP, which may avoid browser certificate errors.
+**HSTS mode** has no effect since the VIP response was removed (#4053), and goes in a follow-up.
 
 **CNAME Validation** also checks the names a domain points at.
 
@@ -457,7 +456,7 @@ allowed; it can fill the log.
       Application Mode** after the upgrade
 - [ ] Optional: set the mechanism to **NXDOMAIN (logging)** and the
       application mode to **Override**, save, DNSBL update, resolve a
-      blocked name — you should see “does not exist,” not a block page
+      blocked name — you should see “does not exist,” not `0.0.0.0`
 - [ ] Optional: with application mode **Default**, set one group to
       **NXDOMAIN (logging)**, update, and confirm only that group’s names
       answer that way
@@ -491,31 +490,16 @@ prefixes).
 - [ ] Note whether it is on or off after your upgrade
 - [ ] Leave it as-is unless a feed is clearly dropping lines it should keep
 
-### Auto VIP (deprecated)
+### DNSBL web server and VIP removed
 
-pfBlockerNG can create the sinkhole Virtual IP for you
-(**Create VIPs automatically**). The VIP, the DNSBL web server (lighttpd), its NAT
-rules and its certificate exist only while something answers with the VIP response:
-a DNSBL group, the Blacklist category, or an enabled built-in block (regex, IDN, TLD
-Allow or TLD Blacklist) while the global mechanism is WebServer/VIP. Without that,
-the VIP is not required or checked, and the ports are not required.
+The DNSBL web server (the block page), its VIP, NAT rules, certificate and ports are gone. After the
+upgrade:
 
-**Auto NAT** (on the same Webserver block) can be ticked to *stop* automatic
-NAT rules if you manage those yourself. It only applies when the web server
-is **not** on Localhost.
-
-**DNSBL Event Logging** is on this block too. The checkbox is labelled
-**Enable**, but ticking it *turns off* resolver event logging and uses the
-DNSBL web server for hits instead (null-blocked events still log). Easy to
-misread.
-
-- [ ] Only if something uses the VIP response: DNSBL Webserver Configuration → **Create VIPs automatically**
-- [ ] Save, confirm **Firewall → Virtual IPs** shows the managed VIP
-- [ ] If the checkbox is greyed out, every auto candidate is already in
-      use — pick a VIP by hand instead
-- [ ] Check with Null Blocking everywhere (global mechanism, every group and the Blacklist category): save and run a DNSBL update. No managed VIP should remain and the DNSBL web server should be stopped (**Status → Services**)
-- [ ] Read the Event Logging help before ticking it; leave it as you found
-      it unless you are testing that path
+- [ ] **Firewall → Virtual IPs** no longer shows a `pfB_AUTO_VIP_v4` / `pfB_AUTO_VIP_v6` VIP; a VIP
+      you created yourself is still there (pfBlockerNG no longer uses it)
+- [ ] **Firewall → NAT** shows no `pfB DNSBL - DO NOT EDIT` rule, and **Status → Services** no longer
+      lists the pfBlockerNG DNSBL service
+- [ ] A blocked name answers `0.0.0.0` (or NXDOMAIN/NODATA if you chose those), never the old VIP
 
 ### IDN / look-alike names
 

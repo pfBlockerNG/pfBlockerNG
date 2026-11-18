@@ -36,8 +36,6 @@ final class GateDisableUiTest extends TestCase
 		$dnsbl = self::dnsbl();
 		foreach ([
 			'pfb_psl_include_private',
-			'pfb_dnsport',
-			'pfb_dnsport_ssl',
 			'pfb_psl_allow_private',
 			'aliaslog',
 		] as $id) {

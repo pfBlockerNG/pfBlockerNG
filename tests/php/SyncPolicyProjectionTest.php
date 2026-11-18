@@ -265,7 +265,6 @@ final class SyncPolicyProjectionTest extends TestCase
 
 		// The registry class, not the section alias, decides: the DNSBL and IP sections follow it too.
 		$this->assertSame('policy', $registry['dnsbl/pfb_hsts']['sync'] ?? NULL);
-		$this->assertSame('local', $registry['dnsbl/pfb_dnsport']['sync'] ?? NULL);
 		$this->assertSame('policy', $registry['ip/enable_dup']['sync'] ?? NULL);
 		$this->assertSame('local', $registry['ip/enable_rdns']['sync'] ?? NULL);
 		$this->assertSame([

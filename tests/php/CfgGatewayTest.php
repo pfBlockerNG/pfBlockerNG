@@ -42,7 +42,6 @@ final class CfgGatewayTest extends TestCase
 		'dnsbl/pfb_regex'    => 'pfb_regex',
 		'dnsbl/pfb_cname'    => 'pfb_cname',
 		'dnsbl/tld_allow'    => 'tld_allow',
-		'dnsbl/pfb_py_nolog' => 'pfb_py_nolog',
 		'dnsbl/pfb_noaaaa'   => 'pfb_noaaaa',
 		'dnsbl/pfb_gp'       => 'pfb_gp',
 	];
@@ -151,8 +150,6 @@ final class CfgGatewayTest extends TestCase
 		$toggle_fields = [
 			'gen/enable_cb'        => 'installedpackages/pfblockerng/config/0/enable_cb',
 			'dnsbl/pfb_dnsbl'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
-			'dnsbl/pfb_dnsvip_auto'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
-			'dnsbl/pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
 			'gen/pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
 			'dnsbl/pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
 			'dnsbl/pfb_psl_include_private' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_include_private',
@@ -194,8 +191,6 @@ final class CfgGatewayTest extends TestCase
 		$toggle_fields = [
 			'gen/enable_cb'        => 'installedpackages/pfblockerng/config/0/enable_cb',
 			'dnsbl/pfb_dnsbl'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
-			'dnsbl/pfb_dnsvip_auto'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
-			'dnsbl/pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
 			'gen/pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 			'dns/pfb_dns'    => 'installedpackages/pfblockerngdns/config/0/pfb_dns',
@@ -774,43 +769,6 @@ final class CfgGatewayTest extends TestCase
 		PfbConfig::write('dnsbl/top1m_token', $token);
 		$this->assertSame($token, config_get_path($path), 'top1m_token write() must store the token verbatim');
 		$this->assertSame($token, PfbConfig::read('dnsbl/top1m_token'), 'top1m_token read() must return the stored token verbatim');
-	}
-
-	/** @return array<string,array{0:string,1:string,2:string}> */
-	public static function autoVipAddressKeys(): array
-	{
-		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
-		return [
-			'v4' => ['dnsbl/pfb_dnsvip_auto4', "{$section}/pfb_dnsvip_auto4", '192.168.53.1'],
-			'v6' => ['dnsbl/pfb_dnsvip_auto6', "{$section}/pfb_dnsvip_auto6", 'fd00:53:53:53:53:53:53:1'],
-		];
-	}
-
-	/**
-	 * issue #3540: the synced address of the auto-created DNSBL VIP is a plain string; absent = no
-	 * synced address = the prior behaviour, so it reads as '' and any stored address round-trips.
-	 */
-	#[DataProvider('autoVipAddressKeys')]
-	public function testAutoVipAddressDefaultsToEmptyAndRoundTrips(string $key, string $path, string $address): void
-	{
-		$this->assertNull(config_get_path($path), 'before-state: the key is absent');
-		$this->assertSame('', PfbConfig::read($key), "{$key} absent -> default ''");
-
-		PfbConfig::write($key, $address);
-
-		$this->assertSame($address, config_get_path($path), "{$key} write() must store the address verbatim");
-		$this->assertSame($address, PfbConfig::read($key), "{$key} read() must return the stored address verbatim");
-	}
-
-	public function testReadReturnsRegisteredDefaultForDnsblInterfaceAbsentKey(): void
-	{
-		// dnsbl_interface default is 'lo0'.
-		$this->assertNull(
-			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_interface')
-		);
-
-		$result = PfbConfig::read('dnsbl/dnsbl_interface');
-		$this->assertSame('lo0', $result);
 	}
 
 	public function testReadReturnsRejectDefaultForDotBlockActionAbsentKey(): void
@@ -1614,7 +1572,6 @@ final class CfgGatewayTest extends TestCase
 			// pfblockerngdnsblsettings foreign key: written directly by
 			// www/pfblockerng_dnsbl.php and read via pfb_dnsbl_webpage() (issue #713
 			// removed the never-written 'dnsblwebpage' registry mis-spelling).
-			'dnsbl_webpage',
 		];
 
 		// Verify the out-of-scope list doesn't conflict with the registry
@@ -1689,16 +1646,7 @@ final class CfgGatewayTest extends TestCase
 
 			// pfblockerngdnsblsettings/config/0 scalars
 			'pfb_dnsbl',
-			'pfb_dnsvip_auto',
-			'pfb_dnsbl_nonat',
-			'dnsbl_interface',
-			'pfb_dnsvip4',
-			'pfb_dnsvip6',
 			// issue #3540: the address of this node's auto-created sinkhole VIP, synced as policy
-			'pfb_dnsvip_auto4',
-			'pfb_dnsvip_auto6',
-			'pfb_dnsport',
-			'pfb_dnsport_ssl',
 			'top1m_enable',
 			'top1m_source',
 			'top1m_count',
@@ -1750,7 +1698,6 @@ final class CfgGatewayTest extends TestCase
 			'tld_allow_cctld',
 			'tld_allow_itld',
 			'tld_allow_bgtld',
-			'pfb_py_nolog',
 			'pfb_noaaaa',
 			'pfb_noaaaa_list',
 			'pfb_gp',
@@ -1759,8 +1706,6 @@ final class CfgGatewayTest extends TestCase
 			'tld_wildcard_exclusion',
 			'whitelist',
 			'action',
-			'pfb_dnsbl_rule',
-			'dnsbl_allow_int',
 			'pfb_control',
 			'pfb_control_legacy',
 			'pfb_py_cache_max',
@@ -1840,7 +1785,6 @@ final class CfgGatewayTest extends TestCase
 			'varsynconchanges',
 			'varsynctimeout',
 			'varsyncdestinenable',
-			'dnsbl_webpage',
 		];
 
 		// Deduplicate (some keys appear in multiple sections).
@@ -1876,8 +1820,8 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('6', PfbConfig::read('gen/pfb_schedule_hour'));
 
 		// DNSBL settings section key.
-		$this->seedConfig('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsport', '8080');
-		$this->assertSame('8080', PfbConfig::read('dnsbl/pfb_dnsport'));
+		$this->seedConfig('installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_cache_max', '777');
+		$this->assertSame('777', PfbConfig::read('dnsbl/pfb_py_cache_max'));
 
 		// SafeSearch section key (flat, no /config/0).
 		$this->seedConfig('installedpackages/pfblockerngsafesearch/safesearch_enable', 'Google');
@@ -3325,7 +3269,8 @@ final class CfgGatewayTest extends TestCase
 		}
 
 		foreach ($fixture as $bare => $expected) {
-			if (in_array($bare, $retired, TRUE)) {
+			// issue #4053: the removed block-page web server's keys left the registry on purpose.
+			if (in_array($bare, $retired, TRUE) || in_array($bare, PFB_DNSBL_RETIRED_KEYS, TRUE)) {
 				continue;
 			}
 			$this->assertArrayHasKey($expected['section'], $alias_of_section,

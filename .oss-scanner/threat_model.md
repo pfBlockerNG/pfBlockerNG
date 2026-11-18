@@ -15,22 +15,19 @@ Ranked by exposure:
 1. **DNS queries from LAN clients.** The pfB-DNS gateway (`go/pfb_dns_gateway/`) decides
    every query and sees each query name, type and client address.
    Any client that can reach the resolver is untrusted.
-2. **The DNSBL block page.** `src/usr/local/www/pfblockerng/www/index.php` and
-   `dnsbl_default.php` are served without authentication by a dedicated lighttpd instance on
-   the DNSBL VIP. The Host header, URI, Referer and User-Agent are attacker-controlled.
-3. **Feed contents.** Feeds are downloaded from third parties, often over plain HTTP, and
+2. **Feed contents.** Feeds are downloaded from third parties, often over plain HTTP, and
    may be compressed (gzip, zip, 7z, tar). Treat every byte as hostile: parsing, archive
    extraction, normalization (`pfb_feed_normalize.py`, `pfblockerng.inc`, `pfblockerng.sh`,
    `list_scripts/`) and anything later built from feed data (aliases, Unbound zone data,
    regex rules, shell command lines).
-4. **Data rendered in the web UI.** Log lines, alert data and feed entries that originate
-   from items 1 to 3 are displayed on the Alerts, Reports and Log pages. Stored XSS through
+3. **Data rendered in the web UI.** Log lines, alert data and feed entries that originate
+   from items 1 and 2 are displayed on the Alerts, Reports and Log pages. Stored XSS through
    these paths is in scope.
-5. **The authenticated web UI** (`src/usr/local/www/pfblockerng/*.php`, widgets, wizards).
+4. **The authenticated web UI** (`src/usr/local/www/pfblockerng/*.php`, widgets, wizards).
    Assume an attacker who can make a logged-in administrator's browser send requests
    (CSRF, reflected XSS), or a pfSense user with only some pfBlockerNG page privileges trying
    to escalate.
-6. **XMLRPC HA sync** (`pfblockerng_sync.php` and the sync code in `pfblockerng.inc`), which
+5. **XMLRPC HA sync** (`pfblockerng_sync.php` and the sync code in `pfblockerng.inc`), which
    pushes configuration to a peer firewall.
 
 ## Out of scope / by design
@@ -66,7 +63,7 @@ Ranked by exposure:
   reaches an administrator from LAN or feed input; silently disabling enforcement (a
   crafted feed or query that bypasses blocking for entries that should match).
 - **Medium:** CSRF or reflected XSS against an administrator; privilege escalation between
-  pfSense user privilege levels; information disclosure on the block page; resource
+  pfSense user privilege levels; resource
   exhaustion that recovers on its own.
 - **Low:** issues that require full administrator access, or that only affect
   defense in depth.

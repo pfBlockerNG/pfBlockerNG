@@ -61,8 +61,8 @@ final class BlacklistLoggingDefaultTest extends TestCase
 		return [
 			'absent joins the policy'       => [[], 'default'],
 			'stored Default'                => [['blacklist_logging' => 'default'], 'default'],
-			'empty is the legacy VIP marker' => [['blacklist_logging' => ''], 'enabled'],
-			'explicit VIP'                  => [['blacklist_logging' => 'enabled'], 'enabled'],
+			'empty is the legacy VIP marker' => [['blacklist_logging' => ''], 'disabled_log'],	// issue #4053: the VIP is Null Blocking
+			'explicit VIP'                  => [['blacklist_logging' => 'enabled'], 'disabled_log'],
 			'explicit Null Blocking'        => [['blacklist_logging' => 'disabled'], 'disabled'],
 			'NXDOMAIN keeps its token'      => [['blacklist_logging' => 'nxdomain_log'], 'nxdomain_log'],
 			'junk fails safe'               => [['blacklist_logging' => 'bogus'], 'disabled_log'],

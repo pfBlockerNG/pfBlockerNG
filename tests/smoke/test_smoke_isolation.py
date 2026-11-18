@@ -16,8 +16,7 @@ These two tests pin the keystone's behaviour (red→green vs the old ``reset()``
   tables/sqlite/pf rules — is ``reset()``'s existing ``clearip``/``cleardnsbl`` path, already
   covered; the NEW behaviour proved here is the config deletion.)
 * ``test_dnsbl_inject_replaces_leaked_toggle`` — a later DNSBL case's settings are EXACTLY what
-  it declares: a prior case's ``pfb_hsts`` does not survive (replace-not-merge), while the
-  VIP/port infrastructure ``ensure_dnsbl_vip`` set IS preserved (so DNSBL is not force-disabled).
+  it declares: a prior case's ``pfb_hsts`` does not survive (replace-not-merge).
   A plain ``array_merge`` leaves ``pfb_hsts=on`` leaked → the first ``Then`` fails on the old path.
 
 Two more (issue #1214), same keystone family:
@@ -54,16 +53,14 @@ HOST_ENTRIES_CONF = "/var/unbound/host_entries.conf"
 
 @pytest.fixture(scope="module")
 def deployed_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
-    """Deploy the branch .pkg + the DNSBL VIP baseline for the isolation tests.
+    """Deploy the branch .pkg for the isolation tests.
 
     No stub DNS / client VM / feed fetch: these tests assert at the config + host_entries.conf
-    level, so they never load a feed or resolve a name. ``ensure_dnsbl_vip`` is what sets the
-    VIP/port infra keys the replace-not-merge test asserts are preserved.
+    level, so they never load a feed or resolve a name.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     try:
         yield smoke_vm
     finally:
@@ -131,27 +128,19 @@ def test_reset_pfb_baseline_clears_injected_config(deployed_vm: SmokeVM) -> None
 
 def test_dnsbl_inject_replaces_leaked_toggle(deployed_vm: SmokeVM) -> None:
     """A DNSBL case's settings are EXACTLY what it declares: a prior case's pfb_hsts does not
-    leak into a later one (replace-not-merge), while the VIP/port infrastructure is preserved.
+    leak into a later one (replace-not-merge).
 
     Scenario:
-      Given the DNSBL VIP infra is set (deployed_vm ran ensure_dnsbl_vip),
       When a case with HSTS-null blocking is injected,
       Then pfb_hsts is 'on';
       When a later case WITHOUT hsts is injected (reset() between cases never clears config, so a
         plain array_merge would keep pfb_hsts=on),
-      Then pfb_hsts is gone AND the VIP infra key is still present (DNSBL stays enabled).
+      Then pfb_hsts is gone.
     """
     vm = deployed_vm
     hsts_key = h.CFG_DNSBL_SETTINGS + "/pfb_hsts"
-    vip_key = h.CFG_DNSBL_SETTINGS + "/pfb_dnsvip4"
     # The feed_url is never fetched here — inject() only WRITES config; we read it back, no reload.
     feed = "http://192.168.89.2/dnsbl_plain.txt"
-
-    # GIVEN the VIP infrastructure is in place. Establish it HERE (idempotent), not via the
-    # module fixture alone: a sibling test's reset_pfb_baseline wipes CFG_DNSBL_SETTINGS (incl.
-    # pfb_dnsvip4), so this test owns its own precondition rather than depending on test order.
-    h.ensure_dnsbl_vip(vm)
-    assert h.config_get(vm, vip_key) != "", "precondition: ensure_dnsbl_vip should set pfb_dnsvip4"
 
     # WHEN a case that enables HSTS-null blocking is injected, THEN pfb_hsts is written 'on'.
     h.inject(vm, h.DnsblCase(aliasname="smokeisohsts", feed_url=feed, header="smokeisohsts", hsts=True))
@@ -163,8 +152,6 @@ def test_dnsbl_inject_replaces_leaked_toggle(deployed_vm: SmokeVM) -> None:
     # THEN the leaked toggle is gone (replace, not merge) ...
     leaked = h.config_get(vm, hsts_key)
     assert leaked == "", f"pfb_hsts leaked across DNSBL cases: {leaked!r} (array_merge would keep 'on')"
-    # ... and the VIP infrastructure key is PRESERVED (a naive config_del would force-disable DNSBL).
-    assert h.config_get(vm, vip_key) != "", "replace dropped pfb_dnsvip4 — would force-disable DNSBL"
 
 
 def test_inject_ip_lists_resets_untouched_family(deployed_vm: SmokeVM) -> None:

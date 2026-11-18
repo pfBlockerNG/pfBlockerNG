@@ -7,7 +7,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * DNSBL settings save: a select the browser does not submit (a `multiple` select with nothing
- * chosen, e.g. dnsbl_allow_int with no permit interface) takes its declared default with no PHP
+ * chosen, e.g. top1m_inclusion with no TLD) takes its declared default with no PHP
  * diagnostic. Reading the absent $_POST key logged `Undefined array key` (issue #3936).
  *
  * The page cannot be required off-appliance, so its real select-validation region is extracted
@@ -21,10 +21,8 @@ final class DnsblSelectOptionDefaultsTest extends TestCase
 	private const DEFAULT_TLDS = ['com', 'net'];
 
 	private const SCALAR_DEFAULTS = [
-		'dnsbl_interface'	=> 'lo0',
 		'global_log'		=> 'pconfig-log',
 		'global_log_mode'	=> 'pconfig-mode',
-		'dnsbl_webpage'		=> 'dnsbl_default.php',
 		'top1m_source'		=> 'tranco',
 		'top1m_count'		=> '1000',
 		'action'		=> 'Disabled',
@@ -62,7 +60,6 @@ final class DnsblSelectOptionDefaultsTest extends TestCase
 		$vars = [
 			'pconfig'			=> ['global_log' => 'pconfig-log', 'global_log_mode' => 'pconfig-mode'],
 			'default_tlds'			=> self::DEFAULT_TLDS,
-			'options_dnsbl_allow_int'	=> ['lan' => 'LAN', 'opt1' => 'OPT1'],
 			'options_top1m_inclusion'	=> ['com' => 'COM', 'net' => 'NET', 'org' => 'ORG'],
 			'input_errors'			=> [],
 		];
@@ -78,7 +75,7 @@ final class DnsblSelectOptionDefaultsTest extends TestCase
 		});
 		try {
 			$scope = pfb_test_page_eval(
-				pfb_test_page_region(self::PAGE, '// Validate Select field options', '// Validate DNSBL webserver block page'),
+				pfb_test_page_region(self::PAGE, '// Validate Select field options', 'foreach (array(\'aliasports_in\', \'aliasaddr_in\', \'aliasports_out\', \'aliasaddr_out\') as $value) {'),
 				$vars
 			);
 		} finally {
@@ -93,13 +90,12 @@ final class DnsblSelectOptionDefaultsTest extends TestCase
 
 		$this->assertSame([], $result['diagnostics'], 'an omitted select must not log a PHP diagnostic');
 		$this->assertSame(self::SCALAR_DEFAULTS, array_intersect_key($result['post'], self::SCALAR_DEFAULTS));
-		$this->assertSame('', $result['post']['dnsbl_allow_int']);
 		$this->assertSame(self::DEFAULT_TLDS, $result['post']['top1m_inclusion']);
 	}
 
 	public function testValidSelectsAreKeptWithoutDiagnostics(): void
 	{
-		$post = ['save' => '1', 'dnsbl_allow_int' => ['lan', 'opt1'], 'top1m_inclusion' => ['org']]
+		$post = ['save' => '1', 'top1m_inclusion' => ['org', 'net']]
 			+ array_fill_keys(array_keys(self::SCALAR_DEFAULTS), 'other');
 		$result = self::validateSelects($post);
 
@@ -113,25 +109,23 @@ final class DnsblSelectOptionDefaultsTest extends TestCase
 			'save'			=> '1',
 			'action'		=> 'bogus',
 			'top1m_source'		=> ['tranco'],
-			'dnsbl_allow_int'	=> ['lan', 'bogus'],
 			'top1m_inclusion'	=> 'bogus',
 		]);
 
 		$this->assertSame([], $result['diagnostics']);
 		$this->assertSame('Disabled', $result['post']['action']);
 		$this->assertSame('tranco', $result['post']['top1m_source']);
-		$this->assertSame('', $result['post']['dnsbl_allow_int']);
 		$this->assertSame(self::DEFAULT_TLDS, $result['post']['top1m_inclusion']);
 	}
 
 	/**
-	 * A crafted POST nesting an array inside a multi-select (dnsbl_allow_int[0][]=x), past a valid
+	 * A crafted POST nesting an array inside a multi-select (top1m_inclusion[0][]=x), past a valid
 	 * or an unknown value or not, is refused with an input error, which blocks the save; array_key_exists() threw
 	 * `Illegal offset type` on it (issue #3947).
 	 */
 	public function testNestedMultiSelectValueIsAnInputError(): void
 	{
-		foreach (['dnsbl_allow_int' => ['lan', ''], 'top1m_inclusion' => ['com', self::DEFAULT_TLDS]] as $field => [$valid, $default]) {
+		foreach (['top1m_inclusion' => ['com', self::DEFAULT_TLDS]] as $field => [$valid, $default]) {
 			foreach ([[['x']], [$valid, ['x']], ['bogus', ['x']]] as $value) {
 				$result = self::validateSelects(['save' => '1', $field => $value]);
 

@@ -32,7 +32,6 @@ import pytest
 from . import helpers as h
 from .ha_pair import HaPair, wait_carp_state
 from .ha_policy import (
-    B_VIP_UNIQID,
     BLACKLIST,
     BLACKLIST_XML,
     CONFIG,
@@ -51,7 +50,7 @@ from .ha_policy import (
     apply_banners,
     arrange_baseline,
     assert_applied_once,
-    assert_dnsbl_vip,
+    assert_dnsbl_on,
     assert_receive,
     assert_sent,
     blacklist_item,
@@ -175,7 +174,7 @@ def assert_mirrored(pair: HaPair, run: Run, transport: Transport) -> None:
     assert run.b_after.core == run.b_before.core, (
         f"B's interfaces/VIPs/gateways/webgui moved: expected {run.b_before.core}, got {run.b_after.core}"
     )
-    assert_dnsbl_vip(pair.secondary, "secondary", B_VIP_UNIQID)
+    assert_dnsbl_on(pair.secondary, "secondary")
 
 
 def assert_local_kept(before: NodeState, after: NodeState, *, new_rows: Iterable[str] = (), rows: bool = True) -> None:
@@ -197,12 +196,12 @@ def assert_local_kept(before: NodeState, after: NodeState, *, new_rows: Iterable
 
 def b_own_scalars() -> dict[str, Any]:
     """B's seeded string local leaves by path (the hook row is a list and is covered by the local-leaf comparison)."""
-    leaves = node_local_leaves("B", vip_uniqid=B_VIP_UNIQID)
+    leaves = node_local_leaves("B")
     return {path: value for path, value in leaves.items() if isinstance(value, str)}
 
 
 def assert_b_keeps_its_own_values(pair: HaPair) -> None:
-    """Read back B's seeded local scalars (credentials, alert prefs, interfaces, VIP reference): still B's, not A's."""
+    """Read back B's seeded local scalars (credentials, alert prefs, interfaces): still B's, not A's."""
     expected = b_own_scalars()
     actual = read_leaves(pair.secondary, expected)
     wrong = {p: (expected[p], actual[p]) for p in expected if actual[p] != expected[p]}

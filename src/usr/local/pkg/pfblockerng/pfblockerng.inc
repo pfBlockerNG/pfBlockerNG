@@ -397,7 +397,6 @@ $pfb['ip_cache']	= "{$pfb['dbdir']}/ip_cache.sqlite";
 
 $pfb['script']		= '/usr/local/pkg/pfblockerng/pfblockerng.sh';
 $pfb['feeds']		= '/usr/local/www/pfblockerng/pfblockerng_feeds.json';
-$pfb['dnsbl_www']	= '/usr/local/www/pfblockerng/www';	// the block pages: dnsbl_active.php is the one the DNSBL web server shows
 // #468: extension-less BASES. pfb_archive_{compress,extract} (pfblockerng.sh) append
 // .zst (zstd) or .bz2 (bzip2 fallback / pre-#468 legacy) and pick the codec by what is
 // available; teardown removes both extensions.
@@ -418,8 +417,8 @@ $pfb['metrics_dir_missing']	= '/usr/local/etc/pfb_metrics_dir_missing';
 $pfb['metrics_sentinel_missing']= '/usr/local/etc/pfb_metrics_sentinel_missing';
 $pfb['pass_status']		= '/usr/local/etc/pfb_pass_status.json';
 
-$pfb['dnsbl_conf']	= '/var/unbound/pfb_dnsbl_lighty.conf';
-$pfb['dnsbl_cert']	= '/var/unbound/dnsbl_cert.pem';
+$pfb['dnsbl_conf']	= '/var/unbound/pfb_dnsbl_lighty.conf';	// issue #4053: retired, removed by pfb_dnsbl_webserver_retire()
+$pfb['dnsbl_cert']	= '/var/unbound/dnsbl_cert.pem';		// issue #4053: retired, removed by pfb_dnsbl_webserver_retire()
 $pfb['unbound_py_conf']	= '/var/unbound/pfb_unbound.ini';
 $pfb['unbound_py_wh']	= '/var/unbound/pfb_py_whitelist.txt';
 $pfb['unbound_py_data']	= '/var/unbound/pfb_py_data.txt';
@@ -431,7 +430,7 @@ $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
 $pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07: gateway-emitted admitted feed+user regex total for the DNSBL_Regex alias
 $pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48: gateway-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
 $pfb['unbound_py_sources']= '/var/unbound/pfb_py_sources.json';	// ADR-06: per-feed manifest consumed by the pfB-DNS gateway's DNSBL build
-$pfb['unbound_py_vip']	= '/var/unbound/pfb_py_vip';		// issue #3539: '1' or '0' -- whether the published manifest's generation answers with the VIP
+$pfb['unbound_py_vip']	= '/var/unbound/pfb_py_vip';		// issue #4053: retired VIP-generation marker, removed by pfb_dnsbl_webserver_retire()
 $pfb['unbound_py_top1m']= '/var/unbound/pfb_py_top1m.txt';	// issue #1542: fixed TOP1M sidecar consumed by the pfB-DNS gateway
 $pfb['unbound_py_rawdir']= '/var/unbound/pfb_py_raw';		// #1357: basename for immutable per-feed raw generations
 
@@ -2592,15 +2591,6 @@ function pfb_get_vip_options(int $family, bool $pkg_xml_format = FALSE) {
 	return $options;
 }
 
-// [ADR-13] Pure decision: is a v6 sinkhole VIP WANTED for this DNSBL config? True iff the DNS
-// Resolver listens on IPv6 AND auto-provisioning is off (manual mode) — a NON-BLOCKING
-// recommendation (ADR-13 §7): pfb_global logs a warning, DNSBL keeps running on IPv4. NOT a hard
-// requirement — a v6-listening resolver without a v6 VIP is a common, valid manual setup. Pure:
-// no global/config access, single directly-testable source of truth.
-function pfb_dnsbl_v6_vip_required(bool $listens_v6, bool $auto): bool {
-	return $listens_v6 && !$auto;
-}
-
 /*
  * Resolve a per-feed list pre/post script (config-stored basename) to its
  * absolute path, or FALSE. The script must be a regular file whose canonical
@@ -3153,117 +3143,12 @@ function pfb_dnsbl_hold_stale_rebuild_skip(bool $stale_generation_rebuild, bool 
 	return $stale_generation_rebuild && $is_hold && !$orig_exists;
 }
 
-// TRUE iff $vip is a stored VIP id that pfSense no longer knows (get_configured_vip_interface() is NULL).
-function pfb_dnsbl_vip_missing(?string $vip): bool {
-	return !empty($vip) && get_configured_vip_interface($vip) === null;
-}
-
-// HTML warning for the DNSBL page: a stored manual-mode VIP id that no longer exists stops DNSBL from
-// running. Auto mode repoints the id itself, and without VIP demand (issue #3539) nothing answers with the
-// VIP, so neither warns. '' = nothing to show.
-function pfb_dnsbl_stale_vip_warning(PfbToggle $auto, ?string $vip4, ?string $vip6, bool $demand): string {
-	if ($auto === PfbToggle::On || !$demand) {
-		return '';
-	}
-
-	$missing = '';
-	if (pfb_dnsbl_vip_missing($vip4)) {
-		$missing .= sprintf('The saved IPv4 VIP (%s) is not in Firewall &gt; Virtual IPs. ', htmlspecialchars($vip4));
-	}
-	if (pfb_dnsbl_vip_missing($vip6)) {
-		$missing .= sprintf('The saved IPv6 VIP (%s) is not in Firewall &gt; Virtual IPs. ', htmlspecialchars($vip6));
-	}
-	if ($missing === '') {
-		return '';
-	}
-
-	return '<strong>The saved DNSBL Virtual IP no longer exists.</strong> ' . $missing
-		. 'DNSBL cannot run until you re-select the DNSBL Virtual IP below and save. '
-		. 'This happens when a VIP is deleted and re-created.';
-}
-
-// v6 stays OPTIONAL (ADR-13 §7 pivot): a missing v6 VIP never fails validation, even when
-// the resolver listens on IPv6 — pfb_global surfaces that as a non-blocking warning, not a
-// force-disable. The validator only checks the VIPs that ARE configured (existence,
-// interface, overlap). Behaviour is identical to before the (reverted) hard rule.
-function pfb_validate_vips(string $interface, string|null $vip4 = '', string|null $vip6 = ''): array {
-	$enabled4 = !empty($vip4);
-	$enabled6 = !empty($vip6);
-
-	if (!$enabled4 && !$enabled6) {
-		return [FALSE, gettext('no VIP configured')];
-	}
-
-	// A stored id absent from virtualip/vip (VIP deleted and re-created gets a new uniqid) makes
-	// pfSense return NULL, which would otherwise read as "not found on interface".
-	if ($enabled4 && pfb_dnsbl_vip_missing($vip4)) {
-		return [FALSE, sprintf(gettext('IPv4 VIP %s no longer exists in Firewall > Virtual IPs'), $vip4)];
-	}
-	if ($enabled6 && pfb_dnsbl_vip_missing($vip6)) {
-		return [FALSE, sprintf(gettext('IPv6 VIP %s no longer exists in Firewall > Virtual IPs'), $vip6)];
-	}
-
-	if ($enabled4 && ($interface != get_configured_vip_interface($vip4))) {
-		return [FALSE, sprintf(gettext('IPv4 VIP not found on interface %s'), convert_friendly_interface_to_friendly_descr($interface))];
-	}
-	if ($enabled6 && ($interface != get_configured_vip_interface($vip6))) {
-		return [FALSE, sprintf(gettext('IPv6 VIP not found on interface %s'), convert_friendly_interface_to_friendly_descr($interface))];
-	}
-
-	$vips = pfb_get_vips();
-	if ($enabled4) {
-		if (!isset($vips['v4'][$vip4])) {
-			return [FALSE, gettext('invalid IPv4 VIP')];
-		} elseif (count(where_is_ipaddr_configured(get_configured_vip_ipv4($vip4), '' , TRUE, TRUE, ''))) {
-			return [FALSE, gettext('IPv4 VIP overlaps with an existing subnet')];
-		}
-	}
-	if ($enabled6) {
-		if (!isset($vips['v6'][$vip6])) {
-			return [FALSE, gettext('invalid IPv6 VIP')];
-		} elseif ($enabled6 && count(where_is_ipaddr_configured(get_configured_vip_ipv6($vip6), '' , TRUE, TRUE, ''))) {
-			return [FALSE, gettext('IPv6 VIP overlaps with an existing subnet')];
-		}
-	}
-
-	return [TRUE, null];
-}
-
-// DNSBL sinkholes use .1; the separate DNS listener VIPs start at .53 (#3688).
-function pfb_dnsbl_vip_candidates(int $family): array {
-
-	if ($family === AF_INET) {
-		return ['172.16.53.1', '192.168.53.1', '10.53.53.1'];
-	} elseif ($family === AF_INET6) {
-		return ['fd00:53:53:53:53:53:53:1'];
-	}
-
-	return [];
-}
-
-// [ ADR-13 ] Return the first candidate sinkhole address (pfb_dnsbl_vip_candidates)
-// for the given family that is free to use as an auto-created DNSBL VIP, or null if
-// every candidate conflicts. A candidate is free iff it is (a) not the address of an
-// existing CARP/IP-Alias VIP (get_configured_vip_list) and (b) overlaps no configured
-// interface subnet (where_is_ipaddr_configured) — the SAME overlap semantics pfb_validate_vips
-// uses. Pure: enumerates state, creates/changes nothing. $interface is
-// accepted for parity with the create path and future per-interface scoping; the
-// conflict checks here are interface-independent (a VIP/subnet conflict anywhere is
-// disqualifying). issue #3540: a non-NULL $address narrows the list to that one
-// candidate (NULL if it is not a candidate string), so a policy receiver follows its sender.
-function pfb_pick_free_dnsbl_vip(int $family, string $interface, ?string $address = NULL, ?iterable $candidates = NULL): ?string {
-
-	$explicit = $candidates === NULL;
-	$candidates ??= pfb_dnsbl_vip_candidates($family);
-	// A sender that already owns a .53 sinkhole still publishes it. A new create does not pick it.
-	if ($explicit && $address !== NULL && !in_array($address, $candidates, TRUE)) {
-		$legacy = $family === AF_INET
-			? ['172.16.53.53', '192.168.53.53', '10.53.53.53']
-			: ($family === AF_INET6 ? ['fd00:53:53:53:53:53:53:53'] : []);
-		if (in_array($address, $legacy, TRUE)) {
-			$candidates = [$address];
-		}
-	}
+// [ ADR-13 ] Return the first of $candidates for the given family that is free to use as an auto-created VIP, or null if
+// every candidate conflicts. A candidate is free iff it is (a) not the address of an existing CARP/IP-Alias VIP
+// (get_configured_vip_list) and (b) overlaps no configured interface subnet (where_is_ipaddr_configured). Pure: enumerates
+// state, creates/changes nothing. issue #3540: a non-NULL $address narrows the list to that one candidate, so a policy
+// receiver follows its sender.
+function pfb_pick_free_vip(int $family, ?string $address, iterable $candidates): ?string {
 
 	// Bare stored addresses (pfb_get_vips() values are display labels), compared as binary so a
 	// differently spelt IPv6 VIP still counts, as pfSense's own duplicate-address check does.
@@ -3288,17 +3173,6 @@ function pfb_pick_free_dnsbl_vip(int $family, string $interface, ?string $addres
 	return null;
 }
 
-// [ADR-13] The address auto-create uses for $family: a marked VIP's own subnet, as pfb_manage_dnsbl_vip
-// reuses it, else the first free candidate (the picker counts that marked VIP as taken).
-function pfb_dnsbl_auto_vip_address(int $family, string $interface): ?string {
-
-	$marker = ($family === AF_INET6) ? PFB_AUTO_VIP_DESCR_V6 : PFB_AUTO_VIP_DESCR_V4;
-	$vips   = config_get_path('virtualip/vip', []);
-	$idx    = pfb_find_marked_vip($vips, $marker, null);
-
-	return ($idx !== null) ? (string) ($vips[$idx]['subnet'] ?? '') : pfb_pick_free_dnsbl_vip($family, $interface);
-}
-
 /** Dedicated listener candidates, kept separate from the DNSBL sinkholes. */
 function pfb_dns_listen_vip_candidates(int $family): iterable {
 	if ($family === AF_INET) {
@@ -3308,55 +3182,6 @@ function pfb_dns_listen_vip_candidates(int $family): iterable {
 			yield 'fd00:53:53:53:53:53:53:' . dechex($host);
 		}
 	}
-}
-
-// [ADR-13] True iff Unbound is configured to listen on IPv6. Mirrors unbound_generate_config_text()
-// (src/etc/inc/unbound.inc) — verified verbatim against upstream at RELENG_2_7_2 and master.
-// Predicate: resolver disabled -> false; active_interface empty/'all' -> 'interface-automatic:
-// yes', true iff ANY enabled interface currently has a v6 address; else true iff ANY listed
-// token is a v6 literal or an interface resolving to v6 (mirrors upstream's bind loop, incl.
-// the up/enabled guard from redmine #11087). MUST be confirmed on-box (no PHP/Unbound runtime
-// in CI): that an automatic bind's v6 is routable (not link-local only), and that
-// 'interface-automatic: yes' does accept v6 queries. Not yet wired into the v6-mandatory rule.
-function pfb_unbound_listens_v6(): bool {
-
-	// A disabled resolver listens on nothing.
-	if (!config_path_enabled('unbound')) {
-		return FALSE;
-	}
-
-	$active_interface = config_get_path('unbound/active_interface', '');
-	$active_interfaces = array_filter(explode(',', (string) $active_interface));
-
-	// Empty or 'all' => 'interface-automatic: yes' => bind every address on the
-	// enabled interfaces. v6 is listened-on iff any configured interface has a v6.
-	if (empty($active_interfaces) || in_array('all', $active_interfaces, TRUE)) {
-		foreach (array_keys(get_configured_interface_list()) as $ubif) {
-			if (is_ipaddrv6(get_interface_ipv6($ubif))) {
-				return TRUE;
-			}
-		}
-		return FALSE;
-	}
-
-	// Explicit interface list: mirror unbound_generate_config_text()'s bind loop.
-	foreach ($active_interfaces as $ubif) {
-		// Skip interfaces that are down/disabled (redmine #11087), same as upstream.
-		$ifinfo = get_interface_info($ubif);
-		if ($ifinfo && (($ifinfo['status'] != 'up') || !$ifinfo['enable'])) {
-			continue;
-		}
-		// A literal IPv6 address binds directly.
-		if (is_ipaddrv6($ubif)) {
-			return TRUE;
-		}
-		// An interface name resolves to its v6 address (if any).
-		if (is_ipaddrv6(get_interface_ipv6($ubif))) {
-			return TRUE;
-		}
-	}
-
-	return FALSE;
 }
 
 // [ADR-13] Locate the index of the auto-managed DNSBL VIP this package owns inside a
@@ -3384,19 +3209,15 @@ function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_
 	return null;
 }
 
-// [ADR-13] VIP lifecycle manager: creates the marked DNSBL sinkhole VIP(s) while auto-create is
-// on and a block answers with the VIP (issue #3539); otherwise removes ONLY the marked +
-// IP-matched VIP(s). ADDITIVE: with
-// pfb_dnsvip_auto never turned on, no marked VIP is found -> no write_config -> byte-identical
-// runtime. Delete guard: removed iff descr == PFB_AUTO_VIP_DESCR_V4/_V6 AND subnet == the
-// address resolved from stored pfb_dnsvip4/6 (pfb_find_marked_vip) — a manual or
-// address-drifted VIP is NEVER deleted. Apply order matches upstream firewall_virtual_ip.inc.
+// [ADR-13] DNS listener VIP lifecycle (#3688): creates the marked pfB_DNS_LISTEN_VIP_v4/v6 VIP(s) while the listener VIP is on
+// and its selection is 'auto'; otherwise removes ONLY the marked + IP-matched VIP(s) this package recorded in
+// pfb_dns_listen_added. A manual or address-drifted VIP is NEVER deleted. Apply order matches upstream firewall_virtual_ip.inc.
 // PFBL-01: $interface must pass pfb_filter(PFB_FILTER_WORD) before use, else the run aborts;
 // pinned by tests/php/PfbFilterContractTest.php.
-// issue #3540: a policy receiver creates the VIP only at the synced pfb_dnsvip_auto4/6 address (not free =
-// no VIP + $pfb['dnsbl_vip_conflict'] finding); any other node publishes the address it uses.
+// issue #3540: a policy receiver creates the VIP only at the synced pfb_dns_listen_auto4/6 address (not free =
+// no VIP + $pfb['dns_listen_vip_conflict'] finding); any other node publishes the address it uses.
 // Returns FALSE iff config.xml did not take the VIP write (nothing is brought up live then).
-function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): bool {
+function pfb_manage_dns_listen_vip(string $mode): bool {
 	global $pfb;
 
 	// Only the two lifecycle modes drive VIP management; anything else is a no-op.
@@ -3404,16 +3225,14 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): bool {
 		return TRUE;
 	}
 
-	$auto      = $listen || ($pfb['dnsbl_vip_auto'] ?? PfbToggle::Off) === PfbToggle::On;
-	$serve     = $listen ? PfbConfig::read('gen/pfb_dns_listen_vip') === PfbToggle::On
-	    : $mode === 'enabled' && !empty($pfb['dnsbl_vip_demand']);
-	$interface = $listen ? (string) PfbConfig::read('gen/pfb_dns_listen_interface') : ($pfb['dnsbl_iface'] ?? 'lo0');
+	$serve     = PfbConfig::read('gen/pfb_dns_listen_vip') === PfbToggle::On;
+	$interface = (string) PfbConfig::read('gen/pfb_dns_listen_interface');
 
 	// PFBL-01: $interface is a singular required parameter -- validate it as a \w-only
 	// friendly interface name before anything else runs. On failure: log + abort the
 	// whole run (no config read/write, no VIP operation).
-	if (empty(pfb_filter($interface, PFB_FILTER_WORD, 'pfb_manage_dnsbl_vip'))) {
-		pfb_logger("\npfb_manage_dnsbl_vip: DNSBL VIP interface failed validation [ " .
+	if (empty(pfb_filter($interface, PFB_FILTER_WORD, 'pfb_manage_dns_listen_vip'))) {
+		pfb_logger("\npfb_manage_dns_listen_vip: DNS listener VIP interface failed validation [ " .
 			substr(htmlspecialchars((string) $interface), 0, 100) . " ] *aborting*", 2);
 		return TRUE;
 	}
@@ -3421,57 +3240,28 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): bool {
 	// issue #3540: a node that accepted a policy payload follows its sender's synced address.
 	$receiver = pfb_sync_receive_state_read($pfb['dbdir'])['accepted_digest'] !== NULL;
 
-	$dnsblcfg_path = PFB_SECTIONS[$listen ? 'gen' : 'dnsbl'];
+	$dnsblcfg_path = PFB_SECTIONS['gen'];
 
-	// NOTE: the enabled+auto-OFF case deliberately does NOT early-return. It falls through
-	// so the delete branch below can clean up a previously auto-created VIP when the admin
-	// switches auto-create back to manual (ADR-13 §2: "whenever a VIP is no longer managed
-	// (auto turned off ...) delete the VIP(s)"). For a setup that never used auto-create
-	// there is no marker+IP-matched VIP, so nothing changes -> byte-identical to today.
-
-	// Families to provision when creating. v4 is always managed. v6 is managed when a
-	// v6 VIP is already requested (an id stored) or the resolver listens on IPv6
-	// (provisioned here; not yet made mandatory in that case).
-	$want_v6 = !empty($pfb['dnsblconfig']['pfb_dnsvip6']) || pfb_unbound_listens_v6();
-
-	// Per-family descriptor table: marker, AF, subnet_bits, the stored-id config key, the
+	// Per-family descriptor table: marker, AF, subnet_bits, the stored selection key, the
 	// synced-address config key and the family label of a conflict finding.
-	$families = [
-		[
-			'marker'   => PFB_AUTO_VIP_DESCR_V4,
-			'family'   => AF_INET,
-			'bits'     => 32,
-			'idkey'    => 'pfb_dnsvip4',
-			'addrkey'  => 'pfb_dnsvip_auto4',
-			'label'    => 'IPv4',
-			'managed'  => ($serve && $auto),	// v4 always managed on create
-		],
-		[
-			'marker'   => PFB_AUTO_VIP_DESCR_V6,
-			'family'   => AF_INET6,
-			'bits'     => 128,
-			'idkey'    => 'pfb_dnsvip6',
-			'addrkey'  => 'pfb_dnsvip_auto6',
-			'label'    => 'IPv6',
-			'managed'  => ($serve && $auto && $want_v6),
-		],
-	];
-	if ($listen) {
-		foreach ($families as &$fam) {
-			$n = $fam['family'] === AF_INET ? '4' : '6';
-			$fam['marker'] = "pfB_DNS_LISTEN_VIP_v{$n}";
-			$fam['idkey'] = "pfb_dns_listen_vip{$n}";
-			$fam['addrkey'] = "pfb_dns_listen_auto{$n}";
-			$fam['managed'] = $serve && PfbConfig::read("gen/{$fam['idkey']}") === 'auto';
-		}
-		unset($fam);
+	$families = [];
+	foreach ([['4', AF_INET, 32, 'IPv4'], ['6', AF_INET6, 128, 'IPv6']] as [$n, $af, $bits, $label]) {
+		$families[] = [
+			'marker'   => "pfB_DNS_LISTEN_VIP_v{$n}",
+			'family'   => $af,
+			'bits'     => $bits,
+			'idkey'    => "pfb_dns_listen_vip{$n}",
+			'addrkey'  => "pfb_dns_listen_auto{$n}",
+			'label'    => $label,
+			'managed'  => $serve && PfbConfig::read("gen/pfb_dns_listen_vip{$n}") === 'auto',
+		];
 	}
 
 	$vips_config = config_get_path('virtualip/vip', []);
 	$dnsblconfig = PfbConfig::readSection($dnsblcfg_path);
 	$changed     = FALSE;
 	$conflicts   = [];
-	$listen_owned = $listen ? json_decode((string) PfbConfig::read('gen/pfb_dns_listen_added'), TRUE) : [];
+	$listen_owned = json_decode((string) PfbConfig::read('gen/pfb_dns_listen_added'), TRUE);
 	$listen_owned = is_array($listen_owned) ? $listen_owned : [];
 
 	foreach ($families as &$fam) {
@@ -3479,11 +3269,11 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): bool {
 		$owned_address = (string) ($dnsblconfig[$fam['addrkey']] ?? '');
 		// The VIP at the recorded address is ours; an operator's copy of the marker never displaces it. Reuse (not ownership) falls back
 		// to the first marked row when ours moved, so an address edited in place keeps its VIP.
-		$owned_vip = $listen ? (string) ($listen_owned['vip' . ($fam['family'] === AF_INET ? '4' : '6')][0] ?? '') : '';
+		$owned_vip = (string) ($listen_owned['vip' . ($fam['family'] === AF_INET ? '4' : '6')][0] ?? '');
 		$idx    = ($owned_vip === '' ? null : pfb_find_marked_vip($vips_config, $fam['marker'], $owned_vip))
 		    ?? pfb_find_marked_vip($vips_config, $fam['marker'], null);
 		$selection = (string) ($dnsblconfig[$fam['idkey']] ?? '');
-		if ($listen && $serve && $selection !== 'auto') {
+		if ($serve && $selection !== 'auto') {
 			$selected = $fam['family'] === AF_INET ? get_configured_vip_ipv4($selection) : get_configured_vip_ipv6($selection);
 			if (!$receiver && $owned_address !== ($selected ?? '')) {
 				$dnsblconfig[$fam['addrkey']] = $selected ?? '';
@@ -3506,13 +3296,13 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): bool {
 		$stale  = $fam['managed'] && $idx !== null && $synced !== ''
 		    && @inet_pton((string) ($vips_config[$idx]['subnet'] ?? '')) !== @inet_pton($synced);
 		$listen_synced_address = NULL;
-		if ($listen && $fam['managed'] && $synced !== '' && ($idx === null || $stale)) {
+		if ($fam['managed'] && $synced !== '' && ($idx === null || $stale)) {
 			$valid_synced = $fam['family'] === AF_INET ? is_ipaddrv4($synced) : is_ipaddrv6($synced);
 			$packed = $valid_synced ? @inet_pton($synced) : FALSE;
 			// 0.0.0.0 and :: bind every interface, so they are not a dedicated listener VIP.
 			$unspecified = $packed !== FALSE && $packed === inet_pton($fam['family'] === AF_INET ? '0.0.0.0' : '::');
 			$listen_synced_address = $valid_synced && !$unspecified && !is_linklocal($synced) && pfb_ipv4_from_mapped($synced) === NULL
-			    ? pfb_pick_free_dnsbl_vip($fam['family'], $interface, $synced, [$synced]) : NULL;
+			    ? pfb_pick_free_vip($fam['family'], $synced, [$synced]) : NULL;
 			// Keep the owned VIP until its replacement is known to be usable.
 			if ($listen_synced_address === NULL) {
 				$conflicts[] = $fam['label'];
@@ -3522,7 +3312,7 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): bool {
 		}
 
 		if (!$fam['managed'] || $stale) {
-			if ($listen && !$stale && $serve) {
+			if (!$stale && $serve) {
 				continue;
 			}
 			// issue #3540: a node that no longer manages the family publishes no address, whatever the guard deletes.
@@ -3533,10 +3323,7 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): bool {
 			// DELETE (marker + IP-match only). The address must match what the stored
 			// config currently resolves to, so we never delete a marked VIP that is no
 			// longer the one our config points at, and never an unmarked VIP.
-			$match_ip = $listen ? (string) ($listen_owned['vip' . ($fam['family'] === AF_INET ? '4' : '6')][0] ?? '')
-			    : (($fam['family'] === AF_INET)
-				? (string) (get_configured_vip_ipv4($dnsblconfig[$fam['idkey']] ?? '') ?? '')
-				: (string) (get_configured_vip_ipv6($dnsblconfig[$fam['idkey']] ?? '') ?? ''));
+			$match_ip = (string) ($listen_owned['vip' . ($fam['family'] === AF_INET ? '4' : '6')][0] ?? '');
 
 			// Double-guard: marker match AND subnet must equal the stored resolved IP.
 			// Use pfb_find_managed_obj with the guard to locate the row, then
@@ -3562,9 +3349,6 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): bool {
 			// issue #3540: drop the same rows from $vips_config; a re-read would lose rows added earlier in this call.
 			$vips_config = array_values(array_filter($vips_config, static fn ($row): bool => !(pfb_managed_obj_match($row, $fam['marker']) && $guard($row))));
 
-			if (!$listen && !empty($dnsblconfig[$fam['idkey']])) {
-				unset($dnsblconfig[$fam['idkey']]);
-			}
 			$changed = TRUE;
 			if (!$fam['managed']) {
 				continue;
@@ -3593,9 +3377,8 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): bool {
 				$changed = TRUE;
 			}
 		} else {
-			$address = $listen && $synced !== '' ? $listen_synced_address
-			    : pfb_pick_free_dnsbl_vip($fam['family'], $interface, $synced !== '' ? $synced : NULL,
-				$listen ? pfb_dns_listen_vip_candidates($fam['family']) : NULL);
+			$address = $synced !== '' ? $listen_synced_address
+			    : pfb_pick_free_vip($fam['family'], NULL, pfb_dns_listen_vip_candidates($fam['family']));
 			if ($address === null) {
 				if ($synced !== '') {
 					// issue #3540: the synced address is taken here -> no VIP; reported as a Sync finding.
@@ -3617,22 +3400,14 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): bool {
 				'descr'       => $fam['marker'],
 				'uniqid'      => $uniqid,
 			];
-			if ($listen) {
-				$listen_owned['vip' . ($fam['family'] === AF_INET ? '4' : '6')] = [$address];
-				$dnsblconfig['pfb_dns_listen_added'] = (string) json_encode($listen_owned);
-			}
+			$listen_owned['vip' . ($fam['family'] === AF_INET ? '4' : '6')] = [$address];
+			$dnsblconfig['pfb_dns_listen_added'] = (string) json_encode($listen_owned);
 			$changed = TRUE;
 			pfb_logger("\nDNSBL auto-VIP: created {$fam['marker']} at {$address}/{$fam['bits']} on {$interface}", 1);
 		}
 
 		$fam['address'] = $address;
 
-		// Point the stored DNSBL settings id at this VIP.
-		$vip_id = "_vip{$uniqid}";
-		if (!$listen && ($dnsblconfig[$fam['idkey']] ?? '') !== $vip_id) {
-			$dnsblconfig[$fam['idkey']] = $vip_id;
-			$changed = TRUE;
-		}
 		// issue #3540: publish the address in use for the policy receivers; a receiver never writes it.
 		if (!$receiver && ($dnsblconfig[$fam['addrkey']] ?? '') !== $address) {
 			$dnsblconfig[$fam['addrkey']] = $address;
@@ -3641,7 +3416,7 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): bool {
 	}
 	unset($fam);
 
-	$pfb[$listen ? 'dns_listen_vip_conflict' : 'dnsbl_vip_conflict'] = $conflicts;
+	$pfb['dns_listen_vip_conflict'] = $conflicts;
 
 	if (!$changed) {
 		return TRUE;
@@ -3657,7 +3432,7 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): bool {
 	}
 
 	// Apply any created/ensured marked VIP live (config-first, then configure).
-	if ($mode === 'enabled' && $auto) {
+	if ($mode === 'enabled') {
 		foreach ($families as $fam) {
 			if (!$fam['managed']) {
 				continue;
@@ -3670,11 +3445,40 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): bool {
 		}
 	}
 
-	// Refresh $pfb so callers (NAT create) see the resolved VIP addresses.
-	if (!$listen) {
-		pfb_global();
-	}
 	return TRUE;
+}
+
+// Issue #4053: delete the auto-created DNSBL block-page VIP an earlier version made, through the ADR-13 guard: the
+// PFB_AUTO_VIP_DESCR_V4/V6 marker AND the address the stored pfb_dnsvip4/6 id resolves to. A manual or address-drifted VIP is
+// never deleted. Then drop the block-page VIP and web server keys from the DNSBL section. TRUE when config changed (the
+// caller writes it).
+function pfb_dnsbl_vip_retire(): bool {
+	$section = PFB_SECTIONS['dnsbl'];
+	$dconfig = config_get_path($section, []);
+	$dconfig = is_array($dconfig) ? $dconfig : [];
+	$changed = FALSE;
+	foreach ([AF_INET => PFB_AUTO_VIP_DESCR_V4, AF_INET6 => PFB_AUTO_VIP_DESCR_V6] as $family => $marker) {
+		$id = (string) ($dconfig[$family === AF_INET ? 'pfb_dnsvip4' : 'pfb_dnsvip6'] ?? '');
+		$ip = $id === '' ? '' : (string) (($family === AF_INET ? get_configured_vip_ipv4($id) : get_configured_vip_ipv6($id)) ?? '');
+		$guard = static fn(array $row): bool => $ip !== '' && ($row['subnet'] ?? '') === $ip;
+		$row = pfb_find_managed_obj('virtualip/vip', $marker, $guard);
+		if ($row === FALSE) {
+			if ($ip !== '') {
+				pfb_logger("\nDNSBL: the VIP {$ip} stays as an ordinary pfSense VIP; pfBlockerNG no longer uses it", 1);
+			}
+			continue;
+		}
+		interface_vip_bring_down($row);
+		pfb_remove_managed_obj('virtualip/vip', $marker, $guard);
+		pfb_logger("\nDNSBL: removed the retired block-page VIP {$marker} at {$ip}", 1);
+		$changed = TRUE;
+	}
+	$kept = array_diff_key($dconfig, array_flip(PFB_DNSBL_RETIRED_KEYS));
+	if ($kept !== $dconfig) {
+		PfbConfig::writeSectionRawSystem($section, $kept);
+		$changed = TRUE;
+	}
+	return $changed;
 }
 
 /** Active listener VIP address => core VIP id. A stale manual id is warned about, never substituted; a receiver advertises only the synced address. */
@@ -3855,7 +3659,7 @@ function pfb_dns_listen_auto_vips(): array {
 /** Save and policy apply share the VIP lifecycle and append-only DNS-list ownership. @return bool FALSE iff config.xml did not take the VIP or the advertisement write */
 function pfb_dns_listen_vips_apply(): bool {
 	$before = array_column(config_get_path('virtualip/vip', []), 'subnet');
-	if (!pfb_manage_dnsbl_vip('enabled', TRUE)) {
+	if (!pfb_manage_dns_listen_vip('enabled')) {
 		return FALSE;
 	}
 	$vips = pfb_dns_listen_vips();
@@ -4356,14 +4160,6 @@ function pfb_global() {
 	$pfb['maxmind_key']	= pfb_filter(PfbConfig::read('ip/maxmind_key'), PFB_FILTER_WORD, 'maxmind_key')		?: '';		// Maxmind License Key (issue #924: log-safe reference -- a rejected key is never logged on this consumer path either)
 
 	$pfb['dnsbl']		= PfbConfig::read('dnsbl/pfb_dnsbl');							// Enabled state of DNSBL
-	$pfb['dnsbl_vip_auto']	= PfbConfig::read('dnsbl/pfb_dnsvip_auto');						// [ ADR-13 ] Auto-create/remove the DNSBL sinkhole VIP(s) (default off)
-	$pfb['dnsbl_nonat']	= PfbConfig::read('dnsbl/pfb_dnsbl_nonat');						// [ #381 ] Opt out of automatic DNSBL NAT rule generation (default off)
-	// issue #3539: the guarded VIP delete unsets both stored ids; the registry default ('') covers it.
-	$pfb_dnsvip4		= PfbConfig::read('dnsbl/pfb_dnsvip4');
-	$pfb_dnsvip6		= PfbConfig::read('dnsbl/pfb_dnsvip6');
-	$pfb['dnsbl_vip4'] = get_configured_vip_ipv4($pfb_dnsvip4) ?? '';
-	$pfb['dnsbl_vip6'] = get_configured_vip_ipv6($pfb_dnsvip6) ?? '';
-	$pfb['dnsbl_iface']	= PfbConfig::read('dnsbl/dnsbl_interface');							// VIP Local Interface setting (default 'lo0')
 	// issue #3288: the DNSBL global policy read-only -- pfb_global() never
 	// writes, so an unmigrated/legacy box (config restore or HA sync bypassing
 	// pfb_run_migrations() entirely) stays correct via pfb_dnsbl_policy_config()'s
@@ -4374,46 +4170,6 @@ function pfb_global() {
 	$pfb['dnsbl_global_log']	= $pfb_dnsbl_policy['mechanism'];	// the concrete mechanism (never '' / 'default')
 	$pfb['dnsbl_global_mode']	= $pfb_dnsbl_policy['mode'];		// PfbDnsblGlobalMode: Default (live-inherit) | Override (enforce)
 	$pfb['dnsbl_policy_legacy']	= $pfb_dnsbl_policy['legacy'];		// TRUE while dnsbl/global_log_mode is genuinely absent (not fresh)
-	// issue #3539: TRUE while any effective DNSBL block answers with the DNSBL VIP/webserver.
-	$pfb['dnsbl_vip_demand']	= pfb_dnsbl_vip_demand($pfb['dnsblconfig'], $pfb_dnsbl_groups, is_array($pfb['blconfig']) ? $pfb['blconfig'] : []);
-	// Effective-policy facts (#3453): reset each pass so a past force-disable never leaks into the next.
-	$pfb['dnsbl_vip_disabled']	= FALSE;
-	// issue #3539: no block answers with the VIP -> no VIP to validate, DNSBL stays on.
-	if ($pfb['dnsbl'] === PfbToggle::On && $pfb['dnsbl_vip_demand']) {
-		// VIP validation: force-disable DNSBL on a genuinely invalid/missing/overlapping
-		// VIP — UNLESS auto-create mode is active, in which case pfb_manage_dnsbl_vip()
-		// owns provisioning and will (re)create a valid VIP during this same update pass.
-		// Disabling DNSBL here in auto mode would prevent the bootstrap from ever running.
-		$vips_valid_result = pfb_validate_vips($pfb['dnsbl_iface'], $pfb_dnsvip4, $pfb_dnsvip6);
-		if (!$vips_valid_result[0]) {
-			if ($pfb['dnsbl_vip_auto'] === PfbToggle::On) {
-				// [ ADR-13 / issue #487 ] Auto-create OWNS the DNSBL sinkhole VIP:
-				// pfb_manage_dnsbl_vip() (re)provisions a valid VIP on the configured
-				// interface during this same update pass. A stale / missing / wrong-interface
-				// manual reference must NOT force-disable DNSBL here, or the auto bootstrap
-				// can never run (mode would compute to 'disabled' and creation would be skipped).
-				pfb_logger("\nDNSBL auto-VIP: VIP validation deferred to auto-create ({$vips_valid_result[1]})", 1);
-			} else {
-				// Manual mode: a genuinely invalid/missing/mismatched VIP disables DNSBL.
-				$pfb['dnsbl'] = PfbToggle::Off;
-				$pfb['dnsbl_vip_disabled'] = TRUE;
-				$vip_notice = "DNSBL disabled: {$vips_valid_result[1]}";
-				pfb_logger("\n{$vip_notice}", 1);
-				// issue #331: this was log-only, invisible in the GUI. Surface it like
-				// the MaxMind/ASN credential notices below.
-				file_notice('pfBlockerNG DNSBL', $vip_notice, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
-			}
-		} elseif (pfb_dnsbl_v6_vip_required(pfb_unbound_listens_v6(), ($pfb['dnsbl_vip_auto'] === PfbToggle::On)) && empty($pfb['dnsblconfig']['pfb_dnsvip6'])) {
-			// [ ADR-13 §7 pivot ] NON-BLOCKING: the resolver listens on IPv6 but no v6
-			// sinkhole VIP is configured (manual mode). DNSBL stays enabled on IPv4;
-			// AAAA blocks simply are not sinkholed. Recommend auto-create or a v6 VIP.
-			// (In auto mode pfb_manage_dnsbl_vip provisions the v6 VIP, so this never fires.)
-			pfb_logger("\nDNSBL: the DNS Resolver listens on IPv6 but no IPv6 sinkhole VIP is configured; AAAA blocks will not be sinkholed. Enable 'Create VIPs automatically' or add an IPv6 VIP.", 1);
-		}
-	}
-
-	$pfb['dnsbl_port']	= $pfb['dnsblconfig']['pfb_dnsport'];									// Lighttpd web server http port setting
-	$pfb['dnsbl_port_ssl']	= $pfb['dnsblconfig']['pfb_dnsport_ssl'];								// Lighttpd web server https port setting
 	$pfb['dnsbl_top1m']	= PfbConfig::read('dnsbl/top1m_enable');							// TOP1M whitelist
 	$pfb['dnsbl_top1m_type']	= PfbConfig::read('dnsbl/top1m_source');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
 	$pfb['dnsbl_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
@@ -4442,7 +4198,6 @@ function pfb_global() {
 	$pfb['dnsbl_psl_allow_private'] = PfbConfig::read('dnsbl/pfb_psl_allow_private');			// PSL PRIVATE TLD-Allow precision (default Off)
 	$pfb['dnsbl_psl_feed_private_policy'] = PfbConfig::read('dnsbl/pfb_psl_feed_private_policy');	// issue #2371: feed-at-suffix PSL PRIVATE policy (PfbFeedSuffixPolicy enum; absent -> Honor)
 	$pfb['dnsbl_psl_feed_icann_policy'] = PfbConfig::read('dnsbl/pfb_psl_feed_icann_policy');		// issue #2371: feed-at-suffix PSL ICANN policy (PfbFeedSuffixPolicy enum; absent -> Honor)
-	$pfb['dnsbl_py_nolog']	= PfbConfig::read('dnsbl/pfb_py_nolog');			// DNSBL Resolver python - Log events via DNSBL Webserver vs python
 	$pfb['dnsbl_noaaaa']	= PfbConfig::read('dnsbl/pfb_noaaaa');			// DNSBL Resolver python no AAAA
 	$pfb['dnsbl_noaaaa_list']=PfbConfig::read('dnsbl/pfb_noaaaa_list');	// DNSBL Resolver python no AAAA list
 
@@ -4518,9 +4273,17 @@ define('PFB_SOFTWARE_PANEL_OVERRIDE', '/var/db/pfblockerng/.pfb_software_panel')
 /** Churn-ratio threshold above which 'auto' mode falls back to -T replace (5%). */
 const PFB_DELTA_CHURN_THRESHOLD = 0.05;
 
+// Issue #4053: the DNSBL section keys of the removed block-page web server and its VIP, NAT and floating rules.
+const PFB_DNSBL_RETIRED_KEYS = array(
+	'pfb_dnsvip_auto', 'pfb_dnsbl_nonat', 'dnsbl_interface', 'pfb_dnsvip4', 'pfb_dnsvip6', 'pfb_dnsvip_auto4', 'pfb_dnsvip_auto6',
+	'pfb_dnsport', 'pfb_dnsport_ssl', 'pfb_dnsbl_rule', 'dnsbl_allow_int', 'pfb_py_nolog', 'dnsbl_webpage',
+	// The pre-2.x VIP keys the installer used to migrate.
+	'pfb_dnsvip', 'pfb_dnsblv6', 'pfb_dnsvip_type', 'pfb_dnsvip_vhid', 'pfb_dnsvip_base', 'pfb_dnsvip_skew', 'pfb_dnsvip_pass',
+);
+
 // Concrete mechanisms; only group choices may use the inheritance token.
 const PFB_DNSBL_CONCRETE_MECHANISMS = array(
-	'enabled', 'disabled_log', 'disabled', 'nxdomain_log', 'nxdomain', 'nodata_log', 'nodata',
+	'disabled_log', 'disabled', 'nxdomain_log', 'nxdomain', 'nodata_log', 'nodata',
 );
 
 // issue #1898: the compatibility-only stored-key rename this migration still owns -- the
@@ -4778,7 +4541,7 @@ function pfb_core_call(string $method, array $params = [], ?string $socket = NUL
  * Core's native `settings/dns` fields (docs/misc/core-api-protocol.md, issue #3913), from config.xml: each value is what
  * pfb_unbound_python_ini() writes for it, so the in-memory config of a page that has not saved yet answers too.
  *
- * @return array<string, bool|int|string> the 17 fields, in the protocol's order
+ * @return array<string, bool|int|string> the 16 fields, in the protocol's order
  */
 function pfb_core_dns_settings(): array {
 	$on = static fn(string $key): bool => pfb_cfg_toggle_read(PfbConfig::read($key)) === PfbToggle::On;
@@ -4796,7 +4559,6 @@ function pfb_core_dns_settings(): array {
 		'idnBlockMalicious'     => $on('dnsbl/pfb_idn_block_malicious'),
 		'idnEscalateSuspicious' => $on('dnsbl/pfb_idn_escalate_suspicious'),
 		'decisionCacheMax'      => ctype_digit($cap) ? min(5000000, (int) $cap) : 10000,
-		'logViaWebserver'       => $on('dnsbl/pfb_py_nolog'),
 		'cnameValidation'       => $on('dnsbl/pfb_cname'),
 		'control'               => $control,
 		'controlLegacy'         => $control && $on('dnsbl/pfb_control_legacy'),
@@ -4943,10 +4705,9 @@ function pfb_core_ingest_entry_valid(string $entry): bool {
  * are the addresses pfb_ip_is_self() calls the box's own beyond the loopbacks, each once and without the ones Core refuses to list (unspecified,
  * link-local, IPv4-mapped): the interfaces' addresses, the virtual IPs and the PPPoE server's, IPv4 then IPv6, as pfSense lists them.
  *
- * `scheduledWorkDisabled` is pfb_cron_disabled(); `sinkholeV4` and `V6` are the DNSBL VIP addresses pfb_global() resolves (issue #4031), '' unless an
- * address of that family without a zone.
+ * `scheduledWorkDisabled` is pfb_cron_disabled().
  *
- * @return array<string, mixed> the 15 fields, in the protocol's order
+ * @return array<string, mixed> the 13 fields, in the protocol's order
  */
 function pfb_core_ingest_settings(): array {
 	$on = static fn(string $key): bool => PfbConfig::read($key) === PfbToggle::On;
@@ -4955,7 +4716,6 @@ function pfb_core_ingest_settings(): array {
 		return ctype_digit($stored) && (int) $stored >= 1 && (int) $stored <= $max ? (int) $stored : 0;
 	};
 	$listed = static fn(array $values, callable $valid): array => array_values(array_unique(array_filter(array_map('strval', $values), $valid)));
-	$sinkhole = static fn(mixed $address, int $family): string => is_string($address) && filter_var($address, FILTER_VALIDATE_IP, $family) !== FALSE ? $address : '';
 	$self = $listed(array_merge(array_values(get_configured_ip_addresses()), array_values(get_configured_ipv6_addresses())), 'pfb_core_ingest_self_valid');
 	return [
 		'suppression'       => $on('ip/suppression'),
@@ -4968,8 +4728,6 @@ function pfb_core_ingest_settings(): array {
 		'selfAddresses'     => array_map(static fn(string $address): array => ['address' => $address], $self),
 	] + pfb_core_proxy_settings() + [
 		'scheduledWorkDisabled' => pfb_cron_disabled(),
-		'sinkholeV4'            => $sinkhole(get_configured_vip_ipv4(pfb_core_table_text('dnsbl/pfb_dnsvip4')), FILTER_FLAG_IPV4),
-		'sinkholeV6'            => $sinkhole(get_configured_vip_ipv6(pfb_core_table_text('dnsbl/pfb_dnsvip6')), FILTER_FLAG_IPV6),
 	];
 }
 
@@ -6303,7 +6061,6 @@ function pfb_core_dns_fields(): array {
 		'idnBlockMalicious'     => ['dnsbl/pfb_idn_block_malicious', 'bool'],
 		'idnEscalateSuspicious' => ['dnsbl/pfb_idn_escalate_suspicious', 'bool'],
 		'decisionCacheMax'      => ['dnsbl/pfb_py_cache_max', 'int'],
-		'logViaWebserver'       => ['dnsbl/pfb_py_nolog', 'bool'],
 		'cnameValidation'       => ['dnsbl/pfb_cname', 'bool'],
 		'control'               => ['dnsbl/pfb_control', 'bool'],
 		'controlLegacy'         => ['dnsbl/pfb_control_legacy', 'bool'],
@@ -6324,7 +6081,7 @@ function pfb_core_settings_refusal(string $code, string $message, array $fieldEr
 
 /**
  * The refusal for a malformed settings adapter request, NULL for a well-formed one: nothing is locked or written before it passes.
- * A request holds exactly the keys of its op, and a write's `settings` exactly `dns` (the 17 fields, each of its native type and
+ * A request holds exactly the keys of its op, and a write's `settings` exactly `dns` (the 16 fields, each of its native type and
  * range), the feed projections (pfb_core_feed_projection_faults(), issue #3937), `schedule` (pfb_core_schedule_faults(), issue #3941) and
  * `ingest` (an object here; pfb_core_settings_backend() holds it to what config.xml and the platform project, issue #3975) and the
  * table-driven projections (pfb_core_table_faults(), issue #4031) and `feeds/geoip` (pfb_core_geoip_faults()).
@@ -6671,6 +6428,12 @@ function pfb_filter_service() {
 EOF;
 	$rc['stop']	= <<<EOF
 
+	# A RAM-disk install (use_mfs_tmpvar) restores this archive at boot: write it when none exists yet and DNSBL has a manifest (#3713; issue #4053: moved here from the retired DNSBL web server's stop, which ran at the same times)
+	if [ ! -f '{$pfb['dnsblarchive']}.zst' ] && [ ! -f '{$pfb['dnsblarchive']}.bz2' ] && [ -f '{$pfb['unbound_py_sources']}' ] &&
+	    [ "\$(/usr/local/sbin/read_xml_tag.sh boolean system/use_mfs_tmpvar)" = 'true' ]; then
+		/usr/bin/timeout -s TERM -k 5 60 {$pfb['php']} -f /usr/local/pkg/pfblockerng/pfblockerng.inc dnsbl_cache >/dev/null 2>&1
+	fi
+
 	# A RAM-disk install (use_mfs_tmpvar) restores this archive at boot: write it when none exists yet (#3713)
 	if [ ! -f '{$pfb['aliasarchive']}.zst' ] && [ ! -f '{$pfb['aliasarchive']}.bz2' ] &&
 	    [ "\$(/usr/local/sbin/read_xml_tag.sh boolean system/use_mfs_tmpvar)" = 'true' ]; then
@@ -6697,64 +6460,6 @@ EOF;
 	write_rcfile($rc);
 }
 
-
-// DNSBL Service
-function pfb_dnsbl_service() {
-	global $pfb;
-	$LOG_PREFIX_PKG_PFBLOCKERNG = LOG_PREFIX_PKG_PFBLOCKERNG;
-
-	$rc		= array();
-	$rc['file']	= 'pfb_dnsbl.sh';
-	$rc['start']	= <<<EOF
-
-	# Check if DNSBL is enabled
-	dnsblcheck="\$(/usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerngdnsblsettings/config/pfb_dnsbl)"
-	if [ "\${dnsblcheck}" != 'on' ]; then
-		exit
-	fi
-
-	# Ensure all processes are stopped; never launch over a survivor (#3423)
-	rc_stop || return 1
-
-	# Start DNSBL Lighttpd webserver (Python mode)
-	if [ -e '/var/unbound/pfb_dnsbl_lighty.conf' ]; then
-		/usr/bin/logger -p daemon.info -t lighttpd_pfb "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNSBL Webserver started"
-		# Detach std fds (#662): lighttpd self-daemonizes, and its forked child would
-		# otherwise inherit the caller's pipe (the package-manager capture pipe during a
-		# package install/upgrade) and hold it open, freezing the upgrade page's live log.
-		# Redirect so the daemon never holds an inherited descriptor.
-		/usr/local/sbin/lighttpd_pfb -f /var/unbound/pfb_dnsbl_lighty.conf >/dev/null 2>&1 </dev/null
-	fi
-
-EOF;
-	$rc['stop']	= <<<EOF
-
-	# A RAM-disk install (use_mfs_tmpvar) restores this archive at boot: write it when none exists yet and DNSBL has a manifest (#3713)
-	if [ ! -f '{$pfb['dnsblarchive']}.zst' ] && [ ! -f '{$pfb['dnsblarchive']}.bz2' ] && [ -f '{$pfb['unbound_py_sources']}' ] &&
-	    [ "\$(/usr/local/sbin/read_xml_tag.sh boolean system/use_mfs_tmpvar)" = 'true' ]; then
-		/usr/bin/timeout -s TERM -k 5 60 {$pfb['php']} -f /usr/local/pkg/pfblockerng/pfblockerng.inc dnsbl_cache >/dev/null 2>&1
-	fi
-
-	# Terminate DNSBL Lighttpd webserver, if found, and wait for its exit (#3423):
-	# TERM at 0 s, KILL at 5 s, give up at 7 s. Exact-name match: a look-alike must not stall it.
-	/usr/bin/logger -p daemon.info -t lighttpd_pfb "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNSBL Webserver stopped"
-	tick=0
-	while /bin/pgrep -x lighttpd_pfb >/dev/null 2>&1; do
-		case "\${tick}" in
-			0) /usr/bin/killall lighttpd_pfb ;;
-			5)
-				/usr/bin/logger -p daemon.warning -t lighttpd_pfb "WARNING [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNSBL Webserver ignored TERM for 5 s, sending KILL"
-				/usr/bin/killall -KILL lighttpd_pfb
-				;;
-			7) return 1 ;;
-		esac
-		/bin/sleep 1
-		tick="\$((tick + 1))"
-	done
-
-EOF;
-	write_rcfile($rc);
-}
 
 
 /**
@@ -9711,7 +9416,6 @@ function pfb_package_removal_recover(): array {
 		// The stored settings, read after the registration's fresh read of config.xml
 		pfb_global();
 		pfb_filter_service();
-		pfb_dnsbl_service();
 		pfb_dns_proxy_service();
 		pfb_core_service();
 		if (pfb_dnsbl_active()) {
@@ -9731,9 +9435,6 @@ function pfb_package_removal_recover(): array {
 			}
 			if (($pfb['enable'] ?? NULL) === PfbToggle::On && !is_service_running('pfb_filter')) {
 				start_service('pfb_filter');
-			}
-			if (pfb_dnsbl_active() && !is_service_running('pfb_dnsbl')) {
-				start_service('pfb_dnsbl');
 			}
 			// issue #3841: the Core API runs whatever the settings say
 			if (!is_service_running('pfb_core')) {
@@ -9805,11 +9506,6 @@ if (!file_exists('/usr/local/etc/rc.d/pfb_filter.sh')) {
 	pfb_filter_service();
 }
 
-// Create DNSBL service
-if (!file_exists('/usr/local/etc/rc.d/pfb_dnsbl.sh')) {
-	pfb_dnsbl_service();
-}
-
 // clog is not required for pfSense 2.5 and above
 if (file_exists('/usr/local/sbin/clog_pfb')) {
 	unlink_if_exists('/usr/local/sbin/clog_pfb');
@@ -9821,26 +9517,8 @@ if (file_exists('/usr/local/sbin/clog_pfb')) {
 // Commandline arguments for daemons
 if (isset($argv[1])) {
 
-	// DNSBL Lighttpd HTTPS daemon (Collects HTTPS events from the Lighttpd dnsbl_error.log)
-	if ($argv[1] == 'dnsbl') {
-			pfb_global();
-			ignore_user_abort(TRUE);
-			set_time_limit(0);
-			pfb_daemon_dnsbl();
-			exit;
-	}
-
-	// DNSBL Lighttpd HTTP daemon (Collects HTTP events from the index.php script)
-	elseif ($argv[1] == 'index') {
-			pfb_global();
-			ignore_user_abort(TRUE);
-			set_time_limit(0);
-			pfb_daemon_dnsbl_index();
-			exit;
-	}
-
 	// IP filter daemon to convert filter.log to ip_block|ip_permit|ip_match log format
-	elseif ($argv[1] == 'filterlog') {
+	if ($argv[1] == 'filterlog') {
 			pfb_global();
 			ignore_user_abort(TRUE);
 			set_time_limit(0);
@@ -11780,20 +11458,6 @@ function pfb_wizard_suppress_autolaunch(?string $get_action, $wizard_skip_flag, 
 }
 
 /*
- * ADR-23: the DNSBL sinkhole-VIP settings the setup wizard persists to the DNSBL config,
- * given the Auto VIP choice. Auto on -> pfb_dnsvip_auto='on' and the manual selector ids
- * are NOT written (ADR-13 provisions and owns the VIP at enable time); auto off -> the flag
- * is '' and the operator's step3 lo0 VIP selections are persisted. step4_submitphpaction()
- * merges the returned slice into the dnsbl settings config.
- */
-function pfb_wizard_dnsvip_settings(bool $auto, $vip4, $vip6): array {
-	$settings = array('pfb_dnsvip_auto' => $auto ? 'on' : '');
-	if (!$auto) {
-		$settings['pfb_dnsvip4'] = $vip4;
-		$settings['pfb_dnsvip6'] = $vip6;
-	}
-	return $settings;
-}
 
 /*
  * ADR-19 software-update decision core (pure; pinned by tests/php/SoftwareUpdateDecisionTest.php).
@@ -16080,352 +15744,52 @@ function dnsbl_save_stats(): bool {
 }
 
 
-// Function to create DNSBL Lighttpd configuration file
-function pfb_create_lighttpd() {
+
+
+// Issue #4053: the DNSBL web server (lighttpd), its NAT redirect, certificate and auto-created VIP are removed. This strips
+// whatever an earlier version left: the exact pfB DNSBL NAT rows, the lighttpd conf and certificate, the running service and
+// the marked auto-VIP (pfb_dnsbl_vip_retire()). Idempotent, so a restored old backup is cleaned by the next apply.
+function pfb_dnsbl_webserver_retire(): void {
 	global $pfb;
 
-	$lighttpd_bind = $pfb['dnsbl_iface'] != 'lo0' ? "127.0.0.1" : "{$pfb['dnsbl_vip4']}";
-	$lighttpd_port = $pfb['dnsbl_iface'] != 'lo0' ? "{$pfb['dnsbl_port']}" : '80';
-
-	$pfb_conf = '';
-	$pfb_conf = <<<EOF
-#
-#pfBlockerNG DNSBL Lighttpd configuration file
-#
-server.tag			= "pfBlockerNG DNSBL"
-server.bind			= "{$lighttpd_bind}"
-server.port			= "{$lighttpd_port}"
-server.event-handler		= "freebsd-kqueue"
-server.network-backend		= "freebsd-sendfile"
-server.dir-listing		= "disable"
-server.document-root		= "/usr/local/www/pfblockerng/www/"
-server.max-request-size		= "1"
-server.pid-file			= "/var/run/dnsbl.pid"
-
-EOF;
-
-if ($pfb['dnsbl_py_nolog'] === PfbToggle::On) {
-	$pfb_conf .= <<<EOF
-server.errorlog			= "|/usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dnsbl"
-
-EOF;
-}
-
-	if (file_exists('/usr/local/lib/lighttpd/mod_openssl.so')) {
-		if ($pfb['dnsbl_py_nolog'] === PfbToggle::On) {
-			$pfb_conf .= 'server.modules			= ( "mod_access", "mod_accesslog", "mod_fastcgi", "mod_rewrite", "mod_openssl" )';
-		} else {
-			$pfb_conf .= 'server.modules			= ( "mod_fastcgi", "mod_rewrite", "mod_openssl" )';
-		}
-	} else {
-		if ($pfb['dnsbl_py_nolog'] === PfbToggle::On) {
-			$pfb_conf .= 'server.modules			= ( "mod_access", "mod_accesslog", "mod_fastcgi", "mod_rewrite" )';
-		} else {
-			$pfb_conf .= 'server.modules			= ( "mod_fastcgi", "mod_rewrite" )';
-		}
+	// Stop the server while its rc script still exists.
+	if (is_service_running('pfb_dnsbl')) {
+		pfb_logger("Stop Service DNSBL\n", 1);
+		stop_service('pfb_dnsbl');
 	}
-
-	// mod_access backs url.access-deny below; load it unconditionally so the
-	// ".inc"/"~" denial is enforced regardless of the logging branch above.
-	$pfb_conf .= <<<EOF
-
-server.modules			+= ( "mod_access" )
-index-file.names		= ( "index.php" )
-mimetype.assign			= ( ".html" => "text/html", ".gif" => "image/gif" )
-url.access-deny			= ( "~", ".inc" )
-fastcgi.server			= ( ".php" => ( "localhost" => ( "socket" => "/var/run/php-fpm.socket", "broken-scriptfilename" => "enable" ) ) )
-
-EOF;
-	if ($pfb['dnsbl_py_nolog'] === PfbToggle::On) {
-
-	$pfb_conf .= <<<EOF
-debug.log-condition-handling	= "enable"
-accesslog.use-syslog		= "disable"
-accesslog.format		= "INDEX!%r!%V!%h!%{Referer}i * %r * %{User-Agent}i"
-accesslog.filename		= "|/usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc index"
-
-EOF;
-}
-	// Lighttpd v1.4.58+ conditional error log with 'ssl.verifyclient.activate' to collect the domain name
-	$lighty_ver = exec('/usr/local/sbin/lighttpd -v 2>&1');
-	if (($pfb['dnsbl_py_nolog'] === PfbToggle::On) &&
-  	    (strpos($lighty_ver, 'lighttpd/1.4.58') !== FALSE ||
-	    strpos($lighty_ver, 'lighttpd/1.4.59') !== FALSE ||
-	    strpos($lighty_ver, 'lighttpd/1.4.60') !== FALSE ||
-	    strpos($lighty_ver, 'lighttpd/1.4.61') !== FALSE ||
-	    strpos($lighty_ver, 'lighttpd/1.4.67') !== FALSE ||
-	    strpos($lighty_ver, 'lighttpd/1.5') !== FALSE)) {
-
-		$pfb_conf .= <<<EOF
-ssl.verifyclient.activate	= "enable"
-
-EOF;
+	$changed = pfb_dnsbl_vip_retire();
+	$dnsbl_ex_nat = pfb_managed_obj_rows('nat/rule', PFB_MANAGED_NAT_DESCR);
+	pfb_sync_copied_check('dnsbl_nat', $dnsbl_ex_nat, [], $pfb['dbdir']);
+	$firewall = pfb_remove_managed_obj('nat/rule', PFB_MANAGED_NAT_DESCR);
+	foreach (['pfB_DNSBL_Ping', 'pfB_DNSBL_Permit'] as $marker) {
+		$firewall = pfb_remove_managed_obj('filter/rule', $marker) || $firewall;
 	}
-
-	$pfb_conf .= <<<EOF
-
-\$HTTP["scheme"] == "http" {
-	url.rewrite-once = ( ".*" => "/index.php" )
-}
-
-\$HTTP["remoteip"] =~ ".*" {
-
-EOF;
-
-	if ($pfb['dnsbl_iface'] != 'lo0') {
-		$pfb_conf .= <<<EOF
-
-	\$SERVER["socket"] == "127.0.0.1:{$pfb['dnsbl_port_ssl']}" {
-		ssl.engine			= "enable"
-		ssl.pemfile			= "/var/unbound/dnsbl_cert.pem"
-		ssl.dh-file			= "/etc/dh-parameters.4096"
-		ssl.ec-curve			= "secp384r1"
-		ssl.honor-cipher-order		= "enable"
-		ssl.openssl.ssl-conf-cmd	= ("MinProtocol"	=> "TLSv1.2",
-					 	   "Options"		=> "-ServerPreference",
-						   "CipherString"	=> "EECDH+AESGCM:AES256+EECDH:CHACHA20:!SHA1:!SHA256:!SHA384")
+	// The block-page aliases go unless an operator's rule still names them (a missing alias fails the whole ruleset).
+	$rules = json_encode([config_get_path('filter/rule', []), config_get_path('nat/rule', [])]);
+	$aliases = config_get_path('aliases/alias', []);
+	$kept_aliases = array_values(array_filter(is_array($aliases) ? $aliases : [], static fn ($alias): bool =>
+		!in_array($alias['name'] ?? '', ['pfB_DNSBL_Ports', 'pfB_DNSBL_VIPs'], TRUE) || str_contains($rules, '"' . $alias['name'] . '"')));
+	if (is_array($aliases) && count($kept_aliases) !== count($aliases)) {
+		config_set_path('aliases/alias', $kept_aliases);
+		$firewall = TRUE;
 	}
-
-	\$SERVER["socket"] == "{$pfb['dnsbl_vip4']}:80" {
-		#
+	$services = config_get_path('installedpackages/service', []);
+	$kept_services = array_values(array_filter(is_array($services) ? $services : [], static fn ($row): bool => ($row['name'] ?? '') !== 'pfb_dnsbl'));
+	if (is_array($services) && count($kept_services) !== count($services)) {
+		config_set_path('installedpackages/service', $kept_services);
+		$changed = TRUE;
 	}
-
-EOF;
+	if ($changed || $firewall) {
+		write_config('pfBlockerNG: removed the DNSBL web server, its firewall objects and VIP (issue #4053)');
 	}
-	$pfb_conf .= <<<EOF
-
-	\$SERVER["socket"] == "{$pfb['dnsbl_vip4']}:443" {
-		ssl.engine			= "enable"
-		ssl.pemfile			= "/var/unbound/dnsbl_cert.pem"
-		ssl.dh-file			= "/etc/dh-parameters.4096"
-		ssl.ec-curve			= "secp384r1"
-		ssl.honor-cipher-order		= "enable"
-		ssl.openssl.ssl-conf-cmd	= ("MinProtocol"	=> "TLSv1.2",
-                                                   "Options"		=> "-ServerPreference",
-                                                   "CipherString"	=> "EECDH+AESGCM:AES256+EECDH:CHACHA20:!SHA1:!SHA256:!SHA384")
+	if ($firewall) {
+		$pfb['filter_configure'] = TRUE;
 	}
-
-EOF;
-	if (!empty($pfb['dnsbl_vip6'])) {
-		if ($pfb['dnsbl_iface'] != 'lo0') {
-			$pfb_conf .= <<<EOF
-
-	\$SERVER["socket"] == "[::1]:{$pfb['dnsbl_port']}" {
-		#
-	}
-
-	\$SERVER["socket"] == "[::1]:{$pfb['dnsbl_port_ssl']}" {
-		ssl.engine			= "enable"
-		ssl.pemfile			= "/var/unbound/dnsbl_cert.pem"
-		ssl.dh-file			= "/etc/dh-parameters.4096"
-		ssl.ec-curve			= "secp384r1"
-		ssl.honor-cipher-order 		= "enable"
-		ssl.openssl.ssl-conf-cmd	= ("MinProtocol"	=> "TLSv1.2",
-						   "Options"		=> "-ServerPreference",
-						   "CipherString"	=> "EECDH+AESGCM:AES256+EECDH:CHACHA20:!SHA1:!SHA256:!SHA384")
-	}
-
-EOF;
-		}
-		$pfb_conf .= <<<EOF
-
-	\$SERVER["socket"] == "[{$pfb['dnsbl_vip6']}]:80" {
-		#
-	}
-
-	\$SERVER["socket"] == "[{$pfb['dnsbl_vip6']}]:443" {
-		ssl.engine			= "enable"
-		ssl.pemfile			= "/var/unbound/dnsbl_cert.pem"
-		ssl.dh-file			= "/etc/dh-parameters.4096"
-		ssl.ec-curve			= "secp384r1"
-		ssl.honor-cipher-order		= "enable"
-		ssl.openssl.ssl-conf-cmd	= ("MinProtocol"	=> "TLSv1.2",
-						   "Options"		=> "-ServerPreference",
-						   "CipherString"	=> "EECDH+AESGCM:AES256+EECDH:CHACHA20:!SHA1:!SHA256:!SHA384")
-	}
-
-EOF;
-	}
-	$pfb_conf .= <<<EOF
-
-	\$HTTP["host"] =~ ".*" {
-		url.rewrite-once = ( ".*" => "/index.php" )
-	}
-}
-
-EOF;
-	return $pfb_conf;
-}
-
-
-// Function to create DNSBL SSL certificate
-function pfb_create_dnsbl_cert() {
-	global $pfb, $cert_strict_values;
-
-	$cert		= array();
-	$cert['refid']	= uniqid();
-	$cert['descr']	= sprintf(gettext("pfBlockerNG DNSBL (%s)"), $cert['refid']);
-	$cert_hostname	= config_get_path('system/hostname') . "-pfBNG-DNSBL-{$cert['refid']}";
-
-	$dn = array(
-		'organizationName'	=> "pfBlockerNG DNSBL Self-Signed Certificate",
-		'commonName'		=> $cert_hostname,
-		'subjectAltName'	=> "DNS:{$cert_hostname}");
-
-	$old_err_level = error_reporting(0); /* otherwise openssl_ functions throw warnings directly to a page screwing menu tab */
-	if (!cert_create($cert, null, 2048, $cert_strict_values['max_server_cert_lifetime'] ?: 398, $dn, 'self-signed', 'sha256')) {
-		while ($ssl_err = openssl_error_string()) {
-			logger(LOG_ERR, localize_text("Could not create DNSBL Certificate: openssl library returns: %s", $ssl_err), LOG_PREFIX_PKG_PFBLOCKERNG);
-		}
-		error_reporting($old_err_level);
-		return null;
-	}
-	error_reporting($old_err_level);
-	$privatekey	= base64_decode($cert['prv']);
-	$publickey	= base64_decode($cert['crt']);
- 
-	@file_put_contents("{$pfb['dnsbl_cert']}", "{$privatekey}{$publickey}", LOCK_EX);
-}
-
-
-// [ #381 ] DNSBL sinkhole NAT generation is gated on a real (non-lo0) listening
-// interface AND the user not having opted out via pfb_dnsbl_nonat. Pure predicate so
-// the branch is unit-testable off-appliance (PfbDnsblNatEnabledTest).
-function pfb_dnsbl_nat_enabled(string $iface, PfbToggle $nonat): bool {
-	return $iface !== 'lo0' && $nonat !== PfbToggle::On;
-}
-
-// Create the DNSBL VIP and NAT rules, lighttpd conf and certificate, and (re)start the web server -- or, while no block answers
-// with the VIP (issue #3539), remove them all and stop it
-function pfb_create_dnsbl($mode) {
-	global $pfb;
-	pfb_global();
-
-	// [ ADR-13 ] Create/remove the marked DNSBL sinkhole VIP(s) before the NAT pass so the
-	// NAT generation below sees the resolved VIP address(es). In the main update pass this
-	// is idempotent — sync_package_pfblockerng() already provisioned it before
-	// pfb_unbound_python() (so the module ini bakes the right sinkhole IP); here it covers
-	// the boot/install call path. No-op (byte-identical) when auto-create is off. Refreshes $pfb.
-	pfb_manage_dnsbl_vip($mode);
-
-	$new_nat = $pfb_ex_nat = $dnsbl_ex_nat = array();
-	$pfbupdate = FALSE;
-
-	// issue #3539: the web server, its NAT and certificate exist only while a block answers with the VIP; any other mode or
-	// no demand strips all of them, with or without ports or a VIP.
-	$serve = $mode == 'enabled' && !empty($pfb['dnsbl_vip_demand']);
-
-	if (!$serve || (!empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl']) && ($pfb['dnsbl'] === PfbToggle::On))) {
-
-		// DNSBL NAT rules generation
-		if ($serve) {
-			// Collect existing pfSense NAT rules for comparison.
-			foreach (config_get_path('nat/rule', []) as $ex_nat) {
-				// Bucket only the exact DNSBL NAT descr for rebuild — a user rule whose descr merely
-				// contains it, and other pfBlockerNG-owned NAT (e.g. DNS redirect), stay in the
-				// preserved 'other' bucket.
-				if (pfb_managed_obj_match($ex_nat, PFB_MANAGED_NAT_DESCR)) {
-					// Collect DNSBL NAT rules
-					$dnsbl_ex_nat[] = $ex_nat;
-				} else {
-					// Collect all 'other' NAT rules
-					$pfb_ex_nat[] = $ex_nat;
-				}
-			}
-
-			// Generate new DNSBL NAT per DNSBL listening ports except for 'localhost' interface setting.
-			$dnsbl_new_nat = array();
-			if (pfb_dnsbl_nat_enabled($pfb['dnsbl_iface'], $pfb['dnsbl_nonat'])) {
-				$selected_ports = array("{$pfb['dnsbl_port']}" => '80', "{$pfb['dnsbl_port_ssl']}" => '443');
-				foreach ($selected_ports as $port => $lport) {
-
-					$dnsbl_new_nat[] =	array ( 'source'		=> array('any'  => ''),
-									'destination'		=> array('address' => "{$pfb['dnsbl_vip4']}", 'port' => "{$lport}"),
-									'protocol'		=> 'tcp',
-									'target'		=> '127.0.0.1',
-									'local-port'		=> "{$port}",
-									'interface'		=> "{$pfb['dnsbl_iface']}",
-									'descr'			=> PFB_MANAGED_NAT_DESCR,
-									'associated-rule-id'	=> 'pass',
-									'natreflection'		=> 'purenat'
-									);
-
-				}
-			}
-
-			pfb_sync_copied_check('dnsbl_nat', $dnsbl_ex_nat, $dnsbl_new_nat, $pfb['dbdir']);
-
-			// Compare existing to new and if they are not identical update
-			if ($dnsbl_ex_nat !== $dnsbl_new_nat) {
-				$pfbupdate = TRUE;
-				$new_nat = array_merge($pfb_ex_nat, $dnsbl_new_nat);
-			} else {
-				$new_nat = array_merge($pfb_ex_nat, $dnsbl_ex_nat);
-			}
-
-			// Compare previous Lighttpd conf
-			$pfb_lighty_conf = pfb_create_lighttpd();
-			$pfb_lighty_conf_ex = @file_get_contents($pfb['dnsbl_conf']);
-			if ($pfb_lighty_conf !== $pfb_lighty_conf_ex) {
-				$pfbupdate = TRUE;
-				@file_put_contents($pfb['dnsbl_conf'], $pfb_lighty_conf, LOCK_EX);
-				$log = "\nSaving new DNSBL web server configuration to port [ {$pfb['dnsbl_port']} and {$pfb['dnsbl_port_ssl']} ]";
-				pfb_logger("{$log}", 1);
-			}
-		} else {
-			// Strip the exact pfB DNSBL NAT rules; pfb_remove_managed_obj preserves user-owned
-			// rules and returns TRUE iff anything was removed.
-			$dnsbl_ex_nat = pfb_managed_obj_rows('nat/rule', PFB_MANAGED_NAT_DESCR);
-			pfb_sync_copied_check('dnsbl_nat', $dnsbl_ex_nat, [], $pfb['dbdir']);
-			if (pfb_remove_managed_obj('nat/rule', PFB_MANAGED_NAT_DESCR)) {
-				$pfbupdate = TRUE;
-			}
-
-			// The conf is the rc script's start marker and the certificate belongs to the web server: with both
-			// gone no start path launches it.
-			unlink_if_exists($pfb['dnsbl_conf']);
-			unlink_if_exists($pfb['dnsbl_cert']);
-		}
-
-		// Update config.xml, if changes required.
-		// On serve: write the full new NAT set. Otherwise pfb_remove_managed_obj already changed the
-		// config; just persist via write_config.
-		if ($pfbupdate) {
-			if ($serve) {
-				config_set_path('nat/rule', $new_nat);
-			}
-			write_config('pfBlockerNG: saving DNSBL changes');
-		}
-	}
-
-	// Save settings, restart services as required
-	if ($serve) {
-
-		// Create DNSBL SSL certificate
-		if (!file_exists("{$pfb['dnsbl_cert']}")) {
-			pfb_create_dnsbl_cert();
-
-			$log = "\nNew DNSBL certificate created";
-			pfb_logger("{$log}", 1);
-		}
-
-		if ($pfbupdate || !is_service_running('pfb_dnsbl')) {
-
-			// Remove any existing and create link for DNSBL lighttpd executable
-			unlink_if_exists('/usr/local/sbin/lighttpd_pfb');
-			link('/usr/local/sbin/lighttpd', '/usr/local/sbin/lighttpd_pfb');
-
-			$log = "\nRestarting DNSBL Service";
-			pfb_logger("{$log}", 1);
-			restart_service('pfb_dnsbl');
-		}
-	}
-	else {
-		if (is_service_running('pfb_dnsbl')) {
-			pfb_logger("Stop Service DNSBL\n", 1);
-			stop_service('pfb_dnsbl');
-		}
-	}
+	unlink_if_exists($pfb['dnsbl_conf']);
+	unlink_if_exists($pfb['dnsbl_cert']);
+	unlink_if_exists($pfb['unbound_py_vip']);
+	unlink_if_exists('/usr/local/sbin/lighttpd_pfb');
+	unlink_if_exists('/usr/local/etc/rc.d/pfb_dnsbl.sh');
 }
 
 
@@ -16721,13 +16085,6 @@ function pfb_unbound_dnsbl($mode) {
 				}
 			}
 
-			// Remove any DNSBL VIPs added to unbound.conf on 'disable'
-			elseif ((strpos($line, 'interface:') !== FALSE) && ($mode == 'disabled') &&
-			    !empty($pfb['dnsbl_vip4']) && (strpos($line, $pfb['dnsbl_vip4']) !== FALSE)) { 
-				$u_update = TRUE;
-				$u_msg .= "  Removed DNSBL VIP from Unbound Interface settings\n";
-				unset($conf[$key]);
-			}
 
 			elseif (strpos($line, 'python-script: pfb_unbound.py') !== FALSE ||
 			    strpos($line, 'python-script: ' . PFB_DNS_PROXY_OBSERVER . '.py') !== FALSE) {
@@ -17961,7 +17318,7 @@ function pfb_unbound_py_teardown_raw_set(): bool {
 		// issue #2607: every Python-emitted artifact describes the generation this manifest
 		// defines and is rewritten only for a build that produced a snapshot, so each one
 		// left behind is read back as live by the update log, the RAM gate or the alias count.
-		foreach (array('unbound_py_count', 'unbound_py_regex_count', 'unbound_py_reject_stats', 'unbound_py_vip') as $emitted) {
+		foreach (array('unbound_py_count', 'unbound_py_regex_count', 'unbound_py_reject_stats') as $emitted) {
 			if (!empty($pfb[$emitted])) {
 				unlink_if_exists($pfb[$emitted]);
 			}
@@ -18844,7 +18201,6 @@ function pfb_unbound_python_ini($mode, ?string $now = NULL): string {
 		$tld_allow_list = ltrim($tld_allow_list, ',');
 	}
 
-	$python_nolog = ($pfb['dnsbl_py_nolog'] === PfbToggle::On) ? 'on' : 'off';
 	$regex_cap = ($pfb['dnsbl_regex_cap'] === PfbToggle::On) ? 'on' : 'off';
 	$decisiondb_max = $pfb['dnsbl_decisiondb_max'] ?? '10000';
 	$forwarding = config_path_enabled('unbound', 'forwarding') ? 'on' : 'off';
@@ -18854,8 +18210,6 @@ function pfb_unbound_python_ini($mode, ?string $now = NULL): string {
 ; pfBlockerNG DNSBL Unbound python configuration file
 ; pfb_unbound.ini [ File created: {$now} ]
 [MAIN]
-dnsbl_ipv4	= {$pfb['dnsbl_vip4']}
-dnsbl_ipv6	= {$pfb['dnsbl_vip6']}
 python_enable	= {$python_enable}
 metrics_client_ip	= {$metrics_client_ip}
 python_reply	= {$python_reply}
@@ -18874,7 +18228,6 @@ python_tld_seg	= 1
 decisiondb_max	= {$decisiondb_max}
 tld_allow	= {$tld_allow}
 tld_allow_list	= {$tld_allow_list}
-python_nolog	= {$python_nolog}
 python_cname	= {$python_cname}
 python_control	= {$python_control}
 python_control_legacy	= {$python_control_legacy}
@@ -21478,10 +20831,6 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	if (!pfb_dnsbl_active() && !$pfb['install']) {
 
 		pfb_reload_unbound('disabled', $pfbpython);
-		if (is_service_running('pfb_dnsbl')) {
-			pfb_logger("\nStop Service DNSBL", 1);
-			stop_service('pfb_dnsbl');
-		}
 		pfb_unbound_clear_work_files();
 
 		// Unmount Unbound python 'lib/bin' folders after Unbound has been reloaded with the python integration enabled
@@ -23058,7 +22407,7 @@ function pfb_dnsbl_mechanism_normalize(mixed $stored): string {
 	return (is_string($stored) && in_array($stored, PFB_DNSBL_CONCRETE_MECHANISMS, TRUE)) ? $stored : 'disabled_log';
 }
 
-/** Project legacy VIP markers (absent, '', 'enabled' in any case) without touching explicit choices; issue #3539: junk fails safe to 'disabled_log'. */
+/** Project legacy VIP markers (absent, '', 'enabled' in any case) without touching explicit choices; issue #4053: the VIP response is gone, so a marker answers Null Blocking (logging), as junk does. */
 function pfb_dnsbl_group_logging(mixed $stored, bool $legacy = FALSE): string {
 
 	if ($stored === 'default') {
@@ -23068,7 +22417,7 @@ function pfb_dnsbl_group_logging(mixed $stored, bool $legacy = FALSE): string {
 	$is_vip_marker = ($stored === NULL) || ($stored === '')
 		|| (is_string($stored) && strcasecmp($stored, 'enabled') === 0);
 	if ($is_vip_marker) {
-		return $legacy ? 'default' : 'enabled';
+		return $legacy ? 'default' : 'disabled_log';
 	}
 
 	if (is_string($stored) && in_array($stored, PFB_DNSBL_CONCRETE_MECHANISMS, TRUE)) {
@@ -23091,7 +22440,6 @@ function pfb_dnsbl_effective_logging(mixed $group_logging, string $global_loggin
  * built-in manifest flag. Issue #3539: unknown input fails closed to '0' (Null Blocking, logged). */
 function pfb_dnsbl_mechanism_flag(string $mechanism): string {
 	return match ($mechanism) {
-		'enabled'      => '1',
 		'disabled_log' => '0',
 		'disabled'     => '2',
 		'nxdomain_log' => '3',
@@ -23102,10 +22450,9 @@ function pfb_dnsbl_mechanism_flag(string $mechanism): string {
 	};
 }
 
-/** issue #3539: the one mechanism label map every page renders, in PFB_DNSBL_CONCRETE_MECHANISMS order; the VIP response is deprecated. */
+/** issue #3539: the one mechanism label map every page renders, in PFB_DNSBL_CONCRETE_MECHANISMS order. */
 function pfb_dnsbl_mechanism_labels(): array {
 	return array(
-		'enabled'	=> 'DNSBL WebServer/VIP (deprecated)',
 		'disabled_log'	=> 'Null Blocking (logging)',
 		'disabled'	=> 'Null Blocking (no logging)',
 		'nxdomain_log'	=> 'NXDOMAIN (logging)',
@@ -23118,13 +22465,12 @@ function pfb_dnsbl_mechanism_labels(): array {
 /** issue #3539: the one mechanism help, one list item per mechanism label, shared by the DNSBL tab, the group editor and the DNSBL Category page. */
 function pfb_dnsbl_mechanism_help(): string {
 	$notes = array(
-		'enabled'	=> 'blocked names resolve to the DNSBL VIP. The web server can log requests and show the block page.',
 		'disabled_log'	=> 'answer <code>0.0.0.0</code> for A and <code>::</code> for AAAA; log the block.',
 		'disabled'	=> 'answer <code>0.0.0.0</code> for A and <code>::</code> for AAAA; do not log the event.',
-		'nxdomain_log'	=> 'answer NXDOMAIN and log the block. No block page.',
-		'nxdomain'	=> 'answer NXDOMAIN without an event log. No block page.',
-		'nodata_log'	=> 'return an empty successful answer with an SOA record; log the block. No block page.',
-		'nodata'	=> 'return an empty successful answer with an SOA record, without an event log. No block page.',
+		'nxdomain_log'	=> 'answer NXDOMAIN and log the block.',
+		'nxdomain'	=> 'answer NXDOMAIN without an event log.',
+		'nodata_log'	=> 'return an empty successful answer with an SOA record; log the block.',
+		'nodata'	=> 'return an empty successful answer with an SOA record, without an event log.',
 	);
 
 	$help = '<ul>';
@@ -23161,7 +22507,7 @@ function pfb_dnsbl_policy_config(array $dconfig, array $groups): array {
 	$override_active = is_string($raw_mechanism) && !empty($raw_mechanism);
 	return array(
 		'mode'      => $override_active ? PfbDnsblGlobalMode::Override : PfbDnsblGlobalMode::Default,
-		'mechanism' => $override_active ? pfb_dnsbl_mechanism_normalize($raw_mechanism) : 'enabled',
+		'mechanism' => $override_active ? pfb_dnsbl_mechanism_normalize($raw_mechanism) : 'disabled_log',
 		'legacy'    => TRUE,
 	);
 }
@@ -23169,60 +22515,6 @@ function pfb_dnsbl_policy_config(array $dconfig, array $groups): array {
 /** The one Blacklist-category logging projection: absent joins the Default/Override policy, '' stays the legacy VIP marker; issue #3539. */
 function pfb_dnsbl_blacklist_logging(array $blconfig): mixed {
 	return $blconfig['blacklist_logging'] ?? 'default';
-}
-
-/** TRUE when any effective DNSBL block (deny group, Blacklist category, global-mechanism built-in) answers with the VIP; issue #3539. */
-function pfb_dnsbl_vip_demand(array $dconfig, array $groups, array $blconfig): bool {
-	$policy   = pfb_dnsbl_policy_config($dconfig, $groups);
-	$uses_vip = static fn(mixed $logging): bool =>
-		pfb_dnsbl_effective_logging($logging, $policy['mechanism'], $policy['mode'], $policy['legacy']) === 'enabled';
-
-	foreach ($groups as $group) {
-		if (!is_array($group) || !pfb_group_action_valid($group['action'] ?? NULL, 'dnsbl') || $group['action'] === 'Disabled') {
-			continue;
-		}
-		$rows = is_array($group['row'] ?? NULL) ? $group['row'] : array();
-		if (empty($rows[0]['url'])) {
-			$rows = array();	// the apply drops every row when the first has no url
-		}
-		$blocks = !empty($group['custom']);
-		foreach ($rows as $row) {
-			if (is_array($row) && !empty($row['url']) && ($row['state'] ?? '') !== 'Disabled' && ($row['action'] ?? '') !== 'Permit') {
-				$header = pfb_normalize_row_header(is_string($row['header'] ?? NULL) ? $row['header'] : '');
-				if ($header['header'] !== '' && $header['header'] !== '0') {
-					$blocks = TRUE;
-					break;
-				}
-			}
-		}
-		if ($blocks && $uses_vip($group['logging'] ?? NULL)) {
-			return TRUE;
-		}
-	}
-
-	// Like the apply: not 'Disable', and a list only from an `item` row listed in blacklist_selected with a category selection.
-	if (($blconfig['blacklist_enable'] ?? NULL) !== 'Disable' && !empty($blconfig['blacklist_selected']) && is_string($blconfig['blacklist_selected'])
-	    && $uses_vip(pfb_dnsbl_blacklist_logging($blconfig))) {
-		$listed = array_flip(explode(',', $blconfig['blacklist_selected']));
-		foreach (is_array($blconfig['item'] ?? NULL) ? $blconfig['item'] : array() as $item) {
-			if (is_array($item) && is_string($item['xml'] ?? NULL) && isset($listed[$item['xml']])
-			    && is_string($item['selected'] ?? NULL) && array_filter(explode(',', $item['selected']))) {
-				return TRUE;
-			}
-		}
-	}
-
-	// Built-ins have no group: they always resolve to the global mechanism ('default').
-	$registry = pfb_cfg_registry();
-	$field    = static fn(string $key): mixed => $dconfig[$key] ?? $registry["dnsbl/{$key}"]['default'];
-	return $uses_vip('default') && (
-		(pfb_cfg_toggle_read($field('pfb_regex')) === PfbToggle::On && !empty($field('pfb_regex_list')))
-		|| pfb_cfg_idn_mode_read($field('pfb_idn')) !== PfbIdnMode::Off
-		// Like the INI writer: TLD Allow is on only with a selection in one of its buckets.
-		|| (pfb_cfg_toggle_read($field('tld_allow')) === PfbToggle::On
-		    && array_filter(array_map($field, ['tld_allow_gtld', 'tld_allow_cctld', 'tld_allow_itld', 'tld_allow_bgtld'])))
-		|| (!empty($field('tld_wildcard')) && !empty(pfb_text_area_decode($field('tld_wildcard_blacklist'), TRUE, FALSE, TRUE)))
-	);
 }
 
 /**
@@ -23247,17 +22539,6 @@ function pfb_dnsbl_policy_from_post(array $post, string $local_tld, array $defau
 		'tld_allow_cctld'	=> $csv('tld_allow_cctld'),
 		'tld_allow_itld'	=> $csv('tld_allow_itld'),
 		'tld_allow_bgtld'	=> $csv('tld_allow_bgtld'),
-	);
-}
-
-/** issue #3539: VIP demand of the configuration a DNSBL settings save would write: the stored section overlaid with the posted policy. */
-function pfb_dnsbl_candidate_vip_demand(array $stored_section, array $posted_policy): bool {
-	$groups   = config_get_path('installedpackages/pfblockerngdnsbl/config', array());
-	$blconfig = config_get_path('installedpackages/pfblockerngblacklist', array());
-	return pfb_dnsbl_vip_demand(
-		array_replace($stored_section, $posted_policy),
-		is_array($groups) ? $groups : array(),
-		is_array($blconfig) ? $blconfig : array()
 	);
 }
 
@@ -23303,6 +22584,50 @@ function pfb_dnsbl_policy_migrate(array $sections): ?array {
 		$result[$groups_path] = $raw_groups;
 	}
 	return $result;
+}
+
+/**
+ * Issue #4053: the WebServer/VIP response is removed. Every stored VIP marker becomes Null Blocking (logging): the global
+ * mechanism, a group's logging (absent, '' or 'enabled' in any case: after #3288's migration those mean the VIP), and an
+ * explicit Blacklist logging ('' or 'enabled'). An absent Blacklist logging follows the policy and stays absent.
+ * Returns the sections to write back, or NULL when nothing is stored as the VIP.
+ */
+function pfb_dnsbl_vip_mechanism_migrate(array $sections): ?array {
+
+	$dnsbl_path  = PFB_SECTIONS['dnsbl'];
+	$groups_path = 'installedpackages/pfblockerngdnsbl/config';
+	$bl_path     = 'installedpackages/pfblockerngblacklist';
+	$is_vip      = static fn(mixed $v): bool => $v === NULL || $v === '' || (is_string($v) && strcasecmp($v, 'enabled') === 0);
+	$result      = array();
+
+	$dconfig = is_array($sections[$dnsbl_path] ?? NULL) ? $sections[$dnsbl_path] : array();
+	if (is_string($dconfig['global_log'] ?? NULL) && strcasecmp($dconfig['global_log'], 'enabled') === 0) {
+		$dconfig['global_log'] = 'disabled_log';
+		$result[$dnsbl_path] = $dconfig;
+	}
+
+	$groups = $sections[$groups_path] ?? NULL;
+	if (is_array($groups)) {
+		$changed = FALSE;
+		foreach ($groups as $index => $group) {
+			if (is_array($group) && $is_vip($group['logging'] ?? NULL)) {
+				$groups[$index]['logging'] = 'disabled_log';
+				$changed = TRUE;
+			}
+		}
+		if ($changed) {
+			$result[$groups_path] = $groups;
+		}
+	}
+
+	$blconfig = is_array($sections[$bl_path] ?? NULL) ? $sections[$bl_path] : array();
+	if (array_key_exists('blacklist_logging', $blconfig) && $is_vip($blconfig['blacklist_logging'])) {
+		$blconfig['blacklist_logging'] = 'disabled_log';
+		$result[$bl_path] = $blconfig;
+	}
+
+	// The unchanged sections ride along, as #3288's migration returns them; an absent one stays absent.
+	return $result === array() ? NULL : $result + array_filter($sections, static fn(mixed $s): bool => $s !== array() && $s !== NULL);
 }
 
 /**
@@ -25797,7 +25122,7 @@ function pfb_download_failure($alias, $header, $pfbfolder, $list_url, $format, $
 						}
 
 						// Determine if Host is listed in DNSBL
-						if ($ip == $pfb['dnsbl_vip4'] || text_to_compressed_ip6($ip) == text_to_compressed_ip6("{$pfb['dnsbl_vip6']}") || $ip == '0.0.0.0') {
+						if ($ip == '0.0.0.0') {
 							$log = " [ {$host} ] Domain blocked via DNSBL!\n";
 							pfb_logger("{$log}", 2);
 							$pfbfound = TRUE;
@@ -27105,10 +26430,6 @@ function pfb_collect_localhosts() {
 	foreach (config_get_path('virtualip/vip', []) as $list) {
 		if (!empty($list['subnet']) && !empty($list['subnet_bits'])) {
 	
-			// Use pfSense hostname for DNSBL vip
-			if ($list['subnet'] == $pfb['dnsbl_vip4']) {
-				$list['descr'] = config_get_path('system/hostname', 'pfSense') . '.' . (config_get_path('system/domain', 'localdomain'));
-			}
 			$local_hosts[$list['subnet']] = strtolower("{$list['descr']}");
 		}
 	}
@@ -28369,210 +27690,6 @@ function pfb_alerts_ip_replay_step($entry): array {
 }
 
 
-// DNSBL Lighttpd 'dnsbl_error.log' conditional log parser
-function pfb_daemon_dnsbl() {
-	global $pfb;
-
-	if (($h_handle = @fopen('php://stdin', 'r')) !== FALSE) {
-		logger(LOG_NOTICE, localize_text('DNSBL parser daemon started'), LOG_PREFIX_PKG_PFBLOCKERNG);
-
-		$chk_ver	= FALSE;
-		$lighty_47	= FALSE;
-		$lighty_58	= FALSE;
-		$lighty_59	= FALSE;
-		$checkpos	= 3; 	// Pre Lighttpd v1.4.47
-		// INIT-GAP (#1497): assigned per-line further down, read again (via
-		// pfb_filter()) on a LATER line under a checkpos-gated branch.
-		$domain		= '';
-		$src_ip		= '';
-
-		while (!feof($h_handle)) {
-			$pfb_buffer = @fgets($h_handle);
-
-			if (!$chk_ver) {
-
-				// Lighttpd v1.4.58+ conditional error log with 'ssl.verifyclient.activate' to collect the domain name
-				if (!$lighty_47 && strpos($pfb_buffer, 'lighttpd/1.4.58') !== FALSE) {
-					$chk_ver	= TRUE;
-					$lighty_58	= TRUE;
-					continue;
-				}
-
-				// Lighttpd v1.4.59+ syntax changes to IP line
-                                elseif (!$lighty_47 &&
-				    (strpos($pfb_buffer, 'lighttpd/1.4.59') !== FALSE ||
-				    strpos($pfb_buffer, 'lighttpd/1.4.6') !== FALSE ||
-				    strpos($pfb_buffer, 'lighttpd/1.4.7') !== FALSE ||
-				    strpos($pfb_buffer, 'lighttpd/1.5') !== FALSE)) {
-					$chk_ver	= TRUE;
-					$lighty_59	= TRUE;
-					continue;
-				}
-
-				// Lighttpd v1.4.47 uses mod_openssl with a different conditional log formatting
-				elseif (strpos($pfb_buffer, 'global/HTTPscheme') !== FALSE) {
-					$lighty_47	= TRUE;
-					$checkpos	= 1;
-					continue;
-				}
-			}
-
-			if ($lighty_58 || $lighty_59) {
-
-				// Verify HTTP["remoteip"]
-				if (empty($src_ip)) {
-					if ($lighty_58) {
-						if (strpos($pfb_buffer, '["re') !== FALSE) {
-							$src_ip = strstr($pfb_buffer, ') compare', TRUE);
-							$src_ip = ltrim(strstr($src_ip, '] (', FALSE), '] (');
-							$src_ip = (filter_var($src_ip, FILTER_VALIDATE_IP) !== FALSE) ? $src_ip : '';
-						}
-					} else {
-						if (strpos($pfb_buffer, '["re') !== FALSE && strpos($pfb_buffer, ' compare to ') !== FALSE) {
-							$src_ip = strstr($pfb_buffer, ' compare to ', FALSE);
-							$src_ip = trim(ltrim($src_ip, ' compare to '));
-							$src_ip = (filter_var($src_ip, FILTER_VALIDATE_IP) !== FALSE) ? $src_ip : '';
-						}
-					}
-					continue;
-				}
-
-				if (!empty($src_ip) && strpos($pfb_buffer, "SSL: ") === FALSE) {
-					continue;
-				}
-				if (empty($domain) && strpos($pfb_buffer, "SSL: can't verify client without ssl.") !== FALSE) {
-					$domain = str_replace(' server name ', '', strstr(trim($pfb_buffer), ' server name ', FALSE));
-				}
-
-				if (!empty($domain) && !empty($src_ip)) {
-
-					$domain = pfb_filter($domain, PFB_FILTER_DOMAIN, 'pfb_daemon_dnsbl');
-					$src_ip = pfb_filter($src_ip, PFB_FILTER_IP, 'pfb_daemon_dnsbl');
-					if (!empty($domain) && !empty($src_ip)) {
-
-						// URL/Referer/URI/Agent String not available for HTTPS events
-						$req_agent	= 'Unknown';
-						$type		= 'DNSBL-HTTPS';
-
-						pfb_log_event($type, $domain, $src_ip, $req_agent);
-						$domain = $src_ip = '';
-					}
-				}
-			}
-			else {
-				// Parse only HTTP["xxx"] log lines
-				if (strpos($pfb_buffer, 'HTTP[') === FALSE) {
-					continue;
-				}
-
-				// Verify only HTTPS lines
-				if (strpos($pfb_buffer, '( https') !== FALSE) {
-					if ($lighty_47) {
-						continue;
-					}
-					$checkpos = 0;
-				}
-
-				// Verify HTTP["remoteip"]
-				if ($checkpos == 1 && strpos($pfb_buffer, '["re') !== FALSE) {
-					$src_ip = strstr($pfb_buffer, ' ) compare', TRUE);
-					$src_ip = ltrim(strstr($src_ip, '] ( ', FALSE), '] ( ');
-					$src_ip = (filter_var($src_ip, FILTER_VALIDATE_IP) !== FALSE) ? $src_ip : '';
-				}
-
-				// Verify HTTP["host"]
-				elseif ($checkpos == 2 && strpos($pfb_buffer, '["ho') !== FALSE) {
-					$lighty_47	= FALSE;
-					$domain		= strstr($pfb_buffer, ' ) compare', TRUE);
-					$domain		= ltrim(strstr($domain, '] ( ', FALSE), '] ( ');
-
-					// URL/Referer/URI/Agent String not available for HTTPS events
-					$req_agent	= 'Unknown';
-					$type		= 'DNSBL-HTTPS';
-
-					// Log event and Increment SQLite DNSBL Group counter
-					if (!empty($domain) && !empty($src_ip)) {
-
-						$domain = pfb_filter($domain, PFB_FILTER_DOMAIN, 'pfb_daemon_dnsbl');
-						$src_ip = pfb_filter($src_ip, PFB_FILTER_IP, 'pfb_daemon_dnsbl');
-						if (!empty($domain) && !empty($src_ip)) {
-
-							// URL/Referer/URI/Agent String not available for HTTPS events
-							$req_agent	= 'Unknown';
-							$type		= 'DNSBL-HTTPS';
-
-						 	pfb_log_event($type, $domain, $src_ip, $req_agent);
-							$domain = $src_ip = '';
-						}
-					}
-				}
-				$checkpos++;
-			}
-		}
-	}
-	else {
-		logger(LOG_ERR, localize_text('DNSBL conditional log parser - Failed to open handle'), LOG_PREFIX_PKG_PFBLOCKERNG);
-	}
-	@fclose($h_handle);
-}
-
-
-// DNSBL Lighttpd 'index.php' event parser
-function pfb_daemon_dnsbl_index() {
-	global $pfb;
-
-	// Replace any [',' or '|' ] in HTTP_REFERER, REQUEST_URI or HTTP_USER_AGENT fields
-	// Replace placeholder characters [ '!' and '*' ] to [ ',' and '|' ]
-	$p1 = array( ',', '!', '|', ' * ' );
-	$p2 = array( '', ',', '--', '|' );
-
-	if (($i_handle = @fopen('php://stdin', 'r')) !== FALSE) {
-		while (!feof($i_handle)) {
-			$pfb_buffer = @fgets($i_handle);
-			$pfb_buffer = str_replace($p1, $p2, $pfb_buffer);
-
-			if (str_starts_with($pfb_buffer, 'INDEX,') && substr_count($pfb_buffer, ',') == 4) {
-				$csvline = str_getcsv($pfb_buffer, ',', '"', '"');
-
-				// Determine blocked domain type (Full, 1x1 or JS)
-				if (isset($csvline[1]) && !empty($csvline[1])) {
-					$request = strstr($csvline[1], '/', FALSE);
-					$request = strstr($request, ' ', TRUE);
-
-					if (strlen($request) < 2) {
-						$type = 'DNSBL-Full';
-					}
-					else {
-						if (pathinfo($request, PATHINFO_EXTENSION) == 'js') {
-							$type = 'DNSBL-JS';
-						} else {
-							$type = 'DNSBL-1x1';
-						}
-					}
-				}
-				else {
-					$type = 'DNSBL-Unknown';
-				}
-
-				$csvline[2] = pfb_filter($csvline[2], PFB_FILTER_DOMAIN, 'pfb_daemon_dnsbl_index');
-				$csvline[3] = pfb_filter($csvline[3], PFB_FILTER_IP, 'pfb_daemon_dnsbl_index');
-				$csvline[4] = pfb_filter($csvline[4], PFB_FILTER_HTML, 'pfb_daemon_dnsbl_index');
-			}
-			else {
-				continue;
-			}
-
-			// Log event and increment SQLite DNSBL Group counter
-			if (!empty($csvline[2]) && !empty($csvline[3])) {
-				pfb_log_event($type, $csvline[2], $csvline[3], $csvline[4]);
-			}
-		}
-	}
-	else {
-		logger(LOG_ERR, localize_text('DNSBL index event parser - Failed to open handle'), LOG_PREFIX_PKG_PFBLOCKERNG);
-	}
-	@fclose($i_handle);
-}
 
 
 // Map a numeric SQLite3 handle index (1-7, see pfb_open_sqlite() callers) to its
@@ -28733,87 +27850,6 @@ function pfb_close_sqlite($db_handle) {
 	}
 }
 
-
-// Function to Log event, Increment SQLite 'dnsbl' database and save last event to SQLite 'lastevent' Database
-function pfb_log_event($type, $domain, $src_ip, $req_agent) {
-	global $pfb;
-
-	$datereq	= pfb_log_iso_timestamp();
-	$req_agent	= str_replace("'", '', $req_agent);
-
-	// Collect lastevent without saving new event
-	$result		= pfb_dnsbl_lastevent('', "{$domain}{$src_ip}", '');
-	$p_entry	= $result['entry'];
-	$details	= $result['details'];
-	// Cached log details are not authority for a new accounting event.
-	$verdict = pfb_dnsbl_query($domain);
-
-	// Duplicate entry comparison: "Domain/SRC IP"
-	if ("{$domain}{$src_ip}" == $p_entry) {
-		$dup_entry	= '-';
-		$pfb_group	= $result['groupname'];
-	}
-
-	// If not duplicate entry, determine TLD type, Group Name and Feed name
-	else {
-		$dup_entry	= '+';
-
-		// ADR-65: attribute via the live query channel instead of grepping the
-		// retired interchange files; NULL and blocked=false are both "no verdict".
-		if ($verdict !== NULL && $verdict['blocked']) {
-			$pfb_mode	= $verdict['b_type']	?: 'Unknown';
-			$pfb_group	= $verdict['group']	?: 'Unknown';
-			$pfb_final	= $verdict['b_eval']	?: 'Unknown';
-			$pfb_feed	= $verdict['feed']	?: 'Unknown';
-		} else {
-			$pfb_mode = $pfb_group = $pfb_final = $pfb_feed = 'Unknown';
-		}
-
-		$log_domain	= pfb_filter($domain, PFB_FILTER_HTML, 'pfb_log_event');
-		$pfb_group	= pfb_filter($pfb_group, PFB_FILTER_HTML, 'pfb_log_event');
-		$pfb_final	= pfb_filter($pfb_final, PFB_FILTER_HTML, 'pfb_log_event');
-		$pfb_feed	= pfb_filter($pfb_feed, PFB_FILTER_HTML, 'pfb_log_event');
-		$details	= "{$log_domain},{$src_ip},{$req_agent},{$pfb_mode},{$pfb_group},{$pfb_final},{$pfb_feed}";
-
-		// Save new lastevent
-		pfb_dnsbl_lastevent($pfb_group, "{$domain}{$src_ip}", $details);
-	}
-
-	$log = "{$type},{$datereq},{$details},{$dup_entry}\n";
-	@file_put_contents($pfb['dnslog'], "{$log}", FILE_APPEND | LOCK_EX);
-
-	// Increment DNSBL Widget counter
-	if ($verdict !== NULL && $verdict['blocked'] && $verdict['group_epoch'] !== '') {
-
-		$db_handle = pfb_open_sqlite(1, 'Increment Counter');
-		if ($db_handle) {
-
-			try {
-				$db_handle->enableExceptions(TRUE);
-				$db_handle->exec('BEGIN IMMEDIATE');
-				$stmt = $db_handle->prepare('SELECT 1 FROM dnsbl_group_epochs WHERE owner = :owner AND origin = :origin AND epoch = :epoch');
-				$stmt->bindValue(':owner', $verdict['group_owner'], SQLITE3_TEXT);
-				$stmt->bindValue(':origin', $verdict['group_origin'], SQLITE3_TEXT);
-				$stmt->bindValue(':epoch', $verdict['group_epoch'], SQLITE3_TEXT);
-				$accepted = $stmt->execute()->fetchArray(SQLITE3_NUM);
-				if ($accepted) {
-					$group = SQLite3::escapeString($verdict['group']);
-					$owner = SQLite3::escapeString($verdict['group_owner']);
-					$origin = SQLite3::escapeString($verdict['group_origin']);
-					$db_handle->exec("INSERT INTO dnsbl(groupname,timestamp,entries,counter) SELECT '{$group}',datetime('now'),0,0 WHERE NOT EXISTS (SELECT 1 FROM dnsbl WHERE groupname='{$group}')");
-					$db_handle->exec("UPDATE dnsbl SET counter=counter+1 WHERE groupname='{$group}'");
-					$db_handle->exec("INSERT INTO dns_metric_totals VALUES ('{$owner}','{$origin}','{$group}',1) ON CONFLICT(owner,origin,groupname) DO UPDATE SET count=count+1");
-				}
-				$db_handle->exec('COMMIT');
-			} catch (Throwable $e) {
-				@$db_handle->exec('ROLLBACK');
-				pfb_logger("\nIncrement DNSBL counter failed: " . $e->getMessage(), 2);
-			}
-		}
-		pfb_close_sqlite($db_handle);
-	}
-	@file_put_contents("{$pfb['dnslog']}.applied", "{$type},{$domain}\n", LOCK_EX);
-}
 
 
 // Function to 1) Collect lastevent and 2) Save lastevent to SQLite 'lastevent' Database
@@ -30925,7 +29961,6 @@ function pfb_sync_effective_facts(string $usage_glob = '/usr/local/pkg/pfblocker
 	}
 
 	return array(
-		'vip_disabled'        => !empty($pfb['dnsbl_vip_disabled']),
 		'maxmind_missing'     => $maxmind_missing,
 		'asn_token_missing'   => isset($formats['asn']) && empty($pfb['asn_token']),
 		'top1m_token_missing' => ($pfb['dnsbl_top1m'] ?? NULL) === PfbToggle::On
@@ -30934,7 +29969,6 @@ function pfb_sync_effective_facts(string $usage_glob = '/usr/local/pkg/pfblocker
 		'reserved_headers'    => array_values($pfb['reserved_header_skips'] ?? array()),
 		'blacklist_missing'   => $blacklist_missing,
 		'drift'               => pfb_sync_receive_drift($pfb['dbdir']) === TRUE,
-		'vip_conflict'        => array_values($pfb['dnsbl_vip_conflict'] ?? array()),
 	);
 }
 
@@ -30946,9 +29980,6 @@ function pfb_sync_effective_facts(string $usage_glob = '/usr/local/pkg/pfblocker
  */
 function pfb_sync_effective_findings(array $facts): array {
 	$findings = array();
-	if (!empty($facts['vip_disabled'])) {
-		$findings[] = 'DNSBL disabled: the DNSBL VIP failed validation';
-	}
 	foreach (($facts['maxmind_missing'] ?? array()) as $field) {
 		$findings[] = "MaxMind: {$field} missing";
 	}
@@ -30966,9 +29997,6 @@ function pfb_sync_effective_findings(array $facts): array {
 	}
 	if (!empty($facts['drift'])) {
 		$findings[] = 'Policy changed locally since the last accepted receive';
-	}
-	foreach (($facts['vip_conflict'] ?? array()) as $family) {
-		$findings[] = "DNSBL auto-VIP: the synced {$family} address is not free on this node";
 	}
 	$findings = array_values(array_unique($findings));
 	sort($findings, SORT_STRING);

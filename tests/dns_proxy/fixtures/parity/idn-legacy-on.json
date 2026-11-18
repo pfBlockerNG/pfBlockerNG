@@ -7,9 +7,7 @@
         "python_enable": "true",
         "python_blocking": "true",
         "python_cname": "true",
-        "python_idn": "true",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "python_idn": "true"
       }
     },
     "manifest": {
@@ -34,7 +32,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["xn--mnchen-3ya.com. 3600 IN A 10.10.10.1"],
+        "answer": ["xn--mnchen-3ya.com. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },

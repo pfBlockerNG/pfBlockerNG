@@ -122,15 +122,17 @@ final class ConfigEmptyStorageContractTest extends TestCase
 
 	public function testPlainScalarEmptyReadAndWriteContractsStayUnchanged(): void
 	{
-		$key  = 'dnsbl/dnsbl_interface';
+		$key  = 'dnsbl/top1m_count';
 		$path = $this->path($key);
-		$this->assertSame('lo0', PfbConfig::read($key), 'plain scalar absent -> lo0');
+		$default = pfb_cfg_registry()[$key]['default'];
+		$this->assertNotSame('', $default, 'precondition: a plain scalar with a non-empty default');
+		$this->assertSame($default, PfbConfig::read($key), 'plain scalar absent -> default');
 		config_set_path($path, '');
-		$this->assertSame('lo0', PfbConfig::read($key), 'plain scalar empty -> lo0');
+		$this->assertSame($default, PfbConfig::read($key), 'plain scalar empty -> default');
 		PfbConfig::writeSystem($key, '');
-		$this->assertSame('lo0', config_get_path($path), 'single plain write keeps current defaulting');
-		PfbConfig::writeSectionSystem(self::SECTIONS['dnsbl'], ['dnsbl_interface' => '']);
+		$this->assertSame($default, config_get_path($path), 'single plain write keeps current defaulting');
+		PfbConfig::writeSectionSystem(self::SECTIONS['dnsbl'], ['top1m_count' => '']);
 		$this->assertSame('', config_get_path($path), 'raw section plain write stays byte-identical');
-		$this->assertSame('lo0', PfbConfig::read($key), 'plain scalar raw empty still reads lo0');
+		$this->assertSame($default, PfbConfig::read($key), 'plain scalar raw empty still reads the default');
 	}
 }

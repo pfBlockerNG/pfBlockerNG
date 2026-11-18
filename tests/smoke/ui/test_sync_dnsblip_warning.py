@@ -20,7 +20,7 @@ pytestmark = pytest.mark.ui_render
 
 SYNC_PAGE = "/pfblockerng/pfblockerng_sync.php"
 WARNING_MARKER = "DNSBL IP rules may be skipped on the High Availability peer"
-WARNING_HINT = "<strong>DNSBL Virtual IP</strong>"  # the recovery step names the real DNSBL VIP control
+WARNING_HINT = "Enable matching DNSBL IP settings on both nodes"  # the recovery step
 
 # Every stored condition of the warning except the Sync scope and mode, so a Tier-B flow can
 # drive those two through the Sync page's own save.
@@ -28,9 +28,6 @@ GUARD_CONFIG = {
     "installedpackages/pfblockerng/config/0/enable_cb": "on",
     helpers.dns_config_path("pfb_dns"): "on",
     "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl": "on",
-    "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto": "",
-    "installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_interface": "lo0",
-    "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4": "_vip_test_missing",
     "installedpackages/pfblockerngdnsblsettings/config/0/action": "Deny_Both",
     "hasync/synchronizerules": "on",
 }
@@ -43,7 +40,7 @@ CONFIG = {
 
 @pytest.fixture
 def dnsblip_mismatch_config(smoke_vm: SmokeVM) -> Iterator[None]:
-    """Seed the stored warning conditions with an invalid manual VIP, then restore them."""
+    """Seed the stored warning conditions, then restore them."""
     saved = {path: helpers.config_get_state(smoke_vm, path) for path in CONFIG}
     for path, value in CONFIG.items():
         helpers.config_set(smoke_vm, path, value)
@@ -69,7 +66,7 @@ def _render(smoke_vm: SmokeVM, webui: WebUI, path: str, marker: str) -> str:
 def test_sync_page_warns_until_hasync_rule_sync_is_cleared(
     smoke_vm: SmokeVM, webui: WebUI, dnsblip_mismatch_config: None
 ) -> None:
-    """Given every stored condition, a runtime VIP failure must not hide the HA warning."""
+    """Given every stored condition, the HA warning shows until the HA rule sync is cleared."""
     html = _render(smoke_vm, webui, SYNC_PAGE, "XMLRPC Sync Settings")
     assert WARNING_MARKER in html, f"before: expected {WARNING_MARKER!r}, found no marker"
     warning = re.search(

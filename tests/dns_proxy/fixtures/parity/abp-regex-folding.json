@@ -6,15 +6,13 @@
       "MAIN": {
         "python_enable": "true",
         "python_blocking": "true",
-        "python_cname": "true",
-        "dnsbl_ipv4": "10.10.10.1",
-        "dnsbl_ipv6": "fd00::1"
+        "python_cname": "true"
       }
     },
     "manifest": {
       "version": 1,
       "config": {},
-      "feeds": [{"raw": "pfb_py_raw/abp.txt", "feed": "AbpFeed", "group": "AbpFeedGroup", "log_flag": "1"}]
+      "feeds": [{"raw": "pfb_py_raw/abp.txt", "feed": "AbpFeed", "group": "AbpFeedGroup", "log_flag": "0"}]
     },
     "files": {
       "pfb_py_raw/abp.txt": [
@@ -46,7 +44,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["fold-exact.example. 3600 IN A 10.10.10.1"],
+        "answer": ["fold-exact.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -72,7 +70,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["fold-zone.example. 3600 IN A 10.10.10.1"],
+        "answer": ["fold-zone.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -85,7 +83,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["deep.sub.fold-zone.example. 3600 IN A 10.10.10.1"],
+        "answer": ["deep.sub.fold-zone.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -111,7 +109,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["fold-zone2.example. 3600 IN A 10.10.10.1"],
+        "answer": ["fold-zone2.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -124,7 +122,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["deep.sub.fold-zone2.example. 3600 IN A 10.10.10.1"],
+        "answer": ["deep.sub.fold-zone2.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -150,7 +148,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["fold-zone3.example. 3600 IN A 10.10.10.1"],
+        "answer": ["fold-zone3.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -163,7 +161,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["deep.sub.fold-zone3.example. 3600 IN A 10.10.10.1"],
+        "answer": ["deep.sub.fold-zone3.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -189,7 +187,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["fold-www.example. 3600 IN A 10.10.10.1"],
+        "answer": ["fold-www.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },
@@ -228,7 +226,7 @@
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["fold-upper.example. 3600 IN A 10.10.10.1"],
+        "answer": ["fold-upper.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },

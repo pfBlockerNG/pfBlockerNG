@@ -106,13 +106,10 @@ final class DnsblEvalOrderHelpTest extends TestCase
 		$this->assertStringContainsString('separate features', $block);
 	}
 
-	public function testTcpdumpExampleUsesAutoVipPattern(): void
+	public function testTcpdumpExampleMatchesTheNullAnswer(): void
 	{
 		$source = self::source();
-		$this->assertStringNotContainsString("A 10.10.10.1", $source);
-		$this->assertStringNotContainsString("A 10.10.0.53", $source);
-		$this->assertStringNotContainsString('10.10.x.53', $source);
-		$this->assertStringContainsString('DNSBL Webserver Configuration', $source);
-		$this->assertStringContainsString("A &lt;VIP&gt;", $source);
+		$this->assertStringNotContainsString("A &lt;VIP&gt;", $source, 'issue #4053: there is no VIP to grep for');
+		$this->assertStringContainsString("grep -B1 \\'A 0.0.0.0\\'", $source);
 	}
 }

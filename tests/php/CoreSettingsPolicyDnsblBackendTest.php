@@ -233,7 +233,7 @@ final class CoreSettingsPolicyDnsblBackendTest extends TestCase
 
 		$reply = $this->writePolicy(static function (array $policy): array {
 			$policy['logging'] = 'nxdomain';
-			$policy['blacklistLogging'] = 'enabled';
+			$policy['blacklistLogging'] = 'nodata';
 			$policy['groups'] = [['name' => 'other', 'logging' => 'disabled', 'primary' => FALSE, 'top1mFilter' => FALSE]];
 			return $policy;
 		});
@@ -471,9 +471,9 @@ final class CoreSettingsPolicyDnsblBackendTest extends TestCase
 			'an item with a field the list lacks' => [static fn(array $p): array => ['safeSearchDohList' => [['host' => 'a.example', 'x' => 1]]] + $p, 'policy/dnsbl.safeSearchDohList[0].x', 'no such field'],
 			'a mechanism off its tokens' => [static fn(array $p): array => ['logging' => 'default'] + $p, 'policy/dnsbl.logging', 'not a valid value'],
 			'a derived list that is a string' => [static fn(array $p): array => ['groups' => 'g1'] + $p, 'policy/dnsbl.groups', 'not a list'],
-			'a group field left out' => [static fn(array $p): array => ['groups' => [['name' => 'g', 'logging' => 'enabled', 'primary' => FALSE]]] + $p, 'policy/dnsbl.groups[0].top1mFilter', 'required'],
-			'a group name off its pattern' => [static fn(array $p): array => ['groups' => [['name' => 'a b', 'logging' => 'enabled', 'primary' => FALSE, 'top1mFilter' => FALSE]]] + $p, 'policy/dnsbl.groups[0].name', 'not a valid value'],
-			'a repeated group'       => [static fn(array $p): array => ['groups' => array_fill(0, 2, ['name' => 'g', 'logging' => 'enabled', 'primary' => FALSE, 'top1mFilter' => FALSE])] + $p, 'policy/dnsbl.groups[1].name', "repeats an earlier item's"],
+			'a group field left out' => [static fn(array $p): array => ['groups' => [['name' => 'g', 'logging' => 'disabled', 'primary' => FALSE]]] + $p, 'policy/dnsbl.groups[0].top1mFilter', 'required'],
+			'a group name off its pattern' => [static fn(array $p): array => ['groups' => [['name' => 'a b', 'logging' => 'disabled', 'primary' => FALSE, 'top1mFilter' => FALSE]]] + $p, 'policy/dnsbl.groups[0].name', 'not a valid value'],
+			'a repeated group'       => [static fn(array $p): array => ['groups' => array_fill(0, 2, ['name' => 'g', 'logging' => 'disabled', 'primary' => FALSE, 'top1mFilter' => FALSE])] + $p, 'policy/dnsbl.groups[1].name', "repeats an earlier item's"],
 			'a projection that is no object' => [static fn(array $p): array => ['x'], 'policy/dnsbl', 'not an object'],
 		];
 	}

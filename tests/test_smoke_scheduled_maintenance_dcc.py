@@ -302,7 +302,6 @@ class DccSetup:
         monkeypatch.setenv("SMOKE_SCHEDULED_EXCEPTION", "allow")
         for name in (
             "deploy",
-            "ensure_dnsbl_vip",
             "use_stub_for_safesearch",
             "inject",
             "set_package_enabled",
@@ -340,7 +339,7 @@ class DccSetup:
             },
         )
         monkeypatch.setattr(h, "dns_probe", lambda *_args, **_kwargs: "198.51.100.9")
-        monkeypatch.setattr(h, "is_vip", lambda _answer: True)
+        monkeypatch.setattr(h, "is_null_ip", lambda _answer: True)
         monkeypatch.setattr(acceptance, "_assert_no_dispatch", lambda _vm, phase: self.phases.append(phase))
         monkeypatch.setattr(acceptance, "_force_install", force_install)
         monkeypatch.setattr(acceptance, "await_core_up", await_core_up)

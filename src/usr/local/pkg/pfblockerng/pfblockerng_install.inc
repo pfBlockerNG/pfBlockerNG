@@ -63,84 +63,6 @@ $pfb['hook_lifecycle'] = 'install';
 // turn-ON pass fires. Scoped to install.inc, so a boot/config-restore resync -- which does NOT run
 // this file -- carries PFB_POST_INSTALL=0 (the vars are always emitted as '1'/'0', #695). Context
 // only: pfBlockerNG never branches on it.
-// Migrate old VIP configuration.
-$pfb_dnsbl_config = PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
-if (
-	isset($pfb_dnsbl_config['pfb_dnsvip']) ||
-	isset($pfb_dnsbl_config['pfb_dnsblv6']) ||
-	isset($pfb_dnsbl_config['pfb_dnsvip_type']) ||
-	isset($pfb_dnsbl_config['pfb_dnsvip_vhid']) ||
-	isset($pfb_dnsbl_config['pfb_dnsvip_base']) ||
-	isset($pfb_dnsbl_config['pfb_dnsvip_skew']) ||
-	isset($pfb_dnsbl_config['pfb_dnsvip_pass'])
-) {
-	// Update existing VIPs.
-	$vips_found = FALSE;
-	$vips_config = config_get_path('virtualip/vip', []); // foreign key — out of ADR-29 gateway scope
-	foreach ($vips_config as &$vip) {
-		if (!str_starts_with($vip['descr'], 'pfB DNSBL')) {
-			continue;
-		}
-		$vips_found = TRUE;
-
-		$vip['descr'] = 'pfBlockerNG DNSBL';
-		$vip['uniqid'] = $vip['uniqid'] ?? uniqid();
-
-		$vip_id = "_vip{$vip['uniqid']}";
-		if ($pfb_dnsbl_config['pfb_dnsvip'] == $vip['subnet']) {
-			$pfb_dnsbl_config['pfb_dnsvip4'] = $vip_id;
-		} elseif (empty($pfb_dnsbl_config['pfb_dnsvip4']) && is_ipaddrv4($vip['subnet'])) {
-			$pfb_dnsbl_config['pfb_dnsvip4'] = $vip_id;
-		} elseif (is_ipaddrv6($vip['subnet'])) {
-			$pfb_dnsbl_config['pfb_dnsvip6'] = $vip_id;
-		}
-	}
-	unset($vip);
-	if ($vips_found) {
-		config_set_path('virtualip/vip', $vips_config); // foreign key — out of ADR-29 gateway scope
-	} elseif (is_ipaddrv4($pfb_dnsbl_config['pfb_dnsvip'])) {
-		// DNSBL is enabled but a VIP isn't configured.
-		file_notice('pfBlockerNG', gettext('The DNSBL VIP needs to be configured manually'), 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
-	}
-
-	// If DNSBL is not configured, don't set new config.
-	if (
-		isset($pfb_dnsbl_config['pfb_dnsvip4']) &&
-		(!isset($pfb_dnsbl_config['pfb_dnsvip']) || !is_ipaddrv4($pfb_dnsbl_config['pfb_dnsvip']) ||
-			!is_string($pfb_dnsbl_config['pfb_dnsvip4']) ||
-			!str_starts_with($pfb_dnsbl_config['pfb_dnsvip4'], '_vip'))
-	) {
-		unset($pfb_dnsbl_config['pfb_dnsvip4']);
-	}
-	if (
-		isset($pfb_dnsbl_config['pfb_dnsvip6']) &&
-		(($pfb_dnsbl_config['pfb_dnsblv6'] != 'on') ||
-			!is_string($pfb_dnsbl_config['pfb_dnsvip6']) ||
-			!str_starts_with($pfb_dnsbl_config['pfb_dnsvip6'], '_vip'))
-	) {
-		unset($pfb_dnsbl_config['pfb_dnsvip6']);
-	}
-
-	// Remove old configuration.
-	unset(
-		$pfb_dnsbl_config['pfb_dnsvip'],
-		$pfb_dnsbl_config['pfb_dnsblv6'],
-		$pfb_dnsbl_config['pfb_dnsvip_type'],
-		$pfb_dnsbl_config['pfb_dnsvip_vhid'],
-		$pfb_dnsbl_config['pfb_dnsvip_base'],
-		$pfb_dnsbl_config['pfb_dnsvip_skew'],
-		$pfb_dnsbl_config['pfb_dnsvip_pass']
-	);
-	// Reset saved wizard configuration.
-	config_del_path('pfblockerng_wizard'); // foreign key — out of ADR-29 gateway scope (root-level, not installedpackages/pfblockerng*)
-
-	// issue #1921: RAW write-back keeps bystander values byte-identical so
-	// pfb_registry_pass() receives exact stored inputs for rename/grandfather decisions.
-	PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngdnsblsettings/config/0', $pfb_dnsbl_config);
-	write_config('Migrated old pfBlockerNG VIP configuration');
-	pfb_global();
-}
-
 // ADR-29: run all registered upgrade migrations in order. Each migration's apply()
 // callable reads the section, returns the updated array or NULL (no-op), and the driver
 // writes back and calls write_config() only when a change is needed. Replaces the
@@ -225,42 +147,12 @@ unlink_if_exists('/var/unbound/pfb_py_tld.txt');
 update_status(" done.\nStarting Firewall filter Service...");
 start_service('pfb_filter');
 
-// Create DNSBL service and link required executables
-update_status(" done.\n\nCreating DNSBL service...");
-pfb_dnsbl_service();
-stop_service('pfb_dnsbl');
-update_status(" done.\nRenew DNSBL lighttpd executable...");
-unlink_if_exists('/usr/local/sbin/lighttpd_pfb');
-link('/usr/local/sbin/lighttpd', '/usr/local/sbin/lighttpd_pfb');
-update_status(" done.\n");
+update_status(" done.\n\n");
 
-// Create DNSBL Lighttpd config file and DNSBL Certificate and restart DNSBL Service
-// issue #3539: only while a block answers with the VIP; the conf is written because the rc script launches lighttpd only when it exists.
+// issue #4053: the DNSBL web server is retired; strip what an earlier version left (service, conf, certificate, NAT, auto-VIP,
+// and its settings keys).
 pfb_global();
-if (pfb_dnsbl_active() && $pfb['unbound_state'] === PfbToggle::On &&
-    !empty($pfb['dnsbl_vip_demand']) && !empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl'])) {
-
-	update_status("Creating DNSBL web server config ...");
-	@file_put_contents($pfb['dnsbl_conf'], pfb_create_lighttpd(), LOCK_EX);
-	update_status(" done.\n");
-
-	unlink_if_exists($pfb['dnsbl_cert']);
-	update_status("Creating DNSBL Certificate...");
-	pfb_create_dnsbl_cert();
-	update_status(" done.\n");
-
-	update_status("Starting DNSBL Service...");
-	start_service('pfb_dnsbl');
-	update_status(" done.\n\n");
-}
-
-// Replace 'default' DNSBL active blocked webpage
-if (!file_exists('/usr/local/www/pfblockerng/www/dnsbl_active.php') ||
-    pfb_dnsbl_webpage() == 'dnsbl_default.php') {
-    @copy('/usr/local/www/pfblockerng/www/dnsbl_default.php', '/usr/local/www/pfblockerng/www/dnsbl_active.php');
-}
-
-
+pfb_dnsbl_webserver_retire();
 
 // *** [ UPGRADE previous settings ] ***
 update_status("Upgrading previous settings:\n");

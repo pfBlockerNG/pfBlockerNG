@@ -68,7 +68,7 @@ PAGES: dict[str, tuple[str, str, str, dict[str, tuple[str, str]]]] = {
     ),
     "dnsbl": (
         "/pfblockerng/pfblockerng_dnsbl.php",
-        "DNSBL Webserver Configuration",
+        "DNSBL Group Policy",
         DNSBL_CFG,
         {
             "aliasaddr_in": ("text", "pfb3450_addr_in"),

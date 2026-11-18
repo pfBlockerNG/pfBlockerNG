@@ -50,7 +50,6 @@ final class CoreSettingsBackendTest extends TestCase
 		'idnBlockMalicious'     => ['dnsbl/pfb_idn_block_malicious', TRUE, 'on', FALSE, ''],
 		'idnEscalateSuspicious' => ['dnsbl/pfb_idn_escalate_suspicious', FALSE, '', TRUE, 'on'],
 		'decisionCacheMax'      => ['dnsbl/pfb_py_cache_max', 10000, '10000', 777, '777'],
-		'logViaWebserver'       => ['dnsbl/pfb_py_nolog', FALSE, '', TRUE, 'on'],
 		'cnameValidation'       => ['dnsbl/pfb_cname', FALSE, '', TRUE, 'on'],
 		'control'               => ['dnsbl/pfb_control', FALSE, '', TRUE, 'on'],
 		'controlLegacy'         => ['dnsbl/pfb_control_legacy', FALSE, '', TRUE, 'on'],
@@ -630,7 +629,7 @@ final class CoreSettingsBackendTest extends TestCase
 
 		$this->assertSame(0, $run['exit'], $run['stderr']);
 		$defaults = self::defaults();
-		// The verb's sandbox config holds DNSBL settings and no mode: the legacy logging. It has its own revision key (#3937): its revision is any positive int, the rest is exact
+		// The verb's sandbox config holds DNSBL settings and no mode: the legacy logging, Null Blocking since issue #4053. It has its own revision key (#3937): its revision is any positive int, the rest is exact
 		$revision = json_decode($run['stdout'], TRUE)['revision'] ?? NULL;
 		$this->assertIsInt($revision, $run['stdout']);
 		$this->assertGreaterThan(0, $revision);
@@ -638,7 +637,7 @@ final class CoreSettingsBackendTest extends TestCase
 		$token = json_decode($run['stdout'], TRUE)['platform']['pendingToken'] ?? NULL;
 		$this->assertMatchesRegularExpression('/^(?:[0-9a-f]{16})?$/D', (string) $token, $run['stdout']);
 		$this->assertSame(
-			json_encode(['version' => 1, 'revision' => $revision, 'settings' => self::settings($defaults, 'enabled'), 'platform' => ['pendingToken' => $token]]),
+			json_encode(['version' => 1, 'revision' => $revision, 'settings' => self::settings($defaults, 'disabled_log'), 'platform' => ['pendingToken' => $token]]),
 			$run['stdout'],
 			'nothing but the reply on stdout: ' . $run['stderr']
 		);

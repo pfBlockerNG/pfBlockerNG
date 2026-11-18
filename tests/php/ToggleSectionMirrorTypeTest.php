@@ -27,7 +27,6 @@ final class ToggleSectionMirrorTypeTest extends TestCase
 		'dnsbl_regex_cap' => 'pfb_regex_cap',
 		'dnsbl_cname'     => 'pfb_cname',
 		'dnsbl_tld_allow' => 'tld_allow',
-		'dnsbl_py_nolog'  => 'pfb_py_nolog',
 		'dnsbl_noaaaa'    => 'pfb_noaaaa',
 		'dnsbl_gp'        => 'pfb_gp',
 	];
@@ -76,7 +75,6 @@ final class ToggleSectionMirrorTypeTest extends TestCase
 			$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 		}
 
-		PfbConfig::write('dnsbl/dnsbl_interface', 'lo0');
 	}
 
 	/** Seed every section-mirror key to one raw token. */

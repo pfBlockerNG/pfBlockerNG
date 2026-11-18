@@ -170,7 +170,7 @@ def test_fixture_preserves_files_around_baseline_seed_and_yield() -> None:
     backup_at = source.index("_backup_seeded_files(vm, SEEDED_FILES)")
     try_at = source.index("    try:\n")
     ensure_log_at = source.index("_ensure_log(vm, path)")
-    dnsbl_at = source.index("helpers.ensure_dnsbl_vip(vm)")
+    dnsbl_at = source.index("helpers.set_dnsbl_enabled(vm, True)")
     baseline_get_at = source.index("for key, path in GET_MATRIX")
     yield_at = source.index('yield {"baseline": baseline, "captures": captures}')
     finally_at = source.index("    finally:\n", yield_at)
@@ -218,7 +218,7 @@ def _fixture_harness(
             raise RuntimeError("ensure_log")
         return "0"
 
-    def ensure_dnsbl(_vm: Any) -> None:
+    def enable_dnsbl(_vm: Any, _enabled: bool) -> None:
         assert_backed_up("dnsbl")
         if failure_point == "dnsbl":
             raise RuntimeError("dnsbl")
@@ -228,8 +228,7 @@ def _fixture_harness(
     monkeypatch.setattr(alerts, "PhpErrorLogGuard", _LogGuard)
     monkeypatch.setattr(alerts, "_ensure_log", ensure_log)
     monkeypatch.setattr(alerts.helpers, "config_get", lambda _vm, _path: "")
-    monkeypatch.setattr(alerts.helpers, "ensure_dnsbl_vip", ensure_dnsbl)
-    monkeypatch.setattr(alerts.helpers, "set_dnsbl_enabled", lambda _vm, _enabled: events.append("dnsbl_set"))
+    monkeypatch.setattr(alerts.helpers, "set_dnsbl_enabled", enable_dnsbl)
     monkeypatch.setattr(alerts.helpers, "php_eval", lambda _vm, _code: subprocess.CompletedProcess([], 0, "OK", ""))
     monkeypatch.setattr(alerts, "_seed_feed_files", lambda _vm: _seed_replacements(paths))
     monkeypatch.setattr(alerts, "_append", lambda _vm, _path, _content: None)
@@ -343,7 +342,6 @@ def test_fixture_backup_failure_does_not_delete_rolled_back_files(tmp_path: Path
     monkeypatch.setattr(alerts, "PhpErrorLogGuard", _NoopLogGuard)
     monkeypatch.setattr(alerts, "_ensure_log", lambda _vm, _path: "0")
     monkeypatch.setattr(alerts.helpers, "config_get", lambda _vm, _path: "")
-    monkeypatch.setattr(alerts.helpers, "ensure_dnsbl_vip", lambda _vm: None)
     monkeypatch.setattr(alerts.helpers, "set_dnsbl_enabled", lambda _vm, _enabled: None)
     monkeypatch.setattr(
         alerts.helpers,

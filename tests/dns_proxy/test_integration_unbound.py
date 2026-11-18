@@ -19,7 +19,7 @@ from typing import TypeVar
 
 import pytest
 from dot_helpers import retry_on_taken_port
-from frontend_constants import ALLOWED, BLOCKED, DNSBL_IPV4, PROTO_DIR
+from frontend_constants import ALLOWED, BLOCKED, NULL_IPV4, PROTO_DIR
 from frontend_helpers import (
     WATCHDOG,
     FakeAuthoritative,
@@ -38,7 +38,7 @@ OBSERVER_SOCKET = "pfb_upstream.sock"  # the gateway's observer socket, relative
 ALLOWED_CLIENT = "127.0.0.5"
 ALLOWED_CLIENT_TCP = "127.0.0.6"
 REFUSED_CLIENT = "127.0.0.9"
-VIP4 = bytes(int(octet) for octet in DNSBL_IPV4.split("."))
+NULL4 = bytes(int(octet) for octet in NULL_IPV4.split("."))
 T = TypeVar("T")
 
 # What the zone's "authoritative server" says. Unbound answers a local-data CNAME as a lone CNAME (the target is

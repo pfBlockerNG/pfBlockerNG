@@ -114,9 +114,6 @@
 				<dt><strong>DNSBL</strong>:</dt>
 				<dd>DNSBL blocks domains from the configured feeds through the DNS Resolver.</dd>
 			</dl>
-			<ul>
-				<li>A VIP on the Localhost interface can be configured manually at <a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>, or set <strong>Auto VIP</strong> in the DNSBL step. The DNSBL WebServer/VIP response is deprecated: the VIP is only needed while a DNSBL block answers with it.</li>
-			</ul>
 		</div>
 		</div>
 		]]>
@@ -207,57 +204,11 @@
 <step>
 	<id>4</id>
 	<title>DNSBL settings</title>
-	<description><![CDATA[Configure the DNSBL settings. The DNSBL WebServer/VIP response is deprecated: a Virtual IP is only needed while a DNSBL block answers with it. Enable <strong>Auto VIP</strong> below to have pfBlockerNG manage the DNSBL sinkhole Virtual IP, or configure a VIP on the Localhost interface manually first at <a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>.<br />Optional: the ports below are used only if you later switch a DNSBL group to the deprecated WebServer/VIP mode and set <strong>Web Server Interface</strong> to something other than <strong>Localhost</strong>.]]></description>
+	<description><![CDATA[Configure the DNSBL settings.]]></description>
 	<fields>
 		<field>
-			<name>DNSBL Webserver Configuration</name>
+			<name>DNSBL Configuration</name>
 			<type>listtopic</type>
-		</field>
-		<field>
-			<name>pfb_dnsvip_auto</name>
-			<displayname>Auto VIP</displayname>
-			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsvip_auto</bindstofield>
-			<description><![CDATA[<strong>Auto VIP</strong>: when enabled, pfBlockerNG manages the DNSBL sinkhole Virtual IP itself, but only while a DNSBL block answers with it. The wizard's DNSBL group uses Null Blocking, so no VIP is created now; the DNSBL page shows the address it would use. The manual selections below are ignored while Auto VIP is on.<br /><span class="text-info">HA:</span> with pfBlockerNG Sync set to Policy and lists (local settings stay local), a secondary that also uses Auto VIP creates its VIP at the address the primary chose. If that address is in use on the secondary, no VIP is created and the Sync page reports the conflict.]]></description>
-			<type>checkbox</type>
-			<value>on</value>
-		</field>
-		<field>
-			<name>pfb_dnsvip4</name>
-			<type>select_source</type>
-			<source><![CDATA[pfb_get_vip_options(AF_INET, true)]]></source>
-			<source_name>descr</source_name>
-			<source_value>id</source_value>
-			<description><![CDATA[Select the IPv4 DNSBL Virtual IP (manual mode only — ignored when <strong>Auto VIP</strong> is enabled)]]></description>
-			<displayname>IPv4 DNSBL Virtual IP</displayname>
-			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsvip4</bindstofield>
-		</field>
-		<field>
-			<name>pfb_dnsvip6</name>
-			<type>select_source</type>
-			<source><![CDATA[pfb_get_vip_options(AF_INET6, true)]]></source>
-			<source_name>descr</source_name>
-			<source_value>id</source_value>
-			<description><![CDATA[Select the IPv6 DNSBL Virtual IP (manual mode only — ignored when <strong>Auto VIP</strong> is enabled)]]></description>
-			<displayname>IPv6 DNSBL Virtual IP</displayname>
-			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsvip6</bindstofield>
-		</field>
-		<field>
-			<name>pfb_dnsport</name>
-			<displayname>Port</displayname>
-			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsport</bindstofield>
-			<description>HTTP port for the DNSBL block page (default 8081).</description>
-			<type>input</type>
-			<value>8081</value>
-			<size>10</size>
-		</field>
-		<field>
-			<name>pfb_dnsport_ssl</name>
-			<displayname>SSL Port</displayname>
-			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsport_ssl</bindstofield>
-			<description>HTTPS port for the DNSBL block page (default 8443).</description>
-			<type>input</type>
-			<value>8443</value>
-			<size>10</size>
 		</field>
 		<field>
 			<name>suppression</name>

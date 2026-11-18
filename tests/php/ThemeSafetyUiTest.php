@@ -33,11 +33,6 @@ final class ThemeSafetyUiTest extends TestCase
 	 */
 	private const DELIMITERS = "'\"`";
 
-	/** Client block page: no pfSense theme applies. */
-	private const ALLOWLIST = [
-		'src/usr/local/www/pfblockerng/www/dnsbl_default.php',
-	];
-
 	/**
 	 * Owner has not ruled (2026-08-29). Remove an entry when that site is
 	 * fixed. Do not add new ones silently — a new hit must fail the suite.
@@ -572,9 +567,6 @@ final class ThemeSafetyUiTest extends TestCase
 		$root = dirname(__DIR__, 2);
 		$found = [];
 		foreach (self::scanTree($root) as $rel => $hits) {
-			if (in_array($rel, self::ALLOWLIST, TRUE)) {
-				continue;
-			}
 			$found[$rel] = array_values(array_unique(array_map(
 				static fn(array $h): string => self::excerptKey($h['excerpt']),
 				$hits

@@ -52,7 +52,6 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     # One real feed group: a failed feed of it is what the retry test arranges. Core answers the tick's calls.
     feed_url = h.write_local_feed(smoke_vm, "smoke_tick_ip.txt", "192.0.2.10/32\n192.0.2.11/32\n")

@@ -261,7 +261,6 @@ final class SuppressionCidrLimitTest extends TestCase
 		if (!isset($GLOBALS['g']['unbound_chroot_path'])) {
 			$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 		}
-		PfbConfig::write('dnsbl/dnsbl_interface', 'lo0');
 	}
 
 	/** pfb_global() publishes the stored limits for the download loop; absent keys publish Disabled. */

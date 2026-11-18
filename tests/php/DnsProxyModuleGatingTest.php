@@ -670,27 +670,6 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertStringNotContainsString('python', $this->patchedConf());
 	}
 
-	public function testDnsblVipStaysInUnboundForAnEnabledPassEvenWithASnapshot(): void
-	{
-		// Given a conf listening on the DNSBL VIP, and a snapshot.
-		config_set_path('virtualip/vip', [['uniqid' => 'abc', 'subnet' => '10.10.10.1']]);
-		PfbConfig::writeSystem('dnsbl/pfb_dnsvip4', '_vipabc');
-		$this->seedMovedResolver();
-		$conf = "server:\n\tinterface: 127.0.0.1\n\tinterface: 10.10.10.1\n\tmodule-config: \"validator iterator\"\n";
-
-		// Before-state: a DISABLED pass removes that VIP line.
-		$this->writeUnboundConf($conf);
-		$this->assertTrue(pfb_unbound_dnsbl('disabled'));
-		$this->assertStringNotContainsString('10.10.10.1', $this->patchedConf(), 'before: disabled removes the VIP');
-
-		// When an ENABLED pass patches the same conf.
-		$this->writeUnboundConf($conf . "python:\npython-script: pfb_unbound.py\n");
-		pfb_unbound_dnsbl('enabled');
-
-		// Then the VIP line stays: only the module decision follows the snapshot.
-		$this->assertStringContainsString('interface: 10.10.10.1', $this->patchedConf());
-	}
-
 	public function testModuleFilesAreStagedWhileTheModuleOrAnyPythonScriptIsInUnbound(): void
 	{
 		// The staging exec targets an absolute appliance path with no test seam, so the decision
@@ -850,7 +829,6 @@ final class DnsProxyModuleGatingTest extends TestCase
 	private function enableDnsbl(): void
 	{
 		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', PfbToggle::On);
-		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::On);
 	}
 
 	/** @return array<string,array{string}> why pfB-DNS could not take the Resolver over, with the toggle on */
@@ -1362,7 +1340,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 		pfb_global();
 		$source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
 		$from = "\t\$pfbupdate = \$pfbpython = FALSE;\n\t// \$mode must be a defined string";
-		$until = "\n\n\t// [ ADR-13 ] Provision (or remove)";
+		$until = "\n\n\t// Modify Unbound's python settings";
 		$start = strpos($source, $from);
 		$end = $start === FALSE ? FALSE : strpos($source, $until, $start);
 		$this->assertTrue($start !== FALSE && $end !== FALSE, 'test bootstrap: apply mode region found');
@@ -1378,7 +1356,6 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// Given pfBlockerNG fully on with a moved Resolver: on its own, the apply pass runs 'enabled' and wants pfB-DNS.
 		PfbConfig::writeSystem('gen/enable_cb', PfbToggle::On);
 		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', PfbToggle::On);
-		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::On);
 		$this->setProxy(TRUE);
 		$this->seedMovedResolver();
 		$this->assertSame(['enabled', TRUE], $this->applyDecisionsFor(FALSE), 'before: a normal pass is enabled');
@@ -1415,7 +1392,6 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// Given DNSBL stored On, the Resolver enabled, and the parent switches as the row says
 		PfbConfig::writeSystem('gen/enable_cb', $enable);
 		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', PfbToggle::On);
-		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::On);
 		$this->setProxy($pfbDns === PfbToggle::On);
 		$GLOBALS['config']['unbound'] = self::originalResolver();
 

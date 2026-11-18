@@ -152,48 +152,6 @@ final class PfbGlobalParityTest extends TestCase
 	}
 
 	/**
-	 * pfb_dnsvip_auto: OLD = pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_dnsvip_auto'] ?? '')->value.
-	 * When absent: pfb_cfg_toggle_read('')->value = ''.
-	 * Via gateway: PfbConfig::read('dnsbl/pfb_dnsvip_auto')->value = '' (default '').
-	 * PARITY: identical.
-	 */
-	public function testParityPfbDnsvipAutoAbsentYieldsOff(): void
-	{
-		$this->assertNull(
-			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto')
-		);
-
-		// The adapter's empty Off token remains empty on write.
-		$old_result = pfb_cfg_toggle_read('')->value;
-		$this->assertSame('off', $old_result);
-
-		// When: gateway read.
-		$result = PfbConfig::read('dnsbl/pfb_dnsvip_auto');
-
-		// Then: same value.
-		$this->assertSame(PfbToggle::Off, $result);
-		$this->assertSame('off', $result->value, 'pfb_dnsvip_auto absent -> off token (matches the adapter normalisation)');
-	}
-
-	/**
-	 * dnsbl_interface: OLD = isset($pfb['dnsblconfig']['dnsbl_interface'])
-	 *                        ? $pfb['dnsblconfig']['dnsbl_interface'] : 'lo0'.
-	 * When absent: 'lo0'.
-	 * Via gateway: PfbConfig::read('dnsbl/dnsbl_interface') = 'lo0' (registered default).
-	 * PARITY: identical.
-	 */
-	public function testParityDnsblInterfaceAbsentYieldsLo0(): void
-	{
-		$this->assertNull(
-			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_interface')
-		);
-
-		$result = PfbConfig::read('dnsbl/dnsbl_interface');
-
-		$this->assertSame('lo0', $result, 'dnsbl_interface absent -> "lo0"');
-	}
-
-	/**
 	 * top1m_source: OLD = isset($pfb['dnsblconfig']['top1m_source'])
 	 *                   ? $pfb['dnsblconfig']['top1m_source'] : 'tranco'.
 	 * When absent: 'tranco'.

@@ -166,7 +166,8 @@ Authorization = property of **write**, not call site (generalises
     toggle mirrors carry
     enum itself (never `->value`), so consumers compare `=== PfbToggle::On`.
     The seven `dnsbl/{top1m_enable,pfb_regex,pfb_cname,tld_allow,pfb_py_nolog,`
-    `pfb_noaaaa,pfb_gp}` fields also use this adapter pair (issue #3137).
+    `pfb_noaaaa,pfb_gp}` fields also use this adapter pair (issue #3137; issue #4053
+    later removed `pfb_py_nolog`).
     Page checkbox rendering accepts either the enum from GET or raw POST redisplay
     through the same adapter; TOP1M comparison snapshots use `toStored()` to keep
     both sides scalar (`''`, not the enum's backing `'off'`).
@@ -444,7 +445,7 @@ pages. Wired into `.github/workflows/test.yml`, `.githooks/pre-commit` and
   six page/registry scalar divergences (`pfb_dnsport`/`pfb_dnsport_ssl`/`aliaslog`
   follow the page, and a fresh install now seeds those values; `pfb_dnsbl_rule` keeps
   registry `Disabled`; `pfb_dnsvip4/6` store `''` and map the Form_Select sentinel
-  `none` after the gateway read). The matchers require a literal key; a dynamic
+  `none` after the gateway read; issue #4053 later retired all five DNSBL web server keys). The matchers require a literal key; a dynamic
   `$pfb['gconfig']['log_max_' . $suffix]` restatement is a documented ceiling, not a
   clean scan of those sites.
 - The mirror → alias mapping is DERIVED from each page's own
@@ -687,7 +688,7 @@ registered path set). Each annotation committed in relevant source file.
 | `pfblockerng_wizard/*` | Wizard temp section, entirely foreign |
 | `installedpackages` (bulk blob) | Bulk wizard init write, foreign structure |
 | `pfblockerng{continent}/config/0` | Dynamic per-continent structure |
-| `pfblockerngdnsblsettings/config/0/dnsbl_webpage` | Out-of-scope foreign key (ADR-29 §2.5); written directly by `pfblockerng_dnsbl.php`, read via `pfb_dnsbl_webpage()` (issue #713 removed the never-written `dnsblwebpage` registry mis-spelling) |
+| `pfblockerngdnsblsettings/config/0/dnsbl_webpage` | Out-of-scope foreign key (ADR-29 §2.5); written directly by `pfblockerng_dnsbl.php`, read via `pfb_dnsbl_webpage()` (issue #713 removed the never-written `dnsblwebpage` registry mis-spelling) Removed by issue #4053. |
 | `pfblockerngdnsbl` / `pfblockernglistsv4/v6` (section-level reads) | Dynamic list sections |
 | `aliases/alias`, `filter/rule`, `system/*`, `hasync/*`, `interfaces`, `unbound/*` | pfSense core sections |
 | `pfblockernglistsv4/v6/config/{row}/auto{addrnot,ports,addr,not}_{in,out}` | Dynamic per-row keys (issue #2123: same bare names as the registered `dnsbl/auto*` scalars; `pfblockerng_category_edit.php` writes them at `installedpackages/{$conf_type}/config/{$rowid}/…`, a path no exact-path registry entry can address). Runtime reads stay direct and normalize through `pfb_dnsbl_toggle_enabled()` (#2817). |

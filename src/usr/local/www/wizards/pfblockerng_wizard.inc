@@ -138,14 +138,11 @@ function pfb_wizard_group_rows(array $info): array {
 }
 
 // issue #3539: the DNSBL settings section the wizard writes (slice order is config order). The wizard sets up a fresh
-// install, so it stores the fresh-install policy; its ADs_Basic group follows it and never answers with the VIP. A blank
-// port stores its default, as a DNSBL page save does, so a later VIP mechanism finds usable ports.
-function pfb_wizard_dnsbl_section(bool $auto, $vip4, $vip6, $port, $port_ssl): array {
+// install, so it stores the fresh-install policy; its ADs_Basic group follows it.
+function pfb_wizard_dnsbl_section(): array {
 	$registry = pfb_cfg_registry();
-	return pfb_wizard_dnsvip_settings($auto, $vip4, $vip6)
-		+ array('pfb_dnsport' => $port ?: $registry['dnsbl/pfb_dnsport']['default'],
-			'pfb_dnsport_ssl' => $port_ssl ?: $registry['dnsbl/pfb_dnsport_ssl']['default'], 'pfb_dnsbl' => 'on',
-			'global_log_mode' => $registry['dnsbl/global_log_mode']['default'], 'global_log' => $registry['dnsbl/global_log']['default']);
+	return array('pfb_dnsbl' => 'on',
+		'global_log_mode' => $registry['dnsbl/global_log_mode']['default'], 'global_log' => $registry['dnsbl/global_log']['default']);
 }
 
 // The ADs_Basic group step 4 writes.
@@ -159,7 +156,7 @@ function pfb_wizard_dnsbl_group(array $info): array {
 }
 
 function step3_submitphpaction() {
-	global $stepid, $input_errors;
+	global $stepid;
 
 	pfb_wizard_skip_check();
 
@@ -168,30 +165,6 @@ function step3_submitphpaction() {
 			$stepid = 0;
 			return;
 		}
-	}
-
-	// The manual VIP selects' sentinel is never stored as a VIP id (manual mode only; Auto VIP disables them).
-	$pfb_auto = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on');
-	if (!$pfb_auto) {
-		if ($_POST['pfb_dnsvip4'] == 'none') {
-			$_POST['pfb_dnsvip4'] = '';
-		}
-		if ($_POST['pfb_dnsvip6'] == 'none') {
-			$_POST['pfb_dnsvip6'] = '';
-		}
-	}
-
-	// issue #3539: the setup the wizard writes answers no block with the VIP, so it needs no VIP and no ports; a port given
-	// must still be valid.
-	foreach (array($_POST['pfb_dnsport'] ?? '', $_POST['pfb_dnsport_ssl'] ?? '') as $pfb_port) {
-		if ($pfb_port !== '' && !is_port($pfb_port)) {
-			$input_errors[] = 'DNSBL Ports: A valid port must be defined.';
-			break;
-		}
-	}
-
-	if ($input_errors) {
-		$stepid = 2;
 	}
 }
 
@@ -265,13 +238,7 @@ function step4_submitphpaction() {
 	$new_config['pfblockerngipsettings']['config'][0]['suppression_cidr_v6']	= '32';
 
 	// foreign section: pfblockerng_wizard/step3/* are wizard temp keys, not in registry
-	$dnsbl_section = pfb_wizard_dnsbl_section(
-		(pfb_cfg_toggle_read(config_get_path('pfblockerng_wizard/step3/pfb_dnsvip_auto')) === PfbToggle::On),
-		config_get_path('pfblockerng_wizard/step3/pfb_dnsvip4'),
-		config_get_path('pfblockerng_wizard/step3/pfb_dnsvip6'),
-		config_get_path('pfblockerng_wizard/step3/pfb_dnsport'),
-		config_get_path('pfblockerng_wizard/step3/pfb_dnsport_ssl')
-	);
+	$dnsbl_section = pfb_wizard_dnsbl_section();
 	foreach ($dnsbl_section as $pfb_dnsbl_key => $pfb_dnsbl_val) {
 		$new_config['pfblockerngdnsblsettings']['config'][0][$pfb_dnsbl_key] = $pfb_dnsbl_val;
 	}

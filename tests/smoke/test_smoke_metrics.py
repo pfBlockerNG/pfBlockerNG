@@ -564,7 +564,6 @@ def _accounting_apply_state(vm: SmokeVM) -> dict[str, object]:
         f"require_once('{_PKG}'); pfb_global();"
         "$state = array('retry' => @file_get_contents($pfb['dnsbl_file'] . '.reload'),"
         "'pending' => pfb_pending_changes(), 'converged' => pfb_dnsbl_converged(),"
-        "'vip_conf' => is_file($pfb['dnsbl_conf']), 'vip_service' => is_service_running('pfb_dnsbl'),"
         "'generation' => pfb_unbound_py_marker_generation($pfb['dnsbldir'] . '/pfb_py_reload'),"
         "'applied' => pfb_unbound_py_marker_generation($pfb['dnsbldir'] . '/pfb_py_reload.applied'),"
         "'fingerprint' => pfb_dnsbl_reload_fingerprint($pfb));"
@@ -643,7 +642,6 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         h.DnsblCase(
             aliasname=alias,
             header=alias,
-            mode=h.DnsblMode.VIP,
             feed_url=h.write_local_feed(vm, f"{alias}.txt", "".join(f"{name}\n" for name in feed)),
         )
         for alias, feed in zip(aliases, feeds, strict=True)
@@ -683,7 +681,7 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         for name, (index, transport, qtype, label) in zip(names, cases, strict=True):
             if transport == "doq":
                 answer, raw = _ask(gw.client, transport, name)
-                assert h.is_vip(answer), f"DoQ must really block {name}: {answer}\n{raw}"
+                assert h.is_null_ip(answer), f"DoQ must really block {name}: {answer}\n{raw}"
             else:
                 reply = _dig(gw.client, transport, qtype, name)
                 assert reply.rcode == "NOERROR", f"{transport}/{qtype}: {reply.raw}"
@@ -718,7 +716,6 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         assert {group: _blocks(enabled, group) for group in groups} == wanted, enabled
 
         prior_apply = _accounting_apply_state(vm)
-        assert prior_apply["vip_conf"] and prior_apply["vip_service"], prior_apply
         null_b = h.DnsblCase(aliasname=aliases[1], header=aliases[1], mode=h.DnsblMode.NULL, feed_url=specs[1].feed_url)
         _php_ok(
             vm,
@@ -735,14 +732,13 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
             assert failed.returncode == 1, f"accounting failure must fail the apply: {failed.stdout}\n{failed.stderr}"
             failed_apply = _accounting_apply_state(vm)
             assert failed_apply["retry"] == "accounting" and failed_apply["pending"], failed_apply
-            assert failed_apply["vip_conf"] and failed_apply["vip_service"], failed_apply
             assert (failed_apply["generation"], failed_apply["applied"]) == (
                 prior_apply["generation"],
                 prior_apply["applied"],
             ), failed_apply
             assert _epochs(vm) == epochs, "failed reconciliation changed authority"
             answer, raw = _ask(gw.client, "udp", held)
-            assert h.is_vip(answer), f"the old generation must still serve its VIP: {answer}\n{raw}"
+            assert h.is_null_ip(answer), f"the old generation must still serve its block: {answer}\n{raw}"
             wanted[groups[0]]["A", "UDP"] = 1
             _wait_blocks(vm, wanted)
             _show_dns_prom(vm, "accounting-failure-old-generation-held")
@@ -761,7 +757,6 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         assert recovered_apply["fingerprint"] == failed_apply["fingerprint"], (failed_apply, recovered_apply)
         assert recovered_apply["retry"] is False and not recovered_apply["pending"], recovered_apply
         assert recovered_apply["converged"], recovered_apply
-        assert not recovered_apply["vip_conf"] and not recovered_apply["vip_service"], recovered_apply
         deleted = _export(vm)
         _show_dns_prom(vm, "accounting-recovered-identical-generation")
         assert (groups[0], "custom") not in _epochs(vm), "deleted A still has an incarnation"
@@ -780,7 +775,7 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         wanted[groups[0]] = {}
         _wait_blocks(vm, wanted)
         answer, raw = _ask(gw.client, "udp", recreated)
-        assert h.is_vip(answer), f"recreated A did not block: {answer}\n{raw}"
+        assert h.is_null_ip(answer), f"recreated A did not block: {answer}\n{raw}"
         wanted[groups[0]]["A", "UDP"] = 1
         _wait_blocks(vm, wanted)
         before_restart = _export(vm)
@@ -856,7 +851,6 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         collision = h.DnsblCase(
             aliasname=collision_alias,
             header=collision_alias,
-            mode=h.DnsblMode.VIP,
             feed_url=h.write_local_feed(vm, f"{collision_alias}.txt", rf"/^feed[0-9]+\.{re.escape(suffix)}$/" + "\n"),
             user_regex=[rf"^builtin[0-9]+\.{re.escape(suffix)}$"],
         )
@@ -877,7 +871,7 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         builtin_before = _origin_blocks(baseline, "builtin")
         for name in (custom_name, builtin_name):
             answer, raw = _ask(gw.client, "udp", name)
-            assert h.is_vip(answer), f"collision regex did not block {name}: {answer}\n{raw}"
+            assert h.is_null_ip(answer), f"collision regex did not block {name}: {answer}\n{raw}"
             assert not stub_dns.received(name), f"collision block reached upstream: {name}"
 
         def collision_committed() -> bool:
@@ -909,7 +903,7 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         assert _origin_blocks(_export(vm), "custom") == custom_before
         fresh_name = f"feed2.{suffix}"
         answer, raw = _ask(gw.client, "udp", fresh_name)
-        assert h.is_vip(answer), f"fresh custom regex did not block: {answer}\n{raw}"
+        assert h.is_null_ip(answer), f"fresh custom regex did not block: {answer}\n{raw}"
         assert not stub_dns.received(fresh_name)
         assert h.wait_until(collision_committed, timeout=60.0, interval=0.5)
     finally:
@@ -1063,7 +1057,6 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
     spec = h.DnsblCase(
         aliasname=alias,
         header=alias,
-        mode=h.DnsblMode.VIP,
         feed_url=h.write_local_feed(vm, f"{alias}.txt", "".join(f"{name}\n" for name in names)),
     )
 
@@ -1086,7 +1079,7 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
 
     def ask(index: int, second: bool = False) -> None:
         answer, raw = _ask_from_alias(gw, "udp", names[index]) if second else _ask(gw.client, "udp", names[index])
-        assert h.is_vip(answer), raw
+        assert h.is_null_ip(answer), raw
 
     def writer_state() -> dict[str, int]:
         queries = {
@@ -1354,7 +1347,6 @@ def test_dns_receiving_endpoint_matrix_reaches_public_metrics(gw: Gateway, gatew
     spec = h.DnsblCase(
         aliasname=alias,
         header=alias,
-        mode=h.DnsblMode.VIP,
         feed_url=h.write_local_feed(
             vm, f"{alias}.txt", "".join(f"{name}\n" for name in (*names.values(), *isolated_names.values()))
         ),
@@ -1370,7 +1362,7 @@ def test_dns_receiving_endpoint_matrix_reaches_public_metrics(gw: Gateway, gatew
         with _client_v6(gw.client):
             for (address, transport), name in names.items():
                 answer, raw = _ask(gw.client, transport, name, server=address)
-                assert h.is_vip(answer), raw
+                assert h.is_null_ip(answer), raw
                 label = LOG_TRANSPORT[transport]
                 wanted["A", label] = wanted.get(("A", label), 0) + 1
                 key = (address, label, LAN_DESCRIPTION)
@@ -1379,7 +1371,7 @@ def test_dns_receiving_endpoint_matrix_reaches_public_metrics(gw: Gateway, gatew
                 _publish_listener_owner_table(vm, dict.fromkeys(isolated_names, unicode_owner))
                 for address, name in isolated_names.items():
                     answer, raw = _ask(gw.client, "udp", name, server=address)
-                    assert h.is_vip(answer), raw
+                    assert h.is_null_ip(answer), raw
                     wanted["A", "UDP"] += 1
                     exact[address, "UDP", unicode_owner] = 1
             finally:

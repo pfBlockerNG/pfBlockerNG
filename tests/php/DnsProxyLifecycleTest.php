@@ -804,7 +804,7 @@ final class DnsProxyLifecycleTest extends TestCase
 		}
 
 		$this->assertArrayHasKey('pfb_dns_proxy', $services);
-		$this->assertArrayHasKey('pfb_dnsbl', $services, 'the existing services are still registered');
+		$this->assertArrayHasKey('pfb_filter', $services, 'the existing services are still registered');
 		$this->assertArrayHasKey('pfb_filter', $services);
 		$proxy = $services['pfb_dns_proxy'];
 		$this->assertSame('pfb_dns_proxy.sh', (string) $proxy->rcfile);

@@ -87,7 +87,6 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
     # so the filter stays ON yet the mock is reachable (the fix for the regression these
     # HTTP-feed tests hit after the filter landed default-on).
     h.set_feed_internal_allowlist(smoke_vm, "192.168.89.0/24")
-    h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
     try:
@@ -172,12 +171,12 @@ def test_dnsbl_http_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_fe
     member = "uuid-a344db4286a4.com"  # listed -> must BLOCK
     non_member = "uuid-06cf362c2890.com"  # not listed -> must RESOLVE
     feed_url = mock_feeds.feed_url("dnsbl_plain.txt")
-    spec = h.DnsblCase(aliasname="smokefeeddnsbl", feed_url=feed_url, header="smokefeeddnsbl", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokefeeddnsbl", feed_url=feed_url, header="smokefeeddnsbl")
 
     # BEFORE: the member is not on any feed yet -> it resolves via the stub sentinel.
     before = h.dns_probe_client(client_vm, member, "A")
     assert h.resolves_to(before, STUB_DNS_A), f"{member} should resolve via stub BEFORE listing, got {before}"
-    assert not h.is_vip(before), f"{member} unexpectedly VIP-blocked before any feed: {before}"
+    assert not h.is_null_ip(before), f"{member} unexpectedly null-blocked before any feed: {before}"
 
     with h.CaseContext(deployed_vm, spec):
         # The "resolves" probes must reach the controlled stub: leave egress OPEN. The
@@ -189,11 +188,11 @@ def test_dnsbl_http_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_fe
         # name (as test_smoke_matrix.py's unlock lifecycle does), then poll until the
         # async swap's VIP block lands.
         h.flush_unbound_name(deployed_vm, member)
-        blocked = h.dns_probe_client_until(client_vm, member, h.is_vip)
+        blocked = h.dns_probe_client_until(client_vm, member, h.is_null_ip)
         assert not h.resolves_to(blocked, STUB_DNS_A), f"{member} still resolving after the feed block: {blocked}"
         passed = h.dns_probe_client(client_vm, non_member, "A")
         assert h.resolves_to(passed, STUB_DNS_A), f"non-member {non_member} should resolve via stub, got {passed}"
-        assert not h.is_vip(passed), f"non-member {non_member} wrongly VIP-blocked: {passed}"
+        assert not h.is_null_ip(passed), f"non-member {non_member} wrongly null-blocked: {passed}"
 
 
 # --------------------------------------------------------------------------- #
@@ -425,21 +424,21 @@ def test_dnsbl_http_hosts_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, m
     member = "uuid-947e69114606.com"  # listed (hosts line) -> must BLOCK
     non_member = "uuid-55ca85f92f34.com"  # not listed -> must RESOLVE
     feed_url = mock_feeds.feed_url("dnsbl_hosts.txt")
-    spec = h.DnsblCase(aliasname="smokefeedhosts", feed_url=feed_url, header="smokefeedhosts", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokefeedhosts", feed_url=feed_url, header="smokefeedhosts")
 
     before = h.dns_probe_client(client_vm, member, "A")
     assert h.resolves_to(before, STUB_DNS_A), f"{member} should resolve via stub BEFORE listing, got {before}"
-    assert not h.is_vip(before), f"{member} unexpectedly VIP-blocked before any feed: {before}"
+    assert not h.is_null_ip(before), f"{member} unexpectedly null-blocked before any feed: {before}"
 
     with h.CaseContext(deployed_vm, spec):
         h.unblock_egress()  # the non-member "resolves" probe must reach the stub upstream
         # before-probe warmed the C-cache; a feed swap is TTL-bounded (see kill-gate) -> flush + poll.
         h.flush_unbound_name(deployed_vm, member)
-        blocked = h.dns_probe_client_until(client_vm, member, h.is_vip)
+        blocked = h.dns_probe_client_until(client_vm, member, h.is_null_ip)
         assert not h.resolves_to(blocked, STUB_DNS_A), f"{member} still resolving after the feed block: {blocked}"
         passed = h.dns_probe_client(client_vm, non_member, "A")
         assert h.resolves_to(passed, STUB_DNS_A), f"non-member {non_member} should resolve via stub, got {passed}"
-        assert not h.is_vip(passed), f"non-member {non_member} wrongly VIP-blocked: {passed}"
+        assert not h.is_null_ip(passed), f"non-member {non_member} wrongly null-blocked: {passed}"
 
 
 def test_dnsbl_http_abp_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
@@ -467,12 +466,12 @@ def test_dnsbl_http_abp_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, moc
     allow_exception = "uuid-f26156c6df69.com"  # || then @@ -> must RESOLVE
     non_member = "uuid-8ed2df53e469.com"  # not in the feed -> must RESOLVE
     feed_url = mock_feeds.feed_url("dnsbl_abp.txt")
-    spec = h.DnsblCase(aliasname="smokefeedabp", feed_url=feed_url, header="smokefeedabp", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokefeedabp", feed_url=feed_url, header="smokefeedabp")
 
     # BEFORE: the ||-only name is not yet on any feed -> it resolves via the stub.
     before = h.dns_probe_client(client_vm, blocked_name, "A")
     assert h.resolves_to(before, STUB_DNS_A), f"{blocked_name} should resolve via stub BEFORE listing, got {before}"
-    assert not h.is_vip(before), f"{blocked_name} unexpectedly VIP-blocked before any feed: {before}"
+    assert not h.is_null_ip(before), f"{blocked_name} unexpectedly null-blocked before any feed: {before}"
 
     with h.CaseContext(deployed_vm, spec):
         # The two "resolves" probes (the @@ exception + the non-member) must reach the
@@ -481,7 +480,7 @@ def test_dnsbl_http_abp_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, moc
         h.unblock_egress()
         # before-probe warmed the C-cache; a feed swap is TTL-bounded (see kill-gate) -> flush + poll.
         h.flush_unbound_name(deployed_vm, blocked_name)
-        ans_blocked = h.dns_probe_client_until(client_vm, blocked_name, h.is_vip)
+        ans_blocked = h.dns_probe_client_until(client_vm, blocked_name, h.is_null_ip)
         assert not h.resolves_to(ans_blocked, STUB_DNS_A), (
             f"{blocked_name} still resolving after the || block: {ans_blocked}"
         )
@@ -489,10 +488,10 @@ def test_dnsbl_http_abp_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, moc
         assert h.resolves_to(ans_allow, STUB_DNS_A), (
             f"ABP @@ allow-exception {allow_exception} must RESOLVE via the stub (@@ beats ||), got {ans_allow}"
         )
-        assert not h.is_vip(ans_allow), f"ABP @@ allow-exception {allow_exception} wrongly VIP-blocked: {ans_allow}"
+        assert not h.is_null_ip(ans_allow), f"ABP @@ allow-exception {allow_exception} null-blocked: {ans_allow}"
         ans_non = h.dns_probe_client(client_vm, non_member, "A")
         assert h.resolves_to(ans_non, STUB_DNS_A), f"non-member {non_member} should resolve via stub, got {ans_non}"
-        assert not h.is_vip(ans_non), f"non-member {non_member} wrongly VIP-blocked: {ans_non}"
+        assert not h.is_null_ip(ans_non), f"non-member {non_member} wrongly null-blocked: {ans_non}"
 
 
 # --------------------------------------------------------------------------- #
@@ -542,7 +541,7 @@ def test_abp_perline_detection_in_plain_feed(
         (``||block^`` reached ``parse_abp`` from a NON-ABP feed — the ADR-21 win);
       * ``<allow>`` RESOLVES via the stub (its ``@@`` allow beat the SAME-FEED plain
         block — proving per-line ``@@||`` parsed and won, not merely that nothing
-        blocked: a regression would leave it VIP-blocked by the plain entry);
+        blocked: a regression would leave it null-blocked by the plain entry);
       * ``<plain>`` returns the VIP block shape (the plain pipeline is untouched).
 
     The two "resolves" assertions reach the stub via the matcher's allow/non-block
@@ -558,13 +557,13 @@ def test_abp_perline_detection_in_plain_feed(
     # placed alongside its ``@@`` to prove @@ overrides a plain block in the SAME feed.
     body = "\n".join([f"||{block_name}^", f"@@||{allow_name}^", allow_name, plain_name]) + "\n"
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr21_perline.txt", body)
-    spec = h.DnsblCase(aliasname="smokeadr21", feed_url=feed_url, header="smokeadr21", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokeadr21", feed_url=feed_url, header="smokeadr21")
 
     # BEFORE: none of the three names is on any feed yet -> each resolves via the stub.
     for name in (block_name, allow_name, plain_name):
         before = h.dns_probe_client(client_vm, name, "A")
         assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
-        assert not h.is_vip(before), f"{name} unexpectedly VIP-blocked before any feed: {before}"
+        assert not h.is_null_ip(before), f"{name} unexpectedly null-blocked before any feed: {before}"
 
     with h.CaseContext(deployed_vm, spec):
         # The "resolves" probe (the @@ allow) must reach the controlled stub: leave egress
@@ -576,17 +575,17 @@ def test_abp_perline_detection_in_plain_feed(
         for name in (block_name, allow_name, plain_name):
             h.flush_unbound_name(deployed_vm, name)
 
-        ans_block = h.dns_probe_client_until(client_vm, block_name, h.is_vip)
+        ans_block = h.dns_probe_client_until(client_vm, block_name, h.is_null_ip)
         assert not h.resolves_to(ans_block, STUB_DNS_A), f"{block_name} still resolving after ||block^: {ans_block}"
 
-        ans_plain = h.dns_probe_client_until(client_vm, plain_name, h.is_vip)
+        ans_plain = h.dns_probe_client_until(client_vm, plain_name, h.is_null_ip)
         assert not h.resolves_to(ans_plain, STUB_DNS_A), f"{plain_name} still resolving after plain block: {ans_plain}"
 
         ans_allow = h.dns_probe_client(client_vm, allow_name, "A")
         assert h.resolves_to(ans_allow, STUB_DNS_A), (
             f"@@||{allow_name}^ must RESOLVE via the stub (its @@ allow beats the same-feed plain block): {ans_allow}"
         )
-        assert not h.is_vip(ans_allow), f"{allow_name} wrongly VIP-blocked despite its @@ allow: {ans_allow}"
+        assert not h.is_null_ip(ans_allow), f"{allow_name} wrongly null-blocked despite its @@ allow: {ans_allow}"
 
 
 # --------------------------------------------------------------------------- #
@@ -631,12 +630,12 @@ def test_abp_bom_header_still_detected(deployed_vm: SmokeVM, client_vm: SmokeVM,
     bom_marker = "Issue #1108: BOM-led mid-feed '!' comment line"
     body = h.abp_feed_bom("/badword/", h.ABP_BOM + "! " + bom_marker)
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr21_bom.txt", body)
-    spec = h.DnsblCase(aliasname="smokeadr21bom", feed_url=feed_url, header="smokeadr21bom", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokeadr21bom", feed_url=feed_url, header="smokeadr21bom")
 
     # BEFORE: the name is on no feed yet -> it resolves via the stub sentinel.
     before = h.dns_probe_client(client_vm, blocked, "A")
     assert h.resolves_to(before, STUB_DNS_A), f"{blocked} should resolve via stub BEFORE listing, got {before}"
-    assert not h.is_vip(before), f"{blocked} unexpectedly VIP-blocked before any feed: {before}"
+    assert not h.is_null_ip(before), f"{blocked} unexpectedly null-blocked before any feed: {before}"
 
     parse_err_before = h.count_log_marker(deployed_vm, h.DNSBL_PARSE_ERR_LOG, bom_marker)
 
@@ -645,7 +644,7 @@ def test_abp_bom_header_still_detected(deployed_vm: SmokeVM, client_vm: SmokeVM,
         # contrast is real (a would-be resolve still reaches the stub, no false-green).
         h.unblock_egress()
         h.flush_unbound_name(deployed_vm, blocked)
-        ans = h.dns_probe_client_until(client_vm, blocked, h.is_vip)
+        ans = h.dns_probe_client_until(client_vm, blocked, h.is_null_ip)
         assert not h.resolves_to(ans, STUB_DNS_A), (
             f"{blocked} still resolving after a BOM-led ABP feed regex block "
             f"(a BOM-masked header would leave the feed 'plain' and drop the regex): {ans}"
@@ -678,7 +677,7 @@ def test_abp_perline_path_anchor_not_overblocked(
 
     Given (before the feed loads) BOTH names RESOLVE via the controlled stub upstream.
     When the header-less feed (``||<blk>^`` + ``||<path>/ads^``) loads (Force Update),
-    Then ``<blk>`` is VIP-blocked (per-line ``||`` reached parse_abp), while ``<path>``
+    Then ``<blk>`` is null-blocked (per-line ``||`` reached parse_abp), while ``<path>``
       STILL RESOLVES via the stub (its path anchor was skipped, not truncated into a
       block). The pre-fix truncation would VIP-block ``<path>`` too, failing this.
     """
@@ -686,13 +685,13 @@ def test_abp_perline_path_anchor_not_overblocked(
     path_dom = h.unique_domain("adr21ppath")  # ||path/ads^ -> path anchor -> must RESOLVE
     body = "\n".join([f"||{blk}^", f"||{path_dom}/ads^"]) + "\n"
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr21_path.txt", body)
-    spec = h.DnsblCase(aliasname="smokeadr21pth", feed_url=feed_url, header="smokeadr21pth", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokeadr21pth", feed_url=feed_url, header="smokeadr21pth")
 
     # BEFORE: neither name is on any feed yet -> each resolves via the stub sentinel.
     for name in (blk, path_dom):
         before = h.dns_probe_client(client_vm, name, "A")
         assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
-        assert not h.is_vip(before), f"{name} unexpectedly VIP-blocked before any feed: {before}"
+        assert not h.is_null_ip(before), f"{name} unexpectedly null-blocked before any feed: {before}"
 
     with h.CaseContext(deployed_vm, spec):
         # The clean || block returns the VIP locally; egress stays OPEN so the path
@@ -701,7 +700,7 @@ def test_abp_perline_path_anchor_not_overblocked(
         for name in (blk, path_dom):
             h.flush_unbound_name(deployed_vm, name)
 
-        ans_blk = h.dns_probe_client_until(client_vm, blk, h.is_vip)
+        ans_blk = h.dns_probe_client_until(client_vm, blk, h.is_null_ip)
         assert not h.resolves_to(ans_blk, STUB_DNS_A), f"{blk} still resolving after ||{blk}^: {ans_blk}"
 
         ans_path = h.dns_probe_client(client_vm, path_dom, "A")
@@ -709,8 +708,8 @@ def test_abp_perline_path_anchor_not_overblocked(
             f"||{path_dom}/ads^ is a PATH anchor -> parse_abp must skip it, so {path_dom} must RESOLVE "
             f"(pre-fix truncation to ||{path_dom} would over-block it): {ans_path}"
         )
-        assert not h.is_vip(ans_path), (
-            f"{path_dom} wrongly VIP-blocked (path anchor truncated into a block): {ans_path}"
+        assert not h.is_null_ip(ans_path), (
+            f"{path_dom} wrongly null-blocked (path anchor truncated into a block): {ans_path}"
         )
 
 
@@ -754,7 +753,7 @@ def test_dnsbl_bom_header_feed_parses_without_error(
     anchor_member = "uuid-6c91761cef48.com"  # ADR-21 '||' anchor line -> must BLOCK
     hosts_member = "uuid-2329767ef078.com"  # hosts '0.0.0.0 domain' line -> must BLOCK
     feed_url = mock_feeds.feed_url("dnsbl_bom_header.txt")
-    spec = h.DnsblCase(aliasname="smokefeedbom", feed_url=feed_url, header="smokefeedbom", mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokefeedbom", feed_url=feed_url, header="smokefeedbom")
     # An ASCII substring of the fixture's BOM-led '!' line (skips the BOM bytes
     # themselves -- grep -F matches it anywhere in the CSV's $oline field, so the
     # leading BOM need not round-trip through the SSH/grep pipeline byte-for-byte).
@@ -764,7 +763,7 @@ def test_dnsbl_bom_header_feed_parses_without_error(
     for name in (anchor_member, hosts_member):
         before = h.dns_probe_client(client_vm, name, "A")
         assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
-        assert not h.is_vip(before), f"{name} unexpectedly VIP-blocked before any feed: {before}"
+        assert not h.is_null_ip(before), f"{name} unexpectedly null-blocked before any feed: {before}"
 
     parse_err_before = h.count_log_marker(deployed_vm, h.DNSBL_PARSE_ERR_LOG, bom_line_marker)
 
@@ -773,11 +772,11 @@ def test_dnsbl_bom_header_feed_parses_without_error(
         for name in (anchor_member, hosts_member):
             h.flush_unbound_name(deployed_vm, name)
 
-        ans_anchor = h.dns_probe_client_until(client_vm, anchor_member, h.is_vip)
+        ans_anchor = h.dns_probe_client_until(client_vm, anchor_member, h.is_null_ip)
         assert not h.resolves_to(ans_anchor, STUB_DNS_A), (
             f"{anchor_member} still resolving after the ADR-21 anchor line block: {ans_anchor}"
         )
-        ans_hosts = h.dns_probe_client_until(client_vm, hosts_member, h.is_vip)
+        ans_hosts = h.dns_probe_client_until(client_vm, hosts_member, h.is_null_ip)
         assert not h.resolves_to(ans_hosts, STUB_DNS_A), (
             f"{hosts_member} still resolving after the hosts-line block: {ans_hosts}"
         )
@@ -858,10 +857,10 @@ def test_strict_skips_invalid_scheme_and_path_and_logs(deployed_vm: SmokeVM, cli
         "smoke_adr22_strict.txt",
         [f"http://{http_dom}", f"evil://{evil_dom}", f"123://{bad_dom}", f"http://{path_dom}/path"],
     )
-    spec = h.DnsblCase(aliasname="smokeadr22s", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokeadr22s", feed_url=feed_url, header=header)
 
     def _blocked(ans: h.DnsAnswer) -> bool:
-        return h.is_vip(ans) or h.is_null_ip(ans)
+        return h.is_null_ip(ans)
 
     try:
         # BEFORE: none of the four is on a feed yet -> each resolves via the stub.
@@ -948,10 +947,10 @@ def test_lenient_blocks_invalid_scheme_and_path(deployed_vm: SmokeVM, client_vm:
         "smoke_adr22_lenient.txt",
         [f"123://{bad_dom}", f"http://{path_dom}/path"],
     )
-    spec = h.DnsblCase(aliasname="smokeadr22l", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname="smokeadr22l", feed_url=feed_url, header=header)
 
     def _blocked(ans: h.DnsAnswer) -> bool:
-        return h.is_vip(ans) or h.is_null_ip(ans)
+        return h.is_null_ip(ans)
 
     try:
         # BEFORE: neither host is on a feed yet -> each resolves via the stub.
@@ -1113,16 +1112,16 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
       Given (§2.2.1 — block-only baseline, before permit feed exists):
         * S, B, M, P, child.P all RESOLVE via the stub sentinel (no feed is live yet)
       When the BLOCK FEED alone is loaded (Deny action, no Permit feed),
-      Then S, B, M are VIP-blocked; P, child.P, X RESOLVE (§2.2.1: block-only = standard
+      Then S, B, M are null-blocked; P, child.P, X RESOLVE (§2.2.1: block-only = standard
            block, absent action = Deny, §2.2.4 non-listed unaffected).
       When the PERMIT FEED is added alongside the block feed (Permit action),
       Then (§2.2.2) S RESOLVES (permit feed at band 2 beats block feed at band 1);
-           (§2.2.2) B remains VIP-blocked (B is on the block feed, not the permit feed);
-           (§2.2.3) M remains VIP-blocked (Custom_List = band-5 sovereign block beats band 2);
+           (§2.2.2) B remains null-blocked (B is on the block feed, not the permit feed);
+           (§2.2.3) M remains null-blocked (Custom_List = band-5 sovereign block beats band 2);
            (§2.2.4) P and child.P RESOLVE (permit feed covers P; Unbound's wildcard logic
                     extends the allow to child.P); X RESOLVES (not on any feed).
       When the PERMIT FEED is removed (Permit→Deny teardown):
-      Then S is VIP-blocked again (no permit feed -> whiteDB entry gone -> band-1 block wins).
+      Then S is null-blocked again (no permit feed -> whiteDB entry gone -> band-1 block wins).
     """
     # --- Domain setup (unique_domain ensures no collision / RFC 6761 / HSTS issue) ---
     s_domain = h.unique_domain("adr31s")  # Shared: block + permit -> permit wins
@@ -1147,7 +1146,6 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
         aliasname="smokeadr31blk",
         feed_url=block_feed_url,
         header="smokeadr31blk",
-        mode=h.DnsblMode.VIP,
         custom_domains=[m_domain],  # -> band-5 sovereign block for M
     )
     # Permit spec: VIP mode (same sinkhole shape); no custom_domains.
@@ -1155,7 +1153,6 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
         aliasname="smokeadr31pmt",
         feed_url=permit_feed_url,
         header="smokeadr31pmt",
-        mode=h.DnsblMode.VIP,
     )
 
     try:
@@ -1169,7 +1166,7 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
             assert h.resolves_to(before, STUB_DNS_A), (
                 f"{name} should resolve via stub BEFORE any feed is loaded, got {before}"
             )
-            assert not h.is_vip(before), f"{name} unexpectedly VIP-blocked before any feed: {before}"
+            assert not h.is_null_ip(before), f"{name} unexpectedly null-blocked before any feed: {before}"
 
         # ------------------------------------------------------------------ #
         # §2.2.1 — BLOCK-ONLY FEED (Deny action, no Permit feed).
@@ -1185,21 +1182,21 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
             h.flush_unbound_name(deployed_vm, name)
 
         # §2.2.1: S is blocked by the block feed (no permit feed yet).
-        ans_s_blk = h.dns_probe_client_until(client_vm, s_domain, h.is_vip)
+        ans_s_blk = h.dns_probe_client_until(client_vm, s_domain, h.is_null_ip)
         assert not h.resolves_to(ans_s_blk, STUB_DNS_A), (
-            f"§2.2.1: {s_domain} should be VIP-blocked by the block feed (no permit feed yet): {ans_s_blk}"
+            f"§2.2.1: {s_domain} should be null-blocked by the block feed (no permit feed yet): {ans_s_blk}"
         )
 
         # §2.2.1: B is blocked by the block feed (block-only, never on permit).
-        ans_b_blk = h.dns_probe_client_until(client_vm, b_domain, h.is_vip)
+        ans_b_blk = h.dns_probe_client_until(client_vm, b_domain, h.is_null_ip)
         assert not h.resolves_to(ans_b_blk, STUB_DNS_A), (
-            f"§2.2.1: {b_domain} should be VIP-blocked by the block feed: {ans_b_blk}"
+            f"§2.2.1: {b_domain} should be null-blocked by the block feed: {ans_b_blk}"
         )
 
         # §2.2.1/§2.2.3: M is blocked via the block feed AND via band-5 Custom_List.
-        ans_m_blk = h.dns_probe_client_until(client_vm, m_domain, h.is_vip)
+        ans_m_blk = h.dns_probe_client_until(client_vm, m_domain, h.is_null_ip)
         assert not h.resolves_to(ans_m_blk, STUB_DNS_A), (
-            f"§2.2.3: {m_domain} should be VIP-blocked (Custom_List band-5 + block feed): {ans_m_blk}"
+            f"§2.2.3: {m_domain} should be null-blocked (Custom_List band-5 + block feed): {ans_m_blk}"
         )
 
         # §2.2.4: P and child.P RESOLVE (not on any block feed); X RESOLVES (not listed).
@@ -1208,7 +1205,7 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
             assert h.resolves_to(ans, STUB_DNS_A), (
                 f"§2.2.4/non-listed: {name} should RESOLVE via stub (not on block feed): {ans}"
             )
-            assert not h.is_vip(ans), f"{name} wrongly VIP-blocked with no matching feed: {ans}"
+            assert not h.is_null_ip(ans), f"{name} wrongly null-blocked with no matching feed: {ans}"
 
         # ------------------------------------------------------------------ #
         # §2.2.2 — ADD PERMIT FEED (block + permit coexist).
@@ -1226,7 +1223,7 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
         )
         h.reload(deployed_vm, "updatednsbl")
 
-        # S was cached as VIP-blocked (from the block-only phase above); a permit-feed
+        # S was cached as null-blocked (from the block-only phase above); a permit-feed
         # swap is TTL-bounded (ADR-10) -> flush S then poll until it RESOLVES.
         h.flush_unbound_name(deployed_vm, s_domain)
         # Also flush P/child.P so any stale not-on-feed answer clears for a clean check.
@@ -1238,23 +1235,23 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
         assert h.resolves_to(ans_s_pmt, STUB_DNS_A), (
             f"§2.2.2: {s_domain} must RESOLVE via stub (permit feed band 2 beats block band 1): {ans_s_pmt}"
         )
-        assert not h.is_vip(ans_s_pmt), (
-            f"§2.2.2: {s_domain} still VIP-blocked despite being on the permit feed: {ans_s_pmt}"
+        assert not h.is_null_ip(ans_s_pmt), (
+            f"§2.2.2: {s_domain} still null-blocked despite being on the permit feed: {ans_s_pmt}"
         )
 
-        # §2.2.2: B remains VIP-blocked — only on the block feed, not the permit feed.
+        # §2.2.2: B remains null-blocked — only on the block feed, not the permit feed.
         ans_b_pmt = h.dns_probe_client(client_vm, b_domain, "A")
-        assert h.is_vip(ans_b_pmt), (
-            f"§2.2.2: {b_domain} must remain VIP-blocked (only on block feed, not on permit feed): {ans_b_pmt}"
+        assert h.is_null_ip(ans_b_pmt), (
+            f"§2.2.2: {b_domain} must remain null-blocked (only on block feed, not on permit feed): {ans_b_pmt}"
         )
         assert not h.resolves_to(ans_b_pmt, STUB_DNS_A), (
             f"§2.2.2: {b_domain} wrongly resolving — block-only domain must stay blocked: {ans_b_pmt}"
         )
 
-        # §2.2.3: M remains VIP-blocked — Custom_List (band 5) beats permit (band 2).
+        # §2.2.3: M remains null-blocked — Custom_List (band 5) beats permit (band 2).
         ans_m_pmt = h.dns_probe_client(client_vm, m_domain, "A")
-        assert h.is_vip(ans_m_pmt), (
-            f"§2.2.3: {m_domain} must remain VIP-blocked (Custom_List band 5 > permit band 2): {ans_m_pmt}"
+        assert h.is_null_ip(ans_m_pmt), (
+            f"§2.2.3: {m_domain} must remain null-blocked (Custom_List band 5 > permit band 2): {ans_m_pmt}"
         )
         assert not h.resolves_to(ans_m_pmt, STUB_DNS_A), (
             f"§2.2.3: {m_domain} wrongly resolving — band-5 Custom_List must beat permit feed: {ans_m_pmt}"
@@ -1265,14 +1262,14 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
         assert h.resolves_to(ans_p, STUB_DNS_A), (
             f"§2.2.4: {p_domain} must RESOLVE via stub (permit feed allow): {ans_p}"
         )
-        assert not h.is_vip(ans_p), f"§2.2.4: {p_domain} wrongly VIP-blocked despite permit feed: {ans_p}"
+        assert not h.is_null_ip(ans_p), f"§2.2.4: {p_domain} wrongly null-blocked despite permit feed: {ans_p}"
 
         ans_child = h.dns_probe_client(client_vm, child_p, "A")
         assert h.resolves_to(ans_child, STUB_DNS_A), (
             f"§2.2.4: {child_p} must RESOLVE via stub (subdomain of permit-listed parent): {ans_child}"
         )
-        assert not h.is_vip(ans_child), (
-            f"§2.2.4: {child_p} wrongly VIP-blocked (subdomain of permit-listed parent should resolve): {ans_child}"
+        assert not h.is_null_ip(ans_child), (
+            f"§2.2.4: {child_p} wrongly null-blocked (subdomain of permit-listed parent should resolve): {ans_child}"
         )
 
         # §2.2.4 (non-listed unaffected): X still RESOLVES — no feed entry for X.
@@ -1280,23 +1277,23 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
         assert h.resolves_to(ans_x, STUB_DNS_A), (
             f"§2.2.4: non-listed {x_domain} must RESOLVE via stub (not on any feed): {ans_x}"
         )
-        assert not h.is_vip(ans_x), f"§2.2.4: non-listed {x_domain} wrongly VIP-blocked: {ans_x}"
+        assert not h.is_null_ip(ans_x), f"§2.2.4: non-listed {x_domain} wrongly null-blocked: {ans_x}"
 
         # ------------------------------------------------------------------ #
         # TEARDOWN — remove Permit: reload as block-only again.
-        # Expected: S is VIP-blocked again (no whiteDB residue from permit).
+        # Expected: S is null-blocked again (no whiteDB residue from permit).
         # This is also the implicit §2.2.5 proof (absent action = Deny = standard block).
         # ------------------------------------------------------------------ #
         h.inject(deployed_vm, block_spec)  # block-only; no permit feed
         h.reload(deployed_vm, "updatednsbl")
 
         # S was cached as RESOLVED (from the permit phase above); the permit feed is
-        # gone so S should now be VIP-blocked. ADR-10 allow->block is TTL-bounded ->
+        # gone so S should now be null-blocked. ADR-10 allow->block is TTL-bounded ->
         # flush S then poll until the block lands.
         h.flush_unbound_name(deployed_vm, s_domain)
-        ans_s_teardown = h.dns_probe_client_until(client_vm, s_domain, h.is_vip)
-        assert h.is_vip(ans_s_teardown), (
-            f"teardown: {s_domain} must be VIP-blocked again after removing the permit feed "
+        ans_s_teardown = h.dns_probe_client_until(client_vm, s_domain, h.is_null_ip)
+        assert h.is_null_ip(ans_s_teardown), (
+            f"teardown: {s_domain} must be null-blocked again after removing the permit feed "
             f"(no whiteDB residue): {ans_s_teardown}"
         )
         assert not h.resolves_to(ans_s_teardown, STUB_DNS_A), (
@@ -1393,21 +1390,21 @@ def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         # GIVEN — write initial feed (dom_old only); ingest (a single updatednsbl creates the
         # .orig baseline + .xxhash128 sidecar + .txt and blocks dom_old).
         feed_path = h.write_local_feed(deployed_vm, "smoke_cronchg.txt", dom_old + "\n")
-        spec = h.DnsblCase(aliasname="smokecronchg", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname="smokecronchg", feed_url=feed_path, header=header)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
         # BEFORE state: dom_old blocked, dom_new resolves via stub.
         h.flush_unbound_name(deployed_vm, dom_old)
-        ans_old_before = h.dns_probe_client_until(client_vm, dom_old, h.is_vip)
-        assert h.is_vip(ans_old_before), (
-            f"BEFORE: {dom_old} must be VIP-blocked after initial ingest, got {ans_old_before}"
+        ans_old_before = h.dns_probe_client_until(client_vm, dom_old, h.is_null_ip)
+        assert h.is_null_ip(ans_old_before), (
+            f"BEFORE: {dom_old} must be null-blocked after initial ingest, got {ans_old_before}"
         )
         ans_new_before = h.dns_probe_client(client_vm, dom_new, "A")
         assert h.resolves_to(ans_new_before, STUB_DNS_A), (
             f"BEFORE: {dom_new} must resolve via stub (not yet listed), got {ans_new_before}"
         )
-        assert not h.is_vip(ans_new_before), (
+        assert not h.is_null_ip(ans_new_before), (
             f"BEFORE: {dom_new} must NOT be blocked before feed edit, got {ans_new_before}"
         )
 
@@ -1437,13 +1434,13 @@ def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
 
         # THEN — dom_new becomes blocked (cron re-ingested the edited feed).
         h.flush_unbound_name(deployed_vm, dom_new)
-        ans_new_after = h.dns_probe_client_until(client_vm, dom_new, h.is_vip, timeout=120.0)
-        assert h.is_vip(ans_new_after), (
-            f"AFTER cron: {dom_new} must be VIP-blocked (detector re-ingested edited feed), got {ans_new_after}"
+        ans_new_after = h.dns_probe_client_until(client_vm, dom_new, h.is_null_ip, timeout=120.0)
+        assert h.is_null_ip(ans_new_after), (
+            f"AFTER cron: {dom_new} must be null-blocked (detector re-ingested edited feed), got {ans_new_after}"
         )
         # dom_old stays blocked (it was already listed).
         ans_old_after = h.dns_probe_client(client_vm, dom_old, "A")
-        assert h.is_vip(ans_old_after), f"AFTER cron: {dom_old} must remain VIP-blocked, got {ans_old_after}"
+        assert h.is_null_ip(ans_old_after), f"AFTER cron: {dom_old} must remain null-blocked, got {ans_old_after}"
 
         # Corroborate: detector fired — "Downloading update" count increased for this header.
         dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
@@ -1493,14 +1490,14 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
 
         # GIVEN — write feed, ingest (a single updatednsbl creates the .orig + .xxhash128 sidecar).
         feed_path = h.write_local_feed(deployed_vm, "smoke_cronunchg.txt", dom + "\n")
-        spec = h.DnsblCase(aliasname="smokecronunchg", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname="smokecronunchg", feed_url=feed_path, header=header)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
         # BEFORE state: dom blocked.
         h.flush_unbound_name(deployed_vm, dom)
-        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
-        assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
+        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_null_ip)
+        assert h.is_null_ip(ans_before), f"BEFORE: {dom} must be null-blocked after initial ingest, got {ans_before}"
 
         # No content change — source bytes == .orig bytes → hash matches sidecar.
         # No mtime manipulation is needed: detection is hash-based (ADR-42 Phase 2).
@@ -1533,7 +1530,7 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
 
         # THEN — dom remains blocked (feed was not cleared).
         ans_after = h.dns_probe_client(client_vm, dom, "A")
-        assert h.is_vip(ans_after), f"AFTER unchanged cron: {dom} must remain VIP-blocked, got {ans_after}"
+        assert h.is_null_ip(ans_after), f"AFTER unchanged cron: {dom} must remain null-blocked, got {ans_after}"
 
     finally:
         reset_exc = None
@@ -1581,14 +1578,14 @@ def test_cron_skips_local_feed_with_bumped_mtime_but_same_content(deployed_vm: S
 
         # GIVEN — write feed, ingest (updatednsbl creates the .orig + .xxhash128 sidecar).
         feed_path = h.write_local_feed(deployed_vm, "smoke_cronsame.txt", dom + "\n")
-        spec = h.DnsblCase(aliasname="smokecronsame", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname="smokecronsame", feed_url=feed_path, header=header)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
         # BEFORE state: dom blocked.
         h.flush_unbound_name(deployed_vm, dom)
-        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
-        assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
+        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_null_ip)
+        assert h.is_null_ip(ans_before), f"BEFORE: {dom} must be null-blocked after initial ingest, got {ans_before}"
 
         # WHEN — bump source mtime LATER than .orig WITHOUT changing content (timezone-free:
         # copy orig's mtime onto source, then advance it by +120 s — no absolute touch -t).
@@ -1620,7 +1617,7 @@ def test_cron_skips_local_feed_with_bumped_mtime_but_same_content(deployed_vm: S
 
         # THEN — dom remains blocked (feed not cleared).
         ans_after = h.dns_probe_client(client_vm, dom, "A")
-        assert h.is_vip(ans_after), f"AFTER cron: {dom} must remain VIP-blocked, got {ans_after}"
+        assert h.is_null_ip(ans_after), f"AFTER cron: {dom} must remain null-blocked, got {ans_after}"
 
     finally:
         reset_exc = None
@@ -1670,18 +1667,18 @@ def test_cron_detects_changed_local_feed_same_second(deployed_vm: SmokeVM, clien
 
         # GIVEN — write initial feed (dom_old only); ingest creates .orig + .xxhash128 sidecar.
         feed_path = h.write_local_feed(deployed_vm, "smoke_cronamess.txt", dom_old + "\n")
-        spec = h.DnsblCase(aliasname="smokecronamess", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname="smokecronamess", feed_url=feed_path, header=header)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
         # BEFORE: dom_old blocked, dom_new resolves via stub.
         h.flush_unbound_name(deployed_vm, dom_old)
-        ans_old_before = h.dns_probe_client_until(client_vm, dom_old, h.is_vip)
-        assert h.is_vip(ans_old_before), (
-            f"BEFORE: {dom_old} must be VIP-blocked after initial ingest, got {ans_old_before}"
+        ans_old_before = h.dns_probe_client_until(client_vm, dom_old, h.is_null_ip)
+        assert h.is_null_ip(ans_old_before), (
+            f"BEFORE: {dom_old} must be null-blocked after initial ingest, got {ans_old_before}"
         )
         ans_new_before = h.dns_probe_client(client_vm, dom_new, "A")
-        assert not h.is_vip(ans_new_before), (
+        assert not h.is_null_ip(ans_new_before), (
             f"BEFORE: {dom_new} must NOT be blocked before feed edit, got {ans_new_before}"
         )
 
@@ -1712,13 +1709,13 @@ def test_cron_detects_changed_local_feed_same_second(deployed_vm: SmokeVM, clien
 
         # THEN — dom_new becomes blocked (detector caught the same-second change).
         h.flush_unbound_name(deployed_vm, dom_new)
-        ans_new_after = h.dns_probe_client_until(client_vm, dom_new, h.is_vip, timeout=120.0)
-        assert h.is_vip(ans_new_after), (
-            f"AFTER cron: {dom_new} must be VIP-blocked (same-second change detected by hash), "
+        ans_new_after = h.dns_probe_client_until(client_vm, dom_new, h.is_null_ip, timeout=120.0)
+        assert h.is_null_ip(ans_new_after), (
+            f"AFTER cron: {dom_new} must be null-blocked (same-second change detected by hash), "
             f"got {ans_new_after} — ADR-42 Phase 2 blind-spot guard"
         )
         ans_old_after = h.dns_probe_client(client_vm, dom_old, "A")
-        assert h.is_vip(ans_old_after), f"AFTER cron: {dom_old} must remain VIP-blocked, got {ans_old_after}"
+        assert h.is_null_ip(ans_old_after), f"AFTER cron: {dom_old} must remain null-blocked, got {ans_old_after}"
 
         # Corroborate: detector fired — "Downloading update" count increased.
         dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
@@ -1788,7 +1785,7 @@ def test_cron_304_skips_unchanged_remote_feed(
 
     Scenario (BDD):
       Given the remote DNSBL feed is loaded (Force Update writes .orig + .xxhash128 + .etag);
-        ``dom`` is VIP-blocked;
+        ``dom`` is null-blocked;
       When feed content is UNCHANGED (same ETag on the server), pfb_reuse is OFF
         and the scheduled Update is run;
       Then the detector logs "304 not modified", does NOT log "Downloading update",
@@ -1808,14 +1805,14 @@ def test_cron_304_skips_unchanged_remote_feed(
         feed_url = mock_feeds.feed_url(feed_name)
 
         # GIVEN — inject + Force Update to establish the .orig baseline + ingest the body.
-        spec = h.DnsblCase(aliasname="smokep3304skip", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname="smokep3304skip", feed_url=feed_url, header=header)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
-        # BEFORE: dom is VIP-blocked.
+        # BEFORE: dom is null-blocked.
         h.flush_unbound_name(deployed_vm, dom)
-        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
-        assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
+        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_null_ip)
+        assert h.is_null_ip(ans_before), f"BEFORE: {dom} must be null-blocked after initial ingest, got {ans_before}"
 
         # The cron detector prefixes the verdict with the feed header, so the marker
         # below is scoped by header and verdict.
@@ -1852,7 +1849,7 @@ def test_cron_304_skips_unchanged_remote_feed(
 
         # THEN — dom remains blocked.
         ans_after = h.dns_probe_client(client_vm, dom, "A")
-        assert h.is_vip(ans_after), f"AFTER 304 cron: {dom} must remain VIP-blocked, got {ans_after}"
+        assert h.is_null_ip(ans_after), f"AFTER 304 cron: {dom} must remain null-blocked, got {ans_after}"
 
     finally:
         reset_exc = None
@@ -1883,7 +1880,7 @@ def test_cron_200_reingest_changed_remote_feed(
       When the feed body is updated + ETag bumped to etag_v2, pfb_reuse is OFF
         and the scheduled Update runs;
       Then the detector logs "content changed" + "Downloading update",
-        ``dom_new`` becomes VIP-blocked, and ``dom_old`` remains blocked.
+        ``dom_new`` becomes null-blocked, and ``dom_old`` remains blocked.
     """
     dom_old = h.unique_domain("p3200old")
     dom_new = h.unique_domain("p3200new")
@@ -1899,16 +1896,16 @@ def test_cron_200_reingest_changed_remote_feed(
         mock_feeds.enable_etag(feed_name, etag_v1)
         feed_url = mock_feeds.feed_url(feed_name)
 
-        spec = h.DnsblCase(aliasname="smokep3200chg", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname="smokep3200chg", feed_url=feed_url, header=header)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
         # BEFORE: dom_old blocked, dom_new resolves.
         h.flush_unbound_name(deployed_vm, dom_old)
-        ans_old_before = h.dns_probe_client_until(client_vm, dom_old, h.is_vip)
-        assert h.is_vip(ans_old_before), f"BEFORE: {dom_old} must be VIP-blocked, got {ans_old_before}"
+        ans_old_before = h.dns_probe_client_until(client_vm, dom_old, h.is_null_ip)
+        assert h.is_null_ip(ans_old_before), f"BEFORE: {dom_old} must be null-blocked, got {ans_old_before}"
         ans_new_before = h.dns_probe_client(client_vm, dom_new, "A")
-        assert not h.is_vip(ans_new_before), f"BEFORE: {dom_new} must NOT be blocked, got {ans_new_before}"
+        assert not h.is_null_ip(ans_new_before), f"BEFORE: {dom_new} must NOT be blocked, got {ans_new_before}"
 
         # WHEN — update body + bump ETag on the server.
         mock_feeds.set_content(feed_name, dom_old + "\n" + dom_new + "\n", etag=etag_v2)
@@ -1941,12 +1938,12 @@ def test_cron_200_reingest_changed_remote_feed(
 
         # THEN — dom_new becomes blocked.
         h.flush_unbound_name(deployed_vm, dom_new)
-        ans_new_after = h.dns_probe_client_until(client_vm, dom_new, h.is_vip, timeout=120.0)
-        assert h.is_vip(ans_new_after), (
-            f"AFTER cron: {dom_new} must be VIP-blocked (changed feed re-ingested), got {ans_new_after}"
+        ans_new_after = h.dns_probe_client_until(client_vm, dom_new, h.is_null_ip, timeout=120.0)
+        assert h.is_null_ip(ans_new_after), (
+            f"AFTER cron: {dom_new} must be null-blocked (changed feed re-ingested), got {ans_new_after}"
         )
         ans_old_after = h.dns_probe_client(client_vm, dom_old, "A")
-        assert h.is_vip(ans_old_after), f"AFTER cron: {dom_old} must remain VIP-blocked, got {ans_old_after}"
+        assert h.is_null_ip(ans_old_after), f"AFTER cron: {dom_old} must remain null-blocked, got {ans_old_after}"
 
     finally:
         reset_exc = None
@@ -1977,7 +1974,7 @@ def test_cron_no_validator_download_hash_decides(
 
     Scenario (BDD):
       Given the remote DNSBL feed is loaded with NO validator at all (server emits neither
-        ETag nor Last-Modified); ``dom`` is VIP-blocked;
+        ETag nor Last-Modified); ``dom`` is null-blocked;
       When feed content is UNCHANGED, pfb_reuse is OFF
         and the scheduled Update runs;
       Then the detector downloads the full body, logs "content unchanged",
@@ -1997,14 +1994,14 @@ def test_cron_no_validator_download_hash_decides(
         mock_feeds.disable_lastmod(feed_name)
         feed_url = mock_feeds.feed_url(feed_name)
 
-        spec = h.DnsblCase(aliasname="smokep3noetag", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname="smokep3noetag", feed_url=feed_url, header=header)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
         # BEFORE: dom is blocked.
         h.flush_unbound_name(deployed_vm, dom)
-        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
-        assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
+        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_null_ip)
+        assert h.is_null_ip(ans_before), f"BEFORE: {dom} must be null-blocked after initial ingest, got {ans_before}"
 
         # Feed unchanged; no If-None-Match will be sent (no stored ETag). #811 header-scopes
         # the "( content unchanged )" verdict line, so the marker below proves BOTH the
@@ -2033,7 +2030,7 @@ def test_cron_no_validator_download_hash_decides(
 
         # THEN — dom remains blocked.
         ans_after = h.dns_probe_client(client_vm, dom, "A")
-        assert h.is_vip(ans_after), f"AFTER no-validator cron: {dom} must remain VIP-blocked, got {ans_after}"
+        assert h.is_null_ip(ans_after), f"AFTER no-validator cron: {dom} must remain null-blocked, got {ans_after}"
 
     finally:
         reset_exc = None
@@ -2156,7 +2153,7 @@ def test_cron_lastmod_304_skips_unchanged_feed(
 
     Scenario (BDD):
       Given the remote DNSBL feed is loaded with NO ETag (server does not emit one);
-        ``dom`` is VIP-blocked;
+        ``dom`` is null-blocked;
       When feed content is UNCHANGED, the server honours If-Modified-Since with a real 304,
         pfb_reuse is OFF, and the scheduled Update runs;
       Then the detector logs "304 not modified", does NOT log "Downloading update",
@@ -2178,14 +2175,14 @@ def test_cron_lastmod_304_skips_unchanged_feed(
         feed_url = mock_feeds.feed_url(feed_name)
 
         # GIVEN — inject + Force Update to establish the .orig baseline + ingest the body.
-        spec = h.DnsblCase(aliasname="smokep3lm304", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname="smokep3lm304", feed_url=feed_url, header=header)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
-        # BEFORE: dom is VIP-blocked.
+        # BEFORE: dom is null-blocked.
         h.flush_unbound_name(deployed_vm, dom)
-        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
-        assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
+        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_null_ip)
+        assert h.is_null_ip(ans_before), f"BEFORE: {dom} must be null-blocked after initial ingest, got {ans_before}"
 
         # Feed unchanged; the stored Last-Modified validator still matches. #811 header-scopes
         # the "( 304 not modified )" verdict line itself, so the marker below is scoped by
@@ -2222,7 +2219,7 @@ def test_cron_lastmod_304_skips_unchanged_feed(
 
         # THEN — dom remains blocked.
         ans_after = h.dns_probe_client(client_vm, dom, "A")
-        assert h.is_vip(ans_after), f"AFTER 304 cron: {dom} must remain VIP-blocked, got {ans_after}"
+        assert h.is_null_ip(ans_after), f"AFTER 304 cron: {dom} must remain null-blocked, got {ans_after}"
 
     finally:
         reset_exc = None
@@ -3469,7 +3466,7 @@ def test_validate_log_entries_reject_line(
       prior case) and no canonical entries-reject line for this feed's header
       exists yet for either bucket (the delta baseline).
     When the case Force-Updates (updatednsbl) over the ABP feed,
-    Then the healthy member is VIP-blocked (feed loaded) AND a NEW
+    Then the healthy member is null-blocked (feed loaded) AND a NEW
       'pfb_validate: REJECT feed=<hdr> stage=entries reason=shape detected=1'
       line appears AND a NEW '... reason=wire_cap detected=1' line appears.
     """
@@ -3483,7 +3480,7 @@ def test_validate_log_entries_reject_line(
         f"||{wire_cap_reject_host}^",
     )
     feed_url = mock_feeds.register("adr48_entries.txt", body)
-    spec = h.DnsblCase(aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname=header, feed_url=feed_url, header=header)
     shape_marker = f"pfb_validate: REJECT feed={header} stage=entries reason=shape detected=1"
     wire_cap_marker = f"pfb_validate: REJECT feed={header} stage=entries reason=wire_cap detected=1"
 
@@ -3492,7 +3489,7 @@ def test_validate_log_entries_reject_line(
     assert h.resolves_to(before_probe, STUB_DNS_A), (
         f"{blocked_name} should resolve via stub BEFORE listing, got {before_probe}"
     )
-    assert not h.is_vip(before_probe), f"{blocked_name} unexpectedly VIP-blocked before any feed: {before_probe}"
+    assert not h.is_null_ip(before_probe), f"{blocked_name} unexpectedly null-blocked before any feed: {before_probe}"
     before_shape = h.count_log_marker(deployed_vm, h.PFB_LOG, shape_marker)
     before_wire_cap = h.count_log_marker(deployed_vm, h.PFB_LOG, wire_cap_marker)
 
@@ -3501,9 +3498,9 @@ def test_validate_log_entries_reject_line(
         # (the block itself resolves locally regardless).
         h.unblock_egress()
         h.flush_unbound_name(deployed_vm, blocked_name)
-        ans = h.dns_probe_client_until(client_vm, blocked_name, h.is_vip)
-        assert h.is_vip(ans), (
-            f"expected {blocked_name!r} VIP-blocked after the entries-reject feed (feed must have "
+        ans = h.dns_probe_client_until(client_vm, blocked_name, h.is_null_ip)
+        assert h.is_null_ip(ans), (
+            f"expected {blocked_name!r} null-blocked after the entries-reject feed (feed must have "
             f"genuinely loaded/parsed), got {ans}"
         )
 
@@ -3544,7 +3541,7 @@ def test_validate_log_healthy_abp_feed_no_entries_reject(
       line for this feed's header exists yet (the delta baseline, module-wide
       generic-marker style per the Phase-3 healthy-feed guard).
     When the case Force-Updates over the skip-only + one-healthy-block feed,
-    Then the healthy member is VIP-blocked (feed genuinely loaded) AND the
+    Then the healthy member is null-blocked (feed genuinely loaded) AND the
       'pfb_validate: REJECT ... feed=<hdr> stage=entries' marker count is
       UNCHANGED -- no skip class was miscounted as a reject.
     """
@@ -3559,7 +3556,7 @@ def test_validate_log_healthy_abp_feed_no_entries_reject(
         f"||{blocked_name}^",
     )
     feed_url = mock_feeds.register("adr48_healthy_abp.txt", body)
-    spec = h.DnsblCase(aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+    spec = h.DnsblCase(aliasname=header, feed_url=feed_url, header=header)
     entries_marker = f"pfb_validate: REJECT feed={header} stage=entries"
 
     # Given -- the healthy member resolves before listing + delta baseline.
@@ -3567,7 +3564,7 @@ def test_validate_log_healthy_abp_feed_no_entries_reject(
     assert h.resolves_to(before_probe, STUB_DNS_A), (
         f"{blocked_name} should resolve via stub BEFORE listing, got {before_probe}"
     )
-    assert not h.is_vip(before_probe), f"{blocked_name} unexpectedly VIP-blocked before any feed: {before_probe}"
+    assert not h.is_null_ip(before_probe), f"{blocked_name} unexpectedly null-blocked before any feed: {before_probe}"
     before = h.count_log_marker(deployed_vm, h.PFB_LOG, entries_marker)
 
     with h.CaseContext(deployed_vm, spec):
@@ -3575,9 +3572,9 @@ def test_validate_log_healthy_abp_feed_no_entries_reject(
         # clean anchor does.
         h.unblock_egress()
         h.flush_unbound_name(deployed_vm, blocked_name)
-        ans = h.dns_probe_client_until(client_vm, blocked_name, h.is_vip)
-        assert h.is_vip(ans), (
-            f"expected {blocked_name!r} VIP-blocked after the healthy ABP feed (feed must have "
+        ans = h.dns_probe_client_until(client_vm, blocked_name, h.is_null_ip)
+        assert h.is_null_ip(ans), (
+            f"expected {blocked_name!r} null-blocked after the healthy ABP feed (feed must have "
             f"genuinely loaded/parsed), got {ans}"
         )
 

@@ -14,7 +14,6 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_aliastables')]
 #[CoversFunction('pfb_dnsbl_cache')]
 #[CoversFunction('pfb_filter_service')]
-#[CoversFunction('pfb_dnsbl_service')]
 final class RamDiskArchiveTest extends TestCase
 {
 	/** Every command the rc stop bodies run, as one script that picks its role from $0. */
@@ -454,11 +453,12 @@ final class RamDiskArchiveTest extends TestCase
 		$this->assertSame([], $this->stateLines('calls'), 'a disk /var writes no aliastables archive at stop');
 	}
 
-	public function testDnsblStopWritesTheMissingDnsblArchiveOnARamDisk(): void
+	public function testFilterStopWritesTheMissingDnsblArchiveOnARamDisk(): void
 	{
 		// Given a RAM-disk /var, a DNSBL manifest, and no DNSBL archive
 		$this->manifest();
-		$this->arrangeRc('pfb_dnsbl.sh', static fn () => pfb_dnsbl_service(), TRUE);
+		$this->existing($this->aliasBase, 'zst');	// the alias archive is there, so only the DNSBL arm can call php
+		$this->arrangeRc('pfb_filter.sh', static fn () => pfb_filter_service(), TRUE);
 		$this->assertNull($this->archive($this->dnsblBase), 'precondition: no DNSBL archive');
 
 		// When the rc stop runs before a clean reboot
@@ -475,12 +475,13 @@ final class RamDiskArchiveTest extends TestCase
 	}
 
 	#[DataProvider('extProvider')]
-	public function testDnsblStopLeavesAPresentArchiveAlone(string $ext): void
+	public function testFilterStopLeavesAPresentDnsblArchiveAlone(string $ext): void
 	{
 		// Given a RAM-disk /var, a DNSBL manifest, and a DNSBL archive already present as .{$ext}
 		$this->manifest();
 		$this->existing($this->dnsblBase, $ext);
-		$this->arrangeRc('pfb_dnsbl.sh', static fn () => pfb_dnsbl_service(), TRUE);
+		$this->existing($this->aliasBase, 'zst');	// the alias archive is there, so only the DNSBL arm can call php
+		$this->arrangeRc('pfb_filter.sh', static fn () => pfb_filter_service(), TRUE);
 
 		// When the rc stop runs
 		[$status, $output] = $this->rcStop();
@@ -490,10 +491,11 @@ final class RamDiskArchiveTest extends TestCase
 		$this->assertSame([], $this->stateLines('calls'), 'a present DNSBL archive is never rewritten at stop');
 	}
 
-	public function testDnsblStopWithoutAManifestArchivesNothing(): void
+	public function testFilterStopWithoutADnsblManifestArchivesNothing(): void
 	{
 		// Given a RAM-disk /var and no DNSBL manifest
-		$this->arrangeRc('pfb_dnsbl.sh', static fn () => pfb_dnsbl_service(), TRUE);
+		$this->existing($this->aliasBase, 'zst');	// the alias archive is there, so only the DNSBL arm can call php
+		$this->arrangeRc('pfb_filter.sh', static fn () => pfb_filter_service(), TRUE);
 
 		// When the rc stop runs
 		[$status, $output] = $this->rcStop();
@@ -503,11 +505,12 @@ final class RamDiskArchiveTest extends TestCase
 		$this->assertSame([], $this->stateLines('calls'), 'a cache without a manifest is not saved at stop');
 	}
 
-	public function testDnsblStopOnADiskVarArchivesNothing(): void
+	public function testFilterStopOnADiskVarArchivesNoDnsblArchive(): void
 	{
 		// Given a disk /var (the rc reads use_mfs_tmpvar off) and a DNSBL manifest
 		$this->manifest();
-		$this->arrangeRc('pfb_dnsbl.sh', static fn () => pfb_dnsbl_service(), FALSE);
+		$this->existing($this->aliasBase, 'zst');	// the alias archive is there, so only the DNSBL arm can call php
+		$this->arrangeRc('pfb_filter.sh', static fn () => pfb_filter_service(), FALSE);
 
 		// When the rc stop runs
 		[$status, $output] = $this->rcStop();
@@ -521,13 +524,14 @@ final class RamDiskArchiveTest extends TestCase
 	{
 		// Given a RAM-disk /var, a DNSBL manifest, no DNSBL archive, and a save that exits 1
 		$this->manifest();
-		$this->arrangeRc('pfb_dnsbl.sh', static fn () => pfb_dnsbl_service(), TRUE, 1);
+		$this->existing($this->aliasBase, 'zst');	// the alias archive is there, so only the DNSBL arm can call php
+		$this->arrangeRc('pfb_filter.sh', static fn () => pfb_filter_service(), TRUE, 1);
 
 		// When the rc stop runs
 		[$status, $output] = $this->rcStop();
 
 		// Then the save is attempted once and the stop still exits 0
 		$this->assertSame(['php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dnsbl_cache'], $this->stateLines('calls'), 'the failing save is attempted once');
-		$this->assertSame(0, $status, "rc_start runs rc_stop || return 1: a failed save must not keep the web server down: {$output}");
+		$this->assertSame(0, $status, "rc_start runs rc_stop || return 1: a failed save must not keep the filter service down: {$output}");
 	}
 }

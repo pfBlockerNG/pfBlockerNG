@@ -76,7 +76,7 @@ These = port's explicit `RUN_DEPENDS` (10 packages, issue #1806 — fixes pre-ex
 | `net/libmaxminddb` | `bin/mmdblookup` | GeoIP C library — GeoIP feeds / reports |
 | `net/py-maxminddb` (`py311-maxminddb`) | — | Python MaxMind reader — no shipped script uses it since #3791 (the gateway reads GeoIP itself); still a port `RUN_DEPENDS` until the port drops it |
 | `databases/py-sqlite3` (`py311-sqlite3`) | — | Python sqlite3 — DNSBL / reports database |
-| `www/lighttpd` | `sbin/lighttpd` | DNSBL sinkhole webserver (block page on VIP) |
+| `www/lighttpd` | `sbin/lighttpd` | Was the DNSBL block-page webserver; no shipped code uses it since #4053, still a port `RUN_DEPENDS` until the port drops it |
 | `textproc/jq` | `bin/jq` | JSON processing (feeds, AWS IP-prefix pre-scripts) |
 | `net/rsync` | `bin/rsync` | **rsync-format feed lists** (`pfblockerng.inc` → `exec("/usr/local/bin/rsync …")`); also rsync-overlay deploy transport |
 | `net-mgmt/grepcidr` | `bin/grepcidr` | CIDR matching on IP path |

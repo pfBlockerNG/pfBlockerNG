@@ -405,11 +405,6 @@ function pfb_stats_panel(string $stat_type, array $stype, array $summary, $pfbma
 								}
 							}
 
-							if ($stat_type == 'dnsblagent' && $data == 'Unknown') {
-								$data = pfb_dnsbl_mechanism_labels()['enabled'];
-								$data_disp = $data;	// literal, trusted
-							}
-
 							if ($stat_type == 'ipdstport') {
 								// issue #1069: href segment rawurlencode'd; title HTML-encoded.
 								$query_port = '&nbsp;<a class="fa-solid fa-search icon-pointer" target="_blank" rel="noopener noreferrer"'
@@ -426,7 +421,7 @@ function pfb_stats_panel(string $stat_type, array $stype, array $summary, $pfbma
 								$data_disp = $data;	// literal, trusted
 							}
 
-							if (empty($data)) {
+							if (pfb_is_empty($data) || $data === '0') {
 								$data = 'Unknown';
 								$data_disp = $data;	// literal, trusted
 							}
