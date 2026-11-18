@@ -11,18 +11,18 @@ import (
 
 // The Extras (#3978): the translation of pfblockerng_download_extras() and the Extras branches of pfb_download(), held
 // to the parity corpus in tests/extras/fixtures/parity. A failed or refused Extra keeps what it published before. The
-// asn type is translated so far; any other kind is refused before it is fetched.
+// asn and geoip types are translated so far; any other kind is refused before it is fetched.
 
 // extrasTimeout is what every pfblockerng.php verb passes pfblockerng_download_extras().
 const extrasTimeout = 600 * time.Second
 
 // Extra is one row of the Extras table (pfblockerng.php:166-256).
 type Extra struct {
-	Kind     string // asn
+	Kind     string // asn or geoip
 	URL      string // an asn URL ends in "token=": the token is appended, encoded
 	Dir      string // the folder: the GeoIP share or the database folder
 	Download string // the download's file name in Dir (file_dwn)
-	File     string // the published file's name in Dir
+	File     string // the published file's name in Dir; empty for the GeoLite2 CSV zip
 }
 
 // ExtrasConfig is what the extras projection and the Core's flags give a run. The secrets are held in memory only.
@@ -50,11 +50,17 @@ func (f *Fetcher) DownloadExtras(ctx context.Context, cfg ExtrasConfig, extras [
 	res := ExtrasResult{OK: true}
 	for _, x := range extras {
 		req := Request{URL: x.URL, Timeout: cfg.Timeout}
-		if x.Kind == "asn" {
+		switch x.Kind {
+		case "asn":
 			req.URL += rawURLEncode(cfg.ASNToken)
+		case "geoip":
+			req.Username, req.Password = cfg.MaxMindAccount, cfg.MaxMindKey
 		}
 		if !f.extra(ctx, cfg, x, req) {
 			res.OK = false
+			if x.Kind == "geoip" {
+				res.MaxMindError = true
+			}
 		}
 	}
 	return res
@@ -63,7 +69,7 @@ func (f *Fetcher) DownloadExtras(ctx context.Context, cfg ExtrasConfig, extras [
 // extra is pfb_download() for one Extra: the transfer to "<download>.raw", the content gates, the update marker and the
 // publication of its type. It reports whether the Extra succeeded.
 func (f *Fetcher) extra(ctx context.Context, cfg ExtrasConfig, x Extra, req Request) bool {
-	if x.Kind != "asn" {
+	if x.Kind != "asn" && x.Kind != "geoip" {
 		return false
 	}
 	src, _ := f.entry(ctx, req)
@@ -94,13 +100,16 @@ func (f *Fetcher) extra(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 			return false
 		}
 	}
-	touch(filepath.Join(cfg.DBDir, "asn.update"))
+	touch(filepath.Join(cfg.DBDir, x.Kind+".update"))
 	if !t.lastMod.IsZero() {
 		os.Chtimes(raw, t.lastMod, t.lastMod)
 	}
 	archive := mime == mimeGzip || mime == mimeBzip2 || mime == mimeZip || mime == mimeTar
 	if archive && f.extractShort(raw, x.Dir, cfg.DBDir, target, filepath.Dir(target)) {
 		return false
+	}
+	if x.Kind == "geoip" {
+		return f.publishGeoIP(ctx, mime, raw, x.Dir, target)
 	}
 	return f.publishASN(ctx, cfg, mime, raw, target)
 }
