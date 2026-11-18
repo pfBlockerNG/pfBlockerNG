@@ -175,7 +175,7 @@ CFG_DDR = h.dns_config_path("pfb_dns_ddr")  # issue #3583: the DDR toggle
 CFG_DDR_DOH_443 = h.dns_config_path("pfb_dns_ddr_doh_443_interfaces")  # issue #3694: "Advertise DoH on port 443"
 DDR_443_INTERFACES = "lan"  # the DoH interface the 443 advertisement is selected for
 CFG_DNS_NAME = h.dns_config_path("pfb_dns_name")  # issue #3694: DDR's target name, and the name the gateway answers
-DDR_DNS_NAME = h.unique_domain("ddrname")  # inert: not RFC 6761, not HSTS-preloaded, listed in no feed
+DDR_DNS_NAME = h.unique_domain("ddrname")  # inert: not RFC 6761, listed in no feed
 DDR_TARGET = f"{DDR_DNS_NAME}."  # the SVCB TargetName and the Additional record's owner, as dig prints them
 # SNAPSHOT_PATHS already holds the interface lists, which LISTENER_SETTINGS names again
 CONFIG_PATHS = tuple(

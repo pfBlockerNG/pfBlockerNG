@@ -47,7 +47,7 @@ REFUSAL = {
     "error": {
         "code": "invalid_argument",
         "message": "the settings are invalid",
-        "fieldErrors": [{"field": "changes.dns.hstsNullBlocking", "message": REFUSED}],
+        "fieldErrors": [{"field": "changes.dns.idnBlockMalicious", "message": REFUSED}],
     }
 }
 # The Core API's socket answered with one refusal for every request: argv are the socket, a file the request lines are

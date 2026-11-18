@@ -55,9 +55,8 @@ from .test_smoke_matrix import deployed_vm as deployed_vm
 # domain the Go decider's TestEvaluateDomainIdnArms (go/pfb_dns_gateway/decider)
 # and TestConfusableActionMatchesOracle use. Not unique-able like
 # unique_domain(): the Confusable analyzer needs this specific mixed-script shape
-# to classify as malicious, a random uuid label would not. Safe under the two
-# smoke.md domain rules regardless: '.com' is not an RFC 6761 reserved TLD, and
-# the punycode label is not a real HSTS-preload host (only literal apple.com is).
+# to classify as malicious, a random uuid label would not. Safe under the
+# smoke.md domain rule regardless: '.com' is not an RFC 6761 reserved TLD.
 CONFUSABLE_MALICIOUS_DOMAIN = "xn--pple-43d.com"
 
 
@@ -147,7 +146,7 @@ def _write_builtin_config(
     timeout: float = 90.0,
 ) -> None:
     """One-shot write: the inert group, EVERY built-in this module exercises
-    (user regex, All-IDN, TLD Blacklist, HSTS), and the shared policy fields.
+    (user regex, All-IDN, TLD Blacklist), and the shared policy fields.
 
     Mirrors ``test_smoke_dnsbl_policy_default_override._write_policy_config``'s
     shape (a raw ``config_set_path`` write — ``inject()`` derives ``global_log``
@@ -164,7 +163,6 @@ def _write_builtin_config(
         "pfb_idn": "on",  # PfbIdnMode::All backing value; the 4.0.0-alpha 'all' token was dropped
         "tld_wildcard": "on",
         "tld_wildcard_blacklist": h._b64_textarea([tld_blacklist]),
-        "pfb_hsts": "on",
     }
     snippet = (
         f"$g = config_get_path({h._php_str(h.CFG_GLOBAL)}, array());\n"
@@ -298,10 +296,9 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
     values, exactly like an ordinary per-list block would.
 
     Phase 1 (``nxdomain``): every built-in -> NXDOMAIN, no records.
-    Phase 2 (``disabled_log``): every built-in -> NULL, the HSTS-preload name too.
+    Phase 2 (``disabled_log``): every built-in -> NULL.
     Phase 3 (``nxdomain_log``, flag '3'): every built-in -> NXDOMAIN, no
-      records. The HSTS-preload name is STILL NXDOMAIN — HSTS never turns an
-      NXDOMAIN block into an address.
+      records.
     Phase 4 (``nodata_log``, flag '5'): every built-in -> NOERROR ANSWER=0
       AUTHORITY=1 SOA.
 
@@ -311,9 +308,10 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
     """
     regex_domain = h.unique_domain("bir")
     regex_label = regex_domain.split(".", 1)[0]
-    hsts_domain = h.unique_domain("birhsts")
-    hsts_label = hsts_domain.split(".", 1)[0]
     idn_domain = f"xn--{uuid.uuid4().hex}.com"
+    # issue #4053: .dev was a built-in HSTS TLD; a block there answers with the configured mechanism like any other.
+    dev_label = f"birdev-{uuid.uuid4().hex}"
+    dev_domain = f"{dev_label}.dev"
     blacklist_tld = _tld_label("pfbsmoketld")
     blacklist_domain = f"pfbtld-{uuid.uuid4().hex}.{blacklist_tld}"
     inert_alias = "smokebuiltininert"
@@ -321,16 +319,14 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
 
     # regex anchors on the unique label (not the bare full-domain string) so this
     # is a genuine regex match, not a literal-string comparison in disguise.
-    regex_patterns = [f"^{re.escape(regex_label)}\\.", f"^{re.escape(hsts_label)}\\."]
+    regex_patterns = [f"^{re.escape(regex_label)}\\.", f"^{re.escape(dev_label)}\\."]
 
     rows = [
         _Row("regex", regex_domain),
         _Row("all-idn", idn_domain),
         _Row("tld-blacklist", blacklist_domain),
-        _Row("hsts-regex", hsts_domain),
+        _Row("former-hsts-tld", dev_domain),
     ]
-
-    h.add_hsts_name(deployed_vm, hsts_domain)
 
     try:
         _write_builtin_config(
@@ -346,9 +342,7 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
         assert h.config_get(deployed_vm, f"{h.CFG_DNSBL_SETTINGS}/pfb_regex") == "on"
         assert h.config_get(deployed_vm, f"{h.CFG_DNSBL_SETTINGS}/pfb_idn") == "on"
         assert h.config_get(deployed_vm, f"{h.CFG_DNSBL_SETTINGS}/tld_wildcard") == "on"
-        assert h.config_get(deployed_vm, f"{h.CFG_DNSBL_SETTINGS}/pfb_hsts") == "on"
         h.reload(deployed_vm, "updatednsbl")
-        h.assert_hsts_loaded(deployed_vm, hsts_domain)
 
         # ---- Phase 1: nxdomain -> NXDOMAIN ----
         with _hermetic_probe():
@@ -367,7 +361,7 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
         with _hermetic_probe():
             _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 2, "null")
 
-        # ---- Phase 3: nxdomain_log (flag '3') -> NXDOMAIN, even for the HSTS name ----
+        # ---- Phase 3: nxdomain_log (flag '3') -> NXDOMAIN ----
         _set_global_mechanism(deployed_vm, mode="default", mechanism="nxdomain_log")
         h.reload(deployed_vm, "updatednsbl")
         with _hermetic_probe():

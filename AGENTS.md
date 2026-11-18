@@ -110,7 +110,7 @@ At session start read `.agents/context/repository-intelligence.md` (details; per
 | `pfb_update_check` / `pfb_download` | architecture-notes "Change detection / content hashing" (ADR-42) |
 | IP alias tables / reload path | architecture-notes ADR-40; scheduling/cron → ADR-43; Uber aliases → ADR-11 |
 | `www/` UI | architecture-notes "Web UI test tiers" + `lang-php.md`; Alerts/Reports pages → `docs/misc/alerts-reports-pipeline.md` |
-| PSL / TLD Allow / HSTS / TOP1M refresh | `docs/misc/<public-suffix-list\|tld-lists\|hsts-preload-list\|top1m-providers>.md` |
+| PSL / TLD Allow / TOP1M refresh | `docs/misc/<public-suffix-list\|tld-lists\|top1m-providers>.md` |
 | docs-only change; min-CE version bump | `git.md` dev-only classes; `docs/misc/version-bump-runbook.md` (stubs: `scripts/update-pfsense-stubs.py`) |
 
 New implementation-plan ADRs stopped (wayfinder map #1383).

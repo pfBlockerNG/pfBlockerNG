@@ -14,7 +14,6 @@ STATIC_CHROOT_FILES = (
     "pfb_dnsbl_regex_rules.py",
     "pfb_unbound.py",
     "pfb_unbound_include.inc",
-    "pfb_py_hsts.txt",
     "pfb_python.sh",
     "dnsbl_psl",
     "pfb_upstream_observer.py",

@@ -310,6 +310,7 @@ _LEGACY_VIP_UNIQID = "pfblegacyvip"
 _LEGACY_VIP_SUBNET = "10.10.10.1"
 _MANUAL_VIP_DESCR = "pfBlockerNG DNSBL (manual, issue 4053)"
 _LIGHTY_CONF = "/var/unbound/pfb_dnsbl_lighty.conf"
+_HSTS_LIST = "/var/unbound/pfb_py_hsts.txt"  # issue #4053 slice 3: the retired HSTS preload list
 
 
 def _seed_legacy_webserver(vm: SmokeVM, *, timeout: float = 60.0) -> None:
@@ -319,6 +320,7 @@ def _seed_legacy_webserver(vm: SmokeVM, *, timeout: float = 60.0) -> None:
         f"$d = config_get_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, array());\n"
         f"$d['pfb_dnsvip4'] = {h._php_str('_vip' + _LEGACY_VIP_UNIQID)};\n"
         "$d['pfb_dnsvip_auto'] = 'on'; $d['pfb_dnsport'] = '8081'; $d['pfb_dnsport_ssl'] = '8443';\n"
+        "$d['pfb_hsts'] = 'on';\n"
         f"config_set_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, $d);\n"
         "$vips = config_get_path('virtualip/vip', array());\n"
         "$vips[] = array('descr' => PFB_AUTO_VIP_DESCR_V4, 'mode' => 'ipalias', 'interface' => 'lo0',"
@@ -345,6 +347,7 @@ def _seed_legacy_webserver(vm: SmokeVM, *, timeout: float = 60.0) -> None:
         "config_set_path('installedpackages/service', $sv);\n"
         "write_config('pfBlockerNG smoke #4053: seed the retired DNSBL web server');\n"
         f"file_put_contents({h._php_str(_LIGHTY_CONF)}, '# legacy');\n"
+        f"file_put_contents({h._php_str(_HSTS_LIST)}, 'bank.example');\n"
         "echo 'OK';"
     )
     result = h.php_eval(vm, snippet, timeout=timeout)
@@ -357,10 +360,10 @@ def test_upgrade_cleanup_removes_the_retired_webserver_objects(deployed_vm: Smok
 
     Scenario: upgrade cleanup.
       Given the auto-VIP (marker + the address pfb_dnsvip4 names), a manual VIP, the DNSBL NAT redirect,
-        a floating rule, its alias, the service row, the lighttpd conf and the retired settings keys
-        are present (before-state asserted),
+        a floating rule, its alias, the service row, the lighttpd conf, the HSTS list and the retired
+        settings keys are present (before-state asserted),
       When a full reload runs,
-      Then the auto-VIP, the DNSBL NAT, the conf and the retired keys are gone,
+      Then the auto-VIP, the DNSBL NAT, the conf, the HSTS list and the retired keys are gone,
         And the manual VIP is still present,
         And a second reload changes nothing.
     """
@@ -370,6 +373,8 @@ def test_upgrade_cleanup_removes_the_retired_webserver_objects(deployed_vm: Smok
         assert h.marked_vip_subnet(vm, _AUTO_VIP_DESCR_V4) == _LEGACY_VIP_SUBNET, h.fwobj_state_snapshot(vm)
         assert _nat_pfb_dnsbl_present(vm), h.fwobj_state_snapshot(vm)
         assert vm.ssh("test", "-e", _LIGHTY_CONF, timeout=30.0).returncode == 0, "seeding the lighttpd conf failed"
+        assert vm.ssh("test", "-e", _HSTS_LIST, timeout=30.0).returncode == 0, "seeding the HSTS list failed"
+        assert h.config_get(vm, f"{h.CFG_DNSBL_SETTINGS}/pfb_hsts") == "on", "seeding pfb_hsts failed"
 
         h.reload(vm, "update")
 
@@ -381,7 +386,8 @@ def test_upgrade_cleanup_removes_the_retired_webserver_objects(deployed_vm: Smok
             vm
         )
         assert vm.ssh("test", "-e", _LIGHTY_CONF, timeout=30.0).returncode != 0, f"{_LIGHTY_CONF} survived the apply"
-        for key in ("pfb_dnsvip4", "pfb_dnsvip_auto", "pfb_dnsport", "pfb_dnsport_ssl"):
+        assert vm.ssh("test", "-e", _HSTS_LIST, timeout=30.0).returncode != 0, f"{_HSTS_LIST} survived the apply"
+        for key in ("pfb_dnsvip4", "pfb_dnsvip_auto", "pfb_dnsport", "pfb_dnsport_ssl", "pfb_hsts"):
             assert h.config_get(vm, f"{h.CFG_DNSBL_SETTINGS}/{key}") == "", f"retired key {key} survived the apply"
         assert vm.ssh("pgrep", "-f", "lighttpd_pfb", timeout=30.0).returncode != 0, "lighttpd_pfb is still running"
         leftovers = h._php_read_scalar(

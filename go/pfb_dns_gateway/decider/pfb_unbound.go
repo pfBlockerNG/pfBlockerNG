@@ -1,6 +1,6 @@
 // Go translation of src/usr/local/pkg/pfblockerng/pfb_unbound.py, the Unbound Python module: the settings
 // init_standard reads from pfb_unbound.ini and the loaders it runs (the user regex list, noAAAA, the Group Policy
-// bypass list, SafeSearch, the manifest build, HSTS), rebuild_and_swap, the loaders' helpers, and operate().
+// bypass list, SafeSearch, the manifest build), rebuild_and_swap, the loaders' helpers, and operate().
 //
 // pfb_unbound.py keeps its state in module globals (pfb, rcodeDB, the DBs); pfbUnbound holds it so two booted
 // modules never share any. Python runs with the module directory as its working directory, so every file name
@@ -73,7 +73,6 @@ type pfbSettings struct {
 	pythonEnable                bool
 	pythonReply                 bool
 	pythonBlocking              bool
-	pythonHsts                  bool
 	pythonTldWildcard           bool
 	pythonIdn                   bool
 	idnMode                     IdnMode
@@ -96,9 +95,9 @@ type pfbSettings struct {
 	regexWarnMs                 float64
 	pythonBlacklist             bool
 
-	// The "<x>DB loaded" flags a loader sets and operate() reads. dataDB, zoneDB, whiteDB, regexDB, allowRegexDB and
-	// hstsDB have flags in Python too, but nothing reads them: evaluate_domain's gates come from the snapshot (its own
-	// dicts, and python_hsts for HSTS; ADR-10), so they are not here.
+	// The "<x>DB loaded" flags a loader sets and operate() reads. dataDB, zoneDB, whiteDB, regexDB and allowRegexDB
+	// have flags in Python too, but nothing reads them: evaluate_domain's gates come from the snapshot (its own
+	// dicts; ADR-10), so they are not here.
 	gpListDB     bool
 	noAAAADB     bool
 	safeSearchDB bool
@@ -107,7 +106,6 @@ type pfbSettings struct {
 	pfbPyWhitelist      string
 	pfbPyZone           string
 	pfbPyData           string
-	pfbPyHsts           string
 	pfbPyTop1m          string
 	pfbPyPsl            string
 	pfbPySs             string
@@ -123,8 +121,7 @@ type pfbSettings struct {
 	pfbPyDnsbl          string
 	pfbPyResolver       string
 
-	rrTypes  []uint16
-	hstsTlds []string
+	rrTypes []uint16
 }
 
 type pfbUnbound struct {
@@ -312,7 +309,6 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 	pfb.pfbPyWhitelist = in("pfb_py_whitelist.txt")
 	pfb.pfbPyZone = in("pfb_py_zone.txt")
 	pfb.pfbPyData = in("pfb_py_data.txt")
-	pfb.pfbPyHsts = in("pfb_py_hsts.txt")
 	pfb.pfbPyTop1m = in("pfb_py_top1m.txt")
 	pfb.pfbPyPsl = in("dnsbl_psl")
 	pfb.pfbPySs = in("pfb_py_ss.txt")
@@ -342,26 +338,6 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 		RR_TYPE_TXT,
 		64,
 		65,
-	}
-
-	pfb.hstsTlds = []string{
-		"android",
-		"app",
-		"bank",
-		"chrome",
-		"dev",
-		"foo",
-		"gle",
-		"gmail",
-		"google",
-		"hangout",
-		"insurance",
-		"meet",
-		"new",
-		"page",
-		"play",
-		"search",
-		"youtube",
 	}
 
 	config := m.loadIniConfig()
@@ -404,9 +380,6 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 				return nil, err
 			}
 			if err := mainBool("python_blocking", &pfb.pythonBlocking); err != nil {
-				return nil, err
-			}
-			if err := mainBool("python_hsts", &pfb.pythonHsts); err != nil {
 				return nil, err
 			}
 			if err := mainBool("python_tld_wildcard", &pfb.pythonTldWildcard); err != nil {
@@ -592,11 +565,10 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 			}
 
 			// ADR-65: the retired zone/data/whitelist CSV loaders only close the parse-stage entries a pre-ADR-65 init
-			// could have left open (issue #1049); HSTS is independent of the manifest gate.
+			// could have left open (issue #1049).
 			m.pfbPyStatusClose("dnsbl", pfb.pfbPyZone, "parse")
 			m.pfbPyStatusClose("dnsbl", pfb.pfbPyData, "parse")
 			m.pfbPyStatusClose("dnsbl", pfb.pfbPyWhitelist, "parse")
-			m.loadHstsDb(scratch.hstsDB)
 
 			// Emit the admitted regex total (feed and user, block and allow) for PHP's DNSBL_Regex alias, even when only
 			// feed regex is enabled.
@@ -624,7 +596,7 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 		} else {
 			// issue #1049: python_enable OFF skips every DNSBL loader above: close their parse-stage entries instead of
 			// stranding them open.
-			for _, item := range []string{pfb.pfbPySources, pfb.pfbPyZone, pfb.pfbPyData, pfb.pfbPyWhitelist, pfb.pfbPyHsts, pfb.pfbPySs} {
+			for _, item := range []string{pfb.pfbPySources, pfb.pfbPyZone, pfb.pfbPyData, pfb.pfbPyWhitelist, pfb.pfbPySs} {
 				m.pfbPyStatusClose("dnsbl", item, "parse")
 			}
 		}
@@ -780,39 +752,6 @@ func pyTextLines(data []byte) []string {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
-}
-
-// loadHstsDb parses the HSTS preload file into hstsDB, gated on python_hsts (not on the ADR-06 manifest: hstsDB is
-// no part of the manifest build).
-// shortcut: a read failure's text is Go's where Python's is OSError's ("[Errno 13] ..."): it only reaches the log and
-// the status message.
-func (m *pfbUnbound) loadHstsDb(hstsDB map[string]struct{}) {
-	pfb := &m.pfb
-	if !(pfb.pythonHsts && isFile(pfb.pfbPyHsts)) {
-		m.pfbPyStatusClose("dnsbl", pfb.pfbPyHsts, "parse")
-		return
-	}
-	data, err := m.readFile(pfb.pfbPyHsts)
-	if err != nil {
-		failure := fmt.Sprintf("Failed to load: %s: %v", pfb.pfbPyHsts, err)
-		pyStderr("[pfBlockerNG]: " + failure)
-		m.pfbPyStatusOpen("dnsbl", pfb.pfbPyHsts, "parse", failure)
-		return
-	}
-	addHstsLines(hstsDB, data)
-	m.pfbPyStatusClose("dnsbl", pfb.pfbPyHsts, "parse")
-}
-
-// addHstsLines adds the HSTS preload file's keys to hstsDB; init and a reload parse the file the same way.
-func addHstsLines(hstsDB map[string]struct{}, data []byte) {
-	for _, line := range pyTextLines(data) {
-		// The PSL parser skips comment and whitespace-only lines; '0' stays valid.
-		key := pyStrip(line)
-		if key == "" || strings.HasPrefix(key, "#") {
-			continue
-		}
-		hstsDB[key] = struct{}{}
-	}
 }
 
 // pyListRepr is repr() of a list of str.
@@ -1497,7 +1436,7 @@ func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any)
 			var dnsbl *dnsblDecision
 			if memo == UNSET {
 				// The original query's TLD comes from qstate; a CNAME target has its own TLD, so derive it from the target
-				// being evaluated, else the TLD-Allow / HSTS checks use the wrong TLD for the target.
+				// being evaluated.
 				var tld string
 				if isCNAME {
 					tld = getTldFromName(qName)

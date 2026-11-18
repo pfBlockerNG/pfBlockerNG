@@ -89,6 +89,12 @@ final class PythonTldWildcardIniEmitTest extends TestCase
 		return $ini;
 	}
 
+	public function testTheIniCarriesNoHstsFlag(): void
+	{
+		// Issue #4053 slice 3: the HSTS list is gone, so the gateway gets no switch for it.
+		$this->assertDoesNotMatchRegularExpression('/^python_hsts\b/m', $this->emit(''));
+	}
+
 	public function testOffToggleEmitsOffKey(): void
 	{
 		$ini = $this->emit('');

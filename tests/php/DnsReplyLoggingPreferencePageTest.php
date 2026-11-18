@@ -40,7 +40,7 @@ final class DnsReplyLoggingPreferencePageTest extends TestCase
 		$page = self::page('pfblockerng_dnsbl.php');
 
 		$this->assertStringNotContainsString('pfb_py_reply', $page, 'no control, no read, no write: its save keeps what DNS General stored');
-		$this->assertStringContainsString("\$pfb['dconfig']['pfb_hsts']", $page, 'bystander: the sibling toggle is still this page\'s own');
+		$this->assertStringContainsString("\$pfb['dconfig']['pfb_idn_block_malicious']", $page, 'bystander: the sibling toggle is still this page\'s own');
 	}
 
 	/** The offset of the first match of $pattern in $page, or NULL. */

@@ -1091,8 +1091,7 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
 
     All test domains use :func:`helpers.unique_domain` (uuid-*.com) — never RFC 6761
     TLDs (.test/.example/.invalid) which Unbound's built-in local-zones shadow before
-    pfBlockerNG runs, and never HSTS-preload names (HSTS default-ON forces NULL on a
-    VIP block, masking whether a name actually resolved). Probed from the civm
+    pfBlockerNG runs. Probed from the civm
     LAN client via :func:`helpers.dns_probe_client` (pfSense's LAN resolver); the
     first response after each reload is authoritative.
 
@@ -1123,7 +1122,7 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
       When the PERMIT FEED is removed (Permit→Deny teardown):
       Then S is null-blocked again (no permit feed -> whiteDB entry gone -> band-1 block wins).
     """
-    # --- Domain setup (unique_domain ensures no collision / RFC 6761 / HSTS issue) ---
+    # --- Domain setup (unique_domain ensures no collision / RFC 6761 issue) ---
     s_domain = h.unique_domain("adr31s")  # Shared: block + permit -> permit wins
     b_domain = h.unique_domain("adr31b")  # Block-only -> always blocked
     m_domain = h.unique_domain("adr31m")  # Manually-blocked via Custom_List (band 5)

@@ -23,7 +23,6 @@ final class ToggleEmptyPreservationTest extends TestCase
 	{
 		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
 		$fields = [
-			'pfb_hsts' => 'dnsbl/pfb_hsts',
 			'pfb_idn_block_malicious' => 'dnsbl/pfb_idn_block_malicious',
 			'pfb_idn_escalate_suspicious' => 'dnsbl/pfb_idn_escalate_suspicious',
 		];
@@ -87,7 +86,6 @@ final class ToggleEmptyPreservationTest extends TestCase
 	public function testShippedSaveBindingsKeepEachToggleOnItsPage(): void
 	{
 		foreach ([
-			"\$pfb['dconfig']['pfb_hsts'] = pfb_filter(\$_POST['pfb_hsts'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';" => self::DNSBL_PAGE,
 			"\$pfb['dconfig']['pfb_idn_block_malicious'] = pfb_filter(\$_POST['pfb_idn_block_malicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';" => self::DNSBL_PAGE,
 			"\$pfb['dconfig']['pfb_idn_escalate_suspicious'] = pfb_filter(\$_POST['pfb_idn_escalate_suspicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';" => self::DNSBL_PAGE,
 			"\$pfb['iconfig']['suppression'] = pfb_filter(\$_POST['suppression'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';" => self::IP_PAGE,

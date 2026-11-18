@@ -1,6 +1,6 @@
-// Tests for the Go translation of pfb_unbound.py's loaders and decisions: _load_hsts_db, _load_gp_bypass_list,
+// Tests for the Go translation of pfb_unbound.py's loaders and decisions: _load_gp_bypass_list,
 // _gp_net_match, _gp_bypassed, convert_other, _load_safesearch_db, safesearch_entry, rebuild_and_swap, init_standard's
-// noAAAA / Group Policy / SafeSearch / HSTS sections and operate()'s noAAAA, SafeSearch and DNSBL branches. They
+// noAAAA / Group Policy / SafeSearch sections and operate()'s noAAAA, SafeSearch and DNSBL branches. They
 // mirror tests/test_pfb_unbound.py (TestConvertOther, TestOperateNoAAAA, TestOperateDnsbl, TestGroupPolicyBypassCidr,
 // TestLoadSafeSearchDb, TestSafeSearchEntry, TestStage2UnifiedDecision), tests/test_adr10_swap.py,
 // tests/test_adr61_py_status.py (the loader wiring) and tests/test_adr06_init_from_raw.py (noAAAA); the expectations
@@ -194,22 +194,6 @@ func TestConvertOther(t *testing.T) {
 	}
 }
 
-// --- _load_hsts_db ---
-
-func opHstsModule(t *testing.T, python bool, content *string) (*pfbUnbound, string) {
-	t.Helper()
-	dir := t.TempDir()
-	m := modMust(t, dir)
-	m.pfb.pythonHsts = python
-	m.pfb.pfbPyStatus = filepath.Join(dir, "pfb_py_status.json")
-	if content != nil {
-		if err := os.WriteFile(m.pfb.pfbPyHsts, []byte(*content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return m, m.pfb.pfbPyStatus
-}
-
 func opLedgerItems(t *testing.T, path string) []string {
 	t.Helper()
 	if _, err := os.Stat(path); err != nil {
@@ -220,91 +204,6 @@ func opLedgerItems(t *testing.T, path string) []string {
 		items = append(items, fmt.Sprint(entry["item"]))
 	}
 	return items
-}
-
-func TestLoadHstsDbReadsKeysAndSkipsCommentsAndBlanks(t *testing.T) {
-	content := "# comment\n\n  bank.example  \r\n0\r#another comment\rgle\n   # indented comment\nmeet\n"
-	m, _ := opHstsModule(t, true, &content)
-	db := map[string]struct{}{}
-
-	m.loadHstsDb(db)
-
-	want := []string{"bank.example", "0", "gle", "meet"}
-	var got []string
-	for key := range db {
-		got = append(got, key)
-	}
-	slices.Sort(got)
-	slices.Sort(want)
-	if !slices.Equal(got, want) {
-		t.Errorf("hstsDB keys = %q, want %q (stripped; '#'-lines and blank lines skipped; '0' is a valid key; a lone CR ends a line)", got, want)
-	}
-}
-
-func TestLoadHstsDbIsGatedOnPythonHstsAndTheFile(t *testing.T) {
-	content := "bad.example\n"
-	for _, tc := range []struct {
-		name    string
-		python  bool
-		content *string
-	}{{"python_hsts off", false, &content}, {"no file", true, nil}} {
-		m, ledger := opHstsModule(t, tc.python, tc.content)
-		m.pfbPyStatusOpen("dnsbl", m.pfb.pfbPyHsts, "parse", "left open by an earlier failure")
-		db := map[string]struct{}{}
-
-		m.loadHstsDb(db)
-
-		if len(db) != 0 {
-			t.Errorf("%s: hstsDB = %v, want nothing loaded", tc.name, db)
-		}
-		if items := opLedgerItems(t, ledger); len(items) != 0 {
-			t.Errorf("%s: ledger = %v, want the orphaned entry closed", tc.name, items)
-		}
-	}
-}
-
-func TestLoadHstsDbNeverOpensAnEntryWhenDisabled(t *testing.T) {
-	content := "bad.example\n"
-	m, ledger := opHstsModule(t, false, &content)
-
-	m.loadHstsDb(map[string]struct{}{})
-
-	if _, err := os.Stat(ledger); err == nil {
-		t.Errorf("%s exists, want no ledger write when python_hsts is off", ledger)
-	}
-}
-
-// Python's tests fail a real open(); the module reads through m.readFile so a test can fail the read the same way.
-func TestLoadHstsDbFailureOpensAnEntryAndSuccessClearsIt(t *testing.T) {
-	content := "bad.example\n"
-	m, ledger := opHstsModule(t, true, &content)
-	_ = modCaptureLog(t)
-	real := m.readFile
-	m.readFile = func(name string) ([]byte, error) { return nil, errors.New("simulated read failure") }
-	db := map[string]struct{}{}
-
-	m.loadHstsDb(db)
-
-	want := "[pfBlockerNG]: Failed to load: " + m.pfb.pfbPyHsts + ": simulated read failure\n"
-	if got := drainPyError(); got != want {
-		t.Errorf("py_error.log = %q, want %q", got, want)
-	}
-	if items := opLedgerItems(t, ledger); !slices.Equal(items, []string{m.pfb.pfbPyHsts}) {
-		t.Errorf("ledger after a failed load = %v, want one entry for %s", items, m.pfb.pfbPyHsts)
-	}
-	entries := statusRead(t, ledger)
-	if entries[0]["stage"] != "parse" || entries[0]["facility"] != "dnsbl" || entries[0]["message"] != "Failed to load: "+m.pfb.pfbPyHsts+": simulated read failure" {
-		t.Errorf("ledger entry = %v, want facility dnsbl, stage parse and the failure text", entries[0])
-	}
-
-	m.readFile = real
-	m.loadHstsDb(db)
-	if items := opLedgerItems(t, ledger); len(items) != 0 {
-		t.Errorf("ledger after a good load = %v, want the entry cleared", items)
-	}
-	if _, ok := db["bad.example"]; !ok {
-		t.Errorf("hstsDB = %v, want bad.example loaded on the retry", db)
-	}
 }
 
 // --- _load_safesearch_db and safesearch_entry ---
@@ -632,7 +531,7 @@ func TestOperateGroupPolicyBypass(t *testing.T) {
 	}
 }
 
-// --- init_standard: the noAAAA, Group Policy, SafeSearch and HSTS sections ---
+// --- init_standard: the noAAAA, Group Policy and SafeSearch sections ---
 
 func TestInitStandardLoadsNoAAAARows(t *testing.T) {
 	_ = modCaptureLog(t)
@@ -696,13 +595,13 @@ func TestInitStandardRaisesWhereNoAAAAItemsRaisesInPython(t *testing.T) {
 	stopModule(t, zoned)
 }
 
-func TestInitStandardLoadsGroupPolicyAndSafeSearchAndHsts(t *testing.T) {
+func TestInitStandardLoadsGroupPolicyAndSafeSearch(t *testing.T) {
 	dir := t.TempDir()
-	ini := "[MAIN]\r\npython_enable = true\r\npython_hsts = true\r\n[GP_Bypass_List]\r\n0 = 10.0.0.0/24\r\n1 = 2001:db8:1::/64\r\n2 = 192.0.2.7\r\n3 = fe80::1%em0\r\n"
+	ini := "[MAIN]\r\npython_enable = true\r\n[GP_Bypass_List]\r\n0 = 10.0.0.0/24\r\n1 = 2001:db8:1::/64\r\n2 = 192.0.2.7\r\n3 = fe80::1%em0\r\n"
 	if err := os.WriteFile(filepath.Join(dir, "pfb_unbound.ini"), []byte(ini), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for name, content := range map[string]string{"pfb_py_ss.txt": "forcesafe.com,1.2.3.4,::1\n", "pfb_py_hsts.txt": "# header\nbank.example\n"} {
+	for name, content := range map[string]string{"pfb_py_ss.txt": "forcesafe.com,1.2.3.4,::1\n"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -720,9 +619,6 @@ func TestInitStandardLoadsGroupPolicyAndSafeSearchAndHsts(t *testing.T) {
 	}
 	if got := snap.safeSearchDB["forcesafe.com"]; got != (safeSearchEntry{a: "1.2.3.4", aaaa: "::1"}) {
 		t.Errorf("safeSearchDB[forcesafe.com] = %v, want the row", got)
-	}
-	if _, ok := snap.hstsDB["bank.example"]; !ok || len(snap.hstsDB) != 1 {
-		t.Errorf("hstsDB = %v, want exactly bank.example", snap.hstsDB)
 	}
 }
 
@@ -885,10 +781,9 @@ func TestRebuildAndSwapEnablesTheMasterGateInTheNewSnapshotOnly(t *testing.T) {
 			t.Errorf("a swap carrying only %s entries left the master gate off, want it on", name)
 		}
 	}
-	// Whitelist-only and HSTS-only snapshots block nothing, so they do not turn the gate on.
+	// A whitelist-only snapshot blocks nothing, so it does not turn the gate on.
 	for name, fill := range map[string]func(*snapshot){
 		"white": func(s *snapshot) { s.whiteDB["a.com"] = whiteEntry{legacy: true} },
-		"hsts":  func(s *snapshot) { s.hstsDB["a.com"] = struct{}{} },
 	} {
 		m := modMust(t, t.TempDir())
 		if !m.rebuildAndSwap(opSwapSnapshot(0, 0, fill), false) || m.snapshot.Load().settings.pythonBlacklist {
@@ -1910,7 +1805,7 @@ func opLedgerSeed(t *testing.T, dir string, items ...string) {
 }
 
 func TestInitStandardClosesTheLoaderEntriesItSkips(t *testing.T) {
-	owned := []string{"pfb_py_sources.json", "pfb_py_zone.txt", "pfb_py_data.txt", "pfb_py_whitelist.txt", "pfb_py_hsts.txt", "pfb_py_ss.txt"}
+	owned := []string{"pfb_py_sources.json", "pfb_py_zone.txt", "pfb_py_data.txt", "pfb_py_whitelist.txt", "pfb_py_ss.txt"}
 
 	// python_enable off: every owned entry is closed, an entry of another stage or facility is not.
 	dir := opManifestModule(t, nil, nil)
@@ -1920,14 +1815,14 @@ func TestInitStandardClosesTheLoaderEntriesItSkips(t *testing.T) {
 	opLedgerSeed(t, dir, owned...)
 	other := &pfbUnbound{}
 	other.pfb.pfbPyStatus = filepath.Join(dir, "pfb_py_status.json")
-	other.pfbPyStatusOpen("dnsbl", filepath.Join(dir, "pfb_py_hsts.txt"), "apply", "a PHP-owned stage")
+	other.pfbPyStatusOpen("dnsbl", filepath.Join(dir, "pfb_py_ss.txt"), "apply", "a PHP-owned stage")
 	modMust(t, dir)
 	left := opLedgerItems(t, filepath.Join(dir, "pfb_py_status.json"))
-	if len(left) != 1 || left[0] != filepath.Join(dir, "pfb_py_hsts.txt") {
+	if len(left) != 1 || left[0] != filepath.Join(dir, "pfb_py_ss.txt") {
 		t.Errorf("ledger after a python_enable-off init = %v, want only the apply-stage entry", left)
 	}
 
-	// python_enable on, no manifest: the retired zone/data/whitelist loaders and the absent HSTS and SafeSearch files
+	// python_enable on, no manifest: the retired zone/data/whitelist loaders and the absent SafeSearch file
 	// close theirs; the manifest entry is the build's to keep until a good build.
 	dir = opManifestModule(t, nil, nil)
 	opLedgerSeed(t, dir, owned...)

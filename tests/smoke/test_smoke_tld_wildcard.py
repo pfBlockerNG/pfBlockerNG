@@ -2,7 +2,7 @@
 
 ``tld_wildcard`` (ini ``python_tld_wildcard``) gates whether ``pfb_unbound.py``'s
 ``tld_wildcard_classify()`` opens the shipped public-suffix oracle (``dnsbl_psl``,
-staged by ``dnsbl_cache_stage()``, mirroring HSTS). ON: a listed
+staged by ``dnsbl_cache_stage()``). ON: a listed
 2-label registrable domain (e.g. ``label-<uuid>.com``) classifies into a wildcard ZONE,
 which blocks the domain AND every sub-domain at any depth. OFF: the oracle is never
 opened (the PSL rules are empty), so ``tld_wildcard_classify()`` forces EXACT DATA for every
@@ -40,7 +40,7 @@ def tld_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> I
 
     A single local feed pins a unique registrable domain (``label-<uuid>.com``) to a
     VIP block; ``tld_enabled=True`` on the case writes ``tld_wildcard = on`` at inject time
-    (``inject()``'s DNSBL-settings replace, same as ``control``/``hsts`` -- #588).
+    (``inject()``'s DNSBL-settings replace, same as ``control`` -- #588).
     System DNS is pointed at the controlled stub so a not-blocked probe has a known
     answer. Yields ``(vm, domain)``.
     """

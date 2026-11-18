@@ -15,8 +15,8 @@ use PHPUnit\Framework\TestCase;
  *
  * The intentional divergences are the #281/#1907 default-repair class: pfb_keep (OLD
  * code used `?? 'on'`, PHP null-coalesce) and, per the #1907 owner decision,
- * pfb_hsts/pfb_py_reply (OLD code called the toggle adapter directly on the
- * raw section value, bypassing the gateway's registry default entirely). All three now
+ * pfb_py_reply (OLD code called the toggle adapter directly on the
+ * raw section value, bypassing the gateway's registry default entirely). Both now
  * default to On, formalising what was already the de-facto page default since 3.2;
  * each test below asserts the repaired value and documents its origin.
  *
@@ -211,28 +211,6 @@ final class PfbGlobalParityTest extends TestCase
 		// Then: same value.
 		$this->assertSame(PfbToggle::Off, $result);
 		$this->assertSame('off', $result->value, 'pfb_dnsbl_lenient absent -> "off" (matches old pfb_cfg_toggle_read)');
-	}
-
-	/**
-	 * pfb_hsts (issue #1907 DEFAULT REPAIR): OLD = $pfb['dnsblconfig']['pfb_hsts']
-	 * (null when absent) -> effectively Off. Via gateway (owner decision, #1907): the
-	 * registry default flipped to 'on' -- the de-facto page default since 3.2
-	 * (pfblockerng_dnsbl.php's own isset(...) ? ... : 'on' render fallback), so
-	 * PfbConfig::read('dnsbl/pfb_hsts') now resolves absent to PfbToggle::On.
-	 * DIVERGENCE (intentional, same class as #281's pfb_keep repair below): the
-	 * Existing stored empty values remain explicit Off; absent values and fresh
-	 * installs use the registered On default.
-	 */
-	public function testParityPfbHstsAbsentYieldsOn(): void
-	{
-		$this->assertNull(
-			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts')
-		);
-
-		$result = PfbConfig::read('dnsbl/pfb_hsts');
-
-		$this->assertSame(PfbToggle::On, $result, 'pfb_hsts absent -> On (issue #1907 default repair)');
-		$this->assertSame('on', $result->value, 'pfb_hsts absent -> on token');
 	}
 
 	/**

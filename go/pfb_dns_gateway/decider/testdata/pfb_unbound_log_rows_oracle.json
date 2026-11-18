@@ -23778,8 +23778,7 @@
      "dnsbl": {
       "feed": "Feed",
       "group": "Group",
-      "b_eval": "example.com",
-      "in_hsts": true
+      "b_eval": "example.com"
      },
      "kwargs": {
       "pfb_addr": "192.0.2.7"
@@ -23802,8 +23801,7 @@
      "dnsbl": {
       "feed": "Feed",
       "group": "Group",
-      "b_eval": "example.com",
-      "in_hsts": true
+      "b_eval": "example.com"
      },
      "kwargs": {
       "pfb_addr": "192.0.2.7"

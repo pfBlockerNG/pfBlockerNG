@@ -656,63 +656,6 @@ func TestEvaluateNoaaaa(t *testing.T) {
 	}
 }
 
-// test_pfb_unbound.py TestHstsCheckDomain plus oracle rows.
-func TestHstsCheckDomain(t *testing.T) {
-	set := func(names ...string) map[string]struct{} {
-		db := map[string]struct{}{}
-		for _, n := range names {
-			db[n] = struct{}{}
-		}
-		return db
-	}
-	for _, c := range []struct {
-		name    string
-		db      map[string]struct{}
-		tlds    []string
-		query   string
-		tld     string
-		matched bool
-		pType   string
-	}{
-		{"tld in hsts_tlds returns HSTS_TLD", set(), []string{"app"}, "example.app", "app", true, "HSTS_TLD"},
-		{"tld not in hsts_tlds falls through", set(), []string{"app"}, "example.com", "com", false, "Python"},
-		{"exact domain in hsts_db", set("example.com"), nil, "example.com", "com", true, "HSTS"},
-		{"suffix walk hits parent", set("example.com"), nil, "sub.example.com", "com", true, "HSTS"},
-		{"every parent suffix is checked (#713)", set("c.d"), nil, "a.b.c.d", "d", true, "HSTS"},
-		{"second-level parent suffix matches", set("b.c.d"), nil, "a.b.c.d", "d", true, "HSTS"},
-		{"bare TLD suffix is checked (#713)", set("d"), nil, "a.b.c.d", "d", true, "HSTS"},
-		{"no match returns Python", set("other.com"), nil, "example.com", "com", false, "Python"},
-	} {
-		matched, pType := hstsCheckDomain(c.query, c.db, c.tlds, c.tld)
-		if matched != c.matched || pType != c.pType {
-			t.Errorf("%s: hstsCheckDomain(%q) = (%v, %q), want (%v, %q)", c.name, c.query, matched, pType, c.matched, c.pType)
-		}
-	}
-	oracle := set("example.com", "c.d", "")
-	for _, r := range []struct {
-		query, tld string
-		matched    bool
-		pType      string
-	}{
-		{"example.com", "com", true, "HSTS"},
-		{"sub.example.com", "com", true, "HSTS"},
-		{"a.b.c.d", "d", true, "HSTS"},
-		{"b.c.d", "d", true, "HSTS"},
-		{"d", "d", false, "Python"},
-		{"example.app", "app", true, "HSTS_TLD"},
-		{"x.app", "app", true, "HSTS_TLD"},
-		{"other.net", "net", false, "Python"},
-		{"", "", true, "HSTS"},
-		{"a..c.d", "d", true, "HSTS"},
-		{"a.", "", true, "HSTS"},
-	} {
-		matched, pType := hstsCheckDomain(r.query, oracle, []string{"app"}, r.tld)
-		if matched != r.matched || pType != r.pType {
-			t.Errorf("oracle: hstsCheckDomain(%q, tld %q) = (%v, %q), want (%v, %q)", r.query, r.tld, matched, pType, r.matched, r.pType)
-		}
-	}
-}
-
 // test_pfb_unbound.py TestResolveFeedGroup. The None-index row is unreachable here: blockEntry.index is an int.
 func TestResolveFeedGroup(t *testing.T) {
 	db := map[int]feedGroup{0: {feed: "MyFeed", group: "MyGroup"}}

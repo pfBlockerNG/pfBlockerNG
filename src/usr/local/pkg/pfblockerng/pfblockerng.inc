@@ -424,8 +424,8 @@ $pfb['unbound_py_wh']	= '/var/unbound/pfb_py_whitelist.txt';
 $pfb['unbound_py_data']	= '/var/unbound/pfb_py_data.txt';
 $pfb['unbound_py_zone'] = '/var/unbound/pfb_py_zone.txt';
 $pfb['unbound_py_ss']	= '/var/unbound/pfb_py_ss.txt';
-$pfb['unbound_py_hsts']	= '/var/unbound/pfb_py_hsts.txt';	// SHIPPED file re-staged by dnsbl_cache_stage() cp -f; fingerprinted so a package update ships a new list and triggers a zero-downtime reload
-$pfb['unbound_py_psl']	= '/var/unbound/dnsbl_psl';	// SHIPPED PSL authority, staged/fingerprinted exactly like unbound_py_hsts above
+$pfb['unbound_py_hsts']	= '/var/unbound/pfb_py_hsts.txt';	// issue #4053: retired HSTS preload list, removed by pfb_dnsbl_webserver_retire()
+$pfb['unbound_py_psl']	= '/var/unbound/dnsbl_psl';	// SHIPPED file re-staged by dnsbl_cache_stage() cp -f; fingerprinted so a package update ships a new list and triggers a zero-downtime reload
 $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
 $pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07: gateway-emitted admitted feed+user regex total for the DNSBL_Regex alias
 $pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48: gateway-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
@@ -2623,7 +2623,7 @@ function pfb_resolve_list_script($name, $dirs = null) {
 
 /* Return the ordered list of input paths the Python DNSBL module loads.
    These are fingerprinted before/after a pass to detect real changes.
-   Includes unbound_py_hsts: the shipped HSTS preload list re-staged by dnsbl_cache_stage()
+   Includes unbound_py_psl: the shipped PSL authority re-staged by dnsbl_cache_stage()
    via cp -f between the two fingerprint snapshots, so a package update that ships a new
    list is detected (old chroot copy vs freshly staged copy differ) and triggers a reload.
    Excluded: unbound_py_count / unbound_py_regex_count (Python-emitted outputs —
@@ -2709,7 +2709,7 @@ function pfb_dnsbl_loaded_input_paths(array $pfb): array {
 	$top1m_files = (($pfb['dnsbl_top1m'] ?? PfbToggle::Off) === PfbToggle::On)
 		? array($pfb['unbound_py_top1m'] ?? '/var/unbound/pfb_py_top1m.txt') : array();
 	return array_merge(
-		array($pfb['unbound_py_wh'], $pfb['unbound_py_sources'], $pfb['unbound_py_hsts'], $pfb['unbound_py_psl']),
+		array($pfb['unbound_py_wh'], $pfb['unbound_py_sources'], $pfb['unbound_py_psl']),
 		$top1m_files,
 		$raw_files
 	);
@@ -2739,7 +2739,7 @@ function pfb_dnsbl_reload_fingerprint(array $pfb): string {
 }
 
 /* TRUE iff genuine FEED-derived DNSBL content is currently loaded — i.e. at least one
-   per-feed *.raw file in the rawdir. Deliberately EXCLUDES the shipped pfb_py_hsts, the
+   per-feed *.raw file in the rawdir. Deliberately EXCLUDES the
    always-present manifest/whitelist, and (ADR-65) a stale retired pfb_py_data.txt/
    pfb_py_zone.txt: none are feed-derived, and counting any of them makes a no-feed setup
    look "loaded" forever, triggering a clear+reload every cron pass (#546).
@@ -4181,7 +4181,6 @@ function pfb_global() {
 	$pfb['dnsbl_lenient']	= PfbConfig::read('dnsbl/pfb_dnsbl_lenient');							// DNSBL scheme-parsing leniency (PfbToggle enum)
 
 	$pfb['dnsbl_py_reply']	= PfbConfig::read('dnsbl/pfb_py_reply');			// DNSBL Resolver python DNS Reply logging (default on, issue #1907)
-	$pfb['dnsbl_hsts']	= PfbConfig::read('dnsbl/pfb_hsts');			// DNSBL Resolver python block HSTS via Null Blocking mode (default on, issue #1907)
 	// ADR-08: IDN mode selector. PfbConfig::read() returns a PfbIdnMode enum via the
 	// registry adapter: 'on' -> All (preserves block-all-IDN on upgrade); 'confusable'
 	// -> Confusable; '' / 'off' / absent / the dropped 4.0.0-alpha 'all' -> Off. Downstream
@@ -4277,6 +4276,8 @@ const PFB_DELTA_CHURN_THRESHOLD = 0.05;
 const PFB_DNSBL_RETIRED_KEYS = array(
 	'pfb_dnsvip_auto', 'pfb_dnsbl_nonat', 'dnsbl_interface', 'pfb_dnsvip4', 'pfb_dnsvip6', 'pfb_dnsvip_auto4', 'pfb_dnsvip_auto6',
 	'pfb_dnsport', 'pfb_dnsport_ssl', 'pfb_dnsbl_rule', 'dnsbl_allow_int', 'pfb_py_nolog', 'dnsbl_webpage',
+	// Issue #4053 slice 3: the HSTS preload list existed only for the block page.
+	'pfb_hsts',
 	// The pre-2.x VIP keys the installer used to migrate.
 	'pfb_dnsvip', 'pfb_dnsblv6', 'pfb_dnsvip_type', 'pfb_dnsvip_vhid', 'pfb_dnsvip_base', 'pfb_dnsvip_skew', 'pfb_dnsvip_pass',
 );
@@ -4541,7 +4542,7 @@ function pfb_core_call(string $method, array $params = [], ?string $socket = NUL
  * Core's native `settings/dns` fields (docs/misc/core-api-protocol.md, issue #3913), from config.xml: each value is what
  * pfb_unbound_python_ini() writes for it, so the in-memory config of a page that has not saved yet answers too.
  *
- * @return array<string, bool|int|string> the 16 fields, in the protocol's order
+ * @return array<string, bool|int|string> the 15 fields, in the protocol's order
  */
 function pfb_core_dns_settings(): array {
 	$on = static fn(string $key): bool => pfb_cfg_toggle_read(PfbConfig::read($key)) === PfbToggle::On;
@@ -4549,7 +4550,6 @@ function pfb_core_dns_settings(): array {
 	$control = $on('dnsbl/pfb_control');
 	return [
 		'replyLogging'          => $on('dnsbl/pfb_py_reply'),
-		'hstsNullBlocking'      => $on('dnsbl/pfb_hsts'),
 		'tldWildcard'           => !empty(PfbConfig::read('dnsbl/tld_wildcard')),
 		'pslIncludePrivate'     => $on('dnsbl/pfb_psl_include_private'),
 		'pslAllowPrivate'       => $on('dnsbl/pfb_psl_allow_private'),
@@ -6051,7 +6051,6 @@ function pfb_core_dns_fields(): array {
 	$policy = array_column(PfbFeedSuffixPolicy::cases(), 'value');
 	return [
 		'replyLogging'          => ['dnsbl/pfb_py_reply', 'bool'],
-		'hstsNullBlocking'      => ['dnsbl/pfb_hsts', 'bool'],
 		'tldWildcard'           => ['dnsbl/tld_wildcard', 'bool'],
 		'pslIncludePrivate'     => ['dnsbl/pfb_psl_include_private', 'bool'],
 		'pslAllowPrivate'       => ['dnsbl/pfb_psl_allow_private', 'bool'],
@@ -6081,7 +6080,7 @@ function pfb_core_settings_refusal(string $code, string $message, array $fieldEr
 
 /**
  * The refusal for a malformed settings adapter request, NULL for a well-formed one: nothing is locked or written before it passes.
- * A request holds exactly the keys of its op, and a write's `settings` exactly `dns` (the 16 fields, each of its native type and
+ * A request holds exactly the keys of its op, and a write's `settings` exactly `dns` (the 15 fields, each of its native type and
  * range), the feed projections (pfb_core_feed_projection_faults(), issue #3937), `schedule` (pfb_core_schedule_faults(), issue #3941) and
  * `ingest` (an object here; pfb_core_settings_backend() holds it to what config.xml and the platform project, issue #3975) and the
  * table-driven projections (pfb_core_table_faults(), issue #4031) and `feeds/geoip` (pfb_core_geoip_faults()).
@@ -15788,6 +15787,7 @@ function pfb_dnsbl_webserver_retire(): void {
 	unlink_if_exists($pfb['dnsbl_conf']);
 	unlink_if_exists($pfb['dnsbl_cert']);
 	unlink_if_exists($pfb['unbound_py_vip']);
+	unlink_if_exists($pfb['unbound_py_hsts']);
 	unlink_if_exists('/usr/local/sbin/lighttpd_pfb');
 	unlink_if_exists('/usr/local/etc/rc.d/pfb_dnsbl.sh');
 }
@@ -18007,8 +18007,7 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 	// tld_wildcard_blacklist/tld_wildcard_exclusion (user config, stay in the manifest) are
 	// emptied when off, even if configured. The public-suffix oracle itself (tld_master) no
 	// longer rides the manifest at all: it is a SHIPPED file (unbound_py_psl) gated by the same
-	// toggle's ini flag (python_tld_wildcard), mirroring HSTS (unbound_py_hsts /
-	// python_hsts) -- see pfb_unbound_python()'s ini emit and the gateway's
+	// toggle's ini flag (python_tld_wildcard) -- see pfb_unbound_python()'s ini emit and the gateway's
 	// dnsblConfigFromManifest().
 	$tld_wildcard_blacklist = array();
 	$tld_wildcard_exclusion = array();
@@ -18169,7 +18168,6 @@ function pfb_unbound_python_ini($mode, ?string $now = NULL): string {
 	$metrics_client_ip = PfbConfig::read('gen/pfb_metrics_client_ip') === PfbToggle::On ? 'on' : 'off';
 	$python_reply = ($pfb['dnsbl_py_reply'] === PfbToggle::On) ? 'on' : 'off';
 	$python_blocking = 'on';
-	$python_hsts = ($pfb['dnsbl_hsts'] === PfbToggle::On) ? 'on' : 'off';
 	$dnsbl_tld_wildcard = $pfb['dnsbl_tld_wildcard'];
 	$python_tld_wildcard = !empty($dnsbl_tld_wildcard) ? 'on' : 'off';
 	$psl_include_private = ($pfb['dnsbl_psl_include_private'] === PfbToggle::On) ? 'on' : 'off';
@@ -18214,7 +18212,6 @@ python_enable	= {$python_enable}
 metrics_client_ip	= {$metrics_client_ip}
 python_reply	= {$python_reply}
 python_blocking	= {$python_blocking}
-python_hsts	= {$python_hsts}
 python_tld_wildcard	= {$python_tld_wildcard}
 psl_include_private	= {$psl_include_private}
 psl_allow_private	= {$psl_allow_private}
@@ -22326,8 +22323,8 @@ function pfb_ip_in_allowlist($ip, array $allowlist) {
 }
 
 
-// issue #1907: one-time upgrade migration disabling pfb_py_reply/pfb_hsts when a stored
-// 'on' was inert under pre-upgrade Unbound mode. Both were python-gated in 3.2
+// issue #1907: one-time upgrade migration disabling pfb_py_reply when a stored
+// 'on' was inert under pre-upgrade Unbound mode. It was python-gated in 3.2
 // ($mode == 'enabled' && dnsbl_mode == 'dnsbl_python'), so a stored 'on' under Unbound
 // mode never actually took effect -- the #1907 default-on flip would otherwise silently
 // activate it on upgrade. MUST run before adr02-dnsbl-python-mode, which overwrites
@@ -22350,11 +22347,9 @@ function pfb_python_gated_toggles_migrate($dconfig) {
 	}
 
 	$changed = FALSE;
-	foreach (array('pfb_py_reply', 'pfb_hsts') as $key) {
-		if (($dconfig[$key] ?? '') === 'on') {
-			$dconfig[$key] = 'off';
-			$changed = TRUE;
-		}
+	if (($dconfig['pfb_py_reply'] ?? '') === 'on') {
+		$dconfig['pfb_py_reply'] = 'off';
+		$changed = TRUE;
 	}
 
 	return $changed ? $dconfig : NULL;

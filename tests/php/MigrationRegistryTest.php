@@ -20,8 +20,8 @@ use PHPUnit\Framework\TestCase;
  *
  * issue #1907 (S3): pfb_python_gated_toggles_migrate() joins the registry, positioned
  * immediately before adr02-dnsbl-python-mode -- it disables a stored 'on' for
- * pfb_py_reply/pfb_hsts that was inert under pre-upgrade Unbound mode (both were
- * python-gated in 3.2), reading dnsbl_mode as evidence BEFORE ADR-02 overwrites it.
+ * pfb_py_reply that was inert under pre-upgrade Unbound mode (it was
+ * python-gated in 3.2; so was pfb_hsts, which issue #4053 removed), reading dnsbl_mode as evidence BEFORE ADR-02 overwrites it.
  *
  * Contract (§2.4 ADR-29):
  *   - ORDERING: migrations fire in the documented order; a later migration sees the
@@ -217,8 +217,8 @@ final class MigrationRegistryTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// B2 — pfb_python_gated_toggles_migrate() unit tests (issue #1907): both
-	//      pfb_py_reply and pfb_hsts were python-gated in 3.2
+	// B2 — pfb_python_gated_toggles_migrate() unit tests (issue #1907):
+	//      pfb_py_reply was python-gated in 3.2
 	//      ($mode == 'enabled' && dnsbl_mode == 'dnsbl_python'), so a stored 'on' under
 	//      Unbound mode was inert -- disable it before ADR-02 forces python mode and
 	//      would otherwise activate it. dnsbl_mode is unregistered, so its PRESENCE
@@ -250,26 +250,26 @@ final class MigrationRegistryTest extends TestCase
 	public function testPythonGatedTogglesMigrateNoOpWhenAlreadyPythonMode(): void
 	{
 		$out = pfb_python_gated_toggles_migrate([
-			'pfb_dnsbl' => 'on', 'dnsbl_mode' => 'dnsbl_python', 'pfb_py_reply' => 'on', 'pfb_hsts' => 'on',
+			'pfb_dnsbl' => 'on', 'dnsbl_mode' => 'dnsbl_python', 'pfb_py_reply' => 'on',
 		]);
 		$this->assertNull($out);
 	}
 
-	/** Row (iv): dnsbl_mode present, non-python -- but both toggles absent/''/'off' -- no-op. */
+	/** Row (iv): dnsbl_mode present, non-python -- but the toggle absent/''/'off' -- no-op. */
 	public function testPythonGatedTogglesMigrateNoOpWhenTogglesNotOn(): void
 	{
 		$absent = pfb_python_gated_toggles_migrate(['dnsbl_mode' => 'dnsbl_unbound']);
 		$this->assertNull($absent);
 
-		$empty = pfb_python_gated_toggles_migrate(['dnsbl_mode' => 'dnsbl_unbound', 'pfb_py_reply' => '', 'pfb_hsts' => '']);
+		$empty = pfb_python_gated_toggles_migrate(['dnsbl_mode' => 'dnsbl_unbound', 'pfb_py_reply' => '']);
 		$this->assertNull($empty);
 
-		$off = pfb_python_gated_toggles_migrate(['dnsbl_mode' => 'dnsbl_unbound', 'pfb_py_reply' => 'off', 'pfb_hsts' => 'off']);
+		$off = pfb_python_gated_toggles_migrate(['dnsbl_mode' => 'dnsbl_unbound', 'pfb_py_reply' => 'off']);
 		$this->assertNull($off);
 	}
 
-	/** Row (i): dnsbl_mode present, non-python, both toggles stored 'on' -- both flip to 'off'. */
-	public function testPythonGatedTogglesMigrateDisablesBothWhenModeIsPreUpgradeUnbound(): void
+	/** Row (i): dnsbl_mode present, non-python, the toggle stored 'on' -- it flips to 'off'; the retired pfb_hsts is left for the upgrade cleanup (#4053). */
+	public function testPythonGatedTogglesMigrateDisablesReplyWhenModeIsPreUpgradeUnbound(): void
 	{
 		$dconfig = ['pfb_dnsbl' => 'on', 'dnsbl_mode' => 'dnsbl_unbound', 'pfb_py_reply' => 'on', 'pfb_hsts' => 'on'];
 
@@ -277,24 +277,16 @@ final class MigrationRegistryTest extends TestCase
 
 		$this->assertIsArray($out);
 		$this->assertSame('off', $out['pfb_py_reply']);
-		$this->assertSame('off', $out['pfb_hsts']);
+		$this->assertSame('on', $out['pfb_hsts']);
 		// Other keys preserved; this migration never touches dnsbl_mode itself.
 		$this->assertSame('on', $out['pfb_dnsbl']);
 		$this->assertSame('dnsbl_unbound', $out['dnsbl_mode']);
 	}
 
-	/** Only one of the two toggles is 'on' -- still fires, flips only that one. */
-	public function testPythonGatedTogglesMigrateFlipsOnlyTheOnToggle(): void
+	/** Issue #4053: a stored 'on' of the retired pfb_hsts alone is no longer this migration's to change. */
+	public function testPythonGatedTogglesMigrateIgnoresTheRetiredHstsToggle(): void
 	{
-		$out1 = pfb_python_gated_toggles_migrate(['dnsbl_mode' => 'dnsbl_unbound', 'pfb_py_reply' => 'on', 'pfb_hsts' => 'off']);
-		$this->assertIsArray($out1);
-		$this->assertSame('off', $out1['pfb_py_reply']);
-		$this->assertSame('off', $out1['pfb_hsts']);
-
-		$out2 = pfb_python_gated_toggles_migrate(['dnsbl_mode' => 'dnsbl_unbound', 'pfb_py_reply' => 'off', 'pfb_hsts' => 'on']);
-		$this->assertIsArray($out2);
-		$this->assertSame('off', $out2['pfb_py_reply']);
-		$this->assertSame('off', $out2['pfb_hsts']);
+		$this->assertNull(pfb_python_gated_toggles_migrate(['dnsbl_mode' => 'dnsbl_unbound', 'pfb_py_reply' => 'off', 'pfb_hsts' => 'on']));
 	}
 
 	// -----------------------------------------------------------------------
@@ -403,7 +395,6 @@ final class MigrationRegistryTest extends TestCase
 			'pfb_dnsbl'    => 'on',
 			'dnsbl_mode'   => 'dnsbl_unbound',
 			'pfb_py_reply' => 'on',
-			'pfb_hsts'     => 'on',
 			'top1m_source' => 'alexa', // bystander: still the raw legacy token
 		]);
 
@@ -411,7 +402,6 @@ final class MigrationRegistryTest extends TestCase
 
 		$dnsbl = $this->getDnsbl();
 		$this->assertSame('off', $dnsbl['pfb_py_reply'], 'issue #1907 migration must disable pfb_py_reply');
-		$this->assertSame('off', $dnsbl['pfb_hsts'], 'issue #1907 migration must disable pfb_hsts');
 		$this->assertSame('alexa', $dnsbl['top1m_source'],
 			'the bystander legacy token must survive RAW write-back');
 		$this->assertContains(
@@ -433,7 +423,6 @@ final class MigrationRegistryTest extends TestCase
 			'dnsbl_mode'   => 'dnsbl_unbound',
 			'pfb_py_block' => '',
 			'pfb_py_reply' => 'on',
-			'pfb_hsts'     => 'on',
 		]);
 
 		pfb_run_migrations();

@@ -249,7 +249,7 @@ func firstRegexMatch(regexDB *regexDB, qName string, scan *regexScan) (string, *
 }
 
 // resolveNumericAllow is the numeric 6-band resolution (ADR.md SS2): true iff an ALLOW overrides the matched BLOCK (the
-// name resolves), mapped onto in_whitelist so the downstream hsts / null-blocking logic is shared with the fast path.
+// name resolves), mapped onto in_whitelist so the downstream null-blocking logic is shared with the fast path.
 // A block always matched here (the caller gates on is_found); blockBand is its highest matching band. Blocked iff
 // blockBand > allow band; with no allow match the allow band is 0, so the block stands.
 func resolveNumericAllow(qName, qNameOriginal string, isCname bool, cfg evaluateConfig, whiteDB map[string]whiteEntry, allowRegexDB, userAllowRegexDB *regexDB, blockBand int) bool {
@@ -344,8 +344,6 @@ type evaluateConfig struct {
 	importantRules              bool
 	regexWarnMs                 float64
 	pythonTldSeg                int64
-	pythonHsts                  bool
-	hstsTlds                    []string
 	builtinLogFlag              string
 	regex                       *regexRuntime
 }
@@ -354,7 +352,6 @@ func evaluateDomain(qName, qNameOriginal, tld string, isCname bool, cfg evaluate
 	isFound := false
 	logType := ""
 	inWhitelist := false
-	inHsts := false
 	nullBlocking := true
 	nxdomain := false
 	bType := "Python"
@@ -546,17 +543,7 @@ func evaluateDomain(qName, qNameOriginal, tld string, isCname bool, cfg evaluate
 	}
 
 	if isFound && !inWhitelist {
-		// issue #3805: the switch gates this, not a loaded preload list: the built-in TLDs need no file.
-		if cfg.pythonHsts {
-			inHsts, pType = hstsCheckDomain(qName, containers.hstsDB, cfg.hstsTlds, tld)
-		}
-
-		if logType == "3" || logType == "4" || logType == "5" || logType == "6" {
-			// NXDOMAIN and NODATA bypass address replies; HSTS did not cause the block.
-			inHsts = false
-			pType = "Python"
-			nxdomain = logType == "3" || logType == "4"
-		}
+		nxdomain = logType == "3" || logType == "4"
 
 		if isCname {
 			bType += "_CNAME"
@@ -566,7 +553,6 @@ func evaluateDomain(qName, qNameOriginal, tld string, isCname bool, cfg evaluate
 	return &dnsblDecision{
 		isFound:      isFound,
 		inWhitelist:  inWhitelist,
-		inHsts:       inHsts,
 		nullBlocking: nullBlocking,
 		nxdomain:     nxdomain,
 		logType:      logType,
@@ -617,8 +603,6 @@ func (m *pfbUnbound) evaluateCfg(snap *snapshot) evaluateConfig {
 		importantRules:              snap.importantRules,
 		regexWarnMs:                 settings.regexWarnMs,
 		pythonTldSeg:                settings.pythonTldSeg,
-		pythonHsts:                  settings.pythonHsts,
-		hstsTlds:                    settings.hstsTlds,
 		builtinLogFlag:              snap.builtinLogFlag,
 		regex:                       m.regexRuntime,
 	}
@@ -626,7 +610,7 @@ func (m *pfbUnbound) evaluateCfg(snap *snapshot) evaluateConfig {
 
 // getTld is the TLD of the query: the second-to-last entry of the qname list (which carries the trailing root label),
 // lowercased (RFC 4343: DNS names compare case-insensitively, but Unbound's qname_list keeps the client's wire case,
-// e.g. dns0x20, while tld_allow_list / hsts_tlds are stored lowercase, #720).
+// e.g. dns0x20, while tld_allow_list is stored lowercase, #720).
 func getTld(qstate *moduleQstate) string {
 	tld := ""
 	if qstate != nil {

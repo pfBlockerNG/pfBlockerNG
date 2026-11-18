@@ -1094,24 +1094,20 @@ func TestReloadBuildSnapshotRereadsTheUserRegexListFromTheIni(t *testing.T) {
 func TestReloadReadsOnlyTheRegexListFromTheIni(t *testing.T) {
 	m, dir := rlManifestModule(t, []string{opRegexList(`^one\.example$`), "psl_feed_private_policy = honor"}, map[string][]string{"feed.txt": {"a.example"}})
 	ini := "[MAIN]\npython_enable = true\n" + opRegexList(`^one\.example$`) + "\npsl_feed_private_policy = apex\nregex_cap = true\n" +
-		"python_hsts = true\ntld_allow = true\ntld_allow_list = com\npython_tld_seg = 3\ndecisiondb_max = 7\n"
+		"tld_allow = true\ntld_allow_list = com\npython_tld_seg = 3\ndecisiondb_max = 7\n"
 	if err := os.WriteFile(filepath.Join(dir, "pfb_unbound.ini"), []byte(ini), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "pfb_py_hsts.txt"), []byte("hsts.example\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
 	if !m.reloadRunSwap(m.reloadBuildSnapshot) {
 		t.Fatalf("reloadRunSwap = false, want a swap")
 	}
 	snap := m.snapshot.Load()
-	if snap.pslFeedPrivatePolicy != "honor" || len(snap.tldAllowRoots) != 0 || len(snap.hstsDB) != 0 {
-		t.Errorf("(pslFeedPrivatePolicy, tldAllowRoots, hstsDB) = (%q, %v, %v), want the init values (honor, none, none)", snap.pslFeedPrivatePolicy, snap.tldAllowRoots, snap.hstsDB)
+	if snap.pslFeedPrivatePolicy != "honor" || len(snap.tldAllowRoots) != 0 {
+		t.Errorf("(pslFeedPrivatePolicy, tldAllowRoots) = (%q, %v), want the init values (honor, none)", snap.pslFeedPrivatePolicy, snap.tldAllowRoots)
 	}
 	s := snap.settings
-	if s.regexCap || s.pythonHsts || s.tldAllow || s.pythonTldSeg != 0 || s.decisiondbMax != 10000 {
-		t.Errorf("settings (regexCap, pythonHsts, tldAllow, pythonTldSeg, decisiondbMax) = (%v, %v, %v, %d, %d), want the init values", s.regexCap, s.pythonHsts, s.tldAllow, s.pythonTldSeg, s.decisiondbMax)
+	if s.regexCap || s.tldAllow || s.pythonTldSeg != 0 || s.decisiondbMax != 10000 {
+		t.Errorf("settings (regexCap, tldAllow, pythonTldSeg, decisiondbMax) = (%v, %v, %d, %d), want the init values", s.regexCap, s.tldAllow, s.pythonTldSeg, s.decisiondbMax)
 	}
 }
 
@@ -1182,60 +1178,6 @@ func TestReloadBuildSnapshotOpensTheDatabaseForTheEpochsWhenListsLoadAndBlocking
 	}
 	if !r.m.sqlite3DnsblCon.Load() {
 		t.Errorf("the DNSBL database is still closed after a build that loaded lists")
-	}
-}
-
-// hstsDB is no part of the manifest: the builder reads pfb_py_hsts.txt itself, when python_hsts is on.
-func TestReloadBuildSnapshotReloadsHstsFromTheFileOnlyWhenPythonHstsIsOn(t *testing.T) {
-	const file = "# a comment\nexample.test\n\n  other.test  \n"
-	for _, tc := range []struct {
-		name string
-		main []string
-		want []string
-	}{
-		{"python_hsts on", []string{"python_hsts = true"}, []string{"example.test", "other.test"}},
-		{"python_hsts off", nil, nil},
-	} {
-		m, dir := rlManifestModule(t, tc.main, map[string][]string{})
-		if len(m.snapshot.Load().hstsDB) != 0 {
-			t.Fatalf("%s: init hstsDB is not empty", tc.name)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "pfb_py_hsts.txt"), []byte(file), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		next, err := m.reloadBuildSnapshot()
-		if err != nil || next == nil {
-			t.Fatalf("%s: reloadBuildSnapshot = (%v, %v), want a snapshot", tc.name, next, err)
-		}
-		var got []string
-		for name := range next.hstsDB {
-			got = append(got, name)
-		}
-		slices.Sort(got)
-		if !slices.Equal(got, tc.want) {
-			t.Errorf("%s: hstsDB = %v, want %v", tc.name, got, tc.want)
-		}
-	}
-}
-
-func TestReloadBuildSnapshotLogsAnUnreadableHstsFileAndStillBuilds(t *testing.T) {
-	m, dir := rlManifestModule(t, []string{"python_hsts = true"}, map[string][]string{"feed.txt": {"a.example"}})
-	hsts := filepath.Join(dir, "pfb_py_hsts.txt")
-	if err := os.WriteFile(hsts, []byte("example.test\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	m.readFile = func(name string) ([]byte, error) { return nil, errors.New("read failed") }
-	_ = modCaptureLog(t)
-
-	next, err := m.reloadBuildSnapshot()
-	if err != nil || next == nil {
-		t.Fatalf("reloadBuildSnapshot = (%v, %v), want a snapshot", next, err)
-	}
-	if len(next.hstsDB) != 0 || len(next.dataDB) != 1 {
-		t.Errorf("(hstsDB, dataDB) = (%d, %d), want (0, 1)", len(next.hstsDB), len(next.dataDB))
-	}
-	if got, want := drainPyError(), "reload: failed to load "+hsts+": read failed"; !strings.Contains(got, want) {
-		t.Errorf("py_error.log = %q, want it to hold %q", got, want)
 	}
 }
 

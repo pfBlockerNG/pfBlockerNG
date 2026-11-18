@@ -216,10 +216,10 @@ func logDnsblOf(t *testing.T, raw json.RawMessage) *dnsblDecision {
 		return nil
 	}
 	spec := struct {
-		IsFound, InWhitelist, InHsts, NullBlocking, Nxdomain bool
-		LogType, BType, PType, Feed, Group, BEval            string
-		IdnAlert                                             *[]string
-		GroupOwner, GroupOrigin                              string
+		IsFound, InWhitelist, NullBlocking, Nxdomain bool
+		LogType, BType, PType, Feed, Group, BEval    string
+		IdnAlert                                     *[]string
+		GroupOwner, GroupOrigin                      string
 	}{IsFound: true, LogType: "1", BType: "DNSBL", PType: "Python", Feed: "Feed", Group: "Group", BEval: "example.com"}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
@@ -232,8 +232,6 @@ func logDnsblOf(t *testing.T, raw json.RawMessage) *dnsblDecision {
 			target = &spec.IsFound
 		case "in_whitelist":
 			target = &spec.InWhitelist
-		case "in_hsts":
-			target = &spec.InHsts
 		case "null_blocking":
 			target = &spec.NullBlocking
 		case "nxdomain":
@@ -264,7 +262,7 @@ func logDnsblOf(t *testing.T, raw json.RawMessage) *dnsblDecision {
 		}
 	}
 	d := &dnsblDecision{
-		isFound: spec.IsFound, inWhitelist: spec.InWhitelist, inHsts: spec.InHsts, nullBlocking: spec.NullBlocking,
+		isFound: spec.IsFound, inWhitelist: spec.InWhitelist, nullBlocking: spec.NullBlocking,
 		nxdomain: spec.Nxdomain, logType: spec.LogType, bType: spec.BType, pType: spec.PType, feed: spec.Feed,
 		group: spec.Group, bEval: spec.BEval, groupOwner: spec.GroupOwner, groupOrigin: spec.GroupOrigin,
 	}

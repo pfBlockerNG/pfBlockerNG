@@ -3271,7 +3271,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			// When DNSBL is enabled and no Aliases are defined, or all Aliases are Disabled
 			if (empty($lists_dnsbl_all) && !$pfb['save']) {
 				// Only log/flag domain_clear when feeds were actually loaded (#546):
-				// pfb_dnsbl_has_loaded_feeds() excludes the shipped pfb_py_hsts and the
+				// pfb_dnsbl_has_loaded_feeds() excludes the
 				// always-present manifest/whitelist so a no-feeds setup never looks "loaded".
 				$had_feeds = pfb_dnsbl_has_loaded_feeds($pfb);
 				if ($had_feeds) {
@@ -3628,11 +3628,11 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		// the next reboot. Gated like the IP side (archive only inside the change branch):
 		// DNSBL active ($mode === 'enabled', i.e. enable + pfB-DNS + dnsbl + resolver on) +
 		// use_mfs_tmpvar. Read $pfb directly (not $mode) to keep the gate self-contained.
-		// #520 NOTE: an HSTS-only change now enters this branch too ($pfb_data_changed
-		// fingerprints the shipped pfb_py_hsts.txt), so the archive is re-saved even
+		// #520 NOTE: a PSL-only change now enters this branch too ($pfb_data_changed
+		// fingerprints the shipped dnsbl_psl), so the archive is re-saved even
 		// though it EXCLUDES the shipped files -- a harmless no-op re-compress of
 		// identical generated content. Deliberately NOT separately gated: the shipped
-		// HSTS list ships per-release (changes ~never), so the rare extra save isn't
+		// PSL ships per-release (changes ~never), so the rare extra save isn't
 		// worth a second generated-only fingerprint.
 		if (pfb_dnsbl_active() && $pfb['unbound_state'] === PfbToggle::On &&
 		    config_path_enabled('system', 'use_mfs_tmpvar')) {

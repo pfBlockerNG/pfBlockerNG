@@ -61,7 +61,6 @@ $pconfig['global_log']		= $pfb['dnsbl_global_log'];
 $pconfig['global_log_mode']	= $pfb['dnsbl_global_mode']->toStored();
 $pconfig['pfb_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');
 
-$pconfig['pfb_hsts']		= PfbConfig::read('dnsbl/pfb_hsts');
 $pconfig['pfb_psl_include_private'] = PfbConfig::read('dnsbl/pfb_psl_include_private');
 $pconfig['pfb_psl_allow_private'] = PfbConfig::read('dnsbl/pfb_psl_allow_private');
 // issue #2371: feed-at-suffix policy selects (PfbFeedSuffixPolicy enum; absent -> Honor).
@@ -800,8 +799,6 @@ if ($_POST) {
 			unset($pfb['dconfig']['pfb_cache']);
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
-			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
-			$pfb['dconfig']['pfb_hsts']		= pfb_filter($_POST['pfb_hsts'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			// issue #1887: checkbox-absent is the owner-ruled empty Off token.
 			$pfb['dconfig']['pfb_idn_block_malicious']	= pfb_filter($_POST['pfb_idn_block_malicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_idn_escalate_suspicious']	= pfb_filter($_POST['pfb_idn_escalate_suspicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
@@ -2557,7 +2554,7 @@ $dnsbl_text = '<div class="infoblock">'
 		. '</ol>'
 		. 'Feed exact and wildcard matching (1–2) run only while DNSBL blocking is enabled; TLD Allow, IDN, and Regex (3–5) still run.<br /><br />'
 		. 'If a block is found, a whitelist entry, an ABP allow rule (<code>@@</code>) or an allow-regex can override it. If several rules match, the one with the highest priority decides; <code>$important</code> rules and Custom List entries outrank ordinary feed rules.<br /><br />'
-		. 'If the name is still blocked, the reply is shaped last: HSTS may use null-blocking to avoid browser certificate errors; NXDOMAIN and NODATA replies (logged or silent) replace a null answer; a hit via a CNAME chain is tagged <code>_CNAME</code>. Null-blocking is not a property of which stage matched.<br /><br />'
+		. 'If the name is still blocked, the reply is shaped last: NXDOMAIN and NODATA replies (logged or silent) replace a null answer; a hit via a CNAME chain is tagged <code>_CNAME</code>. Null-blocking is not a property of which stage matched.<br /><br />'
 		. '<strong>CNAME Validation</strong> and <strong>no-AAAA</strong> are separate features, not steps in this order. Feed-at-suffix (PSL) policies, the regex cap, and <strong>Download Schemes</strong> shape what is loaded, not the per-query order.'
 		. '</div><br /><br />'
 		. '<strong>Note:</strong> '
@@ -2623,22 +2620,6 @@ $section->addInput(new Form_StaticText(
 	gettext('DNS Reply Logging'),
 	'Moved to the <a href="/pfblockerng/pfblockerng_dns_general.php">DNS General</a> tab: one setting for the DNSBL module and for pfB-DNS without DNSBL.'
 ));
-
-$section->addInput(new Form_Checkbox(
-	'pfb_hsts',
-	gettext('HSTS mode'),
-	'Enable',
-	pfb_dnsbl_toggle_enabled($pconfig['pfb_hsts'] ?? NULL),
-	'on'
-))->setHelp('Answer HSTS-preload domains with <code>0.0.0.0</code> / <code>::</code> instead of the DNSBL VIP, which may avoid browser certificate errors.'
-	. '<div class="infoblock">'
-	. 'Enable the DNSBL <strong title="Utilizes 0.0.0.0 / :: instead of the DNSBL VIP">Null Blocking mode</strong> for HSTS domains.<br />'
-	. 'Blocked domains that are in the <a target="_blank" rel="noopener noreferrer" href="https://hstspreload.org/">HSTS preload</a> browser'
-	. ' <a target="_blank" rel="noopener noreferrer" href="https://raw.githubusercontent.com/chromium/chromium/master/net/http/transport_security_state_static.json">list</a>'
-	. ' will use the Null Blocking Mode which *may* prevent Browser Certificate Errors.<br />'
-	. '<strong>Note:</strong> This option will not block HSTS domains, unless those Domains are added via the Feeds/Customlists.'
-	. '</div>'
-);
 
 $section->addInput(new Form_Select(
 	'pfb_idn',

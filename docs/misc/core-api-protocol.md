@@ -178,7 +178,7 @@ The DNSBL resolver settings `pfb-dns` reads from `pfb_unbound.ini` today. `pfb-d
 
 | Field | Type, default |
 |---|---|
-| `replyLogging`, `hstsNullBlocking`, `pslIncludePrivate`, `idnBlockMalicious` | bool, `true` |
+| `replyLogging`, `pslIncludePrivate`, `idnBlockMalicious` | bool, `true` |
 | `tldWildcard`, `pslAllowPrivate`, `idnEscalateSuspicious`, `cnameValidation`, `control`, `regexCap`, `metricsClientIp` | bool, `false` |
 | `controlLegacy` | bool, `false`; `requires` `control` |
 | `pslFeedPrivatePolicy`, `pslFeedIcannPolicy` | enum `ignore` / `apex` / `honor`, `honor` |

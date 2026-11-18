@@ -54,19 +54,17 @@ func evCfg() evaluateConfig {
 		pythonBlocking:          true,
 		regexWarnMs:             REGEX_WARN_MS_DEFAULT,
 		pythonTldSeg:            2,
-		hstsTlds:                []string{"app", "dev"},
 		builtinLogFlag:          "0",
 		pythonIdnBlockMalicious: true,
 		regex:                   newRegexRuntime(),
 	}
 }
 
-// evCfgAll is test_adr65_decision_oracle.py's _cfg(): every presence gate on, no HSTS TLDs.
+// evCfgAll is test_adr65_decision_oracle.py's _cfg(): every presence gate on.
 func evCfgAll() evaluateConfig {
 	cfg := evCfg()
 	cfg.dataDB, cfg.zoneDB, cfg.whiteDB, cfg.regexDB, cfg.allowRegexDB = true, true, true, true, true
-	cfg.userRegexDB, cfg.userAllowRegexDB, cfg.pythonHsts = true, true, true
-	cfg.hstsTlds = nil
+	cfg.userRegexDB, cfg.userAllowRegexDB = true, true
 	return cfg
 }
 
@@ -146,14 +144,9 @@ func TestEvaluateDomainDecisionArms(t *testing.T) {
 		matcherContainers{regexDB: evRegexDB(evRx("MyBlockRegex", `^regex-hit-\d+\.uuid1003\.org$`, PRIO_FEED_BLOCK))}),
 		dd{isFound: true, nullBlocking: true, logType: "0", bType: "Python", pType: "Python", feed: "MyBlockRegex", group: "DNSBL_Regex", bEval: q})
 
-	q = "hsts-listed.uuid1009.com"
-	evCheck(t, "A9 an HSTS-listed block resolves real with the HSTS attribution", evEval(q, "com", false, evCfgAll(),
-		matcherContainers{dataDB: map[string]*blockEntry{q: evBlk("1", 0, PRIO_FEED_BLOCK)}, hstsDB: map[string]struct{}{q: {}}, feedGroupIndexDB: evFG}),
-		dd{isFound: true, inHsts: true, nullBlocking: true, logType: "1", bType: "DNSBL", pType: "HSTS", feed: "TestFeed", group: "TestGroup", bEval: q, groupOwner: "TestGroup", groupOrigin: "custom"})
-
 	q = "nx-listed.uuid1014.com"
-	evCheck(t, "A14 log 3 clears the HSTS attribution even for an HSTS-listed name", evEval(q, "com", false, evCfgAll(),
-		matcherContainers{dataDB: map[string]*blockEntry{q: evBlk("3", 0, PRIO_FEED_BLOCK)}, hstsDB: map[string]struct{}{q: {}}, feedGroupIndexDB: evFG}),
+	evCheck(t, "A14 log 3 answers NXDOMAIN", evEval(q, "com", false, evCfgAll(),
+		matcherContainers{dataDB: map[string]*blockEntry{q: evBlk("3", 0, PRIO_FEED_BLOCK)}, feedGroupIndexDB: evFG}),
 		dd{isFound: true, nxdomain: true, nullBlocking: true, logType: "3", bType: "DNSBL", pType: "Python", feed: "TestFeed", group: "TestGroup", bEval: q, groupOwner: "TestGroup", groupOrigin: "custom"})
 
 	q = "cname-target.uuid1015.net"
@@ -331,10 +324,6 @@ func TestEvaluateDomainTldAllow(t *testing.T) {
 		cfg.builtinLogFlag = row.flag
 		evCheck(t, "oracle: builtin_log_flag "+row.flag, evEval("x.example.net", "net", false, cfg, matcherContainers{}), blocked("x.example.net", row.want))
 	}
-	cfg = tldCfg(true, "com")
-	cfg.builtinLogFlag, cfg.pythonHsts = "1", true
-	evCheck(t, "oracle: a TLD-Allow block on an HSTS TLD resolves real", evEval("x.example.app", "app", false, cfg, matcherContainers{}),
-		blocked("x.example.app", func(d *dd) { d.logType, d.inHsts, d.pType = "1", true, "HSTS_TLD" }))
 
 	// oracle: a TLD-Allow block comes before the IDN feed.
 	cfg = tldCfg(true, "com")
@@ -564,7 +553,7 @@ func evPslContainers(t *testing.T, roots []string, allowPrivate bool) matcherCon
 
 func evAllowCfg(list ...string) evaluateConfig {
 	cfg := evCfg()
-	cfg.pythonBlocking, cfg.tldAllow, cfg.tldAllowList, cfg.hstsTlds = false, true, list, nil
+	cfg.pythonBlocking, cfg.tldAllow, cfg.tldAllowList = false, true, list
 	return cfg
 }
 
@@ -658,11 +647,10 @@ func TestEvaluateDomainPslTldAllow(t *testing.T) {
 }
 
 // oracle: DnsblDecision rows from running evaluate_domain in Python on the same fixtures: attribution of the group
-// fields, the CNAME name list, the HSTS and log-type arms, the gates, and the first-hit orders.
+// fields, the CNAME name list, the log-type arms, the gates, and the first-hit orders.
 func TestEvaluateDomainOracleRows(t *testing.T) {
 	fg := map[int]feedGroup{1: {"FeedA", "GroupA"}, 2: {"ZoneFeed", "ZoneGroup"}}
 	dataEvil := map[string]*blockEntry{"evil.com": evBlk("1", 1, PRIO_FEED_BLOCK)}
-	hstsEvil := map[string]struct{}{"evil.com": {}}
 	cfgOf := func(over func(*evaluateConfig)) evaluateConfig {
 		cfg := evCfg()
 		over(&cfg)
@@ -720,26 +708,14 @@ func TestEvaluateDomainOracleRows(t *testing.T) {
 		cfgOf(func(c *evaluateConfig) { c.dataDB, c.whiteDB = true, true }),
 		matcherContainers{dataDB: target, whiteDB: map[string]whiteEntry{"orig.com": evLegacyWhite(true)}, feedGroupIndexDB: fg}), allowedTarget)
 
-	// R6, R7: HSTS and the log-type arms.
-	hsts := cfgOf(func(c *evaluateConfig) { c.dataDB, c.pythonHsts = true, true })
-	evCheck(t, "R6 an HSTS TLD", evEval("evil.app", "app", false, hsts, matcherContainers{dataDB: map[string]*blockEntry{"evil.app": evBlk("1", 1, PRIO_FEED_BLOCK)}, feedGroupIndexDB: fg}),
-		dd{isFound: true, inHsts: true, nullBlocking: true, logType: "1", bType: "DNSBL", pType: "HSTS_TLD", feed: "FeedA", group: "GroupA", bEval: "evil.app", groupOwner: "GroupA", groupOrigin: "custom"})
-	evCheck(t, "R6b an HSTS parent of a zone hit", evEval("sub.evil.com", "com", false, cfgOf(func(c *evaluateConfig) { c.zoneDB, c.pythonHsts = true, true }),
-		matcherContainers{zoneDB: dataEvil, hstsDB: hstsEvil, feedGroupIndexDB: fg}),
-		dd{isFound: true, inHsts: true, nullBlocking: true, logType: "1", bType: "TLD", pType: "HSTS", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"})
-	evCheck(t, "R6d a whitelisted HSTS name is not HSTS", evEval("evil.com", "com", false, cfgOf(func(c *evaluateConfig) { c.dataDB, c.pythonHsts, c.whiteDB = true, true, true }),
-		matcherContainers{dataDB: dataEvil, hstsDB: hstsEvil, whiteDB: map[string]whiteEntry{"evil.com": evLegacyWhite(true)}, feedGroupIndexDB: fg}),
-		dd{isFound: true, inWhitelist: true, nullBlocking: true, logType: "1", bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"})
-	evCheck(t, "R6e python_hsts off", evEval("evil.com", "com", false, cfgOf(data), matcherContainers{dataDB: dataEvil, hstsDB: hstsEvil, feedGroupIndexDB: fg}),
-		dd{isFound: true, nullBlocking: true, logType: "1", bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"})
-
+	// R7: the log-type arms.
 	for _, row := range []struct {
 		log  string
 		want func(*dd)
 	}{
-		{"0", func(d *dd) { d.inHsts, d.pType = true, "HSTS" }},
-		{"1", func(d *dd) { d.inHsts, d.pType = true, "HSTS" }},
-		{"2", func(d *dd) { d.inHsts, d.pType = true, "HSTS" }},
+		{"0", func(d *dd) {}},
+		{"1", func(d *dd) {}},
+		{"2", func(d *dd) {}},
 		{"3", func(d *dd) { d.nxdomain = true }},
 		{"4", func(d *dd) { d.nxdomain = true }},
 		{"5", func(d *dd) {}},
@@ -747,8 +723,8 @@ func TestEvaluateDomainOracleRows(t *testing.T) {
 	} {
 		want := dd{isFound: true, nullBlocking: true, logType: row.log, bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"}
 		row.want(&want)
-		evCheck(t, "R7 log "+row.log, evEval("evil.com", "com", false, hsts, matcherContainers{
-			dataDB: map[string]*blockEntry{"evil.com": evBlk(row.log, 1, PRIO_FEED_BLOCK)}, hstsDB: hstsEvil, feedGroupIndexDB: fg}), want)
+		evCheck(t, "R7 log "+row.log, evEval("evil.com", "com", false, cfgOf(data), matcherContainers{
+			dataDB: map[string]*blockEntry{"evil.com": evBlk(row.log, 1, PRIO_FEED_BLOCK)}, feedGroupIndexDB: fg}), want)
 	}
 	evCheck(t, "R7 nxdomain on a CNAME", evEval("evil.com", "com", true, cfgOf(data), matcherContainers{
 		dataDB: map[string]*blockEntry{"evil.com": evBlk("3", 1, PRIO_FEED_BLOCK)}, feedGroupIndexDB: fg}),
@@ -1494,10 +1470,7 @@ func evCfgDiff(got, want evaluateConfig) string {
 	if !slices.Equal(got.tldAllowList, want.tldAllowList) {
 		return fmt.Sprintf("tldAllowList = %q, want %q", got.tldAllowList, want.tldAllowList)
 	}
-	if !slices.Equal(got.hstsTlds, want.hstsTlds) {
-		return fmt.Sprintf("hstsTlds = %q, want %q", got.hstsTlds, want.hstsTlds)
-	}
-	got.tldAllowList, want.tldAllowList, got.hstsTlds, want.hstsTlds = nil, nil, nil, nil
+	got.tldAllowList, want.tldAllowList = nil, nil
 	if !reflect.DeepEqual(got, want) {
 		return fmt.Sprintf("\n got  %+v\n want %+v", got, want)
 	}
@@ -1512,7 +1485,7 @@ func TestEvaluateCfg(t *testing.T) {
 	settings := &pfbSettings{
 		pythonBlocking: true, tldAllow: true, tldAllowList: []string{"com"},
 		pythonIdn: true, idnMode: IdnModeConfusable, pythonIdnBlockMalicious: false, pythonIdnEscalateSuspicious: true,
-		regexWarnMs: 7.5, pythonTldSeg: 3, pythonHsts: true, hstsTlds: []string{"app"},
+		regexWarnMs: 7.5, pythonTldSeg: 3,
 	}
 	snap := evSnapshot(settings)
 	snap.dataDB = map[string]*blockEntry{"evil.com": evBlk("1", 0, 1)}
@@ -1527,7 +1500,7 @@ func TestEvaluateCfg(t *testing.T) {
 		pythonIdn: true, idnMode: IdnModeConfusable,
 		pythonIdnBlockMalicious: false, pythonIdnEscalateSuspicious: true,
 		regexDB: true, whiteDB: true, allowRegexDB: false, userRegexDB: true, userAllowRegexDB: false,
-		importantRules: true, regexWarnMs: 7.5, pythonTldSeg: 3, pythonHsts: true, hstsTlds: []string{"app"},
+		importantRules: true, regexWarnMs: 7.5, pythonTldSeg: 3,
 		builtinLogFlag: "1", regex: m.regexRuntime,
 	}
 	if diff := evCfgDiff(m.evaluateCfg(snap), want); diff != "" {

@@ -29,7 +29,7 @@ final class ToggleMirrorComparisonGuardTest extends TestCase
 {
 	/** Every $pfb[] mirror that carries PfbToggle after issue #1887. */
 	private const TYPED_MIRRORS = [
-		'enable', 'keep', 'dnsbl', 'dnsbl_vip_auto', 'dnsbl_nonat', 'dnsbl_hsts',
+		'enable', 'keep', 'dnsbl', 'dnsbl_vip_auto', 'dnsbl_nonat',
 		'unbound_state', 'dnsbl_cache_flush', 'dnsbl_lenient', 'supp', 'dnsbl_top1m',
 		'dnsbl_py_reply', 'dnsbl_regex', 'dnsbl_regex_cap',
 		'dnsbl_cname', 'dnsbl_tld_allow', 'dnsbl_py_nolog', 'dnsbl_noaaaa', 'dnsbl_gp',
@@ -144,7 +144,6 @@ final class ToggleMirrorComparisonGuardTest extends TestCase
 		$base = [
 			'unbound_py_wh'      => '/var/unbound/pfb_py_whitelist.txt',
 			'unbound_py_sources' => '/var/unbound/pfb_py_sources.ini',
-			'unbound_py_hsts'    => '/var/unbound/pfb_py_hsts.txt',
 			'unbound_py_psl'     => '/var/unbound/dnsbl_psl',
 			'unbound_py_top1m'   => '/var/unbound/pfb_py_top1m.txt',
 		];

@@ -37,13 +37,13 @@ against source, not guessed):
   shape even for a 127.0.0.1 query. (The QEMU SLIRP WAN-hostfwd path, unlike a real
   LAN client, is not answered in CI — so we don't use it.)
 
-  Two domain constraints, both load-bearing (see ``helpers.unique_domain``):
+  One domain constraint, load-bearing (see ``helpers.unique_domain``):
   test names must NOT use RFC 6761 TLDs (``.test`` / ``.example`` / …) — DNSBL runs in
   the pfB-DNS decider, which answers a LISTED name there before Unbound is asked
   (listed ``.test`` / ``.example`` / ``.invalid`` names get the null answer), but
   an UNLISTED name (a not-blocked probe) under ``.test`` / ``.invalid`` reaches
-  Unbound's built-in ``local-zone`` and is answered NXDOMAIN, not by the stub upstream
-  — and must NOT be HSTS-preload. A random ``uuid-*.com`` satisfies both.
+  Unbound's built-in ``local-zone`` and is answered NXDOMAIN, not by the stub upstream.
+  A random ``uuid-*.com`` satisfies it.
 * WHITELIST (``suppression``): ``whitelist_check_domain`` short-circuits before
   any block shape, so a suppressed name resolves via its control ``local-data``.
 * DNSBL-IP dual-stack (``action != 'Disabled'``): IP literals in the DNSBL feed
@@ -407,9 +407,8 @@ def test_dnsbl_exact_null(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: 
     """Python-mode null sinkhole: NOERROR + 0.0.0.0/::0 for a logging='disabled' feed.
 
     ``logging='disabled'`` → ``logging_type='2'`` → ``null_blocking=True`` →
-    pfb_unbound.py answers NOERROR + A 0.0.0.0 / AAAA ::0. The domain is a unique
-    non-HSTS-preload ``.com`` so HSTS (on by default) does not also force NULL —
-    NULL here is purely the per-list ``logging='disabled'`` path.
+    pfb_unbound.py answers NOERROR + A 0.0.0.0 / AAAA ::0 — purely the per-list
+    ``logging='disabled'`` path.
     """
     domain = h.unique_domain("null")
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_null.txt", f"{domain}\n")
@@ -432,7 +431,7 @@ def test_dnsbl_exact_nxdomain(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_fee
     ``logging='nxdomain_log'`` → ``logging_type='3'`` → ``operate()`` returns
     ``RCODE_NXDOMAIN`` with no DNSMessage (neither the VIP nor the 0.0.0.0 null
     shape). The rcode is name-level, so BOTH the A and AAAA queries answer
-    NXDOMAIN. A unique non-HSTS-preload ``.com`` is used so the result is the
+    NXDOMAIN. A unique ``.com`` is used so the result is the
     NXDOMAIN block path itself, not the NXDOMAIN Unbound's built-in ``local-zone``
     gives an unlisted name under an RFC-6761 TLD. Contrast the
     VIP/null cases above: same feed match, different per-list ``logging`` →
@@ -489,8 +488,8 @@ def test_dnsbl_idn_confusable_blocks_homoglyph_resolves_legit(
     Scenario: ``pfb_idn='confusable'`` + ``block_malicious`` ON (default). The
     matcher decodes each ``xn--`` label, runs the TR39 analyzer per-label, and:
       * ``xn--pple-43d`` (аpple — Cyrillic U+0430 + Latin) is a confusable Latin+
-        Cyrillic mix → MALICIOUS → blocked as feed ``Homoglyph`` (log_type '1',
-        not HSTS) → NOERROR + ``0.0.0.0``.
+        Cyrillic mix → MALICIOUS → blocked as feed ``Homoglyph`` (log_type '1')
+        → NOERROR + ``0.0.0.0``.
       * ``xn--mnchen-3ya`` (münchen — single-script Latin) is legit → NO IDN action,
         so it resolves via the controlled stub upstream (the before-state: green
         proves the analyzer is the cause of the block, not an always-block path).

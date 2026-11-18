@@ -53,7 +53,7 @@ func TestNewSnapshotDefaults(t *testing.T) {
 	if s.hasTldAllowRoots || s.importantRules || s.counts != 0 || s.regexCount != 0 {
 		t.Errorf("hasTldAllowRoots=%v importantRules=%v counts=%d regexCount=%d, want false false 0 0", s.hasTldAllowRoots, s.importantRules, s.counts, s.regexCount)
 	}
-	if s.dataDB == nil || s.zoneDB == nil || s.whiteDB == nil || s.feedGroupIndexDB == nil || s.hstsDB == nil || s.rejects == nil || s.groupEpochs == nil {
+	if s.dataDB == nil || s.zoneDB == nil || s.whiteDB == nil || s.feedGroupIndexDB == nil || s.rejects == nil || s.groupEpochs == nil {
 		t.Error("a snapshot dict is nil; Snapshot dicts must be writable until the snapshot is published")
 	}
 	if s.regexDB == nil || s.allowRegexDB == nil || s.userRegexDB == nil || s.userAllowRegexDB == nil {
@@ -113,7 +113,7 @@ func TestSnapshotContainers(t *testing.T) {
 	s.pslFeedPrivatePolicy, s.pslFeedIcannPolicy = "apex", "ignore"
 	c := s.containers()
 	if !mwSameMap(c.dataDB, s.dataDB) || !mwSameMap(c.zoneDB, s.zoneDB) || !mwSameMap(c.whiteDB, s.whiteDB) ||
-		!mwSameMap(c.feedGroupIndexDB, s.feedGroupIndexDB) || !mwSameMap(c.hstsDB, s.hstsDB) {
+		!mwSameMap(c.feedGroupIndexDB, s.feedGroupIndexDB) {
 		t.Error("a container map is a copy, want the snapshot's own map")
 	}
 	if c.regexDB != s.regexDB || c.allowRegexDB != s.allowRegexDB || c.userRegexDB != s.userRegexDB || c.userAllowRegexDB != s.userAllowRegexDB {
@@ -145,7 +145,6 @@ func mwSnapshot(tag int) *snapshot {
 	s.zoneDB["zone.example"] = &blockEntry{log: "1", index: tag, band: PRIO_FEED_BLOCK}
 	s.whiteDB["white.example"] = mwBand(true, true, PRIO_USER_ALLOW)
 	s.feedGroupIndexDB[tag] = feedGroup{feed: fmt.Sprint("feed", tag), group: fmt.Sprint("group", tag)}
-	s.hstsDB["evil.example"] = struct{}{}
 	s.regexDB.set("r", &regexEntry{band: PRIO_FEED_BLOCK})
 	s.noAAAADB["v6.example"] = true
 	s.safeSearchDB["search.example"] = safeSearchEntry{a: fmt.Sprint(tag), aaaa: "", v4: "192.0.2.1"}
@@ -191,10 +190,6 @@ func TestSnapshotSwapRace(t *testing.T) {
 				}
 				if !evaluateNoaaaa("v6.example", snap.noAAAADB) || snap.regexDB.len() != 1 || len(snap.gpNetDB) != 1 {
 					t.Error("snapshot lost an entry it was published with")
-					return
-				}
-				if _, ok := snap.containers().hstsDB["evil.example"]; !ok {
-					t.Error("containers() lost hstsDB")
 					return
 				}
 				dec := decisionFor(memo, names[(w+i)%len(names)], snap.gen)

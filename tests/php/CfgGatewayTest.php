@@ -151,7 +151,6 @@ final class CfgGatewayTest extends TestCase
 			'gen/enable_cb'        => 'installedpackages/pfblockerng/config/0/enable_cb',
 			'dnsbl/pfb_dnsbl'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
 			'gen/pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
-			'dnsbl/pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
 			'dnsbl/pfb_psl_include_private' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_include_private',
 			'dnsbl/pfb_psl_allow_private' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_allow_private',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
@@ -185,7 +184,7 @@ final class CfgGatewayTest extends TestCase
 	public function testToggleFieldsRoundTripOff(): void
 	{
 		// pfb_keep is default-on — see testPfbKeepRoundTrip*() below. issue #1907:
-		// dnsbl/pfb_hsts, dnsbl/pfb_py_reply, ip/suppression joined
+		// dnsbl/pfb_py_reply, ip/suppression joined
 		// that same default-on class. Their present empty token is explicit Off and is
 		// covered by ConfigEmptyStorageContractTest.
 		$toggle_fields = [
@@ -861,7 +860,7 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	/**
-	 * issue #1907: dnsbl/pfb_py_reply, dnsbl/pfb_hsts, ip/suppression --
+	 * issue #1907: dnsbl/pfb_py_reply, ip/suppression --
 	 * same default-on shape as pfb_idn_block_malicious/pfb_keep above. Absent resolves
 	 * to On; present empty and legacy 'off' resolve to Off; present 'on' resolves to On.
 	 */
@@ -869,7 +868,6 @@ final class CfgGatewayTest extends TestCase
 	{
 		$fields = [
 			'dnsbl/pfb_py_reply' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply',
-			'dnsbl/pfb_hsts'     => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
 			'ip/suppression'     => 'installedpackages/pfblockerngipsettings/config/0/suppression',
 		];
 
@@ -1678,7 +1676,6 @@ final class CfgGatewayTest extends TestCase
 			'global_log',
 			'pfb_dnsbl_lenient',
 			'pfb_py_reply',
-			'pfb_hsts',
 			'pfb_idn',
 			'pfb_idn_block_malicious',
 			'pfb_idn_escalate_suspicious',
@@ -3146,7 +3143,6 @@ final class CfgGatewayTest extends TestCase
 			'pfb_dnsbl'       => 'on',           // adapted (toggle), canonical.
 			'top1m_source'      => 'domcop',        // adapted (top1m_source), LEGACY -> normalises.
 			'pfb_idn'         => 'all',           // adapted (idn_mode), ALPHA-ONLY -> normalises.
-			'pfb_hsts'        => 'on',            // adapted (toggle), canonical.
 			'dnsbl_interface' => 'lo0',           // unadapted, plain.
 			'pfb_dnsvip4'     => '',              // unadapted, plain.
 			'top1m_token'     => 'QWJjMTIz',      // unadapted, plain (base64-shaped).
@@ -3161,7 +3157,6 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('on', $result['pfb_dnsbl'], 'pfb_dnsbl canonical stays on');
 		$this->assertSame('openpagerank', $result['top1m_source'], "legacy 'domcop' normalises to 'openpagerank'");
 		$this->assertSame('', $result['pfb_idn'], "alpha-only 'all' normalises to empty");
-		$this->assertSame('on', $result['pfb_hsts'], 'pfb_hsts canonical stays on');
 		$this->assertSame('lo0', $result['dnsbl_interface'], 'unadapted dnsbl_interface is byte-identical');
 		$this->assertSame('', $result['pfb_dnsvip4'], 'unadapted pfb_dnsvip4 is byte-identical');
 		$this->assertSame('QWJjMTIz', $result['top1m_token'], 'unadapted top1m_token is byte-identical');
@@ -3251,9 +3246,9 @@ final class CfgGatewayTest extends TestCase
 	 *
 	 * issue #1907: the fixture pins the #1931 re-key TRANSITION (that flipping bare
 	 * keys to alias/bare paths changed nothing else), not future default-value
-	 * decisions -- so pfb_py_reply/pfb_hsts's rows were updated in step with
-	 * the registry (default '' -> 'on'; pfb_py_reply additionally gained the
-	 * toggle adapter pfb_hsts already carried) rather than frozen against it.
+	 * decisions -- so pfb_py_reply's row was updated in step with
+	 * the registry (default '' -> 'on', and the toggle adapter) rather than frozen
+	 * against it. Issue #4053 removed pfb_hsts and its row.
 	 */
 	public function testPathKeyedRegistryMatchesPre1931ParityFixture(): void
 	{
