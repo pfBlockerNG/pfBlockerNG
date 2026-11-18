@@ -178,11 +178,16 @@ func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 		return false
 	}
 	os.WriteFile(base+".source", []byte(identity), 0o644)
-	if cfg.Detect {
-		writeValidatorsAt(base+".orig", probe.etag, probe.lastMod)
-		res.Top1MChanged = true
-		ledger("")
+	if !cfg.Detect {
+		// No probe validated this list: validators of an older version would let a server that reverts to it answer 304
+		// for a list Core no longer holds. PHP keeps them (owner, 2026-11-18).
+		os.Remove(base + ".orig.etag")
+		os.Remove(base + ".orig.lastmod")
+		return true
 	}
+	writeValidatorsAt(base+".orig", probe.etag, probe.lastMod)
+	res.Top1MChanged = true
+	ledger("")
 	return true
 }
 
