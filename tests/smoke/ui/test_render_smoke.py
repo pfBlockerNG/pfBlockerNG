@@ -3062,7 +3062,7 @@ def _set_scalar_or_absent(vm: SmokeVM, path: str, value: str | None) -> None:
     )
 
 
-@pytest.mark.parametrize(("page", "marker", "toggles"), _ISSUE1907_TOGGLE_PAGES, ids=["dnsbl-page", "dns-general-page"])
+@pytest.mark.parametrize(("page", "marker", "toggles"), _ISSUE1907_TOGGLE_PAGES, ids=["dns-general-page"])
 def test_dnsbl_python_gated_toggles_render_checked_when_absent(
     smoke_vm: SmokeVM,
     webui: WebUI,
@@ -3094,7 +3094,7 @@ def test_dnsbl_python_gated_toggles_render_checked_when_absent(
             _set_scalar_or_absent(vm, path, priors[path])
 
 
-@pytest.mark.parametrize(("page", "marker", "toggles"), _ISSUE1907_TOGGLE_PAGES, ids=["dnsbl-page", "dns-general-page"])
+@pytest.mark.parametrize(("page", "marker", "toggles"), _ISSUE1907_TOGGLE_PAGES, ids=["dns-general-page"])
 def test_dnsbl_python_gated_toggles_render_unchecked_when_stored_off(
     smoke_vm: SmokeVM,
     webui: WebUI,

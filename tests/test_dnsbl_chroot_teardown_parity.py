@@ -50,6 +50,7 @@ RETIRED_CHROOT_FILES = [
     "pfb_py_module.applied",
     "pfb_dnsbl_regex_rules.py",
     "pfb_python.sh",
+    "pfb_py_hsts.txt",
 ]
 
 
