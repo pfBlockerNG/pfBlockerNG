@@ -293,7 +293,7 @@ func sqlStrings(t *testing.T, db *sql.DB, query string) []string {
 }
 
 // sqlDecisionDefaults are the generator's DECISION: what a details_dnsbl step leaves unset.
-const sqlDecisionDefaults = `{"is_found":true,"in_whitelist":false,"in_hsts":false,"null_blocking":false,"nxdomain":false,
+const sqlDecisionDefaults = `{"is_found":true,"in_whitelist":false,"null_blocking":false,"nxdomain":false,
 "log_type":"1","b_type":"DNSBL","p_type":"Python","feed":"Feed","group":"G1","b_eval":"example.com",
 "group_owner":"G1","group_origin":"custom"}`
 

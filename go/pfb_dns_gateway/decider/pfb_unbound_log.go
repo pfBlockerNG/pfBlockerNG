@@ -272,11 +272,11 @@ func convertIpv6(x []byte) (string, error) {
 type dnsblEvent struct {
 	qName, qType, transport, qIP, listenerIP, listenerInterface string
 
-	isFound, inWhitelist, inHsts, nullBlocking, nxdomain bool
-	logType, bType, pType, feed, group, bEval            string
-	idnAlert                                             idnAlert
-	hasIdnAlert                                          bool
-	groupOwner, groupOrigin                              string
+	isFound, inWhitelist, nullBlocking, nxdomain bool
+	logType, bType, pType, feed, group, bEval    string
+	idnAlert                                     idnAlert
+	hasIdnAlert                                  bool
+	groupOwner, groupOrigin                      string
 }
 
 // seen records the event as the last one and reports whether it equals the previous.
@@ -334,7 +334,7 @@ func (m *pfbUnbound) getDetailsDnsbl(mType string, qinfo *queryInfo, qstate *mod
 	// The decision is name- and qtype-independent for some block kinds, so the name and q_type are part of the event.
 	event := dnsblEvent{
 		qName: pysem.Lower(qName), qType: qType, transport: transport, qIP: qIP, listenerIP: listenerIP, listenerInterface: listenerInterface,
-		isFound: dnsbl.isFound, inWhitelist: dnsbl.inWhitelist, inHsts: dnsbl.inHsts, nullBlocking: dnsbl.nullBlocking,
+		isFound: dnsbl.isFound, inWhitelist: dnsbl.inWhitelist, nullBlocking: dnsbl.nullBlocking,
 		nxdomain: dnsbl.nxdomain, logType: dnsbl.logType, bType: dnsbl.bType, pType: dnsbl.pType, feed: dnsbl.feed,
 		group: dnsbl.group, bEval: dnsbl.bEval, groupOwner: dnsbl.groupOwner, groupOrigin: dnsbl.groupOrigin,
 	}

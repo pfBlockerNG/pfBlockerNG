@@ -1415,19 +1415,6 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
 		],
 
-		// HSTS null-blocking mode: 'on' | ''. Default on (the de-facto page default
-		// since 3.2 -- #1907 owner decision). A present empty token is deliberate Off.
-		// Bespoke pre-ADR-02 migration (pfb_python_gated_toggles_migrate)
-		// additionally disables a stored 'on' that was inert under pre-upgrade Unbound
-		// mode.
-		'dnsbl/pfb_hsts' => [
-			'default'       => 'on',
-			'read_adapter'  => 'pfb_cfg_toggle_read',
-			'write_adapter' => 'pfb_cfg_toggle_write',
-			'sync'          => 'policy',
-			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
-		],
-
 		// ADR-08: IDN mode — adopted into the gateway as a PfbIdnMode enum (ADR-28
 		// reframe: preserve behaviour on upgrade, not byte-identical storage). Read
 		// normalises legacy 'on' -> All; write persists the canonical token
@@ -3765,7 +3752,7 @@ function pfb_migration_registry(): array
 			'message'  => 'pfBlockerNG: retire legacy configuration key names (issue #1898)',
 			'since'    => '3.2.0',
 		],
-		// 2. issue #1907: disable pfb_py_reply/pfb_hsts when inert under pre-upgrade
+		// 2. issue #1907: disable pfb_py_reply when inert under pre-upgrade
 		// Unbound mode. MUST run immediately before adr02-dnsbl-python-mode -- it reads
 		// 'dnsbl_mode' as pre-upgrade evidence that the very next entry overwrites.
 		[

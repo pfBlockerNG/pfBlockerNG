@@ -183,15 +183,6 @@ func (m *pfbUnbound) reloadBuildSnapshot() (*snapshot, error) {
 	regexDBUpdate(next.userAllowRegexDB, build.userAllowRegexDB)
 	next.importantRules = build.importantRules || next.userRegexDB.len() > 0
 
-	// hstsDB is no part of the manifest: omitting it would ship an empty one and flip HSTS NULL-vs-VIP behaviour.
-	if settings.pythonHsts && isFile(settings.pfbPyHsts) {
-		if data, err := m.readFile(settings.pfbPyHsts); err != nil {
-			pyStderr(fmt.Sprintf("[pfBlockerNG]: reload: failed to load %s: %v", settings.pfbPyHsts, err))
-		} else {
-			addHstsLines(next.hstsDB, data)
-		}
-	}
-
 	loaded := len(next.dataDB) > 0 || len(next.zoneDB) > 0 || next.regexDB.len() > 0 || next.allowRegexDB.len() > 0 ||
 		next.userRegexDB.len() > 0 || next.userAllowRegexDB.len() > 0
 	m.finishSnapshot(next, settings, m.dnsblStatsWanted(settings) || loaded)

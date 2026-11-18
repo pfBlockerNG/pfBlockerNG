@@ -417,13 +417,13 @@ dnsbl_cache() {
 	pfbmount="${pfbmount:-/sbin/mount}"
 	pfbumount="${pfbumount:-/sbin/umount}"
 
-	# The shipped (static) files the chroot reads: the PSL authority, the HSTS list, the observer and its boot hook.
-	PFB_PY_SHIPPED='dnsbl_psl pfb_py_hsts.txt pfb_upstream_observer.py pfb_upstream_observer_include.inc'
+	# The shipped (static) files the chroot reads: the PSL authority, the observer and its boot hook.
+	PFB_PY_SHIPPED='dnsbl_psl pfb_upstream_observer.py pfb_upstream_observer_include.inc'
 	# Files an older package staged into the chroot that nothing reads any more (#3791): the module, its mount hook
 	# (pfb_unbound_include.inc, #3795), its code fingerprint (pfb_py_module.applied, which the pfb_py_* archive glob
 	# would restore on every RAM-disk reboot), and the regex rules and launcher that only the module used from there
-	# (the save-time probe and every other consumer run the /usr/local copies).
-	PFB_PY_RETIRED='pfb_unbound.py pfb_unbound_include.inc pfb_py_module.applied pfb_dnsbl_regex_rules.py pfb_python.sh'
+	# (the save-time probe and every other consumer run the /usr/local copies), and the HSTS list (#4053).
+	PFB_PY_RETIRED='pfb_unbound.py pfb_unbound_include.inc pfb_py_module.applied pfb_dnsbl_regex_rules.py pfb_python.sh pfb_py_hsts.txt'
 
 	# Whether a retired file stays: the module, its mount hook and the rules it imports, while the chroot's unbound.conf
 	# still names pfb_unbound.py (an upgrade whose removal of Unbound's python settings config.xml refused).
@@ -508,7 +508,7 @@ dnsbl_cache() {
 			# Archive the generated chroot set plus exact TOP1M detector sidecars,
 			# EXCLUDING shipped and retired files (PFB_PY_SHIPPED, PFB_PY_RETIRED) -- those are re-staged from
 			# /usr/local on restore, so archiving them would reinstate stale code (e.g.
-			# pfb_py_hsts.txt matches the pfb_py_* glob but is shipped, not generated).
+			# pfb_py_hsts.txt matches the pfb_py_* glob but is retired, not generated).
 			set --
 			for _g in "${pfbchroot}"/pfb_unbound* "${pfbchroot}"/pfb_py_*; do
 				[ -e "${_g}" ] || continue

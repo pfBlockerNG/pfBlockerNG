@@ -106,20 +106,20 @@ PHP;
 		$this->assertLockReleased();
 	}
 
-	public function testMissingArchiveSaveLeavesShippedHstsForTheNormalPassToStage(): void
+	public function testMissingArchiveSaveLeavesTheShippedPslForTheNormalPassToStage(): void
 	{
-		// Given different shipped and currently staged HSTS data, before the old fingerprint is taken
-		file_put_contents("{$this->dir}/pkg/pfb_py_hsts.txt", 'new.example');
-		file_put_contents("{$this->dir}/chroot/pfb_py_hsts.txt", 'old.example');
+		// Given different shipped and currently staged PSL data, before the old fingerprint is taken
+		file_put_contents("{$this->dir}/pkg/dnsbl_psl", 'new.example');
+		file_put_contents("{$this->dir}/chroot/dnsbl_psl", 'old.example');
 
 		// When conf fills a missing archive
 		pfb_dnsbl_cache('conf');
 
 		// Then capture has not changed the old fingerprint input; the normal DNSBL stage still copies the new data
 		$this->archive();
-		$this->assertSame('old.example', file_get_contents("{$this->dir}/chroot/pfb_py_hsts.txt"), 'capture must not mask the HSTS change before fingerprinting');
+		$this->assertSame('old.example', file_get_contents("{$this->dir}/chroot/dnsbl_psl"), 'capture must not mask the PSL change before fingerprinting');
 		exec(escapeshellarg("{$this->dir}/save.sh") . ' dnsbl_cache stage 2>/dev/null');
-		$this->assertSame('new.example', file_get_contents("{$this->dir}/chroot/pfb_py_hsts.txt"), 'normal staging must still install the shipped HSTS');
+		$this->assertSame('new.example', file_get_contents("{$this->dir}/chroot/dnsbl_psl"), 'normal staging must still install the shipped PSL');
 	}
 
 	public function testStopEntryPointUsesTheLockedSave(): void

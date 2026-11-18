@@ -77,7 +77,6 @@ func dnsProjection() Projection {
 	policy := []string{"ignore", "apex", "honor"}
 	return Projection{ID: "dns", Fields: []Field{
 		{Name: "replyLogging", Type: TypeBool, Default: true},
-		{Name: "hstsNullBlocking", Type: TypeBool, Default: true},
 		{Name: "tldWildcard", Type: TypeBool, Default: false},
 		{Name: "pslIncludePrivate", Type: TypeBool, Default: true},
 		{Name: "pslAllowPrivate", Type: TypeBool, Default: false},

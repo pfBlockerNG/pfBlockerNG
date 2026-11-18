@@ -322,7 +322,7 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 		$this->arrange([self::DNSBL => [self::dnsblGroup()]]);
 		$read = $this->read();
 		$settings = $read['settings'];
-		$settings['dns']['hstsNullBlocking'] = !$settings['dns']['hstsNullBlocking'];
+		$settings['dns']['idnBlockMalicious'] = !$settings['dns']['idnBlockMalicious'];
 		$settings['feeds/dnsbl']['groups'][0]['feeds'][0]['action'] = 'deny';
 
 		$reply = $this->write($settings, $read['revision']);

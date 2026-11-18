@@ -149,7 +149,7 @@ func TestControlPublishersDoNothingOnceTheModuleIsClosed(t *testing.T) {
 // A late build on a database that was closed at boot (the reload is what turns statistics on) opens nothing and
 // recovers nothing: the corrupt file at the database's path is left as it was.
 func TestALateBuildOnAColdDatabaseOpensNothingAndRemovesNothing(t *testing.T) {
-	dir := opManifestModule(t, []string{"python_hsts = true"}, map[string][]string{})
+	dir := opManifestModule(t, nil, map[string][]string{})
 	rlQuietLog(t)
 	m := modMust(t, dir)
 	m.stopReloadWatcher()
@@ -162,19 +162,13 @@ func TestALateBuildOnAColdDatabaseOpensNothingAndRemovesNothing(t *testing.T) {
 	if err := os.WriteFile(m.pfb.pfbPyDnsbl, corrupt, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(m.pfb.pfbPyHsts, []byte("example\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	rlWriteFeeds(t, dir, map[string][]string{"feed.txt": {"late.example"}})
 	entered, release, ended := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	ticks := make(chan time.Time)
-	originalRead := m.readFile
-	m.readFile = func(path string) ([]byte, error) {
-		if path == m.pfb.pfbPyHsts {
-			close(entered)
-			<-release
-		}
-		return originalRead(path)
+	m.reloadBuilder = func() (*snapshot, error) {
+		close(entered)
+		<-release
+		return m.reloadBuildSnapshot()
 	}
 	m.reloadTick = func() (<-chan time.Time, func()) { return ticks, func() { close(ended) } }
 	rlPublish(t, m, 1)

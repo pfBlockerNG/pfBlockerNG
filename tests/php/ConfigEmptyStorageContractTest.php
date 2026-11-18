@@ -20,7 +20,6 @@ final class ConfigEmptyStorageContractTest extends TestCase
 		'gen/pfb_feed_internal_filter'   => ['section' => 'gen', 'bare' => 'pfb_feed_internal_filter'],
 		'gen/pfb_syntax_highlight'       => ['section' => 'gen', 'bare' => 'pfb_syntax_highlight'],
 		'dnsbl/pfb_py_reply'              => ['section' => 'dnsbl', 'bare' => 'pfb_py_reply'],
-		'dnsbl/pfb_hsts'                  => ['section' => 'dnsbl', 'bare' => 'pfb_hsts'],
 		'dnsbl/pfb_idn_block_malicious'  => ['section' => 'dnsbl', 'bare' => 'pfb_idn_block_malicious'],
 		'ip/suppression'                  => ['section' => 'ip', 'bare' => 'suppression'],
 	];

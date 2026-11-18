@@ -21,7 +21,6 @@ final class CoreSettingsDnsParityTest extends TestCase
 	/** The native field => its pfb_unbound.ini [MAIN] key. */
 	private const INI_KEY = [
 		'replyLogging'          => 'python_reply',
-		'hstsNullBlocking'      => 'python_hsts',
 		'tldWildcard'           => 'python_tld_wildcard',
 		'pslIncludePrivate'     => 'psl_include_private',
 		'pslAllowPrivate'       => 'psl_allow_private',

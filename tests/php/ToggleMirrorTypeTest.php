@@ -36,7 +36,6 @@ final class ToggleMirrorTypeTest extends TestCase
 		'enable',
 		'keep',
 		'dnsbl',
-		'dnsbl_hsts',
 		// issue #3515: DNS-proxy toggle, sourced through PfbConfig::read().
 		'pfb_dns',
 		// issue #1907 (#1921 S3): moved from ToggleSectionMirrorTypeTest -- now sourced

@@ -188,13 +188,13 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Scenario: returns the four flat inputs (incl. HSTS + PSL authority) plus sorted
+	 * Scenario: returns the three flat inputs (incl. the PSL authority) plus sorted
 	 * manifest-authoritative raw files -- NOT orphan raw files or the retired
 	 * unbound_py_data/unbound_py_zone (ADR-65).
 	 *
 	 * Given:  a $pfb array with two referenced raw files and one orphan raw file
 	 * When:   pfb_dnsbl_loaded_input_paths() is called
-	 * Then:   result contains wh/sources/hsts/tld plus both referenced paths, in
+	 * Then:   result contains wh/sources/tld plus both referenced paths, in
 	 *         sorted order, and excludes the orphan and retired data/zone paths
 	 */
 	public function testReturnsFlatInputsPlusSortedRaws(): void
@@ -216,10 +216,10 @@ final class DnsblLoadedFingerprintTest extends TestCase
 			'unbound_py_zone'    => "{$this->tmpDir}/pfb_py_zone.txt",
 			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
-			'unbound_py_hsts'    => "{$this->tmpDir}/pfb_py_hsts.txt",
 			'unbound_py_psl'     => "{$this->tmpDir}/dnsbl_psl",
 			'unbound_py_rawdir'  => $rawDir,
 			// Keys that must NOT appear in the result:
+			'unbound_py_hsts'        => "{$this->tmpDir}/pfb_py_hsts.txt",
 			'unbound_py_count'       => "{$this->tmpDir}/pfb_py_count",
 			'unbound_py_regex_count' => "{$this->tmpDir}/pfb_py_regex_count",
 			'unbound_py_ss'          => "{$this->tmpDir}/pfb_py_ss.txt",
@@ -227,14 +227,13 @@ final class DnsblLoadedFingerprintTest extends TestCase
 
 		$result = pfb_dnsbl_loaded_input_paths($pfb);
 
-		// The four flat inputs must be present (incl. HSTS + PSL authority).
+		// The three flat inputs must be present (incl. the PSL authority).
 		// ADR-65: unbound_py_data/unbound_py_zone are retired writer targets --
 		// they must NOT appear (a stray on-disk copy must never gate the reload).
 		$this->assertNotContains($pfb['unbound_py_data'], $result, 'retired unbound_py_data must NOT be in the path list (ADR-65)');
 		$this->assertNotContains($pfb['unbound_py_zone'], $result, 'retired unbound_py_zone must NOT be in the path list (ADR-65)');
 		$this->assertContains($pfb['unbound_py_wh'],      $result, 'unbound_py_wh must be in the path list');
 		$this->assertContains($pfb['unbound_py_sources'], $result, 'unbound_py_sources must be in the path list');
-		$this->assertContains($pfb['unbound_py_hsts'],    $result, 'unbound_py_hsts must be in the path list (shipped HSTS preload; #520)');
 		$this->assertContains($pfb['unbound_py_psl'],     $result, 'unbound_py_psl must be in the path list (shipped PSL authority)');
 
 		// Both .raw files must be present.
@@ -246,6 +245,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 		$this->assertNotContains($pfb['unbound_py_count'],       $result, 'unbound_py_count must be excluded (Python-emitted output)');
 		$this->assertNotContains($pfb['unbound_py_regex_count'], $result, 'unbound_py_regex_count must be excluded (Python-emitted output)');
 		$this->assertNotContains($pfb['unbound_py_ss'],          $result, 'unbound_py_ss must be excluded (has its own SafeSearch gate)');
+		$this->assertNotContains($pfb['unbound_py_hsts'],        $result, 'the retired HSTS list must be excluded (#4053)');
 
 		// The .raw files must be sorted (aa before zz).
 		$raw_in_result = array_filter($result, static fn(string $p) => str_ends_with($p, '.raw'));
@@ -255,11 +255,11 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	}
 
 	/**
-	 * Scenario: empty rawdir — no .raw files, just the four flat inputs (incl. HSTS + PSL).
+	 * Scenario: empty rawdir — no .raw files, just the three flat inputs (incl. the PSL).
 	 *
 	 * Given:  a rawdir that is empty (no .raw files)
 	 * When:   pfb_dnsbl_loaded_input_paths() is called
-	 * Then:   result has exactly 4 entries (wh/sources/hsts/tld only -- ADR-65
+	 * Then:   result has exactly 3 entries (wh/sources/tld only -- ADR-65
 	 *         retired unbound_py_data/unbound_py_zone are never in the returned list)
 	 */
 	public function testEmptyRawdirReturnsOnlyFlatInputs(): void
@@ -269,7 +269,6 @@ final class DnsblLoadedFingerprintTest extends TestCase
 			'unbound_py_zone'    => "{$this->tmpDir}/pfb_py_zone.txt",
 			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
-			'unbound_py_hsts'    => "{$this->tmpDir}/pfb_py_hsts.txt",
 			'unbound_py_psl'     => "{$this->tmpDir}/dnsbl_psl",
 			'unbound_py_rawdir'  => "{$this->tmpDir}/raw",
 			'unbound_py_count'       => "{$this->tmpDir}/pfb_py_count",
@@ -279,7 +278,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 
 		$result = pfb_dnsbl_loaded_input_paths($pfb);
 
-		$this->assertCount(4, $result, 'With no .raw files, exactly the four flat inputs are returned (wh/sources/hsts/tld)');
+		$this->assertCount(3, $result, 'With no .raw files, exactly the three flat inputs are returned (wh/sources/tld)');
 	}
 
 	public function testManifestPathsIncludeMissingConfinedRefButRejectEscapesAndSymlinks(): void
@@ -309,84 +308,11 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	}
 
 	/**
-	 * Scenario: HSTS file content change is detected by the fingerprint — #520 regression guard.
-	 *
-	 * The shipped pfb_py_hsts.txt is re-staged by dnsbl_cache_stage() (cp -f) between the
-	 * $pfb_fp_old and $pfb_fp_new snapshots.  Before the #520 fix, hsts was absent from the
-	 * path list so a package update shipping a new HSTS list never flipped the fingerprint
-	 * and the zero-downtime reload was skipped.
-	 *
-	 * Given:  an HSTS file included in the path set via pfb_dnsbl_loaded_input_paths()
-	 * When:   the file content changes (simulating a package update staging a new list)
-	 * Then:   the fingerprint differs (reload is triggered)
-	 *
-	 * Before-state assertion is mandatory: proves the flip is caused by the HSTS file change.
-	 */
-	public function testHstsFileChangeChangesFingerprint(): void
-	{
-		$hsts = "{$this->tmpDir}/pfb_py_hsts.txt";
-		file_put_contents($hsts, "preload-domain.example\n");
-
-		$pfb = [
-			'unbound_py_data'    => "{$this->tmpDir}/pfb_py_data.txt",
-			'unbound_py_zone'    => "{$this->tmpDir}/pfb_py_zone.txt",
-			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
-			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
-			'unbound_py_hsts'    => $hsts,
-			'unbound_py_psl'     => "{$this->tmpDir}/dnsbl_psl",
-			'unbound_py_rawdir'  => "{$this->tmpDir}/raw",
-		];
-
-		// Before: record fingerprint with the original HSTS content.
-		$fp_before = pfb_dnsbl_loaded_fingerprint(pfb_dnsbl_loaded_input_paths($pfb));
-
-		// Simulate dnsbl_cache_stage() cp -f staging a new shipped list.
-		file_put_contents($hsts, "preload-domain.example\nnew-preload.example\n");
-
-		// After: fingerprint must differ (reload fires).
-		$fp_after = pfb_dnsbl_loaded_fingerprint(pfb_dnsbl_loaded_input_paths($pfb));
-
-		$this->assertNotSame(
-			$fp_before,
-			$fp_after,
-			'A change to pfb_py_hsts.txt must produce a different fingerprint (#520: shipped HSTS update must trigger a zero-downtime reload)'
-		);
-	}
-
-	/**
-	 * Scenario: HSTS file unchanged between snapshots — no spurious reload.
-	 *
-	 * Given:  an HSTS file that does not change between two fingerprint calls
-	 * When:   the fingerprint is computed twice via pfb_dnsbl_loaded_input_paths()
-	 * Then:   fingerprints are equal (no reload on an identical re-stage)
-	 */
-	public function testHstsFileUnchangedProducesEqualFingerprint(): void
-	{
-		$hsts = "{$this->tmpDir}/pfb_py_hsts.txt";
-		file_put_contents($hsts, "preload-domain.example\n");
-
-		$pfb = [
-			'unbound_py_data'    => "{$this->tmpDir}/pfb_py_data.txt",
-			'unbound_py_zone'    => "{$this->tmpDir}/pfb_py_zone.txt",
-			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
-			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
-			'unbound_py_hsts'    => $hsts,
-			'unbound_py_psl'     => "{$this->tmpDir}/dnsbl_psl",
-			'unbound_py_rawdir'  => "{$this->tmpDir}/raw",
-		];
-
-		$fp1 = pfb_dnsbl_loaded_fingerprint(pfb_dnsbl_loaded_input_paths($pfb));
-		$fp2 = pfb_dnsbl_loaded_fingerprint(pfb_dnsbl_loaded_input_paths($pfb));
-
-		$this->assertSame($fp1, $fp2, 'Unchanged HSTS file must not cause a spurious fingerprint change');
-	}
-
-	/**
 	 * Scenario: PSL authority content change is detected by the fingerprint —
-	 * issue #1255, HSTS-parity (#520) applied to the public-suffix oracle.
+	 * issue #1255, the #520 fingerprint rule applied to the public-suffix oracle.
 	 *
 	 * The shipped dnsbl_psl is re-staged by dnsbl_cache_stage() (cp -f) between
-	 * the $pfb_fp_old and $pfb_fp_new snapshots, exactly like pfb_py_hsts.txt. A
+	 * the $pfb_fp_old and $pfb_fp_new snapshots. A
 	 * package update shipping a new PSL authority must flip the fingerprint so the
 	 * zero-downtime reload picks it up.
 	 *
@@ -404,7 +330,6 @@ final class DnsblLoadedFingerprintTest extends TestCase
 			'unbound_py_zone'    => "{$this->tmpDir}/pfb_py_zone.txt",
 			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
-			'unbound_py_hsts'    => "{$this->tmpDir}/pfb_py_hsts.txt",
 			'unbound_py_psl'     => $tld,
 			'unbound_py_rawdir'  => "{$this->tmpDir}/raw",
 		];
@@ -440,7 +365,6 @@ final class DnsblLoadedFingerprintTest extends TestCase
 			'unbound_py_zone'    => "{$this->tmpDir}/pfb_py_zone.txt",
 			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
-			'unbound_py_hsts'    => "{$this->tmpDir}/pfb_py_hsts.txt",
 			'unbound_py_psl'     => $tld,
 			'unbound_py_rawdir'  => "{$this->tmpDir}/raw",
 		];
@@ -473,7 +397,6 @@ final class DnsblLoadedFingerprintTest extends TestCase
 			'unbound_py_zone'    => "{$this->tmpDir}/pfb_py_zone.txt",
 			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
-			'unbound_py_hsts'    => "{$this->tmpDir}/pfb_py_hsts.txt",
 			'unbound_py_psl'     => "{$this->tmpDir}/dnsbl_psl",
 			'unbound_py_rawdir'  => "{$this->tmpDir}/raw",
 		];

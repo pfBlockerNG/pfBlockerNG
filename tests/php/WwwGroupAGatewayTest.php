@@ -95,8 +95,8 @@ final class WwwGroupAGatewayTest extends TestCase
 	}
 
 	/**
-	 * issue #1907: pfb_py_reply, pfb_hsts -- the #1907-class page/registry
-	 * divergence this closes. Their page-local `isset(...) ? ... : 'on'` defaults were
+	 * issue #1907: pfb_py_reply -- the #1907-class page/registry
+	 * divergence this closes. Its page-local `isset(...) ? ... : 'on'` defaults were
 	 * REMOVED and replaced by PfbConfig::read(); the registry default flipped from ''
 	 * to 'on' to match, closing the mismatch this test used to document (previously
 	 * the page and registry defaults disagreed, so the page-local default was
@@ -105,17 +105,12 @@ final class WwwGroupAGatewayTest extends TestCase
 	 *
 	 * Parity: absent key -> PfbConfig::read($key) === On (matches the prior page default).
 	 */
-	public function testDnsblPfbPyReplyPfbHstsAbsentDefaultMatchesPriorPageDefault(): void
+	public function testDnsblPfbPyReplyAbsentDefaultMatchesPriorPageDefault(): void
 	{
 		// pfb_py_reply: registry default now 'on' (matches the removed page default).
 		$this->assertNull(config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply'));
 		$this->assertSame(PfbToggle::On, PfbConfig::read('dnsbl/pfb_py_reply'),
 			'pfb_py_reply absent -> On (parity with prior isset default)');
-
-		// pfb_hsts: registry default now 'on' (matches the removed page default).
-		$this->assertNull(config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts'));
-		$this->assertSame(PfbToggle::On, PfbConfig::read('dnsbl/pfb_hsts'),
-			'pfb_hsts absent -> On (parity with prior isset default)');
 	}
 
 	// -----------------------------------------------------------------------
@@ -357,7 +352,6 @@ final class WwwGroupAGatewayTest extends TestCase
 			'dnsbl_webpage'              => 'dnsbl_default.php',
 			'pfb_cache_flush'            => 'on',
 			'pfb_py_reply'               => 'on',
-			'pfb_hsts'                   => 'on',
 			'pfb_idn'                    => 'off',
 			'pfb_idn_block_malicious'    => 'on',
 			'pfb_idn_escalate_suspicious' => '',

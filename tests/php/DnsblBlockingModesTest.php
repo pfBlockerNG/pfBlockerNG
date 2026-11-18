@@ -56,10 +56,10 @@ final class DnsblBlockingModesTest extends TestCase
 	/**
 	 * A genuinely fresh DNSBL section (NEWCFG) seeds global_log at the registered
 	 * default 'disabled_log' (Null Blocking, logging) -- issue #3288's fresh-install
-	 * default -- and leaves pfb_hsts at its own already-decided On default: the two
+	 * default -- and leaves pfb_idn_block_malicious at its own On default: the two
 	 * defaults are independent registry rows, and this fix must not regress the other.
 	 */
-	public function testFreshNewcfgDnsblSectionDefaultsGlobalLogToDisabledLogAndKeepsHstsOn(): void
+	public function testFreshNewcfgDnsblSectionDefaultsGlobalLogToDisabledLogAndKeepsAnotherOnDefault(): void
 	{
 		$sections = [self::DNSBL_SECTION => []];
 
@@ -68,8 +68,8 @@ final class DnsblBlockingModesTest extends TestCase
 		$this->assertSame('disabled_log', $result[self::DNSBL_SECTION]['global_log'] ?? NULL,
 			'NEWCFG must seed the registered default "disabled_log" (issue #3288 fresh-install default)'
 		);
-		$this->assertSame('on', $result[self::DNSBL_SECTION]['pfb_hsts'] ?? NULL,
-			'the HSTS On default must be unaffected by the global_log default fix'
+		$this->assertSame('on', $result[self::DNSBL_SECTION]['pfb_idn_block_malicious'] ?? NULL,
+			'the IDN-malicious On default must be unaffected by the global_log default fix'
 		);
 
 		$this->assertSecondPassIsEmpty($sections);

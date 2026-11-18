@@ -73,7 +73,7 @@ final class SyncPolicyMergeTest extends TestCase
 			],
 			'pfblockerngdnsblsettings' => [
 				'keys' => ['pfb_dnsbl', 'pfb_dnsbl_lenient', 'top1m_enable', 'top1m_source', 'top1m_count', 'global_log',
-					'pfb_hsts'],
+					'pfb_idn_block_malicious'],
 				'head' => ['top1m_token'], 'tail' => ['zz_unknown', 'dnsbl_webpage'], 'fixed' => [],
 			],
 			'pfblockernglistsv4', 'pfblockernglistsv6', 'pfblockerngdnsbl' => [

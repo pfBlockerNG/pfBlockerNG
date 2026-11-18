@@ -176,7 +176,7 @@ final class CoreSettingsDnsSettingsTest extends TestCase
 
 	public function testRefusedSettingsGiveOneMessagePerFieldError(): void
 	{
-		$this->store(['dnsbl/pfb_hsts' => '']);
+		$this->store(['dnsbl/pfb_idn_block_malicious' => '']);
 		$core = $this->core(['ValidateSettings' => self::refused(400, 'invalid_argument', 'invalid settings', [
 			['field' => 'changes.dns.decisionCacheMax', 'message' => 'must be at most 5000000'],
 			['field' => 'changes.dns.idnMode', 'message' => 'not one of off, confusable, on'],
@@ -190,7 +190,7 @@ final class CoreSettingsDnsSettingsTest extends TestCase
 		], $messages);
 		$this->assertSame('ValidateSettings', $this->calls[0][0]);
 		$this->assertSame(['changes'], array_keys($this->calls[0][1]), 'a dry run has no requestId');
-		$this->assertSame(['dns' => self::defaultsWith(['hstsNullBlocking' => FALSE])], $this->calls[0][1]['changes'], 'the in-memory config is what is validated');
+		$this->assertSame(['dns' => self::defaultsWith(['idnBlockMalicious' => FALSE])], $this->calls[0][1]['changes'], 'the in-memory config is what is validated');
 	}
 
 	public function testRefusedSettingsWithoutFieldErrorsGiveTheErrorsMessage(): void

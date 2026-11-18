@@ -1223,7 +1223,7 @@ func stringList(value any) []string {
 // dnsblConfigFromManifest shapes the manifest's config block into the build() config.
 //
 // The public-suffix oracle is not part of the manifest: a shipped dnsbl_psl file (pfb["pfb_py_psl"]) gated by
-// python_tld_wildcard or TLD-Allow, mirroring the HSTS file. A manifest config.tld_master key (a stale pre-#1255 shape)
+// python_tld_wildcard or TLD-Allow. A manifest config.tld_master key (a stale pre-#1255 shape)
 // is ignored entirely. issue #2371 adds a THIRD gate: either psl_feed_private_policy or psl_feed_icann_policy != "honor"
 // also requires the authority. With any gate ON, a missing/corrupt authority is an error (fail-closed, no silent empty
 // rule set); with all OFF it is never opened. The manifest is already validated; baseDir is unused, as in Python.

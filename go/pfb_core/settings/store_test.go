@@ -90,7 +90,7 @@ func TestTheSchemaNamesEveryDnsFieldWithItsTypeAndDefault(t *testing.T) {
 		t.Errorf("schema round-trip changed it:\n have %s\n want %s", again, got)
 	}
 	want := map[string]string{
-		"replyLogging": "bool true", "hstsNullBlocking": "bool true", "tldWildcard": "bool false",
+		"replyLogging": "bool true", "tldWildcard": "bool false",
 		"pslIncludePrivate": "bool true", "pslAllowPrivate": "bool false",
 		"pslFeedPrivatePolicy": `enum "honor" [ignore apex honor]`, "pslFeedIcannPolicy": `enum "honor" [ignore apex honor]`,
 		"idnMode": `enum "off" [off confusable on]`, "idnBlockMalicious": "bool true", "idnEscalateSuspicious": "bool false",

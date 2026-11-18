@@ -1,6 +1,6 @@
 // Go translation of src/usr/local/pkg/pfblockerng/pfb_unbound.py, the matcher's data model and lookups:
 // BuildResult, _snapshot_gen, Snapshot and containers (4525-4677); _top1m_listed (5571-5574);
-// iter_domain_suffixes .. hsts_check_domain with the whiteDB entry helpers (6829-6970); DnsblDecision, UNSET,
+// iter_domain_suffixes .. with the whiteDB entry helpers (6829-6970); DnsblDecision, UNSET,
 // Decision, _decision_for, _LruCache, the PRIO_* bands and _block_entry_band (6971-7127); whitelist_lookup_band
 // (7264-7289); evaluate_noaaaa (7778-7781).
 //
@@ -14,7 +14,6 @@ import (
 	"iter"
 	"net/netip"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -201,7 +200,6 @@ type snapshot struct {
 	userRegexDB      *regexDB
 	userAllowRegexDB *regexDB
 	feedGroupIndexDB map[int]feedGroup
-	hstsDB           map[string]struct{} // Python values are 0; only membership is read
 	importantRules   bool
 	counts           int
 	regexCount       int
@@ -249,7 +247,6 @@ func newSnapshot() *snapshot {
 		userRegexDB:          &regexDB{},
 		userAllowRegexDB:     &regexDB{},
 		feedGroupIndexDB:     map[int]feedGroup{},
-		hstsDB:               map[string]struct{}{},
 		rejects:              rejectTally{},
 		groupEpochs:          map[[2]string]string{},
 		pslIncludePrivate:    true,
@@ -273,7 +270,6 @@ type matcherContainers struct {
 	userRegexDB          *regexDB
 	userAllowRegexDB     *regexDB
 	feedGroupIndexDB     map[int]feedGroup
-	hstsDB               map[string]struct{}
 	pslRules             pslRules
 	tldAllowRoots        []string
 	pslIncludePrivate    bool
@@ -292,7 +288,6 @@ func (s *snapshot) containers() matcherContainers {
 		userRegexDB:          s.userRegexDB,
 		userAllowRegexDB:     s.userAllowRegexDB,
 		feedGroupIndexDB:     s.feedGroupIndexDB,
-		hstsDB:               s.hstsDB,
 		pslRules:             s.pslRules,
 		tldAllowRoots:        s.tldAllowRoots,
 		pslIncludePrivate:    s.pslIncludePrivate,
@@ -307,7 +302,6 @@ func (s *snapshot) containers() matcherContainers {
 type dnsblDecision struct {
 	isFound      bool
 	inWhitelist  bool
-	inHsts       bool
 	nullBlocking bool
 	// issue #31: NXDOMAIN block shape (log_type "3"/"4"), distinct from null_blocking (0.0.0.0/::) and VIP.
 	nxdomain bool
@@ -621,22 +615,6 @@ func resolveFeedGroup(index int, feedGroupIndexDB map[int]feedGroup) (string, st
 		return fg.feed, fg.group
 	}
 	return "Unknown", "Unknown"
-}
-
-func hstsCheckDomain(name string, hstsDB map[string]struct{}, hstsTlds []string, tld string) (bool, string) {
-	if slices.Contains(hstsTlds, tld) {
-		return true, "HSTS_TLD"
-	}
-	q := name
-	// issue #713: this walk must check EVERY parent suffix; skipping levels serves the block page over the wrong
-	// cert for an HSTS-preloaded parent.
-	for range strings.Count(q, ".") + 1 {
-		if _, ok := hstsDB[q]; ok {
-			return true, "HSTS"
-		}
-		q = dropFirstLabel(q)
-	}
-	return false, "Python"
 }
 
 // whitelistLookupBand is the highest whiteDB allow band that matches name (exact, www.-strip, then the wildcard

@@ -228,11 +228,11 @@ final class CoreSettingsPageSavesTest extends TestCase
 
 	public function testACoreRefusalBlocksTheDnsblSaveAndShowsTheError(): void
 	{
-		$socket = $this->core(['ValidateSettings' => self::refusal('hstsNullBlocking')]);
+		$socket = $this->core(['ValidateSettings' => self::refusal('idnBlockMalicious')]);
 
-		$result = $this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket], 'post' => ['pfb_hsts' => 'on']]);
+		$result = $this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket], 'post' => ['pfb_idn_block_malicious' => 'on']]);
 
-		$this->assertSame([self::refusedMessage('hstsNullBlocking')], $result['inputErrors']);
+		$this->assertSame([self::refusedMessage('idnBlockMalicious')], $result['inputErrors']);
 		$this->assertSame([], $result['writes'], 'nothing is written');
 		$this->assertSame($result['before'], $result['disk'], 'config.xml is as it was');
 		$this->assertTrue($result['returned'], 'the page renders the errors, rather than exiting through its redirect');
@@ -246,7 +246,7 @@ final class CoreSettingsPageSavesTest extends TestCase
 	{
 		$socket = $this->core(self::accepting());
 
-		$result = $this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket], 'post' => ['pfb_hsts' => 'on']]);
+		$result = $this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket], 'post' => ['pfb_idn_block_malicious' => 'on']]);
 
 		$this->assertSame([], $result['inputErrors']);
 		$this->assertSame([self::DNSBL_SAVE], $result['writes']);
@@ -254,7 +254,7 @@ final class CoreSettingsPageSavesTest extends TestCase
 		$requests = $this->requests();
 		$this->assertSame(['ValidateSettings', 'SettingsChanged'], array_column($requests, 'method'));
 		$dns = $requests[0]['body']['changes']['dns'];
-		$this->assertTrue($dns['hstsNullBlocking'], 'the dry run judges the posted HSTS');
+		$this->assertTrue($dns['idnBlockMalicious'], 'the dry run judges the posted IDN switch');
 		$this->assertTrue($dns['tldWildcard'], 'the dry run judges the posted TLD wildcard');
 		$this->assertSame('confusable', $dns['idnMode'], 'the dry run judges the posted IDN mode');
 		$this->assertNull($result['settingsFailed']);
@@ -264,7 +264,7 @@ final class CoreSettingsPageSavesTest extends TestCase
 	{
 		$socket = $this->core(self::accepting());
 
-		$this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket], 'post' => ['pfb_hsts' => 'on']]);
+		$this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket], 'post' => ['pfb_idn_block_malicious' => 'on']]);
 
 		$this->assertSame(['ValidateSettings', 'SettingsChanged'], $this->methods());
 	}
@@ -274,7 +274,7 @@ final class CoreSettingsPageSavesTest extends TestCase
 	{
 		$socket = $this->core(self::accepting());
 
-		$result = $this->save('DnsblSaveWorker', $scenario, ['core' => ['socket' => $socket], 'post' => ['pfb_hsts' => 'on']]);
+		$result = $this->save('DnsblSaveWorker', $scenario, ['core' => ['socket' => $socket], 'post' => ['pfb_idn_block_malicious' => 'on']]);
 
 		$this->assertNotSame([], $result['inputErrors'], 'a refused write is a save error');
 		$this->assertSame(['ValidateSettings'], $this->methods(), 'the dry run ran before the write; Core was not told after it');
@@ -314,9 +314,9 @@ final class CoreSettingsPageSavesTest extends TestCase
 	{
 		// Given a Core that refuses the settings (or accepts them, with pfSense then failing the write), and a save that posts a new
 		// TOP1M provider and a new TOP1M count
-		$socket = $this->core($coreRefuses ? ['ValidateSettings' => self::refusal('hstsNullBlocking')] : self::accepting());
+		$socket = $this->core($coreRefuses ? ['ValidateSettings' => self::refusal('idnBlockMalicious')] : self::accepting());
 
-		$result = $this->save('DnsblSaveWorker', $scenario, ['core' => ['socket' => $socket], 'post' => self::TRIGGERS + ['pfb_hsts' => 'on']]);
+		$result = $this->save('DnsblSaveWorker', $scenario, ['core' => ['socket' => $socket], 'post' => self::TRIGGERS + ['pfb_idn_block_malicious' => 'on']]);
 
 		// Then the save failed, and before it both effects were waiting to happen: the baseline in place, no marker
 		$this->assertSame($inputError, $result['inputErrors'] !== [], 'the save was not written, and the page says so unless it threw');
@@ -480,11 +480,11 @@ final class CoreSettingsPageSavesTest extends TestCase
 
 	public function testAGeneralSaveKeepsWhatAnotherWriterChangedInAnotherSectionSinceThePageLoaded(): void
 	{
-		// Given the page loaded HSTS on, and the Core settings adapter then wrote it off under the config lock
-		$hsts = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts';
-		config_set_path($hsts, 'on');
+		// Given the page loaded the IDN switch on, and the Core settings adapter then wrote it off under the config lock
+		$idnSwitch = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_block_malicious';
+		config_set_path($idnSwitch, 'on');
 		$this->configXmlOnDisk();
-		$this->disk['installedpackages']['pfblockerngdnsblsettings']['config'][0]['pfb_hsts'] = '';
+		$this->disk['installedpackages']['pfblockerngdnsblsettings']['config'][0]['pfb_idn_block_malicious'] = '';
 		$this->core(self::accepting());
 
 		// When General is saved
@@ -493,7 +493,7 @@ final class CoreSettingsPageSavesTest extends TestCase
 		// Then the adapter's write survives it, and General's own field is saved
 		$this->assertSame([], $scope['input_errors']);
 		$this->assertSame([self::GENERAL_SAVE], $GLOBALS['pfb_test_write_config_calls']);
-		$this->assertSame('', $this->onDisk($hsts), 'the other section is what the adapter wrote, not the copy the page loaded');
+		$this->assertSame('', $this->onDisk($idnSwitch), 'the other section is what the adapter wrote, not the copy the page loaded');
 		$this->assertSame('on', $this->onDisk('installedpackages/pfblockerng/config/0/pfb_metrics_client_ip'));
 		$this->assertEmpty($GLOBALS['pfb_test_lock_held'], 'the lock is released');
 	}

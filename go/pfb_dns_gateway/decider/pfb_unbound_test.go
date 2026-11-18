@@ -69,7 +69,6 @@ func modDefaults(dir string) pfbSettings {
 		pfbPyWhitelist:      in("pfb_py_whitelist.txt"),
 		pfbPyZone:           in("pfb_py_zone.txt"),
 		pfbPyData:           in("pfb_py_data.txt"),
-		pfbPyHsts:           in("pfb_py_hsts.txt"),
 		pfbPyTop1m:          in("pfb_py_top1m.txt"),
 		pfbPyPsl:            in("dnsbl_psl"),
 		pfbPySs:             in("pfb_py_ss.txt"),
@@ -86,10 +85,6 @@ func modDefaults(dir string) pfbSettings {
 		pfbPyResolver:       in("pfb_py_resolver.sqlite"),
 
 		rrTypes: []uint16{1, 28, 255, 5, 39, 24, 15, 2, 12, 33, 16, 64, 65},
-		hstsTlds: []string{
-			"android", "app", "bank", "chrome", "dev", "foo", "gle", "gmail", "google",
-			"hangout", "insurance", "meet", "new", "page", "play", "search", "youtube",
-		},
 	}
 }
 
@@ -342,7 +337,6 @@ var modBoolKeys = []modBoolKey{
 	{"python_enable", func(p *pfbSettings) bool { return p.pythonEnable }, false},
 	{"python_reply", func(p *pfbSettings) bool { return p.pythonReply }, false},
 	{"python_blocking", func(p *pfbSettings) bool { return p.pythonBlocking }, false},
-	{"python_hsts", func(p *pfbSettings) bool { return p.pythonHsts }, false},
 	{"python_tld_wildcard", func(p *pfbSettings) bool { return p.pythonTldWildcard }, false},
 	{"python_idn", func(p *pfbSettings) bool { return p.pythonIdn }, false},
 	{"python_idn_block_malicious", func(p *pfbSettings) bool { return p.pythonIdnBlockMalicious }, true},
@@ -502,10 +496,8 @@ func TestTwoBootedModulesShareNoState(t *testing.T) {
 	}
 	a.rcodeDB[3] = "changed"
 	a.pfb.rrTypes[0] = 9
-	a.pfb.hstsTlds[0] = "changed"
-	if b.rcodeDB[3] != "NXDOMAIN" || b.pfb.rrTypes[0] != 1 || b.pfb.hstsTlds[0] != "android" {
-		t.Errorf("after changing a: b has (rcodeDB[3], rrTypes[0], hstsTlds[0]) = (%q, %d, %q), want (NXDOMAIN, 1, android)",
-			b.rcodeDB[3], b.pfb.rrTypes[0], b.pfb.hstsTlds[0])
+	if b.rcodeDB[3] != "NXDOMAIN" || b.pfb.rrTypes[0] != 1 {
+		t.Errorf("after changing a: b has (rcodeDB[3], rrTypes[0]) = (%q, %d), want (NXDOMAIN, 1)", b.rcodeDB[3], b.pfb.rrTypes[0])
 	}
 }
 

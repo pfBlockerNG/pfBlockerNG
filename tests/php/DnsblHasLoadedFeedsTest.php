@@ -9,7 +9,7 @@ use PHPUnit\Framework\TestCase;
  * pfb_dnsbl_has_loaded_feeds() — detects genuine feed-derived DNSBL content.
  *
  * Design intent: distinguish a no-feeds steady-state (empty py_data, no zone, no raw files)
- * from a setup where feeds were actually loaded. The shipped pfb_py_hsts and the
+ * from a setup where feeds were actually loaded. The shipped dnsbl_psl and the
  * manifest/whitelist are deliberately EXCLUDED: counting them makes a no-feeds setup
  * look "loaded", which caused a clear+reload every cron pass (#546).
  *
@@ -51,7 +51,7 @@ final class DnsblHasLoadedFeedsTest extends TestCase
 			'unbound_py_zone'    => "{$this->tmpDir}/pfb_py_zone.txt",
 			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
-			'unbound_py_hsts'    => "{$this->tmpDir}/pfb_py_hsts.txt",
+			'unbound_py_psl'     => "{$this->tmpDir}/dnsbl_psl",
 			'unbound_py_rawdir'  => $this->rawDir,
 		];
 	}
@@ -169,28 +169,28 @@ final class DnsblHasLoadedFeedsTest extends TestCase
 	}
 
 	/**
-	 * Scenario: only pfb_py_hsts present (no feed-derived files) → FALSE (#546 regression guard).
+	 * Scenario: only a shipped file present (no feed-derived files) → FALSE (#546 regression guard).
 	 *
-	 * Given:  pfb_py_hsts exists (the shipped HSTS preload list, always staged),
+	 * Given:  dnsbl_psl exists (the shipped PSL authority, always staged),
 	 *         but no py_data, py_zone, or *.raw files
 	 * When:   pfb_dnsbl_has_loaded_feeds() is called
 	 * Then:   returns FALSE
 	 *
 	 * This is the central regression the fix addresses: before #546, the loaded-input-paths
-	 * check included pfb_py_hsts, so a no-feeds setup (hsts always present) always returned
+	 * check included the shipped HSTS list, so a no-feeds setup (a shipped file always present) always returned
 	 * TRUE → "Clearing all DNSBL Feeds" + unlink(py_wh) + Unbound restart every cron.
 	 */
-	public function testOnlyHstsPresentReturnsFalse(): void
+	public function testOnlyAShippedFilePresentReturnsFalse(): void
 	{
 		$pfb = $this->makePfb();
 
-		// Stage the shipped HSTS list (always present after package install).
-		file_put_contents($pfb['unbound_py_hsts'], "preload-domain.example\n");
+		// Stage the shipped PSL authority (always present after package install).
+		file_put_contents($pfb['unbound_py_psl'], "com\n");
 
-		// Must return FALSE: hsts is NOT a feed-derived file.
+		// Must return FALSE: a shipped file is NOT feed-derived.
 		$this->assertFalse(
 			pfb_dnsbl_has_loaded_feeds($pfb),
-			'Only pfb_py_hsts present → FALSE (hsts is not feed-derived; #546 regression guard)'
+			'Only dnsbl_psl present → FALSE (a shipped file is not feed-derived; #546 regression guard)'
 		);
 	}
 

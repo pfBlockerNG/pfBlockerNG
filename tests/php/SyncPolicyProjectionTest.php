@@ -264,15 +264,15 @@ final class SyncPolicyProjectionTest extends TestCase
 		);
 
 		// The registry class, not the section alias, decides: the DNSBL and IP sections follow it too.
-		$this->assertSame('policy', $registry['dnsbl/pfb_hsts']['sync'] ?? NULL);
+		$this->assertSame('policy', $registry['dnsbl/pfb_idn_block_malicious']['sync'] ?? NULL);
 		$this->assertSame('policy', $registry['ip/enable_dup']['sync'] ?? NULL);
 		$this->assertSame('local', $registry['ip/enable_rdns']['sync'] ?? NULL);
 		$this->assertSame([
 			'installedpackages/pfblockerngipsettings/config/0/enable_dup'  => 'on',
-			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts' => 'on',
+			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_block_malicious' => 'on',
 		], $this->project([
 			'pfblockerngipsettings'    => ['config' => [0 => ['enable_rdns' => 'on', 'enable_dup' => 'on', 'zz' => 'u']]],
-			'pfblockerngdnsblsettings' => ['config' => [0 => ['pfb_dnsport' => '8081', 'pfb_hsts' => 'on', 'dnsbl_webpage' => 'x']]],
+			'pfblockerngdnsblsettings' => ['config' => [0 => ['pfb_dnsport' => '8081', 'pfb_idn_block_malicious' => 'on', 'dnsbl_webpage' => 'x']]],
 		]));
 	}
 

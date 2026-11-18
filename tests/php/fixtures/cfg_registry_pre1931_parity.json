@@ -348,12 +348,6 @@
         "read_adapter": "pfb_cfg_toggle_read",
         "write_adapter": "pfb_cfg_toggle_write"
     },
-    "pfb_hsts": {
-        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
-        "default": "on",
-        "read_adapter": "pfb_cfg_toggle_read",
-        "write_adapter": "pfb_cfg_toggle_write"
-    },
     "pfb_idn": {
         "section": "installedpackages/pfblockerngdnsblsettings/config/0",
         "default": "",

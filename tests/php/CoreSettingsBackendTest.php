@@ -40,7 +40,6 @@ final class CoreSettingsBackendTest extends TestCase
 	/** The native field => [registry key, default native, default stored, other native, other stored]: the table the adapter must honour. */
 	private const FIELDS = [
 		'replyLogging'          => ['dnsbl/pfb_py_reply', TRUE, 'on', FALSE, ''],
-		'hstsNullBlocking'      => ['dnsbl/pfb_hsts', TRUE, 'on', FALSE, ''],
 		'tldWildcard'           => ['dnsbl/tld_wildcard', FALSE, '', TRUE, 'on'],
 		'pslIncludePrivate'     => ['dnsbl/pfb_psl_include_private', TRUE, 'on', FALSE, ''],
 		'pslAllowPrivate'       => ['dnsbl/pfb_psl_allow_private', FALSE, '', TRUE, 'on'],
@@ -288,7 +287,7 @@ final class CoreSettingsBackendTest extends TestCase
 	{
 		$this->arrange([]);
 		$current = pfb_core_dns_settings();
-		$wanted = array_merge($current, ['hstsNullBlocking' => FALSE, 'idnMode' => 'on', 'decisionCacheMax' => 0, 'pslFeedIcannPolicy' => 'apex']);
+		$wanted = array_merge($current, ['idnBlockMalicious' => FALSE, 'idnMode' => 'on', 'decisionCacheMax' => 0, 'pslFeedIcannPolicy' => 'apex']);
 
 		$reply = $this->backend(self::writeRequest($current, $wanted));
 
@@ -315,7 +314,7 @@ final class CoreSettingsBackendTest extends TestCase
 
 	public function testWriteOfWhatConfigXmlAlreadyHoldsChangesNothing(): void
 	{
-		$this->arrange(['dnsbl/pfb_hsts' => '']);
+		$this->arrange(['dnsbl/pfb_idn_block_malicious' => '']);
 		$current = pfb_core_dns_settings();
 		$before = $GLOBALS['config'];
 
@@ -332,7 +331,7 @@ final class CoreSettingsBackendTest extends TestCase
 		$stale = pfb_core_settings_revision(self::settings(array_merge($current, ['regexCap' => TRUE])));
 		$before = $GLOBALS['config'];
 
-		$reply = $this->backend(self::writeRequest($current, array_merge($current, ['hstsNullBlocking' => FALSE]), $stale));
+		$reply = $this->backend(self::writeRequest($current, array_merge($current, ['idnBlockMalicious' => FALSE]), $stale));
 
 		$this->assertSame(1, $reply['version']);
 		$this->assertSame('conflict', $reply['error']['code']);
@@ -355,7 +354,7 @@ final class CoreSettingsBackendTest extends TestCase
 		$before = $GLOBALS['config'];
 		$GLOBALS['pfb_test_write_config_result'] = $result;
 
-		$reply = $this->backend(self::writeRequest($current, array_merge($current, ['hstsNullBlocking' => FALSE, 'control' => TRUE])));
+		$reply = $this->backend(self::writeRequest($current, array_merge($current, ['idnBlockMalicious' => FALSE, 'control' => TRUE])));
 
 		$this->assertSame('unavailable', $reply['error']['code']);
 		$this->assertStringContainsString('refused the configuration write', $reply['error']['message']);
@@ -373,7 +372,7 @@ final class CoreSettingsBackendTest extends TestCase
 		$before = $GLOBALS['config'];
 		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
 
-		$reply = $this->backend(self::writeRequest($current, array_merge($current, ['hstsNullBlocking' => FALSE])));
+		$reply = $this->backend(self::writeRequest($current, array_merge($current, ['idnBlockMalicious' => FALSE])));
 
 		$this->assertSame('unavailable', $reply['error']['code']);
 		$this->assertSame('pfb_dns_config', $GLOBALS['pfb_test_lock_events'][0][1], 'the DNS config lock was asked for');
@@ -420,7 +419,7 @@ final class CoreSettingsBackendTest extends TestCase
 		$before = $GLOBALS['config'];
 
 		// When Core turns client IP metrics on together with another field
-		$reply = $this->backend(self::writeRequest($current, array_merge($current, ['metricsClientIp' => TRUE, 'hstsNullBlocking' => FALSE])));
+		$reply = $this->backend(self::writeRequest($current, array_merge($current, ['metricsClientIp' => TRUE, 'idnBlockMalicious' => FALSE])));
 
 		// Then the metrics error is the refusal, and the other field was not written either
 		$this->assertSame('unavailable', $reply['error']['code']);
@@ -502,7 +501,7 @@ final class CoreSettingsBackendTest extends TestCase
 	private static function validWrite(): array
 	{
 		$wanted = self::defaults();
-		$wanted['hstsNullBlocking'] = FALSE;
+		$wanted['idnBlockMalicious'] = FALSE;
 		$wanted['regexCap'] = TRUE;
 		return ['version' => 1, 'op' => 'write', 'expectedRevision' => pfb_core_settings_revision(self::settings(self::defaults())), 'settings' => self::settings($wanted)];
 	}
@@ -674,7 +673,7 @@ final class CoreSettingsBackendTest extends TestCase
 	{
 		// Given a write whose expected revision is not the one config.xml projects
 		$stale = pfb_core_settings_revision(self::settings(array_merge(self::defaults(), ['regexCap' => TRUE])));
-		$request = ['version' => 1, 'op' => 'write', 'expectedRevision' => $stale, 'settings' => self::settings(array_merge(self::defaults(), ['hstsNullBlocking' => FALSE]))];
+		$request = ['version' => 1, 'op' => 'write', 'expectedRevision' => $stale, 'settings' => self::settings(array_merge(self::defaults(), ['idnBlockMalicious' => FALSE]))];
 
 		// When the verb serves it
 		$run = $this->verb((string) json_encode($request));
@@ -696,7 +695,7 @@ final class CoreSettingsBackendTest extends TestCase
 		};
 
 		// When the adapter serves the write
-		$out = pfb_core_settings_serve((string) json_encode(self::writeRequest($current, array_merge($current, ['hstsNullBlocking' => FALSE]))));
+		$out = pfb_core_settings_serve((string) json_encode(self::writeRequest($current, array_merge($current, ['idnBlockMalicious' => FALSE]))));
 
 		// Then the reply is the refusal, as one JSON object, with nothing written and the lock released
 		$reply = json_decode($out, TRUE);
@@ -730,11 +729,11 @@ final class CoreSettingsBackendTest extends TestCase
 
 		// When the adapter reads, and writes a change that runs the privacy step too
 		$read = $this->backend(['version' => 1, 'op' => 'read']);
-		$write = $this->backend(self::writeRequest($current, array_merge($current, ['metricsClientIp' => FALSE, 'hstsNullBlocking' => FALSE])));
+		$write = $this->backend(self::writeRequest($current, array_merge($current, ['metricsClientIp' => FALSE, 'idnBlockMalicious' => FALSE])));
 
 		// Then both worked, and the stand-in got nothing
 		$this->assertArrayHasKey('settings', $read);
-		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(self::settings(array_merge($current, ['metricsClientIp' => FALSE, 'hstsNullBlocking' => FALSE])))], $write);
+		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(self::settings(array_merge($current, ['metricsClientIp' => FALSE, 'idnBlockMalicious' => FALSE])))], $write);
 		$this->assertFileDoesNotExist($record, 'the adapter called Core');
 		$this->assertSame(200, pfb_core_call('GetVersion')['status'], 'positive control: a call is recorded');
 		$this->assertFileExists($record);
