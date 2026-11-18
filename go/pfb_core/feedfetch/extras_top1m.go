@@ -144,6 +144,9 @@ func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 	identity := top1mIdentity(x.Provider, x.URL, req.Headers)
 	ledger := func(msg string) { res.Top1MLedger = &msg }
 	probeBody := base + ".md5.raw"
+	// Only this run's probe body is reused: one an earlier run left behind (a crash) is dropped first. PHP publishes the
+	// leftover without a request (owner, 2026-11-18).
+	os.Remove(probeBody)
 	defer os.Remove(probeBody)
 
 	var probe transfer
@@ -195,12 +198,16 @@ func (f *Fetcher) top1mProbe(ctx context.Context, req Request, x Extra, probeBod
 
 // top1mDecision is pfb_top1m_detector_decision(): a baseline that is not this source's, not a regular file, or no longer
 // matches its xxh128 makes any answered probe changed, as does a 304 with no validator stored; otherwise a 304 is
-// unchanged and a 200 is unchanged only when its body hashes to the baseline.
+// unchanged and a 200 is unchanged only when its body hashes to the baseline. A published list that is gone reads changed
+// too, so the list is published again; PHP trusts the baseline alone (owner, 2026-11-18).
 func top1mDecision(probe transfer, probeBody, base string, x Extra, identityMatches bool) Decision {
 	answered := probe.reason == "" && (probe.status == 200 || probe.status == 304)
 	changed := Failed
 	if answered {
 		changed = Changed
+	}
+	if info, err := os.Stat(filepath.Join(x.Dir, x.File)); err != nil || !info.Mode().IsRegular() {
+		return changed
 	}
 	orig := base + ".orig"
 	if info, err := os.Stat(orig); !identityMatches || err != nil || !info.Mode().IsRegular() {
