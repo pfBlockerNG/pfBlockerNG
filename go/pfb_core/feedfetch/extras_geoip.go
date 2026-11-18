@@ -12,11 +12,12 @@ import (
 	"strings"
 )
 
-// publishGeoIP is the geoip branch of pfb_download(). A tar (gzipped or not) and a zip of more than one member are
-// extracted with their top folder stripped into a directory staged inside the share, and each member then replaces its
-// live copy (pfb_geoip_extract_tar_to_share, pfb_stage_publish_dir_merge); a zip of one member is published whole over
-// target. Every member name is checked before anything is written (ADR-46). Any other accepted body is renamed over
-// target, as pfb_download() does: a text page included (pinned by geoip-mmdb-text-body).
+// publishGeoIP is the geoip branch of pfb_download(). A tar (gzipped or not) is extracted with its top folder stripped
+// into a directory staged inside the share, and each member then replaces its live copy (pfb_geoip_extract_tar_to_share);
+// a zip of more than one member does the same inside target (pfb_stage_publish_dir_merge), which only the CSV row, whose
+// target is the share, accepts. A zip of one member is published whole over target. Every member name is checked before
+// anything is written (ADR-46). Any other accepted body is renamed over target. On a database row a body, or the
+// archive's member of that name, must be a MaxMind DB (owner, #4058).
 func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target string) bool {
 	switch mime {
 	case mimeGzip, mimeTar, mimeZip, mimeBzip2:
@@ -31,7 +32,7 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 			return false
 		}
 		return f.mergeIntoDir(share, func(dir string) error {
-			return checkedDatabases(dir, f.extractTarStripped(ctx, mime, raw, dir))
+			return checkedDatabases(dir, target, f.extractTarStripped(ctx, mime, raw, dir))
 		})
 	case mimeZip:
 		names, ok := zipNames(raw)
@@ -40,7 +41,7 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 				return false
 			}
 			return f.mergeIntoDir(target, func(dir string) error {
-				return checkedDatabases(dir, f.extractZipStripped(ctx, raw, dir))
+				return checkedDatabases(dir, target, f.extractZipStripped(ctx, raw, dir))
 			})
 		}
 		// tar -xOf of the zip: every member's bytes, published whole over target (a directory refuses it).
@@ -74,7 +75,11 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 var (
 	errUnsafeMember = errors.New("archive member leaves the extraction directory")
 	errNotADatabase = errors.New("not a MaxMind DB")
+	errNoDatabase   = errors.New("archive holds no database for the row")
 )
+
+// rename is os.Rename, a test seam for a publication that fails part-way.
+var rename = os.Rename
 
 // unsafeMember is pfb_archive_unsafe_member(): an absolute name, a ".." component, a component over 255 bytes or a name
 // over 1024 bytes.
@@ -150,14 +155,14 @@ func walkTar(ctx context.Context, mime, path string, each func(*tar.Header, io.R
 	}
 }
 
-// stripped is the member's name with its first component removed (--strip=1; a leading "." is that component, as both
-// bsdtar and GNU tar take it): "" when nothing is left.
+// stripped is the member's name with its first component removed (--strip=1; a leading "." is that component, and a run
+// of separators after it is skipped, as bsdtar takes it): "" when nothing is left.
 func stripped(name string) string {
 	_, rest, ok := strings.Cut(name, "/")
 	if !ok {
 		return ""
 	}
-	return strings.TrimSuffix(rest, "/")
+	return strings.TrimSuffix(strings.TrimLeft(rest, "/"), "/")
 }
 
 func (f *Fetcher) extractTarStripped(ctx context.Context, mime, raw, dir string) error {
@@ -262,7 +267,9 @@ func copyZipMember(ctx context.Context, zf *zip.File, w io.Writer) error {
 
 // mergeIntoDir is pfb_stage_publish_dir_merge(): extract fills a directory staged inside target, and each of its
 // top-level entries then replaces its live counterpart by rename. A directory on either side (a live one, or a staged one
-// whose name is taken) refuses the whole publication before the first move.
+// whose name is taken) refuses the whole publication before the first move. Every live file it replaces is hard-linked
+// aside first, so a rename that fails part-way puts the earlier ones back: the share holds one generation, never a mix
+// (PHP leaves the mix).
 func (f *Fetcher) mergeIntoDir(target string, extract func(dir string) error) bool {
 	if info, err := os.Lstat(target); err != nil || !info.IsDir() {
 		return false
@@ -286,19 +293,48 @@ func (f *Fetcher) mergeIntoDir(target string, extract func(dir string) error) bo
 			return false
 		}
 	}
+	backup, err := os.MkdirTemp(target, ".pfbbackup_")
+	if err != nil {
+		return false
+	}
+	defer os.RemoveAll(backup)
+	kept := map[string]bool{}
 	for _, e := range entries {
-		if os.Rename(filepath.Join(staged, e.Name()), filepath.Join(target, e.Name())) != nil {
+		live := filepath.Join(target, e.Name())
+		if _, err := os.Lstat(live); err == nil {
+			if os.Link(live, filepath.Join(backup, e.Name())) != nil {
+				return false
+			}
+			kept[e.Name()] = true
+		}
+	}
+	for i, e := range entries {
+		if rename(filepath.Join(staged, e.Name()), filepath.Join(target, e.Name())) != nil {
+			for _, done := range entries[:i] {
+				live := filepath.Join(target, done.Name())
+				if kept[done.Name()] {
+					rename(filepath.Join(backup, done.Name()), live)
+				} else {
+					os.RemoveAll(live)
+				}
+			}
 			return false
 		}
 	}
 	return true
 }
 
-// checkedDatabases refuses an extraction (err already nil) that holds a database file without the MaxMind DB marker: the
-// whole publication then stays out of the share (owner, #4058).
-func checkedDatabases(dir string, err error) error {
+// checkedDatabases refuses an extraction (err already nil) that holds a database file without the MaxMind DB marker, or,
+// on a database row (target names a .mmdb), one without that database: the whole publication then stays out of the share
+// (owner, #4058).
+func checkedDatabases(dir, target string, err error) error {
 	if err != nil {
 		return err
+	}
+	if isDatabase(target) {
+		if info, err := os.Lstat(filepath.Join(dir, filepath.Base(target))); err != nil || !info.Mode().IsRegular() {
+			return errNoDatabase
+		}
 	}
 	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {

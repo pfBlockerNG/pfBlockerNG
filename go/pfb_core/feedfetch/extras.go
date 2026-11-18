@@ -32,8 +32,8 @@ type ExtrasConfig struct {
 	MaxMindAccount, MaxMindKey string
 	ASNToken                   string
 	Timeout                    time.Duration // per transfer; zero is the verbs' 600 s
-	// ASNTable is `pfblockerng.sh asn_table`, run after a gzipped asn.csv is published (the GeoIP and ASN conversion's,
-	// #4034); nil runs nothing.
+	// ASNTable is `pfblockerng.sh asn_table`, run after a gzipped body is published on an asn row, as pfb_download() does
+	// (the GeoIP and ASN conversion's, #4034); nil runs nothing.
 	ASNTable func(ctx context.Context)
 }
 
@@ -85,8 +85,10 @@ func (f *Fetcher) extra(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 		return false
 	}
 	if t.status == 304 {
-		_, err := os.Stat(base + ".orig")
-		return err == nil
+		// Unchanged is a success only while something is in service: PHP also reports it with nothing published.
+		_, orig := os.Stat(base + ".orig")
+		_, published := os.Stat(target)
+		return orig == nil && published == nil
 	}
 	if t.status != 200 && t.status != 221 && t.status != 226 {
 		return false
@@ -160,6 +162,11 @@ func (f *Fetcher) publishASN(ctx context.Context, cfg ExtrasConfig, mime, raw, t
 	case mimeGzip, mimeTar:
 		staged, err := f.stage(ctx, Feed{Dir: filepath.Dir(target)}, mime, raw, false)
 		if err != nil {
+			return false
+		}
+		// A database row takes a MaxMind DB: what an archive holds is checked as a bare body is (owner, #4058).
+		if isDatabase(target) && !maxMindDB(staged) {
+			os.Remove(staged)
 			return false
 		}
 		if os.Rename(staged, target) != nil {
