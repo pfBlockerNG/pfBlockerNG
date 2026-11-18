@@ -230,3 +230,20 @@ func TestOpenReadsTheRemovedVipMechanismAsNullBlockingWithLogging(t *testing.T) 
 		t.Errorf("a save of the VIP mechanism = %v, want a validation error", err)
 	}
 }
+
+// The Blacklist mechanism is upgraded as config.xml's migration upgrades blacklist_logging, and Validate refuses the
+// legacy token as Save does: only a load reads it (#4060 review).
+func TestTheBlacklistVipMechanismLoadsAndValidateRefusesIt(t *testing.T) {
+	dir := writeStore(t, `{"format":1,"revision":2,"projections":{"policy/dnsbl":{"values":{"blacklistLogging":"enabled"}}}}`)
+	st, err := Open(dir, Production())
+	if err != nil {
+		t.Fatalf("Open of a store holding the Blacklist VIP mechanism: %v", err)
+	}
+	if got := projection(t, get(t, st), "policy/dnsbl").Value["blacklistLogging"]; got != "disabled_log" {
+		t.Errorf("blacklistLogging = %v, want disabled_log", got)
+	}
+	var invalid *ValidationError
+	if err := st.Validate(changes(t, `{"policy/dnsbl": {"blacklistLogging": "enabled"}}`)); !errors.As(err, &invalid) {
+		t.Errorf("Validate of the VIP mechanism = %v, want a validation error", err)
+	}
+}
