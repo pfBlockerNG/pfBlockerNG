@@ -206,3 +206,27 @@ func TestOpenDropsTheRetiredSinkholeAddresses(t *testing.T) {
 		t.Errorf("ingest read as %s, want no sinkhole address", jsonOf(t, ingest))
 	}
 }
+
+// A standalone store that saved the DNSBL mechanism "enabled" (the VIP response #4054 removed) loads it as Null Blocking
+// (logging), "disabled_log", in a group too, as config.xml's migration and PfbConfig's read adapters take it; the API
+// still refuses "enabled" (#4060).
+func TestOpenReadsTheRemovedVipMechanismAsNullBlockingWithLogging(t *testing.T) {
+	dir := writeStore(t, `{"format":1,"revision":5,"projections":{"policy/dnsbl":{"values":{"logging":"enabled",`+
+		`"blacklistLogging":"nxdomain","groups":[{"name":"Ads","logging":"enabled"},{"name":"Mal","logging":"nodata"}]}}}}`)
+	st, err := Open(dir, Production())
+	if err != nil {
+		t.Fatalf("Open of a store holding the VIP mechanism: %v", err)
+	}
+	policy := projection(t, get(t, st), "policy/dnsbl")
+	want := `{"blacklistLogging":"nxdomain","groups":[{"logging":"disabled_log","name":"Ads","primary":false,"top1mFilter":false},` +
+		`{"logging":"nodata","name":"Mal","primary":false,"top1mFilter":false}],"logging":"disabled_log"}`
+	got := map[string]any{"logging": policy.Value["logging"], "blacklistLogging": policy.Value["blacklistLogging"],
+		"groups": policy.Value["groups"]}
+	if jsonOf(t, got) != want {
+		t.Errorf("policy/dnsbl read as %s, want %s", jsonOf(t, got), want)
+	}
+	var invalid *ValidationError
+	if _, err := st.Save(t.Context(), 5, changes(t, `{"policy/dnsbl": {"logging": "enabled"}}`)); !errors.As(err, &invalid) {
+		t.Errorf("a save of the VIP mechanism = %v, want a validation error", err)
+	}
+}
