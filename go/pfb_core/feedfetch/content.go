@@ -169,14 +169,8 @@ func (f *Fetcher) gate(ctx context.Context, feed Feed, raw string, lastMod time.
 	}
 	// #2658: room for the archive itself and nothing more, as /var is a small RAM disk on a default install; a file
 	// system that cannot say is no shortfall.
-	if info, err := os.Stat(raw); err == nil {
-		free := f.FreeBytes
-		if free == nil {
-			free = freeBytes
-		}
-		if avail, known := free(feed.Dir); known && avail < uint64(info.Size()) {
-			return refuse("size", "staging_space_low", feed.Dir)
-		}
+	if f.extractShort(raw, feed.Dir) {
+		return refuse("size", "staging_space_low", feed.Dir)
 	}
 	if err := structural(ctx, mime, raw, io.Discard); err != nil {
 		return failed(err, "structural", "probe_failed", mime+" "+filepath.Base(raw))

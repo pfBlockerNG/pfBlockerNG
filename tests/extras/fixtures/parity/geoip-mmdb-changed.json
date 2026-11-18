@@ -1,0 +1,62 @@
+{
+	"schema": 1,
+	"description": "A new GeoLite2-Country tar.gz: its members, the top folder stripped, replace their live copies in the share.",
+	"hosts": {
+		"download.maxmind.com": [
+			"127.0.0.1",
+			"203.0.113.7"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"maxmind_account": "123456",
+		"maxmind_key": "abcdef"
+	},
+	"seed": {
+		"share/GeoLite2-Country.mmdb": {
+			"b64": "AE9MRC1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+		}
+	},
+	"routes": {
+		"origin": {
+			"/geoip/databases/GeoLite2-Country/download": {
+				"body_b64": "H4sIAAAAAAAC/+3VwU7CMBgH8J19iu+mJm5uZRtedSxIwsAgxHAyY6uww1rSFQPP5LP4LL6C1chlBk1Ed5D/79JmbbrD1//XLpf9QnNmR3IltNrcM5eFnuddnFu/xjXaQfA+GvXx89xjrutbFFgNWFU6Veb31mHq7qx/fcUpy3z24/qHvr+7/n69/kHbYxa5qP/fG8R3djScDMajqZ0knSvr6fklSddJIXInk6UFB5r/aHgzHfW612NHr/Xe/f/L/IftWv598wIg/03opDqdpRWnVOQUSaG50JWZLDeqmC80nWSn9HYl6KMnnFFPZM4RgvPv89/vRfHgNt47/d/n32uxWv5bIWsh/02YmOjLB9KLotpGnJZK5qtMk/k0l49cCZ7TbLNdPq5oe2koNrvNCYr6RcaFOepyrjgvTQ9BiwAAAAAAAAAAAAAAAABo3iuuXHaEACgAAA=="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://download.maxmind.com:{port:origin}/geoip/databases/GeoLite2-Country/download?suffix=tar.gz",
+					"file_dwn": "GeoLite2-Country.tar.gz",
+					"file": "GeoLite2-Country.mmdb",
+					"folder": "share",
+					"type": "geoip"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"share/GeoLite2-Country.mmdb": {
+						"b64": "AE5FVy1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+					},
+					"share/COPYRIGHT.txt": "Database and Contents Copyright (c) 2026 MaxMind, Inc.\n",
+					"share/GeoLite2-Country_20261118": null,
+					"share/GeoLite2-Country.tar.gz.raw": null,
+					"db/geoip.update": ""
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					}
+				]
+			}
+		}
+	]
+}

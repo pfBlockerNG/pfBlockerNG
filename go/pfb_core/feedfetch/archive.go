@@ -278,11 +278,7 @@ func (f *Fetcher) stage(ctx context.Context, feed Feed, mime, raw string, tarInn
 	if err != nil {
 		return "", err
 	}
-	limit := f.extractMax
-	if limit <= 0 {
-		limit = maxExtract
-	}
-	err = extract(ctx, mime, raw, tarInner, &capWriter{w: out, left: limit})
+	err = extract(ctx, mime, raw, tarInner, &capWriter{w: out, left: f.ceiling()})
 	if cerr := out.Chmod(0o644); err == nil {
 		err = cerr
 	}
@@ -294,6 +290,14 @@ func (f *Fetcher) stage(ctx context.Context, feed Feed, mime, raw string, tarInn
 		return "", err
 	}
 	return out.Name(), nil
+}
+
+// ceiling is the per-file ceiling of an extraction.
+func (f *Fetcher) ceiling() int64 {
+	if f.extractMax > 0 {
+		return f.extractMax
+	}
+	return maxExtract
 }
 
 // ctxEnded tells that err is the context's own: a cancelled or expired context is no fault of the feed.

@@ -1,0 +1,60 @@
+{
+	"schema": 1,
+	"description": "A zip of more than one member on the database row is refused: its staged merge needs a directory and the row names a file (pfb_stage_publish_dir_merge).",
+	"hosts": {
+		"download.maxmind.com": [
+			"127.0.0.1",
+			"203.0.113.7"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"maxmind_account": "123456",
+		"maxmind_key": "abcdef"
+	},
+	"seed": {
+		"share/GeoLite2-Country.mmdb": {
+			"b64": "AE9MRC1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+		}
+	},
+	"routes": {
+		"origin": {
+			"/geoip/databases/GeoLite2-Country/download": {
+				"body_b64": "UEsDBBQAAAAAAAAAcl1PKkp5IAAAACAAAAAVAAAAR2VvTGl0ZTItQ291bnRyeS5tbWRiAE5FVy1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb21QSwMEFAAAAAAAAAByXUrfRGgCAAAAAgAAAAsAAABMSUNFTlNFLnR4dGwKUEsBAhQDFAAAAAAAAAByXU8qSnkgAAAAIAAAABUAAAAAAAAAAAAAAIABAAAAAEdlb0xpdGUyLUNvdW50cnkubW1kYlBLAQIUAxQAAAAAAAAAcl1K30RoAgAAAAIAAAALAAAAAAAAAAAAAACAAVMAAABMSUNFTlNFLnR4dFBLBQYAAAAAAgACAHwAAAB+AAAAAAA="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://download.maxmind.com:{port:origin}/geoip/databases/GeoLite2-Country/download?suffix=tar.gz",
+					"file_dwn": "GeoLite2-Country.tar.gz",
+					"file": "GeoLite2-Country.mmdb",
+					"folder": "share",
+					"type": "geoip"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"maxmind_error": true,
+				"files": {
+					"share/GeoLite2-Country.mmdb": {
+						"b64": "AE9MRC1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+					},
+					"share/LICENSE.txt": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					}
+				]
+			}
+		}
+	]
+}

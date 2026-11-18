@@ -196,15 +196,19 @@ type scenario struct {
 
 // corpusServer mirrors tests/php/support/FeedFetchCorpusRouter.php.
 type corpusServer struct {
-	t    testing.TB
-	name string
-	mu   *sync.Mutex // guards tab
-	log  *requestLog
-	tab  *routes
+	t     testing.TB
+	name  string
+	mu    *sync.Mutex // guards tab
+	log   *requestLog
+	tab   *routes
+	query bool // the Extras corpus (#3978) also records the query, where a token rides (CORPUS_QUERY)
 }
 
 func (s corpusServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rec := map[string]string{"server": s.name, "path": r.URL.Path, "host": r.Host}
+	if s.query {
+		rec["query"] = r.URL.RawQuery
+	}
 	for key, header := range map[string]string{
 		"authorization": "Authorization", "if_none_match": "If-None-Match", "if_modified_since": "If-Modified-Since",
 		"x_feed_probe": "X-Feed-Probe", "accept_encoding": "Accept-Encoding",

@@ -13,6 +13,10 @@ $server = (string) getenv('CORPUS_SERVER');
 $path = (string) parse_url($uri, PHP_URL_PATH);
 
 $record = ['server' => $server, 'path' => $path, 'host' => (string) ($_SERVER['HTTP_HOST'] ?? '')];
+// The Extras corpus (#3978) also records the query, where a token rides.
+if (getenv('CORPUS_QUERY') === '1') {
+	$record['query'] = (string) parse_url($uri, PHP_URL_QUERY);
+}
 foreach ([
 	'authorization'     => 'HTTP_AUTHORIZATION',
 	'if_none_match'     => 'HTTP_IF_NONE_MATCH',

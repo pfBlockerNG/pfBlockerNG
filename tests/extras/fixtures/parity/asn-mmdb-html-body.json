@@ -1,0 +1,72 @@
+{
+	"schema": 1,
+	"description": "A 200 HTML page on the asn.mmdb row: today's PHP renames it over asn.mmdb (old_expect); Core refuses a body without the MaxMind DB marker and keeps the database (owner, #4058).",
+	"hosts": {
+		"ipinfo.io": [
+			"127.0.0.1",
+			"203.0.113.5"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"asn_token": "tok123"
+	},
+	"seed": {
+		"share/asn.mmdb": {
+			"b64": "AAFPTEQtTU1EQgCrze9NYXhNaW5kLmNvbQAAAAAAAAAA"
+		}
+	},
+	"routes": {
+		"origin": {
+			"/data/free/asn.mmdb": {
+				"body": "<html><body>maintenance window</body></html>\n"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://ipinfo.io:{port:origin}/data/free/asn.mmdb?token=",
+					"file_dwn": "asn.mmdb",
+					"file": "asn.mmdb",
+					"folder": "share",
+					"type": "asn"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"files": {
+					"share/asn.mmdb": {
+						"b64": "AAFPTEQtTU1EQgCrze9NYXhNaW5kLmNvbQAAAAAAAAAA"
+					},
+					"db/asn.update": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.mmdb",
+						"query": "token=tok123"
+					}
+				]
+			},
+			"old_expect": {
+				"ok": true,
+				"files": {
+					"share/asn.mmdb": "<html><body>maintenance window</body></html>\n",
+					"db/asn.update": ""
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.mmdb",
+						"query": "token=tok123"
+					}
+				]
+			}
+		}
+	]
+}

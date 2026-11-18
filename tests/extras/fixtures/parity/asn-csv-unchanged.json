@@ -1,0 +1,59 @@
+{
+	"schema": 1,
+	"description": "The same asn.csv.gz publishes the same asn.csv again.",
+	"hosts": {
+		"ipinfo.io": [
+			"127.0.0.1",
+			"203.0.113.5"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"asn_token": "tok123"
+	},
+	"seed": {
+		"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/data/free/asn.csv.gz": {
+				"body_b64": "H4sIAAAAAAAC/ysuSSwqic8s0EnNSwFRicV5OnmJuak6Kfm5iZl5XIZ6BiCoA6GNTE11HIMNjY2NTXWcc/JLU9JyEotSdZLhTL3k/FwuACI3kx9UAAAA"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://ipinfo.io:{port:origin}/data/free/asn.csv.gz?token=",
+					"file_dwn": "asn.csv.gz",
+					"file": "asn.csv",
+					"folder": "share",
+					"type": "asn"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n",
+					"share/asn.csv.gz.raw": null,
+					"db/asn.update": "",
+					"db/script.calls": "asn_table\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.csv.gz",
+						"query": "token=tok123"
+					}
+				],
+				"replaced": [
+					"share/asn.csv"
+				]
+			}
+		}
+	]
+}

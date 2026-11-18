@@ -1,0 +1,59 @@
+{
+	"schema": 1,
+	"description": "With no token the server refuses; asn.mmdb stays. The body is a real database, so only the status refuses it.",
+	"hosts": {
+		"ipinfo.io": [
+			"127.0.0.1",
+			"203.0.113.5"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"asn_token": ""
+	},
+	"seed": {
+		"share/asn.mmdb": {
+			"b64": "AAFPTEQtTU1EQgCrze9NYXhNaW5kLmNvbQAAAAAAAAAA"
+		}
+	},
+	"routes": {
+		"origin": {
+			"/data/free/asn.mmdb": {
+				"status": 403,
+				"body_b64": "AAJORVctTU1EQgCrze9NYXhNaW5kLmNvbQAAAAAAAAAA"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://ipinfo.io:{port:origin}/data/free/asn.mmdb?token=",
+					"file_dwn": "asn.mmdb",
+					"file": "asn.mmdb",
+					"folder": "share",
+					"type": "asn"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"files": {
+					"share/asn.mmdb": {
+						"b64": "AAFPTEQtTU1EQgCrze9NYXhNaW5kLmNvbQAAAAAAAAAA"
+					},
+					"db/asn.update": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.mmdb",
+						"query": "token="
+					}
+				]
+			}
+		}
+	]
+}
