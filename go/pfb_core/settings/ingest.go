@@ -28,7 +28,7 @@ func ingestProjection() Projection {
 		{Name: "proxyPassword", Type: TypeString, Default: "", Secret: true},
 		{Name: "proxyUnusable", Type: TypeBool, Default: false},
 		{Name: "scheduledWorkDisabled", Type: TypeBool, Default: false},
-	}}
+	}, Retired: []string{"sinkholeV4", "sinkholeV6"}} // #4054
 }
 
 // checkAllowEntry holds an allowlist entry to an IP address or a CIDR: the forms the feed policy parses, with no zone.
