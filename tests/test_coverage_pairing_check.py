@@ -159,7 +159,6 @@ def test_docs_only_diff_is_neutral() -> None:
 # tool's own set cannot rewrite the expectation it is checked against.
 _EXEMPT_DATA_PATHS = (
     "src/usr/local/pkg/pfblockerng/dnsbl_psl",
-    "src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt",
     "src/usr/local/www/pfblockerng/vendor/codemirror/MANIFEST.sha256",
 )
 
@@ -190,7 +189,7 @@ def test_the_retired_hsts_list_is_not_an_exempt_snapshot() -> None:
 def test_data_snapshot_neutrality_does_not_excuse_a_real_src_change() -> None:
     # Discriminating sibling: neutral means "ignored", never "satisfies". A real
     # src file riding along in the same diff still demands its paired test.
-    both = ["src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt", "src/usr/local/pkg/pfblockerng/pfblockerng.inc"]
+    both = ["src/usr/local/pkg/pfblockerng/dnsbl_psl", "src/usr/local/pkg/pfblockerng/pfblockerng.inc"]
     violations = ccp.evaluate(both)
     assert len(violations) == 1, f"a real src file alongside data must still fire rule 1; got {violations}"
     assert "tests/**" in violations[0], f"rule-1 message must name tests/**; got {violations[0]!r}"
@@ -229,7 +228,7 @@ def test_data_exemption_is_exact_path_not_a_prefix() -> None:
     assert ccp.evaluate(["src/usr/local/pkg/pfblockerng/dnsbl_tld_overrides"]) != [], (
         "a path that only extends an exempt name is still src code"
     )
-    assert ccp.evaluate(["src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt.in"]) != [], (
+    assert ccp.evaluate(["src/usr/local/pkg/pfblockerng/dnsbl_psl.in"]) != [], (
         "a generator template beside an exempt snapshot is still src code"
     )
 
