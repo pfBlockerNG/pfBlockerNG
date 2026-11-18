@@ -147,7 +147,10 @@ func upgradedValue(f Field, raw json.RawMessage) json.RawMessage {
 				}
 			}
 		}
-		if b, err := json.Marshal(items); changed && err == nil {
+		if !changed {
+			return raw
+		}
+		if b, err := json.Marshal(items); err == nil {
 			return b
 		}
 		return raw
