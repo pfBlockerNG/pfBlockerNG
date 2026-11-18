@@ -1,0 +1,57 @@
+{
+	"schema": 1,
+	"description": "A 500 keeps asn.csv and marks no update.",
+	"hosts": {
+		"ipinfo.io": [
+			"127.0.0.1",
+			"203.0.113.5"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"asn_token": "tok123"
+	},
+	"seed": {
+		"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/data/free/asn.csv.gz": {
+				"status": 500,
+				"body": "error\n"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://ipinfo.io:{port:origin}/data/free/asn.csv.gz?token=",
+					"file_dwn": "asn.csv.gz",
+					"file": "asn.csv",
+					"folder": "share",
+					"type": "asn"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"files": {
+					"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n",
+					"share/asn.csv.gz.raw": null,
+					"db/asn.update": null,
+					"db/script.calls": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.csv.gz",
+						"query": "token=tok123"
+					}
+				]
+			}
+		}
+	]
+}

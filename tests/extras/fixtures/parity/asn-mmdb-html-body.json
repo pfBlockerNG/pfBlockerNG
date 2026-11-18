@@ -1,0 +1,56 @@
+{
+	"schema": 1,
+	"description": "Today's behaviour, pinned (#3978 escalation): a 200 HTML page passes the MIME gate as text and is renamed over asn.mmdb.",
+	"hosts": {
+		"ipinfo.io": [
+			"127.0.0.1",
+			"203.0.113.5"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"asn_token": "tok123"
+	},
+	"seed": {
+		"share/asn.mmdb": {
+			"b64": "AAFPTEQtTU1EQgCrze9NYXhNaW5kLmNvbQAAAAAAAAAA"
+		}
+	},
+	"routes": {
+		"origin": {
+			"/data/free/asn.mmdb": {
+				"body": "<html><body>maintenance window</body></html>\n"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://ipinfo.io:{port:origin}/data/free/asn.mmdb?token=",
+					"file_dwn": "asn.mmdb",
+					"file": "asn.mmdb",
+					"folder": "share",
+					"type": "asn"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"share/asn.mmdb": "<html><body>maintenance window</body></html>\n",
+					"db/asn.update": ""
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.mmdb",
+						"query": "token=tok123"
+					}
+				]
+			}
+		}
+	]
+}

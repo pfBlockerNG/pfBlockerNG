@@ -1,0 +1,56 @@
+{
+	"schema": 1,
+	"description": "A 304 with a <download>.orig beside it is a success that publishes nothing.",
+	"hosts": {
+		"ipinfo.io": [
+			"127.0.0.1",
+			"203.0.113.5"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"asn_token": "tok123"
+	},
+	"seed": {
+		"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n",
+		"share/asn.csv.gz.orig": "x\n"
+	},
+	"routes": {
+		"origin": {
+			"/data/free/asn.csv.gz": {
+				"status": 304,
+				"body": ""
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://ipinfo.io:{port:origin}/data/free/asn.csv.gz?token=",
+					"file_dwn": "asn.csv.gz",
+					"file": "asn.csv",
+					"folder": "share",
+					"type": "asn"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n",
+					"db/asn.update": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.csv.gz",
+						"query": "token=tok123"
+					}
+				]
+			}
+		}
+	]
+}

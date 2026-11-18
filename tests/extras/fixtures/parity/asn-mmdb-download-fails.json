@@ -1,0 +1,60 @@
+{
+	"schema": 1,
+	"description": "A 500 keeps asn.mmdb and marks no update.",
+	"hosts": {
+		"ipinfo.io": [
+			"127.0.0.1",
+			"203.0.113.5"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"asn_token": "tok123"
+	},
+	"seed": {
+		"share/asn.mmdb": {
+			"b64": "AAFPTEQtTU1EQgCrze9NYXhNaW5kLmNvbQAAAAAAAAAA"
+		}
+	},
+	"routes": {
+		"origin": {
+			"/data/free/asn.mmdb": {
+				"status": 500,
+				"body": "error\n"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://ipinfo.io:{port:origin}/data/free/asn.mmdb?token=",
+					"file_dwn": "asn.mmdb",
+					"file": "asn.mmdb",
+					"folder": "share",
+					"type": "asn"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"files": {
+					"share/asn.mmdb": {
+						"b64": "AAFPTEQtTU1EQgCrze9NYXhNaW5kLmNvbQAAAAAAAAAA"
+					},
+					"share/asn.mmdb.raw": null,
+					"db/asn.update": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.mmdb",
+						"query": "token=tok123"
+					}
+				]
+			}
+		}
+	]
+}
