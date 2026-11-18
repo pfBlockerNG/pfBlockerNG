@@ -45,7 +45,6 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     # The shipped files (current code in /usr/local).
     echo 'RULES-CODE-v1' > "${pfbpkgdir}/pfb_dnsbl_regex_rules.py"
     echo 'INC-CODE-v1' > "${pfbpkgdir}/pfb_unbound_include.inc"
-    echo 'HSTS-v1' > "${pfbpkgdir}/pfb_py_hsts.txt"
     echo 'WRAPPER-CODE-v1' > "${pfbpkgdir}/pfb_python.sh"
     chmod +x "${pfbpkgdir}/pfb_python.sh"
     echo 'PSL-AUTHORITY-v1' > "${pfbpkgdir}/dnsbl_psl"
@@ -92,7 +91,6 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     # The retired module's mount hook is not staged: no unbound.conf names pfb_unbound.py here (#3795).
     The path "${pfbchroot}/pfb_unbound_include.inc" should not be exist
     # The shipped files landed in the chroot.
-    The path "${pfbchroot}/pfb_py_hsts.txt" should be exist
     The path "${pfbchroot}/dnsbl_psl" should be exist
     # The retired files are not staged even though the package still ships two of them under /usr/local (#3791).
     The path "${pfbchroot}/pfb_dnsbl_regex_rules.py" should not be exist
@@ -248,6 +246,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     setup_sandbox
     dc stage
     plant_retired
+    echo 'HSTS-old' > "${pfbchroot}/pfb_py_hsts.txt"
     name_module_in_conf
     When call named_then_not retire
     The line 1 of output should equal 'PRE:module-present'
@@ -256,8 +255,8 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The line 4 of output should equal 'pfb_unbound.py:gone'
     The line 5 of output should equal 'pfb_dnsbl_regex_rules.py:gone'
     The path "${pfbchroot}/pfb_py_module.applied" should not be exist
-    # Only the retired set: what the chroot still reads stays.
-    The path "${pfbchroot}/pfb_py_hsts.txt" should be exist
+    # Only the retired set, the HSTS list among it (#4053): what the chroot still reads stays.
+    The path "${pfbchroot}/pfb_py_hsts.txt" should not be exist
     The path "${pfbchroot}/dnsbl_psl" should be exist
     cleanup_sandbox
   End
@@ -625,7 +624,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     # Simulate a RAM-disk reboot: wipe the whole chroot.
     rm -rf "${pfbchroot}"
     # Bump the shipped code in /usr/local to prove restore re-stages CURRENT code.
-    echo 'HSTS-v2' > "${pfbpkgdir}/pfb_py_hsts.txt"
+    echo 'PSL-AUTHORITY-v2' > "${pfbpkgdir}/dnsbl_psl"
     When call restore_and_report
     # Before: the chroot was wiped; After: restore ran.
     The output should include 'PRE:wiped'
@@ -634,7 +633,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The contents of file "${pfbchroot}/pfb_py_sources.json" should equal 'MANIFEST-v1'
     The contents of file "${pfbchroot}/pfb_unbound.ini" should equal 'ini-v1'
     # The shipped code is the CURRENT /usr/local copy (v2), not a stale archived v1.
-    The contents of file "${pfbchroot}/pfb_py_hsts.txt" should equal 'HSTS-v2'
+    The contents of file "${pfbchroot}/dnsbl_psl" should equal 'PSL-AUTHORITY-v2'
     # Mount-point dirs are present again after restore.
     The path "${pfbchroot}/lib" should be directory
     cleanup_sandbox
@@ -661,7 +660,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     dc stage
     dc save
     rm -rf "${pfbchroot}"
-    # Bump the shipped oracle to prove restore re-stages CURRENT code, like pfb_py_hsts.txt.
+    # Bump the shipped oracle to prove restore re-stages CURRENT code.
     echo 'PSL-AUTHORITY-v2' > "${pfbpkgdir}/dnsbl_psl"
     When call dc restore
     The contents of file "${pfbchroot}/dnsbl_psl" should equal 'PSL-AUTHORITY-v2'
@@ -674,7 +673,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     When call dc restore
     arc="$(pfb_spec_archive_path "${dnsblarchive}")"
     The value "$arc" should equal ''
-    The path "${pfbchroot}/pfb_py_hsts.txt" should be exist
+    The path "${pfbchroot}/dnsbl_psl" should be exist
     # A wiped chroot has no unbound.conf naming pfb_unbound.py, so the module's mount hook stays out (#3795).
     The path "${pfbchroot}/pfb_unbound_include.inc" should not be exist
     The path "${pfbchroot}/lib" should be directory

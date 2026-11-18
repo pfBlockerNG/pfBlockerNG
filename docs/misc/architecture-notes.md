@@ -1657,7 +1657,7 @@ without touching the body, reproducing the Apache `AddEncoding` origin; pfBlocke
 **Adding a new format fixture.**
 
 1. Drop the fixture file into `tests/smoke/fixtures/` (inert data — TEST-NET IPs / `uuid-*.com`
-   domains; never RFC 6761 TLDs or HSTS-preload names).
+   domains; never RFC 6761 TLDs).
 2. Update `tests/smoke/fixtures/README.md` with the member/non-member set.
 3. Add a case in `test_smoke_feeds.py` using `mock_feeds.feed_url("<filename>")`.
 

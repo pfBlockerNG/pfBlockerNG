@@ -130,7 +130,6 @@ def deployed_vm(
             aliasname="pfb_syslog_test",
             feed_url=_dnsbl_feed_path,
             header="pfb_syslog_dnsbl",
-            hsts=False,  # explicit — test domain is not HSTS-preloaded
         ),
     )
 

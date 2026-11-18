@@ -2497,7 +2497,7 @@ def test_ipv6_alert_external_host_attribution(
     vm = smoke_vm
     ts = time.strftime("%b %e %H:%M:%S")  # e.g. "Jun  8 12:00:00"
 
-    # RFC 3849 addresses — inert, non-routable, never HSTS-preloaded. The foreign
+    # RFC 3849 addresses — inert and non-routable. The foreign
     # address is the external host in BOTH directions; only its column moves.
     foreign = helpers.IPV6_FOREIGN  # 2001:db8:dead:beef::1 — outside the /64
     local = helpers.IPV6_LOCAL_HOST  # 2001:db8:51:1::1234   — inside the /64

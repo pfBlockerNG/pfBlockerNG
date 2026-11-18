@@ -237,7 +237,6 @@ def _setup_dnsbl_feed(vm: SmokeVM) -> str:
         aliasname="UpgradeConfigStability",
         feed_url=feed_path,
         header="upgrade-config-stability",
-        hsts=False,
     )
     h.inject(vm, spec)
     return feed_path

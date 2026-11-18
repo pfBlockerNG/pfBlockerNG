@@ -444,8 +444,6 @@ edit page (**DNSBL → DNSBL Groups**, then the pencil on a group). New groups
 start on Default. **Group Order** (Primary) on that page decides which group
 is considered first.
 
-**HSTS mode** has no effect since the VIP response was removed (#4053), and goes in a follow-up.
-
 **CNAME Validation** also checks the names a domain points at.
 
 **DNS Reply Logging** (on **DNS > General**, for DNSBL with or without

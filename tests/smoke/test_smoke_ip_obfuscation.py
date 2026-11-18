@@ -61,8 +61,8 @@ NUMERIC_HOSTS = (
     "198.18.6.0/33",
 )
 # Plain spellings that used to become domain rules. They are fixed literals, not unique_domain(),
-# because the whole point is that they are IPv4 spellings; they are neither RFC 6761 names nor
-# HSTS-preload names, and each is flushed from the Unbound cache before its probe.
+# because the whole point is that they are IPv4 spellings; they are not RFC 6761 names,
+# and each is flushed from the Unbound cache before its probe.
 NUMERIC_PLAIN = ("0xc6.0x33.0x64.0x9", "203.0.28942")
 
 

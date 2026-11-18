@@ -12,7 +12,6 @@
     "abp": "parse_abp and reconcile: ABP rule lines folded into dataDB, zoneDB and whiteDB",
     "allow": "evaluate_domain fast path: whitelist_check_domain over the user whitelist (important_rules False)",
     "allow_band": "_resolve_numeric_allow: the six-band block/allow precedence (important_rules True)",
-    "hsts": "evaluate_domain: hsts_check_domain turns a VIP block into a null block",
     "response": "evaluate_domain log_type shapes the operate block answer: VIP, null, NXDOMAIN, NODATA",
     "qtype": "operate: the q_type in rr_types gate; a blocked non-address type answers NODATA",
     "in_addr_arpa": "operate: names under in-addr.arpa are left out of the DNSBL validation list",

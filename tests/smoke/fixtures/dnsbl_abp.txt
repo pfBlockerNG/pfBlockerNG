@@ -6,7 +6,7 @@
 ! '||domain^' is a BLOCK (wildcard: name + subdomains);
 ! '@@||domain^' is an ALLOW exception (feed allow band 2 BEATS feed block band 1, so
 ! a name that is also '||'-blocked resolves). uuid-style '.com' names ONLY
-! (smoke-domain rule: never RFC-6761 / HSTS-preload).
+! (smoke-domain rule: never RFC-6761).
 !
 ! Served by mock_feeds at http://192.168.89.2:<port>/dnsbl_abp.txt
 !

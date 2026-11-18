@@ -287,7 +287,6 @@ def test_uninstall_runs_hook_tears_down_and_is_gui_visible(repo_vm: SmokeVM) -> 
             aliasname="LcHookVis",
             feed_url=feed,
             header="lchookvis",
-            hsts=False,
         )
         h.inject(vm, spec)
         h.reload(vm, "updatednsbl")

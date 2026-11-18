@@ -3,7 +3,7 @@
 # (lower-cased, domain-shape gated, wildcard -> blocks the name + subdomains); a
 # full-line '#' or '!' comment and blank lines are dropped.
 # uuid-style '.com' names ONLY (smoke-domain rule: never RFC-6761 .test/.example/
-# .invalid -> Unbound built-in local-zones shadow them; never HSTS-preload names).
+# .invalid -> Unbound built-in local-zones shadow them).
 #
 # Served by mock_feeds at http://192.168.89.2:<port>/dnsbl_plain.txt
 #

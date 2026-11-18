@@ -20,8 +20,7 @@ These tests call the REAL ``pfb_collect_localip()`` on a booted pfSense VM:
 * Assert every locality invariant — before and after — so a regression would
   produce a red test, not a vacuous green.
 
-Test domains and IPs are RFC 3849 / RFC 5737: inert, non-routable, never
-HSTS-preloaded.
+Test domains and IPs are RFC 3849 / RFC 5737: inert and non-routable.
 
 These tests are DESELECTED from the default ``python -m pytest`` run.  Run via::
 

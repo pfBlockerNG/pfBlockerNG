@@ -179,7 +179,6 @@ def test_pkg_reinstall_keeps_live_delete_tears_down(repo_vm: SmokeVM) -> None:
             aliasname="PkgOp697",
             feed_url=feed,
             header="pkg-op-697",
-            hsts=False,
         )
         h.inject(vm, spec)
         h.reload(vm, "updatednsbl")

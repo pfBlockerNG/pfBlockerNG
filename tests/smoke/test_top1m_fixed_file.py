@@ -460,9 +460,7 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     feed = h.write_local_feed(vm, os.path.basename(LOCAL_FEED), f"{allowed}\n{sibling}\n{replacement}\n")
     h.inject(
         vm,
-        h.DnsblCase(
-            aliasname="Top1mFixedFile", feed_url=feed, header="top1mFixedFile", mode=h.DnsblMode.NULL_LOG, hsts=False
-        ),
+        h.DnsblCase(aliasname="Top1mFixedFile", feed_url=feed, header="top1mFixedFile", mode=h.DnsblMode.NULL_LOG),
     )
     h.reload(vm, "updatednsbl")
 

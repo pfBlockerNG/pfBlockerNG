@@ -14,7 +14,7 @@ from the restored manifest), with NO manual update. Verified RED on pre-fix code
 
 Issue #1255 rides the SAME reboot cycle: the shipped TLD-Wildcard public-suffix
 oracle (``dnsbl_psl``) is archive-EXCLUDED (re-staged fresh from the package
-dir by ``dnsbl_cache_stage()``, like ``pfb_py_hsts.txt``) while the ini
+dir by ``dnsbl_cache_stage()``) while the ini
 (``python_tld_wildcard = on``) rides the archived ``pfb_unbound*`` set -- so a
 wildcard-blocked sub-domain must ALSO still sinkhole post-reboot, proving both
 halves were restored.
@@ -253,7 +253,7 @@ def test_dnsbl_tld_wildcard_survives_ramdisk_var_reboot(reboot_observation: Dnsb
     2-label domain BEFORE the reboot,
     When the RAM-disk /var reboot wipes /var/unbound,
     Then the shipped oracle is re-staged fresh (``dnsbl_cache_stage()``, archive-
-    EXCLUDED like ``pfb_py_hsts.txt``) and the archived ini (``python_tld_wildcard =
+    EXCLUDED) and the archived ini (``python_tld_wildcard =
     on``) is restored, so the sub-domain STILL sinkholes with NO manual update.
     """
     obs = reboot_observation

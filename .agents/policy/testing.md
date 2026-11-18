@@ -35,7 +35,7 @@ coverage; mark unexecuted live checks pending, never passed.
 
 ## Satisfying the principles
 
-- **Branch coverage — test every condition, not one side.** Boolean gets off *and* on (plus any third state); every `if`/`switch`/match branch and documented input class gets own assertion (exemplar pair: `test_dnsbl_hsts_override_forces_null` / `test_dnsbl_hsts_disabled_keeps_vip`).
+- **Branch coverage — test every condition, not one side.** Boolean gets off *and* on (plus any third state); every `if`/`switch`/match branch and documented input class gets own assertion (exemplar pair: `testOffToggleEmitsOffKey` / `testOnToggleEmitsOnKey`).
 - **Assert before-state in transition tests.** Test that flips toggle asserts *original* result first, so green proves flip **caused** change — never just final state. Extends to any lifecycle (blocked-after-listing test first asserts domain *resolved*).
 - **Self-encapsulated — never order-dependent.** Shared fixtures fine; no test may depend on sibling running first. Reset per-test state explicitly with autouse fixture that **fails loudly** if reset doesn't take (the `tick` smoke-module bug); module-scoped baseline is NOT per-test isolation.
 - **Specify complex behaviour BDD-style; keep trivial tests trivial.** Non-trivial behaviour (state transitions, precedence, multi-step flows) gets Scenario / Given–When–Then structure.

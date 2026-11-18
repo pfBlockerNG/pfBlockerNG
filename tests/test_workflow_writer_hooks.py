@@ -1,7 +1,7 @@
 """GitHub Actions jobs that create commits activate repository hooks first.
 
 Issue #3045: git.md requires every Actions workflow that commits code to run
-``scripts/setup-hooks.sh`` after checkout. HSTS/PSL/TLD refresh already do;
+``scripts/setup-hooks.sh`` after checkout. PSL/TLD refresh already do;
 the remaining writers must pair hook activation with the commit step.
 """
 

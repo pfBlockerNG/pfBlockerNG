@@ -9,7 +9,7 @@ SLIRP. **Phase 4 authors these fixtures only** — Phase 5 registers them on an
 All data is inert: IP files use RFC 5737 / RFC 3849 documentation ranges; DNSBL
 files use `uuid-<hex>.com` names. Per the smoke-domain rule, DNSBL fixtures NEVER
 use RFC-6761 TLDs (`.test`/`.example`/`.invalid` — Unbound's built-in local-zones
-shadow them) and NEVER HSTS-preload names (HSTS forces a VIP block to NULL).
+shadow them).
 
 **Exception (issue #760):** a fixture exercised under the global Suppression
 checkbox ON (`tests/smoke/test_smoke_suppression.py`) must NOT use RFC

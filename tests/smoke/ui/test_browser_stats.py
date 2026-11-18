@@ -351,7 +351,7 @@ def test_stats_dnsbl_pie_fluid_and_screenshots(
     ts = time.strftime("%b %d %H:%M:%S")  # "Jun 18 12:00:00"
 
     # Use helpers.unique_domain() for domains (smoke-domain rule: no RFC-6761
-    # TLDs; uuid-*.com avoids HSTS preload and Unbound local-zone shadowing).
+    # TLDs; uuid-*.com avoids Unbound local-zone shadowing).
     # Source IPs from RFC-5737 (192.0.2.x); all 8 lines differ in src_ip, mode,
     # and feed to give the pies multiple distinct slices.
     d1 = helpers.unique_domain("stats1")

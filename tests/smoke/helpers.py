@@ -130,8 +130,7 @@ def unique_domain(label: str = "pfbsmoke") -> str:
     unlisted name under ``.test`` / ``.invalid`` reaches Unbound's built-in
     ``local-zone`` and is answered NXDOMAIN, so a not-blocked name there never gets
     the upstream's answer. A random
-    UUIDv4 under ``.com`` can't collide with a real domain and isn't on the HSTS
-    preload list (which would flip the block shape to NULL when HSTS is on). The
+    UUIDv4 under ``.com`` can't collide with a real domain. The
     ``<label>-`` prefix keeps the first label from starting with a digit.
     """
     return f"{label}-{uuid.uuid4().hex}.com"
@@ -284,13 +283,6 @@ class DnsblCase:
     # to the queried name, b_type '_CNAME'). Off (default): only the queried name is
     # checked, so a name whose CNAME target is blocked still resolves.
     cname_validation: bool = False
-    # hsts -> the "HSTS via Null Blocking mode" toggle (CFG_DNSBL_SETTINGS/pfb_hsts,
-    # inc:847 -> ini python_hsts). When on, pfb_unbound.py loads pfb_py_hsts.txt into
-    # hstsDB; a VIP-mode (logging='enabled', log_type '1') block on an HSTS-preload
-    # name keeps null_blocking=True -> NULL instead of the VIP (evaluate_domain:
-    # ``log_type == '1' and not in_hsts``). ``None`` (default) emits nothing -> the
-    # existing matrix is byte-for-byte unchanged; True/False forces pfb_hsts on/off.
-    hsts: bool | None = None
     # idn_mode -> the "IDN Blocking" selector (CFG_DNSBL_SETTINGS/pfb_idn, ADR-08).
     # 'off'/'' -> no IDN action; 'all' -> block every xn-- (legacy blunt); 'confusable'
     # -> the TR39 mixed-script homoglyph analyzer (pfb_unbound.py classify_idn). ``None``
@@ -947,18 +939,8 @@ def teardown_geoip_dataset(vm: SmokeVM, *, timeout: float = 60.0) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# HSTS preload set — pin a name into the shipped list pfb_unbound.py reads
+# Chroot files the smoke helpers read
 # --------------------------------------------------------------------------- #
-# pfb_unbound.py loads /var/unbound/pfb_py_hsts.txt (chroot-relative
-# ``pfb_py_hsts.txt``, init line ~752) into hstsDB on every reload.
-# dnsbl_cache_stage() (pfblockerng.sh) uses ``cp -f`` to ALWAYS overwrite the
-# chroot copy from the shipped source at /usr/local/pkg/pfblockerng/pfb_py_hsts.txt
-# — so any name appended directly to the chroot file is LOST on the next reload.
-# A test domain must be written to the SHIPPED SOURCE so ``cp -f`` propagates it.
-
-UNBOUND_HSTS_FILE = "/var/unbound/pfb_py_hsts.txt"
-# Shipped source that dnsbl_cache_stage() copies into the chroot via cp -f.
-SHIPPED_HSTS_FILE = "/usr/local/pkg/pfblockerng/pfb_py_hsts.txt"
 UNBOUND_PFB_INI = "/var/unbound/pfb_unbound.ini"
 # pfb_unbound.py loads SafeSearch redirect entries from this chroot-relative CSV
 # (5-col format: domain,cname,target,baked_v4,baked_v6; see inject_safesearch_cname_entries).
@@ -971,43 +953,6 @@ SS_TARGET_A = "198.51.100.10"  # RFC 5737 TEST-NET-2: the CNAME chase target add
 SS_TARGET_AAAA = "2001:db8:5350::10"  # RFC 3849: the CNAME chase target address (#1)
 SS_BAKED_A = "203.0.113.20"  # RFC 5737 TEST-NET-3 (≠ STUB_DNS_A .99): baked fallback (#2)
 SS_BAKED_AAAA = "2001:db8:5350::20"  # RFC 3849 (≠ STUB_DNS_AAAA ::99): baked fallback (#2)
-
-
-def add_hsts_name(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> None:
-    """Append ``name`` (one line) to the shipped HSTS preload source.
-
-    dnsbl_cache_stage() uses ``cp -f`` to overwrite the chroot copy from
-    ``SHIPPED_HSTS_FILE`` on every reload, so the test name must live in the
-    shipped source — not in the chroot file — to survive a DNSBL reload.
-    ``assert_hsts_loaded`` still checks the chroot copy to verify that
-    ``cp -f`` propagated the entry into the file the module actually reads.
-    """
-    result = subprocess.run(
-        vm.ssh_argv("tee", "-a", SHIPPED_HSTS_FILE),
-        input=f"{name}\n",
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"add_hsts_name({name}) failed: rc={result.returncode} {result.stderr!r}")
-
-
-def assert_hsts_loaded(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> None:
-    """Precondition guard: ``name`` is in the effective HSTS set the module loads.
-
-    Confirms BOTH halves of the load path so a failed end-to-end assertion can be
-    attributed to the HSTS branch and not to a load miss: ``name`` is an exact line
-    in ``pfb_py_hsts.txt`` (the file the chrooted module reads), AND ``python_hsts``
-    is ``on`` in the generated ini (else pfb_unbound.py never opens the file).
-    """
-    in_file = vm.ssh("grep", "-Fxq", name, UNBOUND_HSTS_FILE, timeout=timeout)
-    if in_file.returncode != 0:
-        raise AssertionError(f"{name} not a line in {UNBOUND_HSTS_FILE} (rc={in_file.returncode})")
-    ini = vm.ssh("cat", UNBOUND_PFB_INI, timeout=timeout)
-    if not re.search(r"(?im)^\s*python_hsts\s*=\s*on\b", ini.stdout):
-        raise AssertionError(f"python_hsts not 'on' in {UNBOUND_PFB_INI}:\n{ini.stdout}")
 
 
 # --------------------------------------------------------------------------- #
@@ -3258,7 +3203,7 @@ def _dnsbl_settings_replace_php(settings: dict[str, str]) -> str:
     """PHP that sets the DNSBL settings to EXACTLY ``settings`` (replace, not merge).
 
     REPLACES every behaviour toggle. A plain ``array_merge`` would let a prior case's
-    ``pfb_idn`` / ``pfb_hsts`` / ``pfb_regex`` survive into this one — :func:`reset` never clears
+    ``pfb_idn`` / ``pfb_regex`` survive into this one — :func:`reset` never clears
     config, so within a module a case would inherit toggles it never declared. Shared by
     :func:`_dnsbl_inject_snippet`, :func:`inject_dnsbl_lists` and the test-local writers.
 
@@ -3314,8 +3259,6 @@ def inject_dnsbl_lists(
         settings["pfb_regex_cap"] = "on"
     if primary_spec.cname_validation:
         settings["pfb_cname"] = "on"
-    if primary_spec.hsts is not None:
-        settings["pfb_hsts"] = "on" if primary_spec.hsts else "off"
     if primary_spec.idn_mode is not None:
         settings["pfb_idn"] = primary_spec.idn_mode
     if primary_spec.idn_block_malicious is not None:
@@ -3389,12 +3332,6 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         # "CNAME Validation" (inc:852 -> ini python_cname). Walk a resolved answer's
         # CNAME chain and block the original name if a target is blocklisted.
         settings["pfb_cname"] = "on"
-    if spec.hsts is not None:
-        # "HSTS via Null Blocking mode" (inc:847 -> ini python_hsts). On: a VIP-mode
-        # block on an HSTS-preload name is forced to NULL (pfb_unbound.py loads
-        # pfb_py_hsts.txt -> hstsDB). Only emitted when the case sets it explicitly,
-        # so the default matrix stays byte-for-byte unchanged. See add_hsts_name.
-        settings["pfb_hsts"] = "on" if spec.hsts else "off"
     if spec.idn_mode is not None:
         # "IDN Blocking" selector (ADR-08; CFG_DNSBL_SETTINGS/pfb_idn -> ini idn_mode).
         # 'confusable' runs the TR39 homoglyph analyzer; the two sub-toggles map to the
@@ -4951,10 +4888,9 @@ def dns_probe(
     path (which, unlike a real LAN client, does not get answered in CI — that path,
     not Unbound being slow, is what produced the earlier transport TIMEOUTs).
 
-    Caller MUST use a non-RFC-6761, non-HSTS-preload domain (see ``unique_domain``):
+    Caller MUST use a non-RFC-6761 domain (see ``unique_domain``):
     Unbound's built-in ``local-zone``s for ``.test`` / ``.example`` / etc. shadow
-    those names (NXDOMAIN/NODATA) before DNSBL, and HSTS-preload names flip a VIP
-    block to NULL when HSTS is on (the default).
+    those names (NXDOMAIN/NODATA) before DNSBL.
 
     Probe semantics (load-bearing): the caller has already waited for Unbound to be
     ready after the reload (``reload`` -> ``wait_unbound_ready``). The FIRST parsed
@@ -5002,7 +4938,7 @@ def dns_probe_until(
 
     Use ONLY for the swap transition (a data update / #51 toggle whose decision must flip).
     Keep :func:`dns_probe` for steady-state and restart-class reads where the first answer
-    is authoritative. Caller MUST pass a non-RFC-6761, non-HSTS-preload name (see
+    is authoritative. Caller MUST pass a non-RFC-6761 name (see
     :func:`unique_domain`).
     """
     deadline = time.monotonic() + timeout
@@ -5088,7 +5024,7 @@ def dns_probe_client(
     ``server`` is the resolver civm queries — defaults to ``PFSENSE_LAN_IP`` (192.168.1.1).
     Override to probe a different resolver (e.g. a secondary DNS).
 
-    Caller MUST use a non-RFC-6761, non-HSTS-preload domain (see :func:`unique_domain`)
+    Caller MUST use a non-RFC-6761 domain (see :func:`unique_domain`)
     for the same reasons as :func:`dns_probe`.
     """
     cmd = f"dig +tries=1 +time=5 {shlex.quote(rtype)} {shlex.quote(name)} @{shlex.quote(server)}"
@@ -5124,7 +5060,7 @@ def dns_probe_client_until(
     success; expiry is a loud ``stuck/environment`` salvage failure.
 
     Use ONLY for swap/toggle transitions. Keep :func:`dns_probe_client` for steady-state
-    reads. Caller MUST pass a non-RFC-6761, non-HSTS-preload name (see :func:`unique_domain`).
+    reads. Caller MUST pass a non-RFC-6761 name (see :func:`unique_domain`).
     """
     deadline = time.monotonic() + timeout
     last: DnsAnswer | None = None

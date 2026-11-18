@@ -16,8 +16,8 @@ These two tests pin the keystone's behaviour (red→green vs the old ``reset()``
   tables/sqlite/pf rules — is ``reset()``'s existing ``clearip``/``cleardnsbl`` path, already
   covered; the NEW behaviour proved here is the config deletion.)
 * ``test_dnsbl_inject_replaces_leaked_toggle`` — a later DNSBL case's settings are EXACTLY what
-  it declares: a prior case's ``pfb_hsts`` does not survive (replace-not-merge).
-  A plain ``array_merge`` leaves ``pfb_hsts=on`` leaked → the first ``Then`` fails on the old path.
+  it declares: a prior case's ``pfb_cname`` does not survive (replace-not-merge).
+  A plain ``array_merge`` leaves ``pfb_cname=on`` leaked → the first ``Then`` fails on the old path.
 
 Two more (issue #1214), same keystone family:
 
@@ -127,31 +127,31 @@ def test_reset_pfb_baseline_clears_injected_config(deployed_vm: SmokeVM) -> None
 
 
 def test_dnsbl_inject_replaces_leaked_toggle(deployed_vm: SmokeVM) -> None:
-    """A DNSBL case's settings are EXACTLY what it declares: a prior case's pfb_hsts does not
+    """A DNSBL case's settings are EXACTLY what it declares: a prior case's pfb_cname does not
     leak into a later one (replace-not-merge).
 
     Scenario:
-      When a case with HSTS-null blocking is injected,
-      Then pfb_hsts is 'on';
-      When a later case WITHOUT hsts is injected (reset() between cases never clears config, so a
-        plain array_merge would keep pfb_hsts=on),
-      Then pfb_hsts is gone.
+      When a case with CNAME Validation is injected,
+      Then pfb_cname is 'on';
+      When a later case WITHOUT it is injected (reset() between cases never clears config, so a
+        plain array_merge would keep pfb_cname=on),
+      Then pfb_cname is gone.
     """
     vm = deployed_vm
-    hsts_key = h.CFG_DNSBL_SETTINGS + "/pfb_hsts"
+    cname_key = h.CFG_DNSBL_SETTINGS + "/pfb_cname"
     # The feed_url is never fetched here — inject() only WRITES config; we read it back, no reload.
     feed = "http://192.168.89.2/dnsbl_plain.txt"
 
-    # WHEN a case that enables HSTS-null blocking is injected, THEN pfb_hsts is written 'on'.
-    h.inject(vm, h.DnsblCase(aliasname="smokeisohsts", feed_url=feed, header="smokeisohsts", hsts=True))
-    assert h.config_get(vm, hsts_key) == "on", "inject(hsts=True) did not set pfb_hsts=on"
+    # WHEN a case that enables CNAME Validation is injected, THEN pfb_cname is written 'on'.
+    h.inject(vm, h.DnsblCase(aliasname="smokeisocname", feed_url=feed, header="smokeisocname", cname_validation=True))
+    assert h.config_get(vm, cname_key) == "on", "inject(cname_validation=True) did not set pfb_cname=on"
 
-    # WHEN a later case WITHOUT hsts is injected in the same module.
+    # WHEN a later case WITHOUT it is injected in the same module.
     h.inject(vm, h.DnsblCase(aliasname="smokeisoplain", feed_url=feed, header="smokeisoplain"))
 
     # THEN the leaked toggle is gone (replace, not merge) ...
-    leaked = h.config_get(vm, hsts_key)
-    assert leaked == "", f"pfb_hsts leaked across DNSBL cases: {leaked!r} (array_merge would keep 'on')"
+    leaked = h.config_get(vm, cname_key)
+    assert leaked == "", f"pfb_cname leaked across DNSBL cases: {leaked!r} (array_merge would keep 'on')"
 
 
 def test_inject_ip_lists_resets_untouched_family(deployed_vm: SmokeVM) -> None:

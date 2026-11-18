@@ -195,18 +195,18 @@ Authorization = property of **write**, not call site (generalises
     of `on` → `lists`, anything else or absent → `all`) and deletes it; a node with no saved
     Sync section takes the default. Both send transports read the stored leaf, never the
     default: an unstored or unknown value sends nothing.
-  - **Nine adapter-bearing toggles default On:** `pfb_keep`, `pfb_software_check`,
+  - **Eight adapter-bearing toggles default On:** `pfb_keep`, `pfb_software_check`,
     `pfb_feed_internal_filter`, `pfb_syntax_highlight`, `pfb_py_reply`,
-    `pfb_hsts`, `pfb_idn_block_malicious`, ip-section `suppression`, and (since #2123)
-    `global/alertrefresh`. For all nine,
+    `pfb_idn_block_malicious`, ip-section `suppression`, and (since #2123)
+    `global/alertrefresh`. For all eight,
     absence reads On while stored `''` reads Off. Six former `'' => 'off'`
     grandfather arms (`pfb_keep`, `pfb_cache`, `pfb_py_reply`, `pfb_hsts`,
-    `pfb_idn_block_malicious`, `suppression`) retired by #2120 because runtime
+    `pfb_idn_block_malicious`, `suppression`; `pfb_hsts` itself went with #4053) retired by #2120 because runtime
     adapter now preserves that legacy uncheck and canonical writes use `''`; separate
-    `pfb_keep` absent → `'on'` grandfather remains. `pfb_py_reply`/`pfb_hsts`
-    additionally get `issue1907-python-gated-toggles`
+    `pfb_keep` absent → `'on'` grandfather remains. `pfb_py_reply`
+    additionally gets `issue1907-python-gated-toggles`
     migration: stored `'on'` beside pre-upgrade `dnsbl_mode` that is present and not
-    `'dnsbl_python'` was inert (both consumers python-gated in 3.2) and is disabled
+    `'dnsbl_python'` was inert (python-gated in 3.2) and is disabled
     before ADR-02 python force would otherwise activate it.
   - **`dnsbl/pfb_py_reply` is read in both DNS modes** (issue #3515): it stays the DNSBL-section key,
     with the same default, grandfathering and `local` sync, but it is edited on **DNS > General**

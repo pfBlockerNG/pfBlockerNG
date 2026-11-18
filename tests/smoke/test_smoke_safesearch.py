@@ -100,7 +100,7 @@ def safesearch_vm(
     h.block_egress()
 
     # Step 2: fabricate source + target names (must be unique_domain — never RFC-6761
-    # TLDs or HSTS-preload names; SafeSearch redirects have no localhost exemption).
+    # TLDs; SafeSearch redirects have no localhost exemption).
     src_chase = h.unique_domain("ss-src")
     target_chase = h.unique_domain("ss-tgt")
     src_fallback = h.unique_domain("ss-fb-src")

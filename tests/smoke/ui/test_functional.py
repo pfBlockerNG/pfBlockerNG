@@ -209,15 +209,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/tld_wildcard",
     ),
     ToggleFlow(
-        name="dnsbl_hsts_mode",
-        page="/pfblockerng/pfblockerng_dnsbl.php",
-        field="pfb_hsts",
-        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts",
-        # Adapter-backed unchecked saves use the canonical empty Off token.
-        # Registry default 'on' since issue #1907: an absent key means the feature is ON.
-        absent="on",
-    ),
-    ToggleFlow(
         name="dnsbl_regex",
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_regex",

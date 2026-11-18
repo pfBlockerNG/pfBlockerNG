@@ -3026,17 +3026,12 @@ def test_pfb_dns_page_leaves_the_doh_listener_unchecked_while_its_interface_is_a
         )
 
 
-# issue #1907: dnsbl/pfb_py_reply, dnsbl/pfb_hsts and
+# issue #1907: dnsbl/pfb_py_reply and
 # ip/suppression (IP page) flipped their registry default to 'on' -- the checkbox must
 # render CHECKED with no stored config, and still render UNCHECKED for a present Off token
 # for both canonical empty and legacy ``off`` storage. pfb_py_reply (still the
 # DNSBL-section key, read by both DNS modes) is edited on DNS General, not the DNSBL page.
 _ISSUE1907_TOGGLE_PAGES = (
-    (
-        "/pfblockerng/pfblockerng_dnsbl.php",
-        "DNSBL Group Policy",
-        (("pfb_hsts", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts"),),
-    ),
     (
         "/pfblockerng/pfblockerng_dns_general.php",
         "DNS Reply Logging",
@@ -3076,7 +3071,7 @@ def test_dnsbl_python_gated_toggles_render_checked_when_absent(
     marker: str,
     toggles: tuple[tuple[str, str], ...],
 ) -> None:
-    """issue #1907: pfb_py_reply/pfb_hsts render CHECKED with no stored config --
+    """issue #1907: pfb_py_reply renders CHECKED with no stored config --
     the registry default flipped to 'on', matching the page's REMOVED
     ``isset(...) ? ... : 'on'`` fallback (PfbConfig::read() now owns the default).
     pfb_py_reply is checked the same way on DNS General, where it now lives.

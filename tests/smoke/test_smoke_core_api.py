@@ -49,7 +49,7 @@ SYNC_WATCHDOG = 90.0
 CORE_RC = "/usr/local/etc/rc.d/pfb_core.sh"
 PHP = "/usr/local/bin/php"
 PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
-HSTS = f"{h.CFG_DNSBL_SETTINGS}/pfb_hsts"
+IDN_MALICIOUS = f"{h.CFG_DNSBL_SETTINGS}/pfb_idn_block_malicious"
 CORE_STATE = "/usr/local/etc/pfb_core"
 CONFIG_HISTORY = "/conf/backup/config-*.xml"
 SAVE_MESSAGE = "pfBlockerNG Core saved the settings"
@@ -350,13 +350,13 @@ def run_tick(vm: SmokeVM) -> None:
     assert tick.returncode == 0, f"the tick failed: {tick.stdout}"
 
 
-def core_save_hsts(vm: SmokeVM, revision: int, value: bool) -> dict[str, Any]:
-    """Core's ``SaveSettings`` of hstsNullBlocking at ``revision``: the reply as ``pfb_core_call`` gives it."""
+def core_save_idn_malicious(vm: SmokeVM, revision: int, value: bool) -> dict[str, Any]:
+    """Core's ``SaveSettings`` of idnBlockMalicious at ``revision``: the reply as ``pfb_core_call`` gives it."""
     flag = "TRUE" if value else "FALSE"
     reply: dict[str, Any] = php_json(
         vm,
         "pfb_core_call('SaveSettings', ['requestId' => bin2hex(random_bytes(16)), "
-        f"'expectedRevision' => {revision}, 'changes' => ['dns' => ['hstsNullBlocking' => {flag}]]])",
+        f"'expectedRevision' => {revision}, 'changes' => ['dns' => ['idnBlockMalicious' => {flag}]]])",
     )
     return reply
 
@@ -407,7 +407,7 @@ def test_the_install_leaves_no_settings_file_for_core(core_vm: SmokeVM) -> None:
 def test_the_install_leaves_core_at_the_revision_config_xml_projects(core_vm: SmokeVM) -> None:
     """Core read config.xml through the adapter at its start: its values and its revision are config.xml's."""
     want = config_dns_settings(core_vm)
-    assert len(want) == 17, f"before-state: expected the 17 native fields, got {want}"
+    assert len(want) == 15, f"before-state: expected the 15 native fields, got {want}"
 
     await_core_dns(core_vm, want)
 
@@ -419,27 +419,29 @@ def test_the_install_leaves_core_at_the_revision_config_xml_projects(core_vm: Sm
 
 def test_a_change_made_without_a_page_reaches_core_with_the_next_tick(core_vm: SmokeVM) -> None:
     """A restore or an HA receive writes config.xml with no page save: the tick finds Core's revision differs."""
-    original = h.config_get_state(core_vm, HSTS)
+    original = h.config_get_state(core_vm, IDN_MALICIOUS)
     try:
         tell_core(core_vm)
         before = config_dns_settings(core_vm)
 
-        h.config_set(core_vm, HSTS, _flipped(original))
+        h.config_set(core_vm, IDN_MALICIOUS, _flipped(original))
 
         after = config_dns_settings(core_vm)
-        assert after["hstsNullBlocking"] != before["hstsNullBlocking"], f"before-state: the write did not change {HSTS}"
+        assert after["idnBlockMalicious"] != before["idnBlockMalicious"], (
+            f"before-state: the write did not change {IDN_MALICIOUS}"
+        )
         held = core_dns(core_vm)
         assert held is not None and held[1] == before, f"before-state: Core must still hold the old value, holds {held}"
         run_tick(core_vm)
         await_core_dns(core_vm, after)
     finally:
-        h.config_restore_state(core_vm, HSTS, original)
+        h.config_restore_state(core_vm, IDN_MALICIOUS, original)
         tell_core(core_vm)
 
 
 def test_core_that_was_down_when_the_setting_changed_reads_it_at_its_start(core_vm: SmokeVM) -> None:
     """A stopped Core never blocks or undoes a change: config.xml keeps the value, and Core reads it when it starts."""
-    original = h.config_get_state(core_vm, HSTS)
+    original = h.config_get_state(core_vm, IDN_MALICIOUS)
     stopped = False
     try:
         tell_core(core_vm)
@@ -449,13 +451,15 @@ def test_core_that_was_down_when_the_setting_changed_reads_it_at_its_start(core_
         stopped = True
 
         new = _flipped(original)
-        h.config_set(core_vm, HSTS, new)
+        h.config_set(core_vm, IDN_MALICIOUS, new)
 
-        assert h.config_get(core_vm, HSTS) == new, "config.xml must keep the value written while Core is down"
+        assert h.config_get(core_vm, IDN_MALICIOUS) == new, "config.xml must keep the value written while Core is down"
         down = php_json(core_vm, "pfb_core_call('GetVersion')")
         assert down["status"] == 0 and down["error"], f"before-state: Core must be unreachable, answered {down}"
         want = config_dns_settings(core_vm)
-        assert want["hstsNullBlocking"] != before["hstsNullBlocking"], f"before-state: the write did not change {HSTS}"
+        assert want["idnBlockMalicious"] != before["idnBlockMalicious"], (
+            f"before-state: the write did not change {IDN_MALICIOUS}"
+        )
         start = core_vm.ssh(f"{CORE_RC} start", timeout=60)
         assert start.returncode == 0, f"{CORE_RC} start failed: {start.stdout}{start.stderr}"
         stopped = False
@@ -465,7 +469,7 @@ def test_core_that_was_down_when_the_setting_changed_reads_it_at_its_start(core_
     finally:
         if stopped:
             core_vm.ssh(f"{CORE_RC} start", timeout=60)
-        h.config_restore_state(core_vm, HSTS, original)
+        h.config_restore_state(core_vm, IDN_MALICIOUS, original)
         await_core_up(core_vm)
         tell_core(core_vm)
 
@@ -494,36 +498,36 @@ def test_concurrent_starts_leave_one_supervisor(core_vm: SmokeVM) -> None:
 
 def test_a_core_save_changes_config_xml_and_leaves_a_config_history_entry(core_vm: SmokeVM) -> None:
     """Core's SaveSettings goes through the adapter: config.xml holds the value and pfSense keeps a revision of it."""
-    original = h.config_get_state(core_vm, HSTS)
+    original = h.config_get_state(core_vm, IDN_MALICIOUS)
     try:
         tell_core(core_vm)
         before = config_dns_settings(core_vm)
         revision = await_core_dns(core_vm, before)
         history = config_history(core_vm)
 
-        reply = core_save_hsts(core_vm, revision, not before["hstsNullBlocking"])
+        reply = core_save_idn_malicious(core_vm, revision, not before["idnBlockMalicious"])
 
         assert reply["status"] == 200, f"Core refused the save: {reply}"
         after = config_dns_settings(core_vm)
-        assert after == {**before, "hstsNullBlocking": not before["hstsNullBlocking"]}, f"config.xml now says {after}"
+        assert after == {**before, "idnBlockMalicious": not before["idnBlockMalicious"]}, f"config.xml now says {after}"
         assert core_dns(core_vm) == (config_revision(core_vm), after), "Core is at config.xml's values and revision"
         # write_config() backs up the configuration it replaces; Config History lists the new one by its description
         assert config_history(core_vm) - history, "the save left no new config history entry"
         description = h.config_get(core_vm, "revision/description")
         assert SAVE_MESSAGE in description, f"config.xml's revision says {description!r}, not the Core save"
     finally:
-        h.config_restore_state(core_vm, HSTS, original)
+        h.config_restore_state(core_vm, IDN_MALICIOUS, original)
         tell_core(core_vm)
 
 
 def test_an_older_config_restored_reaches_core_with_the_next_tick(core_vm: SmokeVM) -> None:
     """Config History's restore (pfSense ``config_restore()``) of the config before a Core save: the tick tells Core."""
-    original = h.config_get_state(core_vm, HSTS)
+    original = h.config_get_state(core_vm, IDN_MALICIOUS)
     try:
         tell_core(core_vm)
         older = config_dns_settings(core_vm)
         revision = await_core_dns(core_vm, older)
-        saved = core_save_hsts(core_vm, revision, not older["hstsNullBlocking"])
+        saved = core_save_idn_malicious(core_vm, revision, not older["idnBlockMalicious"])
         assert saved["status"] == 200, f"before-state: Core refused the save: {saved}"
         newer = config_dns_settings(core_vm)
         assert newer != older, "before-state: the Core save changed config.xml"
@@ -538,22 +542,22 @@ def test_an_older_config_restored_reaches_core_with_the_next_tick(core_vm: Smoke
         run_tick(core_vm)
         await_core_dns(core_vm, older)
     finally:
-        h.config_restore_state(core_vm, HSTS, original)
+        h.config_restore_state(core_vm, IDN_MALICIOUS, original)
         tell_core(core_vm)
 
 
 def test_the_settings_adapter_reads_and_writes_as_core_runs_it(core_vm: SmokeVM) -> None:
     """The adapter as Core runs it: five reads and two writes (a flip and back), each timed on the box and recorded."""
-    original = h.config_get_state(core_vm, HSTS)
+    original = h.config_get_state(core_vm, IDN_MALICIOUS)
     try:
         reads = [adapter_seconds(core_vm, {"version": 1, "op": "read"}) for _ in range(5)]
         for _, reply in reads:
             assert reply["settings"]["dns"] == config_dns_settings(core_vm), f"the read answered {reply}"
         current = reads[-1][1]
         writes = []
-        hsts = current["settings"]["dns"]["hstsNullBlocking"]
-        for value in (not hsts, hsts):
-            wanted = {**current["settings"], "dns": {**current["settings"]["dns"], "hstsNullBlocking": value}}
+        flag = current["settings"]["dns"]["idnBlockMalicious"]
+        for value in (not flag, flag):
+            wanted = {**current["settings"], "dns": {**current["settings"]["dns"], "idnBlockMalicious": value}}
             seconds, reply = adapter_seconds(
                 core_vm,
                 {"version": 1, "op": "write", "expectedRevision": current["revision"], "settings": wanted},
@@ -565,7 +569,7 @@ def test_the_settings_adapter_reads_and_writes_as_core_runs_it(core_vm: SmokeVM)
         # A diagnostic, never an assertion: the Go unit tests pin the deadlines with controlled hangs
         print(f"PFB_ADAPTER_LATENCY read {read_times} write {writes}", flush=True)
     finally:
-        h.config_restore_state(core_vm, HSTS, original)
+        h.config_restore_state(core_vm, IDN_MALICIOUS, original)
         tell_core(core_vm)
 
 
