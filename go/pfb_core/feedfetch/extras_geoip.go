@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,14 +30,18 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 		if !ok || unsafeMember(names) {
 			return false
 		}
-		return f.mergeIntoDir(share, func(dir string) error { return f.extractTarStripped(ctx, mime, raw, dir) })
+		return f.mergeIntoDir(share, func(dir string) error {
+			return checkedDatabases(dir, f.extractTarStripped(ctx, mime, raw, dir))
+		})
 	case mimeZip:
 		names, ok := zipNames(raw)
 		if ok && len(names) > 1 {
 			if unsafeMember(names) {
 				return false
 			}
-			return f.mergeIntoDir(target, func(dir string) error { return f.extractZipStripped(ctx, raw, dir) })
+			return f.mergeIntoDir(target, func(dir string) error {
+				return checkedDatabases(dir, f.extractZipStripped(ctx, raw, dir))
+			})
 		}
 		// tar -xOf of the zip: every member's bytes, published whole over target (a directory refuses it).
 		staged, err := os.CreateTemp(filepath.Dir(target), ".pfbstage_")
@@ -287,4 +292,21 @@ func (f *Fetcher) mergeIntoDir(target string, extract func(dir string) error) bo
 		}
 	}
 	return true
+}
+
+// checkedDatabases refuses an extraction (err already nil) that holds a database file without the MaxMind DB marker: the
+// whole publication then stays out of the share (owner, #4058).
+func checkedDatabases(dir string, err error) error {
+	if err != nil {
+		return err
+	}
+	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type().IsRegular() && isDatabase(p) && !maxMindDB(p) {
+			return errNotADatabase
+		}
+		return nil
+	})
 }
