@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -209,5 +210,30 @@ func TestATop1MListThatCannotBePutBackStaysOnDisk(t *testing.T) {
 	})
 	if len(kept) == 0 {
 		t.Error("no file holds the old list after the failed commit")
+	}
+}
+
+// A TOP1M publication that succeeds leaves the list and its baseline, and nothing it set aside on the way.
+func TestATop1MCommitLeavesNoResidue(t *testing.T) {
+	dir := t.TempDir()
+	target, base := filepath.Join(dir, "top-1m.csv"), filepath.Join(dir, "top-1m.csv.zip")
+	stage, raw := filepath.Join(dir, "stage"), filepath.Join(dir, "raw")
+	for path, content := range map[string]string{target: "old\n", stage: "new\n", raw: "raw", base + ".orig": "old raw"} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !top1mCommit(stage, target, base, raw) {
+		t.Fatal("the commit failed")
+	}
+	os.Remove(raw) // the caller's
+	var names []string
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	want := []string{"top-1m.csv", "top-1m.csv.zip.orig", "top-1m.csv.zip.xxhash128"}
+	if !slices.Equal(names, want) {
+		t.Errorf("the directory holds %v, want %v", names, want)
 	}
 }

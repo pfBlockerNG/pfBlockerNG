@@ -53,7 +53,8 @@ func top1mAuthHeaders(p top1mProvider, token string) []string {
 }
 
 // top1mIdentity is pfb_top1m_source_identity(): the provider, the URL and each header's SHA-256, as PHP's json_encode()
-// writes them with JSON_UNESCAPED_SLASHES. A changed identity drops the detector's baseline.
+// writes them with JSON_UNESCAPED_SLASHES for the ASCII values the provider table holds (PHP would escape non-ASCII as
+// \uXXXX). A changed identity drops the detector's baseline.
 func top1mIdentity(provider, url string, headers []string) string {
 	hashes := []string{}
 	for _, h := range headers {
@@ -163,6 +164,11 @@ func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 			ledger("")
 			return true
 		}
+		if probe.status == 304 {
+			// A 304 that reads changed (the baseline is not trusted) has no body to reuse: the list is downloaded in full.
+			// PHP reuses the empty probe body and fails for as long as the server answers 304 (owner, 2026-11-18).
+			os.Remove(probeBody)
+		}
 	}
 	if !f.top1mDownload(ctx, cfg, x, req, p, base, probeBody) {
 		ledger(top1mDownloadFailed)
@@ -250,9 +256,6 @@ func (f *Fetcher) top1mDownload(ctx context.Context, cfg ExtrasConfig, x Extra, 
 			return false
 		}
 		status = t.status
-		if !t.lastMod.IsZero() {
-			defer os.Chtimes(raw, t.lastMod, t.lastMod)
-		}
 	}
 	if status == 304 {
 		_, err := os.Stat(base + ".orig")
@@ -331,17 +334,13 @@ func (f *Fetcher) top1mStage(ctx context.Context, mime, raw, target string) (str
 
 // top1mZipStage is the zip branch: exactly one member, a regular file with a safe name, that is not an HTML page.
 func (f *Fetcher) top1mZipStage(ctx context.Context, raw, target string) (string, error) {
-	names, ok := zipNames(raw)
-	if !ok || len(names) != 1 || unsafeMember(names) {
-		return "", errTop1MArchive
-	}
 	file, err := os.Open(raw)
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
 	zr, err := openZip(file)
-	if err != nil || len(zr.File) != 1 || !zr.File[0].Mode().IsRegular() || strings.HasSuffix(zr.File[0].Name, "/") {
+	if err != nil || len(zr.File) != 1 || unsafeMember([]string{zr.File[0].Name}) || !zr.File[0].Mode().IsRegular() {
 		return "", errTop1MArchive
 	}
 	staged, err := os.CreateTemp(filepath.Dir(target), ".pfbtop1m_")
@@ -386,23 +385,31 @@ func top1mCommit(stage, target, base, raw string) bool {
 			saved[path] = copyPath
 		}
 	}
-	active := filepath.Join(backup, "active")
+	// The old list is set aside beside the target, as PHP's ".pfbtop1m_active_": a copy that cannot be put back stays.
+	held, err := os.CreateTemp(filepath.Dir(target), ".pfbtop1m_active_")
+	if err != nil {
+		return false
+	}
+	active := held.Name()
+	held.Close()
+	os.Remove(active)
 	_, err = os.Lstat(target)
 	hadActive := err == nil
 	if hadActive && rename(target, active) != nil {
 		return false
 	}
-	if rename(stage, target) != nil {
-		if hadActive {
-			rename(active, target)
+	putBack := func() {
+		if hadActive && rename(active, target) != nil {
+			hadActive = false // the old list stays at active
 		}
+	}
+	if rename(stage, target) != nil {
+		putBack()
 		return false
 	}
 	if !top1mPersistBaseline(base, raw) {
 		os.Remove(target)
-		if hadActive {
-			rename(active, target)
-		}
+		putBack()
 		for _, suffix := range []string{".orig", ".xxhash128", ".md5"} {
 			path := base + suffix
 			if copyPath, ok := saved[path]; ok {
@@ -412,6 +419,9 @@ func top1mCommit(stage, target, base, raw string) bool {
 			}
 		}
 		return false
+	}
+	if hadActive {
+		os.Remove(active)
 	}
 	return true
 }
