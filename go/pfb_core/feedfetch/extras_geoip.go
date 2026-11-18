@@ -63,6 +63,8 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 	return os.Rename(raw, target) == nil
 }
 
+var errUnsafeMember = errors.New("archive member leaves the extraction directory")
+
 // unsafeMember is pfb_archive_unsafe_member(): an absolute name, a ".." component, a component over 255 bytes or a name
 // over 1024 bytes.
 func unsafeMember(names []string) bool {
@@ -189,6 +191,10 @@ func (f *Fetcher) extractZipStripped(ctx context.Context, raw, dir string) error
 func (f *Fetcher) writeMember(dir, name string, isDir, isReg bool, r io.Reader) error {
 	if name == "" {
 		return nil
+	}
+	// unsafeMember refused such names before extraction; this keeps the write itself inside dir.
+	if !filepath.IsLocal(filepath.FromSlash(name)) {
+		return errUnsafeMember
 	}
 	p := filepath.Join(dir, filepath.FromSlash(name))
 	if isDir {
