@@ -14,7 +14,8 @@ package feedfetch_test
 //	steps        [step]: run in order on the same directories.
 //
 // A step: run ("download"), extras ([{url, file_dwn, file, folder ("db" or "share"), type}]), routes and seed (replacing or
-// adding before the step), and expect: ok, maxmind_error, files ({path: content,
+// adding before the step), expect and, where Core deliberately differs (an owner decision), old_expect (today's PHP answer,
+// which only the PHP runner reads): ok, maxmind_error, files ({path: content,
 // {"b64": bytes} or null when absent}: only the files named), and requests (what the servers recorded; host and query
 // only where named). `pfblockerng.sh asn_table`, the ASN conversion's step (#4034), is recorded as a line in
 // db/script.calls.
@@ -57,11 +58,12 @@ type extrasExpect struct {
 }
 
 type extrasStep struct {
-	Run    string         `json:"run"`
-	Extras []extrasExtra  `json:"extras"`
-	Routes routes         `json:"routes"`
-	Seed   map[string]any `json:"seed"`
-	Expect extrasExpect   `json:"expect"`
+	Run       string         `json:"run"`
+	Extras    []extrasExtra  `json:"extras"`
+	Routes    routes         `json:"routes"`
+	Seed      map[string]any `json:"seed"`
+	Expect    extrasExpect   `json:"expect"`
+	OldExpect *extrasExpect  `json:"old_expect"`
 }
 
 type extrasScenario struct {

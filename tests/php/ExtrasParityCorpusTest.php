@@ -163,7 +163,8 @@ final class ExtrasParityCorpusTest extends TestCase
 			}
 			$actual['requests'] = $this->requests($step['expect']['requests'] ?? []);
 
-			$want = $step['expect'];
+			// A step where Core deliberately differs (an owner decision) records today's answer as old_expect.
+			$want = $step['old_expect'] ?? $step['expect'];
 			$want += ['requests' => []];
 			$want['requests'] = array_map(fn (array $r): array => $this->expandRecord($r), $want['requests']);
 			foreach ($want['files'] ?? [] as $rel => $content) {

@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "Today's behaviour, pinned: with the feed sanity scan on, the binary asn.mmdb (taken for text by the ipinfo.io exception) is refused and asn.mmdb stays.",
+	"description": "With the feed sanity scan on: today's PHP scans the binary asn.mmdb as text (the ipinfo.io exception) and refuses it (old_expect); Core does not scan a database as text and publishes it (owner, #4058).",
 	"hosts": {
 		"ipinfo.io": [
 			"127.0.0.1",
@@ -39,6 +39,22 @@
 				}
 			],
 			"expect": {
+				"ok": true,
+				"files": {
+					"share/asn.mmdb": {
+						"b64": "AAJORVctTU1EQgCrze9NYXhNaW5kLmNvbQAAAAAAAAAA"
+					},
+					"db/asn.update": ""
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.mmdb",
+						"query": "token=tok123"
+					}
+				]
+			},
+			"old_expect": {
 				"ok": false,
 				"files": {
 					"share/asn.mmdb": {

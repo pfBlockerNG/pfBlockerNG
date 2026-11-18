@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "Today's behaviour, pinned (#3978 escalation): a 200 HTML page passes the MIME gate as text and is renamed over asn.mmdb.",
+	"description": "A 200 HTML page on the asn.mmdb row: today's PHP renames it over asn.mmdb (old_expect); Core refuses a body without the MaxMind DB marker and keeps the database (owner, #4058).",
 	"hosts": {
 		"ipinfo.io": [
 			"127.0.0.1",
@@ -38,6 +38,22 @@
 				}
 			],
 			"expect": {
+				"ok": false,
+				"files": {
+					"share/asn.mmdb": {
+						"b64": "AAFPTEQtTU1EQgCrze9NYXhNaW5kLmNvbQAAAAAAAAAA"
+					},
+					"db/asn.update": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.mmdb",
+						"query": "token=tok123"
+					}
+				]
+			},
+			"old_expect": {
 				"ok": true,
 				"files": {
 					"share/asn.mmdb": "<html><body>maintenance window</body></html>\n",
