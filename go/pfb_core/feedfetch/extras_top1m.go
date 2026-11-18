@@ -279,8 +279,10 @@ func (f *Fetcher) top1mDownload(ctx context.Context, cfg ExtrasConfig, x Extra, 
 		status, fetched = t.status, &t
 	}
 	if status == 304 {
-		_, err := os.Stat(base + ".orig")
-		return err == nil, fetched
+		// A 304 confirms what is published: the list and its baseline both have to be there.
+		_, orig := os.Stat(base + ".orig")
+		info, err := os.Stat(target)
+		return orig == nil && err == nil && info.Mode().IsRegular(), fetched
 	}
 	if status != 200 && status != 221 && status != 226 {
 		return false, nil
