@@ -190,3 +190,19 @@ func TestOpenDropsARetiredFieldAndKeepsTheRest(t *testing.T) {
 		t.Errorf("a save naming a retired field = %v, want a validation error", err)
 	}
 }
+
+// A store initialized before #4054 also holds the read-only ingest projection's sinkholeV4 and sinkholeV6, which #4054
+// dropped with the VIP response: it loads too (#4055).
+func TestOpenDropsTheRetiredSinkholeAddresses(t *testing.T) {
+	dir := writeStore(t, `{"format":1,"revision":2,"projections":{"ingest":{"values":{"sinkholeV4":"","sinkholeV6":""}}}}`)
+	st, err := Open(dir, Production())
+	if err != nil {
+		t.Fatalf("Open of a store holding the retired sinkhole addresses: %v", err)
+	}
+	ingest := projection(t, get(t, st), "ingest")
+	_, v4 := ingest.Value["sinkholeV4"]
+	_, v6 := ingest.Value["sinkholeV6"]
+	if v4 || v6 {
+		t.Errorf("ingest read as %s, want no sinkhole address", jsonOf(t, ingest))
+	}
+}
