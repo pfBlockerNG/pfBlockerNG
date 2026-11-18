@@ -883,7 +883,7 @@ Do this after the v4 install, and again after **Run Now**.
 
 - [ ] Dashboard: the pfBlockerNG widget loads
 - [ ] Dashboard: no red/error notices from pfBlockerNG (failed downloads,
-      Python/Unbound errors, a missing VIP while something uses the VIP response, and so on). Note anything new
+      Python/Unbound errors, and so on). Note anything new
       since the 3.3 jump
 - [ ] **Status → System Logs → System** — scan recent lines for
       pfBlockerNG / Unbound / PHP errors

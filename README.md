@@ -30,8 +30,8 @@ sync on top.
   Match, inbound/outbound), with dedup, CIDR aggregation, and suppression of
   your own networks.
 - **GeoIP** — block or permit by continent or country (MaxMind GeoLite2).
-- **DNSBL** — domain blocklists enforced inside the Unbound resolver;
-  sinkhole-VIP (deprecated) or NULL responses, SafeSearch enforcement, and per-name reports.
+- **DNSBL** — domain blocklists enforced in front of the Unbound resolver;
+  Null (`0.0.0.0` / `::`), NXDOMAIN or NODATA responses, SafeSearch enforcement, and per-name reports.
 - **Adblock Plus / EasyList feeds** — full ABP syntax: allow (`@@`) exceptions,
   regex rules, and `$important` / `$badfilter` precedence.
 - **IDN homoglyph protection** — blocks deceptive cross-script look-alike
@@ -42,9 +42,6 @@ sync on top.
   CIDR-aggregated set of a whole action type, for use by your own rules or an
   external service such as HAProxy.
 - **Update Hooks** — run your own `pre`/`post` scripts on each update pass.
-- **Automatic DNSBL sinkhole VIP (deprecated)** — pfBlockerNG can own the sinkhole
-  Virtual IP for you instead of a manual setup. The VIP and its web server run only
-  while a block answers with the VIP response; NULL blocking needs neither.
 
 > [!WARNING]
 > **The `pfB_` alias prefix is reserved.** pfBlockerNG recognizes its own

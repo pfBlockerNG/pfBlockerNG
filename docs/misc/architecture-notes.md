@@ -1268,6 +1268,11 @@ NODATA.
   the lighttpd conf, the certificate, the retired generation marker and the service, and `pfb_dnsbl_vip_retire()` deletes
   the auto-created VIP through the ADR-13 guard (the `pfB_AUTO_VIP_v4/v6` marker AND the address the stored id resolves
   to) and drops the retired keys (`PFB_DNSBL_RETIRED_KEYS`). A VIP the operator created is never deleted.
+- **HSTS list (#4056, 2026-11-18).** The HSTS preload list existed only so the VIP answer became a null answer for
+  preloaded names, so it went too: `pfb_py_hsts.txt` and its weekly refresh (#4057), the `dnsbl/pfb_hsts` setting and its
+  page control, the ini `python_hsts` flag, Core's `settings/dns` `hstsNullBlocking` field and the decider's HSTS lookup.
+  The cleanup above also drops the stored `pfb_hsts` key and the staged `/var/unbound/pfb_py_hsts.txt` (`PFB_PY_RETIRED`
+  in `pfblockerng.sh` clears the chroot copy too). Old `dnsbl.log` rows keep the `HSTS` type they were written with.
 - **RAM-disk archive.** The DNSBL archive write at shutdown (#3713) moved from the `pfb_dnsbl` rc stop to the `pfb_filter`
   rc stop, which runs at the same times.
 - **Kept.** The DNS listener VIPs of pfB-DNS (`pfb_manage_dns_listen_vip()`, #3688) are a different feature and stay.

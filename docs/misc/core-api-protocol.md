@@ -337,6 +337,7 @@ once and reads again, and the Update's start reads the backend again ([Update an
 - `feedfetch` refuses remote feeds with `proxy_unusable` when the configured proxy cannot be used, preserving last-known-good; for FTP it supports only an HTTP proxy and refuses HTTPS/SOCKS rather than sending Basic credentials in cleartext. The proxy is not applied to local files, self-hosted feeds (PHP uses its stream wrapper), or rsync. An empty URL (`""` or `"0"`) means no proxy.
 - **Sinkhole addresses.** What `pfb_global()` resolves from the stored VIP ids, whatever the DNSBL state. A VIP id that resolves to
   nothing, or to an address of the other family or with a zone (a link-local VIP: today's PHP writes it as typed), reads as `""`.
+  *Withdrawn 2026-11-17 (issue #4053): the fields are removed with the VIP response; see the amendment above.*
 - **Core refuses what it reads.** `proxyUrl` must use `http`, `https`, `socks5` or `socks5h` with a port from 1 to 65535 and no userinfo; a listed self address an IP address that is not unspecified, link-local, IPv4-mapped or zoned; an allowlist entry an address or a CIDR without a zone. A backend answer that breaks a rule fails the read ([Settings backends](#settings-backends)).
 
 Parity fixture: `tests/core/fixtures/settings_ingest_parity.json`. `CoreSettingsIngestParityTest` (PHPUnit) freezes it

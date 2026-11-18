@@ -249,6 +249,9 @@ Interfaces reach Core only as `bindAddress` and `selfAddresses`, and the proxy i
 | `dnsbl/<scope>` | DNSBL data for pfB-DNS (§9) | `sinkholeRequired`, per-group counts |
 | `settings/<projection>` | exists | exists |
 
+*Amendment 2026-11-18 (issue #4053): with the WebServer/VIP response removed, nothing needs a sinkhole, so `dnsbl/<scope>`
+carries no `sinkholeRequired`; the per-group counts stay. The same holds for the `dnsbl` object of the example below.*
+
 - **Canonical body:** members sorted and unique in byte order, one per line, the order `pfb_canonical_alias_set` produces
   (`pfb.inc:14880`; `docs/misc/architecture-notes.md:1194-1197`). `digest` is the xxh128 of that body.
 - **Generation:** a `uint64` per resource, written as a decimal string on the wire, as `GetUpdate`'s cursor is
@@ -388,6 +391,8 @@ The apply settles exactly that token (`apply.inc:5617`), so a change marked whil
 - The Core Updater publishes what the manifest holds today (`pfb.inc:18049-18067`: config, feeds, user unlock) with each feed's
   rows, the TOP1M whitelist, SafeSearch, and the PSL, TLD and HSTS reference lists. pfB-DNS keeps its `build()` and feeds it
   from fetched data. The build is not moved or redesigned.
+  *Amendment 2026-11-18 (issue #4053, #4056): the HSTS preload list is removed; it only turned a VIP answer into a null
+  answer. The reference lists are the PSL and TLD lists.*
 - The Outpost apply keeps the VIP, NAT, certificate and webserver from `sinkholeRequired`, with the hold-down while the
   previous generation still answers (`apply.inc:3350-3384,3730`), the Resolver move, and the re-lock of temporary unlocks.
   *Amendment 2026-11-17 (issue #4053): the WebServer/VIP response is removed, so there is no VIP, NAT, certificate,
