@@ -3463,6 +3463,9 @@ function pfb_dnsbl_vip_retire(): bool {
 		$guard = static fn(array $row): bool => $ip !== '' && ($row['subnet'] ?? '') === $ip;
 		$row = pfb_find_managed_obj('virtualip/vip', $marker, $guard);
 		if ($row === FALSE) {
+			if ($ip !== '') {
+				pfb_logger("\nDNSBL: the VIP {$ip} stays as an ordinary pfSense VIP; pfBlockerNG no longer uses it", 1);
+			}
 			continue;
 		}
 		interface_vip_bring_down($row);
@@ -3472,7 +3475,7 @@ function pfb_dnsbl_vip_retire(): bool {
 	}
 	$kept = array_diff_key($dconfig, array_flip(PFB_DNSBL_RETIRED_KEYS));
 	if ($kept !== $dconfig) {
-		config_set_path($section, $kept);
+		PfbConfig::writeSectionRawSystem($section, $kept);
 		$changed = TRUE;
 	}
 	return $changed;
@@ -15749,24 +15752,44 @@ function dnsbl_save_stats(): bool {
 function pfb_dnsbl_webserver_retire(): void {
 	global $pfb;
 
+	// Stop the server while its rc script still exists.
+	if (is_service_running('pfb_dnsbl')) {
+		pfb_logger("Stop Service DNSBL\n", 1);
+		stop_service('pfb_dnsbl');
+	}
 	$changed = pfb_dnsbl_vip_retire();
 	$dnsbl_ex_nat = pfb_managed_obj_rows('nat/rule', PFB_MANAGED_NAT_DESCR);
 	pfb_sync_copied_check('dnsbl_nat', $dnsbl_ex_nat, [], $pfb['dbdir']);
-	if (pfb_remove_managed_obj('nat/rule', PFB_MANAGED_NAT_DESCR)) {
+	$firewall = pfb_remove_managed_obj('nat/rule', PFB_MANAGED_NAT_DESCR);
+	foreach (['pfB_DNSBL_Ping', 'pfB_DNSBL_Permit'] as $marker) {
+		$firewall = pfb_remove_managed_obj('filter/rule', $marker) || $firewall;
+	}
+	// The block-page aliases go unless an operator's rule still names them (a missing alias fails the whole ruleset).
+	$rules = json_encode([config_get_path('filter/rule', []), config_get_path('nat/rule', [])]);
+	$aliases = config_get_path('aliases/alias', []);
+	$kept_aliases = array_values(array_filter(is_array($aliases) ? $aliases : [], static fn ($alias): bool =>
+		!in_array($alias['name'] ?? '', ['pfB_DNSBL_Ports', 'pfB_DNSBL_VIPs'], TRUE) || str_contains($rules, '"' . $alias['name'] . '"')));
+	if (is_array($aliases) && count($kept_aliases) !== count($aliases)) {
+		config_set_path('aliases/alias', $kept_aliases);
+		$firewall = TRUE;
+	}
+	$services = config_get_path('installedpackages/service', []);
+	$kept_services = array_values(array_filter(is_array($services) ? $services : [], static fn ($row): bool => ($row['name'] ?? '') !== 'pfb_dnsbl'));
+	if (is_array($services) && count($kept_services) !== count($services)) {
+		config_set_path('installedpackages/service', $kept_services);
 		$changed = TRUE;
 	}
-	if ($changed) {
-		write_config('pfBlockerNG: removed the DNSBL web server NAT and VIP (issue #4053)');
+	if ($changed || $firewall) {
+		write_config('pfBlockerNG: removed the DNSBL web server, its firewall objects and VIP (issue #4053)');
+	}
+	if ($firewall) {
+		$pfb['filter_configure'] = TRUE;
 	}
 	unlink_if_exists($pfb['dnsbl_conf']);
 	unlink_if_exists($pfb['dnsbl_cert']);
 	unlink_if_exists($pfb['unbound_py_vip']);
 	unlink_if_exists('/usr/local/sbin/lighttpd_pfb');
 	unlink_if_exists('/usr/local/etc/rc.d/pfb_dnsbl.sh');
-	if (is_service_running('pfb_dnsbl')) {
-		pfb_logger("Stop Service DNSBL\n", 1);
-		stop_service('pfb_dnsbl');
-	}
 }
 
 

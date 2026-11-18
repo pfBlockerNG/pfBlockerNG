@@ -28,13 +28,15 @@ final class DnsblWebserverRetireTest extends TestCase
 		$GLOBALS['pfb_test_service_running'] = ['pfb_dnsbl' => FALSE];
 		$this->dir = sys_get_temp_dir() . '/pfb_retire_' . getmypid() . '_' . bin2hex(random_bytes(4));
 		$this->assertTrue(mkdir($this->dir, 0700, TRUE));
-		foreach (['dbdir', 'dnsbl_conf', 'dnsbl_cert', 'unbound_py_vip'] as $k) {
+		foreach (['dbdir', 'dnsbl_conf', 'dnsbl_cert', 'unbound_py_vip', 'log', 'filter_configure'] as $k) {
 			$this->saved[$k] = $GLOBALS['pfb'][$k] ?? NULL;
 		}
 		$GLOBALS['pfb']['dbdir'] = $this->dir;
 		$GLOBALS['pfb']['dnsbl_conf'] = "{$this->dir}/pfb_dnsbl_lighty.conf";
 		$GLOBALS['pfb']['dnsbl_cert'] = "{$this->dir}/dnsbl_cert.pem";
 		$GLOBALS['pfb']['unbound_py_vip'] = "{$this->dir}/pfb_py_vip";
+		$GLOBALS['pfb']['log'] = "{$this->dir}/pfblockerng.log";
+		unset($GLOBALS['pfb']['filter_configure']);
 	}
 
 	protected function tearDown(): void
@@ -100,10 +102,6 @@ final class DnsblWebserverRetireTest extends TestCase
 		$this->assertTrue(pfb_dnsbl_vip_retire());
 
 		$this->assertSame(['pfb_dnsbl' => 'on', 'global_log' => 'disabled_log'], config_get_path(self::DNSBL));
-		foreach (['pfb_dnsvip4', 'pfb_dnsvip_auto', 'pfb_dnsport', 'pfb_dnsport_ssl', 'dnsbl_interface', 'pfb_dnsbl_rule',
-			'dnsbl_allow_int', 'pfb_py_nolog', 'dnsbl_webpage', 'pfb_dnsvip'] as $key) {
-			$this->assertContains($key, PFB_DNSBL_RETIRED_KEYS);
-		}
 	}
 
 	public function testOnlyTheExactDnsblNatRowsGoAndTheServerFilesAreRemoved(): void
@@ -138,5 +136,77 @@ final class DnsblWebserverRetireTest extends TestCase
 		pfb_dnsbl_webserver_retire();
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
 		$this->assertSame([], $GLOBALS['pfb_test_service_calls']);
+	}
+
+	public function testAManualVipAtTheStoredIdIsKeptAndLogged(): void
+	{
+		$this->seed(['pfb_dnsvip4' => '_vipm1'], [['uniqid' => 'm1', 'subnet' => '10.10.10.1', 'descr' => 'my DNSBL VIP']]);
+
+		pfb_dnsbl_webserver_retire();
+
+		$this->assertSame(['10.10.10.1'], array_column(config_get_path('virtualip/vip', []), 'subnet'));
+		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertStringContainsString('10.10.10.1', $log, 'the upgrade names the manual VIP it leaves behind');
+		$this->assertStringContainsString('no longer uses', $log);
+	}
+
+	public function testTheDnsblFloatingRulesAndTheirAliasesGo(): void
+	{
+		$this->seed(['pfb_dnsbl' => 'on'], []);
+		config_set_path('filter/rule', [
+			['descr' => 'pfB_DNSBL_Ping auto rule', 'destination' => ['address' => 'pfB_DNSBL_VIPs']],
+			['descr' => 'pfB_DNSBL_Permit auto rule', 'destination' => ['address' => 'pfB_DNSBL_VIPs', 'port' => 'pfB_DNSBL_Ports']],
+			['descr' => 'my rule', 'destination' => ['address' => 'lan']],
+		]);
+		config_set_path('aliases/alias', [['name' => 'pfB_DNSBL_Ports'], ['name' => 'pfB_DNSBL_VIPs'], ['name' => 'mine']]);
+
+		pfb_dnsbl_webserver_retire();
+
+		$this->assertSame(['my rule'], array_column(config_get_path('filter/rule', []), 'descr'));
+		$this->assertSame(['mine'], array_column(config_get_path('aliases/alias', []), 'name'));
+		$this->assertTrue($GLOBALS['pfb']['filter_configure'] ?? FALSE, 'the firewall is reloaded without the rules');
+		$this->assertCount(1, $GLOBALS['pfb_test_write_config_calls']);
+	}
+
+	public function testAnAliasAnOperatorRuleStillUsesStays(): void
+	{
+		$this->seed(['pfb_dnsbl' => 'on'], []);
+		config_set_path('filter/rule', [['descr' => 'my rule', 'destination' => ['address' => 'lan', 'port' => 'pfB_DNSBL_Ports']]]);
+		config_set_path('aliases/alias', [['name' => 'pfB_DNSBL_Ports'], ['name' => 'pfB_DNSBL_VIPs']]);
+
+		pfb_dnsbl_webserver_retire();
+
+		$this->assertSame(['pfB_DNSBL_Ports'], array_column(config_get_path('aliases/alias', []), 'name'));
+	}
+
+	public function testTheServiceRowIsUnregistered(): void
+	{
+		$this->seed(['pfb_dnsbl' => 'on'], []);
+		config_set_path('installedpackages/service', [['name' => 'pfb_dnsbl'], ['name' => 'pfb_filter']]);
+
+		pfb_dnsbl_webserver_retire();
+
+		$this->assertSame(['pfb_filter'], array_column(config_get_path('installedpackages/service', []), 'name'));
+	}
+
+	public function testASecondRunAfterARealCleanupChangesNothing(): void
+	{
+		$this->seed(['pfb_dnsbl' => 'on', 'pfb_dnsvip4' => '_vip4a', 'pfb_dnsport' => '8081'],
+			[['uniqid' => '4a', 'subnet' => '10.10.10.1', 'descr' => PFB_AUTO_VIP_DESCR_V4, 'interface' => 'lo0']],
+			[['descr' => PFB_MANAGED_NAT_DESCR, 'target' => '127.0.0.1']]);
+		pfb_dnsbl_webserver_retire();
+		$this->assertCount(1, $GLOBALS['pfb_test_write_config_calls']);
+		$after = $GLOBALS['config'];
+
+		$GLOBALS['pfb_test_write_config_calls'] = [];
+		pfb_dnsbl_webserver_retire();
+
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertSame($after, $GLOBALS['config']);
+	}
+
+	public function testTheRegistryNeverGrandfathersTheRetiredVipToken(): void
+	{
+		$this->assertNotContains('enabled', pfb_cfg_registry()['dnsbl/global_log']['grandfather'] ?? []);
 	}
 }

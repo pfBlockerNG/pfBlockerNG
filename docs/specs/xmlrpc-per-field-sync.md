@@ -143,7 +143,8 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
   `asn_reporting`, `asn_token`, `inbound_interface`, `inbound_deny_action`, `outbound_interface`,
   `outbound_deny_action`, `pass_order`, `autorule_suffix`; DNSBL `agateway_in`, `agateway_out`,
   `aliasaddr_in`, `aliasaddr_out`, `aliasports_in`, `aliasports_out`, `autoproto_in`,
-  `autoproto_out`. `dnsbl_webpage` stays foreign (ADR-29 §2.5).
+  `autoproto_out`. `dnsbl_webpage` stays foreign (ADR-29 §2.5). *Amendment 2026-11-17 (issue #4053):
+  `dnsbl_webpage` is removed.*
 - Rule: **local** is an interface, VIP, listener port, gateway, filesystem or script reference,
   credential, runtime or one-shot marker, log, display, or per-node performance tuning value.
   **Policy** is what is blocked, permitted, logged, or transformed, and the shape of generated

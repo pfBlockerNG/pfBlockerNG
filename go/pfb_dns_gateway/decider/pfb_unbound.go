@@ -12,8 +12,7 @@
 // writes it any more). The stderr redirect is translated (pfb_unbound_stderr.go: what the module writes to sys.stderr is
 // py_error.log rows). The live update (the reload watcher, its RAM gate, its applied marker and the reload builder) is in
 // pfb_unbound_reload.go, the DNSBL control surface
-// (pfb_apply_control_command, its timers and the control watcher) in pfb_unbound_control.go, the ADR-65 query channel
-// (pfb_query_watcher and its verdict) in pfb_unbound_query.go, and the log rows, their files and the GeoIP reader in
+// (pfb_apply_control_command, its timers and the control watcher) in pfb_unbound_control.go, and the log rows, their files and the GeoIP reader in
 // pfb_unbound_log.go, pfb_unbound_logfile.go and pfb_unbound_geoip.go. deinit (pfbUnbound.deinit) stops what init
 // started, bounded as Python's joins are.
 package decider
@@ -169,9 +168,6 @@ type pfbUnbound struct {
 	controlTick func() (tick <-chan time.Time, stop func())
 	// controlStop stops the control watcher and waits for it to end; nil is pfb["control_watcher"] False.
 	controlStop func()
-	// queryNewTicker makes the default tick of the query watcher (nil: time.NewTicker); a test wraps it to see the
-	// interval the watcher's ticker is made with.
-	queryNewTicker func(d time.Duration) *time.Ticker
 
 	// The live update (pfb_unbound_reload.go). reloadStop stops the reload watcher and waits for it to end; nil is
 	// pfb["reload_watcher"] False. reloadTick is its poll tick and the tick's release (nil: a RELOAD_POLL_INTERVAL ticker),

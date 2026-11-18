@@ -111,7 +111,6 @@ switch ($cmd) {
 		file_put_contents($pfb['unbound_py_conf'], pfb_unbound_python_ini('enabled', 'BASELINE'));
 		pfb_dns_proxy_service();
 		pfb_filter_service();
-		pfb_dnsbl_service();
 		echo 'seeded; ', oracle_state(), "\n";
 		break;
 	case 'start':

@@ -156,7 +156,7 @@ function pfb_wizard_dnsbl_group(array $info): array {
 }
 
 function step3_submitphpaction() {
-	global $stepid, $input_errors;
+	global $stepid;
 
 	pfb_wizard_skip_check();
 
@@ -165,10 +165,6 @@ function step3_submitphpaction() {
 			$stepid = 0;
 			return;
 		}
-	}
-
-	if ($input_errors) {
-		$stepid = 2;
 	}
 }
 

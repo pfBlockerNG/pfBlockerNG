@@ -1639,8 +1639,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		}
 	}
 
-	// Check if DNSBL auto permit rule or DNSBL 'Auto Deny' rules for DNSBL IPs are defined
-	if (!empty($pfb['dnsblconfig']['dnsbl_allow_int']) || strpos($pfb['dnsbl_ip'], 'Deny_') !== FALSE) {
+	// Check if DNSBL 'Auto Deny' rules for DNSBL IPs are defined
+	if (strpos($pfb['dnsbl_ip'], 'Deny_') !== FALSE) {
 		$pfb['autorules'] = TRUE;
 	}
 
@@ -2114,9 +2114,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$safesearch_update		= FALSE;	// Flag: SafeSearch CSV changed -> force an Unbound restart (issue #149)
 	$pfb_fp_old			= null;		// Fingerprint of loaded input files BEFORE this pass (null => DNSBL not active this pass)
 
-	$dnsbl_error = FALSE;
-
-	if (pfb_dnsbl_active() && !$pfb['save'] && !$dnsbl_error) {
+	if (pfb_dnsbl_active() && !$pfb['save']) {
 		$configured = array();
 		$config_complete = TRUE;
 		$source_groups = config_get_path('installedpackages/pfblockerngdnsbl/config', array());

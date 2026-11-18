@@ -81,14 +81,14 @@ final class DnsblBlockingModesTest extends TestCase
 	 * for an existing install with no prior global override, NOT the fresh
 	 * 'disabled_log' default NEWCFG takes.
 	 */
-	public function testOldcfgAbsentGlobalLogGrandfathersToEnabled(): void
+	public function testOldcfgAbsentGlobalLogGrandfathersToNullLogging(): void
 	{
 		$sections = [self::DNSBL_SECTION => ['pfb_dnsbl' => 'on']];
 
 		$result = pfb_registry_pass($sections);
 
-		$this->assertSame('enabled', $result[self::DNSBL_SECTION]['global_log'] ?? NULL,
-			'an existing install with global_log entirely absent must grandfather to "enabled", never the fresh default'
+		$this->assertSame('disabled_log', $result[self::DNSBL_SECTION]['global_log'] ?? NULL,
+			'an existing install with global_log entirely absent grandfathers to "disabled_log" (issue #4053: never the retired VIP)'
 		);
 
 		$this->assertSecondPassIsEmpty($sections);
@@ -96,7 +96,7 @@ final class DnsblBlockingModesTest extends TestCase
 
 	/**
 	 * OLDCFG, global_log already an explicit CONCRETE value (NODATA tokens
-	 * included, '' excluded -- see testOldcfgExplicitEmptyGrandfathersToEnabled):
+	 * included, '' excluded -- see testOldcfgExplicitEmptyGrandfathersToNullLogging):
 	 * every one of them survives the pass untouched -- an already-present concrete
 	 * value is never rewritten, and the grandfather map only has ABSENT/'' entries.
 	 */
@@ -119,14 +119,14 @@ final class DnsblBlockingModesTest extends TestCase
 	 * retired single-field scheme, so both must land on the SAME grandfathered
 	 * mechanism.
 	 */
-	public function testOldcfgExplicitEmptyGrandfathersToEnabled(): void
+	public function testOldcfgExplicitEmptyGrandfathersToNullLogging(): void
 	{
 		$sections = [self::DNSBL_SECTION => ['pfb_dnsbl' => 'on', 'global_log' => '']];
 
 		$result = pfb_registry_pass($sections);
 
-		$this->assertSame('enabled', $result[self::DNSBL_SECTION]['global_log'] ?? NULL,
-			'an explicitly-stored "" must grandfather to "enabled", the same as an absent key'
+		$this->assertSame('disabled_log', $result[self::DNSBL_SECTION]['global_log'] ?? NULL,
+			'an explicitly-stored "" grandfathers to "disabled_log", the same as an absent key'
 		);
 
 		$this->assertSecondPassIsEmpty($sections);

@@ -1380,7 +1380,7 @@ function pfb_cfg_registry(): array
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 			'sync'          => 'policy',
-			'grandfather'   => [PFB_GF_ABSENT => 'enabled', '' => 'enabled'],
+			'grandfather'   => [PFB_GF_ABSENT => 'disabled_log', '' => 'disabled_log'],
 		],
 
 		// issue #3288: Default (groups may inherit the mechanism above) or
@@ -1604,7 +1604,6 @@ function pfb_cfg_registry(): array
 			'old_name'       => 'pfb_pytlds_bgtld',
 			'no_grandfather' => '3.2-era field; v3.2.16 absent fallback equals default; registered for old_name parity (#1921)',
 		],
-
 
 		// No AAAA blocking: 'on' | ''. Default ''.
 		'dnsbl/pfb_noaaaa' => [
