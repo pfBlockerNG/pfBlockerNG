@@ -1,0 +1,177 @@
+package feedfetch
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// The Extras (#3978): the translation of pfblockerng_download_extras() and the Extras branches of pfb_download(), held
+// to the parity corpus in tests/extras/fixtures/parity. A failed or refused Extra keeps what it published before. The
+// asn type is translated so far; any other kind is refused before it is fetched.
+
+// extrasTimeout is what every pfblockerng.php verb passes pfblockerng_download_extras().
+const extrasTimeout = 600 * time.Second
+
+// Extra is one row of the Extras table (pfblockerng.php:166-256).
+type Extra struct {
+	Kind     string // asn
+	URL      string // an asn URL ends in "token=": the token is appended, encoded
+	Dir      string // the folder: the GeoIP share or the database folder
+	Download string // the download's file name in Dir (file_dwn)
+	File     string // the published file's name in Dir
+}
+
+// ExtrasConfig is what the extras projection and the Core's flags give a run. The secrets are held in memory only.
+type ExtrasConfig struct {
+	DBDir                      string // where the update markers go ($pfb['dbdir'])
+	MaxMindAccount, MaxMindKey string
+	ASNToken                   string
+	Timeout                    time.Duration // per transfer; zero is the verbs' 600 s
+	// ASNTable is `pfblockerng.sh asn_table`, run after a gzipped asn.csv is published (the GeoIP and ASN conversion's,
+	// #4034); nil runs nothing.
+	ASNTable func(ctx context.Context)
+}
+
+// ExtrasResult is pfblockerng_download_extras()'s return and the flags it leaves in $pfb.
+type ExtrasResult struct {
+	OK           bool
+	MaxMindError bool // a geoip row failed: it blocks the country conversion
+}
+
+// DownloadExtras downloads every Extra in order, as pfblockerng_download_extras() does.
+func (f *Fetcher) DownloadExtras(ctx context.Context, cfg ExtrasConfig, extras []Extra) ExtrasResult {
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = extrasTimeout
+	}
+	res := ExtrasResult{OK: true}
+	for _, x := range extras {
+		req := Request{URL: x.URL, Timeout: cfg.Timeout}
+		if x.Kind == "asn" {
+			req.URL += rawURLEncode(cfg.ASNToken)
+		}
+		if !f.extra(ctx, cfg, x, req) {
+			res.OK = false
+		}
+	}
+	return res
+}
+
+// extra is pfb_download() for one Extra: the transfer to "<download>.raw", the content gates, the update marker and the
+// publication of its type. It reports whether the Extra succeeded.
+func (f *Fetcher) extra(ctx context.Context, cfg ExtrasConfig, x Extra, req Request) bool {
+	if x.Kind != "asn" {
+		return false
+	}
+	src, _ := f.entry(ctx, req)
+	if src == nil || f.proxyUnusableFor(src) {
+		return false
+	}
+	base := filepath.Join(x.Dir, x.Download)
+	raw, target := base+".raw", filepath.Join(x.Dir, x.File)
+	defer os.Remove(raw)
+	t := f.fetch(ctx, src, req, raw, nil)
+	if t.reason != "" {
+		return false
+	}
+	if t.status == 304 {
+		_, err := os.Stat(base + ".orig")
+		return err == nil
+	}
+	if t.status != 200 && t.status != 221 && t.status != 226 {
+		return false
+	}
+
+	mime, ok := f.extraVerdict(ctx, raw, src.host)
+	if !ok {
+		return false
+	}
+	if f.Sanity && (mime == mimeText || mime == mimeHTML) {
+		if sane(raw) != "" {
+			return false
+		}
+	}
+	touch(filepath.Join(cfg.DBDir, "asn.update"))
+	if !t.lastMod.IsZero() {
+		os.Chtimes(raw, t.lastMod, t.lastMod)
+	}
+	archive := mime == mimeGzip || mime == mimeBzip2 || mime == mimeZip || mime == mimeTar
+	if archive && f.extractShort(raw, x.Dir, cfg.DBDir, target, filepath.Dir(target)) {
+		return false
+	}
+	return f.publishASN(ctx, cfg, mime, raw, target)
+}
+
+// extraVerdict is pfb_filter(FILE_MIME) with its host exception: an octet stream from ipinfo.io (the binary asn.mmdb)
+// is taken for text/plain before any structural recovery.
+func (f *Fetcher) extraVerdict(ctx context.Context, raw, host string) (string, bool) {
+	if h, err := os.Open(raw); err == nil {
+		mime := classify(head(h))
+		h.Close()
+		if mime == mimeOctet && host == "ipinfo.io" {
+			return mimeText, true
+		}
+	}
+	mime, _, ok := verdict(ctx, raw)
+	return mime, ok
+}
+
+// extractShort is pfb_extract_space_shortfall(): one of the directories cannot hold the archive itself.
+func (f *Fetcher) extractShort(raw string, dirs ...string) bool {
+	info, err := os.Stat(raw)
+	if err != nil {
+		return false
+	}
+	free := f.FreeBytes
+	if free == nil {
+		free = freeBytes
+	}
+	for _, d := range dirs {
+		if avail, known := free(d); known && avail < uint64(info.Size()) {
+			return true
+		}
+	}
+	return false
+}
+
+// publishASN is the asn branch: a gzip's stream or a tar's members replace the published file whole (pfb_stage_publish),
+// any other body is renamed over it.
+func (f *Fetcher) publishASN(ctx context.Context, cfg ExtrasConfig, mime, raw, target string) bool {
+	switch mime {
+	case mimeGzip, mimeTar:
+		staged, err := f.stage(ctx, Feed{Dir: filepath.Dir(target)}, mime, raw, false)
+		if err != nil {
+			return false
+		}
+		if os.Rename(staged, target) != nil {
+			os.Remove(staged)
+			return false
+		}
+		if mime == mimeGzip && cfg.ASNTable != nil {
+			cfg.ASNTable(ctx)
+		}
+		return true
+	case mimeBzip2, mimeZip:
+		// shortcut: pfb_download() publishes an IPinfo bzip2 or zip to "<download>.orig", which nothing reads; IPinfo
+		// serves neither. Refused here until a corpus row pins that path.
+		return false
+	}
+	return os.Rename(raw, target) == nil
+}
+
+// rawURLEncode is PHP's rawurlencode(): everything but letters, digits and "-_.~" is percent-encoded.
+func rawURLEncode(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("-_.~", c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, "%%%02X", c)
+	}
+	return b.String()
+}
