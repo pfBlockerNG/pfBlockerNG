@@ -332,6 +332,16 @@ def _seed_legacy_webserver(vm: SmokeVM, *, timeout: float = 60.0) -> None:
         " 'destination' => array('address' => '10.10.10.1', 'port' => '80'),"
         " 'target' => '127.0.0.1', 'local-port' => '8081');\n"
         "config_set_path('nat/rule', $rules);\n"
+        "$fw = config_get_path('filter/rule', array());\n"
+        "$fw[] = array('descr' => 'pfB_DNSBL_Ping auto rule', 'type' => 'pass', 'floating' => 'yes',"
+        " 'destination' => array('address' => 'pfB_DNSBL_VIPs'));\n"
+        "config_set_path('filter/rule', $fw);\n"
+        "$al = config_get_path('aliases/alias', array());\n"
+        "$al[] = array('name' => 'pfB_DNSBL_VIPs', 'type' => 'host', 'address' => '10.10.10.1');\n"
+        "config_set_path('aliases/alias', $al);\n"
+        "$sv = config_get_path('installedpackages/service', array());\n"
+        "$sv[] = array('name' => 'pfb_dnsbl', 'rcfile' => 'pfb_dnsbl.sh', 'executable' => 'lighttpd_pfb');\n"
+        "config_set_path('installedpackages/service', $sv);\n"
         "write_config('pfBlockerNG smoke #4053: seed the retired DNSBL web server');\n"
         f"file_put_contents({h._php_str(_LIGHTY_CONF)}, '# legacy');\n"
         "echo 'OK';"
@@ -346,7 +356,8 @@ def test_upgrade_cleanup_removes_the_retired_webserver_objects(deployed_vm: Smok
 
     Scenario: upgrade cleanup.
       Given the auto-VIP (marker + the address pfb_dnsvip4 names), a manual VIP, the DNSBL NAT redirect,
-        the lighttpd conf and the retired settings keys are present (before-state asserted),
+        a floating rule, its alias, the service row, the lighttpd conf and the retired settings keys
+        are present (before-state asserted),
       When a full reload runs,
       Then the auto-VIP, the DNSBL NAT, the conf and the retired keys are gone,
         And the manual VIP is still present,
@@ -372,6 +383,18 @@ def test_upgrade_cleanup_removes_the_retired_webserver_objects(deployed_vm: Smok
         for key in ("pfb_dnsvip4", "pfb_dnsvip_auto", "pfb_dnsport", "pfb_dnsport_ssl"):
             assert h.config_get(vm, f"{h.CFG_DNSBL_SETTINGS}/{key}") == "", f"retired key {key} survived the apply"
         assert vm.ssh("pgrep", "-f", "lighttpd_pfb", timeout=30.0).returncode != 0, "lighttpd_pfb is still running"
+        leftovers = h._php_read_scalar(
+            vm,
+            "$n = 0;\n"
+            "foreach (config_get_path('filter/rule', array()) as $r) {"
+            " if (str_starts_with((string) ($r['descr'] ?? ''), 'pfB_DNSBL_')) { $n++; } }\n"
+            "foreach (config_get_path('aliases/alias', array()) as $a) {"
+            " if (($a['name'] ?? '') === 'pfB_DNSBL_VIPs') { $n++; } }\n"
+            "foreach (config_get_path('installedpackages/service', array()) as $v) {"
+            " if (($v['name'] ?? '') === 'pfb_dnsbl') { $n++; } }",
+            "(string) $n",
+        )
+        assert leftovers == "0", f"{leftovers} floating rule/alias/service row(s) of the web server survived the apply"
 
         h.reload(vm, "update")
         assert _vip_descr_present(vm, _MANUAL_VIP_DESCR), "a second apply deleted the operator VIP"
