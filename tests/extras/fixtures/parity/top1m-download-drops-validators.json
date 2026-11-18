@@ -1,0 +1,85 @@
+{
+	"schema": 1,
+	"description": "A plain extras run publishes a list no probe validated: Core drops the stored ETag and Last-Modified, which describe an older version, so the next dcc probe is a full GET that the xxh128 comparison settles. Today's PHP keeps them, and a server that goes back to that older version answers 304 for a list Core no longer holds (old_expect; owner, 2026-11-18).",
+	"hosts": {
+		"tranco-list.eu": [
+			"127.0.0.1",
+			"203.0.113.11"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "tranco"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n",
+		"db/top-1m.csv.zip.orig.etag": "\"v1\"",
+		"db/top-1m.csv.zip.orig.lastmod": "1700000000"
+	},
+	"routes": {
+		"origin": {
+			"/top-1m.csv.zip": {
+				"body_b64": "UEsDBBQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQoyLGZhY2Vib29rLmNvbQozLGV4YW1wbGUub3JnClBLAQIUAxQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAFIAAAAAAA=="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://tranco-list.eu:{port:origin}/top-1m.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "tranco"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/top-1m.csv": "1,google.com\n2,facebook.com\n3,example.org\n",
+					"db/top-1m.csv.zip.orig": {
+						"b64": "UEsDBBQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQoyLGZhY2Vib29rLmNvbQozLGV4YW1wbGUub3JnClBLAQIUAxQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAFIAAAAAAA=="
+					},
+					"db/top-1m.csv.zip.xxhash128": "e1712341769adb69f0593d90ea5c480c",
+					"db/top-1m.csv.zip.source": "{\"provider\":\"tranco\",\"url\":\"http://tranco-list.eu:{port:origin}/top-1m.csv.zip\",\"headers\":[]}",
+					"db/top-1m.csv.zip.raw": null,
+					"db/top-1m.update": "",
+					"db/top-1m.csv.zip.orig.etag": null,
+					"db/top-1m.csv.zip.orig.lastmod": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			},
+			"old_expect": {
+				"ok": true,
+				"files": {
+					"db/top-1m.csv": "1,google.com\n2,facebook.com\n3,example.org\n",
+					"db/top-1m.csv.zip.orig": {
+						"b64": "UEsDBBQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQoyLGZhY2Vib29rLmNvbQozLGV4YW1wbGUub3JnClBLAQIUAxQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAFIAAAAAAA=="
+					},
+					"db/top-1m.csv.zip.xxhash128": "e1712341769adb69f0593d90ea5c480c",
+					"db/top-1m.csv.zip.source": "{\"provider\":\"tranco\",\"url\":\"http://tranco-list.eu:{port:origin}/top-1m.csv.zip\",\"headers\":[]}",
+					"db/top-1m.csv.zip.raw": null,
+					"db/top-1m.update": "",
+					"db/top-1m.csv.zip.orig.etag": "\"v1\"",
+					"db/top-1m.csv.zip.orig.lastmod": "1700000000"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			}
+		}
+	]
+}
