@@ -391,8 +391,8 @@ def adapter_seconds(vm: SmokeVM, request: dict[str, Any]) -> tuple[float, dict[s
 
 
 def _flipped(state: tuple[bool, str]) -> str:
-    """The other toggle value for a stored one: On becomes the Off token, anything else On."""
-    return "" if state[1] == "on" else "on"
+    """The other value of the default-On IDN toggle: absent or On becomes the Off token, the Off token On."""
+    return "" if not state[0] or state[1] == "on" else "on"
 
 
 def test_the_install_leaves_no_settings_file_for_core(core_vm: SmokeVM) -> None:
