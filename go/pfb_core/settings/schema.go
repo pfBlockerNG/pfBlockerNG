@@ -40,6 +40,9 @@ type Field struct {
 	Key      string   `json:"key,omitempty"`
 	Items    []Field  `json:"items,omitempty"`
 
+	// Legacy maps a stored token the schema no longer takes to its current value, as PfbConfig's read adapters absorb
+	// legacy tokens: a load reads it so, the next save stores the current value, and the API refuses the token.
+	Legacy    map[string]string                      `json:"-"`
 	Check     func(item map[string]any) []FieldError `json:"-"`
 	CheckList func(list []any) []FieldError          `json:"-"` // field names relative to the list: "[i].…"
 }
@@ -51,6 +54,8 @@ type Projection struct {
 	ID       string  `json:"id"`
 	ReadOnly bool    `json:"readOnly,omitempty"`
 	Fields   []Field `json:"fields"`
+	// Retired names fields the schema dropped: a store written before drops them on load instead of refusing to load.
+	Retired []string `json:"-"`
 }
 
 // Schema is what GetSettingsSchema answers.
@@ -91,7 +96,7 @@ func dnsProjection() Projection {
 		{Name: "controlLegacy", Type: TypeBool, Default: false, Requires: "control"},
 		{Name: "regexCap", Type: TypeBool, Default: false},
 		{Name: "metricsClientIp", Type: TypeBool, Default: false},
-	}}
+	}, Retired: []string{"logViaWebserver", "hstsNullBlocking"}} // #4054, #4056
 }
 
 const (

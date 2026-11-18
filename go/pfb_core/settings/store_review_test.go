@@ -158,3 +158,92 @@ func TestAFailedDirectorySyncAfterTheRenameServesWhatIsOnDisk(t *testing.T) {
 		t.Errorf("memory %s, disk %s: want both at revision 2", jsonOf(t, mem), jsonOf(t, disk))
 	}
 }
+
+// A standalone Core whose settings.json still holds a field the schema has dropped (logViaWebserver with #4054,
+// hstsNullBlocking with #4056) starts without it and keeps the rest; its next save no longer stores it. The API still
+// refuses the name (#4055).
+func TestOpenDropsARetiredFieldAndKeepsTheRest(t *testing.T) {
+	dir := writeStore(t, `{"format":1,"revision":3,"projections":{"dns":{"values":`+
+		`{"hstsNullBlocking":true,"logViaWebserver":false,"replyLogging":false}}}}`)
+	st, err := Open(dir, Production())
+	if err != nil {
+		t.Fatalf("Open of a store holding retired fields: %v", err)
+	}
+	dns := projection(t, get(t, st), "dns")
+	_, hsts := dns.Value["hstsNullBlocking"]
+	_, webserver := dns.Value["logViaWebserver"]
+	if hsts || webserver || dns.Value["replyLogging"] != false {
+		t.Errorf("dns read as %s, want no retired field and replyLogging still off", jsonOf(t, dns))
+	}
+	if _, err := st.Save(t.Context(), 3, changes(t, `{"dns": {"tldWildcard": true}}`)); err != nil {
+		t.Fatalf("save after the load: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, storeFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "hstsNullBlocking") || strings.Contains(string(raw), "logViaWebserver") {
+		t.Errorf("the saved store still holds a retired field: %s", raw)
+	}
+	var invalid *ValidationError
+	if _, err := st.Save(t.Context(), 4, changes(t, `{"dns": {"hstsNullBlocking": false}}`)); !errors.As(err, &invalid) {
+		t.Errorf("a save naming a retired field = %v, want a validation error", err)
+	}
+}
+
+// A store initialized before #4054 also holds the read-only ingest projection's sinkholeV4 and sinkholeV6, which #4054
+// dropped with the VIP response: it loads too (#4055).
+func TestOpenDropsTheRetiredSinkholeAddresses(t *testing.T) {
+	dir := writeStore(t, `{"format":1,"revision":2,"projections":{"ingest":{"values":{"sinkholeV4":"","sinkholeV6":""}}}}`)
+	st, err := Open(dir, Production())
+	if err != nil {
+		t.Fatalf("Open of a store holding the retired sinkhole addresses: %v", err)
+	}
+	ingest := projection(t, get(t, st), "ingest")
+	_, v4 := ingest.Value["sinkholeV4"]
+	_, v6 := ingest.Value["sinkholeV6"]
+	if v4 || v6 {
+		t.Errorf("ingest read as %s, want no sinkhole address", jsonOf(t, ingest))
+	}
+}
+
+// A standalone store that saved the DNSBL mechanism "enabled" (the VIP response #4054 removed) loads it as Null Blocking
+// (logging), "disabled_log", in a group too, as config.xml's migration and PfbConfig's read adapters take it; the API
+// still refuses "enabled" (#4060).
+func TestOpenReadsTheRemovedVipMechanismAsNullBlockingWithLogging(t *testing.T) {
+	dir := writeStore(t, `{"format":1,"revision":5,"projections":{"policy/dnsbl":{"values":{"logging":"enabled",`+
+		`"blacklistLogging":"nxdomain","groups":[{"name":"Ads","logging":"enabled"},{"name":"Mal","logging":"nodata"}]}}}}`)
+	st, err := Open(dir, Production())
+	if err != nil {
+		t.Fatalf("Open of a store holding the VIP mechanism: %v", err)
+	}
+	policy := projection(t, get(t, st), "policy/dnsbl")
+	want := `{"blacklistLogging":"nxdomain","groups":[{"logging":"disabled_log","name":"Ads","primary":false,"top1mFilter":false},` +
+		`{"logging":"nodata","name":"Mal","primary":false,"top1mFilter":false}],"logging":"disabled_log"}`
+	got := map[string]any{"logging": policy.Value["logging"], "blacklistLogging": policy.Value["blacklistLogging"],
+		"groups": policy.Value["groups"]}
+	if jsonOf(t, got) != want {
+		t.Errorf("policy/dnsbl read as %s, want %s", jsonOf(t, got), want)
+	}
+	var invalid *ValidationError
+	if _, err := st.Save(t.Context(), 5, changes(t, `{"policy/dnsbl": {"logging": "enabled"}}`)); !errors.As(err, &invalid) {
+		t.Errorf("a save of the VIP mechanism = %v, want a validation error", err)
+	}
+}
+
+// The Blacklist mechanism is upgraded as config.xml's migration upgrades blacklist_logging, and Validate refuses the
+// legacy token as Save does: only a load reads it (#4060 review).
+func TestTheBlacklistVipMechanismLoadsAndValidateRefusesIt(t *testing.T) {
+	dir := writeStore(t, `{"format":1,"revision":2,"projections":{"policy/dnsbl":{"values":{"blacklistLogging":"enabled"}}}}`)
+	st, err := Open(dir, Production())
+	if err != nil {
+		t.Fatalf("Open of a store holding the Blacklist VIP mechanism: %v", err)
+	}
+	if got := projection(t, get(t, st), "policy/dnsbl").Value["blacklistLogging"]; got != "disabled_log" {
+		t.Errorf("blacklistLogging = %v, want disabled_log", got)
+	}
+	var invalid *ValidationError
+	if err := st.Validate(changes(t, `{"policy/dnsbl": {"blacklistLogging": "enabled"}}`)); !errors.As(err, &invalid) {
+		t.Errorf("Validate of the VIP mechanism = %v, want a validation error", err)
+	}
+}

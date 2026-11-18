@@ -92,11 +92,12 @@ func (s *Store) fetch(ctx context.Context) error {
 	}
 	var values map[string]map[string]any
 	if stored.Initialized {
-		// A projection or field the backend does not hold yet (the schema grew) is its default; one this schema does not
-		// know (it shrank) refuses the read, since dropping a stored setting needs a migration.
+		// A projection or field the backend does not hold yet (the schema grew) is its default; a retired field is dropped and
+		// a legacy token read as its current value; any other field or value this schema does not know refuses the read,
+		// since dropping a stored setting needs a migration.
 		values = make(map[string]map[string]any, len(s.schema.Projections))
 		for _, p := range s.schema.Projections {
-			v, errs := apply(p, defaults(p), stored.Projections[p.ID], p.ID)
+			v, errs := apply(p, defaults(p), upgraded(p, stored.Projections[p.ID]), p.ID)
 			if errs != nil {
 				return fmt.Errorf("the stored settings are not valid: %s: %s", errs[0].Field, errs[0].Message)
 			}
@@ -113,6 +114,55 @@ func (s *Store) fetch(ctx context.Context) error {
 	s.pendingToken = stored.PendingToken
 	s.mu.Unlock()
 	return nil
+}
+
+// upgraded is what a load validates of a projection's stored values: its retired fields dropped and each legacy token,
+// in list items too, read as its current value. The API never applies it.
+func upgraded(p Projection, given map[string]json.RawMessage) map[string]json.RawMessage {
+	out := maps.Clone(given)
+	for _, name := range p.Retired {
+		delete(out, name)
+	}
+	for _, f := range p.Fields {
+		if raw, ok := out[f.Name]; ok {
+			out[f.Name] = upgradedValue(f, raw)
+		}
+	}
+	return out
+}
+
+func upgradedValue(f Field, raw json.RawMessage) json.RawMessage {
+	if f.Type == TypeList {
+		var items []map[string]json.RawMessage
+		if json.Unmarshal(raw, &items) != nil {
+			return raw // not a list of items: apply refuses it as stored
+		}
+		changed := false
+		for _, item := range items {
+			for _, sub := range f.Items {
+				if v, ok := item[sub.Name]; ok {
+					if u := upgradedValue(sub, v); !bytes.Equal(u, v) {
+						item[sub.Name], changed = u, true
+					}
+				}
+			}
+		}
+		if !changed {
+			return raw
+		}
+		if b, err := json.Marshal(items); err == nil {
+			return b
+		}
+		return raw
+	}
+	var token string
+	if len(f.Legacy) > 0 && json.Unmarshal(raw, &token) == nil {
+		if current, ok := f.Legacy[token]; ok {
+			b, _ := json.Marshal(current)
+			return b
+		}
+	}
+	return raw
 }
 
 // PendingToken is the platform's opaque token of the last backend read, as its JSON value (nil: none): an Update hands it back
