@@ -92,11 +92,18 @@ func (s *Store) fetch(ctx context.Context) error {
 	}
 	var values map[string]map[string]any
 	if stored.Initialized {
-		// A projection or field the backend does not hold yet (the schema grew) is its default; one this schema does not
-		// know (it shrank) refuses the read, since dropping a stored setting needs a migration.
+		// A projection or field the backend does not hold yet (the schema grew) is its default; a retired field is dropped;
+		// any other one this schema does not know refuses the read, since dropping a stored setting needs a migration.
 		values = make(map[string]map[string]any, len(s.schema.Projections))
 		for _, p := range s.schema.Projections {
-			v, errs := apply(p, defaults(p), stored.Projections[p.ID], p.ID)
+			given := stored.Projections[p.ID]
+			if len(p.Retired) > 0 {
+				given = maps.Clone(given)
+				for _, name := range p.Retired {
+					delete(given, name)
+				}
+			}
+			v, errs := apply(p, defaults(p), given, p.ID)
 			if errs != nil {
 				return fmt.Errorf("the stored settings are not valid: %s: %s", errs[0].Field, errs[0].Message)
 			}
