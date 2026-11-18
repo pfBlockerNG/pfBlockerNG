@@ -269,7 +269,8 @@ func copyZipMember(ctx context.Context, zf *zip.File, w io.Writer) error {
 // top-level entries then replaces its live counterpart by rename. A directory on either side (a live one, or a staged one
 // whose name is taken) refuses the whole publication before the first move. Every live file it replaces is hard-linked
 // aside first, so a rename that fails part-way puts the earlier ones back: the share holds one generation, never a mix
-// (PHP leaves the mix).
+// (PHP leaves the mix). A file that cannot be put back keeps its copy in the ".pfbbackup_" directory. Each swap is one
+// rename, so a reader that opens several of the files while a merge runs can still see both generations, as in PHP.
 func (f *Fetcher) mergeIntoDir(target string, extract func(dir string) error) bool {
 	if info, err := os.Lstat(target); err != nil || !info.IsDir() {
 		return false
@@ -297,7 +298,12 @@ func (f *Fetcher) mergeIntoDir(target string, extract func(dir string) error) bo
 	if err != nil {
 		return false
 	}
-	defer os.RemoveAll(backup)
+	keepBackup := false // a rollback that could not put a file back leaves its copy here
+	defer func() {
+		if !keepBackup {
+			os.RemoveAll(backup)
+		}
+	}()
 	kept := map[string]bool{}
 	for _, e := range entries {
 		live := filepath.Join(target, e.Name())
@@ -313,7 +319,9 @@ func (f *Fetcher) mergeIntoDir(target string, extract func(dir string) error) bo
 			for _, done := range entries[:i] {
 				live := filepath.Join(target, done.Name())
 				if kept[done.Name()] {
-					rename(filepath.Join(backup, done.Name()), live)
+					if rename(filepath.Join(backup, done.Name()), live) != nil {
+						keepBackup = true
+					}
 				} else {
 					os.RemoveAll(live)
 				}
