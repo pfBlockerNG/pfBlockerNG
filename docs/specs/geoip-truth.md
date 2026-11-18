@@ -391,6 +391,8 @@ Before schedule enablement, evidence must show: a fixture country-name change
 makes `--check` report drift; a real dispatch validation failure opens an issue;
 and a successful retry closes that same open issue. The workflow uses the
 repository's HSTS/PSL refresh shape and adds no service or dependency.
+*Amendment 2026-11-18 (issue #4057): the HSTS refresh job is retired; the
+shape to follow is the PSL refresh's.*
 
 ### Approved deltas
 

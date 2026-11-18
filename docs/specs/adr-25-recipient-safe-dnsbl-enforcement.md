@@ -164,6 +164,10 @@ Policy disabling a feature does not suppress Baseline; only an earlier terminal
 opposite decision does. CNAME targets are evaluated only by layers with CNAME
 Validation enabled. The winning Policy/Group/Feed/rule attribution is retained.
 
+*Amendment 2026-11-18 (issue #4053, #4056): the HSTS preload list is removed, so
+there is no HSTS behavior to preserve. It only turned a VIP answer into a null
+answer, and the VIP response is removed too.*
+
 The evaluator is pure over one frozen snapshot, effective vector, normalized
 query name/type, observed CNAME chain, and transient override state. The same
 entry point serves `operate()`, the decision-query channel, and focused tests;

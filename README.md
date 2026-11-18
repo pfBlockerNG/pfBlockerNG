@@ -16,7 +16,7 @@
 
 pfBlockerNG downloads curated IP and domain feeds and turns them into live
 firewall and DNS policy: IP feeds become firewall rules, GeoIP lets you block
-or permit by country, and DNSBL enforces domain blocklists directly in the
+or permit by country, and DNSBL enforces domain blocklists in front of the
 Unbound resolver. It adds reports, alerts, a dashboard widget, and HA/CARP
 sync on top.
 

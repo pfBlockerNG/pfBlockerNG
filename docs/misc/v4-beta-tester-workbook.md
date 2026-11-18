@@ -30,7 +30,7 @@ to test). One problem per report.
 After the v3 → v4 jump, and after each **Run Now**, you should still have:
 
 - Your old IP and DNSBL groups listed (not wiped)
-- A name you already block still blocked (fail to resolve, sinkhole, or
+- A name you already block still blocked (fail to resolve, or
   “does not exist” — depending on Logging/Blocking Mode)
 - A name you allow / whitelist still resolving
 - **Update → Run** finishing: the log stops growing, and DNS on the LAN
@@ -563,7 +563,7 @@ Under **DNS Bypass Prevention**:
 - [ ] Optional on a lab LAN: enable DNS Redirect, **Fill from IP
       Interfaces**, save
 - [ ] From a client, `dig @8.8.8.8` of a name **you already block** should
-      return the DNSBL answer (sinkhole / 0.0.0.0 / NXDOMAIN), not the real
+      return the DNSBL answer (0.0.0.0 / :: / NXDOMAIN), not the real
       public address. If you get the real address, redirect did not catch it
 - [ ] Optional: enable DoT/DoQ Block and confirm port 853 is rejected
 - [ ] Do **not** enable these on a production WAN you have not thought
@@ -707,7 +707,7 @@ may be greyed — that is expected, not a bug.
       enable that group
 - [ ] **Update → Run Now**, Scope **DNSBL**
 - [ ] From a client, resolve a hostname you expect that list to block —
-      it should fail to resolve or hit the sinkhole
+      it should fail to resolve (0.0.0.0 / :: / NXDOMAIN)
 - [ ] If the list has allow exceptions, a name that should be allowed still
       resolves
 - [ ] Open **AdBlock suffix handling**, leave the defaults (or set each

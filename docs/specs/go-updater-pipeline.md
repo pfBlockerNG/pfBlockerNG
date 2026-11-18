@@ -293,6 +293,9 @@ stdin, one JSON object, protocol version 2:
 }
 ```
 
+*Amendment 2026-11-18 (issue #4053): `sinkholeRequired` in the example above is withdrawn; the `dnsbl` object carries
+only `generation` and `groups`.*
+
 The request names resources and generations. It carries no members.
 
 #### 8.2 `GetResources`: deltas between generations
