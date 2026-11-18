@@ -50,6 +50,9 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 		if cerr := staged.Close(); werr == nil {
 			werr = cerr
 		}
+		if werr == nil && isDatabase(target) && !maxMindDB(staged.Name()) {
+			werr = errNotADatabase
+		}
 		if werr != nil || os.Rename(staged.Name(), target) != nil {
 			os.Remove(staged.Name())
 			return false
@@ -63,7 +66,10 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 	return os.Rename(raw, target) == nil
 }
 
-var errUnsafeMember = errors.New("archive member leaves the extraction directory")
+var (
+	errUnsafeMember = errors.New("archive member leaves the extraction directory")
+	errNotADatabase = errors.New("not a MaxMind DB")
+)
 
 // unsafeMember is pfb_archive_unsafe_member(): an absolute name, a ".." component, a component over 255 bytes or a name
 // over 1024 bytes.
