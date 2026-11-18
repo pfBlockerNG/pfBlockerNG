@@ -50,6 +50,10 @@ func (f *Fetcher) DownloadExtras(ctx context.Context, cfg ExtrasConfig, extras [
 	}
 	res := ExtrasResult{OK: true}
 	for _, x := range extras {
+		if ctx.Err() != nil {
+			res.OK = false // the run is aborted: the rows left are not failed by their feeds
+			break
+		}
 		req := Request{URL: x.URL, Timeout: cfg.Timeout}
 		switch x.Kind {
 		case "asn":
@@ -59,7 +63,7 @@ func (f *Fetcher) DownloadExtras(ctx context.Context, cfg ExtrasConfig, extras [
 		}
 		if !f.extra(ctx, cfg, x, req) {
 			res.OK = false
-			if x.Kind == "geoip" {
+			if x.Kind == "geoip" && ctx.Err() == nil {
 				res.MaxMindError = true
 			}
 		}
@@ -96,6 +100,11 @@ func (f *Fetcher) extra(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 
 	mime, ok := f.extraVerdict(ctx, raw, src.host)
 	if !ok {
+		return false
+	}
+	// A type the row cannot publish is refused before the update marker: PHP reports an asn bzip2 or zip a success
+	// with only "<download>.orig" written, which nothing reads, and fails a geoip bzip2 after the marker.
+	if mime == mimeBzip2 || mime == mimeZip && x.Kind == "asn" {
 		return false
 	}
 	archive := mime == mimeGzip || mime == mimeBzip2 || mime == mimeZip || mime == mimeTar
@@ -177,10 +186,6 @@ func (f *Fetcher) publishASN(ctx context.Context, cfg ExtrasConfig, mime, raw, t
 			cfg.ASNTable(ctx)
 		}
 		return true
-	case mimeBzip2, mimeZip:
-		// shortcut: pfb_download() publishes an IPinfo bzip2 or zip to "<download>.orig", which nothing reads; IPinfo
-		// serves neither. Refused here until a corpus row pins that path.
-		return false
 	}
 	return os.Rename(raw, target) == nil
 }

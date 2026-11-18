@@ -20,7 +20,7 @@ import (
 // archive's member of that name, must be a MaxMind DB (owner, #4058).
 func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target string) bool {
 	switch mime {
-	case mimeGzip, mimeTar, mimeZip, mimeBzip2:
+	case mimeGzip, mimeTar, mimeZip:
 		if structural(ctx, mime, raw, io.Discard) != nil {
 			return false
 		}
@@ -44,7 +44,11 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 				return checkedDatabases(dir, target, f.extractZipStripped(ctx, raw, dir))
 			})
 		}
-		// tar -xOf of the zip: every member's bytes, published whole over target (a directory refuses it).
+		// tar -xOf of the zip: every member's bytes, published whole over target. A directory refuses it, so nothing is
+		// extracted for one.
+		if info, err := os.Lstat(target); err == nil && info.IsDir() {
+			return false
+		}
 		staged, err := os.CreateTemp(filepath.Dir(target), ".pfbstage_")
 		if err != nil {
 			return false
@@ -64,10 +68,6 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 			return false
 		}
 		return true
-	case mimeBzip2:
-		// shortcut: a bzip2 GeoIP body takes pfb_download()'s generic path to "<download>.orig", which nothing reads;
-		// MaxMind serves none. Refused until a corpus row pins it.
-		return false
 	}
 	return os.Rename(raw, target) == nil
 }
@@ -311,7 +311,7 @@ func (f *Fetcher) mergeIntoDir(target string, extract func(dir string) error) bo
 	for _, e := range entries {
 		live := filepath.Join(target, e.Name())
 		if _, err := os.Lstat(live); err == nil {
-			if link(live, filepath.Join(backup, e.Name())) != nil {
+			if backupEntry(live, filepath.Join(backup, e.Name())) != nil {
 				return false
 			}
 			kept[e.Name()] = true
@@ -333,6 +333,19 @@ func (f *Fetcher) mergeIntoDir(target string, extract func(dir string) error) bo
 		}
 	}
 	return true
+}
+
+// backupEntry keeps a live entry aside by a hard link, and a symbolic link as the link it is: FreeBSD's link(2) follows
+// one, which fails for a dangling link and turns a restored link into a copy of its target.
+func backupEntry(live, backup string) error {
+	if info, err := os.Lstat(live); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+		to, err := os.Readlink(live)
+		if err != nil {
+			return err
+		}
+		return os.Symlink(to, backup)
+	}
+	return link(live, backup)
 }
 
 // checkedDatabases refuses an extraction (err already nil) that holds a database file without the MaxMind DB marker, or,
