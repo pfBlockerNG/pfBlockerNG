@@ -284,7 +284,7 @@ def test_dnsbl_policy_install_preserves_legacy_mechanisms(
     expected_mode: str,
     expected_group: str,
 ) -> None:
-    """The actual installer converts VIP groups without losing overrides or VIP defaults."""
+    """The installer keeps the override mode and the groups' choices; the retired VIP moves to Null (#4053)."""
     pkg = os.environ.get("SMOKE_PKG")
     assert pkg and Path(pkg).is_file(), "SMOKE_PKG must name the branch package"
     try:
@@ -306,8 +306,9 @@ def test_dnsbl_policy_install_preserves_legacy_mechanisms(
             h.config_get(smoke_vm, f"{h.CFG_DNSBL_SETTINGS}/global_log"),
             h.config_get(smoke_vm, f"{h.CFG_DNSBL_LISTS}/0/logging"),
         )
-        assert actual == (expected_mode, "enabled", expected_group), (
-            f"installer lost the legacy mechanism: expected {(expected_mode, 'enabled', expected_group)!r}, "
+        # Issue #4053: the retired VIP mechanism ('enabled') lands on Null Blocking (logging).
+        assert actual == (expected_mode, "disabled_log", expected_group), (
+            f"installer lost the legacy mechanism: expected {(expected_mode, 'disabled_log', expected_group)!r}, "
             f"got {actual!r}"
         )
     finally:

@@ -1064,7 +1064,7 @@ def test_the_status_panel_lists_each_transport_the_gateway_serves_with_a_localho
     """issue #3555: the status panel is one table per transport, a row per interface.
 
     Given the gateway serves plain DNS and DoT, DoH and DoQ (the toggles this module turns on, none off),
-    Then each table has a Localhost row with exactly its served lo0 VIP and loopbacks at the transport's port and a LAN
+    Then each table has a Localhost row with exactly its loopbacks at the transport's port and a LAN
       row that holds the LAN address at it, both reading `Listening` for a screen reader.
     """
     ports = {"plain": 53, "dot": DOT_PORT, "doh": DOH_PORT, "doq": DOQ_PORT}
@@ -1080,10 +1080,8 @@ def test_the_status_panel_lists_each_transport_the_gateway_serves_with_a_localho
         rows = _status_rows(page, transport)
         _say(f"status panel, {transport}: {rows}")
         loopback = [row for row in rows if row[0] == "Localhost"]
+        # Issue #4053: no lo0 VIP any more, so the Localhost row holds only the loopbacks.
         localhost_addresses = [f"127.0.0.1:{port}", f"[::1]:{port}"]
-        # Plain DNS and DoT select all addresses; the LAN-only DoH/DoQ lists exclude the lo0 VIP.
-        if transport in ("plain", "dot"):
-            localhost_addresses.insert(0, f"{h.NULL_IP4}:{port}")
         assert loopback == [("Localhost", localhost_addresses, "Listening")], (
             f"{transport}: the Localhost row is {loopback}; all rows: {rows}"
         )

@@ -3039,7 +3039,7 @@ def test_an_aborted_removal_keeps_pfb_dns_serving_and_a_retry_removes_the_packag
         assert pkg_installed_version(vm) is not None, f"pkg removed the package although the hook aborted:\n{out}"
         state = _capture(vm)
         assert state.service == "running", f"the proxy is not running after the aborted removal:\n{_diagnostics(vm)}"
-        assert {"pfb_dnsbl", "pfb_dns_proxy", "pfb_filter"} <= set(_registered_services(vm)), _registered_services(vm)
+        assert {"pfb_dns_proxy", "pfb_filter"} <= set(_registered_services(vm)), _registered_services(vm)
         assert state.resolver["active_interface"] == "lo0" and state.marker, (
             f"the Resolver is not still moved: {state.resolver}"
         )

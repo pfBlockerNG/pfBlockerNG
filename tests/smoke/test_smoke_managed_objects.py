@@ -315,6 +315,7 @@ _LIGHTY_CONF = "/var/unbound/pfb_dnsbl_lighty.conf"
 def _seed_legacy_webserver(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     """Write what a pre-#4053 config carried: auto-VIP + its stored id, a manual VIP, the DNSBL NAT and the conf."""
     snippet = (
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
         f"$d = config_get_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, array());\n"
         f"$d['pfb_dnsvip4'] = {h._php_str('_vip' + _LEGACY_VIP_UNIQID)};\n"
         "$d['pfb_dnsvip_auto'] = 'on'; $d['pfb_dnsport'] = '8081'; $d['pfb_dnsport_ssl'] = '8443';\n"
