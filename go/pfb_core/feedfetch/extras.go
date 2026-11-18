@@ -50,10 +50,6 @@ func (f *Fetcher) DownloadExtras(ctx context.Context, cfg ExtrasConfig, extras [
 	}
 	res := ExtrasResult{OK: true}
 	for _, x := range extras {
-		if ctx.Err() != nil {
-			res.OK = false // the run is aborted: the rows left are not failed by their feeds
-			break
-		}
 		req := Request{URL: x.URL, Timeout: cfg.Timeout}
 		switch x.Kind {
 		case "asn":
@@ -63,7 +59,7 @@ func (f *Fetcher) DownloadExtras(ctx context.Context, cfg ExtrasConfig, extras [
 		}
 		if !f.extra(ctx, cfg, x, req) {
 			res.OK = false
-			if x.Kind == "geoip" && ctx.Err() == nil {
+			if x.Kind == "geoip" && ctx.Err() == nil { // an aborted run is no MaxMind failure
 				res.MaxMindError = true
 			}
 		}
@@ -107,7 +103,7 @@ func (f *Fetcher) extra(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 	if mime == mimeBzip2 || mime == mimeZip && x.Kind == "asn" {
 		return false
 	}
-	archive := mime == mimeGzip || mime == mimeBzip2 || mime == mimeZip || mime == mimeTar
+	archive := mime == mimeGzip || mime == mimeZip || mime == mimeTar
 	if isDatabase(target) {
 		// A database row takes a MaxMind DB and nothing else: a text page is not one, and a database is never scanned as
 		// text (owner, #4058; PHP renames any text body over it, and its sanity scan refuses the binary asn.mmdb).

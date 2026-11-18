@@ -44,11 +44,7 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 				return checkedDatabases(dir, target, f.extractZipStripped(ctx, raw, dir))
 			})
 		}
-		// tar -xOf of the zip: every member's bytes, published whole over target. A directory refuses it, so nothing is
-		// extracted for one.
-		if info, err := os.Lstat(target); err == nil && info.IsDir() {
-			return false
-		}
+		// tar -xOf of the zip: every member's bytes, published whole over target (a directory refuses it).
 		staged, err := os.CreateTemp(filepath.Dir(target), ".pfbstage_")
 		if err != nil {
 			return false

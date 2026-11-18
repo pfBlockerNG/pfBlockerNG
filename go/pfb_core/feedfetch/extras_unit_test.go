@@ -107,3 +107,30 @@ func TestAnEndedContextIsNoMaxMindError(t *testing.T) {
 		t.Errorf("(ok, maxmind error) = (%v, %v), want (false, false)", res.OK, res.MaxMindError)
 	}
 }
+
+// A run cancelled while a geoip row downloads is aborted, not failed by MaxMind (#4059 review).
+func TestARunCancelledMidTransferIsNoMaxMindError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+		<-r.Context().Done()
+	})}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	f := &feedfetch.Fetcher{RetryDelay: 1}
+	f.Resolve = func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("203.0.113.7")}, nil
+	}
+	url := "http://download.maxmind.com:" + strconv.Itoa(ln.Addr().(*net.TCPAddr).Port) +
+		"/geoip/databases/GeoLite2-Country/download?suffix=tar.gz"
+	res := f.DownloadExtras(ctx, feedfetch.ExtrasConfig{DBDir: t.TempDir(), MaxMindAccount: "1", MaxMindKey: "k"},
+		[]feedfetch.Extra{{Kind: "geoip", URL: url, Dir: t.TempDir(), Download: "GeoLite2-Country.tar.gz", File: "GeoLite2-Country.mmdb"}})
+	if res.OK || res.MaxMindError {
+		t.Errorf("(ok, maxmind error) = (%v, %v), want (false, false)", res.OK, res.MaxMindError)
+	}
+}
