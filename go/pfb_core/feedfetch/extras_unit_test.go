@@ -80,9 +80,9 @@ func TestAnExtraOfAnUntranslatedKindIsRefusedBeforeItIsFetched(t *testing.T) {
 		return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("203.0.113.5")}, nil
 	}
 	dir := t.TempDir()
-	url := "http://tranco-list.eu:" + strconv.Itoa(ln.Addr().(*net.TCPAddr).Port) + "/top-1m.csv.zip"
+	url := "http://dsi.ut-capitole.fr:" + strconv.Itoa(ln.Addr().(*net.TCPAddr).Port) + "/blacklists/download/ads.tar.gz"
 	res := f.DownloadExtras(context.Background(), feedfetch.ExtrasConfig{DBDir: dir},
-		[]feedfetch.Extra{{Kind: "top1m", URL: url, Dir: dir, Download: "top-1m.csv.zip", File: "top-1m.csv"}})
+		[]feedfetch.Extra{{Kind: "blacklist", URL: url, Dir: dir, Download: "ads.tar.gz", File: "ads"}})
 	srv.Close()
 	entries, _ := os.ReadDir(dir)
 	if res.OK || asked.Load() || len(entries) != 0 {

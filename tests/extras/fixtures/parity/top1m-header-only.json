@@ -1,0 +1,58 @@
+{
+	"schema": 1,
+	"description": "Majestic's header without a row is no list: it is refused.",
+	"hosts": {
+		"downloads.majestic.com": [
+			"127.0.0.1",
+			"203.0.113.14"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "majestic"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/majestic_million.csv": {
+				"body": "GlobalRank,TldRank,Domain,TLD,RefSubNets,RefIPs,IDN_Domain,IDN_TLD,PrevGlobalRank,PrevTldRank,PrevRefSubNets,PrevRefIPs\n"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://downloads.majestic.com:{port:origin}/majestic_million.csv",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "majestic"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"ledger": "TOP1M download failed",
+				"files": {
+					"db/top-1m.csv": "1,old.example.com\n",
+					"db/top-1m.csv.zip.orig": null,
+					"db/top-1m.csv.zip.raw": null,
+					"db/top-1m.update": null,
+					"db/top-1m.csv.zip.source": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/majestic_million.csv"
+					}
+				]
+			}
+		}
+	]
+}

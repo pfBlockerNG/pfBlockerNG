@@ -1,0 +1,60 @@
+{
+	"schema": 1,
+	"description": "Tranco has no header: its first line is a row, and one valid row makes the list.",
+	"hosts": {
+		"tranco-list.eu": [
+			"127.0.0.1",
+			"203.0.113.11"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "tranco"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/top-1m.csv.zip": {
+				"body_b64": "UEsDBBQAAAAAAAAAIVxM14gWFwAAABcAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQpub3QgYSByb3cKUEsBAhQDFAAAAAAAAAAhXEzXiBYXAAAAFwAAAAoAAAAAAAAAAAAAAIABAAAAAHRvcC0xbS5jc3ZQSwUGAAAAAAEAAQA4AAAAPwAAAAAA"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://tranco-list.eu:{port:origin}/top-1m.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "tranco"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/top-1m.csv": "1,google.com\nnot a row\n",
+					"db/top-1m.csv.zip.orig": {
+						"b64": "UEsDBBQAAAAAAAAAIVxM14gWFwAAABcAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQpub3QgYSByb3cKUEsBAhQDFAAAAAAAAAAhXEzXiBYXAAAAFwAAAAoAAAAAAAAAAAAAAIABAAAAAHRvcC0xbS5jc3ZQSwUGAAAAAAEAAQA4AAAAPwAAAAAA"
+					},
+					"db/top-1m.csv.zip.xxhash128": "911ad344c343e45b2d4940eda0239ad8",
+					"db/top-1m.csv.zip.source": "{\"provider\":\"tranco\",\"url\":\"http://tranco-list.eu:{port:origin}/top-1m.csv.zip\",\"headers\":[]}",
+					"db/top-1m.csv.zip.raw": null,
+					"db/top-1m.update": ""
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			}
+		}
+	]
+}

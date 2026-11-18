@@ -8,18 +8,22 @@ package feedfetch_test
 //	description  what the scenario pins.
 //	hosts        {name: [addresses]}: the vetting resolver; every connection goes to 127.0.0.1.
 //	servers      [name]: HTTP servers on 127.0.0.1; "{port:<name>}" expands to a server's port.
-//	settings     {maxmind_account, maxmind_key, asn_token, sanity}: what the extras projection holds.
+//	settings     {maxmind_account, maxmind_key, asn_token, sanity, top1m_source, top1m_token}: what the extras and DNSBL
+//	             projections hold (top1m_source is the provider the TOP1M row names).
+//	ledger       the open message of the TOP1M download ledger entry before the first step; absent when none is open.
 //	seed         {"db/<path>" or "share/<path>": content or {"b64": bytes}}: files before the first step.
 //	routes       {server: {path: route}}: what each server answers (the feed-transfer corpus's route keys).
 //	steps        [step]: run in order on the same directories.
 //
-// A step: run ("download"), extras ([{url, file_dwn, file, folder ("db" or "share"), type}]), routes and seed (replacing or
+// A step: run ("download", or "dcc": the cron verb whose TOP1M row runs the change detector first), extras ([{url, file_dwn,
+// file, folder ("db" or "share"), type, and provider on a top1m row}]), routes and seed (replacing or
 // adding before the step), expect and, where Core deliberately differs (an owner decision), old_expect (today's PHP answer,
 // which only the PHP runner reads): ok, maxmind_error, replaced (paths that must hold a new file afterwards, even when its
 // bytes are the same), files ({path: content, {"b64": bytes}, or null when nothing is there; any other entry reads
 // "<not a regular file>"}: only the paths named), and requests (what the servers recorded; host and query only where
-// named). `pfblockerng.sh asn_table`, the ASN conversion's step (#4034), is recorded as a line in
-// db/script.calls.
+// named), top1m_changed (TOP1M changed under dcc), and ledger (the TOP1M download ledger's open message after the step, or
+// null when none is open; checked only where named). `pfblockerng.sh asn_table`, the ASN conversion's step (#4034), is
+// recorded as a line in db/script.calls.
 
 import (
 	"bytes"
@@ -45,16 +49,19 @@ import (
 const extrasCorpusDir = "../../../tests/extras/fixtures/parity"
 
 type extrasExtra struct {
-	URL     string `json:"url"`
-	FileDwn string `json:"file_dwn"`
-	File    string `json:"file"`
-	Folder  string `json:"folder"`
-	Type    string `json:"type"`
+	URL      string `json:"url"`
+	FileDwn  string `json:"file_dwn"`
+	File     string `json:"file"`
+	Folder   string `json:"folder"`
+	Type     string `json:"type"`
+	Provider string `json:"provider"`
 }
 
 type extrasExpect struct {
 	OK           bool                `json:"ok"`
 	MaxmindError bool                `json:"maxmind_error"`
+	Top1MChanged bool                `json:"top1m_changed"`
+	Ledger       json.RawMessage     `json:"ledger"`
 	Replaced     []string            `json:"replaced"`
 	Files        map[string]any      `json:"files"`
 	Requests     []map[string]string `json:"requests"`
@@ -79,7 +86,10 @@ type extrasScenario struct {
 		MaxMindKey     string `json:"maxmind_key"`
 		ASNToken       string `json:"asn_token"`
 		Sanity         bool   `json:"sanity"`
+		Top1MSource    string `json:"top1m_source"`
+		Top1MToken     string `json:"top1m_token"`
 	} `json:"settings"`
+	Ledger *string        `json:"ledger"`
 	Seed   map[string]any `json:"seed"`
 	Routes routes         `json:"routes"`
 	Steps  []extrasStep   `json:"steps"`
@@ -182,6 +192,7 @@ func runExtrasScenario(t *testing.T, file string) {
 		MaxMindAccount: sc.Settings.MaxMindAccount,
 		MaxMindKey:     sc.Settings.MaxMindKey,
 		ASNToken:       sc.Settings.ASNToken,
+		Top1MToken:     sc.Settings.Top1MToken,
 		ASNTable: func(context.Context) {
 			out, err := os.OpenFile(calls, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
 			if err != nil {
@@ -192,6 +203,7 @@ func runExtrasScenario(t *testing.T, file string) {
 		},
 	}
 
+	ledger := sc.Ledger // the TOP1M download ledger's open message, nil when none is open
 	for i, st := range sc.Steps {
 		label := filepath.Base(file) + " step " + strconv.Itoa(i)
 		mu.Lock()
@@ -210,9 +222,10 @@ func runExtrasScenario(t *testing.T, file string) {
 		mu.Unlock()
 		log.reset(t)
 		seed(st.Seed)
-		if st.Run != "download" {
+		if st.Run != "download" && st.Run != "dcc" {
 			t.Fatalf("%s: unknown run %q", label, st.Run)
 		}
+		cfg.Detect = st.Run == "dcc"
 
 		inodes := map[string]uint64{}
 		for _, rel := range st.Expect.Replaced {
@@ -220,12 +233,27 @@ func runExtrasScenario(t *testing.T, file string) {
 		}
 		var extras []feedfetch.Extra
 		for _, e := range st.Extras {
+			if e.Provider != "" && e.Provider != sc.Settings.Top1MSource {
+				t.Fatalf("%s: the TOP1M row names %s, the settings %s", label, e.Provider, sc.Settings.Top1MSource)
+			}
 			extras = append(extras, feedfetch.Extra{
 				Kind: e.Type, URL: expand(e.URL), Dir: filepath.Join(root, e.Folder), Download: e.FileDwn, File: e.File,
+				Provider: e.Provider,
 			})
 		}
 		res := f.DownloadExtras(context.Background(), cfg, extras)
-		actual := map[string]any{"ok": res.OK, "maxmind_error": res.MaxMindError}
+		if res.Top1MLedger != nil { // "" closes the entry; any other text opens it with that message
+			if ledger = nil; *res.Top1MLedger != "" {
+				ledger = res.Top1MLedger
+			}
+		}
+		actual := map[string]any{"ok": res.OK, "maxmind_error": res.MaxMindError, "top1m_changed": res.Top1MChanged}
+		if st.Expect.Ledger != nil {
+			actual["ledger"] = nil
+			if ledger != nil {
+				actual["ledger"] = *ledger
+			}
+		}
 		files := map[string]any{}
 		for rel := range st.Expect.Files {
 			files[rel] = observe(t, filepath.Join(root, rel))
@@ -271,7 +299,18 @@ func runExtrasScenario(t *testing.T, file string) {
 			}
 			wantReqs = append(wantReqs, rec)
 		}
-		wantMap := map[string]any{"ok": want.OK, "maxmind_error": want.MaxmindError, "files": wantFiles, "requests": wantReqs}
+		wantMap := map[string]any{"ok": want.OK, "maxmind_error": want.MaxmindError, "top1m_changed": want.Top1MChanged,
+			"files": wantFiles, "requests": wantReqs}
+		if want.Ledger != nil {
+			var msg *string
+			if err := json.Unmarshal(want.Ledger, &msg); err != nil {
+				t.Fatalf("%s: ledger: %v", label, err)
+			}
+			wantMap["ledger"] = nil
+			if msg != nil {
+				wantMap["ledger"] = *msg
+			}
+		}
 		if want.Replaced != nil {
 			wantMap["replaced"] = want.Replaced
 		}

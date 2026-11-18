@@ -1,0 +1,60 @@
+{
+	"schema": 1,
+	"description": "OpenPageRank's zipped five-column CSV with its header is published as served.",
+	"hosts": {
+		"openpagerank.keywordseverywhere.com": [
+			"127.0.0.1",
+			"203.0.113.13"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "openpagerank"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/downloads/top10milliondomains.csv.zip": {
+				"body_b64": "UEsDBBQAAAAAAAAAIVwdrbT1UgAAAFIAAAAXAAAAdG9wMTBtaWxsaW9uZG9tYWlucy5jc3ZSYW5rLERvbWFpbixFeHRlbnNpb24sT3BlbiBQYWdlIFJhbmssUmVmZXJyaW5nIERvbWFpbnMKMSxnb29nbGUuY29tLGNvbSwxMC4wMCwxMDAKUEsBAhQDFAAAAAAAAAAhXB2ttPVSAAAAUgAAABcAAAAAAAAAAAAAAIABAAAAAHRvcDEwbWlsbGlvbmRvbWFpbnMuY3N2UEsFBgAAAAABAAEARQAAAIcAAAAAAA=="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://openpagerank.keywordseverywhere.com:{port:origin}/downloads/top10milliondomains.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "openpagerank"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/top-1m.csv": "Rank,Domain,Extension,Open Page Rank,Referring Domains\n1,google.com,com,10.00,100\n",
+					"db/top-1m.csv.zip.orig": {
+						"b64": "UEsDBBQAAAAAAAAAIVwdrbT1UgAAAFIAAAAXAAAAdG9wMTBtaWxsaW9uZG9tYWlucy5jc3ZSYW5rLERvbWFpbixFeHRlbnNpb24sT3BlbiBQYWdlIFJhbmssUmVmZXJyaW5nIERvbWFpbnMKMSxnb29nbGUuY29tLGNvbSwxMC4wMCwxMDAKUEsBAhQDFAAAAAAAAAAhXB2ttPVSAAAAUgAAABcAAAAAAAAAAAAAAIABAAAAAHRvcDEwbWlsbGlvbmRvbWFpbnMuY3N2UEsFBgAAAAABAAEARQAAAIcAAAAAAA=="
+					},
+					"db/top-1m.csv.zip.xxhash128": "1a32718c18f96d708ed5792bfdb9832e",
+					"db/top-1m.csv.zip.source": "{\"provider\":\"openpagerank\",\"url\":\"http://openpagerank.keywordseverywhere.com:{port:origin}/downloads/top10milliondomains.csv.zip\",\"headers\":[]}",
+					"db/top-1m.csv.zip.raw": null,
+					"db/top-1m.update": ""
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/downloads/top10milliondomains.csv.zip"
+					}
+				]
+			}
+		}
+	]
+}

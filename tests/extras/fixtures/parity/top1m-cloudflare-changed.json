@@ -1,0 +1,62 @@
+{
+	"schema": 1,
+	"description": "Cloudflare Radar's one-column CSV is fetched with the Bearer token; the identity carries the header's SHA-256, never the token.",
+	"hosts": {
+		"api.cloudflare.com": [
+			"127.0.0.1",
+			"203.0.113.15"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "cloudflare",
+		"top1m_token": "cf-token"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/client/v4/radar/datasets/ranking_top_1000000": {
+				"body": "domain\ngoogle.com\nfacebook.com\n"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://api.cloudflare.com:{port:origin}/client/v4/radar/datasets/ranking_top_1000000",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "cloudflare"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/top-1m.csv": "domain\ngoogle.com\nfacebook.com\n",
+					"db/top-1m.csv.zip.orig": {
+						"b64": "ZG9tYWluCmdvb2dsZS5jb20KZmFjZWJvb2suY29tCg=="
+					},
+					"db/top-1m.csv.zip.xxhash128": "b1e78ed80e0b4f4e072374d2a345e88f",
+					"db/top-1m.csv.zip.source": "{\"provider\":\"cloudflare\",\"url\":\"http://api.cloudflare.com:{port:origin}/client/v4/radar/datasets/ranking_top_1000000\",\"headers\":[\"338a7c809797a3c5789f00781b56fd8c2e59af53fc6a2227668d65c6b186c8b4\"]}",
+					"db/top-1m.csv.zip.raw": null,
+					"db/top-1m.update": ""
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/client/v4/radar/datasets/ranking_top_1000000",
+						"authorization": "Bearer cf-token"
+					}
+				]
+			}
+		}
+	]
+}

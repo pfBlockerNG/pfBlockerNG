@@ -1,0 +1,60 @@
+{
+	"schema": 1,
+	"description": "A gzip body is decompressed over top-1m.csv; the gzip is the baseline.",
+	"hosts": {
+		"tranco-list.eu": [
+			"127.0.0.1",
+			"203.0.113.11"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "tranco"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/top-1m.csv.zip": {
+				"body_b64": "H4sIAAAAAAAC/zPUSc/PT89J1UvOz+Uy0klLTE5Nys/PBnONdVIrEnMLgJL5RelcAEA5vQQqAAAA"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://tranco-list.eu:{port:origin}/top-1m.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "tranco"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/top-1m.csv": "1,google.com\n2,facebook.com\n3,example.org\n",
+					"db/top-1m.csv.zip.orig": {
+						"b64": "H4sIAAAAAAAC/zPUSc/PT89J1UvOz+Uy0klLTE5Nys/PBnONdVIrEnMLgJL5RelcAEA5vQQqAAAA"
+					},
+					"db/top-1m.csv.zip.xxhash128": "af621beeba55dc2c370f03d23f41dee3",
+					"db/top-1m.csv.zip.source": "{\"provider\":\"tranco\",\"url\":\"http://tranco-list.eu:{port:origin}/top-1m.csv.zip\",\"headers\":[]}",
+					"db/top-1m.csv.zip.raw": null,
+					"db/top-1m.update": ""
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			}
+		}
+	]
+}

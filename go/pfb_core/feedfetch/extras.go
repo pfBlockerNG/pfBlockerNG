@@ -12,18 +12,19 @@ import (
 
 // The Extras (#3978): the translation of pfblockerng_download_extras() and the Extras branches of pfb_download(), held
 // to the parity corpus in tests/extras/fixtures/parity. A failed or refused Extra keeps what it published before. The
-// asn and geoip types are translated so far; any other kind is refused before it is fetched.
+// asn, geoip and top1m types are translated so far; any other kind is refused before it is fetched.
 
 // extrasTimeout is what every pfblockerng.php verb passes pfblockerng_download_extras().
 const extrasTimeout = 600 * time.Second
 
 // Extra is one row of the Extras table (pfblockerng.php:166-256).
 type Extra struct {
-	Kind     string // asn or geoip
+	Kind     string // asn, geoip or top1m
 	URL      string // an asn URL ends in "token=": the token is appended, encoded
 	Dir      string // the folder: the GeoIP share or the database folder
 	Download string // the download's file name in Dir (file_dwn)
 	File     string // the published file's name in Dir; empty for the GeoLite2 CSV zip
+	Provider string // top1m: the provider (PfbTop1mSource), which also names its row shape
 }
 
 // ExtrasConfig is what the extras projection and the Core's flags give a run. The secrets are held in memory only.
@@ -31,16 +32,23 @@ type ExtrasConfig struct {
 	DBDir                      string // where the update markers go ($pfb['dbdir'])
 	MaxMindAccount, MaxMindKey string
 	ASNToken                   string
+	Top1MToken                 string        // Cloudflare Radar's Bearer token
 	Timeout                    time.Duration // per transfer; zero is the verbs' 600 s
 	// ASNTable is `pfblockerng.sh asn_table`, run after a gzipped body is published on an asn row, as pfb_download() does
 	// (the GeoIP and ASN conversion's, #4034); nil runs nothing.
 	ASNTable func(ctx context.Context)
+	// Detect is the dcc verb: the TOP1M row runs its change detector first and is downloaded only when it changed.
+	Detect bool
 }
 
 // ExtrasResult is pfblockerng_download_extras()'s return and the flags it leaves in $pfb.
 type ExtrasResult struct {
 	OK           bool
 	MaxMindError bool // a geoip row failed: it blocks the country conversion
+	Top1MChanged bool // dcc downloaded a changed TOP1M list: the DNSBL update is due
+	// Top1MLedger is what the TOP1M download ledger entry (dnsbl/top1m/download) is to become: nil leaves it, "" closes it,
+	// and any other text opens it with that message.
+	Top1MLedger *string
 }
 
 // DownloadExtras downloads every Extra in order, as pfblockerng_download_extras() does.
@@ -51,6 +59,12 @@ func (f *Fetcher) DownloadExtras(ctx context.Context, cfg ExtrasConfig, extras [
 	res := ExtrasResult{OK: true}
 	for _, x := range extras {
 		req := Request{URL: x.URL, Timeout: cfg.Timeout}
+		if x.Kind == "top1m" {
+			if !f.top1m(ctx, cfg, x, req, &res) {
+				res.OK = false
+			}
+			continue
+		}
 		switch x.Kind {
 		case "asn":
 			req.URL += rawURLEncode(cfg.ASNToken)

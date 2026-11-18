@@ -1,0 +1,60 @@
+{
+	"schema": 1,
+	"description": "Majestic's plain twelve-column CSV is copied over top-1m.csv; the plain body itself is the baseline.",
+	"hosts": {
+		"downloads.majestic.com": [
+			"127.0.0.1",
+			"203.0.113.14"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "majestic"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/majestic_million.csv": {
+				"body": "GlobalRank,TldRank,Domain,TLD,RefSubNets,RefIPs,IDN_Domain,IDN_TLD,PrevGlobalRank,PrevTldRank,PrevRefSubNets,PrevRefIPs\n1,1,google.com,com,1,1,google.com,com,1,1,1,1\n"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://downloads.majestic.com:{port:origin}/majestic_million.csv",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "majestic"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/top-1m.csv": "GlobalRank,TldRank,Domain,TLD,RefSubNets,RefIPs,IDN_Domain,IDN_TLD,PrevGlobalRank,PrevTldRank,PrevRefSubNets,PrevRefIPs\n1,1,google.com,com,1,1,google.com,com,1,1,1,1\n",
+					"db/top-1m.csv.zip.orig": {
+						"b64": "R2xvYmFsUmFuayxUbGRSYW5rLERvbWFpbixUTEQsUmVmU3ViTmV0cyxSZWZJUHMsSUROX0RvbWFpbixJRE5fVExELFByZXZHbG9iYWxSYW5rLFByZXZUbGRSYW5rLFByZXZSZWZTdWJOZXRzLFByZXZSZWZJUHMKMSwxLGdvb2dsZS5jb20sY29tLDEsMSxnb29nbGUuY29tLGNvbSwxLDEsMSwxCg=="
+					},
+					"db/top-1m.csv.zip.xxhash128": "3c28b3ab4c764ee9e5c619fd1f74064b",
+					"db/top-1m.csv.zip.source": "{\"provider\":\"majestic\",\"url\":\"http://downloads.majestic.com:{port:origin}/majestic_million.csv\",\"headers\":[]}",
+					"db/top-1m.csv.zip.raw": null,
+					"db/top-1m.update": ""
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/majestic_million.csv"
+					}
+				]
+			}
+		}
+	]
+}

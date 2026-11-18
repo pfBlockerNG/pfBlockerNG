@@ -1,10 +1,20 @@
 package feedfetch
 
 import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 )
 
 // writeMember refuses a member name that would leave the staging directory, whatever checked the names before it
@@ -173,4 +183,121 @@ func TestALiveSymlinkIsBackedUpAsALink(t *testing.T) {
 			t.Errorf("(merged, a.csv link) = (%v, %q, %v), want a failed merge and the link to %s", ok, to, err, elsewhere)
 		}
 	})
+}
+
+// A TOP1M publication whose new list cannot be renamed into place, and whose old list then cannot be put back, still
+// leaves the old list on disk beside the target, as PHP's ".pfbtop1m_active_" does (#3978 review).
+func TestATop1MListThatCannotBePutBackStaysOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	target, base := filepath.Join(dir, "top-1m.csv"), filepath.Join(dir, "top-1m.csv.zip")
+	stage, raw := filepath.Join(dir, "stage"), filepath.Join(dir, "top-1m.csv.zip.raw")
+	for path, content := range map[string]string{target: "old\n", stage: "new\n", raw: "raw"} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	real := rename
+	rename = func(from, to string) error {
+		if to == target {
+			return os.ErrPermission // neither the new list nor the old one reaches the target
+		}
+		return real(from, to)
+	}
+	t.Cleanup(func() { rename = real })
+	if top1mCommit(stage, target, base, raw) {
+		t.Fatal("the commit succeeded, want a failure")
+	}
+	var kept []string
+	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if b, _ := os.ReadFile(p); string(b) == "old\n" {
+				kept = append(kept, p)
+			}
+		}
+		return nil
+	})
+	if len(kept) == 0 {
+		t.Error("no file holds the old list after the failed commit")
+	}
+}
+
+// A TOP1M publication that succeeds leaves the list and its baseline, and nothing it set aside on the way.
+func TestATop1MCommitLeavesNoResidue(t *testing.T) {
+	dir := t.TempDir()
+	target, base := filepath.Join(dir, "top-1m.csv"), filepath.Join(dir, "top-1m.csv.zip")
+	stage, raw := filepath.Join(dir, "stage"), filepath.Join(dir, "raw")
+	for path, content := range map[string]string{target: "old\n", stage: "new\n", raw: "raw", base + ".orig": "old raw"} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !top1mCommit(stage, target, base, raw) {
+		t.Fatal("the commit failed")
+	}
+	os.Remove(raw) // the caller's
+	var names []string
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	want := []string{"top-1m.csv", "top-1m.csv.zip.orig", "top-1m.csv.zip.xxhash128"}
+	if !slices.Equal(names, want) {
+		t.Errorf("the directory holds %v, want %v", names, want)
+	}
+}
+
+// After a 304 that reads changed, the list comes from a second, full download: the validators stored with it are that
+// download's, not the 304's (#4066 review).
+func TestATop1MFullDownloadAfterA304StoresItsOwnValidators(t *testing.T) {
+	body := zipOf(t, "top-1m.csv", "1,google.com\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			w.Header().Set("ETag", `"v1"`)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", `"v2"`)
+		w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	port := srv.URL[strings.LastIndex(srv.URL, ":")+1:]
+	dir := t.TempDir()
+	url := "http://tranco-list.eu:" + port + "/top-1m.csv.zip"
+	base := filepath.Join(dir, "top-1m.csv.zip")
+	sum := digest.Bytes(body)
+	for path, content := range map[string]string{ // a trusted baseline, but the published list is gone: reads changed
+		base + ".orig": string(body), base + ".xxhash128": sum, base + ".orig.etag": `"v1"`,
+		base + ".source": top1mIdentity("tranco", url, nil),
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := &Fetcher{RetryDelay: 1}
+	f.Resolve = func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("203.0.113.11")}, nil
+	}
+	res := f.DownloadExtras(context.Background(), ExtrasConfig{DBDir: dir, Detect: true},
+		[]Extra{{Kind: "top1m", URL: url, Dir: dir, Download: "top-1m.csv.zip", File: "top-1m.csv", Provider: "tranco"}})
+	etag, _ := os.ReadFile(base + ".orig.etag")
+	if !res.OK || !res.Top1MChanged || string(etag) != `"v2"` {
+		t.Errorf("(ok, changed, stored ETag) = (%v, %v, %s), want (true, true, \"v2\")", res.OK, res.Top1MChanged, etag)
+	}
+}
+
+func zipOf(t *testing.T, name, content string) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	zw := zip.NewWriter(&b)
+	w, err := zw.Create(name)
+	if err == nil {
+		_, err = w.Write([]byte(content))
+	}
+	if err == nil {
+		err = zw.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
 }
