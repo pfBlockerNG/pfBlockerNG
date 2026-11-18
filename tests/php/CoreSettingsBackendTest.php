@@ -12,7 +12,7 @@ use PHPUnit\Framework\TestCase;
  * Issue #3924: on pfSense Core keeps no settings store; it runs the settings adapter (pfb_core_settings.sh, the `core_settings`
  * verb of pfblockerng.inc) once per call, one JSON request on stdin and one JSON reply on stdout (docs/misc/core-api-protocol.md).
  * Pinned here, for the adapter that answers over config.xml:
- *   - read: the 17 native `settings/dns` fields as pfb_core_dns_settings() projects them, beside the feed projections (issue #3937,
+ *   - read: the 15 native `settings/dns` fields as pfb_core_dns_settings() projects them, beside the feed projections (issue #3937,
  *     CoreSettingsFeedsBackendTest; empty here: config.xml holds no group), with their revision;
  *   - write: every changed field reaches its registered config.xml key and only that key, under the config lock, with one
  *     write_config() and the pending-changes mark; the projection afterwards is what was asked for;
@@ -104,7 +104,7 @@ final class CoreSettingsBackendTest extends TestCase
 		rmdir_recursive($this->dir);
 	}
 
-	/** @return array<string, mixed> the parity fixture's `defaults` native values: all 17 fields in the protocol's order */
+	/** @return array<string, mixed> the parity fixture's `defaults` native values: all 15 fields in the protocol's order */
 	private static function defaults(): array
 	{
 		return self::fixture()['defaults'];
@@ -237,7 +237,7 @@ final class CoreSettingsBackendTest extends TestCase
 
 		$this->assertSame(['version', 'revision', 'settings', 'platform'], array_keys($reply), "{$case['id']}: the reply's keys");
 		$this->assertSame(1, $reply['version']);
-		$this->assertSame(self::settings($native), $reply['settings'], "{$case['id']}: the 17 native fields, in the protocol's order");
+		$this->assertSame(self::settings($native), $reply['settings'], "{$case['id']}: the 15 native fields, in the protocol's order");
 		$this->assertSame(pfb_core_settings_revision(self::settings($native)), $reply['revision'], "{$case['id']}: the projection's revision");
 		$this->assertGreaterThanOrEqual(1, $reply['revision']);
 		$this->assertSame([], $GLOBALS['pfb_test_lock_events'], 'a read takes no lock');

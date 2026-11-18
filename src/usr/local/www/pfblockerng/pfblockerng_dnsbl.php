@@ -799,7 +799,6 @@ if ($_POST) {
 			unset($pfb['dconfig']['pfb_cache']);
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
-			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
 			// issue #1887: checkbox-absent is the owner-ruled empty Off token.
 			$pfb['dconfig']['pfb_idn_block_malicious']	= pfb_filter($_POST['pfb_idn_block_malicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_idn_escalate_suspicious']	= pfb_filter($_POST['pfb_idn_escalate_suspicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';

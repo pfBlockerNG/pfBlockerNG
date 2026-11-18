@@ -295,7 +295,7 @@ def php_json(vm: SmokeVM, expression: str) -> Any:
 
 
 def config_dns_settings(vm: SmokeVM) -> dict[str, Any]:
-    """What config.xml says for ``settings/dns``: the 17 fields as ``pfb_core_dns_settings()`` projects them."""
+    """What config.xml says for ``settings/dns``: the 15 fields as ``pfb_core_dns_settings()`` projects them."""
     settings: dict[str, Any] = php_json(vm, "pfb_core_dns_settings()")
     return settings
 

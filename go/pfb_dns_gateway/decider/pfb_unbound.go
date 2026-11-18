@@ -1436,7 +1436,7 @@ func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any)
 			var dnsbl *dnsblDecision
 			if memo == UNSET {
 				// The original query's TLD comes from qstate; a CNAME target has its own TLD, so derive it from the target
-				// being evaluated, else the TLD-Allow check uses the wrong TLD for the target.
+				// being evaluated.
 				var tld string
 				if isCNAME {
 					tld = getTldFromName(qName)

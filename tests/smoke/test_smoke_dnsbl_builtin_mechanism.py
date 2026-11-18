@@ -309,6 +309,9 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
     regex_domain = h.unique_domain("bir")
     regex_label = regex_domain.split(".", 1)[0]
     idn_domain = f"xn--{uuid.uuid4().hex}.com"
+    # issue #4053: .dev was a built-in HSTS TLD; a block there answers with the configured mechanism like any other.
+    dev_label = f"birdev-{uuid.uuid4().hex}"
+    dev_domain = f"{dev_label}.dev"
     blacklist_tld = _tld_label("pfbsmoketld")
     blacklist_domain = f"pfbtld-{uuid.uuid4().hex}.{blacklist_tld}"
     inert_alias = "smokebuiltininert"
@@ -316,12 +319,13 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
 
     # regex anchors on the unique label (not the bare full-domain string) so this
     # is a genuine regex match, not a literal-string comparison in disguise.
-    regex_patterns = [f"^{re.escape(regex_label)}\\."]
+    regex_patterns = [f"^{re.escape(regex_label)}\\.", f"^{re.escape(dev_label)}\\."]
 
     rows = [
         _Row("regex", regex_domain),
         _Row("all-idn", idn_domain),
         _Row("tld-blacklist", blacklist_domain),
+        _Row("former-hsts-tld", dev_domain),
     ]
 
     try:

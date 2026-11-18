@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Issue #3913 / #3924: the Outpost's side of Core's `settings/dns`. Pinned here:
- *   - pfb_core_dns_settings(): config.xml's values as Core's 17 native `settings/dns` fields, equal to the parity fixture's
+ *   - pfb_core_dns_settings(): config.xml's values as Core's 15 native `settings/dns` fields, equal to the parity fixture's
  *     `native` for every valid case (CoreSettingsDnsParityTest freezes the same cases against pfb_unbound.ini); the settings
  *     adapter (CoreSettingsBackendTest) answers exactly this projection;
  *   - pfb_core_settings_validate(): the dry run through Core before a save; only a Core `invalid_argument` refuses, anything
@@ -53,7 +53,7 @@ final class CoreSettingsDnsSettingsTest extends TestCase
 		rmdir_recursive($this->dir);
 	}
 
-	/** @return array<string, mixed> the fixture's `defaults` native values: all 17 fields, in the protocol note's order */
+	/** @return array<string, mixed> the fixture's `defaults` native values: all 15 fields, in the protocol note's order */
 	private static function defaults(): array
 	{
 		$doc = json_decode((string) file_get_contents(self::FIXTURE), TRUE, 512, JSON_THROW_ON_ERROR);
@@ -146,7 +146,7 @@ final class CoreSettingsDnsSettingsTest extends TestCase
 
 		$native = pfb_core_dns_settings();
 
-		$this->assertSame(array_keys(self::defaults()), array_keys($native), "{$case['id']}: all 17 fields, in the protocol note's order");
+		$this->assertSame(array_keys(self::defaults()), array_keys($native), "{$case['id']}: all 15 fields, in the protocol note's order");
 		foreach ($case['native'] as $field => $expected) {
 			$this->assertSame($expected, $native[$field], "{$case['id']}: {$field}");
 		}

@@ -1,6 +1,6 @@
-// Tests for the Go translation of pfb_unbound.py's loaders and decisions: _load_hsts_db, _load_gp_bypass_list,
+// Tests for the Go translation of pfb_unbound.py's loaders and decisions: _load_gp_bypass_list,
 // _gp_net_match, _gp_bypassed, convert_other, _load_safesearch_db, safesearch_entry, rebuild_and_swap, init_standard's
-// noAAAA / Group Policy / SafeSearch / HSTS sections and operate()'s noAAAA, SafeSearch and DNSBL branches. They
+// noAAAA / Group Policy / SafeSearch sections and operate()'s noAAAA, SafeSearch and DNSBL branches. They
 // mirror tests/test_pfb_unbound.py (TestConvertOther, TestOperateNoAAAA, TestOperateDnsbl, TestGroupPolicyBypassCidr,
 // TestLoadSafeSearchDb, TestSafeSearchEntry, TestStage2UnifiedDecision), tests/test_adr10_swap.py,
 // tests/test_adr61_py_status.py (the loader wiring) and tests/test_adr06_init_from_raw.py (noAAAA); the expectations
@@ -531,7 +531,7 @@ func TestOperateGroupPolicyBypass(t *testing.T) {
 	}
 }
 
-// --- init_standard: the noAAAA, Group Policy, SafeSearch and HSTS sections ---
+// --- init_standard: the noAAAA, Group Policy and SafeSearch sections ---
 
 func TestInitStandardLoadsNoAAAARows(t *testing.T) {
 	_ = modCaptureLog(t)
@@ -595,13 +595,13 @@ func TestInitStandardRaisesWhereNoAAAAItemsRaisesInPython(t *testing.T) {
 	stopModule(t, zoned)
 }
 
-func TestInitStandardLoadsGroupPolicyAndSafeSearchAndHsts(t *testing.T) {
+func TestInitStandardLoadsGroupPolicyAndSafeSearch(t *testing.T) {
 	dir := t.TempDir()
-	ini := "[MAIN]\r\npython_enable = true\r\npython_hsts = true\r\n[GP_Bypass_List]\r\n0 = 10.0.0.0/24\r\n1 = 2001:db8:1::/64\r\n2 = 192.0.2.7\r\n3 = fe80::1%em0\r\n"
+	ini := "[MAIN]\r\npython_enable = true\r\n[GP_Bypass_List]\r\n0 = 10.0.0.0/24\r\n1 = 2001:db8:1::/64\r\n2 = 192.0.2.7\r\n3 = fe80::1%em0\r\n"
 	if err := os.WriteFile(filepath.Join(dir, "pfb_unbound.ini"), []byte(ini), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for name, content := range map[string]string{"pfb_py_ss.txt": "forcesafe.com,1.2.3.4,::1\n", "pfb_py_hsts.txt": "# header\nbank.example\n"} {
+	for name, content := range map[string]string{"pfb_py_ss.txt": "forcesafe.com,1.2.3.4,::1\n"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}

@@ -647,7 +647,7 @@ func TestEvaluateDomainPslTldAllow(t *testing.T) {
 }
 
 // oracle: DnsblDecision rows from running evaluate_domain in Python on the same fixtures: attribution of the group
-// fields, the CNAME name list, the HSTS and log-type arms, the gates, and the first-hit orders.
+// fields, the CNAME name list, the log-type arms, the gates, and the first-hit orders.
 func TestEvaluateDomainOracleRows(t *testing.T) {
 	fg := map[int]feedGroup{1: {"FeedA", "GroupA"}, 2: {"ZoneFeed", "ZoneGroup"}}
 	dataEvil := map[string]*blockEntry{"evil.com": evBlk("1", 1, PRIO_FEED_BLOCK)}
