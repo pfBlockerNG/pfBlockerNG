@@ -62,21 +62,16 @@ function pfb_crowdsec_should_run(): bool {
  * An http:// or https:// URL with a host, and no credentials, query or fragment: what the bouncer accepts as its api_url (its
  * config check, go/pfb_crowdsec config.go, parses it with net/url). A character a URL never holds unencoded (space, quotes, <, >,
  * \, ^, `, {, |, }) is refused, which also keeps every shell metacharacter that needs quoting out of the file; so are a % that
- * starts no escape, an escape in the host other than an IPv6 zone, and an unclosed IPv6 bracket, which net/url refuses.
+ * starts no escape and an authority net/url refuses: the host is a name without brackets, colons or escapes, or a bracketed
+ * IPv6 address with an optional %25 zone, and the port, when there is a colon, is digits only.
  */
 function pfb_crowdsec_url_valid(string $url): bool {
-	if (strlen($url) > 2048 || preg_match('/[\x00-\x20"<>\\\\^`{|}\x7f]|%(?![0-9A-Fa-f]{2})/', $url) || !preg_match('~^https?://~i', $url)
-	    || str_contains($url, '?') || str_contains($url, '#')) {
+	if (strlen($url) > 2048 || preg_match('/[\x00-\x20"<>\\\\^`{|}\x7f]|%(?![0-9A-Fa-f]{2})/', $url) || str_contains($url, '?')
+	    || str_contains($url, '#') || !preg_match('~^https?://([^/]*)~i', $url, $m)
+	    || !preg_match('~^(?:\[([0-9A-Fa-f:.]+)(?:%25[^%\]/]+)?\]|([^\[\]:%@]+))(?::[0-9]*)?$~D', $m[1], $a)) {
 		return FALSE;
 	}
-	$parts = parse_url($url);
-	if (!is_array($parts) || isset($parts['user']) || isset($parts['pass'])) {
-		return FALSE;
-	}
-	$host = (string) ($parts['host'] ?? '');
-	$bracketed = str_starts_with($host, '[');
-	return $host !== '' && $host !== '[]' && $bracketed === str_ends_with($host, ']')
-	    && (!str_contains($host, '%') || ($bracketed && preg_match('/^\[[0-9A-Fa-f:.]+%25[^%\]]+\]$/', $host)));
+	return ($a[2] ?? '') !== '' || filter_var($a[1], FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== FALSE;
 }
 
 /**

@@ -70,6 +70,14 @@ final class CrowdsecHardeningTest extends TestCase
 		yield 'escape in the host'    => ['http://lapi%41.example/'];
 		yield 'unclosed IPv6 bracket' => ['http://[::1/'];
 		yield 'user without password' => ['https://user@lapi.example/'];
+		yield 'IPv6 without brackets' => ['http://fd00::1:8080/'];
+		yield 'IPv6 without port'     => ['http://fd00::1/'];
+		yield 'port typo'             => ['http://10.0.0.1:8080x/'];
+		yield 'letter in the port'    => ['http://lapi.example:8o80/'];
+		yield 'doubled port'          => ['http://lapi.example:80:80/'];
+		yield 'IPv4 in brackets'      => ['http://[1.2.3.4]:8080/'];
+		yield 'name in brackets'      => ['http://[lapi]/'];
+		yield 'bracket inside'        => ['http://lapi[.example/'];
 	}
 
 	#[DataProvider('daemonRefuses')]
@@ -83,13 +91,13 @@ final class CrowdsecHardeningTest extends TestCase
 
 	public function testAValidEscapeAndAnIpv6ZoneArePlainUrls(): void
 	{
-		foreach (['http://lapi.example/a%20b', 'http://[fe80::1%25em0]:8080/'] as $url) {
+		foreach (['http://lapi.example/a%20b', 'http://[fe80::1%25em0]:8080/', 'http://[::ffff:1.2.3.4]:1/', 'http://lapi.example:/'] as $url) {
 			$out = pfb_crowdsec_validate(['lapi_url' => $url, 'log_level' => 'info', 'rules_all_interfaces' => 'on'], '', ['wan']);
 			$this->assertSame([], $out['errors'], $url);
 		}
 	}
 
-	public function testNoTemporaryFileOutsideItsFolderIsEverRenamedIntoPlace(): void
+	public function testAWriteIntoAFolderItCannotWriteFailsAndLeavesNoFileAnywhere(): void
 	{
 		if (function_exists('posix_getuid') && posix_getuid() === 0) {
 			$this->markTestSkipped('root writes into a read-only folder');
