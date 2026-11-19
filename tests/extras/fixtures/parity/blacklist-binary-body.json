@@ -1,0 +1,55 @@
+{
+	"schema": 1,
+	"description": "A binary body that is no archive is refused at its MIME type: the category folder stays.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"seed": {
+		"db/ut1/ut1_adult": "old.example\n"
+	},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"body_b64": "AAECA0pVTkv//gBiaW5hcnkAEBES"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"report": "\tUT1 ... Failed\n",
+				"files": {
+					"db/ut1/ut1_adult": "old.example\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				],
+				"reason": "mime_not_allowed",
+				"stage": "mime",
+				"detected": "application/octet-stream rc=0"
+			}
+		}
+	]
+}

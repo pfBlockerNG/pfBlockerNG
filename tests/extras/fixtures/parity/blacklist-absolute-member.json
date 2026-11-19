@@ -46,7 +46,10 @@
 						"server": "origin",
 						"path": "/ut1.tar.gz"
 					}
-				]
+				],
+				"reason": "unsafe_member_name",
+				"stage": "member",
+				"detected": "/tmp/evil/domains"
 			}
 		}
 	]

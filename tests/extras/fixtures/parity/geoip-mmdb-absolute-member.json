@@ -52,7 +52,10 @@
 						"path": "/geoip/databases/GeoLite2-Country/download",
 						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
 					}
-				]
+				],
+				"reason": "unsafe_member_name",
+				"stage": "member",
+				"detected": "/tmp/GeoLite2-Country.mmdb"
 			}
 		}
 	]

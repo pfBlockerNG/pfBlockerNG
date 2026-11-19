@@ -58,7 +58,9 @@
 						"path": "/data/free/asn.csv.gz",
 						"query": "token=tok123"
 					}
-				]
+				],
+				"reason": "feed host resolves to a non-permitted address",
+				"stage": "fetch"
 			}
 		}
 	]

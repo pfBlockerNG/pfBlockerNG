@@ -54,7 +54,10 @@
 						"server": "origin",
 						"path": "/ut1.tar.gz"
 					}
-				]
+				],
+				"reason": "blacklist_not_archive",
+				"stage": "extract",
+				"detected": "text/plain"
 			}
 		},
 		{
@@ -91,7 +94,10 @@
 						"server": "origin",
 						"path": "/ut1.tar.gz"
 					}
-				]
+				],
+				"reason": "blacklist_not_archive",
+				"stage": "extract",
+				"detected": "application/zip"
 			}
 		},
 		{
@@ -128,7 +134,10 @@
 						"server": "origin",
 						"path": "/ut1.tar.gz"
 					}
-				]
+				],
+				"reason": "blacklist_not_archive",
+				"stage": "extract",
+				"detected": "application/x-bzip2"
 			}
 		}
 	]

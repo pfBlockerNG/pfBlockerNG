@@ -24,8 +24,12 @@ package feedfetch_test
 // bytes are the same), files ({path: content, {"b64": bytes}, or null when nothing is there; any other entry reads
 // "<not a regular file>"}: only the paths named), and requests (what the servers recorded; host and query only where
 // named), top1m_changed (TOP1M changed under dcc), and ledger (the TOP1M download ledger's open message after the step, or
-// null when none is open; checked only where named), and report (the Blacklist report the bls verb prints, a line per
-// blacklist row; checked only where named). `pfblockerng.sh asn_table`, the ASN conversion's step (#4034), is
+// null when none is open; checked only where named), report (the Blacklist report the bls verb prints, a line per
+// blacklist row; checked only where named), and reason, stage and detected (the refusal of the step's last refused row,
+// checked only where named: on the PHP side the last "pfb_validate: REJECT" line's reason code, stage and detected, else
+// the last "— skipped" text or failed transfer status of the Extras log, with stage "fetch"). Every refused row
+// carries a reason and a stage, and after every step no configured secret appears in a row's reason or detail, or in
+// the name or content of any file the run left (the servers' request log aside). `pfblockerng.sh asn_table`, the ASN conversion's step (#4034), is
 // recorded as a line in db/script.calls.
 //
 // A "whitelist" step (no extras) runs the TOP1M whitelist build, pfblockerng_top1m(); its ok is whether a new
@@ -36,9 +40,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -72,6 +78,9 @@ type extrasExpect struct {
 	Top1MChanged bool                `json:"top1m_changed"`
 	Ledger       json.RawMessage     `json:"ledger"`
 	Report       *string             `json:"report"`
+	Reason       *string             `json:"reason"`
+	Stage        *string             `json:"stage"`
+	Detected     *string             `json:"detected"`
 	Replaced     []string            `json:"replaced"`
 	Files        map[string]any      `json:"files"`
 	Requests     []map[string]string `json:"requests"`
@@ -281,6 +290,27 @@ func runExtrasScenario(t *testing.T, file string) {
 		if st.Expect.Report != nil {
 			actual["report"] = res.Report
 		}
+		var refused *feedfetch.ExtrasRow
+		for n := range res.Rows {
+			row := &res.Rows[n]
+			if !row.OK {
+				if row.Reason == "" || row.Stage == "" {
+					t.Errorf("%s: refused row %s carries no reason or stage: %+v", label, row.Download, *row)
+				}
+				refused = row
+			}
+		}
+		got := map[string]any{"reason": nil, "stage": nil, "detected": nil}
+		if refused != nil {
+			got = map[string]any{"reason": refused.Reason, "stage": refused.Stage, "detected": refused.Detected}
+		}
+		for key, want := range map[string]*string{"reason": st.Expect.Reason, "stage": st.Expect.Stage, "detected": st.Expect.Detected} {
+			if want != nil {
+				actual[key] = got[key]
+			}
+		}
+		checkSecrets(t, label, root, res.Rows,
+			secrets(sc.Settings.MaxMindAccount, sc.Settings.MaxMindKey, sc.Settings.ASNToken, sc.Settings.Top1MToken, st.Extras))
 		files := map[string]any{}
 		for rel := range st.Expect.Files {
 			files[rel] = observe(t, filepath.Join(root, rel))
@@ -344,9 +374,79 @@ func runExtrasScenario(t *testing.T, file string) {
 		if want.Report != nil {
 			wantMap["report"] = *want.Report
 		}
+		for key, v := range map[string]*string{"reason": want.Reason, "stage": want.Stage, "detected": want.Detected} {
+			if v != nil {
+				wantMap[key] = *v
+			}
+		}
 		if !reflect.DeepEqual(wantMap, actual) {
 			t.Errorf("%s: %s\nwant %#v\n got %#v", label, sc.Description, wantMap, actual)
 		}
+	}
+}
+
+// secrets are the configured secrets of a step, each as it is configured and as it travels: the MaxMind key, the ASN and
+// TOP1M tokens and the blacklist rows' passwords, raw, URL-encoded (query and path escaping) and inside the Basic
+// authorization they make with their account or user.
+func secrets(maxMindAccount, maxMindKey, asnToken, top1mToken string, extras []extrasExtra) []string {
+	var out []string
+	add := func(s string) {
+		if s != "" {
+			out = append(out, s, url.QueryEscape(s), url.PathEscape(s))
+		}
+	}
+	basic := func(user, pass string) {
+		if pass != "" {
+			out = append(out, base64.StdEncoding.EncodeToString([]byte(user+":"+pass)))
+		}
+	}
+	add(maxMindKey)
+	add(asnToken)
+	add(top1mToken)
+	basic(maxMindAccount, maxMindKey)
+	for _, e := range extras {
+		add(e.Password)
+		basic(e.Username, e.Password)
+	}
+	return out
+}
+
+// checkSecrets fails when a secret appears in a row's reason or detail, or in the name or content of a file under root
+// (the servers' request log aside: the servers record what they were sent).
+func checkSecrets(t *testing.T, label, root string, rows []feedfetch.ExtrasRow, secrets []string) {
+	t.Helper()
+	if len(secrets) == 0 {
+		return
+	}
+	for _, row := range rows {
+		for _, s := range secrets {
+			if strings.Contains(row.Reason, s) || strings.Contains(row.Detected, s) {
+				t.Errorf("%s: a secret reaches the refusal of %s: %q %q", label, row.Download, row.Reason, row.Detected)
+			}
+		}
+	}
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if p == filepath.Join(root, "requests.log") {
+			return nil
+		}
+		var content []byte
+		if d.Type().IsRegular() {
+			if content, err = os.ReadFile(p); err != nil {
+				return err
+			}
+		}
+		for _, s := range secrets {
+			if strings.Contains(d.Name(), s) || bytes.Contains(content, []byte(s)) {
+				t.Errorf("%s: a secret reaches %s", label, strings.TrimPrefix(p, root))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Errorf("%s: the run root was not read whole for secrets: %v", label, err)
 	}
 }
 

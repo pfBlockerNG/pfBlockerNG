@@ -1,0 +1,56 @@
+{
+	"schema": 1,
+	"description": "A refused download with a token holding &, #, a space and a line break keeps asn.csv, and the token reaches no reason or file, raw or encoded.",
+	"hosts": {
+		"ipinfo.io": [
+			"127.0.0.1",
+			"203.0.113.5"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"asn_token": "a&b#c d\ne"
+	},
+	"seed": {
+		"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/data/free/asn.csv.gz": {
+				"status": 500,
+				"body": "error\n"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://ipinfo.io:{port:origin}/data/free/asn.csv.gz?token=",
+					"file_dwn": "asn.csv.gz",
+					"file": "asn.csv",
+					"folder": "share",
+					"type": "asn"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"files": {
+					"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.csv.gz",
+						"query": "token=a%26b%23c%20d%0Ae"
+					}
+				],
+				"reason": "500 Internal Server Error",
+				"stage": "fetch"
+			}
+		}
+	]
+}

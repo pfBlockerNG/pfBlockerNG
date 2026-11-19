@@ -51,7 +51,9 @@
 						"server": "origin",
 						"path": "/ut1.tar.gz"
 					}
-				]
+				],
+				"reason": "304 Not Modified",
+				"stage": "fetch"
 			}
 		},
 		{

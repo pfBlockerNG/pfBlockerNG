@@ -52,7 +52,9 @@
 						"server": "origin",
 						"path": "/client/v4/radar/datasets/ranking_top_1000000"
 					}
-				]
+				],
+				"reason": "401 Unauthorized",
+				"stage": "fetch"
 			}
 		}
 	]

@@ -1,0 +1,57 @@
+{
+	"schema": 1,
+	"description": "With the content scan on, an HTML error page served for the TOP1M list is refused: top-1m.csv stays.",
+	"hosts": {
+		"tranco-list.eu": [
+			"127.0.0.1",
+			"203.0.113.11"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "tranco",
+		"sanity": true
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/top-1m.csv.zip": {
+				"body_b64": "PCFET0NUWVBFIGh0bWw+CjxodG1sPjxoZWFkPjx0aXRsZT41MDIgQmFkIEdhdGV3YXk8L3RpdGxlPjwvaGVhZD48Ym9keT48aDE+NTAyIEJhZCBHYXRld2F5PC9oMT48L2JvZHk+PC9odG1sPgo="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://tranco-list.eu:{port:origin}/top-1m.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "tranco"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"files": {
+					"db/top-1m.csv": "1,old.example.com\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				],
+				"reason": "html_error_page",
+				"stage": "plaintext",
+				"detected": "top-1m.csv.zip.raw"
+			}
+		}
+	]
+}

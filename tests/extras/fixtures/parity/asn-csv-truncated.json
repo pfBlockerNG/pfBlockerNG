@@ -49,7 +49,10 @@
 						"path": "/data/free/asn.csv.gz",
 						"query": "token=tok123"
 					}
-				]
+				],
+				"reason": "probe_failed",
+				"stage": "structural",
+				"detected": "application/gzip asn.csv.gz.raw"
 			}
 		}
 	]

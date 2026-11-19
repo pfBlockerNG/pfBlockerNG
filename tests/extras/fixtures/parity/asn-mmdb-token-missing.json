@@ -52,7 +52,9 @@
 						"path": "/data/free/asn.mmdb",
 						"query": "token="
 					}
-				]
+				],
+				"reason": "403 Forbidden",
+				"stage": "fetch"
 			}
 		}
 	]

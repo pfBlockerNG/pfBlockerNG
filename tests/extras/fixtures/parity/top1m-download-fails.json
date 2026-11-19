@@ -52,7 +52,9 @@
 						"server": "origin",
 						"path": "/top-1m.csv.zip"
 					}
-				]
+				],
+				"reason": "500 Internal Server Error",
+				"stage": "fetch"
 			}
 		}
 	]

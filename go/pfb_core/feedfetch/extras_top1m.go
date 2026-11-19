@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -156,7 +157,7 @@ const (
 // conditional GET against the stored validators, the source identity and the xxh128 baseline), then the download, whose
 // list is published over File with the downloaded body as the new baseline. A failure keeps the published list and the
 // baseline as they were.
-func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Request, res *ExtrasResult) bool {
+func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Request, res *ExtrasResult) Result {
 	p := top1mProviderOf(x.Provider)
 	req.Headers = top1mAuthHeaders(p, cfg.Top1MToken)
 	base := filepath.Join(x.Dir, x.Download)
@@ -179,12 +180,15 @@ func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 		switch top1mDecision(probe, probeBody, base, x, matches) {
 		case Failed:
 			ledger(top1mProbeFailed)
-			return false
+			if probe.reason != "" {
+				return transferFailed(probe)
+			}
+			return transferRefused(probe.status)
 		case Unchanged:
 			writeValidatorsAt(base+".orig", probe.etag, probe.lastMod)
 			os.WriteFile(base+".source", []byte(identity), 0o644)
 			ledger("")
-			return true
+			return accepted
 		}
 		if probe.status == 304 {
 			// A 304 that reads changed (the baseline is not trusted) has no body to reuse: the list is downloaded in full.
@@ -192,10 +196,10 @@ func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 			os.Remove(probeBody)
 		}
 	}
-	ok, fetched := f.top1mDownload(ctx, cfg, x, req, p, base, probeBody)
-	if !ok {
+	r, fetched := f.top1mDownload(ctx, cfg, x, req, p, base, probeBody)
+	if !r.OK {
 		ledger(top1mDownloadFailed)
-		return false
+		return r
 	}
 	os.WriteFile(base+".source", []byte(identity), 0o644)
 	if !cfg.Detect {
@@ -203,7 +207,7 @@ func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 		// for a list Core no longer holds. PHP keeps them (owner, 2026-11-18).
 		os.Remove(base + ".orig.etag")
 		os.Remove(base + ".orig.lastmod")
-		return true
+		return accepted
 	}
 	if fetched != nil {
 		probe = *fetched // the list came from its own download (after an untrusted 304): its validators describe it
@@ -214,15 +218,15 @@ func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 	writeValidatorsAt(base+".orig", probe.etag, probe.lastMod)
 	res.Top1MChanged = true
 	ledger("")
-	return true
+	return accepted
 }
 
 // top1mProbe is pfb_download()'s change_detect mode: a conditional GET with the validators stored beside the baseline,
 // its body kept at probeBody for the download to reuse.
 func (f *Fetcher) top1mProbe(ctx context.Context, req Request, x Extra, probeBody string) transfer {
-	src, _ := f.entry(ctx, req)
-	if src == nil || f.proxyUnusableFor(src) {
-		return transfer{reason: "refused"}
+	src, reason := f.extrasEntry(ctx, req)
+	if src == nil {
+		return transfer{reason: reason}
 	}
 	return f.fetch(ctx, src, req, probeBody, readValidators(Feed{Dir: x.Dir, Name: x.Download}))
 }
@@ -276,7 +280,7 @@ func top1mDropBaseline(base string) {
 // top1mDownload is pfb_download() for the TOP1M row: the body (the probe's, when dcc kept one) through the content gates,
 // then the list it holds staged, checked as the provider's and published with the body as its baseline. It returns the
 // transfer it made, nil when it reused the probe's body.
-func (f *Fetcher) top1mDownload(ctx context.Context, cfg ExtrasConfig, x Extra, req Request, p top1mProvider, base, probeBody string) (bool, *transfer) {
+func (f *Fetcher) top1mDownload(ctx context.Context, cfg ExtrasConfig, x Extra, req Request, p top1mProvider, base, probeBody string) (Result, *transfer) {
 	raw, target := base+".raw", filepath.Join(x.Dir, x.File)
 	defer os.Remove(raw)
 	status := 200
@@ -284,80 +288,89 @@ func (f *Fetcher) top1mDownload(ctx context.Context, cfg ExtrasConfig, x Extra, 
 	if _, err := os.Stat(probeBody); err == nil {
 		// The probe already downloaded the body: it is used instead of downloading twice.
 		if os.Rename(probeBody, raw) != nil {
-			return false, nil
+			return refused("fetch", "probe body could not be staged", ""), nil
 		}
 	} else {
-		src, _ := f.entry(ctx, req)
-		if src == nil || f.proxyUnusableFor(src) {
-			return false, nil
-		}
-		t := f.fetch(ctx, src, req, raw, nil)
-		if t.reason != "" {
-			return false, nil
+		_, t, r := f.extrasFetch(ctx, req, raw)
+		if r != nil {
+			return *r, nil
 		}
 		status, fetched = t.status, &t
 	}
 	if status == 304 {
 		// A 304 confirms what is published: the list and its baseline both have to be there.
 		_, orig := os.Stat(base + ".orig")
-		info, err := os.Stat(target)
-		return orig == nil && err == nil && info.Mode().IsRegular(), fetched
+		if info, err := os.Stat(target); orig == nil && err == nil && info.Mode().IsRegular() {
+			return accepted, fetched
+		}
+		return transferRefused(304), fetched
 	}
-	if status != 200 && status != 221 && status != 226 {
-		return false, nil
+	if !accepts(status) {
+		return transferRefused(status), nil
 	}
-	mime, _, ok := verdict(ctx, raw)
+	mime, detected, ok := verdict(ctx, raw)
 	if !ok {
-		return false, nil
+		return refused("mime", "mime_not_allowed", detected), nil
 	}
 	archive := mime == mimeGzip || mime == mimeBzip2 || mime == mimeZip || mime == mimeTar
-	if !archive && f.Sanity && (mime == mimeText || mime == mimeHTML) && sane(raw) != "" {
-		return false, nil
+	if !archive && f.Sanity && (mime == mimeText || mime == mimeHTML) {
+		if why := sane(raw); why != "" {
+			return refused("plaintext", why, filepath.Base(raw)), nil
+		}
 	}
 	if archive && f.extractShort(raw, x.Dir, cfg.DBDir, target, filepath.Dir(target)) {
-		return false, nil
+		return refused("size", "staging_space_low", filepath.Base(raw)), nil
 	}
-	stage, err := f.top1mStage(ctx, mime, raw, target)
+	stage, list, err := f.top1mStage(ctx, mime, raw, target)
 	if err != nil {
-		return false, nil
+		if !archive { // a plain body is only copied: what failed is the disk, not an extraction
+			return publishRefused, nil
+		}
+		return extractRefused(top1mExtraction[mime], err, filepath.Base(raw)), nil
 	}
 	defer os.Remove(stage)
 	if !top1mCandidate(stage, p) {
-		return false, nil
+		return refused("top1m", "semantic_invalid", list), nil
 	}
 	if !top1mCommit(stage, target, base, raw) {
-		return false, nil
+		return publishRefused, nil
 	}
 	touch(filepath.Join(cfg.DBDir, "top-1m.update"))
-	return true, fetched
+	return accepted, fetched
 }
 
 var errTop1MArchive = errors.New("archive is not one TOP1M list")
 
+// top1mExtraction is the extrasExtraction name of each archive the TOP1M row extracts.
+var top1mExtraction = map[string]string{mimeGzip: "top1m gzip", mimeTar: "top1m tar", mimeZip: "top1m zip"}
+
 // top1mStage writes the list a body holds to a file beside target: a gzip's stream, the one member of a zip or tar, or
-// the body itself.
-func (f *Fetcher) top1mStage(ctx context.Context, mime, raw, target string) (string, error) {
+// the body itself. It also returns the list's name: the member's, else target's.
+func (f *Fetcher) top1mStage(ctx context.Context, mime, raw, target string) (string, string, error) {
+	list := filepath.Base(target)
 	switch mime {
 	case mimeGzip:
 		if structural(ctx, mime, raw, io.Discard) != nil {
-			return "", errTop1MArchive
+			return "", list, errTop1MArchive
 		}
-		return f.stage(ctx, Feed{Dir: filepath.Dir(target)}, mime, raw, false)
+		staged, err := f.stage(ctx, Feed{Dir: filepath.Dir(target)}, mime, raw, false)
+		return staged, list, err
 	case mimeTar:
 		names, ok := tarNames(ctx, mime, raw)
-		if structural(ctx, mime, raw, io.Discard) != nil || !ok || len(names) != 1 || unsafeMember(names) {
-			return "", errTop1MArchive
+		if structural(ctx, mime, raw, io.Discard) != nil || !ok || len(names) != 1 || unsafeMember(names) != "" {
+			return "", list, errTop1MArchive
 		}
-		return f.stage(ctx, Feed{Dir: filepath.Dir(target)}, mime, raw, true)
+		staged, err := f.stage(ctx, Feed{Dir: filepath.Dir(target)}, mime, raw, true)
+		return staged, path.Base(names[0]), err
 	case mimeZip:
 		return f.top1mZipStage(ctx, raw, target)
 	case mimeBzip2:
 		// shortcut: no TOP1M provider serves bzip2; refused until a corpus row pins pfb_download()'s path for it.
-		return "", errTop1MArchive
+		return "", list, errTop1MArchive
 	}
 	staged, err := os.CreateTemp(filepath.Dir(target), ".pfbtop1m_")
 	if err != nil {
-		return "", err
+		return "", list, err
 	}
 	in, err := os.Open(raw)
 	if err == nil {
@@ -369,25 +382,28 @@ func (f *Fetcher) top1mStage(ctx context.Context, mime, raw, target string) (str
 	}
 	if err != nil {
 		os.Remove(staged.Name())
-		return "", err
+		return "", list, err
 	}
-	return staged.Name(), nil
+	return staged.Name(), list, nil
 }
 
-// top1mZipStage is the zip branch: exactly one member, a regular file with a safe name, that is not an HTML page.
-func (f *Fetcher) top1mZipStage(ctx context.Context, raw, target string) (string, error) {
+// top1mZipStage is the zip branch: exactly one member, a regular file with a safe name, that is not an HTML page. It also
+// returns the member's name.
+func (f *Fetcher) top1mZipStage(ctx context.Context, raw, target string) (string, string, error) {
+	list := filepath.Base(target)
 	file, err := os.Open(raw)
 	if err != nil {
-		return "", err
+		return "", list, err
 	}
 	defer file.Close()
 	zr, err := openZip(file)
-	if err != nil || len(zr.File) != 1 || unsafeMember([]string{zr.File[0].Name}) || !zr.File[0].Mode().IsRegular() {
-		return "", errTop1MArchive
+	if err != nil || len(zr.File) != 1 || unsafeMember([]string{zr.File[0].Name}) != "" || !zr.File[0].Mode().IsRegular() {
+		return "", list, errTop1MArchive
 	}
+	list = path.Base(zr.File[0].Name)
 	staged, err := os.CreateTemp(filepath.Dir(target), ".pfbtop1m_")
 	if err != nil {
-		return "", err
+		return "", list, err
 	}
 	err = copyZipMember(ctx, zr.File[0], &capWriter{w: staged, left: f.ceiling()})
 	if cerr := staged.Close(); err == nil {
@@ -403,9 +419,9 @@ func (f *Fetcher) top1mZipStage(ctx context.Context, raw, target string) (string
 	}
 	if err != nil {
 		os.Remove(staged.Name())
-		return "", err
+		return "", list, err
 	}
-	return staged.Name(), nil
+	return staged.Name(), list, nil
 }
 
 // top1mCommit publishes stage over target and raw as the baseline (base.orig with its xxh128), and puts back the old list

@@ -1,6 +1,7 @@
 package feedfetch_test
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"net/http"
@@ -49,19 +50,37 @@ func TestAnExtrasMemberPastTheCeilingKeepsWhatWasPublished(t *testing.T) {
 	mmdb := append(make([]byte, 64<<10), "\xab\xcd\xefMaxMind.com"...)
 	domains := bytes.Repeat([]byte("big.example\n"), 64<<10/12)
 	list := bytes.Repeat([]byte("1,good.example\n"), 64<<10/15)
+	const past = " -- output exceeded the extraction size ceiling"
 	for _, tc := range []struct {
 		name, kind, host, download, file, published string
 		member                                      []byte
 		body                                        []byte
+		reason, detail                              string // the refusal one byte past the ceiling: PHP's text, and the file
 	}{
 		{"geoip tar member", "geoip", "download.maxmind.com", "GeoLite2-Country.tar.gz", "GeoLite2-Country.mmdb",
-			"GeoLite2-Country.mmdb", mmdb, gzipOf(t, tarNamed(t, "GeoLite2-Country_1/GeoLite2-Country.mmdb", mmdb))},
+			"GeoLite2-Country.mmdb", mmdb, gzipOf(t, tarNamed(t, "GeoLite2-Country_1/GeoLite2-Country.mmdb", mmdb)),
+			"geoip extraction failed (tar exit 153)" + past, "GeoLite2-Country.tar.gz.raw"},
 		{"geoip zip member", "geoip", "download.maxmind.com", "GeoLite2-Country.zip", "GeoLite2-Country.mmdb",
-			"GeoLite2-Country.mmdb", mmdb, zipNamed(t, "GeoLite2-Country.mmdb", string(mmdb))},
+			"GeoLite2-Country.mmdb", mmdb, zipNamed(t, "GeoLite2-Country.mmdb", string(mmdb)),
+			"geoip zip extraction failed (tar exit 153)" + past, "GeoLite2-Country.zip.raw"},
 		{"blacklist member", "blacklist", "bl.example", "ut1.tar.gz", "ut1.tar.gz", "ut1/ut1_adult",
-			domains, gzipOf(t, tarNamed(t, "bl/adult/domains", domains))},
+			domains, gzipOf(t, tarNamed(t, "bl/adult/domains", domains)),
+			"blacklist extraction failed (tar exit 153)" + past, "ut1.tar.gz"},
 		{"top1m zip member", "top1m", "tranco-list.eu", "top-1m.csv.zip", "top-1m.csv", "top-1m.csv",
-			list, zipNamed(t, "top-1m.csv", string(list))},
+			list, zipNamed(t, "top-1m.csv", string(list)),
+			"top1m zip extraction failed (tar exit 153)" + past, "top-1m.csv.zip.raw"},
+		{"top1m gzip member", "top1m", "tranco-list.eu", "top-1m.csv.gz", "top-1m.csv", "top-1m.csv",
+			list, gzipOf(t, list), "top1m extraction failed (gunzip exit 153)" + past, "top-1m.csv.gz.raw"},
+		{"asn gzip member", "asn", "ipinfo.io", "asn.csv.gz", "asn.csv", "asn.csv",
+			list, gzipOf(t, list), "asn extraction failed (gunzip exit 153)" + past, "asn.csv.gz.raw"},
+		{"asn tar member", "asn", "ipinfo.io", "asn.csv.tar", "asn.csv", "asn.csv",
+			list, tarNamed(t, "asn.csv", list), "tar extraction failed (tar exit 153)" + past, "asn.csv.tar.raw"},
+		{"top1m tar member", "top1m", "tranco-list.eu", "top-1m.csv.tar", "top-1m.csv", "top-1m.csv",
+			list, tarNamed(t, "top-1m.csv", list), "top1m extraction failed (tar exit 153)" + past, "top-1m.csv.tar.raw"},
+		{"geoip zip of several members", "geoip", "download.maxmind.com", "GeoLite2-Country-CSV.zip",
+			"GeoLite2-Country-CSV", "GeoLite2-Country-CSV/blocks.csv", list,
+			zipMembersNamed(t, "GeoLite2-Country-CSV_1/blocks.csv", list, "GeoLite2-Country-CSV_1/LICENSE.txt", []byte("l\n")),
+			"geoip zip extraction failed (tar exit 153)" + past, "GeoLite2-Country-CSV.zip.raw"},
 	} {
 		port, _ := extrasPort(t, tc.body, time.Time{})
 		for _, room := range []bool{true, false} {
@@ -95,9 +114,33 @@ func TestAnExtrasMemberPastTheCeilingKeepsWhatWasPublished(t *testing.T) {
 					t.Errorf("(ok, %s replaced) = (%v, %v), want (%v, %v)", tc.published, res.OK, string(got) != oldCopy,
 						room, room)
 				}
+				if r := res.Rows[0]; !room && (r.Stage != "extract" || r.Reason != tc.reason || r.Detected != tc.detail) {
+					t.Errorf("refusal (stage, reason, detected) = (%q, %q, %q), want (extract, %q, %q)", r.Stage, r.Reason,
+						r.Detected, tc.reason, tc.detail)
+				}
 			})
 		}
 	}
+}
+
+// zipMembersNamed is a zip of each name and its bytes, in order.
+func zipMembersNamed(t *testing.T, pairs ...any) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for i := 0; i < len(pairs); i += 2 {
+		w, err := zw.Create(pairs[i].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(pairs[i+1].([]byte)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 // With the proxy unusable (pfb_proxy_unusable), every Extra is refused before it is fetched, and nothing is written.
@@ -155,5 +198,18 @@ func TestTheRemoteTimestampReachesWhatIsPublishedWhole(t *testing.T) {
 				t.Errorf("(ok, %s mtime) = (%v, %v), want (true, %v)", x.File, res.OK, info.ModTime(), stamp)
 			}
 		})
+	}
+}
+
+// A category archive with no domains member is refused with PHP's text: tar itself succeeded (exit 0).
+func TestACategoryArchiveWithoutACategoryIsRefusedAsPHPLogsIt(t *testing.T) {
+	port, _ := extrasPort(t, gzipOf(t, tarNamed(t, "bl/README", []byte("readme\n"))), time.Time{})
+	db := t.TempDir()
+	res := extrasFetcher().DownloadExtras(context.Background(), feedfetch.ExtrasConfig{DBDir: db}, []feedfetch.Extra{{
+		Kind: "blacklist", URL: "http://bl.example:" + port + "/ut1.tar.gz", Dir: db, Download: "ut1.tar.gz",
+		File: "ut1.tar.gz", Name: "UT1"}})
+	if r := res.Rows[0]; res.OK || r.Stage != "extract" || r.Reason != "blacklist extraction failed (tar exit 0)" {
+		t.Errorf("(ok, stage, reason) = (%v, %q, %q), want (false, extract, blacklist extraction failed (tar exit 0))",
+			res.OK, r.Stage, r.Reason)
 	}
 }

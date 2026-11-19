@@ -3,6 +3,7 @@ package feedfetch
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -25,62 +26,70 @@ func posix(expr string) *regexp.Regexp {
 	return re
 }
 
-// blacklist is pfb_download() for a blacklist row. It reports whether the row succeeded.
-func (f *Fetcher) blacklist(ctx context.Context, cfg ExtrasConfig, x Extra, req Request) bool {
+// errNoCategory is a category archive whose extraction holds no category file.
+var errNoCategory = errors.New("archive holds no category")
+
+// blacklist is pfb_download() for a blacklist row.
+func (f *Fetcher) blacklist(ctx context.Context, cfg ExtrasConfig, x Extra, req Request) Result {
 	// A folder an interrupted swap left aside goes back before anything can fail, so a failed download leaves it in service
 	// (owner, 2026-11-19; PHP recovers it only inside a publication).
 	recoverDirs(cfg.DBDir)
-	src, _ := f.entry(ctx, req)
-	if src == nil || f.proxyUnusableFor(src) {
-		return false
-	}
 	base := filepath.Join(x.Dir, x.Download)
 	raw := base + ".raw"
 	defer os.Remove(raw)
-	t := f.fetch(ctx, src, req, raw, nil)
-	if t.reason != "" {
-		return false
+	_, t, r := f.extrasFetch(ctx, req, raw)
+	if r != nil {
+		return *r
 	}
 	if t.status == 304 {
-		_, err := os.Stat(base + ".orig")
-		return err == nil
+		if _, err := os.Stat(base + ".orig"); err == nil {
+			return accepted
+		}
+		return transferRefused(304)
 	}
-	if t.status != 200 && t.status != 221 && t.status != 226 {
-		return false
+	if !accepts(t.status) {
+		return transferRefused(t.status)
 	}
 	// Only a tar is a category archive: a text list, a zip or a bzip2 leaves the folder as it is (issues #2635, #2739).
-	mime, _, ok := verdict(ctx, raw)
-	if !ok || mime != mimeGzip && mime != mimeTar {
-		return false
+	mime, detected, ok := verdict(ctx, raw)
+	if !ok {
+		return refused("mime", "mime_not_allowed", detected)
+	}
+	if mime != mimeGzip && mime != mimeTar {
+		return refused("extract", "blacklist_not_archive", mime)
 	}
 	if !t.lastMod.IsZero() {
 		os.Chtimes(raw, t.lastMod, t.lastMod)
 	}
-	if f.extractShort(raw, x.Dir, cfg.DBDir, filepath.Join(x.Dir, x.File)) || structural(ctx, mime, raw, io.Discard) != nil {
-		return false
+	if f.extractShort(raw, x.Dir, cfg.DBDir, filepath.Join(x.Dir, x.File)) {
+		return refused("size", "staging_space_low", filepath.Base(raw))
+	}
+	if structural(ctx, mime, raw, io.Discard) != nil {
+		return refused("structural", "probe_failed", mime+" "+filepath.Base(raw))
 	}
 	if rename(raw, base) != nil {
-		return false
+		return publishRefused
 	}
 	name := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(base), ".tar.gz"), ".tar")
 	if !wordName(name) {
-		return false
+		return refused("extract", "invalid_filename", name)
 	}
-	if names, ok := tarNames(ctx, mime, base); !ok || unsafeMember(names) {
+	names, listed := tarNames(ctx, mime, base)
+	if r := memberRefused(names, listed); r != nil {
 		os.Remove(base)
-		return false
+		return *r
 	}
-	if !replaceDir(filepath.Join(cfg.DBDir, name), func(dir string) error {
+	if r := published(replaceDir, filepath.Join(cfg.DBDir, name), "blacklist", filepath.Base(base), func(dir string) error {
 		return f.extractCategories(ctx, mime, base, name, dir)
-	}) {
-		return false
+	}); !r.OK {
+		return r
 	}
 	// No reader takes the change-detection sidecars of a category archive (issue #2738).
 	for _, sfx := range []string{".orig", ".xxhash128", ".md5"} {
 		os.Remove(base + sfx)
 	}
 	touch(filepath.Join(cfg.DBDir, name, name+".update"))
-	return true
+	return accepted
 }
 
 // wordName is pfb_filter(PFB_FILTER_WORD) as its caller takes it: letters, digits and underscores, and neither "" nor "0".
@@ -164,7 +173,7 @@ func (f *Fetcher) extractCategories(ctx context.Context, mime, archive, name, di
 		}
 	}
 	if !found {
-		return errNoDatabase
+		return errNoCategory
 	}
 	return nil
 }
