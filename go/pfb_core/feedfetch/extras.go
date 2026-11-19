@@ -58,8 +58,8 @@ type ExtrasRow struct {
 type ExtrasResult struct {
 	OK           bool
 	Rows         []ExtrasRow // one per Extra, in order
-	MaxMindError bool // a geoip row failed: it blocks the country conversion
-	Top1MChanged bool // dcc downloaded a changed TOP1M list: the DNSBL update is due
+	MaxMindError bool        // a geoip row failed: it blocks the country conversion
+	Top1MChanged bool        // dcc downloaded a changed TOP1M list: the DNSBL update is due
 	// Top1MLedger is what the TOP1M download ledger entry (dnsbl/top1m/download) is to become: nil leaves it, "" closes it,
 	// and any other text opens it with that message.
 	Top1MLedger *string
