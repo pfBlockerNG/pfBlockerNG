@@ -13677,7 +13677,7 @@ function pfb_metrics_render(array $s): string {
 	}
 	foreach ($cs['banned'] ?? array() as $type => $bans) {
 		foreach ($bans['origins'] as $origin => $count) {
-			$banned[] = array(array('origin' => (string) $origin, 'ip_type' => $type), $count);
+			$banned[] = array(array('origin' => $origin, 'ip_type' => $type), $count);
 		}
 	}
 	$one = static fn (string $field): array => $cs === NULL ? array() : array(array(array(), $cs[$field]));

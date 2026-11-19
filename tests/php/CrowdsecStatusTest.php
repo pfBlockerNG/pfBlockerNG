@@ -184,6 +184,8 @@ final class CrowdsecStatusTest extends TestCase
 	public static function unusableSettings(): iterable
 	{
 		yield 'no URL' => ['', self::KEY];
+		yield 'a file URL' => ['file:///etc', self::KEY];
+		yield 'a URL with a query' => ['http://192.0.2.10:8080/?x=1', self::KEY];
 		yield 'no key' => [self::URL, ''];
 		yield 'a key with a line break' => [self::URL, "abc\r\nX-Other: 1"];
 		yield 'a key with a space' => [self::URL, 'abc def'];
@@ -232,7 +234,70 @@ final class CrowdsecStatusTest extends TestCase
 		$this->assertNull(pfb_crowdsec_status_read("{$this->root}/absent.json"));
 	}
 
+	/** A healthy status document with $changes merged over it. */
+	private static function statusJson(array $changes = []): string
+	{
+		return json_encode(array_replace([
+			'version' => '0.1.0', 'start_time' => 1, 'update_frequency_seconds' => 10, 'updated_at' => 1000, 'last_pull' => 4,
+			'last_error_time' => 0, 'last_error' => '', 'lapi_requests' => 9, 'lapi_errors' => 0,
+			'banned' => ['ipv4' => ['total' => 0, 'origins' => new stdClass()], 'ipv6' => ['total' => 0, 'origins' => new stdClass()]],
+			'dropped' => ['ipv4' => ['packets' => 0, 'bytes' => 0], 'ipv6' => ['packets' => 0, 'bytes' => 0]],
+		], $changes));
+	}
+
+	public function testAZeroUpdateFrequencyIsNotTheDaemonsFile(): void
+	{
+		$path = "{$this->root}/status.json";
+		file_put_contents($path, self::statusJson(['update_frequency_seconds' => 1]));
+		$this->assertIsArray(pfb_crowdsec_status_read($path), 'before-state: a positive frequency reads');
+
+		file_put_contents($path, self::statusJson(['update_frequency_seconds' => 0]));
+		$this->assertNull(pfb_crowdsec_status_read($path));
+	}
+
+	public function testAValidDocumentOverOneMebibyteIsRefused(): void
+	{
+		$path = "{$this->root}/status.json";
+		$json = self::statusJson();
+		file_put_contents($path, $json . str_repeat(' ', PFB_CROWDSEC_STATUS_MAX - strlen($json)));
+		$this->assertIsArray(pfb_crowdsec_status_read($path), 'before-state: exactly the limit, trailing spaces and all, reads');
+
+		file_put_contents($path, $json . str_repeat(' ', PFB_CROWDSEC_STATUS_MAX - strlen($json) + 1));
+		$this->assertNull(pfb_crowdsec_status_read($path), 'one byte over the limit');
+	}
+
+	public function testAFileFromTheFutureIsStaleBeyondOneInterval(): void
+	{
+		$status = ['updated_at' => 1000, 'update_frequency_seconds' => 10];
+
+		$this->assertTrue(pfb_crowdsec_status_fresh($status, 990), 'one interval ahead: a clock a little behind the writer');
+		$this->assertFalse(pfb_crowdsec_status_fresh($status, 989), 'more than one interval ahead');
+		$this->assertFalse(pfb_crowdsec_status_fresh(['updated_at' => PHP_INT_MAX, 'update_frequency_seconds' => 10], 1000));
+	}
+
 	// ---- the log ----------------------------------------------------------------------------
+
+	public function testOnlyTheLogsLastMebibyteIsReadAndNotTheLineItStartsIn(): void
+	{
+		$log = "{$this->root}/system.log";
+		$old = "Nov 19 09:00:00 pfSense pfb_crowdsec[1]: level=info msg=too old\n";
+		$filler = str_repeat("Nov 19 09:30:00 pfSense php-fpm[7]: filler\n", 30000);
+		// The forged text sits inside another program's line, starting exactly where the read may start: at the window or a byte before it
+		$forged = "Nov 19 10:00:00 pfSense pfb_crowdsec[1]: level=error msg=FORGED\n";
+		$real = "Nov 19 10:00:01 pfSense pfb_crowdsec[2]: level=info msg=REAL\n";
+		foreach ([PFB_CROWDSEC_LOG_WINDOW, PFB_CROWDSEC_LOG_WINDOW + 1] as $from) {
+			$tail = $forged . str_repeat("Nov 19 10:00:00 pfSense php-fpm[7]: filler\n", 20000);
+			$tail .= str_repeat('x', $from - strlen($tail) - strlen($real) - 1) . "\n" . $real;
+			$this->assertSame($from, strlen($tail), 'fixture: the forged text starts that many bytes before the end');
+			file_put_contents($log, $old . $filler . 'Nov 19 10:00:00 pfSense php-fpm[7]: /index.php: user input ' . $tail);
+
+			$this->assertSame(['Nov 19 10:00:01 pfSense pfb_crowdsec[2]: level=info msg=REAL'], pfb_crowdsec_log_tail($log), "forged at -{$from}");
+		}
+
+		file_put_contents($log, $old . $real);
+		$this->assertSame([rtrim($old), rtrim($real)], pfb_crowdsec_log_tail($log), 'a log inside the window is read from its first line');
+	}
+
 
 	public function testTheLogShowsTheLastFiftyLinesTaggedPfbCrowdsecInEitherFormat(): void
 	{

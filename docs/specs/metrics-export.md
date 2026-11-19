@@ -151,7 +151,8 @@ the existing explicit statistics clear remains the reset mechanism, with no arbi
 
 ### Metrics
 
-All names carry the `pfblockerng_` prefix. `# HELP` and `# TYPE` lines are emitted for
+All names carry the `pfblockerng_` prefix, except the CrowdSec bouncer's `fw_bouncer_*` families, which keep the
+official bouncer's names (`docs/specs/crowdsec-integration.md` D6). `# HELP` and `# TYPE` lines are emitted for
 every family that has at least one series, and label values are escaped per the
 Prometheus text format (`\\`, `\"`, `\n`).
 

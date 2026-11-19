@@ -34,11 +34,15 @@ const PFB_CROWDSEC_STATUS_MAX = 1048576;
 // The Status subtab's lookup (D7): the whole request's time limit, and the largest answer read
 const PFB_CROWDSEC_LOOKUP_TIMEOUT = 5;
 const PFB_CROWDSEC_LOOKUP_MAX = 1048576;
+// The Status subtab's log: how much of the system log's end it reads
+const PFB_CROWDSEC_LOG_WINDOW = 1048576;
 // The bouncer's own pid (daemon -p), which the rule hook signals; SIGUSR1 to daemon(8)'s supervisor (-P) would kill it (#4069)
 const PFB_CROWDSEC_PIDFILE = '/var/run/pfb_crowdsec.pid';
 const PFB_CROWDSEC_DAEMON_PIDFILE = '/var/run/pfb_crowdsec_daemon.pid';
 const PFB_CROWDSEC_LOG_LEVELS = ['debug', 'info', 'warning', 'error'];
 const PFB_CROWDSEC_TAG_PATTERN = '/^[A-Za-z0-9_-]{1,63}$/D';
+// The bouncer key (D2): it travels in a request header, so no whitespace or control character
+const PFB_CROWDSEC_KEY_PATTERN = '/^[\x21-\x7e]{1,256}$/D';
 // The section's fields in the spec's order, and those the generated rules depend on (the enable and the rule settings)
 const PFB_CROWDSEC_FIELDS = ['enable', 'lapi_url', 'api_key', 'log_level', 'rules_all_interfaces', 'rules_interfaces', 'rules_log',
 	'rules_tag', 'rule_v4', 'rule_v6'];
@@ -123,7 +127,7 @@ function pfb_crowdsec_validate(array $post, string $storedKey, array $interfaces
 
 	$key = $text('api_key');
 	$values['api_key'] = $storedKey;
-	if ($key === NULL || ($key !== '' && !preg_match('/^[\x21-\x7e]{1,256}$/D', $key))) {
+	if ($key === NULL || ($key !== '' && !preg_match(PFB_CROWDSEC_KEY_PATTERN, $key))) {
 		$errors[] = gettext('The Bouncer API key must be 1 to 256 printable ASCII characters, without spaces.');
 	} elseif ($key !== '') {
 		$values['api_key'] = $key;
@@ -315,9 +319,13 @@ function pfb_crowdsec_status_read(string $path = PFB_CROWDSEC_STATUS): ?array {
 	return $status;
 }
 
-/** A status file is fresh while it is at most three update intervals old (D6); older, the bouncer has stopped writing it. */
+/**
+ * A status file is fresh while it is at most three update intervals old (D6); older, the bouncer has stopped writing it. One written
+ * more than an interval in the future is not fresh either: after the clock steps back it would otherwise stay fresh however old it gets.
+ */
 function pfb_crowdsec_status_fresh(array $status, int $now): bool {
-	return $now - $status['updated_at'] <= 3 * $status['update_frequency_seconds'];
+	$age = $now - $status['updated_at'];
+	return $age <= 3 * $status['update_frequency_seconds'] && $age >= -$status['update_frequency_seconds'];
 }
 
 /**
@@ -336,7 +344,7 @@ function pfb_crowdsec_table_entries(string $table): ?array {
 /**
  * The last $lines lines of the system log tagged pfb_crowdsec (D7, D4's `daemon -T pfb_crowdsec`), oldest first, in either of pfSense's
  * log formats (BSD `<time> <host> pfb_crowdsec[<pid>]:`, or RFC 5424 `<pri>1 <time> <host> pfb_crowdsec`). Only the log's last
- * PFB_CROWDSEC_STATUS_MAX bytes are read.
+ * PFB_CROWDSEC_LOG_WINDOW bytes are read, without the partial line they start inside.
  *
  * @return list<string>
  */
@@ -345,12 +353,16 @@ function pfb_crowdsec_log_tail(string $log = '/var/log/system.log', int $lines =
 	if ($fh === FALSE) {
 		return array();
 	}
-	$size = @filesize($log);
-	@fseek($fh, max(0, (int) $size - PFB_CROWDSEC_STATUS_MAX));
-	$raw = (string) @stream_get_contents($fh);
+	// One byte before the window as well: up to the first newline is the line the window starts inside (or nothing, when it starts
+	// a line), a fragment that could pass for a line of its own
+	$start = max(0, (int) @filesize($log) - PFB_CROWDSEC_LOG_WINDOW - 1);
+	@fseek($fh, $start);
+	$rows = explode("\n", mb_scrub((string) @stream_get_contents($fh), 'UTF-8'));
 	fclose($fh);
-	$tagged = preg_grep('/^(?:\S+\s+\d+\s+\d\d:\d\d:\d\d\s+\S+\s+pfb_crowdsec(?:\[\d+\])?:|<\d+>1\s+\S+\s+\S+\s+pfb_crowdsec\s)/',
-	    explode("\n", mb_scrub($raw, 'UTF-8')));
+	if ($start > 0) {
+		array_shift($rows);
+	}
+	$tagged = preg_grep('/^(?:\S+\s+\d+\s+\d\d:\d\d:\d\d\s+\S+\s+pfb_crowdsec(?:\[\d+\])?:|<\d+>1\s+\S+\s+\S+\s+pfb_crowdsec\s)/', $rows);
 	return array_slice(array_values($tagged), -$lines);
 }
 
@@ -367,8 +379,8 @@ function pfb_crowdsec_lookup(string $ip, string $url, string $key, ?callable $ge
 	if (filter_var($ip, FILTER_VALIDATE_IP) === FALSE) {
 		return $fail(gettext('The lookup address is not an IP address.'));
 	}
-	// The key goes into a request header: it must be what the Settings accept (printable ASCII, no whitespace)
-	if ($url === '' || !preg_match('/^[\x21-\x7e]{1,256}$/D', $key)) {
+	// Both as the Settings accept them: the URL http(s) only, the key fit for a request header. A stored value may come from elsewhere.
+	if (!pfb_crowdsec_url_valid($url) || !preg_match(PFB_CROWDSEC_KEY_PATTERN, $key)) {
 		return $fail(gettext('Store the Remote LAPI URL and the Bouncer API key on the Settings subtab first.'));
 	}
 	$answer = ($get ?? 'pfb_crowdsec_lapi_get')(rtrim($url, '/') . '/v1/decisions?ip=' . rawurlencode($ip), $key);

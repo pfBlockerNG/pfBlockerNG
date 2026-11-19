@@ -131,7 +131,7 @@ foreach (PFB_CROWDSEC_TABLES as $family => $table) {
 	$shown = array_slice($entries, ($current - 1) * PFB_CROWDSEC_PAGE_SIZE, PFB_CROWDSEC_PAGE_SIZE);
 	$links = '';
 	for ($n = 1; $n <= $pages && $pages > 1; $n++) {
-		$query = $h('?' . http_build_query(array_merge(array_intersect_key($_GET, array_flip(array('lookup', 'page_ipv4', 'page_ipv6'))), array($param => $n))));
+		$query = $h('?' . http_build_query(array_merge(array_intersect_key($_GET, array_flip(array('page_ipv4', 'page_ipv6'))), array($param => $n))));
 		$links .= $n === $current ? "<li class=\"active\"><span>{$n}</span></li>" : "<li><a href=\"{$query}\">{$n}</a></li>";
 	}
 	$panel(sprintf(gettext('Table %s'), $table), '<p id="cs-table-' . $family . '-count">'
