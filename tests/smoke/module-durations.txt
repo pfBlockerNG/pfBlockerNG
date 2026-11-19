@@ -221,6 +221,7 @@ test_smoke_counters_lane.py 179.56
 test_smoke_counters_lane.py::test_core_clears_the_counters_at_a_day_change[sunday-daily-weekly] 77.37
 test_smoke_counters_lane.py::test_core_clears_the_counters_at_a_day_change[weekday-daily-weekly] 76.02
 test_smoke_counters_lane.py::test_core_clears_the_counters_at_a_day_change[weekday-never-never] 26.17
+test_smoke_crowdsec.py 1100.00
 test_smoke_dns_gateway.py 261.17
 test_smoke_dns_gateway.py::test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an_ipv6_lan_client_gets_the_vip 13.40
 test_smoke_dns_gateway.py::test_a_listed_name_gets_the_vip_and_a_log_row_naming_the_client[doh-get] 1.39

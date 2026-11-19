@@ -414,6 +414,8 @@ def metrics_export(deployed_vm: SmokeVM) -> Iterator[Callable[[], dict[str, Metr
 
     export(True)
     try:
+        # The option takes effect with the update pass, which writes the export's sentinel the verb checks
+        h.reload(vm, "update", wait_unbound=False)
         yield scrape
     finally:
         export(False)
