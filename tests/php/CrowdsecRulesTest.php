@@ -67,7 +67,7 @@ final class CrowdsecRulesTest extends TestCase
 		$xml = simplexml_load_file(__DIR__ . '/../../src/usr/local/pkg/pfblockerng.xml');
 		$this->assertNotFalse($xml);
 		$this->assertSame(['pfb_crowdsec_rules'], array_map('strval', $xml->xpath('/packagegui/filter_rules_needed')),
-			'pkg-utils.inc registers it as installedpackages/package/<n>/filter_rule_function at install and upgrade');
+			'the name pfb_crowdsec_register_rule_hook() keeps in installedpackages/package/<n>/filter_rule_function');
 	}
 
 	// ---- D5 rule text ------------------------------------------------------------------------
@@ -76,10 +76,10 @@ final class CrowdsecRulesTest extends TestCase
 	{
 		self::store(['rules_all_interfaces' => '', 'rules_interfaces' => 'wan,opt1', 'rules_log' => 'on', 'rules_tag' => 'cs_ban-1']);
 		$this->assertSame(
-			"block drop in log quick on { vtnet0 vtnet2.10 } inet from <crowdsec_v4> to any label \"CrowdSec IPv4\" tag cs_ban-1\n"
-			. "block drop out log quick on { vtnet0 vtnet2.10 } inet from any to <crowdsec_v4> label \"CrowdSec IPv4 out\" tag cs_ban-1\n"
-			. "block drop in log quick on { vtnet0 vtnet2.10 } inet6 from <crowdsec_v6> to any label \"CrowdSec IPv6\" tag cs_ban-1\n"
-			. "block drop out log quick on { vtnet0 vtnet2.10 } inet6 from any to <crowdsec_v6> label \"CrowdSec IPv6 out\" tag cs_ban-1\n",
+			"block drop in log quick on { vtnet0 vtnet2.10 } inet from <crowdsec_v4> to any label \"CrowdSec IPv4\" tag \"cs_ban-1\"\n"
+			. "block drop out log quick on { vtnet0 vtnet2.10 } inet from any to <crowdsec_v4> label \"CrowdSec IPv4 out\" tag \"cs_ban-1\"\n"
+			. "block drop in log quick on { vtnet0 vtnet2.10 } inet6 from <crowdsec_v6> to any label \"CrowdSec IPv6\" tag \"cs_ban-1\"\n"
+			. "block drop out log quick on { vtnet0 vtnet2.10 } inet6 from any to <crowdsec_v6> label \"CrowdSec IPv6 out\" tag \"cs_ban-1\"\n",
 			pfb_crowdsec_rules('pfearly'));
 	}
 
@@ -117,7 +117,7 @@ final class CrowdsecRulesTest extends TestCase
 
 		$on = $chosen === NULL ? '' : ' on { ' . implode(' ', array_map(static fn (string $i): string => self::REAL[$i], $chosen)) . ' }';
 		$opt = ($log ? ' log' : '') . ' quick' . $on;
-		$end = $tag === '' ? '' : " tag {$tag}";
+		$end = $tag === '' ? '' : " tag \"{$tag}\"";
 		$expected = '';
 		foreach (['4' => [$v4, 'inet'], '6' => [$v6, 'inet6']] as $n => [$enabled, $af]) {
 			if ($enabled) {
@@ -170,13 +170,32 @@ final class CrowdsecRulesTest extends TestCase
 	public function testAStoredTagTheSettingsWouldRefuseIsLeftOutAndTheRulesStay(string $tag): void
 	{
 		self::store(['rules_tag' => 'pfb_cs-1']);
-		$this->assertStringContainsString(' tag pfb_cs-1', pfb_crowdsec_rules('pfearly'), 'before: a valid tag is rendered');
+		$this->assertStringContainsString(' tag "pfb_cs-1"', pfb_crowdsec_rules('pfearly'), 'before: a valid tag is rendered');
 
 		self::store(['rules_tag' => $tag]);
 		$rules = pfb_crowdsec_rules('pfearly');
 		$this->assertSame(4, substr_count($rules, "\n"), 'four rules and nothing else');
 		$this->assertStringNotContainsString(' tag', $rules);
 		$this->assertStringNotContainsString('pass', $rules);
+	}
+
+	/** @return iterable<string, array{string}> tags the Settings accept that pf reads as a number, a keyword or an operator unquoted */
+	public static function tagsPfWouldNotReadAsAString(): iterable
+	{
+		foreach (['123', '007', 'quick', 'all', 'log', 'label', 'pass', 'any', '-x', '_'] as $tag) {
+			yield $tag => [$tag];
+		}
+	}
+
+	#[DataProvider('tagsPfWouldNotReadAsAString')]
+	public function testEveryTagTheSettingsAcceptIsQuotedSoPfReadsItAsTheTag(string $tag): void
+	{
+		$this->assertSame([], pfb_crowdsec_validate(['log_level' => 'info', 'rules_all_interfaces' => 'on', 'rules_tag' => $tag], 'k', [])['errors'],
+			'the Settings accept it');
+		self::store(['rules_tag' => $tag]);
+		$rules = pfb_crowdsec_rules('pfearly');
+		$this->assertSame(4, substr_count($rules, " label \"CrowdSec IPv") , $rules);
+		$this->assertSame(4, substr_count($rules, " tag \"{$tag}\"\n"), 'each rule ends with the quoted tag: ' . $rules);
 	}
 
 	// ---- no output ---------------------------------------------------------------------------
