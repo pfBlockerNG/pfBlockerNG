@@ -194,7 +194,7 @@ final class CrowdsecRulesTest extends TestCase
 			'the Settings accept it');
 		self::store(['rules_tag' => $tag]);
 		$rules = pfb_crowdsec_rules('pfearly');
-		$this->assertSame(4, substr_count($rules, " label \"CrowdSec IPv") , $rules);
+		$this->assertSame(4, substr_count($rules, " label \"CrowdSec IPv"), $rules);
 		$this->assertSame(4, substr_count($rules, " tag \"{$tag}\"\n"), 'each rule ends with the quoted tag: ' . $rules);
 	}
 

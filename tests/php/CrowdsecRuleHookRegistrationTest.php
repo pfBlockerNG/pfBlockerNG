@@ -92,19 +92,14 @@ final class CrowdsecRuleHookRegistrationTest extends TestCase
 		$this->assertFalse(pfb_crowdsec_register_rule_hook(), 'no pfBlockerNG entry');
 	}
 
-	public function testAFreshRegistrationReloadsTheFilterWhileTheBouncerShouldRunIncludingOnAnInstall(): void
+	public function testAFreshRegistrationReloadsTheFilterAtOnceWhileTheBouncerShouldRun(): void
 	{
 		$apply = file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
 		$this->assertIsString($apply);
 		$pass = substr($apply, (int) strpos($apply, 'function sync_package_pfblockerng('));
-		$this->assertSame(1, preg_match('~\$pfb_crowdsec_hook_new = pfb_crowdsec_register_rule_hook\(\) && pfb_crowdsec_should_run\(\);~', $pass),
+		// At once, not through the pass's own reload: an install or upgrade, and a pass that stops early, never reach that
+		$this->assertSame(1, preg_match('~if \(pfb_crowdsec_register_rule_hook\(\) && pfb_crowdsec_should_run\(\)\) \{\s*filter_configure\(\);\s*\}~', $pass),
 			'a running bouncer has no rules until the filter reloads with the hook registered');
-		$this->assertSame(1, preg_match("~if \\(\\\$pfb_crowdsec_hook_new\\) \\{\\s*\\\$pfb\\['filter_configure'\\] = TRUE;~", $pass),
-			'the pass\'s own reload');
-		$boot = (int) strpos($pass, "if (is_platform_booting() || \$g['pfblockerng_install'])");
-		$branch = substr($pass, $boot, (int) strpos($pass, 'return TRUE;', $boot) - $boot);
-		$this->assertSame(1, preg_match('~if \(\$pfb_crowdsec_hook_new && !is_platform_booting\(\)\) \{\s*filter_configure\(\);~', $branch),
-			'an install or upgrade returns before that reload, so it asks for one itself (a boot loads the filter anyway)');
 	}
 
 	public function testTheUpdatePassRegistersItBeforeItsInstallAndBootEarlyReturn(): void
