@@ -69,8 +69,6 @@ func (c *lapiClient) postUsage(ctx context.Context, body []byte) error {
 	return c.do(ctx, http.MethodPost, c.metricsURL, body, nil)
 }
 
-var errTooLarge = errors.New("response body larger than the limit")
-
 func (c *lapiClient) do(ctx context.Context, method, target string, body []byte, read func(io.Reader) error) error {
 	c.requests++
 	err := c.roundTrip(ctx, method, target, body, read)
@@ -101,46 +99,24 @@ func (c *lapiClient) roundTrip(ctx context.Context, method, target string, body 
 		return err
 	}
 	defer resp.Body.Close()
-	limited := &cappedReader{r: resp.Body, left: c.maxBody}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, int64(200+len(c.key))))
+		if bytes.Contains(excerpt, []byte(c.key)) {
+			excerpt = []byte("(reply omitted: it repeats the key)")
+		} else if len(excerpt) > 200 {
+			excerpt = excerpt[:200] // a cut-off key prefix cannot reach the log: the whole reply was checked
+		}
 		return fmt.Errorf("%s %s: HTTP %s: %s", method, req.URL.Path, resp.Status, bytes.TrimSpace(excerpt))
 	}
 	if read == nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return nil
 	}
-	if err := read(limited); err != nil {
-		if limited.over {
-			return fmt.Errorf("%s %s: %w (%d bytes)", method, req.URL.Path, errTooLarge, c.maxBody)
+	if err := read(http.MaxBytesReader(nil, resp.Body, c.maxBody)); err != nil {
+		if tooLarge := (*http.MaxBytesError)(nil); errors.As(err, &tooLarge) {
+			return fmt.Errorf("%s %s: response body larger than the %d-byte limit", method, req.URL.Path, c.maxBody)
 		}
 		return err
 	}
 	return nil
-}
-
-// cappedReader fails once more than left bytes would be read.
-type cappedReader struct {
-	r    io.Reader
-	left int64
-	over bool
-}
-
-func (c *cappedReader) Read(p []byte) (int, error) {
-	if c.left <= 0 {
-		var one [1]byte
-		if n, err := io.ReadFull(c.r, one[:]); n > 0 {
-			c.over = true
-			return 0, errTooLarge
-		} else if err != io.EOF {
-			return 0, err
-		}
-		return 0, io.EOF
-	}
-	if int64(len(p)) > c.left {
-		p = p[:c.left]
-	}
-	n, err := c.r.Read(p)
-	c.left -= int64(n)
-	return n, err
 }

@@ -25,22 +25,14 @@ const tablesSample = `-pa-r--	LAN__NETWORK
 	References:  [ Anchors: 0                  Rules: 2                  ]
 	Evaluations: [ NoMatch: 12                 Match: 1                  ]
 	In/Block:    [ Packets: 1                  Bytes: 60                 ]
-----r--	crowdsec_v6
-	Addresses:   0
-	Cleared:     Thu Nov 19 06:41:00 2026
 --a-r--	virusprot
 	Addresses:   0
 	Cleared:     Thu Nov 19 06:40:12 2026
 `
 
-func TestParseTablesReadsFlagsAndCounts(t *testing.T) {
+func TestParseTablesReadsTheCounts(t *testing.T) {
 	got := parseTables([]byte(tablesSample))
-	want := map[string]tableInfo{
-		"LAN__NETWORK": {active: true, addresses: 1},
-		"crowdsec_v4":  {active: true, addresses: 3},
-		"crowdsec_v6":  {active: false, addresses: 0},
-		"virusprot":    {active: true, addresses: 0},
-	}
+	want := map[string]int{"LAN__NETWORK": 1, "crowdsec_v4": 3, "virusprot": 0}
 	if !maps.Equal(got, want) {
 		t.Fatalf("parseTables = %v; want %v", got, want)
 	}
@@ -53,13 +45,13 @@ func TestParseTablesIgnoresAnchorTablesAndJunk(t *testing.T) {
 	}
 }
 
-// pfctl -s states: IPv4 addr:port, IPv6 addr[port], NAT translations in parentheses, ICMP, portless protocols.
+// pfctl -s states (pfSense prints the interface first): IPv4 addr:port, IPv6 addr[port], NAT translations in parentheses, ICMP, portless protocols.
 const statesSample = `all tcp 192.168.1.1:22 <- 198.51.100.10:50122       ESTABLISHED:ESTABLISHED
-all udp 192.168.1.10:5353 -> 203.0.113.5:53       MULTIPLE:SINGLE
-all tcp 10.0.0.2:5000 (192.0.2.1:6000) -> 198.51.100.77:443       ESTABLISHED:ESTABLISHED
-all tcp 2001:db8::10[443] <- 2001:db8:dead::1[51515]       ESTABLISHED:ESTABLISHED
-all icmp 192.168.1.1:31234 -> 192.0.2.53:31234       0:0
-all gre 192.0.2.200 -> 192.0.2.201       MULTIPLE:MULTIPLE
+vtnet0 udp 192.168.1.10:5353 -> 203.0.113.5:53       MULTIPLE:SINGLE
+vtnet0 tcp 10.0.0.2:5000 (192.0.2.1:6000) -> 198.51.100.77:443       ESTABLISHED:ESTABLISHED
+vtnet0 tcp 2001:db8::10[443] <- 2001:db8:dead::1[51515]       ESTABLISHED:ESTABLISHED
+vtnet0 icmp 192.168.1.1:31234 -> 192.0.2.53:31234       0:0
+vtnet0 gre 192.0.2.200 -> 192.0.2.201       MULTIPLE:MULTIPLE
 `
 
 func TestParseStatesCollectsEveryAddress(t *testing.T) {

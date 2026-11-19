@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,14 +21,11 @@ var ipTypes = [2]string{"ipv4", "ipv6"}
 
 // decision is the LAPI's Decision object; fields the bouncer does not use are ignored.
 type decision struct {
-	ID       int64  `json:"id"`
-	Origin   string `json:"origin"`
-	Type     string `json:"type"`
-	Scope    string `json:"scope"`
-	Value    string `json:"value"`
-	Scenario string `json:"scenario"`
-	Duration string `json:"duration"`
-	Until    string `json:"until"`
+	ID     int64  `json:"id"`
+	Origin string `json:"origin"`
+	Type   string `json:"type"`
+	Scope  string `json:"scope"`
+	Value  string `json:"value"`
 }
 
 // streamResponse is the LAPI's DecisionsStreamResponse.
@@ -40,18 +36,13 @@ type streamResponse struct {
 
 // decodeStream reads exactly one JSON object; anything else fails the pull.
 func decodeStream(r io.Reader) (*streamResponse, error) {
-	br := bufio.NewReader(r)
-	first, err := peekNonSpace(br)
-	if err != nil {
-		return nil, fmt.Errorf("decisions stream: %w", err)
-	}
-	if first != '{' {
-		return nil, errors.New("decisions stream: the body is not a JSON object")
-	}
-	dec := json.NewDecoder(br)
-	var resp streamResponse
+	dec := json.NewDecoder(r)
+	var resp *streamResponse
 	if err := dec.Decode(&resp); err != nil {
 		return nil, fmt.Errorf("decisions stream: %w", err)
+	}
+	if resp == nil {
+		return nil, errors.New("decisions stream: the body is null")
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		if err != nil {
@@ -59,22 +50,7 @@ func decodeStream(r io.Reader) (*streamResponse, error) {
 		}
 		return nil, errors.New("decisions stream: trailing data after the JSON object")
 	}
-	return &resp, nil
-}
-
-func peekNonSpace(br *bufio.Reader) (byte, error) {
-	for {
-		b, err := br.ReadByte()
-		if err != nil {
-			if err == io.EOF {
-				return 0, errors.New("empty body")
-			}
-			return 0, err
-		}
-		if b != ' ' && b != '\t' && b != '\r' && b != '\n' {
-			return b, br.UnreadByte()
-		}
-	}
+	return resp, nil
 }
 
 // ban is one enforceable value: an address or a masked prefix, keyed by its normal form.

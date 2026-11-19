@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -57,11 +58,10 @@ func parseConfig(data []byte) (*config, error) {
 		LogLevel:        "info",
 		StatusFile:      "/var/run/pfb_crowdsec.json",
 	}
-	if trimmed := bytes.TrimSpace(data); len(trimmed) == 0 || string(trimmed) == "null" {
-		return nil, errors.New("config: not a JSON object")
+	if err := checkConfigKeys(data); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
@@ -72,6 +72,37 @@ func parseConfig(data []byte) (*config, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	return cfg, nil
+}
+
+var configKeys = []string{"api_url", "api_key", "update_frequency", "table_v4", "table_v6", "log_level", "status_file"}
+
+// checkConfigKeys requires one JSON object whose keys are configKeys, spelled exactly and each at most once (encoding/json
+// alone matches keys case-insensitively and lets a repeated key win).
+func checkConfigKeys(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return errors.New("not a JSON object")
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, _ := tok.(string)
+		if !slices.Contains(configKeys, key) {
+			return fmt.Errorf("unknown key %q", key)
+		}
+		if seen[key] {
+			return fmt.Errorf("key %q appears twice", key)
+		}
+		seen[key] = true
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *config) validate() error {

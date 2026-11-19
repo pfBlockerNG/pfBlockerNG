@@ -359,7 +359,7 @@ def test_core_and_pfb_dns_require_the_go_minor_the_image_bakes() -> None:
     `go` directive is the floor every builder must meet: CI, and a ports `make package` whose
     lang/goNNN would otherwise build Core and pfb-dns with older tables (GOTOOLCHAIN=local)."""
     minor = ".".join(_image_pin("GO_VERSION").split(".")[:2])
-    for module in ("pfb_core", "pfb_dns_gateway"):
+    for module in ("pfb_core", "pfb_crowdsec", "pfb_dns_gateway"):
         go_mod = (ROOT / "go" / module / "go.mod").read_text(encoding="utf-8")
         directives = re.findall(r"^go (\S+)$", go_mod, re.MULTILINE)
         assert directives == [f"{minor}.0"], f"go/{module}/go.mod declares go {directives}, the ci image bakes {minor}"

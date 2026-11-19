@@ -28,17 +28,6 @@ func TestLogLevelFiltersLowerLevels(t *testing.T) {
 	}
 }
 
-func TestSetLevelChangesTheFilter(t *testing.T) {
-	var buf bytes.Buffer
-	l := newLogger(&buf, levelInfo)
-	l.debugf("hidden")
-	l.setLevel(levelDebug)
-	l.debugf("shown")
-	if got := buf.String(); got != "level=debug msg=shown\n" {
-		t.Fatalf("output = %q; want only the message logged after setLevel(debug)", got)
-	}
-}
-
 func TestParseLogLevelAcceptsOnlyTheSettingsValues(t *testing.T) {
 	want := map[string]logLevel{"debug": levelDebug, "info": levelInfo, "warning": levelWarning, "error": levelError}
 	for text, lvl := range want {

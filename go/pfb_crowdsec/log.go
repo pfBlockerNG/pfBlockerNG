@@ -16,6 +16,8 @@ const (
 	levelError
 )
 
+const minRedacted = 8
+
 var levelNames = [...]string{"debug", "info", "warning", "error"}
 
 // parseLogLevel accepts exactly the values the settings page writes.
@@ -39,12 +41,6 @@ type logger struct {
 
 func newLogger(out io.Writer, min logLevel) *logger { return &logger{out: out, min: min} }
 
-func (l *logger) setLevel(min logLevel) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.min = min
-}
-
 func (l *logger) setSecret(s string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -66,8 +62,10 @@ func (l *logger) infof(format string, args ...any)  { l.logf(levelInfo, format, 
 func (l *logger) warnf(format string, args ...any)  { l.logf(levelWarning, format, args...) }
 func (l *logger) errorf(format string, args ...any) { l.logf(levelError, format, args...) }
 
+// redact hides secret in text. A key shorter than minRedacted is left alone: replacing every occurrence of a one- or
+// two-letter key would garble the log and spell the key out; the LAPI client drops any reply that echoes the key.
 func redact(text, secret string) string {
-	if secret == "" {
+	if len(secret) < minRedacted {
 		return text
 	}
 	return strings.ReplaceAll(text, secret, "[redacted]")

@@ -384,7 +384,7 @@ line carries `go/`) has these parts:
 
 - `USES=go:1.27+,modules,no_targets` (x/net picks its IDNA tables by compiler: go1.27
   selects Unicode 17, which Core's feed corpus and pfb-dns assume, #3982; the modules'
-  `go 1.27.0` refuses an older Go), `NO_ARCH_IGNORE=pfb-dns` (`qa.sh` flags every
+  `go 1.27.0` refuses an older Go), `NO_ARCH_IGNORE=pfb-dns pfb-core pfb_crowdsec` (`qa.sh` flags every
   FreeBSD ELF in a `NO_ARCH` package otherwise) and an empty `STRIP=` (Go linked the
   binaries stripped already; `INSTALL_PROGRAM` must not rewrite the bytes `do-build` checked).
 - `GH_TUPLE`: one entry per module the gateway vendors, each unpacked to

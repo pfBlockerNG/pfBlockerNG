@@ -1508,3 +1508,14 @@ def test_crowdsec_binary_mtime_follows_its_own_module(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     for target in TARGETS:
         assert int((tmp_path / "out" / target / "pfb_crowdsec").stat().st_mtime) == 1_750_000_000
+
+
+@pytest.mark.parametrize("mode", ["builder", "vendored"])
+def test_an_out_dir_inside_the_crowdsec_module_is_refused_and_writes_nothing(tmp_path: Path, mode: str) -> None:
+    # pfb_crowdsec is built in place in both modes, so an --out-dir inside it would land binaries in its source tree
+    root = write_tiny_crowdsec(write_tiny_module(tmp_path / "src-tree"))
+    module = root / "go" / "pfb_crowdsec"
+    result = run_helper(root, "out", extra=["--vendored"] if mode == "vendored" else [], cwd=module)
+    assert result.returncode == 1, f"an --out-dir inside go/pfb_crowdsec was accepted ({mode}):\n{result.stderr}"
+    assert "inside the module" in result.stderr, result.stderr
+    assert sorted(p.name for p in module.iterdir()) == ["go.mod", "main.go"], "the module tree was written to"

@@ -64,11 +64,12 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "pfb_crowdsec: configuration OK")
 		return 0
 	}
-	return serve(cfg, stdout)
+	return serve(cfg, stdout, pfctlPath, pfDevice)
 }
 
-func serve(cfg *config, out io.Writer) int {
-	// Before anything else: SIGUSR1's default action would kill the daemon.
+// serve runs the daemon until SIGTERM or SIGINT; it returns 1 when it cannot start.
+func serve(cfg *config, out io.Writer, pfctlBin, device string) int {
+	// Before anything else, so that a SIGUSR1 sent during start-up queues a reconcile.
 	usr1, stopUSR1 := notifyUSR1()
 	defer stopUSR1()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -76,7 +77,7 @@ func serve(cfg *config, out io.Writer) int {
 
 	log := newLogger(out, cfg.level)
 	log.setSecret(cfg.APIKey)
-	if err := preflight(pfctlPath, pfDevice); err != nil {
+	if err := preflight(pfctlBin, device); err != nil {
 		log.errorf("%v", err)
 		return 1
 	}
@@ -85,7 +86,7 @@ func serve(cfg *config, out io.Writer) int {
 		log.errorf("%v", err)
 		return 1
 	}
-	d := newDaemon(cfg, log, &pfctl{r: execRunner{path: pfctlPath, timeout: pfctlTimeout}}, api, time.Now)
+	d := newDaemon(cfg, log, &pfctl{r: execRunner{path: pfctlBin, timeout: pfctlTimeout}}, api, time.Now)
 	log.infof("pfb_crowdsec %s starting: LAPI %s, tables %s and %s, every %s", version, cfg.APIURL, cfg.TableV4,
 		cfg.TableV6, cfg.interval)
 	if err := d.setup(ctx); err != nil {
@@ -96,11 +97,8 @@ func serve(cfg *config, out io.Writer) int {
 	defer ticker.Stop()
 	usage := time.NewTicker(usageInterval)
 	defer usage.Stop()
-	err = d.run(ctx, ticker.C, usage.C, usr1, nil)
+	d.run(ctx, ticker.C, usage.C, usr1, nil)
 	log.infof("stopped")
-	if err != nil {
-		return 1
-	}
 	return 0
 }
 

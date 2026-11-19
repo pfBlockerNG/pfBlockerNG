@@ -63,11 +63,7 @@ func (p *pfctl) load(ctx context.Context, table, op string, addrs []string) erro
 		return err
 	}
 	name := f.Name()
-	defer os.Remove(name)
-	if err := f.Chmod(0o600); err != nil {
-		f.Close()
-		return err
-	}
+	defer os.Remove(name) // os.CreateTemp made it mode 0600
 	w := bufio.NewWriter(f)
 	for _, a := range addrs {
 		w.WriteString(a)
@@ -84,12 +80,8 @@ func (p *pfctl) load(ctx context.Context, table, op string, addrs []string) erro
 	return err
 }
 
-type tableInfo struct {
-	active    bool
-	addresses int
-}
-
-func (p *pfctl) tables(ctx context.Context) (map[string]tableInfo, error) {
+// tables returns each table's address count.
+func (p *pfctl) tables(ctx context.Context) (map[string]int, error) {
 	out, err := p.r.run(ctx, "-vvs", "Tables")
 	if err != nil {
 		return nil, err
@@ -98,9 +90,9 @@ func (p *pfctl) tables(ctx context.Context) (map[string]tableInfo, error) {
 }
 
 // parseTables reads `pfctl -vvs Tables`: a `<flags>\t<name>[\t<anchor>]` line per table, then indented statistics.
-// Tables in anchors are ignored. The third flag is 'a' when the table is active.
-func parseTables(out []byte) map[string]tableInfo {
-	tables := map[string]tableInfo{}
+// Tables in anchors are ignored. pfctl lists only tables that exist.
+func parseTables(out []byte) map[string]int {
+	tables := map[string]int{}
 	current := ""
 	for _, line := range strings.Split(string(out), "\n") {
 		if line == "" {
@@ -109,9 +101,7 @@ func parseTables(out []byte) map[string]tableInfo {
 		if line[0] == '\t' || line[0] == ' ' {
 			rest, found := strings.CutPrefix(strings.TrimSpace(line), "Addresses:")
 			if n, err := strconv.Atoi(strings.TrimSpace(rest)); found && err == nil && current != "" {
-				info := tables[current]
-				info.addresses = n
-				tables[current] = info
+				tables[current] = n
 			}
 			continue
 		}
@@ -121,7 +111,7 @@ func parseTables(out []byte) map[string]tableInfo {
 			continue
 		}
 		current = fields[1]
-		tables[current] = tableInfo{active: fields[0][2] == 'a'}
+		tables[current] = 0
 	}
 	return tables
 }

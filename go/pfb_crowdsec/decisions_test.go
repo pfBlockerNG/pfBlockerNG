@@ -9,8 +9,7 @@ import (
 )
 
 func banDecision(id int64, scope, value string) decision {
-	return decision{ID: id, Origin: "crowdsec", Type: "ban", Scope: scope, Value: value, Scenario: "test/scenario",
-		Duration: "4h"}
+	return decision{ID: id, Origin: "crowdsec", Type: "ban", Scope: scope, Value: value}
 }
 
 func TestParseBanNormalisesUsableValues(t *testing.T) {

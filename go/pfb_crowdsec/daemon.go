@@ -139,15 +139,15 @@ func (d *daemon) reconcile(ctx context.Context) {
 	}
 	for f, table := range d.tables() {
 		want := d.bans.keys(family(f))
-		info, exists := have[table]
-		missing := !exists || !info.active
+		addresses, exists := have[table]
+		missing := !exists
 		if missing {
 			if err := d.pf.createTable(ctx, table); err != nil {
 				d.log.errorf("pfctl creating table %s: %v", table, err)
 				continue
 			}
 		}
-		if !missing && !d.dirty[f] && info.addresses == len(want) {
+		if !missing && !d.dirty[f] && addresses == len(want) {
 			continue
 		}
 		if err := d.pf.load(ctx, table, "replace", want); err != nil {
@@ -155,7 +155,7 @@ func (d *daemon) reconcile(ctx context.Context) {
 			continue
 		}
 		d.dirty[f] = false
-		d.log.infof("%s: restored %d values (table was %s)", table, len(want), describe(missing, info.addresses))
+		d.log.infof("%s: restored %d values (table was %s)", table, len(want), describe(missing, addresses))
 	}
 }
 
@@ -186,7 +186,7 @@ func (d *daemon) writeStatus() {
 		UpdatedAt:              d.now().Unix(),
 		LastPull:               unixOrZero(d.lastPull),
 		LastErrorTime:          unixOrZero(d.lastErrAt),
-		LastError:              redact(d.lastErr, d.cfg.APIKey),
+		LastError:              d.lastErr,
 		LAPIRequests:           d.api.requests,
 		LAPIErrors:             d.api.errors,
 		Banned:                 map[string]familyBans{},
@@ -248,7 +248,7 @@ func (d *daemon) shutdown(ctx context.Context) {
 
 // run pulls at once, then on every tick; reconciles on SIGUSR1; posts usage on its ticker; and flushes the tables
 // and returns when ctx ends. done, when set, is told of each handled event (tests synchronise on it).
-func (d *daemon) run(ctx context.Context, ticks, usage <-chan time.Time, usr1 <-chan os.Signal, done func(string)) error {
+func (d *daemon) run(ctx context.Context, ticks, usage <-chan time.Time, usr1 <-chan os.Signal, done func(string)) {
 	notify := func(event string) {
 		if done != nil {
 			done(event)
@@ -260,7 +260,7 @@ func (d *daemon) run(ctx context.Context, ticks, usage <-chan time.Time, usr1 <-
 		select {
 		case <-ctx.Done():
 			d.shutdown(context.WithoutCancel(ctx))
-			return nil
+			return
 		case <-ticks:
 			_ = d.pull(ctx)
 			notify("pull")

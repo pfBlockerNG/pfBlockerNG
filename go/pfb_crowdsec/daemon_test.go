@@ -223,12 +223,11 @@ func TestAValueBannedTwiceStaysUntilBothDecisionsGo(t *testing.T) {
 		ok(`{"new":[],"deleted":[{"id":20,"origin":"cscli","type":"ban","scope":"Ip","value":"198.51.100.10","duration":"-1s","scenario":"m"}]}`),
 	)
 	ctx := context.Background()
-	for i := range 2 {
+	for range 2 {
 		if err := h.d.pull(ctx); err != nil {
 			t.Fatal(err)
 		}
 		assertTable(t, h.pf, "crowdsec_v4", startupV4...)
-		_ = i
 	}
 	if err := h.d.pull(ctx); err != nil {
 		t.Fatal(err)
@@ -240,10 +239,10 @@ func TestAValueBannedTwiceStaysUntilBothDecisionsGo(t *testing.T) {
 // a new address without states, and with `pfctl -s states` read once per pull.
 func TestStateKillsAreLimitedToNewSingleAddressesWithStates(t *testing.T) {
 	h := newHarness(t, ok(startupBody))
-	h.pf.states = "all tcp 192.168.1.1:22 <- 198.51.100.10:50122       ESTABLISHED:ESTABLISHED\n" +
-		"all tcp 192.168.1.1:443 <- 203.0.113.5:40000       ESTABLISHED:ESTABLISHED\n" +
-		"all tcp 192.168.1.1:443 <- 198.51.100.99:40000       ESTABLISHED:ESTABLISHED\n" +
-		"all tcp 2001:db8::10[443] <- 2001:db8:dead::1[51515]       ESTABLISHED:ESTABLISHED\n"
+	h.pf.states = "vtnet0 tcp 192.168.1.1:22 <- 198.51.100.10:50122       ESTABLISHED:ESTABLISHED\n" +
+		"vtnet0 tcp 192.168.1.1:443 <- 203.0.113.5:40000       ESTABLISHED:ESTABLISHED\n" +
+		"vtnet0 tcp 192.168.1.1:443 <- 198.51.100.99:40000       ESTABLISHED:ESTABLISHED\n" +
+		"vtnet0 tcp 2001:db8::10[443] <- 2001:db8:dead::1[51515]       ESTABLISHED:ESTABLISHED\n"
 	ctx := context.Background()
 	if err := h.d.setup(ctx); err != nil {
 		t.Fatal(err)
@@ -276,7 +275,7 @@ func TestStateKillsAreLimitedToNewSingleAddressesWithStates(t *testing.T) {
 
 func TestNoStatesAreReadWhenAPullAddsOnlyRanges(t *testing.T) {
 	h := synced(t, ok(`{"new":[{"id":30,"origin":"crowdsec","type":"ban","scope":"Range","value":"192.0.2.0/24","duration":"4h","scenario":"s"}],"deleted":[]}`))
-	h.pf.states = "all tcp 192.168.1.1:22 <- 192.0.2.7:50122       ESTABLISHED:ESTABLISHED\n"
+	h.pf.states = "vtnet0 tcp 192.168.1.1:22 <- 192.0.2.7:50122       ESTABLISHED:ESTABLISHED\n"
 	if err := h.d.pull(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +363,7 @@ func TestRunReconcilesOnSIGUSR1AndFlushesOnShutdown(t *testing.T) {
 	if err := h.d.setup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	go func() { result <- h.d.run(ctx, ticks, nil, usr1, func(e string) { events <- e }) }()
+	go func() { h.d.run(ctx, ticks, nil, usr1, func(e string) { events <- e }); result <- nil }()
 	if e := nextEvent(t, events, result); e != "pull" {
 		t.Fatalf("first event = %q; want the immediate start-up pull", e)
 	}
@@ -398,7 +397,7 @@ func TestRunReconcilesOnSIGUSR1AndFlushesOnShutdown(t *testing.T) {
 
 	cancel()
 	if err := <-result; err != nil {
-		t.Fatalf("run returned %v; want nil after shutdown", err)
+		t.Fatalf("run ended with %v", err)
 	}
 	assertTable(t, h.pf, "crowdsec_v4")
 	assertTable(t, h.pf, "crowdsec_v6")
@@ -413,7 +412,7 @@ func TestRunPostsUsageOnItsTicker(t *testing.T) {
 	if err := h.d.setup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	go func() { result <- h.d.run(ctx, nil, usage, nil, func(e string) { events <- e }) }()
+	go func() { h.d.run(ctx, nil, usage, nil, func(e string) { events <- e }); result <- nil }()
 	if e := nextEvent(t, events, result); e != "pull" {
 		t.Fatalf("first event = %q; want the start-up pull", e)
 	}
@@ -608,5 +607,27 @@ func TestInvalidValuesAreLoggedOncePerPull(t *testing.T) {
 		if strings.HasPrefix(line, "level=error") {
 			t.Fatalf("a LAPI value forged a log line: %q", line)
 		}
+	}
+}
+
+// Scenario: an add and a delete of the same size both fail, so pf's count still matches memory.
+// The failure alone must make the reconcile replace the table, and once replaced the table is left alone again.
+func TestAFailedAddAndDeleteOfTheSameSizeAreRepairedOnce(t *testing.T) {
+	h := synced(t, ok(`{"new":[{"id":60,"origin":"crowdsec","type":"ban","scope":"Ip","value":"198.51.100.60","duration":"4h","scenario":"s"}],
+	"deleted":[{"id":1,"origin":"crowdsec","type":"ban","scope":"Ip","value":"198.51.100.10","duration":"-1s","scenario":"s"}]}`))
+	h.pf.failOn = func(args []string) error {
+		if len(args) == 6 && (args[3] == "add" || args[3] == "delete") && args[5] != "/dev/null" {
+			return errors.New("pfctl: Cannot allocate memory")
+		}
+		return nil
+	}
+	if err := h.d.pull(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertTable(t, h.pf, "crowdsec_v4", "198.51.100.11", "198.51.100.60", "203.0.113.0/24")
+	h.pf.takeCalls()
+	h.d.reconcile(context.Background())
+	if got := callStrings(h.pf.takeCalls()); !slices.Equal(got, []string{"-vvs Tables"}) {
+		t.Fatalf("calls after the repair = %q; want only the tables read", got)
 	}
 }

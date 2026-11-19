@@ -524,7 +524,9 @@ def main(argv: list[str]) -> int:
         description="Cross-compile pfB-DNS, pfb-core and pfb_crowdsec for FreeBSD amd64 and arm64.",
     )
     ap.add_argument("--source-root", type=Path, required=True, help="source tree holding go/pfb_dns_gateway")
-    ap.add_argument("--out-dir", type=Path, required=True, help="receives freebsd-<arch>/pfb-dns and pfb-core")
+    ap.add_argument(
+        "--out-dir", type=Path, required=True, help="receives freebsd-<arch>/pfb-dns, pfb-core and pfb_crowdsec"
+    )
     ap.add_argument("--go", default="go", help="Go toolchain to run (default: go on PATH)")
     ap.add_argument("--vendored", action="store_true", help="build in place from the module's ready-made vendor/")
     ap.add_argument("--modules-txt", type=Path, help="the vendor/modules.txt the module must carry (or be given)")

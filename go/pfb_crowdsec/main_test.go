@@ -105,3 +105,48 @@ func TestNotifyUSR1DeliversTheSignal(t *testing.T) {
 		t.Fatal("STUCK/ENVIRONMENT: SIGUSR1 never arrived")
 	}
 }
+
+// Scenario: the service stops the daemon. Given serve running against a pfctl stand-in, when SIGTERM arrives,
+// then both tables are flushed last and serve returns 0.
+func TestServeFlushesTheTablesAndExitsZeroOnSIGTERM(t *testing.T) {
+	dir := t.TempDir()
+	argsLog := filepath.Join(dir, "pfctl.log")
+	pfctlBin := filepath.Join(dir, "pfctl")
+	if err := os.WriteFile(pfctlBin, []byte("#!/bin/sh\necho \"$*\" >> "+argsLog+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	device := filepath.Join(dir, "pf")
+	if err := os.WriteFile(device, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lapi := newStubLAPI(t, ok(emptyDelta))
+	cfg := testConfig(t, lapi.srv.URL+"/")
+	var out lockedWriter
+	out.w = &bytes.Buffer{}
+	code := make(chan int, 1)
+	go func() { code <- serve(cfg, &out, pfctlBin, device) }()
+	for i := 0; ; i++ { // readiness: the status file appears after the first pull, signal handling is armed by then
+		if _, err := os.Stat(cfg.StatusFile); err == nil {
+			break
+		}
+		select {
+		case c := <-code:
+			t.Fatalf("serve returned %d before it was ready", c)
+		case <-time.After(10 * time.Millisecond):
+		}
+		if i > 6000 {
+			t.Fatal("STUCK/ENVIRONMENT: no status file after a minute")
+		}
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if c := <-code; c != 0 {
+		t.Fatalf("serve returned %d after SIGTERM; want 0", c)
+	}
+	data, _ := os.ReadFile(argsLog)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if n := len(lines); n < 2 || lines[n-2] != "-t crowdsec_v4 -T flush" || lines[n-1] != "-t crowdsec_v6 -T flush" {
+		t.Fatalf("pfctl calls = %q; want both flushes last", lines)
+	}
+}
