@@ -102,3 +102,7 @@ smoke_key
 src/usr/local/pkg/pfblockerng/dns_proxy/bin/
 src/usr/local/pkg/pfblockerng/core/bin/
 src/usr/local/pkg/pfblockerng/crowdsec/bin/
+# A bare `go build` in a module directory leaves its binary there (issue #4082).
+/go/pfb_core/pfb_core
+/go/pfb_crowdsec/pfb_crowdsec
+/go/pfb_dns_gateway/pfb_dns_gateway
