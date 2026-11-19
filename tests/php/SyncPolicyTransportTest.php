@@ -573,7 +573,7 @@ final class SyncPolicyTransportTest extends TestCase
 		foreach (self::blacklistCredentials() as [$user, $pass]) {
 			array_push($sentinels, $user, $pass);
 		}
-		$this->assertCount(8, $sentinels, 'the four registry credentials plus two Blacklist rows of username and password');
+		$this->assertCount(9, $sentinels, 'the five registry credentials plus two Blacklist rows of username and password');
 		foreach (array_merge($sentinels, array_values($fx['nonpolicy'])) as $needle) {
 			$this->assertStringContainsString($needle, $fixtureText, "vacuity guard: the fixture holds {$needle}");
 		}

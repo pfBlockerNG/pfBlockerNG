@@ -876,6 +876,8 @@ const PFB_SECTIONS = [
 	'dns'    => 'installedpackages/pfblockerngdns/config/0',
 	// issue #3649: shared transport settings, separate from the receiver's Resolver recovery state.
 	'dns_shared' => 'installedpackages/pfblockerngdnssettings/config/0',
+	// issue #4071: the CrowdSec tab's Settings (docs/specs/crowdsec-integration.md, D2); a settings section of pfb_sync_policy_sections()
+	'crowdsec' => 'installedpackages/pfblockerngcrowdsec/config/0',
 ];
 
 const PFB_DNS_SHARED_FIELDS = [
@@ -2445,6 +2447,81 @@ function pfb_cfg_registry(): array
 			'write_adapter' => NULL,
 			'sync'          => 'local',
 			'no_grandfather' => 'new key; \'\' = nothing advertised on 443 by choice; per node like the DoH interface list it is drawn from; the retired Nightly toggles are not carried over',
+		],
+
+		// -------------------------------------------------------------------
+		// issue #4071: the CrowdSec bouncer (crowdsec, docs/specs/crowdsec-integration.md D2). New section: absent reads the
+		// defaults below, which keep the bouncer off. Each node registers its own bouncer, so the key never leaves it.
+		// -------------------------------------------------------------------
+		'crowdsec/enable' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
+			'no_grandfather' => 'new key; absent reads Off = no bouncer (pre-feature behaviour)',
+		],
+		'crowdsec/lapi_url' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'policy',
+			'no_grandfather' => 'new key; absent reads \'\' = no engine configured',
+		],
+		'crowdsec/api_key' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads \'\' = no key on this node, so the bouncer does not run; a credential, never synced',
+		],
+		'crowdsec/log_level' => [
+			'default'       => 'info',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads info, the bouncer\'s own default level',
+		],
+		'crowdsec/rules_all_interfaces' => [
+			'default'       => 'on',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads On = the rules apply on every interface',
+		],
+		'crowdsec/rules_interfaces' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads \'\' = no interface chosen, which only matters with all interfaces off',
+		],
+		'crowdsec/rules_log' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
+			'no_grandfather' => 'new key; absent reads Off = blocked packets are not logged',
+		],
+		'crowdsec/rules_tag' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'policy',
+			'no_grandfather' => 'new key; absent reads \'\' = the rules carry no tag',
+		],
+		'crowdsec/rule_v4' => [
+			'default'       => 'on',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
+			'no_grandfather' => 'new key; absent reads On = the IPv4 rules are generated while the bouncer runs',
+		],
+		'crowdsec/rule_v6' => [
+			'default'       => 'on',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
+			'no_grandfather' => 'new key; absent reads On = the IPv6 rules are generated while the bouncer runs',
 		],
 	];
 

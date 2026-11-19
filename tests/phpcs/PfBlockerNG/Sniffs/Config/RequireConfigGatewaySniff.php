@@ -290,6 +290,17 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_dot_port6',
 		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doh_port6',
 		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doq_port6',
+		// issue #4071: the CrowdSec tab's Settings
+		'installedpackages/pfblockerngcrowdsec/config/0/enable',
+		'installedpackages/pfblockerngcrowdsec/config/0/lapi_url',
+		'installedpackages/pfblockerngcrowdsec/config/0/api_key',
+		'installedpackages/pfblockerngcrowdsec/config/0/log_level',
+		'installedpackages/pfblockerngcrowdsec/config/0/rules_all_interfaces',
+		'installedpackages/pfblockerngcrowdsec/config/0/rules_interfaces',
+		'installedpackages/pfblockerngcrowdsec/config/0/rules_log',
+		'installedpackages/pfblockerngcrowdsec/config/0/rules_tag',
+		'installedpackages/pfblockerngcrowdsec/config/0/rule_v4',
+		'installedpackages/pfblockerngcrowdsec/config/0/rule_v6',
 		// issue #3688: resolver VIP fields on package general config
 		'installedpackages/pfblockerng/config/0/pfb_dns_listen_vip',
 		'installedpackages/pfblockerng/config/0/pfb_dns_listen_vip_only',

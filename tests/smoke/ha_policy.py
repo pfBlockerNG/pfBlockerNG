@@ -40,6 +40,7 @@ GEN = f"{PKGS}/pfblockerng/config/0"
 IP = f"{PKGS}/pfblockerngipsettings/config/0"
 DNSBL = f"{PKGS}/pfblockerngdnsblsettings/config/0"
 DNS = f"{PKGS}/pfblockerngdns/config/0"
+CROWDSEC = f"{PKGS}/pfblockerngcrowdsec/config/0"
 SYNC = f"{PKGS}/pfblockerngsync/config/0"
 LISTS_V4 = f"{PKGS}/pfblockernglistsv4"
 LISTS_V6 = f"{PKGS}/pfblockernglistsv6"
@@ -276,6 +277,11 @@ UNSEEDED_LOCAL_KEYS = {
     },
     f"{GEN}/pfb_dns_listen_interface": "must be the interface of this node's resolver VIP: a seeded foreign interface fails validation",
     f"{GEN}/pfb_dns_listen_added": "the apply pass's own record of addresses it inserted; a seeded value would make a later disable remove a server the pass did not add",
+    **{
+        f"{CROWDSEC}/{leaf}": "the CrowdSec bouncer stays off in this harness, so its node-local settings change nothing; "
+        "tests/php/CrowdsecSyncTest.php pins that they never travel (#4071)"
+        for leaf in ("api_key", "log_level", "rules_all_interfaces", "rules_interfaces")
+    },
 }
 
 

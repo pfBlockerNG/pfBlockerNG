@@ -53,6 +53,12 @@
 		<description>pfBlockerNG Core API</description>
 	</service>
 	<service>
+		<name>pfb_crowdsec</name>
+		<rcfile>pfb_crowdsec.sh</rcfile>
+		<custom_php_service_status_command>isvalidpid('/var/run/pfb_crowdsec.pid')</custom_php_service_status_command>
+		<description>pfBlockerNG CrowdSec bouncer</description>
+	</service>
+	<service>
 		<name>pfb_filter</name>
 		<rcfile>pfb_filter.sh</rcfile>
 		<executable>php_pfb</executable>

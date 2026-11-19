@@ -400,7 +400,7 @@ final class SyncPolicyProjectionTest extends TestCase
 		$this->assertSame($text, serialize($fx['sections']));
 	}
 
-	// B11 -- every projected path is rooted at installedpackages/<one of the 19 synced sections or pfblockerngdns>/.
+	// B11 -- every projected path is rooted at installedpackages/<one of the 19 synced sections, pfblockerngdns or pfblockerngcrowdsec>/.
 	public function testEveryPathStartsWithInstalledPackagesAndASyncedSection(): void
 	{
 		$fx = self::diskFixture();
@@ -408,11 +408,11 @@ final class SyncPolicyProjectionTest extends TestCase
 		$this->assertNotEmpty($projection, 'vacuity guard');
 
 		$sections = pfb_sync_policy_sections();
-		$this->assertCount(20, $sections);
+		$this->assertCount(21, $sections);
 		foreach (array_keys($projection) as $path) {
 			$this->assertStringStartsWith(self::SECTIONS_ROOT, $path);
 			$segments = explode('/', $path);
-			$this->assertContains($segments[1], $sections, "{$path} must sit in one of the 19 synced sections or pfblockerngdns");
+			$this->assertContains($segments[1], $sections, "{$path} must sit in one of the 19 synced sections, pfblockerngdns or pfblockerngcrowdsec");
 			$this->assertGreaterThanOrEqual(3, count($segments), "{$path} must name a leaf below its section");
 		}
 	}

@@ -9417,6 +9417,7 @@ function pfb_package_removal_recover(): array {
 		pfb_filter_service();
 		pfb_dns_proxy_service();
 		pfb_core_service();
+		pfb_crowdsec_service();
 		if (pfb_dnsbl_active()) {
 			// The apply pass's own ini inputs, from the settings config.xml stores
 			pfb_dnsbl_ini_inputs();
@@ -9438,6 +9439,10 @@ function pfb_package_removal_recover(): array {
 			// issue #3841: the Core API runs whatever the settings say
 			if (!is_service_running('pfb_core')) {
 				start_service('pfb_core');
+			}
+			// issue #4071: the CrowdSec bouncer only when its settings say it should run (its config file is still in place)
+			if (pfb_crowdsec_should_run() && !is_service_running('pfb_crowdsec')) {
+				start_service('pfb_crowdsec');
 			}
 		}
 	} catch (\Throwable $e) {
@@ -12604,6 +12609,8 @@ function pfb_print_pending_changes_box(bool $on_update_page = FALSE): void {
  * display_top_tabs(); $active marks it the current tab.
  */
 function pfb_software_add_tab(array &$tab_array, bool $active = FALSE, ?bool $provenance_ok = null): void {
+	// issue #4071: every top row ends with this call, the generated GeoIP pages too, so the CrowdSec tab is added here, after Sync
+	pfb_crowdsec_add_tab($tab_array);
 	$provenance_ok = $provenance_ok ?? pfb_software_provenance_ok();
 	if ($provenance_ok && isAllowedPage('pkg_mgr_installed.php')) {
 		$tab_array[] = array(gettext('Software'), $active, '/pfblockerng/pfblockerng_software.php');
@@ -28726,6 +28733,7 @@ function pfb_build_autorule_list(
 require_once __DIR__ . '/pfblockerng_apply.inc';
 require_once __DIR__ . '/pfblockerng_cron.inc';
 require_once __DIR__ . '/pfblockerng_geoip.inc';
+require_once __DIR__ . '/pfblockerng_crowdsec.inc';
 
 /**
  * Core's counter lane (issue #3996): clears the counters Core names, `clearip` and `cleardnsbl`, each at most once and in that order. Core
@@ -29007,6 +29015,7 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 	unlink_if_exists('/usr/bin/tail_pfb');
 	stop_service('pfb_core');
 	pfb_core_state_teardown($pfb['keep']);
+	pfb_crowdsec_teardown();
 	unlink_if_exists(PFB_CORE_RCFILE);
 	unlink_if_exists('/usr/local/etc/rc.d/pfb_filter.sh');
 	unlink_if_exists('/usr/local/etc/rc.d/pfb_dnsbl.sh');
@@ -29228,11 +29237,12 @@ function pfb_sync_legacy_sections(bool $all): array {
 /**
  * The sections scope 'policy' carries: the synced ones plus pfblockerngdns, of which only the pfB-DNS enable is policy
  * (the registry's 'sync' class; the snapshot, listener lists and transports stay node-local). DNSBL runs only through
- * pfB-DNS, so the enable travels with the DNSBL enable (#3770). The legacy scopes keep pfb_sync_legacy_sections().
+ * pfB-DNS, so the enable travels with the DNSBL enable (#3770). Then pfblockerngcrowdsec, whose bouncer key, log level and
+ * interfaces stay local (#4071). The legacy scopes keep pfb_sync_legacy_sections(), so they never send either.
  * @return list<string>
  */
 function pfb_sync_policy_sections(): array {
-	return [...pfblockerng_sync_sections(TRUE), 'pfblockerngdns'];
+	return [...pfblockerng_sync_sections(TRUE), 'pfblockerngdns', 'pfblockerngcrowdsec'];
 }
 
 /**
@@ -29293,7 +29303,7 @@ function pfb_sync_path_is_local(array $local, string $section, array $rel): bool
 }
 
 /**
- * pfb_sync_settings_sections — the settings sections of the synced set (issue #3450/#3451, #3770): bare
+ * pfb_sync_settings_sections — the settings sections of the synced set (issue #3450/#3451, #3770, #4071): bare
  * section name => [registry alias, path segments of the settings map inside the section]. The
  * projection and the receive merge share it.
  *
@@ -29301,7 +29311,7 @@ function pfb_sync_path_is_local(array $local, string $section, array $rel): bool
  */
 function pfb_sync_settings_sections(): array {
 	$settings = array();
-	foreach (array('gen', 'ip', 'dnsbl', 'dns') as $alias) {
+	foreach (array('gen', 'ip', 'dnsbl', 'dns', 'crowdsec') as $alias) {
 		[, $name, $prefix] = explode('/', PFB_SECTIONS[$alias], 3);
 		$settings[$name]   = array($alias, explode('/', $prefix));
 	}
@@ -29697,8 +29707,10 @@ function pfb_sync_policy_merge(array $incoming, array $current, ?array &$ignored
 		$inc = $incoming[$s] ?? NULL;
 		$cur = $current[$s] ?? NULL;
 		if ($inc !== NULL || $cur !== NULL) {
-			// #3770 version skew: an older sender sends no pfblockerngdns at all, which is no statement about the enable.
-			$out[$s] = $s === 'pfblockerngdns' && $inc === NULL ? $cur : ($node($s, array(), $inc, $cur) ?? ($cur === '' ? '' : array()));
+			// #3770, #4071 version skew: an older sender sends no pfblockerngdns or pfblockerngcrowdsec at all, which is no statement
+			// about their settings.
+			$skew = $inc === NULL && in_array($s, array('pfblockerngdns', 'pfblockerngcrowdsec'), TRUE);
+			$out[$s] = $skew ? $cur : ($node($s, array(), $inc, $cur) ?? ($cur === '' ? '' : array()));
 		}
 	}
 

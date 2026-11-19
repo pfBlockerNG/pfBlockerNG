@@ -414,3 +414,13 @@ stay banned and a missed ban would stay missing until the next restart.
   the single addresses that were not banned before, as for a delta. The start-up pull takes
   the same path, which is the same as adding to the empty tables.
 - The pull after a successful full pull is a delta again.
+
+## Amendment 2026-11-19 — the pidfiles and the tab (#4071)
+
+- **Pidfiles.** daemon(8) does not handle `SIGUSR1`, so the signal kills its supervisor (#4069 verification). The rc
+  script therefore writes the bouncer's own pid (`daemon -p`) to `/var/run/pfb_crowdsec.pid`, the file D4's service
+  status and D5's shutdown function read, and the supervisor's (`daemon -P`) to `/var/run/pfb_crowdsec_daemon.pid`.
+  Stop sends TERM to the supervisor, which passes it on to the bouncer.
+- **Start condition.** The config file exists exactly while the bouncer should run, so the rc script's start, the boot
+  start included, starts nothing without it.
+- **Tab.** The CrowdSec tab follows Sync on every top row. Its second row holds Settings, and Status joins it with D7.

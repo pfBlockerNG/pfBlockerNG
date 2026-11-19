@@ -770,3 +770,20 @@ the enable; everything else of the `pfblockerngdns` section stays local in every
 - **HA ordering is unchanged.** pfSense's Resolver sync still copies the moved `unbound` section, so the secondary must
   apply the change first. The primary's setting now replaces the secondary's at its next sync, so save the same setting on both
   nodes before applying.
+
+## Amendment 2026-11-19 — the CrowdSec settings (#4071)
+
+`docs/specs/crowdsec-integration.md` D2 adds the section `pfblockerngcrowdsec` (registry alias `crowdsec`).
+
+- **Policy.** `pfb_sync_policy_sections()` is now the 19 sections, `pfblockerngdns` and `pfblockerngcrowdsec`. The new
+  section is a settings section (allowlist): `enable`, `lapi_url`, `rules_log`, `rules_tag`, `rule_v4` and `rule_v6` are
+  policy; the bouncer key `api_key` (a credential: each node registers its own bouncer), `log_level`,
+  `rules_all_interfaces` and `rules_interfaces` are local. A receiver that gets the enable without its own key does not
+  start the bouncer.
+- **Legacy scopes.** `pfblockerng_sync_sections()` and `pfb_sync_legacy_sections()` are unchanged, so neither `all` nor
+  `lists` ever sends the section, and so never the key.
+- **Version skew.** As for `pfblockerngdns`, a policy payload without the section (an older sender) leaves the receiver's
+  own section as it is. Adding the section changes a node's policy digest once it stores CrowdSec settings, with the
+  drift consequences the #3770 amendment describes.
+- **Apply.** The receive marks the change pending and starts the tick; the update pass applies the bouncer's
+  "should run" decision (crowdsec-integration D4).
