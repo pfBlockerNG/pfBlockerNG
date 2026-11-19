@@ -27,6 +27,9 @@ func posix(expr string) *regexp.Regexp {
 
 // blacklist is pfb_download() for a blacklist row. It reports whether the row succeeded.
 func (f *Fetcher) blacklist(ctx context.Context, cfg ExtrasConfig, x Extra, req Request) bool {
+	// A folder an interrupted swap left aside goes back before anything can fail, so a failed download leaves it in service
+	// (owner, 2026-11-19; PHP recovers it only inside a publication).
+	recoverDirs(cfg.DBDir)
 	src, _ := f.entry(ctx, req)
 	if src == nil || f.proxyUnusableFor(src) {
 		return false
