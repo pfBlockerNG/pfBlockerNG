@@ -6,6 +6,7 @@ package settings
 // config.xml holds, and a write names them, never creates one (docs/misc/core-api-protocol.md).
 // tests/core/fixtures/settings_schedule_parity.json is the parity fixture.
 func scheduleProjection() Projection {
+	const text = `^[^\p{Cc}\x{FEFF}]*$` // as the GUI's free-text filter (#1723); it goes into a transfer's URL or authorization
 	group := append([]Field{
 		{Name: "id", Type: TypeString, Default: "", Pattern: `^(ipv4|ipv6|dnsbl)/[A-Za-z0-9_]+$`}, // <type>/<group name>
 		{Name: "override", Type: TypeBool, Default: false},
@@ -14,6 +15,12 @@ func scheduleProjection() Projection {
 		{Name: "id", Type: TypeString, Default: "", Pattern: `^[A-Za-z0-9_-]+$`, Reserved: []string{"0"}},
 		{Name: "selected", Type: TypeBool, Default: false},
 		{Name: "categories", Type: TypeString, Default: "", Pattern: `^[A-Za-z0-9_,.-]*$`}, // the provider's chosen categories, comma-separated
+		// The provider's title and feed are the package's Blacklist definitions (the pfSense adapter refuses a change); its username and
+		// password are what the Extras transfer of the provider's archive authenticates with (issue #3978).
+		{Name: "title", Type: TypeString, Default: "", Pattern: text},
+		{Name: "feed", Type: TypeString, Default: "", Pattern: text},
+		{Name: "username", Type: TypeString, Default: "", Pattern: text},
+		{Name: "password", Type: TypeString, Default: "", Pattern: text, Secret: true},
 	}
 	fields := append([]Field{{Name: "scheduledUpdates", Type: TypeBool, Default: true}}, slotFields()...)
 	return Projection{ID: "schedule", Fields: append(fields,

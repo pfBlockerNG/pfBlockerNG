@@ -5858,23 +5858,39 @@ function pfb_core_schedule_group_slots(mixed $section): array {
 }
 
 /**
- * The Blacklist's items as Core's `categoryProviders`, keyed by their index in `item` (issue #3941): an item whose id is no identity
- * or holds a comma, that is Shallalist, has no feed, has categories outside [A-Za-z0-9_,.-], or repeats an id before it, is left out.
+ * A Blacklist provider's title, feed, username or password as Core takes it (issue #3978): a string of UTF-8 without a control
+ * character or a BOM, the characters the GUI's free-text filter refuses (#1723); it goes into a transfer's URL or authorization.
+ */
+function pfb_core_text_ok(mixed $value): bool {
+	return is_string($value) && preg_match('/[\p{Cc}\x{FEFF}]/u', $value) === 0;
+}
+
+/**
+ * The Blacklist's items as Core's `categoryProviders`, keyed by their index in `item` (issues #3941, #3978): an item whose id is no
+ * identity or holds a comma, that is Shallalist, has no feed, has categories outside [A-Za-z0-9_,.-], has a title, feed, username or
+ * password that pfb_core_text_ok() refuses, or repeats an id before it, is left out. An absent title, username or password reads as
+ * empty.
  *
  * @param array<mixed> $blacklist
- * @return array<int, array{id: string, selected: bool, categories: string}>
+ * @return array<int, array{id: string, selected: bool, categories: string, title: string, feed: string, username: string, password: string}>
  */
 function pfb_core_schedule_providers(array $blacklist): array {
 	$csv = $blacklist['blacklist_selected'] ?? NULL;
 	$chosen = is_string($csv) && $csv !== '' ? array_flip(explode(',', $csv)) : [];
 	$providers = $ids = [];
 	foreach (is_array($blacklist['item'] ?? NULL) ? $blacklist['item'] : [] as $n => $item) {
-		$id = is_array($item) ? ($item['xml'] ?? NULL) : NULL;
-		$categories = is_array($item) ? ($item['selected'] ?? '') : NULL;
-		if (pfb_blacklist_identity_valid($id) && !str_contains($id, ',') && ($item['title'] ?? NULL) !== 'Shallalist' && is_string($item['feed'] ?? NULL)
-		    && $item['feed'] !== '' && is_string($categories) && preg_match('/^[A-Za-z0-9_,.-]*$/D', $categories) === 1
-		    && !isset($ids[$id])) {
-			$providers[$n] = ['id' => $id, 'selected' => isset($chosen[$id]), 'categories' => $categories];
+		if (!is_array($item)) {
+			continue;
+		}
+		$id = $item['xml'] ?? NULL;
+		$categories = $item['selected'] ?? '';
+		[$title, $feed, $username, $password] = array_map(static fn(string $key): ?string => ($item[$key] ?? NULL) === NULL ? ''
+			: (pfb_core_text_ok($item[$key]) ? $item[$key] : NULL), ['title', 'feed', 'username', 'password']);
+		if (pfb_blacklist_identity_valid($id) && !str_contains($id, ',') && $title !== NULL && $title !== 'Shallalist' && $feed !== NULL
+		    && $feed !== '' && is_string($categories) && preg_match('/^[A-Za-z0-9_,.-]*$/D', $categories) === 1 && $username !== NULL
+		    && $password !== NULL && !isset($ids[$id])) {
+			$providers[$n] = ['id' => $id, 'selected' => isset($chosen[$id]), 'categories' => $categories, 'title' => $title, 'feed' => $feed,
+				'username' => $username, 'password' => $password];
 			$ids[$id] = TRUE;
 		}
 	}
@@ -5938,10 +5954,12 @@ function pfb_core_schedule_faults(mixed $value, array $current): array {
 		return $faults;
 	}
 	$id = static fn(string $pattern): callable => static fn(mixed $v): ?string => is_string($v) && preg_match($pattern, $v) === 1 && $v !== '0' ? NULL : 'not a valid id';
+	$text = static fn(mixed $v): ?string => pfb_core_text_ok($v) ? NULL : 'not text without a control character or a BOM';
 	$items = [
 		'groups'            => ['id' => $id('/^(?:ipv4|ipv6|dnsbl)\/[A-Za-z0-9_]+$/D'), 'override' => $bool] + $slot,
 		'categoryProviders' => ['id' => $id('/^[A-Za-z0-9_-]+$/D'), 'selected' => $bool,
-			'categories' => static fn(mixed $v): ?string => is_string($v) && preg_match('/^[A-Za-z0-9_,.-]*$/D', $v) === 1 ? NULL : 'holds a character outside A-Z a-z 0-9 _ , . -'],
+			'categories' => static fn(mixed $v): ?string => is_string($v) && preg_match('/^[A-Za-z0-9_,.-]*$/D', $v) === 1 ? NULL : 'holds a character outside A-Z a-z 0-9 _ , . -',
+			'title' => $text, 'feed' => $text, 'username' => $text, 'password' => $text],
 	];
 	foreach ($items as $field => $fields) {
 		$known = array_flip(array_column($current[$field], 'id'));
@@ -6018,21 +6036,23 @@ function pfb_core_schedule_merge(array $wanted, array $current, array &$sections
 	$at = array_combine(array_column($providers, 'id'), array_keys($providers));
 	$csv = is_string($list['blacklist_selected'] ?? NULL) && $list['blacklist_selected'] !== '' ? explode(',', $list['blacklist_selected']) : [];
 	$was = $csv;
-	$categories = FALSE;
+	$patched = FALSE;
 	foreach ($wanted['categoryProviders'] as $provider) {
 		$n = $at[$provider['id']] ?? NULL;
 		if ($n === NULL) {
 			continue;
 		}
-		if ($provider['categories'] !== $providers[$n]['categories']) {
-			$items[$n]['selected'] = $provider['categories'];
-			$categories = TRUE;
+		foreach (['categories' => 'selected', 'username' => 'username', 'password' => 'password'] as $field => $key) {
+			if ($provider[$field] !== $providers[$n][$field]) {
+				$items[$n][$key] = $provider[$field];
+				$patched = TRUE;
+			}
 		}
 		if ($provider['selected'] !== $providers[$n]['selected']) {
 			$csv = $provider['selected'] ? [...$csv, $provider['id']] : array_values(array_diff($csv, [$provider['id']]));
 		}
 	}
-	if ($categories) {
+	if ($patched) {
 		$sections["{$blacklist}/item"] = $items;
 	}
 	if ($csv !== $was) {
@@ -6154,7 +6174,7 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
  * values of every projection (pfb_core_settings()). `read` answers them with their revision. `write` stores what differs from
  * config.xml under the DNS config lock and with one write_config(): each changed `dns` field in its registered key, and each feed
  * projection merged into its section (pfb_core_feed_merge(), issue #3937) and `schedule` merged into its keys (pfb_core_schedule_merge(),
- * issue #3941) and each table-driven projection merged into its keys (pfb_core_table_merge(), issue #4031); `ingest` is never written (a write that changes it is `invalid_argument`, after the revision check: a stale Core gets `conflict`). It refuses with `conflict` when config.xml is no longer
+ * issue #3941) and each table-driven projection merged into its keys (pfb_core_table_merge(), issue #4031); `ingest` is never written (a write that changes it is `invalid_argument`, after the revision check: a stale Core gets `conflict`), nor is a Blacklist provider's title or feed (issue #3978, the same way). It refuses with `conflict` when config.xml is no longer
  * at the revision Core read, and with `unavailable` when it could not change config.xml (a lock that stays taken, a refused
  * write_config(), a client-IP metrics privacy step that failed). A malformed request is `invalid_argument` and touches nothing.
  * Once the write is stored, each custom list it changed is flagged for a rebuild (pfb_core_custom_list_flag(), issue #3946). The
@@ -6208,6 +6228,19 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 			if ($readOnly !== []) {
 				return pfb_core_settings_refusal('invalid_argument', "{$id} is read-only: config.xml and the platform own it", $readOnly);
 			}
+		}
+		// issue #3978: a provider's title and feed are the package's Blacklist definitions; the revision just matched, so a difference is a write
+		$packaged = array_column($now['schedule']['categoryProviders'], NULL, 'id');
+		$fixed = [];
+		foreach ($request['settings']['schedule']['categoryProviders'] as $i => $provider) {
+			foreach (['title', 'feed'] as $field) {	// the re-check above refused an id config.xml lacks
+				if ($provider[$field] !== $packaged[$provider['id']][$field]) {
+					$fixed[] = ['field' => "schedule.categoryProviders[{$i}].{$field}", 'message' => 'set by the package: Core cannot change it'];
+				}
+			}
+		}
+		if ($fixed !== []) {
+			return pfb_core_settings_refusal('invalid_argument', "a Blacklist provider's title and feed are the package's", $fixed);
 		}
 		$current = pfb_core_dns_settings();
 		$changed = array_keys(array_filter($wanted, static fn(mixed $value, string $field): bool => $value !== $current[$field], ARRAY_FILTER_USE_BOTH));

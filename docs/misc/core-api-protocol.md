@@ -143,7 +143,7 @@ it (`Store.PendingToken`, in-process only), hands it back to the platform in the
 it; no API method answers it. A token JSON cannot carry unaltered (bytes that are not UTF-8) refuses the read whole
 (`unavailable`). A write's reply holds no `platform`.
 
-A read carries secrets (feed credentials, the proxy password) to Core; only Core's API hides them. A write carries `ingest`
+A read carries secrets (feed credentials, the proxy password, the Blacklist providers' passwords) to Core; only Core's API hides them. A write carries `ingest`
 as Core read it; the adapter never writes it, and refuses (`invalid_argument`, field errors `ingest.<field>`) a write whose
 `ingest` differs from what config.xml and the platform project, after the revision check: a Core that read the box before
 an address or the proxy changed gets `conflict` and reads again.
@@ -281,6 +281,15 @@ projections, keyed by `feeds/ipv4`, `feeds/ipv6` and `feeds/dnsbl`.
 | `id` (key) | string `[A-Za-z0-9_-]+`, not `0`: the item's `xml` |
 | `selected` | bool, `false`: id in `blacklist_selected` |
 | `categories` | string `[A-Za-z0-9_,.-]*`, `""`: the item's `selected` CSV |
+| `title`, `feed` | text, `""`: the item's `title` and `feed`, set by the package's Blacklist definitions. The pfSense adapter refuses a write that changes one |
+| `username` | text, `""`: the item's `username`, which the Extras transfer of the provider's archive authenticates with |
+| `password` | secret text, `""`: the item's `password` |
+
+Text is a string of valid UTF-8 without a control character or a BOM, the characters the GUI's free-text filter refuses (#1723).
+An item whose title, feed, username or password is not text does not project, like one whose categories hold another
+character: Core then neither schedules nor downloads that provider, where PHP's `bl` verb still would. The Blacklist page
+stores a username or password HTML-escaped and trimmed (`PFB_FILTER_HTML`); the projection reads the stored value as it
+is, and a Core write stores the value as Core sends it.
 
 A missing or invalid stored slot field reads as its default, independently of the other slot fields. This differs from
 the old PHP runtime model: an override on with an invalid slot rejects that entire model, while the projection gives
@@ -291,7 +300,9 @@ are not PHP-empty (`""` or `"0"`), and frequency `EveryDay` or `Weekly`; only `W
 Writes change only changed keys, together with the other projections in one `write_config()`. An unknown group or
 provider id is `invalid_argument` naming the field: this projection cannot create them. An item left out of either list
 is unchanged, not deleted. Provider selection removes its id from `blacklist_selected` or appends it, preserving the
-other ids' order. Category changes write the existing item's `selected` CSV. Group patches apply after feed merges;
+other ids' order. Category changes write the existing item's `selected` CSV, and a changed username or password writes the item's
+`username` or `password` (`""` clears it). A write that changes a provider's title or feed is `invalid_argument` after
+the revision check, so a Core that read before config.xml moved gets `conflict`. Group patches apply after feed merges;
 a group deleted by a feed projection in the same save is not patched. All these values participate in the revision.
 After a `SaveSettings`, Core reads its backend again, so derived schedule membership is current at once.
 

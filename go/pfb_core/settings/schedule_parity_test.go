@@ -73,8 +73,20 @@ func TestTheScheduleProjectionAcceptsAndReadsBackWhatTheAdapterReadsOnEveryFixtu
 			if err := json.Unmarshal(c.Schedule, &want); err != nil {
 				t.Fatal(err)
 			}
-			if have := jsonOf(t, projection(t, get(t, st, "schedule"), "schedule").Value); have != jsonOf(t, want) {
+			got, err := st.GetClear("schedule") // a secret reads back as it was saved
+			if err != nil {
+				t.Fatal(err)
+			}
+			if have := jsonOf(t, got); have != jsonOf(t, want) {
 				t.Errorf("%s\nread  %s\nwant  %s", c.Description, have, jsonOf(t, want))
+			}
+			// The API read is the same value, with each provider's password shown only as whether it is set (issue #3978)
+			for _, p := range want["categoryProviders"].([]any) {
+				provider := p.(map[string]any)
+				provider["password"] = map[string]any{"present": provider["password"] != ""}
+			}
+			if have := jsonOf(t, projection(t, get(t, st, "schedule"), "schedule").Value); have != jsonOf(t, want) {
+				t.Errorf("%s\nthe API reads %s\nwant           %s", c.Description, have, jsonOf(t, want))
 			}
 		})
 	}
