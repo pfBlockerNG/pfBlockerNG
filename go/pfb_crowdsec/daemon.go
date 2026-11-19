@@ -19,7 +19,7 @@ type daemon struct {
 	now  func() time.Time
 
 	started   time.Time
-	synced    bool    // the start-up pull has succeeded; later pulls are deltas
+	synced    bool    // the last pull succeeded; the next one is a delta, else a full pull (startup=true)
 	dirty     [2]bool // a pfctl add or delete failed: the next reconcile replaces the table
 	lastPull  time.Time
 	lastErrAt time.Time
@@ -48,15 +48,22 @@ func (d *daemon) setup(ctx context.Context) error {
 }
 
 // pull runs one tick: fetch and apply the stream, reconcile, read the counters, write the status file. A failed
-// fetch changes nothing in pf; it is returned after the rest of the tick has run.
+// fetch changes nothing in pf; it is returned after the rest of the tick has run, and the next tick pulls the full
+// set: the LAPI may have moved this bouncer's cursor past the delta it could not read (#4077).
 func (d *daemon) pull(ctx context.Context) error {
 	var fresh []netip.Addr
-	resp, err := d.api.pull(ctx, !d.synced)
-	if err != nil {
+	full := !d.synced
+	resp, err := d.api.pull(ctx, full)
+	d.synced = err == nil
+	switch {
+	case err != nil:
 		d.lastErr, d.lastErrAt = err.Error(), d.now()
 		d.log.errorf("LAPI pull failed: %v", err)
-	} else {
-		d.synced, d.lastPull = true, d.now()
+	case full:
+		d.lastPull = d.now()
+		fresh = d.replace(ctx, resp)
+	default:
+		d.lastPull = d.now()
 		fresh = d.apply(ctx, resp)
 	}
 	d.reconcile(ctx)
@@ -70,12 +77,7 @@ func (d *daemon) pull(ctx context.Context) error {
 // the tables are reconciled (so also when an add failed and the reconcile installed them).
 func (d *daemon) apply(ctx context.Context, resp *streamResponse) []netip.Addr {
 	res := d.bans.apply(resp)
-	if n := len(res.invalid); n > 0 {
-		d.log.warnf("ignored %d invalid ban values (first: %s)", n, strings.Join(res.invalid[:min(n, 3)], ", "))
-	}
-	if res.skipped > 0 {
-		d.log.debugf("skipped %d decisions that are not ip or range bans", res.skipped)
-	}
+	d.logUnused(res)
 	tables := d.tables()
 	for f, bans := range res.del {
 		if len(bans) > 0 && d.load(ctx, family(f), "delete", bans) {
@@ -94,6 +96,36 @@ func (d *daemon) apply(ctx context.Context, resp *streamResponse) []netip.Addr {
 		}
 	}
 	return fresh
+}
+
+// replace makes a full pull the whole in-memory set and replaces both tables with it. It returns the set's single
+// addresses that were not banned before, whose states are to be killed.
+func (d *daemon) replace(ctx context.Context, resp *streamResponse) []netip.Addr {
+	old := d.bans
+	d.bans = newBanSet()
+	res := d.bans.apply(resp)
+	d.logUnused(res)
+	var fresh []netip.Addr
+	for f, bans := range res.add {
+		if d.load(ctx, family(f), "replace", bans) {
+			d.log.infof("%s: replaced with the full set of %d values", d.tables()[f], len(bans))
+		}
+		for _, b := range bans {
+			if _, was := old.entries[b.key]; b.single && !was {
+				fresh = append(fresh, b.addr)
+			}
+		}
+	}
+	return fresh
+}
+
+func (d *daemon) logUnused(res applyResult) {
+	if n := len(res.invalid); n > 0 {
+		d.log.warnf("ignored %d invalid ban values (first: %s)", n, strings.Join(res.invalid[:min(n, 3)], ", "))
+	}
+	if res.skipped > 0 {
+		d.log.debugf("skipped %d decisions that are not ip or range bans", res.skipped)
+	}
 }
 
 // load feeds bans to `pfctl -T op`; a failure marks the table for replacement by the next reconcile.
