@@ -206,6 +206,7 @@ final class CoreSettingsScheduleBackendTest extends TestCase
 			['xml' => 'nontext', 'title' => 'NonText', 'feed' => 'https://example.org/n', 'selected' => '', 'username' => ['u'], 'password' => 'p'],
 			['xml' => 'tab', 'title' => "T\tab", 'feed' => 'https://example.org/t', 'selected' => ''],
 			['xml' => 'feedbreak', 'title' => 'FeedBreak', 'feed' => "https://example.org/f\n", 'selected' => ''],
+			['xml' => 'badutf', 'title' => 'Bad', 'feed' => 'https://example.org/bad', 'selected' => '', 'username' => '', 'password' => "p\xff"],
 			['xml' => 'bom', 'title' => 'Bom', 'feed' => 'https://example.org/bom', 'selected' => '', 'username' => '', 'password' => "\u{FEFF}p"],
 			['xml' => 'format', 'title' => 'Format', 'feed' => 'https://example.org/fmt', 'selected' => '', 'username' => "u\u{200D}", 'password' => "p\u{E000}"],
 		]]]);
@@ -213,7 +214,7 @@ final class CoreSettingsScheduleBackendTest extends TestCase
 		$providers = $this->read()['settings']['schedule']['categoryProviders'];
 
 		$this->assertSame(['ut1', 'ut4', 'format'], array_column($providers, 'id'),
-			'a title, feed, username or password holding a control character or a BOM leaves its provider out; the GUI\'s format and private-use characters do not (#1723)');
+			'a title, feed, username or password holding a control character, a BOM or invalid UTF-8 leaves its provider out; the GUI\'s format and private-use characters do not (#1723)');
 		$this->assertSame('adult', $providers[0]['categories'], 'the first of a repeated id');
 	}
 

@@ -6233,7 +6233,7 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		$packaged = array_column($now['schedule']['categoryProviders'], NULL, 'id');
 		$fixed = [];
 		foreach ($request['settings']['schedule']['categoryProviders'] as $i => $provider) {
-			foreach (isset($packaged[$provider['id']]) ? ['title', 'feed'] : [] as $field) {
+			foreach (['title', 'feed'] as $field) {	// the re-check above refused an id config.xml lacks
 				if ($provider[$field] !== $packaged[$provider['id']][$field]) {
 					$fixed[] = ['field' => "schedule.categoryProviders[{$i}].{$field}", 'message' => 'set by the package: Core cannot change it'];
 				}

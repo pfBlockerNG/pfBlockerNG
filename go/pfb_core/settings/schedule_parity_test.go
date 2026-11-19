@@ -84,8 +84,8 @@ func TestTheScheduleProjectionAcceptsAndReadsBackWhatTheAdapterReadsOnEveryFixtu
 			public := projection(t, get(t, st, "schedule"), "schedule").Value
 			for i, p := range public["categoryProviders"].([]any) {
 				password := want["categoryProviders"].([]any)[i].(map[string]any)["password"].(string)
-				if have, want := jsonOf(t, p.(map[string]any)["password"]), jsonOf(t, map[string]any{"present": password != ""}); have != want {
-					t.Errorf("%s\nthe API reads provider %d's password as %s, want %s", c.Description, i, have, want)
+				if have, hidden := jsonOf(t, p.(map[string]any)["password"]), jsonOf(t, map[string]any{"present": password != ""}); have != hidden {
+					t.Errorf("%s\nthe API reads provider %d's password as %s, want %s", c.Description, i, have, hidden)
 				}
 			}
 		})

@@ -143,7 +143,7 @@ it (`Store.PendingToken`, in-process only), hands it back to the platform in the
 it; no API method answers it. A token JSON cannot carry unaltered (bytes that are not UTF-8) refuses the read whole
 (`unavailable`). A write's reply holds no `platform`.
 
-A read carries secrets (feed credentials, the proxy password) to Core; only Core's API hides them. A write carries `ingest`
+A read carries secrets (feed credentials, the proxy password, the Blacklist providers' passwords) to Core; only Core's API hides them. A write carries `ingest`
 as Core read it; the adapter never writes it, and refuses (`invalid_argument`, field errors `ingest.<field>`) a write whose
 `ingest` differs from what config.xml and the platform project, after the revision check: a Core that read the box before
 an address or the proxy changed gets `conflict` and reads again.
@@ -285,7 +285,7 @@ projections, keyed by `feeds/ipv4`, `feeds/ipv6` and `feeds/dnsbl`.
 | `username` | text, `""`: the item's `username`, which the Extras transfer of the provider's archive authenticates with |
 | `password` | secret text, `""`: the item's `password` |
 
-Text is a string without a control character or a BOM, the characters the GUI's free-text filter refuses (#1723).
+Text is a string of valid UTF-8 without a control character or a BOM, the characters the GUI's free-text filter refuses (#1723).
 An item whose title, feed, username or password is not text does not project, like one whose categories hold another
 character: Core then neither schedules nor downloads that provider, where PHP's `bl` verb still would. The Blacklist page
 stores a username or password HTML-escaped and trimmed (`PFB_FILTER_HTML`); the projection reads the stored value as it
