@@ -3,7 +3,9 @@ package feedfetch
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -97,29 +99,41 @@ func wordName(s string) bool {
 }
 
 // linkMember is a hard-link member: name, under dir, becomes another name for target, already extracted there, and
-// replaces what an earlier member wrote under it, as tar does. A link to a member that was skipped (a link or special
-// member) is skipped with it.
+// replaces a file an earlier member wrote under that name (a folder there refuses the archive). A link whose target was
+// not extracted as a file (a skipped link or special member, a member outside the categories, or none at all) is
+// skipped, and drops the earlier file of its name as any later member does.
 func linkMember(dir, target, name string) error {
 	for _, n := range []string{target, name} {
 		if !filepath.IsLocal(filepath.FromSlash(n)) {
 			return errUnsafeMember
 		}
 	}
-	from := filepath.Join(dir, filepath.FromSlash(target))
-	if info, err := os.Lstat(from); err != nil || !info.Mode().IsRegular() {
-		return nil
-	}
-	p := filepath.Join(dir, filepath.FromSlash(name))
+	from, p := filepath.Join(dir, filepath.FromSlash(target)), filepath.Join(dir, filepath.FromSlash(name))
 	if p == from {
 		return nil
+	}
+	if err := removeFile(p); err != nil {
+		return err
+	}
+	info, err := os.Lstat(from)
+	if errors.Is(err, fs.ErrNotExist) || err == nil && !info.Mode().IsRegular() {
+		return nil
+	}
+	if err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-		return err
-	}
 	return os.Link(from, p)
+}
+
+// removeFile removes what is at p unless it is a folder (or nothing).
+func removeFile(p string) error {
+	if info, err := os.Lstat(p); err != nil || info.IsDir() {
+		return nil
+	}
+	return os.Remove(p)
 }
 
 // extractCategories is `tar -xf --include='*domains' -s <blacklistRules>` into dir, then pfb_blacklist_tar_finalize_staged():

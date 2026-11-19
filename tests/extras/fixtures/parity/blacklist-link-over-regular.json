@@ -1,0 +1,64 @@
+{
+	"schema": 1,
+	"description": "A later symbolic link of a name drops the earlier regular member of that name: the later member wins, and Core skips links. Today's PHP publishes the link (old_expect).",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"body_b64": "H4sIAAAAAAAC/+3UTQ6CMBCG4Vl7Ck5gp1DKecrPwgSUWIge38pOVm4gGt5nM82smnyZr+5NaOd+Mu1tCJdrlA1o4p1bZrKeqtaLdWXuqkrde2+t+koylR3McQr39BU5piX8c/cMw9h3J8HB1L9w/+n9ef+FLbxkuemmxowhxkfL/W+WfxM2Tf+b/ner/LXMC/p/Dyl82h8AAAAAAAAAAAAAgD/3AowOkgIAKAAA"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"report": "\tUT1 ... Completed\n",
+				"files": {
+					"db/ut1/ut1_adult": null,
+					"db/ut1/ut1_cat": "cat.example\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			},
+			"old_expect": {
+				"ok": true,
+				"report": "\tUT1 ... Completed\n",
+				"files": {
+					"db/ut1/ut1_adult": "<not a regular file>",
+					"db/ut1/ut1_cat": "cat.example\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

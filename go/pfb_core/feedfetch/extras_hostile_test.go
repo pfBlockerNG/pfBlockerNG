@@ -1,18 +1,13 @@
 package feedfetch_test
 
 import (
-	"archive/tar"
-	"archive/zip"
 	"bytes"
-	"compress/gzip"
 	"context"
-	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,27 +15,23 @@ import (
 )
 
 // What the Extras corpus cannot reach: today's PHP caps an extraction with a fixed `ulimit -f`, has no proxy switch the
-// corpus runner sets, and the corpus does not observe modification times.
+// corpus runner sets, and the corpus does not observe modification times. Each Extras type runs its own copy of these
+// checks, so each is covered here apart from the feeds' tests of the same mechanism.
 
-// extrasServer answers every path with body (and lastMod, when set) and counts the requests; it returns its port.
-func extrasServer(t *testing.T, body []byte, lastMod time.Time, asked *atomic.Int32) string {
+// extrasPort serves body (with lastMod, when set) on every path and returns the server's port and request count.
+func extrasPort(t *testing.T, body []byte, lastMod time.Time) (string, func() int32) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if asked != nil {
-			asked.Add(1)
-		}
+	srvURL, hits := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		if !lastMod.IsZero() {
 			w.Header().Set("Last-Modified", lastMod.UTC().Format(http.TimeFormat))
 		}
 		w.Write(body)
-	})}
-	go srv.Serve(ln)
-	t.Cleanup(func() { srv.Close() })
-	return strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	})
+	u, err := url.Parse(srvURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Port(), hits.Load
 }
 
 func extrasFetcher() *feedfetch.Fetcher {
@@ -51,87 +42,50 @@ func extrasFetcher() *feedfetch.Fetcher {
 	return f
 }
 
-func tarGz(t *testing.T, name string, data []byte) []byte {
-	t.Helper()
-	var tb bytes.Buffer
-	tw := tar.NewWriter(&tb)
-	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data))}); err != nil {
-		t.Fatal(err)
-	}
-	tw.Write(data)
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	zw := gzip.NewWriter(&out)
-	zw.Write(tb.Bytes())
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return out.Bytes()
-}
-
-func zipOne(t *testing.T, name string, data []byte) []byte {
-	t.Helper()
-	var out bytes.Buffer
-	zw := zip.NewWriter(&out)
-	w, err := zw.Create(name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w.Write(data)
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return out.Bytes()
-}
-
-func writeFile(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// An archive member past the per-file extraction ceiling (#2658) refuses the row: a GeoIP tar member, the one member of
-// a GeoIP zip, a Blacklist category member, the TOP1M list in its zip. What was published stays; with room, the same archive publishes.
+// A member one byte past the per-file extraction ceiling (#2658) refuses the row, and what was published stays; a ceiling
+// of exactly the member's size publishes the same archive, so the ceiling is what refused it. The members: a GeoIP tar
+// member, the one member of a GeoIP zip, a Blacklist category member, the TOP1M list in its zip.
 func TestAnExtrasMemberPastTheCeilingKeepsWhatWasPublished(t *testing.T) {
 	mmdb := append(make([]byte, 64<<10), "\xab\xcd\xefMaxMind.com"...)
 	domains := bytes.Repeat([]byte("big.example\n"), 64<<10/12)
+	list := bytes.Repeat([]byte("1,good.example\n"), 64<<10/15)
 	for _, tc := range []struct {
 		name, kind, host, download, file, published string
+		member                                      []byte
 		body                                        []byte
 	}{
 		{"geoip tar member", "geoip", "download.maxmind.com", "GeoLite2-Country.tar.gz", "GeoLite2-Country.mmdb",
-			"GeoLite2-Country.mmdb", tarGz(t, "GeoLite2-Country_1/GeoLite2-Country.mmdb", mmdb)},
+			"GeoLite2-Country.mmdb", mmdb, gzipOf(t, tarNamed(t, "GeoLite2-Country_1/GeoLite2-Country.mmdb", mmdb))},
 		{"geoip zip member", "geoip", "download.maxmind.com", "GeoLite2-Country.zip", "GeoLite2-Country.mmdb",
-			"GeoLite2-Country.mmdb", zipOne(t, "GeoLite2-Country.mmdb", mmdb)},
+			"GeoLite2-Country.mmdb", mmdb, zipNamed(t, "GeoLite2-Country.mmdb", string(mmdb))},
 		{"blacklist member", "blacklist", "bl.example", "ut1.tar.gz", "ut1.tar.gz", "ut1/ut1_adult",
-			tarGz(t, "bl/adult/domains", domains)},
+			domains, gzipOf(t, tarNamed(t, "bl/adult/domains", domains))},
 		{"top1m zip member", "top1m", "tranco-list.eu", "top-1m.csv.zip", "top-1m.csv", "top-1m.csv",
-			zipOne(t, "top-1m.csv", bytes.Repeat([]byte("1,good.example\n"), 64<<10/15))},
+			list, zipNamed(t, "top-1m.csv", string(list))},
 	} {
-		port := extrasServer(t, tc.body, time.Time{}, nil)
+		port, _ := extrasPort(t, tc.body, time.Time{})
 		for _, room := range []bool{true, false} {
-			t.Run(tc.name+map[bool]string{true: " with room", false: " past the ceiling"}[room], func(t *testing.T) {
+			t.Run(tc.name+map[bool]string{true: " at the ceiling", false: " one byte past it"}[room], func(t *testing.T) {
 				dir := t.TempDir()
 				published := filepath.Join(dir, tc.published)
-				writeFile(t, published, "old\n")
+				if err := os.MkdirAll(filepath.Dir(published), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(published, []byte(oldCopy), 0o644); err != nil {
+					t.Fatal(err)
+				}
 				f := extrasFetcher()
-				f.SetExtractMax(16 << 10)
+				f.SetExtractMax(int64(len(tc.member)) - 1)
 				if room {
-					f.SetExtractMax(1 << 20)
+					f.SetExtractMax(int64(len(tc.member)))
 				}
 				res := f.DownloadExtras(context.Background(),
 					feedfetch.ExtrasConfig{DBDir: dir, MaxMindAccount: "1", MaxMindKey: "k"},
 					[]feedfetch.Extra{{Kind: tc.kind, URL: "http://" + tc.host + ":" + port + "/" + tc.download,
 						Dir: dir, Download: tc.download, File: tc.file, Name: "UT1", Provider: "tranco"}})
 				got, _ := os.ReadFile(published)
-				if res.OK != room || (string(got) == "old\n") == room {
-					t.Errorf("(ok, %s replaced) = (%v, %v), want (%v, %v)", tc.published, res.OK, string(got) != "old\n",
+				if res.OK != room || (string(got) == oldCopy) == room {
+					t.Errorf("(ok, %s replaced) = (%v, %v), want (%v, %v)", tc.published, res.OK, string(got) != oldCopy,
 						room, room)
 				}
 			})
@@ -141,8 +95,7 @@ func TestAnExtrasMemberPastTheCeilingKeepsWhatWasPublished(t *testing.T) {
 
 // With the proxy unusable (pfb_proxy_unusable), every Extra is refused before it is fetched, and nothing is written.
 func TestAnUnusableProxyRefusesEveryExtraBeforeItIsFetched(t *testing.T) {
-	var asked atomic.Int32
-	port := extrasServer(t, []byte("body\n"), time.Time{}, &asked)
+	port, hits := extrasPort(t, []byte("body\n"), time.Time{})
 	for _, x := range []feedfetch.Extra{
 		{Kind: "asn", URL: "http://ipinfo.io:" + port + "/asn.csv.gz?token=", Download: "asn.csv.gz", File: "asn.csv"},
 		{Kind: "geoip", URL: "http://download.maxmind.com:" + port + "/db", Download: "GeoLite2-Country.tar.gz",
@@ -159,8 +112,8 @@ func TestAnUnusableProxyRefusesEveryExtraBeforeItIsFetched(t *testing.T) {
 			f.ProxyUnusable = true
 			res := f.DownloadExtras(context.Background(), feedfetch.ExtrasConfig{DBDir: dir}, []feedfetch.Extra{x})
 			entries, _ := os.ReadDir(dir)
-			if res.OK || asked.Load() != 0 || len(entries) != 0 {
-				t.Errorf("(ok, requests, files) = (%v, %d, %d), want (false, 0, 0)", res.OK, asked.Load(), len(entries))
+			if res.OK || hits() != 0 || len(entries) != 0 {
+				t.Errorf("(ok, requests, files) = (%v, %d, %d), want (false, 0, 0)", res.OK, hits(), len(entries))
 			}
 		})
 	}
@@ -171,27 +124,25 @@ func TestAnUnusableProxyRefusesEveryExtraBeforeItIsFetched(t *testing.T) {
 func TestTheRemoteTimestampReachesWhatIsPublishedWhole(t *testing.T) {
 	stamp := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
 	for _, tc := range []struct {
-		name string
-		x    feedfetch.Extra
-		body []byte
-		kept string
+		name, host, query string
+		x                 feedfetch.Extra
+		body              []byte
 	}{
-		{"asn database", feedfetch.Extra{Kind: "asn", Download: "asn.mmdb", File: "asn.mmdb"},
-			[]byte("\x00db\x00\xab\xcd\xefMaxMind.com"), "asn.mmdb"},
-		{"blacklist archive", feedfetch.Extra{Kind: "blacklist", Download: "ut1.tar.gz", File: "ut1.tar.gz", Name: "UT1"},
-			tarGz(t, "bl/adult/domains", []byte("adult.example\n")), "ut1.tar.gz"},
+		{"asn database", "ipinfo.io", "?token=", feedfetch.Extra{Kind: "asn", Download: "asn.mmdb", File: "asn.mmdb"},
+			[]byte("\x00db\x00\xab\xcd\xefMaxMind.com")},
+		{"blacklist archive", "bl.example", "",
+			feedfetch.Extra{Kind: "blacklist", Download: "ut1.tar.gz", File: "ut1.tar.gz", Name: "UT1"},
+			gzipOf(t, tarNamed(t, "bl/adult/domains", []byte("adult.example\n")))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			port := extrasServer(t, tc.body, stamp, nil)
+			port, _ := extrasPort(t, tc.body, stamp)
 			dir := t.TempDir()
 			x := tc.x
-			x.Dir = dir
-			x.URL = "http://" + map[string]string{"asn": "ipinfo.io", "blacklist": "bl.example"}[x.Kind] + ":" + port +
-				"/" + x.Download + map[string]string{"asn": "?token="}[x.Kind]
+			x.Dir, x.URL = dir, "http://"+tc.host+":"+port+"/"+x.Download+tc.query
 			res := extrasFetcher().DownloadExtras(context.Background(), feedfetch.ExtrasConfig{DBDir: dir}, []feedfetch.Extra{x})
-			info, err := os.Stat(filepath.Join(dir, tc.kept))
+			info, err := os.Stat(filepath.Join(dir, x.File))
 			if !res.OK || err != nil || !info.ModTime().Equal(stamp) {
-				t.Errorf("(ok, %s, err) = (%v, %v, %v), want (true, %v, nil)", tc.kept, res.OK, info, err, stamp)
+				t.Errorf("(ok, %s, err) = (%v, %v, %v), want (true, %v, nil)", x.File, res.OK, info, err, stamp)
 			}
 		})
 	}

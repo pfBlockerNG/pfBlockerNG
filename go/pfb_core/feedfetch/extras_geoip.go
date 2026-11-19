@@ -216,8 +216,10 @@ func (f *Fetcher) writeMember(dir, name string, isDir, isReg bool, r io.Reader) 
 	if isDir {
 		return os.MkdirAll(p, 0o755)
 	}
-	if !isReg {
-		return nil
+	// A later member of a name replaces the earlier one, never writing through a hard link it shares; a skipped member
+	// drops it too.
+	if err := removeFile(p); err != nil || !isReg {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err

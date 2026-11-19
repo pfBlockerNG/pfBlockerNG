@@ -40,9 +40,14 @@ func gzipOf(t *testing.T, b []byte) []byte {
 
 func zipOf(t *testing.T, data string) []byte {
 	t.Helper()
+	return zipNamed(t, "a.txt", data)
+}
+
+func zipNamed(t *testing.T, name, data string) []byte {
+	t.Helper()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	w, err := zw.Create("a.txt")
+	w, err := zw.Create(name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,9 +62,14 @@ func zipOf(t *testing.T, data string) []byte {
 
 func tarOf(t *testing.T, data []byte) []byte {
 	t.Helper()
+	return tarNamed(t, "a.txt", data)
+}
+
+func tarNamed(t *testing.T, name string, data []byte) []byte {
+	t.Helper()
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	if err := tw.WriteHeader(&tar.Header{Name: "a.txt", Mode: 0o644, Size: int64(len(data))}); err != nil {
+	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data))}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tw.Write(data); err != nil {
