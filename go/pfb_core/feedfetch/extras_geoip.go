@@ -35,7 +35,7 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 			if r := memberRefused(names, ok); r != nil {
 				return *r
 			}
-			return published(f.mergeIntoDir, target, "geoip", func(dir string) error {
+			return published(f.mergeIntoDir, target, "geoip zip", func(dir string) error {
 				return checkedDatabases(dir, target, f.extractZipStripped(ctx, raw, dir))
 			})
 		}
@@ -56,7 +56,7 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 		}
 		if werr != nil {
 			os.Remove(staged.Name())
-			return extractRefused(mimeZip, werr)
+			return extractRefused("geoip zip", werr, filepath.Base(raw))
 		}
 		if os.Rename(staged.Name(), target) != nil {
 			os.Remove(staged.Name())
@@ -91,7 +91,7 @@ func published(publish func(string, func(string) error) bool, target, what strin
 		return accepted
 	}
 	if xerr != nil {
-		return extractRefused(what, xerr)
+		return extractRefused(what, xerr, "")
 	}
 	return publishRefused
 }

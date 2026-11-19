@@ -3,6 +3,7 @@ package feedfetch
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -24,6 +25,9 @@ func posix(expr string) *regexp.Regexp {
 	re.Longest()
 	return re
 }
+
+// errNoCategory is a category archive whose extraction holds no category file.
+var errNoCategory = errors.New("archive holds no category")
 
 // blacklist is pfb_download() for a blacklist row.
 func (f *Fetcher) blacklist(ctx context.Context, cfg ExtrasConfig, x Extra, req Request) Result {
@@ -169,7 +173,7 @@ func (f *Fetcher) extractCategories(ctx context.Context, mime, archive, name, di
 		}
 	}
 	if !found {
-		return errNoDatabase
+		return errNoCategory
 	}
 	return nil
 }

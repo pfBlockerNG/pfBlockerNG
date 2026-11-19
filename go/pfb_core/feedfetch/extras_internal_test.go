@@ -1,9 +1,12 @@
 package feedfetch
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/base64"
+	"errors"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -366,5 +369,125 @@ func TestAMemberNamingTheExtractionFolderWritesNothing(t *testing.T) {
 		if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
 			t.Fatalf("the extraction folder is gone or no longer a folder (%v, %v)", info, err)
 		}
+	}
+}
+
+// redact hides every URL query and every form a secret travels in, and leaves reason codes alone: a short secret is no
+// reason to rewrite them.
+func TestRedactHidesSecretsAndKeepsReasonCodes(t *testing.T) {
+	cfg := ExtrasConfig{MaxMindAccount: "123456", MaxMindKey: "maxmind-key", ASNToken: "asn token+1"}
+	row := Extra{Username: "user", Password: "p w+d~x"}
+	short := Extra{Password: "a"}
+	for _, tc := range []struct {
+		in   string
+		x    Extra
+		gone []string
+		want string
+	}{
+		{in: "staging_space_low", x: short, want: "staging_space_low"},
+		{in: `Get "HTTP://lists.example/bl.tar.gz?key=v": refused`, x: row, gone: []string{"key=v"}},
+		{in: "fetch 'ftp://lists.example/bl.tar.gz?key=v' failed", x: row, gone: []string{"key=v"}},
+		{in: "sent p%20w+d~x and p+w%2Bd~x and p%20w%2Bd~x", x: row, gone: []string{"p%20w+d~x", "p+w%2Bd~x", "p%20w%2Bd~x"}},
+		{in: "auth " + base64.StdEncoding.EncodeToString([]byte("user:p w+d~x")), x: row, gone: []string{"dXNlcjpw"}},
+		{in: "auth " + base64.StdEncoding.EncodeToString([]byte("123456:maxmind-key")), x: row, gone: []string{"MTIzNDU2"}},
+		{in: "token asn+token%2B1 and asn%20token%2B1", x: row, gone: []string{"asn+token%2B1", "asn%20token%2B1"}},
+	} {
+		got := cfg.redact(tc.in, tc.x)
+		if tc.want != "" && got != tc.want {
+			t.Errorf("redact(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		for _, g := range tc.gone {
+			if strings.Contains(got, g) {
+				t.Errorf("redact(%q) = %q still holds %q", tc.in, got, g)
+			}
+		}
+	}
+}
+
+// The same cause gets the same refusal wherever an extraction meets it, with the file it was found in.
+func TestExtractRefusedNamesItsFile(t *testing.T) {
+	for _, tc := range []struct {
+		err                   error
+		stage, reason, detail string
+	}{
+		{errNotADatabase, "structural", "not_a_maxmind_db", "x.raw"},
+		{errTop1MArchive, "extract", errTop1MArchive.Error(), "x.raw"},
+		{errUnsafeMember, "member", "unsafe_member_name", "x.raw"},
+	} {
+		r := extractRefused(mimeZip, tc.err, "x.raw")
+		if r.Stage != tc.stage || r.Reason != tc.reason || r.Detected != tc.detail {
+			t.Errorf("extractRefused(%v) = (%q, %q, %q), want (%q, %q, %q)", tc.err, r.Stage, r.Reason, r.Detected,
+				tc.stage, tc.reason, tc.detail)
+		}
+	}
+}
+
+// Each Extra words an extraction failure as pfb_download() does for it: its own name, the tool that ran, and the
+// ceiling's status 153.
+func TestAnExtrasExtractionFailureIsWordedAsPHPWordsIt(t *testing.T) {
+	failed := errors.New("unexpected EOF")
+	for _, tc := range []struct {
+		what string
+		err  error
+		want string
+	}{
+		{"asn", failed, "asn extraction failed (gunzip exit 1)"},
+		{"asn", errCeiling, "asn extraction failed (gunzip exit 153) -- output exceeded the extraction size ceiling"},
+		{"top1m gzip", failed, "top1m extraction failed (gunzip exit 1)"},
+		{"top1m tar", failed, "top1m extraction failed (tar exit 1)"},
+		{"top1m zip", failed, "top1m zip extraction failed (tar exit 1)"},
+		{"geoip", failed, "geoip extraction failed (tar exit 1)"},
+		{"geoip zip", errCeiling, "geoip zip extraction failed (tar exit 153) -- output exceeded the extraction size ceiling"},
+		{"blacklist", failed, "blacklist extraction failed (tar exit 1)"},
+		{"blacklist", errNoCategory, "blacklist extraction failed (tar exit 0)"},
+		{mimeTar, failed, "tar extraction failed (tar exit 1)"},
+	} {
+		if r := extractRefused(tc.what, tc.err, ""); r.Stage != "extract" || r.Reason != tc.want {
+			t.Errorf("extractRefused(%q, %v) = (%q, %q), want (extract, %q)", tc.what, tc.err, r.Stage, r.Reason, tc.want)
+		}
+	}
+}
+
+// A longer secret is hidden whole even when a shorter one is part of it, and a query quoted with escaped quotes is
+// hidden to its end.
+func TestRedactHidesALongerSecretWholeAndAQuotedQuery(t *testing.T) {
+	cfg := ExtrasConfig{MaxMindKey: "abcdef", ASNToken: "abcdefSECRETTAIL"}
+	for in, gone := range map[string]string{
+		"sent abcdefSECRETTAIL": "SECRETTAIL",
+		`Get "http://lists.example/bl.tar.gz?key=q\"tok en\"": dial`: "tok en",
+	} {
+		if got := cfg.redact(in, Extra{}); strings.Contains(got, gone) {
+			t.Errorf("redact(%q) = %q still holds %q", in, got, gone)
+		}
+	}
+}
+
+// A Blacklist archive that cannot be kept beside its folder is a publication failure, named without a path.
+func TestABlacklistArchiveThatCannotBeKeptIsAPublicationFailure(t *testing.T) {
+	var tb bytes.Buffer
+	tw := tar.NewWriter(&tb)
+	tw.WriteHeader(&tar.Header{Name: "bl/adult/domains", Mode: 0o644, Size: 14})
+	tw.Write([]byte("adult.example\n"))
+	tw.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write(tb.Bytes()) }))
+	t.Cleanup(srv.Close)
+	real := rename
+	rename = func(from, to string) error {
+		if strings.HasSuffix(from, ".raw") {
+			return os.ErrPermission
+		}
+		return real(from, to)
+	}
+	t.Cleanup(func() { rename = real })
+	f := &Fetcher{RetryDelay: 1}
+	f.Resolve = func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("203.0.113.9")}, nil
+	}
+	db := t.TempDir()
+	url := "http://bl.example:" + srv.URL[strings.LastIndex(srv.URL, ":")+1:] + "/ut1.tar"
+	res := f.DownloadExtras(context.Background(), ExtrasConfig{DBDir: db},
+		[]Extra{{Kind: "blacklist", URL: url, Dir: db, Download: "ut1.tar", File: "ut1.tar", Name: "UT1"}})
+	if r := res.Rows[0]; res.OK || r.Stage != "publish" || r.Reason != "publication_failed" || strings.Contains(r.Reason, db) {
+		t.Errorf("(ok, stage, reason) = (%v, %q, %q), want (false, publish, publication_failed)", res.OK, r.Stage, r.Reason)
 	}
 }

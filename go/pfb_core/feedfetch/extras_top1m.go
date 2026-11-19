@@ -322,10 +322,12 @@ func (f *Fetcher) top1mDownload(ctx context.Context, cfg ExtrasConfig, x Extra, 
 		return refused("size", "staging_space_low", filepath.Base(raw)), nil
 	}
 	stage, list, err := f.top1mStage(ctx, mime, raw, target)
-	if errors.Is(err, errTop1MArchive) {
-		return refused("extract", err.Error(), filepath.Base(raw)), nil
-	} else if err != nil {
-		return extractRefused(mime, err), nil
+	if err != nil {
+		if !archive { // a plain body is only copied: what failed is the disk, not an extraction
+			return publishRefused, nil
+		}
+		return extractRefused(map[string]string{mimeGzip: "top1m gzip", mimeTar: "top1m tar", mimeZip: "top1m zip"}[mime], err,
+			filepath.Base(raw)), nil
 	}
 	defer os.Remove(stage)
 	if !top1mCandidate(stage, p) {

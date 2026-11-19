@@ -152,6 +152,9 @@ func TestAnExtraOfAnUntranslatedKindIsRefusedBeforeItIsFetched(t *testing.T) {
 	if res.OK || asked.Load() || len(entries) != 0 {
 		t.Errorf("(ok, fetched, files) = (%v, %v, %d), want (false, false, 0)", res.OK, asked.Load(), len(entries))
 	}
+	if r := res.Rows[0]; r.Stage != "unsupported" {
+		t.Errorf("refusal stage = %q, want unsupported", r.Stage)
+	}
 }
 
 // A run whose context has ended is aborted, not failed by MaxMind: no geoip row reports a MaxMind error that would read

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -51,7 +53,8 @@ type ExtrasConfig struct {
 // ExtrasRow is one Extra's outcome. A refused row's Reason, Stage and Detected say why, as Result does for a feed, so the
 // verbs can tell a bad key from a full disk. Unlike a feed's, every refusal has a Stage: pfb_validate_log()'s fetch, size,
 // mime, plaintext, structural, member or extract, or top1m, publish, aborted (the run's context ended) or unsupported;
-// Reason is the code pfb_validate_log() writes wherever today's PHP writes one. No secret and no URL query reaches them.
+// Reason is the code pfb_validate_log() writes wherever today's PHP writes one. No secret of six bytes or more, and no URL
+// query, reaches them. A row refused for its own reason just as the run's context ends reads aborted: the run ended.
 type ExtrasRow struct {
 	Kind, Download string
 	Result
@@ -122,19 +125,31 @@ func refused(stage, reason, detected string) Result {
 // accepted is a row that succeeded.
 var accepted = Result{OK: true}
 
-// urlQuery is a URL's query string in a reason (Go's client quotes the URL it failed on).
-var urlQuery = regexp.MustCompile(`((?:https?|ftp)://[^\s"?]*)\?[^\s"]*`)
+// urlQuery is a URL's query string in a reason, to its closing quote (Go's client quotes the URL it failed on, escaping a
+// quote inside it), or to white space.
+var urlQuery = regexp.MustCompile(`(?i)((?:https?|ftp)://[^\s"'?]*)\?(?:\\.|[^\s"'\\])*`)
 
 // redact is what a refused row may carry: every URL query, as pfb_redact_url() hides it, and every secret of the run and
-// row, raw or as it travels in a query, gone.
+// row, raw, as it travels in a URL or in the Basic authorization it makes, gone, the longest form first. A secret under
+// six bytes is left: as plain text it would rewrite the reason codes themselves.
 func (cfg ExtrasConfig) redact(s string, x Extra) string {
 	s = urlQuery.ReplaceAllString(s, "$1?[redacted]")
-	for _, secret := range []string{cfg.MaxMindKey, cfg.ASNToken, cfg.Top1MToken, x.Password} {
-		if secret != "" {
-			for _, form := range []string{secret, rawURLEncode(secret), url.QueryEscape(secret)} {
-				s = strings.ReplaceAll(s, form, "[redacted]")
+	var forms []string
+	add := func(user, secret string) {
+		if len(secret) >= 6 {
+			forms = append(forms, secret, rawURLEncode(secret), url.QueryEscape(secret), url.PathEscape(secret))
+			if user != "" {
+				forms = append(forms, base64.StdEncoding.EncodeToString([]byte(user+":"+secret)))
 			}
 		}
+	}
+	add(cfg.MaxMindAccount, cfg.MaxMindKey)
+	add("", cfg.ASNToken)
+	add("", cfg.Top1MToken)
+	add(x.Username, x.Password)
+	slices.SortFunc(forms, func(a, b string) int { return len(b) - len(a) })
+	for _, form := range slices.Compact(forms) {
+		s = strings.ReplaceAll(s, form, "[redacted]")
 	}
 	return s
 }
@@ -179,18 +194,47 @@ func transferRefused(status int) Result {
 	return r
 }
 
-// extractRefused is the refusal for an extraction err ended: a database the row cannot take, a member that leaves its
-// folder, else pfb_download()'s text for what was extracted (a MIME type, or "geoip" or "blacklist" for their tar).
-func extractRefused(what string, err error) Result {
+// extrasExtraction is pfb_download()'s text for each Extra's extraction: its name and the tool that runs it.
+var extrasExtraction = map[string]string{
+	"asn":        "asn extraction failed (gunzip exit %d)",
+	"top1m gzip": "top1m extraction failed (gunzip exit %d)",
+	"top1m tar":  "top1m extraction failed (tar exit %d)",
+	"top1m zip":  "top1m zip extraction failed (tar exit %d)",
+	"geoip":      "geoip extraction failed (tar exit %d)",
+	"geoip zip":  "geoip zip extraction failed (tar exit %d)",
+	"blacklist":  "blacklist extraction failed (tar exit %d)",
+}
+
+// extractRefused is the refusal for an extraction err ended, found in detail: a database the row cannot take, a member
+// that leaves its folder, a TOP1M archive that is not one list, else pfb_download()'s text for what was extracted (an
+// Extra's name in extrasExtraction, or a MIME type). A Blacklist archive with no category reads as PHP's: tar exit 0.
+func extractRefused(what string, err error, detail string) Result {
 	switch {
 	case errors.Is(err, errNotADatabase):
-		return refused("structural", "not_a_maxmind_db", "")
+		return refused("structural", "not_a_maxmind_db", detail)
 	case errors.Is(err, errNoDatabase):
-		return refused("structural", "no_database", "")
+		return refused("structural", "no_database", detail)
 	case errors.Is(err, errUnsafeMember):
-		return refused("member", "unsafe_member_name", "")
+		return refused("member", "unsafe_member_name", detail)
+	case errors.Is(err, errTop1MArchive):
+		return refused("extract", err.Error(), detail)
 	}
-	return refused("extract", extractionFailure(what, err), "")
+	format, ok := extrasExtraction[what]
+	if !ok {
+		return refused("extract", extractionFailure(what, err), detail)
+	}
+	code := exitFailed
+	switch {
+	case errors.Is(err, errNoCategory):
+		code = 0
+	case errors.Is(err, errCeiling):
+		code = exitCeiling
+	}
+	text := fmt.Sprintf(format, code)
+	if code == exitCeiling {
+		text += " -- output exceeded the extraction size ceiling"
+	}
+	return refused("extract", text, detail)
 }
 
 // publishRefused is a publication that did not complete; the error's paths stay out of the reason.
@@ -302,7 +346,11 @@ func (f *Fetcher) publishASN(ctx context.Context, cfg ExtrasConfig, mime, raw, t
 	case mimeGzip, mimeTar:
 		staged, err := f.stage(ctx, Feed{Dir: filepath.Dir(target)}, mime, raw, false)
 		if err != nil {
-			return extractRefused(mime, err)
+			what := mime
+			if mime == mimeGzip {
+				what = "asn"
+			}
+			return extractRefused(what, err, filepath.Base(raw))
 		}
 		// A database row takes a MaxMind DB: what an archive holds is checked as a bare body is (owner, #4058).
 		if isDatabase(target) && !maxMindDB(staged) {
