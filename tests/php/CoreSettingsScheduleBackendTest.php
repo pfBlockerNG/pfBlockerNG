@@ -204,11 +204,16 @@ final class CoreSettingsScheduleBackendTest extends TestCase
 			['xml' => 'ut4', 'title' => 'UT4', 'feed' => 'https://example.org/ut4', 'selected' => 'ok'],
 			['xml' => 'break', 'title' => 'Break', 'feed' => 'https://example.org/b', 'selected' => '', 'username' => 'u', 'password' => "a\nb"],
 			['xml' => 'nontext', 'title' => 'NonText', 'feed' => 'https://example.org/n', 'selected' => '', 'username' => ['u'], 'password' => 'p'],
+			['xml' => 'tab', 'title' => "T\tab", 'feed' => 'https://example.org/t', 'selected' => ''],
+			['xml' => 'feedbreak', 'title' => 'FeedBreak', 'feed' => "https://example.org/f\n", 'selected' => ''],
+			['xml' => 'bom', 'title' => 'Bom', 'feed' => 'https://example.org/bom', 'selected' => '', 'username' => '', 'password' => "\u{FEFF}p"],
+			['xml' => 'format', 'title' => 'Format', 'feed' => 'https://example.org/fmt', 'selected' => '', 'username' => "u\u{200D}", 'password' => "p\u{E000}"],
 		]]]);
 
 		$providers = $this->read()['settings']['schedule']['categoryProviders'];
 
-		$this->assertSame(['ut1', 'ut4'], array_column($providers, 'id'), 'a username or password that is not text without control characters leaves its provider out');
+		$this->assertSame(['ut1', 'ut4', 'format'], array_column($providers, 'id'),
+			'a title, feed, username or password holding a control character or a BOM leaves its provider out; the GUI\'s format and private-use characters do not (#1723)');
 		$this->assertSame('adult', $providers[0]['categories'], 'the first of a repeated id');
 	}
 
@@ -427,6 +432,21 @@ final class CoreSettingsScheduleBackendTest extends TestCase
 
 		$this->assertWrittenOnly([self::BLACKLIST . '/item/2/username' => [NULL, 'bl-user'], self::BLACKLIST . '/item/2/password' => [NULL, 'bl-pass1']],
 			$before, $reply);
+	}
+
+	public function testAStaleWriteAfterAFeedChangedBehindCoreIsAConflict(): void
+	{
+		$read = $this->read();
+		config_set_path(self::BLACKLIST . '/item/2/feed', 'https://example.org/moved');	// config.xml moved after Core read it
+		$this->configXmlOnDisk();
+		$before = $GLOBALS['config'];
+		$settings = $read['settings'];
+		$settings['schedule']['weekday'] = 4;
+
+		$reply = $this->backend(['version' => 1, 'op' => 'write', 'expectedRevision' => $read['revision'], 'settings' => $settings]);
+
+		$this->assertSame('conflict', $reply['error']['code'] ?? NULL, 'Core read before the feed changed: it must read again, ' . json_encode($reply));
+		$this->assertNothingWritten($before, 'a stale write');
 	}
 
 	/** @return array<string, array{0: string, 1: string}> */

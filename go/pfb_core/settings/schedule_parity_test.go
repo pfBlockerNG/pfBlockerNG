@@ -28,7 +28,6 @@ type scheduleFixture struct {
 		Description string          `json:"description"`
 		Schedule    json.RawMessage `json:"schedule"`
 		Field       string          `json:"field"`
-		AdapterOnly bool            `json:"adapterOnly"` // only the adapter refuses it: it compares with what config.xml holds
 	} `json:"refused"`
 }
 
@@ -74,12 +73,20 @@ func TestTheScheduleProjectionAcceptsAndReadsBackWhatTheAdapterReadsOnEveryFixtu
 			if err := json.Unmarshal(c.Schedule, &want); err != nil {
 				t.Fatal(err)
 			}
-			clear, err := st.GetClear("schedule") // a secret reads back as it was saved
+			got, err := st.GetClear("schedule") // a secret reads back as it was saved
 			if err != nil {
 				t.Fatal(err)
 			}
-			if have := jsonOf(t, clear); have != jsonOf(t, want) {
+			if have := jsonOf(t, got); have != jsonOf(t, want) {
 				t.Errorf("%s\nread  %s\nwant  %s", c.Description, have, jsonOf(t, want))
+			}
+			// The API read shows only whether a provider's password is set (issue #3978)
+			public := projection(t, get(t, st, "schedule"), "schedule").Value
+			for i, p := range public["categoryProviders"].([]any) {
+				password := want["categoryProviders"].([]any)[i].(map[string]any)["password"].(string)
+				if have, want := jsonOf(t, p.(map[string]any)["password"]), jsonOf(t, map[string]any{"present": password != ""}); have != want {
+					t.Errorf("%s\nthe API reads provider %d's password as %s, want %s", c.Description, i, have, want)
+				}
 			}
 		})
 	}
@@ -91,9 +98,6 @@ func TestTheScheduleProjectionRefusesTheFixturesHostileInputNamingTheField(t *te
 		t.Fatal(err)
 	}
 	for _, c := range loadScheduleFixture(t).Refused {
-		if c.AdapterOnly {
-			continue
-		}
 		t.Run(c.ID, func(t *testing.T) {
 			err := st.Validate(scheduleChanges(t, c.Schedule))
 			v, ok := err.(*ValidationError)

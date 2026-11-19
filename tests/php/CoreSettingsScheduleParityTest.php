@@ -87,15 +87,15 @@ final class CoreSettingsScheduleParityTest extends TestCase
 			'three-families-in-order', 'groups-that-do-not-project', 'blacklist-disabled', 'blacklist-weekly', 'blacklist-selected-without-categories',
 			'blacklist-provider-excluded', 'blacklist-provider-not-selected', 'blacklist-never', 'feed-states', 'override-token-not-on',
 			'blacklist-frequency-daily', 'blacklist-enable-on-token', 'blacklist-enable-lowercase-disable', 'blacklist-enable-zero-token',
-			'blacklist-credentials'] as $id) {
+			'blacklist-credentials', 'blacklist-credentials-format-characters'] as $id) {
 			$this->assertContains($id, $ids, "the coverage matrix row {$id}");
 		}
 		$refused = array_column($doc['refused'], 'id');
 		$this->assertSame(array_values(array_unique($refused)), $refused, 'a refused row id appears once');
 		foreach (['group-id-without-family', 'group-id-unknown-family', 'group-id-name-with-dash', 'group-id-name-with-space', 'provider-id-zero',
 			'provider-id-comma', 'provider-id-empty', 'provider-categories-markup', 'weekday-zero', 'weekday-eight', 'hour-24', 'minute-60',
-			'minute-negative', 'minute-20', 'scheduled-updates-string', 'provider-feed-changed', 'provider-title-changed', 'provider-username-line-break',
-			'provider-password-line-break'] as $id) {
+			'minute-negative', 'minute-20', 'scheduled-updates-string', 'provider-username-line-break', 'provider-password-line-break',
+			'provider-password-tab', 'provider-username-bom'] as $id) {
 			$this->assertContains($id, $refused, "the hostile row {$id}");
 		}
 	}
