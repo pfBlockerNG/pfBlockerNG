@@ -65,10 +65,8 @@ func (f *Fetcher) RunExtras(ctx context.Context, v ExtrasVerb) (int, ExtrasResul
 	if len(extras) == 0 && v.Name != "dc" && v.Name != "dcc" { // dc and dcc download an empty table, then convert
 		return 0, ExtrasResult{OK: true}
 	}
-	s := v.Settings
 	log("\nDownload Process Starting\n")
-	res := f.DownloadExtras(ctx, ExtrasConfig{DBDir: v.DBDir, MaxMindAccount: s.MaxMindAccount, MaxMindKey: s.MaxMindKey,
-		ASNToken: s.ASNToken, Top1MToken: s.Top1MToken, ASNTable: v.ASNTable, Detect: v.Name == "dcc"}, extras)
+	res := f.DownloadExtras(ctx, v.config(), extras)
 	for i, r := range res.Rows {
 		if !r.OK {
 			log(fmt.Sprintf("\nFailed to Download %s [ stage=%s reason=%s detected=%s ]\n",
@@ -80,6 +78,13 @@ func (f *Fetcher) RunExtras(ctx context.Context, v ExtrasVerb) (int, ExtrasResul
 		log(res.Report)
 	}
 	return v.exit(ctx, res), res
+}
+
+// config is the run's transfer configuration: dcc alone runs the TOP1M change detector (pfblockerng.php:577).
+func (v ExtrasVerb) config() ExtrasConfig {
+	s := v.Settings
+	return ExtrasConfig{DBDir: v.DBDir, MaxMindAccount: s.MaxMindAccount, MaxMindKey: s.MaxMindKey, ASNToken: s.ASNToken,
+		Top1MToken: s.Top1MToken, ASNTable: v.ASNTable, Detect: v.Name == "dcc"}
 }
 
 // plan is the verb's rows of the Extras table (pfblockerng.php:166-260 and its case), logging why a verb downloads
