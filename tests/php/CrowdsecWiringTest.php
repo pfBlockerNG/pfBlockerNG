@@ -95,6 +95,20 @@ final class CrowdsecWiringTest extends TestCase
 		$this->assertStringContainsString('pfb_crowdsec_teardown();', substr($hook, 0, (int) strpos($hook, "\n}\n")));
 	}
 
+	/**
+	 * An aborted removal puts back what pfSense took before the hook ran (pfb_package_removal_recover()): pfSense unlinked the rc
+	 * script and stopped the service, so the recovery writes the script again and starts the bouncer when it should run.
+	 */
+	public function testAnAbortedRemovalRestoresTheBouncerWhenItShouldRun(): void
+	{
+		$inc = self::source('pfblockerng/pfblockerng.inc');
+		$recover = substr($inc, (int) strpos($inc, 'function pfb_package_removal_recover('));
+		$recover = substr($recover, 0, (int) strpos($recover, "\n}\n"));
+		$this->assertStringContainsString("pfb_core_service();\n\t\tpfb_crowdsec_service();", $recover, 'the rc script is written with the others');
+		$this->assertSame(1, preg_match("~if \\(pfb_crowdsec_should_run\\(\\) && !is_service_running\\('pfb_crowdsec'\\)\\) \\{\\s*start_service\\('pfb_crowdsec'\\);~", $recover),
+			'and the bouncer starts only when its settings say it should run');
+	}
+
 	public function testTheTeardownStopsTheServiceAndRemovesEveryFileItOwns(): void
 	{
 		$files = [

@@ -9417,6 +9417,7 @@ function pfb_package_removal_recover(): array {
 		pfb_filter_service();
 		pfb_dns_proxy_service();
 		pfb_core_service();
+		pfb_crowdsec_service();
 		if (pfb_dnsbl_active()) {
 			// The apply pass's own ini inputs, from the settings config.xml stores
 			pfb_dnsbl_ini_inputs();
@@ -9438,6 +9439,10 @@ function pfb_package_removal_recover(): array {
 			// issue #3841: the Core API runs whatever the settings say
 			if (!is_service_running('pfb_core')) {
 				start_service('pfb_core');
+			}
+			// issue #4071: the CrowdSec bouncer only when its settings say it should run (its config file is still in place)
+			if (pfb_crowdsec_should_run() && !is_service_running('pfb_crowdsec')) {
+				start_service('pfb_crowdsec');
 			}
 		}
 	} catch (\Throwable $e) {

@@ -127,10 +127,19 @@ def test_each_rule_answers_with_its_message_and_a_refused_save_stores_nothing(
         },
     )
 
-    for message in ("LAPI URL", "API key", "Tag", "interface"):
-        assert re.search(rf'class="alert[^"]*alert-danger[^"]*"[\s\S]*{re.escape(message)}', html), (
-            f"no input error about {message!r}"
-        )
+    # Only the error alert's own text: the form below it names every field too
+    alert = re.search(r'<div[^>]*class="[^"]*alert-danger[^"]*"[^>]*>(.*?)</div>', html, re.S)
+    assert alert, "the refused save shows no input-error alert"
+    errors = [re.sub(r"<[^>]+>", "", item).strip() for item in re.findall(r"<li>(.*?)</li>", alert.group(1), re.S)]
+    expected = {
+        "LAPI URL": "The Remote LAPI URL must be",
+        "API key": "The Bouncer API key must be",
+        "Tag": "The Tag must be",
+        "interface": "Select at least one interface",
+    }
+    for field, start in expected.items():
+        assert any(error.startswith(start) for error in errors), f"no input error about {field!r}: {errors}"
+    assert len(errors) == len(expected), f"exactly one error per refused field, got {errors}"
     assert helpers.config_get(crowdsec, f"{SECTION}/enable") == "", "a refused save stores nothing"
     assert helpers.config_get(crowdsec, f"{SECTION}/api_key") == key, "the stored key is untouched"
     assert key not in html and "has a space" not in html, "no key is echoed, stored or refused"
