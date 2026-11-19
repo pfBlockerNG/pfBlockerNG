@@ -203,6 +203,8 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page("sync", "/pfblockerng/pfblockerng_sync.php", ("XMLRPC Sync Settings",)),
     # issue #4071: the CrowdSec tab's Settings subtab
     Page("crowdsec", "/pfblockerng/pfblockerng_crowdsec.php", ("CrowdSec Bouncer", "cscli bouncers add")),
+    # issue #4073: its Status subtab
+    Page("crowdsec_status", "/pfblockerng/pfblockerng_crowdsec_status.php", ("Bouncer Service", "Decision Lookup")),
     Page("safesearch", "/pfblockerng/pfblockerng_safesearch.php", ("SafeSearch settings", "DNSBL SafeSearch")),
     Page(
         "update",
@@ -4559,6 +4561,7 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
         "/pfblockerng/pfblockerng_log.php",
         "/pfblockerng/pfblockerng_sync.php",
         "/pfblockerng/pfblockerng_crowdsec.php",
+        "/pfblockerng/pfblockerng_crowdsec_status.php",
         "/pfblockerng/pfblockerng_safesearch.php",
         "/pfblockerng/pfblockerng_update.php",
         "/pfblockerng/pfblockerng_blacklist.php",

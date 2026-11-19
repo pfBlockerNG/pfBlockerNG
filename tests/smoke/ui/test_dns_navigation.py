@@ -42,6 +42,8 @@ LOG = "/pfblockerng/pfblockerng_log.php"
 SYNC = "/pfblockerng/pfblockerng_sync.php"
 # issue #4071: the CrowdSec tab, after Sync on every top row; its Settings subtab is its landing page.
 CROWDSEC = "/pfblockerng/pfblockerng_crowdsec.php"
+# issue #4073: the CrowdSec tab's Status subtab, beside Settings on the second row.
+CROWDSEC_STATUS = "/pfblockerng/pfblockerng_crowdsec_status.php"
 SOFTWARE = "/pfblockerng/pfblockerng_software.php"
 WIZARD = "/wizard.php?xml=pfblockerng_wizard.xml"
 ALERTS = "/pfblockerng/pfblockerng_alerts.php"
@@ -216,6 +218,7 @@ _UNRELATED_PAGES = (
     LOG,
     SYNC,
     CROWDSEC,
+    CROWDSEC_STATUS,
     UPDATE,
     HOOKS,
     EDIT_HOOKS,
@@ -226,6 +229,7 @@ TOP_ROW_PAGES = (*_DNS_FAMILY_ACTIVE, *_UNRELATED_PAGES)
 # The pages that print the Wizard tab: package General (outside its redirect) and DNS General.
 _WIZARD_PAGES = frozenset({GENERAL, DNS_GENERAL})
 
+_CROWDSEC_SUBTABS = (("Settings", CROWDSEC), ("Status", CROWDSEC_STATUS))
 _DNS_SUBTABS = (
     ("General", DNS_GENERAL),
     ("DNSBL", DNSBL),
@@ -258,7 +262,8 @@ _SUBTAB_CASES: tuple[tuple[str, tuple[tuple[str, str], ...], str | None], ...] =
     (EDITOR_IPV4, _IP_SUBTABS, "IPv4"),
     (EDITOR_IPV6, _IP_SUBTABS, "IPv6"),
     (REPUTATION, _IP_SUBTABS, "Reputation"),
-    (CROWDSEC, (("Settings", CROWDSEC),), "Settings"),
+    (CROWDSEC, _CROWDSEC_SUBTABS, "Settings"),
+    (CROWDSEC_STATUS, _CROWDSEC_SUBTABS, "Status"),
 )
 # The DNS-family pages: each prints the five-tab DNS row.
 _DNS_FAMILY_PAGES = tuple(path for path, subtabs, _ in _SUBTAB_CASES if subtabs is _DNS_SUBTABS)
@@ -279,6 +284,7 @@ _CRUMB_CASES: tuple[tuple[str, str, Crumb], ...] = (
     (EDITOR_IPV4, "IPv4", _IP_PARENT),
     (EDITOR_IPV6, "IPv6", _IP_PARENT),
     (CROWDSEC, "Settings", Crumb("CrowdSec", CROWDSEC)),
+    (CROWDSEC_STATUS, "Status", Crumb("CrowdSec", CROWDSEC)),
 )
 
 _EDITOR_CASES = ((EDITOR_IPV4, "ipv4"), (EDITOR_IPV6, "ipv6"), (GROUP_EDITOR, "dnsbl"))
@@ -323,7 +329,7 @@ def test_top_row_offers_one_dns_tab_where_dnsbl_and_pfb_dns_were(path: str, webu
         *_CONTINENT_PAGES,
     }:
         assert active == ["IP"], f"{path}: IP must be the sole active tab, got {active}"
-    elif path == CROWDSEC:
+    elif path in {CROWDSEC, CROWDSEC_STATUS}:
         assert active == ["CrowdSec"], f"{path}: CrowdSec must be the sole active tab, got {active}"
     else:
         assert "DNS" not in active, f"{path}: the DNS tab must not be selected off the DNS family"
