@@ -1,0 +1,49 @@
+{
+	"schema": 1,
+	"description": "A category name holding a line break is renamed like any other.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"body_b64": "H4sIAAAAAAAC/+3RSwrCQBCE4V7nFJ4g6ZY2OU/LZCFMHuQBHt/RpesgSP5vU1CrgrrnJlK1561J0xCPcZXjadG6f7L4TlVrxfx29a5Tf/dmpiYXlR/Y1y2WMkXOKVL5vu6fMcy5rwQAAAAAAAAAAAAAAAAA8CdeOoiRlwAoAAA="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"report": "\tUT1 ... Completed\n",
+				"files": {
+					"db/ut1/ut1_ad\nult": "adult.example\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

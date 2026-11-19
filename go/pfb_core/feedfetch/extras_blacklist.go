@@ -15,10 +15,14 @@ import (
 // "<cat>/<sub>/domains") is published as "<name>_<cat>" or "<name>_<cat>_<sub>" in the category folder "<dbdir>/<name>",
 // which is replaced whole. <name> is the download's name without ".tar.gz" or ".tar".
 
-// The two `tar -s` rules of the extraction, in order: the first that matches renames the member.
-var blacklistRules = []*regexp.Regexp{
-	regexp.MustCompilePOSIX(`.*/(.*)/(.*)/domains`),
-	regexp.MustCompilePOSIX(`.*/(.*)/domains`),
+// The two `tar -s` rules of the extraction, in order: the first that matches renames the member. They match as POSIX
+// regular expressions do: leftmost-longest, with "." matching a line break too.
+var blacklistRules = []*regexp.Regexp{posix(`(?s).*/(.*)/(.*)/domains`), posix(`(?s).*/(.*)/domains`)}
+
+func posix(expr string) *regexp.Regexp {
+	re := regexp.MustCompile(expr)
+	re.Longest()
+	return re
 }
 
 // blacklist is pfb_download() for a blacklist row. It reports whether the row succeeded.
@@ -82,12 +86,25 @@ func wordName(s string) bool {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_') {
+		if !word(s[i]) {
 			return false
 		}
 	}
 	return true
+}
+
+// linkMember is a hard-link member: name, under dir, becomes another name for target, already extracted there.
+func linkMember(dir, target, name string) error {
+	for _, n := range []string{target, name} {
+		if !filepath.IsLocal(filepath.FromSlash(n)) {
+			return errUnsafeMember
+		}
+	}
+	p := filepath.Join(dir, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	return os.Link(filepath.Join(dir, filepath.FromSlash(target)), p)
 }
 
 // extractCategories is `tar -xf --include='*domains' -s <blacklistRules>` into dir, then pfb_blacklist_tar_finalize_staged():
@@ -96,6 +113,10 @@ func (f *Fetcher) extractCategories(ctx context.Context, mime, archive, name, di
 	err := walkTar(ctx, mime, archive, func(h *tar.Header, r io.Reader) error {
 		if !categoryMember(h.Name) {
 			return nil
+		}
+		if h.Typeflag == tar.TypeLink {
+			// tar renames a hard link's target by the same rules, so a linked category is published too.
+			return linkMember(dir, categoryName(h.Linkname, name), categoryName(h.Name, name))
 		}
 		return f.writeMember(dir, categoryName(h.Name, name), h.Typeflag == tar.TypeDir, h.Typeflag == tar.TypeReg, r)
 	})
