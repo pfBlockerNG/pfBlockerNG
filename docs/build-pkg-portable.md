@@ -317,6 +317,15 @@ mode `0555`. The go recipe ships it only when the port's `do-install` installs i
 `NO_ARCH_IGNORE` names it (pfBlockerNG/FreeBSD-ports, nightly); its `do-build` builds it either way. The rc script `pfb_core.sh` picks
 this machine's binary (`pfb_core_service()`).
 
+**pfb_crowdsec** (issue #4069, the CrowdSec bouncer, `docs/specs/crowdsec-integration.md`). A source that also
+carries `go/pfb_crowdsec` gets it built by the same helper, with the same flags and checks, into
+`freebsd-<arch>/pfb_crowdsec`, recorded under `pfb_crowdsec`. The module is standard library only: a `require` or
+`replace` in its `go.mod`, or a `vendor/` beside it, fails the build before anything is written. With nothing to
+vendor it is built in place in both modes, so the go recipe needs no `GH_TUPLE` or `modules.txt` change for it. A
+recipe without `do-build` has the builder stage it at
+`/usr/local/pkg/pfblockerng/crowdsec/bin/freebsd-<arch>/pfb_crowdsec`, mode `0555`. The go recipe ships it only
+when its `do-install` installs it and its `NO_ARCH_IGNORE` names it.
+
 - **Source.** Project builds compile the `go/` tree of the attested commit (the same
   `git archive` snapshot as `src/`), never the working tree. Native builds read the live
   tree like every other file; `--gh-tagname` builds read `go/` from the downloaded tarball.
@@ -336,8 +345,8 @@ this machine's binary (`pfb_core_service()`).
   library, so one set of bytes serves every leg from 12 up; the check refuses a toolchain
   that ever stamps newer.
 - **Never committed.** The builder reads no binary from the source: a tree that already
-  carries `dns_proxy/bin` or `pfblockerng/core/bin` fails the build, and both paths are gitignored. A dirty or
-  untracked tree still fails project attestation.
+  carries `dns_proxy/bin`, `pfblockerng/core/bin` or `pfblockerng/crowdsec/bin` fails the build, and all three
+  paths are gitignored. A dirty or untracked tree still fails project attestation.
 - **Provenance.** Each binary's sha256 is the file checksum in `+MANIFEST`; in project
   mode the build record's `source_sha` pins the source. The same source and toolchain give
   the same bytes (file mtime is `go.mod`'s, or the record's `source_date_epoch`).

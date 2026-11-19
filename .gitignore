@@ -101,3 +101,4 @@ smoke_key
 # build-pkg-portable.py cross-compiles them into the package; they are never committed.
 src/usr/local/pkg/pfblockerng/dns_proxy/bin/
 src/usr/local/pkg/pfblockerng/core/bin/
+src/usr/local/pkg/pfblockerng/crowdsec/bin/

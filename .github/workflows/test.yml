@@ -476,6 +476,7 @@ jobs:
             [ "$failing_status" -ne 0 ] || { echo "red canary failed: a module with a failing test passed the Go gate (go test must fail the gate)"; exit 1; }
             go_gate go/pfb_dns_gateway
             go_gate go/pfb_core
+            go_gate go/pfb_crowdsec
         run: $CI_RUN bash -ec "$GATE"
 
   shell-tests:

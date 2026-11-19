@@ -1410,3 +1410,101 @@ def test_a_vendored_core_is_refused_for_a_go4_sibling_of_netipx_beside_it(
     stray.parent.mkdir(parents=True)
     stray.write_text("")
     assert_refused(run_helper(root, tmp_path / "out", extra=["--vendored"]), tmp_path / "out", ["go4.org/mem"])
+
+
+# --- pfb_crowdsec (issue #4069): the CrowdSec bouncer is its own module with no dependencies at all. It is built in
+# place (there is nothing to vendor) beside pfb-dns, and a go.mod with any `require` or `replace`, or a vendor/, is
+# refused before anything is written. ---
+
+CROWDSEC_MAIN_GO = 'package main\n\nvar marker = "TINY-CROWDSEC"\n\nfunc main() { println(marker) }\n'
+
+
+def write_tiny_crowdsec(root: Path, *, go_mod: str = "module example.test/crowdsec\n\ngo 1.21\n") -> Path:
+    """A `go/pfb_crowdsec` module under ``root`` (beside the gateway); returns ``root``."""
+    module = root / "go" / "pfb_crowdsec"
+    module.mkdir(parents=True)
+    (module / "go.mod").write_text(go_mod)
+    (module / "main.go").write_text(CROWDSEC_MAIN_GO)
+    return root
+
+
+def test_real_crowdsec_cross_builds_a_dependency_free_freebsd_elf_for_each_architecture(
+    real_build: tuple[Path, dict[str, Any]],
+) -> None:
+    out_dir, record = real_build
+    crowdsec = record["pfb_crowdsec"]
+    assert sorted(crowdsec) == sorted(TARGETS), f"the record does not list pfb_crowdsec for both targets: {record}"
+    for target, machine in TARGETS.items():
+        binary = out_dir / target / "pfb_crowdsec"
+        data = binary.read_bytes()
+        assert elf_facts(data) == expected_facts(machine), f"{binary} is not the {target} ELF"
+        assert os.access(binary, os.X_OK), f"{target}/pfb_crowdsec is not executable"
+        assert crowdsec[target]["sha256"] == hashlib.sha256(data).hexdigest()
+        shown = subprocess.run(["go", "version", "-m", str(binary)], capture_output=True, text=True, check=True)
+        deps = [line for line in shown.stdout.splitlines() if line.strip().startswith(("dep\t", "=>"))]
+        assert deps == [], f"{target}/pfb_crowdsec links dependencies:\n{shown.stdout}"
+
+
+@pytest.mark.parametrize("mode", ["builder", "vendored"])
+def test_a_source_with_a_crowdsec_module_builds_it_in_both_modes(tmp_path: Path, mode: str) -> None:
+    root = write_tiny_crowdsec(write_tiny_module(tmp_path / "src-tree"))
+    result = run_helper(root, tmp_path / "out", extra=["--vendored"] if mode == "vendored" else [])
+    assert result.returncode == 0, result.stderr
+    assert sorted(json.loads(result.stdout)["pfb_crowdsec"]) == sorted(TARGETS)
+    for target in TARGETS:
+        assert b"TINY-CROWDSEC" in (tmp_path / "out" / target / "pfb_crowdsec").read_bytes()
+        assert b"TINY-CROWDSEC" not in (tmp_path / "out" / target / "pfb-dns").read_bytes()
+
+
+def test_a_source_without_a_crowdsec_module_builds_no_pfb_crowdsec(tmp_path: Path) -> None:
+    result = run_helper(write_tiny_module(tmp_path / "src-tree"), tmp_path / "out")
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["pfb_crowdsec"] == {}
+    assert list((tmp_path / "out").rglob("pfb_crowdsec")) == []
+
+
+@pytest.mark.parametrize(
+    ("shape", "go_mod"),
+    [
+        ("require line", "module example.test/crowdsec\n\ngo 1.21\n\nrequire golang.org/x/sys v0.50.0\n"),
+        ("require block", "module example.test/crowdsec\n\ngo 1.21\n\nrequire (\n\tgolang.org/x/net v0.56.0\n)\n"),
+        ("replace", "module example.test/crowdsec\n\ngo 1.21\n\nreplace example.test/x => ../x\n"),
+    ],
+)
+@pytest.mark.parametrize("mode", ["builder", "vendored"])
+def test_a_crowdsec_module_with_dependencies_is_refused_and_writes_nothing(
+    tmp_path: Path, shape: str, go_mod: str, mode: str
+) -> None:
+    root = write_tiny_crowdsec(write_tiny_module(tmp_path / "src-tree"), go_mod=go_mod)
+    result = run_helper(root, tmp_path / "out", extra=["--vendored"] if mode == "vendored" else [])
+    assert result.returncode == 1, f"a pfb_crowdsec go.mod with a {shape} was built"
+    assert "go/pfb_crowdsec" in result.stderr and "standard library" in result.stderr, result.stderr
+    assert list((tmp_path / "out").rglob("pfb*")) == [], "binaries were written for a refused source"
+
+
+def test_a_crowdsec_vendor_dir_is_refused(tmp_path: Path) -> None:
+    root = write_tiny_crowdsec(write_tiny_module(tmp_path / "src-tree"))
+    (root / "go" / "pfb_crowdsec" / "vendor").mkdir()
+    (root / "go" / "pfb_crowdsec" / "vendor" / "modules.txt").write_text("")
+    result = run_helper(root, tmp_path / "out", extra=["--vendored"])
+    assert result.returncode == 1, "a pfb_crowdsec vendor/ was accepted"
+    assert "go/pfb_crowdsec/vendor" in result.stderr, result.stderr
+
+
+def test_a_crowdsec_compile_error_leaves_no_partial_payload(tmp_path: Path) -> None:
+    root = write_tiny_crowdsec(write_tiny_module(tmp_path / "src-tree"))
+    (root / "go" / "pfb_crowdsec" / "broken_arm64.go").write_text("package main\n\nvar _ = undefinedSymbol\n")
+    result = run_helper(root, tmp_path / "out")
+    assert result.returncode == 1, "a failing pfb_crowdsec compile still exited 0"
+    assert "pfb_crowdsec" in result.stderr and "freebsd-arm64" in result.stderr, result.stderr
+    assert list((tmp_path / "out").rglob("pfb*")) == [], "binaries were left behind after the pfb_crowdsec failure"
+
+
+def test_crowdsec_binary_mtime_follows_its_own_module(tmp_path: Path) -> None:
+    root = write_tiny_crowdsec(write_tiny_module(tmp_path / "src-tree"))
+    os.utime(root / "go" / "pfb_dns_gateway" / "go.mod", (1_600_000_000, 1_600_000_000))
+    os.utime(root / "go" / "pfb_crowdsec" / "go.mod", (1_750_000_000, 1_750_000_000))
+    result = run_helper(root, tmp_path / "out")
+    assert result.returncode == 0, result.stderr
+    for target in TARGETS:
+        assert int((tmp_path / "out" / target / "pfb_crowdsec").stat().st_mtime) == 1_750_000_000

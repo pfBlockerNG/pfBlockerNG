@@ -7,8 +7,9 @@
 #   --source-root  a source tree holding go/pfb_dns_gateway (the module, with its committed
 #                  go.mod and go.sum). A tree without that module is a legacy source: nothing is
 #                  built, nothing is written, no Go is needed, and the result is {"targets": {}}.
-#   --out-dir      receives freebsd-amd64/pfb-dns and freebsd-arm64/pfb-dns, and freebsd-<arch>/pfb-core
-#                  when the tree also holds go/pfb_core (each mtime = its module's go.mod's, so the bytes
+#   --out-dir      receives freebsd-amd64/pfb-dns and freebsd-arm64/pfb-dns, and freebsd-<arch>/pfb-core and
+#                  freebsd-<arch>/pfb_crowdsec when the tree also holds go/pfb_core and go/pfb_crowdsec
+#                  (each mtime = its module's go.mod's, so the bytes
 #                  and stamps are a function of the source alone). Relative paths are taken from the
 #                  caller's directory; a directory inside either module is refused.
 #   --go           the Go toolchain to run (default: `go` on PATH); a relative path is resolved from the
@@ -27,7 +28,9 @@
 # stdout: one JSON object, {"go": "go1.x.y", "freebsd_major": N, "modules_txt_sha256": "<hex>" or
 # null when the module vendors nothing, "targets": {"freebsd-amd64": {"goarch", "path", "sha256",
 # "size", "freebsd_abi_note"}, ...}, "pfb_core": the same per target for pfb-core, {} for a tree without
-# go/pfb_core}. --modules-txt and --vendored concern the gateway. Core may require golang.org/x/net, x/sys and x/text,
+# go/pfb_core, "pfb_crowdsec": the same for pfb_crowdsec}. go/pfb_crowdsec is standard library only: a go.mod with any
+# `require` or `replace`, or a vendor/ there, exits 1 before anything is built, and it is built in place.
+# --modules-txt and --vendored concern the gateway. Core may require golang.org/x/net, x/sys and x/text,
 # at the versions the gateway's go.mod requires, and github.com/pfBlockerNG/xxh3 and go4.org/netipx (which the gateway
 # does not carry) at any version, and nothing else: it is built from a scratch copy of its module whose vendor/ is cut
 # from the gateway's (those modules' packages and licenses, and their vendor/modules.txt sections) plus each own
@@ -76,6 +79,9 @@ CORE_MODULES = ("golang.org/x/net", "golang.org/x/sys", "golang.org/x/text")
 # Modules Core vendors itself, at any version, because the gateway does not carry them: the xxh3 fork (issue #3925)
 # and go4.org/netipx (issue #4033).
 CORE_OWN_MODULES = ("github.com/pfBlockerNG/xxh3", "go4.org/netipx")
+# The CrowdSec bouncer (issue #4069): standard library only, so it is built in place with nothing to vendor.
+CROWDSEC_MODULE = Path("go") / "pfb_crowdsec"
+CROWDSEC_BINARY = "pfb_crowdsec"
 # The files Go copies from a module's root into vendor/ beside its packages.
 _LICENSE_PREFIXES = (
     "AUTHORS",
@@ -319,6 +325,16 @@ def _check_core_module(core: Path, gateway: Path, *, vendored: bool) -> dict[str
     return dict(requires)
 
 
+def _check_crowdsec_module(crowdsec: Path) -> None:
+    """The bouncer's module must stay standard library only: no require, no replace, no vendor/."""
+    if (crowdsec / "vendor").exists():
+        raise BuildError(f"{CROWDSEC_MODULE}/vendor/ is refused: the module is standard library only")
+    requires, replaced = _parse_go_mod(crowdsec / "go.mod")
+    if requires or replaced:
+        shown = ", ".join(module for module, _version in requires) or "a replace"
+        raise BuildError(f"{CROWDSEC_MODULE}/go.mod names {shown}: the module is standard library only")
+
+
 def _copy_files(src: Path, dst: Path, wanted: Callable[[str], bool] = lambda _name: True) -> None:
     """The files (not the subdirectories) of ``src`` that ``wanted`` accepts, copied into ``dst``."""
     if not src.is_dir():
@@ -444,15 +460,21 @@ def build_pfb_dns(
     wanted = _read_modules_txt(modules_txt)
     core = source_root / CORE_MODULE
     has_core = (core / "go.mod").is_file()
+    crowdsec = source_root / CROWDSEC_MODULE
+    has_crowdsec = (crowdsec / "go.mod").is_file()
     out_dir = out_dir.resolve()  # Go runs inside the module: a relative path would land in the source tree
-    for built in (module, core) if has_core else (module,):
-        if out_dir.is_relative_to(built.resolve()):
+    for built, present in ((module, True), (core, has_core), (crowdsec, has_crowdsec)):
+        if present and out_dir.is_relative_to(built.resolve()):
             raise BuildError(f"--out-dir {out_dir} is inside the module being built")
     core_modules = _check_core_module(core, module, vendored=vendored) if has_core else {}
+    if has_crowdsec:
+        _check_crowdsec_module(crowdsec)
     stamp = int((module / "go.mod").stat().st_mtime)
     core_stamp = int((core / "go.mod").stat().st_mtime) if has_core else 0
+    crowdsec_stamp = int((crowdsec / "go.mod").stat().st_mtime) if has_crowdsec else 0
     targets: dict[str, dict[str, object]] = {}
     core_targets: dict[str, dict[str, object]] = {}
+    crowdsec_targets: dict[str, dict[str, object]] = {}
     out_dir.mkdir(parents=True, exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix=".vendor-", dir=out_dir))
     try:
@@ -466,6 +488,8 @@ def build_pfb_dns(
             builds = [(tree, BINARY, stamp, targets)]
             if has_core:
                 builds.append((core_tree, CORE_BINARY, core_stamp, core_targets))
+            if has_crowdsec:
+                builds.append((crowdsec, CROWDSEC_BINARY, crowdsec_stamp, crowdsec_targets))
             for built, binary, mtime, record in builds:
                 record[target] = _build_one(
                     go, built, out_dir / target / binary, target, goarch, machine, freebsd_major, mtime
@@ -484,6 +508,7 @@ def build_pfb_dns(
         "modules_txt_sha256": modules_sha256,
         "targets": targets,
         "pfb_core": core_targets,
+        "pfb_crowdsec": crowdsec_targets,
     }
 
 
@@ -495,7 +520,8 @@ def _positive_int(text: str) -> int:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
-        prog="build-pfb-dns.py", description="Cross-compile pfB-DNS and pfb-core for FreeBSD amd64 and arm64."
+        prog="build-pfb-dns.py",
+        description="Cross-compile pfB-DNS, pfb-core and pfb_crowdsec for FreeBSD amd64 and arm64.",
     )
     ap.add_argument("--source-root", type=Path, required=True, help="source tree holding go/pfb_dns_gateway")
     ap.add_argument("--out-dir", type=Path, required=True, help="receives freebsd-<arch>/pfb-dns and pfb-core")
