@@ -84,13 +84,18 @@ func memberRefused(names []string, listed bool) *Result {
 }
 
 // published is a folder publisher (mergeIntoDir, replaceDir) as a row's outcome: what stopped the extraction of what from
-// the archive named detail, else a publication that could not complete.
-func published(publish func(string, func(string) error) bool, target, what, detail string, extract func(dir string) error) Result {
+// the archive named detail, else a publication that could not complete, naming what a rollback that could not finish
+// left behind.
+func published(publish func(string, func(string) error) (bool, string), target, what, detail string,
+	extract func(dir string) error) Result {
 	var xerr error
-	if publish(target, func(dir string) error { xerr = extract(dir); return xerr }) {
+	ok, left := publish(target, func(dir string) error { xerr = extract(dir); return xerr })
+	switch {
+	case ok:
 		return accepted
-	}
-	if xerr != nil {
+	case left != "":
+		return refused("publish", "rollback_incomplete", left)
+	case xerr != nil:
 		return extractRefused(what, xerr, detail)
 	}
 	return publishRefused
@@ -104,6 +109,9 @@ var (
 
 // rename is os.Rename, a test seam for a publication that fails part-way.
 var rename = os.Rename
+
+// removeAll is os.RemoveAll, a test seam for a rollback that cannot take a published entry out.
+var removeAll = os.RemoveAll
 
 // link is os.Link, a test seam for link(2) as FreeBSD has it.
 var link = os.Link
@@ -325,32 +333,34 @@ func copyZipMember(ctx context.Context, zf *zip.File, w io.Writer) error {
 // aside first, so a rename that fails part-way puts the earlier ones back: the share holds one generation, never a mix
 // (PHP leaves the mix). A file that cannot be put back keeps its copy in the ".pfbbackup_" directory. Each swap is one
 // rename, so a reader that opens several of the files while a merge runs can still see both generations, as in PHP.
-func (f *Fetcher) mergeIntoDir(target string, extract func(dir string) error) bool {
+// A rollback that cannot finish reports what it left, space-separated: the backup directory, then each entry it published
+// and could not remove.
+func (f *Fetcher) mergeIntoDir(target string, extract func(dir string) error) (bool, string) {
 	if info, err := os.Lstat(target); err != nil || !info.IsDir() {
-		return false
+		return false, ""
 	}
 	staged, err := os.MkdirTemp(target, ".pfbstagedir_")
 	if err != nil {
-		return false
+		return false, ""
 	}
 	defer os.RemoveAll(staged)
 	if os.Chmod(staged, 0o755) != nil || extract(staged) != nil {
-		return false
+		return false, ""
 	}
 	entries, err := os.ReadDir(staged)
 	if err != nil {
-		return false
+		return false, ""
 	}
 	for _, e := range entries {
 		live := filepath.Join(target, e.Name())
 		info, err := os.Lstat(live)
 		if err == nil && (info.IsDir() || e.IsDir()) {
-			return false
+			return false, ""
 		}
 	}
 	backup, err := os.MkdirTemp(target, ".pfbbackup_")
 	if err != nil {
-		return false
+		return false, ""
 	}
 	keepBackup := false // a rollback that could not put a file back leaves its copy here
 	defer func() {
@@ -363,27 +373,31 @@ func (f *Fetcher) mergeIntoDir(target string, extract func(dir string) error) bo
 		live := filepath.Join(target, e.Name())
 		if _, err := os.Lstat(live); err == nil {
 			if backupEntry(live, filepath.Join(backup, e.Name())) != nil {
-				return false
+				return false, ""
 			}
 			kept[e.Name()] = true
 		}
 	}
 	for i, e := range entries {
 		if rename(filepath.Join(staged, e.Name()), filepath.Join(target, e.Name())) != nil {
+			var left []string
 			for _, done := range entries[:i] {
 				live := filepath.Join(target, done.Name())
 				if kept[done.Name()] {
 					if rename(filepath.Join(backup, done.Name()), live) != nil {
 						keepBackup = true
 					}
-				} else {
-					os.RemoveAll(live)
+				} else if removeAll(live) != nil {
+					left = append(left, live)
 				}
 			}
-			return false
+			if keepBackup {
+				left = append([]string{backup}, left...)
+			}
+			return false, strings.Join(left, " ")
 		}
 	}
-	return true
+	return true, ""
 }
 
 // backupEntry keeps a live entry aside by a hard link, and a symbolic link as the link it is: FreeBSD's link(2) follows

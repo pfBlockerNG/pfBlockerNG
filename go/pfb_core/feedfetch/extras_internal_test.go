@@ -62,7 +62,7 @@ func TestAMergeThatFailsPartWayRestoresWhatItReplaced(t *testing.T) {
 	}
 	t.Cleanup(func() { rename = real })
 	f := &Fetcher{}
-	ok := f.mergeIntoDir(share, func(dir string) error {
+	ok, _ := f.mergeIntoDir(share, func(dir string) error {
 		for name, content := range map[string]string{"a.csv": "new a\n", "b.csv": "new b\n"} {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 				return err
@@ -105,7 +105,7 @@ func TestAFailedRollbackKeepsTheBackup(t *testing.T) {
 	}
 	t.Cleanup(func() { rename = real })
 	f := &Fetcher{}
-	ok := f.mergeIntoDir(share, func(dir string) error {
+	ok, _ := f.mergeIntoDir(share, func(dir string) error {
 		for name, content := range map[string]string{"a.csv": "new a\n", "b.csv": "new b\n"} {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 				return err
@@ -147,7 +147,7 @@ func TestALiveSymlinkIsBackedUpAsALink(t *testing.T) {
 		if err := os.Symlink(filepath.Join(t.TempDir(), "gone.mmdb"), filepath.Join(share, "GeoLite2-Country.mmdb")); err != nil {
 			t.Fatal(err)
 		}
-		ok := (&Fetcher{}).mergeIntoDir(share, func(dir string) error {
+		ok, _ := (&Fetcher{}).mergeIntoDir(share, func(dir string) error {
 			return os.WriteFile(filepath.Join(dir, "GeoLite2-Country.mmdb"), []byte("new"), 0o644)
 		})
 		got, err := os.ReadFile(filepath.Join(share, "GeoLite2-Country.mmdb"))
@@ -173,7 +173,7 @@ func TestALiveSymlinkIsBackedUpAsALink(t *testing.T) {
 			return real(from, to)
 		}
 		t.Cleanup(func() { rename = real })
-		ok := (&Fetcher{}).mergeIntoDir(share, func(dir string) error {
+		ok, _ := (&Fetcher{}).mergeIntoDir(share, func(dir string) error {
 			for _, name := range []string{"a.csv", "b.csv"} {
 				if err := os.WriteFile(filepath.Join(dir, name), []byte("new\n"), 0o644); err != nil {
 					return err

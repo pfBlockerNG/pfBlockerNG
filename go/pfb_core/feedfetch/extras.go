@@ -108,6 +108,9 @@ func (f *Fetcher) DownloadExtras(ctx context.Context, cfg ExtrasConfig, extras [
 			res.OK = false
 			if err := ctx.Err(); err != nil {
 				r = refused("aborted", err.Error(), "") // the run ended, not the feed or its key
+				if x.Kind == "top1m" {
+					res.Top1MLedger = nil // nor the TOP1M probe or download (#4085 review)
+				}
 			} else if x.Kind == "geoip" {
 				res.MaxMindError = true
 			}
