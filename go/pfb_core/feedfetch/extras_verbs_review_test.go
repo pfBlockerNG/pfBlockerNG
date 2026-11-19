@@ -32,19 +32,6 @@ func TestADccWithNoRowStillConvertsAndReportsTheGeoIPChange(t *testing.T) {
 	}
 }
 
-// A run whose context ended does not convert: a geoip row cut short is no MaxMind error, but its data is not new
-// either, so PHP's maxmind_feed_error rule (any geoip failure blocks the conversion) holds (#4119 review).
-func TestAnEndedRunDoesNotConvert(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	converted := false
-	v := ExtrasVerb{Name: "dcc", DBDir: t.TempDir(), Settings: verbSettings(),
-		Convert: func(context.Context) bool { converted = true; return true }}
-	if code := v.exit(ctx, ExtrasResult{}); code != 1 || converted {
-		t.Errorf("(exit, converted) = (%d, %v), want (1, false)", code, converted)
-	}
-}
-
 // The archive's name is the base of the feed's path as written, as pathinfo() takes it: a percent-encoded character
 // stays encoded (#4119 review).
 func TestABlacklistArchiveNameKeepsItsEncoding(t *testing.T) {

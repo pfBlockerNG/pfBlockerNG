@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -62,7 +61,7 @@ func (f *Fetcher) RunExtras(ctx context.Context, v ExtrasVerb) (int, ExtrasResul
 		return 1, ExtrasResult{OK: false}
 	}
 	extras := v.plan(log)
-	if len(extras) == 0 && v.Name != "dc" && v.Name != "dcc" { // dc and dcc download an empty table, then convert
+	if len(extras) == 0 && v.Name != "dcc" { // dcc downloads an empty table, then converts (dc always has a row)
 		return 0, ExtrasResult{OK: true}
 	}
 	log("\nDownload Process Starting\n")
@@ -157,11 +156,7 @@ func (v ExtrasVerb) blacklist(log func(string)) []Extra {
 		if !slices.Contains(ids, p.ID) {
 			continue
 		}
-		// The base of the feed's path: PHP's pathinfo() keeps a query, which can carry a key, in a name written to disk.
-		name := ""
-		if u, err := url.Parse(p.Feed); err == nil {
-			name = path.Base(u.EscapedPath()) // as written, as pathinfo() takes it
-		}
+		name := archiveName(p.Feed)
 		if p.ID == "ut1" { // keyed on the id, never the feed: the name decides the category folder (issue #2636)
 			name = "ut1.tar.gz"
 		}
@@ -183,14 +178,31 @@ func (v ExtrasVerb) blacklist(log func(string)) []Extra {
 	return rows
 }
 
+// archiveName is the last segment of the feed's path as written, as pathinfo() takes it, without the query or fragment
+// that PHP keeps (a key in a name written to disk). A feed with no path names no file ("").
+func archiveName(feed string) string {
+	rest := feed
+	if _, after, ok := strings.Cut(feed, "://"); ok {
+		rest = after
+	}
+	rest, _, _ = strings.Cut(rest, "#")
+	rest, _, _ = strings.Cut(rest, "?")
+	_, p, ok := strings.Cut(rest, "/") // past the authority, userinfo included
+	if !ok {
+		return ""
+	}
+	return path.Base("/" + p)
+}
+
 // exit is the verb's exit code (pfblockerng.php:374-386, :380-449), after dc and dcc's country conversion.
 func (v ExtrasVerb) exit(ctx context.Context, res ExtrasResult) int {
 	s := v.Settings
 	switch v.Name {
 	case "dc", "dcc":
 		ok := res.OK
-		// A run whose context ended converts nothing: its geoip rows read aborted, not MaxMind errors, but are not new.
-		if !res.MaxMindError && ctx.Err() == nil && (!s.MaxMindCSVDisabled || s.MaxMindKey != "" || s.MaxMindAccount != "") && v.Convert != nil {
+		// A geoip row the run's end cut short is no MaxMind error, but its data is not new either: it blocks the conversion.
+		aborted := slices.ContainsFunc(res.Rows, func(r ExtrasRow) bool { return r.Kind == "geoip" && r.Stage == "aborted" })
+		if !res.MaxMindError && !aborted && (!s.MaxMindCSVDisabled || s.MaxMindKey != "" || s.MaxMindAccount != "") && v.Convert != nil {
 			ok = v.Convert(ctx) && ok
 		}
 		_, err := os.Stat(filepath.Join(v.DBDir, "geoip.update"))
