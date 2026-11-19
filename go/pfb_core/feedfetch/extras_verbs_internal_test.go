@@ -2,6 +2,8 @@ package feedfetch
 
 import (
 	"context"
+	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -290,4 +292,148 @@ func TestAnIncompleteMergeRollbackNamesWhatItLeft(t *testing.T) {
 			t.Errorf("refusal = %+v, want %+v", r, want)
 		}
 	})
+}
+
+// A dcc with no row to download still runs pfblockerng_download_extras() over an empty table, then the conversion and
+// the exit formula (pfblockerng.php:374-386): a pending geoip.update makes a scheduled run exit 2 (#4119 review).
+func TestADccWithNoRowStillConvertsAndReportsTheGeoIPChange(t *testing.T) {
+	db := t.TempDir()
+	if err := os.WriteFile(filepath.Join(db, "geoip.update"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := &Fetcher{RetryDelay: 1}
+	f.Resolve = func(context.Context, string) ([]netip.Addr, error) {
+		t.Error("a dcc with no row resolved a host")
+		return nil, errors.New("no such host")
+	}
+	converted := false
+	var log strings.Builder
+	code, _ := f.RunExtras(context.Background(), ExtrasVerb{Name: "dcc", Args: []string{"scheduled"}, GeoIPShare: t.TempDir(),
+		DBDir: db, Settings: ExtrasSettings{Top1MProvider: "tranco"}, Log: &log,
+		Convert: func(context.Context) bool { converted = true; return true }})
+	if code != 2 || !converted || !strings.Contains(log.String(), "Download Process Starting") {
+		t.Errorf("(exit, converted) = (%d, %v), log %q; want (2, true) and the download's start", code, converted, log.String())
+	}
+}
+
+// A run's configuration carries every setting the transfers need: the MaxMind credentials, the IPinfo and TOP1M tokens,
+// the database folder for the update markers, the ASN table hook, and the change detector for dcc alone (#4119 review).
+func TestAVerbsConfigurationCarriesItsSettings(t *testing.T) {
+	s := verbSettings()
+	s.Top1MToken = "tt"
+	for verb, detect := range map[string]bool{"dcc": true, "dc": false, "al": false, "bl": false} {
+		ran := false
+		c := ExtrasVerb{Name: verb, GeoIPShare: "/share", DBDir: "/db", Settings: s,
+			ASNTable: func(context.Context) { ran = true }}.config()
+		if c.DBDir != "/db" || c.MaxMindAccount != "1" || c.MaxMindKey != "mk" || c.ASNToken != "it" || c.Top1MToken != "tt" ||
+			c.Detect != detect || c.ASNTable == nil {
+			t.Errorf("%s: config = %+v, want every setting and detect %v", verb, c, detect)
+			continue
+		}
+		if c.ASNTable(context.Background()); !ran {
+			t.Errorf("%s: the ASN table hook is not the verb's", verb)
+		}
+	}
+}
+
+// A feed path ending in "." or ".." names no file: the row would download beside the database folder (#4119 review).
+func TestAFeedEndingInADotNamesNoFile(t *testing.T) {
+	for _, feed := range []string{"https://lists.example/a/..", "https://lists.example/a/.", "https://lists.example/.."} {
+		s := verbSettings()
+		s.Providers[1].Feed = feed
+		var log strings.Builder
+		rows := ExtrasVerb{Name: "bl", Args: []string{"ex"}, DBDir: "/db", Settings: s}.plan(func(m string) { log.WriteString(m) })
+		if len(rows) != 0 || log.String() != "\nBlacklist provider [ ex ] skipped: its feed names no file\n" {
+			t.Errorf("%s: rows %+v, log %q; want none and the skip", feed, rows, log.String())
+		}
+	}
+}
+
+// bl logs no Blacklist report (only bls prints it, pfblockerng.php:442-448); an unknown id is logged once, an empty one
+// never (#4119 review).
+func TestTheBlacklistVerbsLogs(t *testing.T) {
+	f := &Fetcher{RetryDelay: 1}
+	f.Resolve = func(context.Context, string) ([]netip.Addr, error) { return nil, errors.New("no such host") }
+	var log strings.Builder
+	f.RunExtras(context.Background(), ExtrasVerb{Name: "bl", Args: []string{",gone,ex,gone,"}, GeoIPShare: t.TempDir(),
+		DBDir: t.TempDir(), Settings: verbSettings(), Log: &log})
+	if strings.Contains(log.String(), "... Failed") {
+		t.Errorf("bl logged the Blacklist report:\n%s", log.String())
+	}
+	if n := strings.Count(log.String(), "skipped"); n != 1 || !strings.Contains(log.String(), "[ gone ] skipped") {
+		t.Errorf("skip lines = %d, want one for gone:\n%s", n, log.String())
+	}
+}
+
+// A geoip row the run's end cut short blocks the conversion, as PHP's maxmind_feed_error does for any geoip failure: its
+// data is not new. The rows decide, not the context's state when the exit code is worked out (#4119 review, round 2).
+func TestAnAbortedGeoIPRowBlocksTheConversion(t *testing.T) {
+	converted := false
+	v := ExtrasVerb{Name: "dcc", DBDir: t.TempDir(), Settings: verbSettings(),
+		Convert: func(context.Context) bool { converted = true; return true }}
+	res := ExtrasResult{Rows: []ExtrasRow{{Kind: "geoip", Download: "GeoLite2-Country.tar.gz",
+		Result: refused("aborted", context.Canceled.Error(), "")}}}
+	if code := v.exit(context.Background(), res); code != 1 || converted {
+		t.Errorf("(exit, converted) = (%d, %v), want (1, false)", code, converted)
+	}
+}
+
+// A run whose context ended never reports success and starts no conversion, whatever its rows did: an ended scheduled
+// dcc over a pending geoip.update exits 3, not 2 (#4119 review, round 3).
+func TestAnEndedRunNeverSucceedsNorConverts(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, convert := range []bool{true, false} {
+		db := t.TempDir()
+		if err := os.WriteFile(filepath.Join(db, "geoip.update"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		converted := false
+		v := ExtrasVerb{Name: "dcc", Args: []string{"scheduled"}, DBDir: db, Settings: verbSettings()}
+		if convert {
+			v.Convert = func(context.Context) bool { converted = true; return true }
+		}
+		if code := v.exit(ctx, ExtrasResult{OK: true}); code != 3 || converted {
+			t.Errorf("convert set %v: (exit, converted) = (%d, %v), want (3, false)", convert, code, converted)
+		}
+	}
+}
+
+// Any failed geoip row blocks the conversion, whatever its stage, as PHP's maxmind_feed_error does (#4119 review,
+// round 3).
+func TestAnyFailedGeoIPRowBlocksTheConversion(t *testing.T) {
+	for _, stage := range []string{"fetch", "aborted", "publish"} {
+		converted := false
+		v := ExtrasVerb{Name: "dcc", DBDir: t.TempDir(), Settings: verbSettings(),
+			Convert: func(context.Context) bool { converted = true; return true }}
+		res := ExtrasResult{Rows: []ExtrasRow{{Kind: "geoip", Result: refused(stage, "r", "")}}}
+		if code := v.exit(context.Background(), res); code != 1 || converted {
+			t.Errorf("%s: (exit, converted) = (%d, %v), want (1, false)", stage, code, converted)
+		}
+	}
+}
+
+// The archive's name is the last segment of the feed's path as written, without the query or fragment: a space, a
+// non-ASCII letter or a malformed escape stays as pathinfo() keeps it. A feed with no path names no file, so userinfo
+// never becomes a name.
+func TestABlacklistArchiveNameIsThePathAsWritten(t *testing.T) {
+	for feed, want := range map[string]string{
+		"https://lists.example/cat/my list.tar.gz":       "my list.tar.gz",
+		"https://lists.example/catégories.tar.gz":        "catégories.tar.gz",
+		"https://lists.example/a%zz.tar.gz?key=k#frag":   "a%zz.tar.gz",
+		"https://lists.example/cat/my%20list.tar.gz#x?y": "my%20list.tar.gz",
+		"https://user:pw@lists.example":                  "",
+		"https://user:pw@lists.example?x=/a.tar.gz":      "",
+	} {
+		s := verbSettings()
+		s.Providers[1].Feed = feed
+		rows := ExtrasVerb{Name: "bl", Args: []string{"ex"}, DBDir: "/db", Settings: s}.plan(func(string) {})
+		got := ""
+		if len(rows) == 1 {
+			got = rows[0].Download
+		}
+		if got != want || (len(rows) == 1 && rows[0].File != want) {
+			t.Errorf("%s: rows %+v, want the name %q", feed, rows, want)
+		}
+	}
 }

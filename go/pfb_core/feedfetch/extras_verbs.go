@@ -199,10 +199,12 @@ func (v ExtrasVerb) exit(ctx context.Context, res ExtrasResult) int {
 	s := v.Settings
 	switch v.Name {
 	case "dc", "dcc":
-		ok := res.OK
-		// A geoip row the run's end cut short is no MaxMind error, but its data is not new either: it blocks the conversion.
-		aborted := slices.ContainsFunc(res.Rows, func(r ExtrasRow) bool { return r.Kind == "geoip" && r.Stage == "aborted" })
-		if !res.MaxMindError && !aborted && (!s.MaxMindCSVDisabled || s.MaxMindKey != "" || s.MaxMindAccount != "") && v.Convert != nil {
+		// Any failed geoip row blocks the conversion, as PHP's maxmind_feed_error does: an aborted one is no MaxMind
+		// error, but its data is not new either. A run whose context ended never succeeds and converts nothing.
+		failed := res.MaxMindError || slices.ContainsFunc(res.Rows, func(r ExtrasRow) bool { return r.Kind == "geoip" && !r.OK })
+		ended := ctx.Err() != nil
+		ok := res.OK && !ended
+		if !failed && !ended && (!s.MaxMindCSVDisabled || s.MaxMindKey != "" || s.MaxMindAccount != "") && v.Convert != nil {
 			ok = v.Convert(ctx) && ok
 		}
 		_, err := os.Stat(filepath.Join(v.DBDir, "geoip.update"))
