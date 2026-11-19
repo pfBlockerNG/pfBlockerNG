@@ -244,8 +244,8 @@ final class CrowdsecMetricsSourceTest extends TestCase
 		yield 'a string' => ['"status"'];
 		yield 'an empty object' => ['{}'];
 		yield 'no updated_at' => [$with(static function (array &$s): void { unset($s['updated_at']); })];
-		// Fresh but a string: only the type check can refuse it
-		yield 'updated_at a string' => [$with(static function (array &$s): void { $s['updated_at'] = (string) (time() - 1); })];
+		// Fresh but a string ("NOW_STRING" becomes one when written): only the type check can refuse it
+		yield 'updated_at a string' => [$with(static function (array &$s): void { $s['updated_at'] = 'NOW_STRING'; })];
 		yield 'lapi_requests negative' => [$with(static function (array &$s): void { $s['lapi_requests'] = -1; })];
 		yield 'lapi_errors a float' => [$with(static function (array &$s): void { $s['lapi_errors'] = 1.5; })];
 		yield 'lapi_requests beyond 64-bit' => [str_replace('"lapi_requests":1,', '"lapi_requests":184467440737095516150,', $with(static function (array &$s): void {}))];
@@ -263,7 +263,8 @@ final class CrowdsecMetricsSourceTest extends TestCase
 	#[DataProvider('garbled')]
 	public function testAGarbledStatusFileIsDownAndTheOtherSourcesStay(string $raw): void
 	{
-		$this->writeStatus(str_replace('"NOW"', (string) (time() - 1), $raw));
+		$now = time() - 1;
+		$this->writeStatus(str_replace(['"NOW"', '"NOW_STRING"'], [(string) $now, "\"{$now}\""], $raw));
 
 		[$snapshot, $prom] = $this->collect();
 
