@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -166,10 +167,11 @@ func stripped(name string) string {
 
 func (f *Fetcher) extractTarStripped(ctx context.Context, mime, raw, dir string) error {
 	return walkTar(ctx, mime, raw, func(h *tar.Header, r io.Reader) error {
-		if h.Typeflag == tar.TypeLink && stripped(h.Linkname) == stripped(h.Name) {
+		name := stripped(h.Name)
+		if h.Typeflag == tar.TypeLink && path.Clean(stripped(h.Linkname)) == path.Clean(name) {
 			return nil // a hard link to its own name (GNU tar's second copy of a file) leaves that file in place
 		}
-		return f.writeMember(dir, stripped(h.Name), h.Typeflag == tar.TypeDir, regularMember(h), r)
+		return f.writeMember(dir, name, h.Typeflag == tar.TypeDir, regularMember(h), r)
 	})
 }
 
@@ -230,7 +232,7 @@ func (f *Fetcher) writeMember(dir, name string, isDir, isReg bool, r io.Reader) 
 	p := filepath.Join(dir, rel)
 	if isDir {
 		if info, err := os.Lstat(p); err == nil && !info.IsDir() {
-			if err := os.Remove(p); err != nil {
+			if err := removeEarlier(p); err != nil {
 				return err
 			}
 		}
