@@ -57,7 +57,8 @@ func TestAnExtrasVerbLogsEachFailureWithoutASecret(t *testing.T) {
 			for _, line := range tc.lines {
 				i := strings.Index(log.String()[at:], line)
 				if i < 0 {
-					t.Fatalf("log lacks %q after offset %d:\n%s", line, at, log.String())
+					t.Errorf("log lacks %q after offset %d:\n%s", line, at, log.String())
+					break // the secret check below still runs
 				}
 				at += i + len(line)
 			}

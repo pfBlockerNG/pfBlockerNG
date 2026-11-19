@@ -179,7 +179,7 @@ func TestTheExtrasVerbsExitCodes(t *testing.T) {
 		{name: "no conversion after a MaxMind failure", verb: "dcc", res: ExtrasResult{MaxMindError: true}, convert: new(true),
 			want: 1},
 		{name: "no conversion with the CSV skipped and no credential", verb: "dcc", res: ExtrasResult{OK: true},
-			edit: func(s *ExtrasSettings) { s.MaxMindCSVDisabled, s.MaxMindAccount, s.MaxMindKey = true, "", "" },
+			edit:    func(s *ExtrasSettings) { s.MaxMindCSVDisabled, s.MaxMindAccount, s.MaxMindKey = true, "", "" },
 			convert: new(false), want: 0},
 		{name: "conversion with the CSV skipped and an account", verb: "dcc", res: ExtrasResult{OK: true},
 			edit: func(s *ExtrasSettings) { s.MaxMindCSVDisabled, s.MaxMindKey = true, "" }, convert: new(false), want: 1,
