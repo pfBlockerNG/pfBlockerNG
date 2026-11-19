@@ -19,36 +19,30 @@ import (
 // target is the share, accepts. A zip of one member is published whole over target. Every member name is checked before
 // anything is written (ADR-46). Any other accepted body is renamed over target. On a database row a body, or the
 // archive's member of that name, must be a MaxMind DB (owner, #4058).
-func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target string) bool {
-	switch mime {
-	case mimeGzip, mimeTar, mimeZip:
-		if structural(ctx, mime, raw, io.Discard) != nil {
-			return false
-		}
-	}
+func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target string) Result {
 	switch mime {
 	case mimeGzip, mimeTar:
 		names, ok := tarNames(ctx, mime, raw)
-		if !ok || unsafeMember(names) {
-			return false
+		if r := memberRefused(names, ok); r != nil {
+			return *r
 		}
-		return f.mergeIntoDir(share, func(dir string) error {
+		return f.merged(share, func(dir string) error {
 			return checkedDatabases(dir, target, f.extractTarStripped(ctx, mime, raw, dir))
 		})
 	case mimeZip:
 		names, ok := zipNames(raw)
 		if ok && len(names) > 1 {
-			if unsafeMember(names) {
-				return false
+			if r := memberRefused(names, ok); r != nil {
+				return *r
 			}
-			return f.mergeIntoDir(target, func(dir string) error {
+			return f.merged(target, func(dir string) error {
 				return checkedDatabases(dir, target, f.extractZipStripped(ctx, raw, dir))
 			})
 		}
 		// tar -xOf of the zip: every member's bytes, published whole over target (a directory refuses it).
 		staged, err := os.CreateTemp(filepath.Dir(target), ".pfbstage_")
 		if err != nil {
-			return false
+			return refused("publish", err.Error(), "")
 		}
 		werr := extractZipPayload(ctx, raw, &capWriter{w: staged, left: f.ceiling()})
 		if cerr := staged.Chmod(0o644); werr == nil {
@@ -60,13 +54,45 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 		if werr == nil && isDatabase(target) && !maxMindDB(staged.Name()) {
 			werr = errNotADatabase
 		}
-		if werr != nil || os.Rename(staged.Name(), target) != nil {
+		if werr != nil {
 			os.Remove(staged.Name())
-			return false
+			return refused("extract", werr.Error(), filepath.Base(raw))
 		}
-		return true
+		if err := os.Rename(staged.Name(), target); err != nil {
+			os.Remove(staged.Name())
+			return refused("publish", err.Error(), "")
+		}
+		return accepted
 	}
-	return os.Rename(raw, target) == nil
+	if err := os.Rename(raw, target); err != nil {
+		return refused("publish", err.Error(), "")
+	}
+	return accepted
+}
+
+// memberRefused is pfb_archive_unsafe_member() as a refusal: an archive that cannot be listed, or its first member name
+// that would leave the extraction folder; nil when every name is safe.
+func memberRefused(names []string, listed bool) *Result {
+	detected := "unlistable-archive"
+	if listed {
+		if detected = unsafeMember(names); detected == "" {
+			return nil
+		}
+	}
+	r := refused("member", "unsafe_member_name", detected)
+	return &r
+}
+
+// merged is mergeIntoDir as a row's outcome: what stopped the extraction, else a publication that could not complete.
+func (f *Fetcher) merged(target string, extract func(dir string) error) Result {
+	var xerr error
+	if f.mergeIntoDir(target, func(dir string) error { xerr = extract(dir); return xerr }) {
+		return accepted
+	}
+	if xerr != nil {
+		return refused("extract", xerr.Error(), "")
+	}
+	return refused("publish", "the extraction could not be published", "")
 }
 
 var (
@@ -81,23 +107,23 @@ var rename = os.Rename
 // link is os.Link, a test seam for link(2) as FreeBSD has it.
 var link = os.Link
 
-// unsafeMember is pfb_archive_unsafe_member(): an absolute name, a ".." component, a component over 255 bytes or a name
-// over 1024 bytes.
-func unsafeMember(names []string) bool {
+// unsafeMember is pfb_archive_unsafe_member(): the first name that is absolute, has a ".." component, a component over
+// 255 bytes or is over 1024 bytes; "" when there is none.
+func unsafeMember(names []string) string {
 	for _, n := range names {
 		if n == "" {
 			continue
 		}
 		if n[0] == '/' || len(n) > 1024 {
-			return true
+			return n
 		}
 		for _, c := range strings.Split(n, "/") {
 			if c == ".." || len(c) > 255 {
-				return true
+				return n
 			}
 		}
 	}
-	return false
+	return ""
 }
 
 // tarNames is `tar -tf`: the member names, or false when the archive cannot be listed.

@@ -24,6 +24,9 @@ require_once __DIR__ . '/support/HttpFixtureReadiness.php';
  *   maxmind_error   $pfb['maxmind_feed_error'] after the step.
  *   files           {"db/<path>" or "share/<path>": content, {"b64": bytes} or null when absent}: only the files named.
  *   requests        what the servers recorded (host only where named; query only where named).
+ *   reason, stage, detected   the step's last refusal, checked only where named: the last "pfb_validate: REJECT"
+ *                   line's reason code, stage and detected, else the Extras log's last "— skipped" text or failed
+ *                   transfer status, with stage "transfer".
  *
  * `pfblockerng.sh asn_table` (the ASN conversion's, #4034) is a stand-in that records its call in db/script.calls.
  *
@@ -140,6 +143,7 @@ final class ExtrasParityCorpusTest extends TestCase
 			$this->seed($step['seed'] ?? []);
 			file_put_contents("{$this->tools}/requests.log", '');
 			file_put_contents($GLOBALS['pfb']['log'], '');
+			file_put_contents($GLOBALS['pfb']['extraslog'], '');
 			// No proxy of the developer's (a saved option or http_proxy) may stand between cURL and the corpus servers.
 			$curl = $this->savedGlobals['pfb']['curl_defaults'] ?? [];
 			foreach ([CURLOPT_PROXYPORT, CURLOPT_PROXYAUTH, CURLOPT_PROXYUSERPWD, CURLOPT_TCP_FASTOPEN] as $opt) {
@@ -193,6 +197,12 @@ final class ExtrasParityCorpusTest extends TestCase
 				$actual['files'][$rel] = self::state("{$this->root}/{$rel}");
 			}
 			$actual['requests'] = $this->requests($want['requests'] ?? []);
+			$refusal = array_combine(['reason', 'stage', 'detected'], $this->refusal());
+			foreach ($refusal as $key => $value) {
+				if (array_key_exists($key, $want)) {
+					$actual[$key] = $value;
+				}
+			}
 			if (isset($want['replaced'])) {
 				// A path counts as replaced when a new file now stands there: an identical download is still published.
 				$actual['replaced'] = array_values(array_filter($want['replaced'],
@@ -279,6 +289,27 @@ final class ExtrasParityCorpusTest extends TestCase
 			@mkdir(dirname($path), 0755, TRUE);
 			file_put_contents($path, is_array($content) ? (string) base64_decode($content['b64'], TRUE) : $this->expand($content));
 		}
+	}
+
+	/**
+	 * The step's last refusal as reason, stage and detected: the last "pfb_validate: REJECT" line of the main log, else
+	 * the Extras log's last "— skipped" text or failed transfer status (stage "transfer"), else nothing.
+	 *
+	 * @return array{?string, ?string, ?string}
+	 */
+	private function refusal(): array
+	{
+		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
+		if (preg_match_all('/pfb_validate: REJECT feed=\S+ stage=(\S+) reason=(\S+) detected=(.*)$/m', $log, $m)) {
+			return [end($m[2]), end($m[1]), rtrim(end($m[3]))];
+		}
+		$extras = (string) @file_get_contents($GLOBALS['pfb']['extraslog']);
+		if (preg_match_all("/\\[ [^\\]]+ \\] (.+?) \xe2\x80\x94 skipped/", $extras, $m)) {
+			return [end($m[1]), 'transfer', NULL];
+		}
+		preg_match_all('/\t\t(\d{3} .+)$/m', $extras, $m);
+		$failed = array_values(array_filter($m[1], static fn (string $s): bool => !in_array(substr($s, 0, 3), ['200', '221', '226'], TRUE)));
+		return $failed ? [rtrim(end($failed)), 'transfer', NULL] : [NULL, NULL, NULL];
 	}
 
 	/** A file's content, NULL when nothing is at the path, or a marker for an entry that is not a regular file. */

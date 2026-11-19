@@ -51,7 +51,9 @@
 						"server": "origin",
 						"path": "/majestic_million.csv"
 					}
-				]
+				],
+				"reason": "semantic_invalid",
+				"stage": "top1m"
 			}
 		}
 	]

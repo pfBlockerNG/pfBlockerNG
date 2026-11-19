@@ -51,7 +51,10 @@
 						"server": "origin",
 						"path": "/downloads/top10milliondomains.csv.zip"
 					}
-				]
+				],
+				"reason": "semantic_invalid",
+				"stage": "top1m",
+				"detected": "top10milliondomains.csv"
 			}
 		}
 	]

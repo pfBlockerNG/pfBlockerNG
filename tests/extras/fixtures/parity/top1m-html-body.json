@@ -51,7 +51,9 @@
 						"server": "origin",
 						"path": "/top-1m.csv.zip"
 					}
-				]
+				],
+				"reason": "semantic_invalid",
+				"stage": "top1m"
 			}
 		}
 	]

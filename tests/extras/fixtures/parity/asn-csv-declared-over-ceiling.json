@@ -49,7 +49,9 @@
 						"path": "/data/free/asn.csv.gz",
 						"query": "token=tok123"
 					}
-				]
+				],
+				"reason": "download_too_large",
+				"stage": "size"
 			}
 		}
 	]

@@ -53,7 +53,9 @@
 						"path": "/data/free/asn.mmdb",
 						"query": "token=tok123"
 					}
-				]
+				],
+				"reason": "500 Internal Server Error",
+				"stage": "transfer"
 			}
 		}
 	]

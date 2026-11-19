@@ -52,7 +52,9 @@
 						"server": "origin",
 						"path": "/ut1.tar.gz"
 					}
-				]
+				],
+				"reason": "404 Not Found",
+				"stage": "transfer"
 			}
 		}
 	]

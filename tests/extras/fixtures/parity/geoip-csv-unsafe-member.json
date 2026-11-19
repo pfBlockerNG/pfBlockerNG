@@ -49,7 +49,10 @@
 						"path": "/geoip/databases/GeoLite2-Country-CSV/download",
 						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
 					}
-				]
+				],
+				"reason": "unsafe_member_name",
+				"stage": "member",
+				"detected": "../evil.csv"
 			}
 		}
 	]

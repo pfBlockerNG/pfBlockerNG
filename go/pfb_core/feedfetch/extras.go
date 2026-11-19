@@ -2,8 +2,10 @@ package feedfetch
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,9 +45,19 @@ type ExtrasConfig struct {
 	Detect bool
 }
 
+// ExtrasRow is one Extra's outcome. A refused row's Reason, Stage and Detected say why, as Result does for a feed, so the
+// verbs can tell a bad key from a full disk: Stage is transfer, size, mime, plaintext, structural, member, extract,
+// top1m or publish, and Reason is the code pfb_validate_log() writes wherever today's PHP writes one. No secret reaches
+// them.
+type ExtrasRow struct {
+	Kind, Download string
+	Result
+}
+
 // ExtrasResult is pfblockerng_download_extras()'s return and the flags it leaves in $pfb.
 type ExtrasResult struct {
 	OK           bool
+	Rows         []ExtrasRow // one per Extra, in order
 	MaxMindError bool // a geoip row failed: it blocks the country conversion
 	Top1MChanged bool // dcc downloaded a changed TOP1M list: the DNSBL update is due
 	// Top1MLedger is what the TOP1M download ledger entry (dnsbl/top1m/download) is to become: nil leaves it, "" closes it,
@@ -63,91 +75,135 @@ func (f *Fetcher) DownloadExtras(ctx context.Context, cfg ExtrasConfig, extras [
 	res := ExtrasResult{OK: true}
 	for _, x := range extras {
 		req := Request{URL: x.URL, Timeout: cfg.Timeout}
-		if x.Kind == "top1m" {
-			if !f.top1m(ctx, cfg, x, req, &res) {
-				res.OK = false
-			}
-			continue
-		}
-		if x.Kind == "blacklist" {
-			req.Username, req.Password = x.Username, x.Password
-			verdict := "Completed"
-			if !f.blacklist(ctx, cfg, x, req) {
-				res.OK, verdict = false, "Failed"
-			}
-			res.Report += "\t" + x.Name + " ... " + verdict + "\n"
-			continue
-		}
+		var r Result
 		switch x.Kind {
-		case "asn":
-			req.URL += rawURLEncode(cfg.ASNToken)
-		case "geoip":
-			req.Username, req.Password = cfg.MaxMindAccount, cfg.MaxMindKey
-		}
-		if !f.extra(ctx, cfg, x, req) {
-			res.OK = false
-			if x.Kind == "geoip" && ctx.Err() == nil { // an aborted run is no MaxMind failure
+		case "top1m":
+			r = f.top1m(ctx, cfg, x, req, &res)
+		case "blacklist":
+			req.Username, req.Password = x.Username, x.Password
+			r = f.blacklist(ctx, cfg, x, req)
+			res.Report += "\t" + x.Name + " ... " + map[bool]string{true: "Completed", false: "Failed"}[r.OK] + "\n"
+		default:
+			switch x.Kind {
+			case "asn":
+				req.URL += rawURLEncode(cfg.ASNToken)
+			case "geoip":
+				req.Username, req.Password = cfg.MaxMindAccount, cfg.MaxMindKey
+			}
+			r = f.extra(ctx, cfg, x, req)
+			if !r.OK && x.Kind == "geoip" && ctx.Err() == nil { // an aborted run is no MaxMind failure
 				res.MaxMindError = true
 			}
 		}
+		if !r.OK {
+			res.OK = false
+		}
+		res.Rows = append(res.Rows, ExtrasRow{Kind: x.Kind, Download: x.Download, Result: r})
 	}
 	return res
 }
 
-// extra is pfb_download() for one Extra: the transfer to "<download>.raw", the content gates, the update marker and the
-// publication of its type. It reports whether the Extra succeeded.
-func (f *Fetcher) extra(ctx context.Context, cfg ExtrasConfig, x Extra, req Request) bool {
-	if x.Kind != "asn" && x.Kind != "geoip" {
-		return false
+// refused is a refusal at stage, as pfb_validate_log() records one ("stage=<stage> reason=<reason> detected=<detected>").
+func refused(stage, reason, detected string) Result {
+	return Result{Reason: reason, Stage: stage, Detected: detected}
+}
+
+// accepted is a row that succeeded.
+var accepted = Result{OK: true}
+
+// extrasFetch is how every Extra starts: the entry gate, the proxy and the transfer to raw. It returns the source and the
+// transfer, or the refusal; a status the row does not accept is the caller's.
+func (f *Fetcher) extrasFetch(ctx context.Context, req Request, raw string) (*source, transfer, *Result) {
+	src, reason := f.entry(ctx, req)
+	if src == nil {
+		r := refused("transfer", cmp.Or(reason, "invalid feed URL"), "")
+		return nil, transfer{}, &r
 	}
-	src, _ := f.entry(ctx, req)
-	if src == nil || f.proxyUnusableFor(src) {
-		return false
+	if f.proxyUnusableFor(src) {
+		r := refused("transfer", "proxy_unusable", "")
+		return nil, transfer{}, &r
+	}
+	t := f.fetch(ctx, src, req, raw, nil)
+	if t.reason != "" {
+		stage := "transfer"
+		if t.reason == "download_too_large" {
+			stage = "size" // pfb_validate_log()'s stage for the transfer ceiling
+		}
+		r := refused(stage, t.reason, "")
+		r.Status = t.status
+		return nil, t, &r
+	}
+	return src, t, nil
+}
+
+// transferRefused is a final status the row does not accept.
+func transferRefused(status int) Result {
+	r := refused("transfer", statusReason(status), "")
+	r.Status = status
+	return r
+}
+
+// accepts tells a final status whose body the row takes: 200, an FTP 226 or a file:// 221.
+func accepts(status int) bool { return status == 200 || status == 221 || status == 226 }
+
+// extra is pfb_download() for one Extra: the transfer to "<download>.raw", the content gates, the update marker and the
+// publication of its type.
+func (f *Fetcher) extra(ctx context.Context, cfg ExtrasConfig, x Extra, req Request) Result {
+	if x.Kind != "asn" && x.Kind != "geoip" {
+		return refused("transfer", "unknown Extra kind "+x.Kind, "")
 	}
 	base := filepath.Join(x.Dir, x.Download)
 	raw, target := base+".raw", filepath.Join(x.Dir, x.File)
 	defer os.Remove(raw)
-	t := f.fetch(ctx, src, req, raw, nil)
-	if t.reason != "" {
-		return false
+	src, t, r := f.extrasFetch(ctx, req, raw)
+	if r != nil {
+		return *r
 	}
 	if t.status == 304 {
 		// Unchanged is a success only while something is in service: PHP also reports it with nothing published.
 		_, orig := os.Stat(base + ".orig")
 		_, published := os.Stat(target)
-		return orig == nil && published == nil
+		if orig == nil && published == nil {
+			return accepted
+		}
+		return transferRefused(304)
 	}
-	if t.status != 200 && t.status != 221 && t.status != 226 {
-		return false
+	if !accepts(t.status) {
+		return transferRefused(t.status)
 	}
 
-	mime, ok := f.extraVerdict(ctx, raw, src.host)
+	mime, detected, ok := f.extraVerdict(ctx, raw, src.host)
 	if !ok {
-		return false
+		return refused("mime", "mime_not_allowed", detected)
 	}
 	// A type the row cannot publish is refused before the update marker: PHP reports an asn bzip2 or zip a success
 	// with only "<download>.orig" written, which nothing reads, and fails a geoip bzip2 after the marker.
 	if mime == mimeBzip2 || mime == mimeZip && x.Kind == "asn" {
-		return false
+		return refused("extract", "archive_not_publishable", mime)
 	}
 	archive := mime == mimeGzip || mime == mimeZip || mime == mimeTar
 	if isDatabase(target) {
 		// A database row takes a MaxMind DB and nothing else: a text page is not one, and a database is never scanned as
 		// text (owner, #4058; PHP renames any text body over it, and its sanity scan refuses the binary asn.mmdb).
 		if !archive && !maxMindDB(raw) {
-			return false
+			return refused("structural", "not_a_maxmind_db", filepath.Base(raw))
 		}
 	} else if f.Sanity && (mime == mimeText || mime == mimeHTML) {
-		if sane(raw) != "" {
-			return false
+		if why := sane(raw); why != "" {
+			return refused("plaintext", why, filepath.Base(raw))
 		}
 	}
 	touch(filepath.Join(cfg.DBDir, x.Kind+".update"))
 	if !t.lastMod.IsZero() {
 		os.Chtimes(raw, t.lastMod, t.lastMod)
 	}
-	if archive && f.extractShort(raw, x.Dir, cfg.DBDir, target, filepath.Dir(target)) {
-		return false
+	if archive {
+		if f.extractShort(raw, x.Dir, cfg.DBDir, target, filepath.Dir(target)) {
+			return refused("size", "staging_space_low", filepath.Base(raw))
+		}
+		if structural(ctx, mime, raw, io.Discard) != nil {
+			return refused("structural", "probe_failed", mime+" "+filepath.Base(raw))
+		}
 	}
 	if x.Kind == "geoip" {
 		return f.publishGeoIP(ctx, mime, raw, x.Dir, target)
@@ -157,16 +213,15 @@ func (f *Fetcher) extra(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 
 // extraVerdict is pfb_filter(FILE_MIME) with its host exception: an octet stream from ipinfo.io (the binary asn.mmdb)
 // is taken for text/plain before any structural recovery.
-func (f *Fetcher) extraVerdict(ctx context.Context, raw, host string) (string, bool) {
+func (f *Fetcher) extraVerdict(ctx context.Context, raw, host string) (mime, detected string, ok bool) {
 	if h, err := os.Open(raw); err == nil {
 		mime := classify(head(h))
 		h.Close()
 		if mime == mimeOctet && host == "ipinfo.io" {
-			return mimeText, true
+			return mimeText, "", true
 		}
 	}
-	mime, _, ok := verdict(ctx, raw)
-	return mime, ok
+	return verdict(ctx, raw)
 }
 
 // extractShort is pfb_extract_space_shortfall(): one of the directories cannot hold the archive itself.
@@ -189,28 +244,31 @@ func (f *Fetcher) extractShort(raw string, dirs ...string) bool {
 
 // publishASN is the asn branch: a gzip's stream or a tar's members replace the published file whole (pfb_stage_publish),
 // any other body is renamed over it.
-func (f *Fetcher) publishASN(ctx context.Context, cfg ExtrasConfig, mime, raw, target string) bool {
+func (f *Fetcher) publishASN(ctx context.Context, cfg ExtrasConfig, mime, raw, target string) Result {
 	switch mime {
 	case mimeGzip, mimeTar:
 		staged, err := f.stage(ctx, Feed{Dir: filepath.Dir(target)}, mime, raw, false)
 		if err != nil {
-			return false
+			return refused("extract", err.Error(), filepath.Base(raw))
 		}
 		// A database row takes a MaxMind DB: what an archive holds is checked as a bare body is (owner, #4058).
 		if isDatabase(target) && !maxMindDB(staged) {
 			os.Remove(staged)
-			return false
+			return refused("structural", "not_a_maxmind_db", filepath.Base(raw))
 		}
-		if os.Rename(staged, target) != nil {
+		if err := os.Rename(staged, target); err != nil {
 			os.Remove(staged)
-			return false
+			return refused("publish", err.Error(), "")
 		}
 		if mime == mimeGzip && cfg.ASNTable != nil {
 			cfg.ASNTable(ctx)
 		}
-		return true
+		return accepted
 	}
-	return os.Rename(raw, target) == nil
+	if err := os.Rename(raw, target); err != nil {
+		return refused("publish", err.Error(), "")
+	}
+	return accepted
 }
 
 // rawURLEncode is PHP's rawurlencode(): everything but letters, digits and "-_.~" is percent-encoded.

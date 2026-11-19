@@ -49,7 +49,9 @@
 						"path": "/data/free/asn.csv.gz",
 						"query": "token="
 					}
-				]
+				],
+				"reason": "403 Forbidden",
+				"stage": "transfer"
 			}
 		}
 	]

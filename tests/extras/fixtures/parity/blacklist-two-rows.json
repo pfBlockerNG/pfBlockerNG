@@ -67,7 +67,9 @@
 						"server": "origin",
 						"path": "/cats.tar"
 					}
-				]
+				],
+				"reason": "500 Internal Server Error",
+				"stage": "transfer"
 			}
 		}
 	]

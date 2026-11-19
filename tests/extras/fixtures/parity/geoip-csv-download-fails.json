@@ -50,7 +50,9 @@
 						"path": "/geoip/databases/GeoLite2-Country-CSV/download",
 						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
 					}
-				]
+				],
+				"reason": "500 Internal Server Error",
+				"stage": "transfer"
 			}
 		}
 	]
