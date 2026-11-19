@@ -24,8 +24,8 @@ type daemon struct {
 	lastPull  time.Time
 	lastErrAt time.Time
 	lastErr   string
-	dropped   [2]counter // the inbound rules' counters at the last pull
-	sent      [2]counter // dropped as of the last usage post
+	dropped   [2]counter // the inbound rules' counters at the last read
+	window    [2]counter // drops counted since the last usage post, across counter resets
 }
 
 func newDaemon(cfg *config, log *logger, pf *pfctl, api *lapiClient, now func() time.Time) *daemon {
@@ -50,21 +50,25 @@ func (d *daemon) setup(ctx context.Context) error {
 // pull runs one tick: fetch and apply the stream, reconcile, read the counters, write the status file. A failed
 // fetch changes nothing in pf; it is returned after the rest of the tick has run.
 func (d *daemon) pull(ctx context.Context) error {
+	var fresh []netip.Addr
 	resp, err := d.api.pull(ctx, !d.synced)
 	if err != nil {
 		d.lastErr, d.lastErrAt = err.Error(), d.now()
 		d.log.errorf("LAPI pull failed: %v", err)
 	} else {
 		d.synced, d.lastPull = true, d.now()
-		d.apply(ctx, resp)
+		fresh = d.apply(ctx, resp)
 	}
 	d.reconcile(ctx)
+	d.killStates(ctx, fresh)
 	d.readCounters(ctx)
 	d.writeStatus()
 	return err
 }
 
-func (d *daemon) apply(ctx context.Context, resp *streamResponse) {
+// apply loads the pull's net change into pf and returns its new single addresses, whose states are to be killed once
+// the tables are reconciled (so also when an add failed and the reconcile installed them).
+func (d *daemon) apply(ctx context.Context, resp *streamResponse) []netip.Addr {
 	res := d.bans.apply(resp)
 	if n := len(res.invalid); n > 0 {
 		d.log.warnf("ignored %d invalid ban values (first: %s)", n, strings.Join(res.invalid[:min(n, 3)], ", "))
@@ -80,17 +84,16 @@ func (d *daemon) apply(ctx context.Context, resp *streamResponse) {
 	}
 	var fresh []netip.Addr
 	for f, bans := range res.add {
-		if len(bans) == 0 || !d.load(ctx, family(f), "add", bans) {
-			continue
+		if len(bans) > 0 && d.load(ctx, family(f), "add", bans) {
+			d.log.infof("%s: %d values added", tables[f], len(bans))
 		}
-		d.log.infof("%s: %d values added", tables[f], len(bans))
 		for _, b := range bans {
 			if b.single {
 				fresh = append(fresh, b.addr)
 			}
 		}
 	}
-	d.killStates(ctx, fresh)
+	return fresh
 }
 
 // load feeds bans to `pfctl -T op`; a failure marks the table for replacement by the next reconcile.
@@ -174,8 +177,24 @@ func (d *daemon) readCounters(ctx context.Context) {
 		return
 	}
 	for f, table := range tables {
-		d.dropped[f] = sums[table]
+		cur := sums[table]
+		d.window[f].Packets += since(cur.Packets, d.dropped[f].Packets)
+		d.window[f].Bytes += since(cur.Bytes, d.dropped[f].Bytes)
+		d.dropped[f] = cur
 	}
+}
+
+// origins counts the family's values per origin as published (status file, usage labels): an origin that repeats the
+// API key is shown as "(hidden)".
+func (d *daemon) origins(f family) map[string]int {
+	out := map[string]int{}
+	for origin, n := range d.bans.origins(f) {
+		if strings.Contains(origin, d.cfg.APIKey) {
+			origin = "(hidden)"
+		}
+		out[origin] += n
+	}
+	return out
 }
 
 func (d *daemon) writeStatus() {
@@ -193,7 +212,7 @@ func (d *daemon) writeStatus() {
 		Dropped:                map[string]counter{},
 	}
 	for f := range 2 {
-		st.Banned[ipTypes[f]] = familyBans{Total: len(d.bans.keys(family(f))), Origins: d.bans.origins(family(f))}
+		st.Banned[ipTypes[f]] = familyBans{Total: len(d.bans.keys(family(f))), Origins: d.origins(family(f))}
 		st.Dropped[ipTypes[f]] = d.dropped[f]
 	}
 	if err := writeStatus(d.cfg.StatusFile, st); err != nil {
@@ -208,15 +227,15 @@ func unixOrZero(t time.Time) int64 {
 	return t.Unix()
 }
 
-// sendUsage posts one usage-metrics window. A failed post is logged and the window dropped.
+// sendUsage closes the usage window: reads the counters, then posts the window. A failed post is logged and the
+// window dropped.
 func (d *daemon) sendUsage(ctx context.Context) {
-	in := usageInput{start: d.started, now: d.now(), window: usageInterval}
+	d.readCounters(ctx)
+	in := usageInput{start: d.started, now: d.now(), window: usageInterval, dropped: d.window}
 	for f := range 2 {
-		in.dropped[f] = counter{Packets: since(d.dropped[f].Packets, d.sent[f].Packets),
-			Bytes: since(d.dropped[f].Bytes, d.sent[f].Bytes)}
-		in.origins[f] = d.bans.origins(family(f))
+		in.origins[f] = d.origins(family(f))
 	}
-	d.sent = d.dropped
+	d.window = [2]counter{}
 	body, err := usagePayload(in)
 	if err == nil {
 		err = d.api.postUsage(ctx, body)
@@ -228,7 +247,7 @@ func (d *daemon) sendUsage(ctx context.Context) {
 	d.log.debugf("usage metrics sent")
 }
 
-// since is cur's growth over prev; a counter below prev was reset by a filter reload and counts from zero.
+// since is cur's growth over prev; a counter below prev was reset by a filter reload and counted from zero.
 func since(cur, prev uint64) uint64 {
 	if cur < prev {
 		return cur

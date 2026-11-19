@@ -47,6 +47,16 @@ func TestTestFlagValidatesTheConfigAndExits(t *testing.T) {
 	if strings.Contains(out.String()+errOut.String(), testKey) {
 		t.Fatal("the key was printed")
 	}
+	badKey := validConfigMap()
+	badKey["api_key"] = testKey + " trailing" // rejected: whitespace
+	out.Reset()
+	errOut.Reset()
+	if code := realMain([]string{"-t", "-c", writeConfigFile(t, badKey)}, &out, &errOut); code != 1 {
+		t.Fatalf("-t on an invalid api_key exited %d; want 1", code)
+	}
+	if !strings.Contains(errOut.String(), "api_key") || strings.Contains(out.String()+errOut.String(), testKey) {
+		t.Fatalf("stderr = %q; want api_key named and the key not printed", errOut.String())
+	}
 }
 
 func TestMissingConfigFlagIsAUsageError(t *testing.T) {

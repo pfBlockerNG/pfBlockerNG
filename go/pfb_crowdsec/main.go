@@ -90,6 +90,11 @@ func serve(cfg *config, out io.Writer, pfctlBin, device string) int {
 	log.infof("pfb_crowdsec %s starting: LAPI %s, tables %s and %s, every %s", version, cfg.APIURL, cfg.TableV4,
 		cfg.TableV6, cfg.interval)
 	if err := d.setup(ctx); err != nil {
+		if ctx.Err() != nil { // stopped during start-up: leave both tables empty, as a normal stop does
+			d.shutdown(context.WithoutCancel(ctx))
+			log.infof("stopped")
+			return 0
+		}
 		log.errorf("%v", err)
 		return 1
 	}

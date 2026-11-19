@@ -3,11 +3,14 @@ package main
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 )
 
 // usageInterval is go-cs-bouncer's default for POST /v1/usage-metrics.
 const usageInterval = 15 * time.Minute
+
+const maxLabel = 255
 
 // usageInput is one window's worth of figures: dropped counts for the window, active decisions now.
 type usageInput struct {
@@ -60,8 +63,12 @@ func usagePayload(in usageInput) ([]byte, error) {
 		}
 		slices.Sort(origins)
 		for _, origin := range origins {
+			label := origin
+			if len(label) > maxLabel { // the LAPI schema's MetricsLabels limit
+				label = strings.ToValidUTF8(label[:maxLabel], "")
+			}
 			items = append(items, metricItem{Name: "active_decisions", Value: float64(in.origins[f][origin]), Unit: "ip",
-				Labels: map[string]string{"origin": origin, "ip_type": ipTypes[f]}})
+				Labels: map[string]string{"origin": label, "ip_type": ipTypes[f]}})
 		}
 	}
 	return json.Marshal(allMetrics{RemediationComponents: []remediationComponent{{

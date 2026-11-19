@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -71,22 +72,37 @@ func (c *lapiClient) postUsage(ctx context.Context, body []byte) error {
 
 func (c *lapiClient) do(ctx context.Context, method, target string, body []byte, read func(io.Reader) error) error {
 	c.requests++
-	err := c.roundTrip(ctx, method, target, body, read)
+	status, err := c.roundTrip(ctx, method, target, body, read)
 	if err != nil {
 		c.errors++
-		err = errors.New(redact(err.Error(), c.key))
+		if strings.Contains(err.Error(), c.key) {
+			shown := ""
+			if status != 0 {
+				shown = fmt.Sprintf(" (HTTP %d)", status)
+			}
+			err = fmt.Errorf("%s %s failed%s; the details repeat the key and are omitted", method, c.path(target), shown)
+		}
 	}
 	return err
 }
 
-func (c *lapiClient) roundTrip(ctx context.Context, method, target string, body []byte, read func(io.Reader) error) error {
+// path is target's path for messages; target is one of the client's own URLs.
+func (c *lapiClient) path(target string) string {
+	if u, err := url.Parse(target); err == nil {
+		return u.Path
+	}
+	return ""
+}
+
+// roundTrip makes one request; status is the reply's HTTP status, 0 when there was none.
+func (c *lapiClient) roundTrip(ctx context.Context, method, target string, body []byte, read func(io.Reader) error) (status int, err error) {
 	var reqBody io.Reader
 	if body != nil {
 		reqBody = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, reqBody)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("X-Api-Key", c.key)
 	req.Header.Set("User-Agent", "pfb_crowdsec/"+version)
@@ -96,7 +112,7 @@ func (c *lapiClient) roundTrip(ctx context.Context, method, target string, body 
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -106,17 +122,17 @@ func (c *lapiClient) roundTrip(ctx context.Context, method, target string, body 
 		} else if len(excerpt) > 200 {
 			excerpt = excerpt[:200] // a cut-off key prefix cannot reach the log: the whole reply was checked
 		}
-		return fmt.Errorf("%s %s: HTTP %s: %s", method, req.URL.Path, resp.Status, bytes.TrimSpace(excerpt))
+		return resp.StatusCode, fmt.Errorf("%s %s: HTTP %s: %s", method, req.URL.Path, resp.Status, bytes.TrimSpace(excerpt))
 	}
 	if read == nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-		return nil
+		return resp.StatusCode, nil
 	}
 	if err := read(http.MaxBytesReader(nil, resp.Body, c.maxBody)); err != nil {
 		if tooLarge := (*http.MaxBytesError)(nil); errors.As(err, &tooLarge) {
-			return fmt.Errorf("%s %s: response body larger than the %d-byte limit", method, req.URL.Path, c.maxBody)
+			return resp.StatusCode, fmt.Errorf("%s %s: response body larger than the %d-byte limit", method, req.URL.Path, c.maxBody)
 		}
-		return err
+		return resp.StatusCode, err
 	}
-	return nil
+	return resp.StatusCode, nil
 }

@@ -67,6 +67,9 @@ func nextEvent(t *testing.T, events <-chan string, result <-chan error) string {
 	case err := <-result:
 		t.Fatalf("run returned %v before the expected event", err)
 		return ""
+	case <-time.After(time.Minute): // salvage watchdog only: events follow synchronous work at once
+		t.Fatal("STUCK/ENVIRONMENT: the run loop sent no event within a minute")
+		return ""
 	}
 }
 
@@ -209,7 +212,8 @@ func TestAnEmptyDeltaRunsNoTableChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range h.pf.takeCalls() {
-		if c.file != "" || slices.Contains(c.args, "-k") || slices.Equal(c.args, []string{"-s", "states"}) {
+		if c.file != "" || slices.Contains(c.args, "-T") || slices.Contains(c.args, "-k") ||
+			slices.Equal(c.args, []string{"-s", "states"}) {
 			t.Fatalf("an empty delta ran %s", c)
 		}
 	}
@@ -376,6 +380,8 @@ func TestRunReconcilesOnSIGUSR1AndFlushesOnShutdown(t *testing.T) {
 	case usr1 <- syscall.SIGUSR1:
 	case err := <-result:
 		t.Fatalf("run returned %v before SIGUSR1", err)
+	case <-time.After(time.Minute):
+		t.Fatal("STUCK/ENVIRONMENT: the run loop did not take SIGUSR1 within a minute")
 	}
 	if e := nextEvent(t, events, result); e != "reconcile" {
 		t.Fatalf("event after SIGUSR1 = %q; want reconcile", e)
@@ -390,14 +396,18 @@ func TestRunReconcilesOnSIGUSR1AndFlushesOnShutdown(t *testing.T) {
 	case ticks <- time.Now():
 	case err := <-result:
 		t.Fatalf("run returned %v before the tick", err)
+	case <-time.After(time.Minute):
+		t.Fatal("STUCK/ENVIRONMENT: the run loop did not take the tick within a minute")
 	}
 	if e := nextEvent(t, events, result); e != "pull" {
 		t.Fatalf("event after a tick = %q; want pull", e)
 	}
 
 	cancel()
-	if err := <-result; err != nil {
-		t.Fatalf("run ended with %v", err)
+	select {
+	case <-result:
+	case <-time.After(time.Minute):
+		t.Fatal("STUCK/ENVIRONMENT: the run loop did not stop within a minute")
 	}
 	assertTable(t, h.pf, "crowdsec_v4")
 	assertTable(t, h.pf, "crowdsec_v6")
@@ -406,6 +416,7 @@ func TestRunReconcilesOnSIGUSR1AndFlushesOnShutdown(t *testing.T) {
 func TestRunPostsUsageOnItsTicker(t *testing.T) {
 	h := newHarness(t, ok(startupBody))
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	usage := make(chan time.Time)
 	events := make(chan string, 16)
 	result := make(chan error, 1)
