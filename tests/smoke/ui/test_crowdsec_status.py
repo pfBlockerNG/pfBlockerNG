@@ -220,7 +220,7 @@ def _now(vm: helpers.SmokeVM) -> int:
 
 def _fake_running(vm: helpers.SmokeVM) -> None:
     """A live process named by the bouncer's pidfile: what the page reads as a running service."""
-    _sh(vm, f"/usr/sbin/daemon -p {PIDFILE} /bin/sleep 600")
+    _sh(vm, f"/usr/sbin/daemon -f -p {PIDFILE} /bin/sleep 600")
     helpers.wait_until(
         lambda: vm.ssh("/bin/sh", "-c", f"pgrep -F {PIDFILE}").returncode == 0,
         timeout=10.0,
