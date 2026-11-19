@@ -1,0 +1,49 @@
+{
+	"schema": 1,
+	"description": "A contiguous-file member (tar type 7) is a category file like a regular one.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"body_b64": "H4sIAAAAAAAC/+3RQQqDMBSE4bf2FJ6gvshrcp6ILoRES1Xo8Y0uu1co/b/NwKwGpktN7Le0Nv2c4zgtcgEtvNmZxXeqOi/Onq2FoHb0zmnwUge5wbas8V2myH86z38Mn5hfaagEAAAAAAAAAAAAAAAAAPAjduFpq8kAKAAA"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"report": "\tUT1 ... Completed\n",
+				"files": {
+					"db/ut1/ut1_adult": "adult.example\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

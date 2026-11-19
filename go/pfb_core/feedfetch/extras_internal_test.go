@@ -350,3 +350,21 @@ func TestAHardLinkThroughAFileIsSkipped(t *testing.T) {
 		t.Errorf("ut1_x exists (%v), want nothing published", err)
 	}
 }
+
+// A member whose name resolves to the extraction folder itself ("t/." once its top folder is stripped) writes nothing,
+// and the folder stays a folder.
+func TestAMemberNamingTheExtractionFolderWritesNothing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "staged")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := &Fetcher{}
+	for _, isReg := range []bool{false, true} {
+		if err := f.writeMember(dir, ".", false, isReg, strings.NewReader("x")); err != nil {
+			t.Errorf("writeMember(.) regular=%v = %v, want nothing written", isReg, err)
+		}
+		if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+			t.Fatalf("the extraction folder is gone or no longer a folder (%v, %v)", info, err)
+		}
+	}
+}

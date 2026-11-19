@@ -141,8 +141,11 @@ func TestTheRemoteTimestampReachesWhatIsPublishedWhole(t *testing.T) {
 			x.Dir, x.URL = dir, "http://"+tc.host+":"+port+"/"+x.Download+tc.query
 			res := extrasFetcher().DownloadExtras(context.Background(), feedfetch.ExtrasConfig{DBDir: dir}, []feedfetch.Extra{x})
 			info, err := os.Stat(filepath.Join(dir, x.File))
-			if !res.OK || err != nil || !info.ModTime().Equal(stamp) {
-				t.Errorf("(ok, %s, err) = (%v, %v, %v), want (true, %v, nil)", x.File, res.OK, info, err, stamp)
+			if err != nil {
+				t.Fatalf("ok %v, %s: %v", res.OK, x.File, err)
+			}
+			if !res.OK || !info.ModTime().Equal(stamp) {
+				t.Errorf("(ok, %s mtime) = (%v, %v), want (true, %v)", x.File, res.OK, info.ModTime(), stamp)
 			}
 		})
 	}

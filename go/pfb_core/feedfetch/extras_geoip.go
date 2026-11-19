@@ -166,7 +166,7 @@ func stripped(name string) string {
 
 func (f *Fetcher) extractTarStripped(ctx context.Context, mime, raw, dir string) error {
 	return walkTar(ctx, mime, raw, func(h *tar.Header, r io.Reader) error {
-		return f.writeMember(dir, stripped(h.Name), h.Typeflag == tar.TypeDir, h.FileInfo().Mode().IsRegular(), r)
+		return f.writeMember(dir, stripped(h.Name), h.Typeflag == tar.TypeDir, regularMember(h), r)
 	})
 }
 
@@ -201,11 +201,17 @@ func (f *Fetcher) extractZipStripped(ctx context.Context, raw, dir string) error
 	return nil
 }
 
+// regularMember tells a tar member that holds a file's bytes: a regular, contiguous or sparse file. Its type flag
+// decides, never its mode bits; a link, special file, pax global header or unknown type is not one.
+func regularMember(h *tar.Header) bool {
+	return h.Typeflag == tar.TypeReg || h.Typeflag == tar.TypeCont || h.Typeflag == tar.TypeGNUSparse
+}
+
 // writeMember writes one stripped member under dir: a directory, or a regular file under the per-file ceiling.
 // A link or special member is skipped where tar would create it (owner, plan of #3978): a symbolic link in a published
 // folder would read its target as data.
 func (f *Fetcher) writeMember(dir, name string, isDir, isReg bool, r io.Reader) error {
-	if name == "" {
+	if name == "" || filepath.Clean(filepath.FromSlash(name)) == "." { // the extraction folder itself
 		return nil
 	}
 	// unsafeMember refused such names before extraction; this keeps the write itself inside dir.
@@ -218,8 +224,11 @@ func (f *Fetcher) writeMember(dir, name string, isDir, isReg bool, r io.Reader) 
 	}
 	// A later member of a name replaces the earlier one, never writing through a hard link it shares; a skipped member
 	// drops it too.
-	if err := removeEarlier(p); err != nil || !isReg {
+	if err := removeEarlier(p); err != nil {
 		return err
+	}
+	if !isReg {
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err

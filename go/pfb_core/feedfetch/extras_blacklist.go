@@ -122,8 +122,9 @@ func linkMember(dir, target, name string) error {
 	return os.Link(from, p)
 }
 
-// removeEarlier removes what an earlier member left at p, so the later member wins: a file, or an empty folder. A folder
-// that holds other members refuses the archive.
+// removeEarlier removes what an earlier member left at p before a later file, link or skipped member takes the name, so
+// the later member wins: a file, or an empty folder. A folder that holds other members refuses the archive, and so does
+// a later folder member over a file (MkdirAll).
 func removeEarlier(p string) error {
 	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 		return err
@@ -142,7 +143,7 @@ func (f *Fetcher) extractCategories(ctx context.Context, mime, archive, name, di
 			// tar renames a hard link's target by the same rules, so a linked category is published too.
 			return linkMember(dir, categoryName(h.Linkname, name), categoryName(h.Name, name))
 		}
-		return f.writeMember(dir, categoryName(h.Name, name), h.Typeflag == tar.TypeDir, h.FileInfo().Mode().IsRegular(), r)
+		return f.writeMember(dir, categoryName(h.Name, name), h.Typeflag == tar.TypeDir, regularMember(h), r)
 	})
 	if err != nil {
 		return err

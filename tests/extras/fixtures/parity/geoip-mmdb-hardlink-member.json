@@ -1,0 +1,78 @@
+{
+	"schema": 1,
+	"description": "A hard-link member is no file: it publishes nothing, so the live file of its name stays. Today's tar publishes it as another name for the database (old_expect); Core skips links.",
+	"hosts": {
+		"download.maxmind.com": [
+			"127.0.0.1",
+			"203.0.113.7"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"maxmind_account": "123456",
+		"maxmind_key": "abcdef"
+	},
+	"seed": {
+		"share/GeoLite2-Country.mmdb": {
+			"b64": "AE9MRC1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+		},
+		"share/COPYRIGHT.txt": "live copyright\n"
+	},
+	"routes": {
+		"origin": {
+			"/geoip/databases/GeoLite2-Country/download": {
+				"body_b64": "H4sIAAAAAAAC/+3UPQrCQBCG4T2KF0jcXVbTG2UVjIooYiX+FSmSgG4gnsmzeBav4GIZCwtFUN+nmWGameYbuy+GqdvrIC7K3B1OK9W0tVGYZbuNeIH02sbcq1evUhoplGlpE0W+9XPV0kqKhhQfUB7d+uBPEX9q1FsE8Xg+mk2XQZJ0O+J8uSbrKknzXbgtMoGfZh/zH48ny+nA9mehq9w7djzNv6zlX+u2jERD2Q88p3/PPwAAAAAAAAAAAAAAAL7aDehUgssAKAAA"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://download.maxmind.com:{port:origin}/geoip/databases/GeoLite2-Country/download?suffix=tar.gz",
+					"file_dwn": "GeoLite2-Country.tar.gz",
+					"file": "GeoLite2-Country.mmdb",
+					"folder": "share",
+					"type": "geoip"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"share/GeoLite2-Country.mmdb": {
+						"b64": "AE5FVy1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+					},
+					"share/COPYRIGHT.txt": "live copyright\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					}
+				]
+			},
+			"old_expect": {
+				"ok": true,
+				"files": {
+					"share/GeoLite2-Country.mmdb": {
+						"b64": "AE5FVy1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+					},
+					"share/COPYRIGHT.txt": {
+						"b64": "AE5FVy1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+					}
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					}
+				]
+			}
+		}
+	]
+}

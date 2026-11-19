@@ -87,19 +87,17 @@ func top1mRow(line string, p top1mProvider) (string, bool) {
 	if line == "" || !strings.Contains(line, ".") || p.domainCol > 0 && !strings.Contains(line, ",") {
 		return "", false
 	}
-	raw := line
-	line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 	var fields []string
 	if strings.Contains(line, `"`) {
 		// The line keeps its ending here, as str_getcsv() gets it: an unterminated quote takes the line break into the field.
-		r := csv.NewReader(strings.NewReader(raw))
+		r := csv.NewReader(strings.NewReader(line))
 		r.FieldsPerRecord, r.LazyQuotes, r.TrimLeadingSpace = -1, true, true
 		var err error
 		if fields, err = r.Read(); err != nil {
 			return "", false
 		}
-	} else if line != "" { // an unquoted row is its commas; a csv.Reader per row made a full list 4x slower than PHP
-		fields = strings.Split(line, ",")
+	} else { // an unquoted row is its commas; a csv.Reader per row made a full list 4x slower than PHP
+		fields = strings.Split(strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"), ",")
 		for i, f := range fields {
 			if f != "" && (f[0] <= ' ' || f[0] >= utf8.RuneSelf) { // most fields start with neither
 				fields[i] = strings.TrimLeftFunc(f, unicode.IsSpace)
