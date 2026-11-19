@@ -306,8 +306,8 @@ func ctxEnded(err error) bool {
 }
 
 // extractionFailure is pfb_download()'s text for an extraction of what (an Extra's name in extrasExtraction, an archive's
-// MIME type, or "xlsx" for a
-// workbook) that err ended: status 153 (SIGXFSZ) for one that outgrew the ceiling, else 1.
+// MIME type, or "xlsx" for a workbook) that err ended. The exit status is 153 (SIGXFSZ) for one that outgrew the ceiling,
+// 0 for a Blacklist archive with no category, else 1.
 func extractionFailure(what string, err error) string {
 	if errors.Is(err, errTooManyXLSXAddresses) {
 		return err.Error()

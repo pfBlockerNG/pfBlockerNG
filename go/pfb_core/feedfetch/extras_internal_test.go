@@ -515,3 +515,16 @@ func TestRedactHidesAShortPasswordsAuthorization(t *testing.T) {
 		t.Errorf("redact = %q, want the authorization hidden and the reason code kept", got)
 	}
 }
+
+// A URL's userinfo is hidden like its query, and an escaped quote in its path does not stop the query being hidden.
+func TestRedactHidesUserinfoAndAQueryPastAnEscapedQuote(t *testing.T) {
+	for in, gone := range map[string]string{
+		"fetch ftp://bl:Sup3rSecret@hostile.example/ut1.tar.gz failed": "Sup3rSecret",
+		`Get "http://user:pw@h/x": dial`:                               "user:pw",
+		`Get "https://h/a\"b?key=TOKENVALUE": dial`:                    "TOKENVALUE",
+	} {
+		if got := (ExtrasConfig{}).redact(in, Extra{}); strings.Contains(got, gone) {
+			t.Errorf("redact(%q) = %q still holds %q", in, got, gone)
+		}
+	}
+}

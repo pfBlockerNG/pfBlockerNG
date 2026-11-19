@@ -129,7 +129,10 @@ var accepted = Result{OK: true}
 
 // urlQuery is a URL's query string in a reason, to its closing double quote (Go's client quotes the URL it failed on,
 // escaping a quote inside it) or to white space; an apostrophe, in the path or the query, is part of the URL.
-var urlQuery = regexp.MustCompile(`(?i)((?:https?|ftp)://[^\s"?]*)\?(?:\\.|[^\s"\\])*`)
+var urlQuery = regexp.MustCompile(`(?i)((?:https?|ftp)://(?:\\.|[^\s"?\\])*)\?(?:\\.|[^\s"\\])*`)
+
+// urlUserinfo is a URL's user and password, as a Blacklist row's ftp://user:pass@host carries them.
+var urlUserinfo = regexp.MustCompile(`(?i)((?:https?|ftp)://)(?:\\.|[^\s"/?#@\\])*@`)
 
 // redact is what a refused row may carry: every URL query, as pfb_redact_url() hides it, and every secret of the run and
 // row, raw, as it travels in a URL or in the Basic authorization it makes, gone, the longest form first. A secret under
@@ -137,6 +140,7 @@ var urlQuery = regexp.MustCompile(`(?i)((?:https?|ftp)://[^\s"?]*)\?(?:\\.|[^\s"
 // or more, still goes.
 func (cfg ExtrasConfig) redact(s string, x Extra) string {
 	s = urlQuery.ReplaceAllString(s, "$1?[redacted]")
+	s = urlUserinfo.ReplaceAllString(s, "$1[redacted]@")
 	var forms []string
 	add := func(user, secret string) {
 		if secret == "" {
