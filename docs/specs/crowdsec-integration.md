@@ -432,8 +432,8 @@ stay banned and a missed ban would stay missing until the next restart.
   unsaved registration, so pfSense CE 2.8.1 showed an empty `filter_rule_function` after `pkg add` of the package. The
   update pass, which also runs as the install's resync, therefore writes the same registration itself when it is missing
   (`pfb_crowdsec_register_rule_hook()`), as it already does for the package's `<logging>` block. It is still the only
-  `config.xml` side effect of the hook. A registration it writes while the bouncer should run reloads the filter, also on
-  an install or upgrade, whose pass ends before its own reload.
+  `config.xml` side effect of the hook. A registration it writes while the bouncer should run reloads the filter at once,
+  since an install or upgrade, and a pass that ends early, never reach the pass's own reload.
 - **Tag.** The tag is written quoted (`tag "<tag>"`), as pfSense writes its own rules' tags. Unquoted, pf reads a tag the
   Settings accept, such as `123` or `quick`, as a number or a keyword, and pfSense then drops every CrowdSec rule.
 - **Should run in a filter reload.** pfSense calls the hook without loading pfBlockerNG's globals, so "should run" (D4)
