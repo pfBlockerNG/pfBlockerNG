@@ -123,8 +123,7 @@ func linkMember(dir, target, name string) error {
 }
 
 // removeEarlier removes what an earlier member left at p before a later file, link or skipped member takes the name, so
-// the later member wins: a file, or an empty folder. A folder that holds other members refuses the archive, and so does
-// a later folder member over a file (MkdirAll).
+// the later member wins: a file, or an empty folder. A folder that holds other members refuses the archive.
 func removeEarlier(p string) error {
 	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 		return err

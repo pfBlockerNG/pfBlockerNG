@@ -1,0 +1,57 @@
+{
+	"schema": 1,
+	"description": "A GNU sparse member is a regular file: the database is extracted whole, holes included.",
+	"hosts": {
+		"download.maxmind.com": [
+			"127.0.0.1",
+			"203.0.113.7"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"maxmind_account": "123456",
+		"maxmind_key": "abcdef"
+	},
+	"seed": {
+		"share/GeoLite2-Country.mmdb": {
+			"b64": "AE9MRC1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+		}
+	},
+	"routes": {
+		"origin": {
+			"/geoip/databases/GeoLite2-Country/download": {
+				"body_b64": "H4sIAAAAAAAC/+3QsQ3CMBCFYY/iBQi2MfEAFGlIxQAokBQpHEshkWAmZmEWVsBBQBGoQAIh/V9zp1fcSS+rwrLuKjNZhL7p2sNaT7NRlHhfbsQHVJRae53ReCqlU6Ht3FjnlB1yY2bOCbkSX9DvuqKVUvzMUIB90cgjv+331t5/EA89OZ7OebHP66ZMtsELAAAAAAAAAAAAAAAAAMCfuADxdeRbACgAAA=="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://download.maxmind.com:{port:origin}/geoip/databases/GeoLite2-Country/download?suffix=tar.gz",
+					"file_dwn": "GeoLite2-Country.tar.gz",
+					"file": "GeoLite2-Country.mmdb",
+					"folder": "share",
+					"type": "geoip"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"replaced": [
+					"share/GeoLite2-Country.mmdb"
+				],
+				"files": {},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					}
+				]
+			}
+		}
+	]
+}
