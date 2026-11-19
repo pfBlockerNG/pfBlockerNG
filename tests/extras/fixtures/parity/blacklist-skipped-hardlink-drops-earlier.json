@@ -1,0 +1,69 @@
+{
+	"schema": 1,
+	"description": "A hard link to a missing target is skipped and drops the earlier file of its name, as any later member does. Today's tar fails the archive (old_expect).",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"seed": {
+		"db/ut1/ut1_old": "old.example\n"
+	},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"body_b64": "H4sIAAAAAAAC/+3UTQ6CQAyG4Vl7Ck8gHSxwnkEm0YQfw0/0+FZ2snID0fA+m066auZLW9ZJqKZ6TKquCbd2cCsQk6vO1SyriM+d1yzVohB9972XvHBHcRuYhjH0Norbpzn8U3yG5l7Hg8POlL+w//b+3H/NrBy9Ddd2j2vs43rj7Xz/7YsvYdX0v7n/ushfsvTM/d+Chc/1BwAAAAAAAAAAAADgz70A/9OnDQAoAAA="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"report": "\tUT1 ... Completed\n",
+				"files": {
+					"db/ut1/ut1_adult": null,
+					"db/ut1/ut1_cat": "cat.example\n",
+					"db/ut1/ut1_old": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			},
+			"old_expect": {
+				"ok": false,
+				"report": "\tUT1 ... Failed\n",
+				"files": {
+					"db/ut1/ut1_adult": null,
+					"db/ut1/ut1_cat": null,
+					"db/ut1/ut1_old": "old.example\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

@@ -166,7 +166,7 @@ func stripped(name string) string {
 
 func (f *Fetcher) extractTarStripped(ctx context.Context, mime, raw, dir string) error {
 	return walkTar(ctx, mime, raw, func(h *tar.Header, r io.Reader) error {
-		return f.writeMember(dir, stripped(h.Name), h.Typeflag == tar.TypeDir, h.Typeflag == tar.TypeReg, r)
+		return f.writeMember(dir, stripped(h.Name), h.Typeflag == tar.TypeDir, h.FileInfo().Mode().IsRegular(), r)
 	})
 }
 
@@ -218,7 +218,7 @@ func (f *Fetcher) writeMember(dir, name string, isDir, isReg bool, r io.Reader) 
 	}
 	// A later member of a name replaces the earlier one, never writing through a hard link it shares; a skipped member
 	// drops it too.
-	if err := removeFile(p); err != nil || !isReg {
+	if err := removeEarlier(p); err != nil || !isReg {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

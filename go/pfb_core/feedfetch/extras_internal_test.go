@@ -335,3 +335,18 @@ func TestACategorySwapThatFailsPutsTheFolderBack(t *testing.T) {
 		t.Errorf("the database folder holds %d entries after the failed swap, want the category folder only", len(entries))
 	}
 }
+
+// A hard link whose target cannot be a file (its path runs through a file) is skipped like any target that was not
+// extracted, not a refusal of the whole archive.
+func TestAHardLinkThroughAFileIsSkipped(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ut1_adult"), []byte("adult.example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := linkMember(dir, "ut1_adult/sub", "ut1_x"); err != nil {
+		t.Fatalf("linkMember through a file = %v, want the link skipped", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "ut1_x")); !os.IsNotExist(err) {
+		t.Errorf("ut1_x exists (%v), want nothing published", err)
+	}
+}

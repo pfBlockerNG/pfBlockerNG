@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 )
@@ -78,9 +79,10 @@ func top1mIdentity(provider, url string, headers []string) string {
 var top1mDomain = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*\.(?:[A-Za-z]{2,}|[Xx][Nn]--[A-Za-z0-9][A-Za-z0-9-]+)$`)
 
 // top1mRow is pfb_top1m_parse_source_row(): the lowercased domain of one line of the list, or false. A row is read as
-// CSV by encoding/csv, not with str_getcsv()'s quirks (owner, 2026-11-19): white space before a field is skipped,
-// quoted or not, and text after a closing quote makes the row malformed, where PHP appends it to the field. A line
-// break an unterminated quote takes into the field is refused by top1mDomain, which has no (?m).
+// CSV by encoding/csv, not with str_getcsv()'s quirks (owner, 2026-11-19): Unicode white space before a field is
+// skipped, quoted or not. Text after a closing quote stays in the field with its quote (LazyQuotes), where PHP drops the
+// quote, and a line break an unterminated quote takes in stays too: top1mDomain, which has no quote and no (?m), refuses
+// both.
 func top1mRow(line string, p top1mProvider) (string, bool) {
 	if line == "" || !strings.Contains(line, ".") || p.domainCol > 0 && !strings.Contains(line, ",") {
 		return "", false
@@ -99,7 +101,9 @@ func top1mRow(line string, p top1mProvider) (string, bool) {
 	} else if line != "" { // an unquoted row is its commas; a csv.Reader per row made a full list 4x slower than PHP
 		fields = strings.Split(line, ",")
 		for i, f := range fields {
-			fields[i] = strings.TrimLeftFunc(f, unicode.IsSpace)
+			if f != "" && (f[0] <= ' ' || f[0] >= utf8.RuneSelf) { // most fields start with neither
+				fields[i] = strings.TrimLeftFunc(f, unicode.IsSpace)
+			}
 		}
 	}
 	if len(fields) != p.columns {
