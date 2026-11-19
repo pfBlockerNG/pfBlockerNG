@@ -724,8 +724,9 @@ pfb_core_service();
 restart_service('pfb_core');
 update_status(" done.\n");
 
-// issue #4071: the CrowdSec bouncer runs only while it should (pfBlockerNG on, CrowdSec on, a key on this node); the removal before an
-// upgrade stopped it and removed its config file, so this starts it again on the new binary
+// issue #4071: the CrowdSec bouncer runs only while it should (pfBlockerNG on, CrowdSec on, a key on this node). The update pass ends
+// early during an install, so the installer applies it itself; an upgrade's removal step stopped the package services, so this
+// starts it again on the new binary
 update_status("Applying the CrowdSec bouncer service...");
 pfb_crowdsec_apply();
 update_status(" done.\n");

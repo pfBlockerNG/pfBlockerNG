@@ -274,7 +274,7 @@ trait SyncPolicyFixtureTrait
 		// #4071: pfblockerngcrowdsec follows it; its key, log level and interfaces are local.
 		$settings('crowdsec');
 
-		$sy ='installedpackages/pfblockerngsync/config/0';
+		$sy = 'installedpackages/pfblockerngsync/config/0';
 		$put(FALSE, "{$sy}/syncscope", 'SYNC<syncscope>');
 		$put(FALSE, "{$sy}/varsynconchanges", 'SYNC<varsynconchanges>');
 		$put(FALSE, "{$sy}/row/0/ip", 'SYNC<target.ip>');

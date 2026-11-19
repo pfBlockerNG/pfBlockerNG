@@ -59,18 +59,24 @@ function pfb_crowdsec_should_run(): bool {
 }
 
 /**
- * An http:// or https:// URL with a host, and no credentials, query or fragment: what the bouncer accepts as its api_url. A character
- * a URL never holds unencoded (space, quotes, <, >, \, ^, `, {, |, }) is refused, which also keeps every shell metacharacter that
- * needs quoting out of the file.
+ * An http:// or https:// URL with a host, and no credentials, query or fragment: what the bouncer accepts as its api_url (its
+ * config check, go/pfb_crowdsec config.go, parses it with net/url). A character a URL never holds unencoded (space, quotes, <, >,
+ * \, ^, `, {, |, }) is refused, which also keeps every shell metacharacter that needs quoting out of the file; so are a % that
+ * starts no escape, an escape in the host other than an IPv6 zone, and an unclosed IPv6 bracket, which net/url refuses.
  */
 function pfb_crowdsec_url_valid(string $url): bool {
-	if (strlen($url) > 2048 || preg_match('/[\x00-\x20"<>\\\\^`{|}\x7f]/', $url) || !preg_match('~^https?://~i', $url)
+	if (strlen($url) > 2048 || preg_match('/[\x00-\x20"<>\\\\^`{|}\x7f]|%(?![0-9A-Fa-f]{2})/', $url) || !preg_match('~^https?://~i', $url)
 	    || str_contains($url, '?') || str_contains($url, '#')) {
 		return FALSE;
 	}
 	$parts = parse_url($url);
-	return is_array($parts) && ($parts['host'] ?? '') !== '' && ($parts['host'] ?? '') !== '[]' && !isset($parts['user'])
-	    && !isset($parts['pass']);
+	if (!is_array($parts) || isset($parts['user']) || isset($parts['pass'])) {
+		return FALSE;
+	}
+	$host = (string) ($parts['host'] ?? '');
+	$bracketed = str_starts_with($host, '[');
+	return $host !== '' && $host !== '[]' && $bracketed === str_ends_with($host, ']')
+	    && (!str_contains($host, '%') || ($bracketed && preg_match('/^\[[0-9A-Fa-f:.]+%25[^%\]]+\]$/', $host)));
 }
 
 /**
@@ -122,7 +128,7 @@ function pfb_crowdsec_validate(array $post, string $storedKey, array $interfaces
 	} elseif ($chosen === [] && $values['rules_all_interfaces'] === '') {
 		$errors[] = gettext('Select at least one interface, or apply the rules to all interfaces.');
 	}
-	$values['rules_interfaces'] = implode(',', $chosen);
+	$values['rules_interfaces'] = implode(',', array_unique($chosen));
 
 	$values['rules_log'] = $toggle('rules_log');
 	$tag = $text('rules_tag');
@@ -174,8 +180,8 @@ function pfb_crowdsec_config_write(string $content, string $path): bool {
 }
 
 /**
- * Apply the "should run" decision (D4). Called by the Settings save, by pfBlockerNG's update pass (after a master enable change, an
- * XMLRPC receive and the install or upgrade resync) and by the installer. While the bouncer should run: write the config file and
+ * Apply the "should run" decision (D4). Called by the Settings save, by pfBlockerNG's update pass (after a master enable change or
+ * an XMLRPC receive) and by the installer (the pass ends early during an install). While the bouncer should run: write the config file and
  * start the service, or restart it when the file changed. Otherwise: stop it and remove the file, which also keeps the rc script's
  * own start (at boot) from starting it. The rc script is (re)generated on every call.
  *
@@ -190,7 +196,8 @@ function pfb_crowdsec_apply(): bool {
 	$was = is_file($config);
 
 	if (!pfb_crowdsec_should_run()) {
-		if (is_service_running('pfb_crowdsec')) {
+		// A supervisor outlives its bouncer between restarts (-R 5), when the bouncer pidfile names no live process
+		if ($was || is_service_running('pfb_crowdsec')) {
 			stop_service('pfb_crowdsec');
 		}
 		unlink_if_exists($config);

@@ -80,6 +80,7 @@ foreach ($tab_array as &$tab) {
 }
 unset($tab);
 display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
 
 $tab_array	= array();
 $tab_array[]	= array(gettext('Settings'),	TRUE,	PFB_CROWDSEC_PAGE);
