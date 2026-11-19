@@ -470,3 +470,14 @@ func TestAnAbortedNonGeoIPRowDoesNotBlockTheConversion(t *testing.T) {
 		t.Errorf("(exit, converted) = (%d, %v), want (1, true)", code, converted)
 	}
 }
+
+// A conversion during which the run ends does not succeed: the context is read again after it (CodeRabbit on #4119).
+func TestARunThatEndsDuringTheConversionFails(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	v := ExtrasVerb{Name: "dcc", DBDir: t.TempDir(), Settings: verbSettings(),
+		Convert: func(context.Context) bool { cancel(); return true }}
+	if code := v.exit(ctx, ExtrasResult{OK: true}); code != 1 {
+		t.Errorf("exit = %d, want 1", code)
+	}
+}

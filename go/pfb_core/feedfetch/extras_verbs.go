@@ -204,7 +204,7 @@ func (v ExtrasVerb) exit(ctx context.Context, res ExtrasResult) int {
 		ended := ctx.Err() != nil
 		ok := res.OK && !ended
 		if !failed && !ended && (!s.MaxMindCSVDisabled || s.MaxMindKey != "" || s.MaxMindAccount != "") && v.Convert != nil {
-			ok = v.Convert(ctx) && ok
+			ok = v.Convert(ctx) && ok && ctx.Err() == nil // a run that ended during the conversion did not succeed
 		}
 		_, err := os.Stat(filepath.Join(v.DBDir, "geoip.update"))
 		changed := len(v.Args) > 0 && v.Args[0] == "scheduled" && (res.Top1MChanged || err == nil)

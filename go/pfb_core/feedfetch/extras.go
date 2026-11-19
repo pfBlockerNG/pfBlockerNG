@@ -107,7 +107,11 @@ func (f *Fetcher) DownloadExtras(ctx context.Context, cfg ExtrasConfig, extras [
 		if !r.OK {
 			res.OK = false
 			if err := ctx.Err(); err != nil {
-				r = refused("aborted", err.Error(), "") // the run ended, not the feed or its key
+				left := "" // what a rollback the end cut short left behind stays named
+				if r.Reason == "rollback_incomplete" {
+					left = r.Detected
+				}
+				r = refused("aborted", err.Error(), left) // the run ended, not the feed or its key
 				if x.Kind == "top1m" {
 					res.Top1MLedger = nil // nor the TOP1M probe or download (#4085 review)
 				}
