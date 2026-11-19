@@ -10,10 +10,11 @@
 // Signals: SIGUSR1 re-checks the tables at once (sent after a filter reload); SIGTERM and SIGINT flush both tables
 // and exit 0.
 //
-// Status file (status_file, JSON, mode 0644, replaced atomically after every pull): version, start_time,
-// update_frequency_seconds, updated_at, last_pull, last_error_time (Unix seconds, 0 for never), last_error,
-// lapi_requests, lapi_errors, banned.{ipv4,ipv6}.{total,origins{<origin>:<count>}} and
-// dropped.{ipv4,ipv6}.{packets,bytes} (the inbound rules' counters, reset by every filter reload).
+// Status file (status_file, JSON, mode 0644, replaced atomically after every pull and every update_frequency, however
+// long a LAPI request takes): version, start_time, update_frequency_seconds, updated_at, last_pull, last_error_time
+// (Unix seconds, 0 for never), last_error, lapi_requests, lapi_errors (requests that have ended),
+// banned.{ipv4,ipv6}.{total,origins{<origin>:<count>}} and dropped.{ipv4,ipv6}.{packets,bytes} (the inbound rules'
+// counters, reset by every filter reload).
 package main
 
 import (
@@ -102,7 +103,9 @@ func serve(cfg *config, out io.Writer, pfctlBin, device string) int {
 	defer ticker.Stop()
 	usage := time.NewTicker(usageInterval)
 	defer usage.Stop()
-	d.run(ctx, ticker.C, usage.C, nil, usr1, nil)
+	status := time.NewTicker(cfg.interval)
+	defer status.Stop()
+	d.run(ctx, ticker.C, usage.C, status.C, usr1, nil)
 	log.infof("stopped")
 	return 0
 }

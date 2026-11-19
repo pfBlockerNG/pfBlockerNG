@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -443,6 +444,97 @@ func TestRunPostsUsageOnItsTicker(t *testing.T) {
 	if last := reqs[len(reqs)-1]; last.URL.Path != "/v1/usage-metrics" || last.Method != http.MethodPost {
 		t.Fatalf("last request = %s %s; want the usage post", last.Method, last.URL.Path)
 	}
+}
+
+// Scenario: ticks come while a LAPI request hangs. Given a running daemon whose start-up pull hangs, when a pull tick,
+// a usage tick and another pull tick come, then no second request starts while it hangs; once it ends, the due pull
+// runs, then the usage post, one at a time.
+func TestLAPIRequestsRunOneAtATime(t *testing.T) {
+	release := make(chan struct{})
+	arrived := make(chan struct{}, 1)
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		mu.Lock()
+		seen = append(seen, r.URL.Path+"?startup="+r.URL.Query().Get("startup"))
+		first := len(seen) == 1
+		mu.Unlock()
+		switch {
+		case first:
+			arrived <- struct{}{}
+			select {
+			case <-release:
+			case <-r.Context().Done(): // the client gave up: a failing test must not hang the server's Close
+			}
+			w.WriteHeader(http.StatusBadGateway)
+		case r.URL.Path == "/v1/decisions/stream":
+			_, _ = io.WriteString(w, startupBody)
+		default:
+			w.WriteHeader(http.StatusCreated)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	requests := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(seen)
+	}
+	h := newHarness(t)
+	cfg := *h.cfg
+	cfg.APIURL = srv.URL + "/"
+	api, err := newLAPIClient(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.d.api = api
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := h.d.setup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ticks, usage, status := make(chan time.Time), make(chan time.Time), make(chan time.Time)
+	events := make(chan string, 16)
+	result := make(chan error, 1)
+	go func() { h.d.run(ctx, ticks, usage, status, nil, func(e string) { events <- e }); result <- nil }()
+	select {
+	case <-arrived:
+	case <-time.After(time.Minute): // salvage watchdog only
+		t.Fatal("STUCK/ENVIRONMENT: the start-up pull did not arrive within a minute")
+	}
+
+	for _, ch := range []chan time.Time{ticks, usage, ticks, status} {
+		select {
+		case ch <- testEpoch:
+		case <-time.After(time.Minute): // salvage watchdog only
+			t.Fatal("STUCK/ENVIRONMENT: the run loop did not take a tick while the pull hung")
+		}
+	}
+	if e := nextEvent(t, events, result); e != "status" { // the loop has handled every tick before it
+		t.Fatalf("event = %q; want status", e)
+	}
+	if got := requests(); len(got) != 1 {
+		t.Fatalf("requests while the start-up pull hung = %q; want only that pull", got)
+	}
+
+	close(release)
+	var got []string
+	for range 3 {
+		got = append(got, nextEvent(t, events, result))
+	}
+	if want := []string{"pull", "pull", "usage"}; !slices.Equal(got, want) {
+		t.Fatalf("events after the hung pull ended = %q; want %q", got, want)
+	}
+	want := []string{"/v1/decisions/stream?startup=true", "/v1/decisions/stream?startup=true", "/v1/usage-metrics?startup="}
+	if got := requests(); !slices.Equal(got, want) {
+		t.Fatalf("requests = %q; want %q", got, want)
+	}
+	cancel()
+	<-result
+	if h.d.requests != 3 || h.d.errors != 1 {
+		t.Fatalf("lapi requests, errors = %d, %d; want 3, 1", h.d.requests, h.d.errors)
+	}
+	assertTable(t, h.pf, "crowdsec_v4")
 }
 
 func TestShutdownFlushesBothTables(t *testing.T) {

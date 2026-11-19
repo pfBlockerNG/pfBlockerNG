@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-// daemon keeps the two tables equal to the LAPI's active bans (spec D1). All of its state lives in one goroutine.
+// daemon keeps the two tables equal to the LAPI's active bans (spec D1). All of its state lives in one goroutine; run
+// makes its LAPI requests on others and takes their results back.
 type daemon struct {
 	cfg  *config
 	log  *logger
@@ -24,6 +25,8 @@ type daemon struct {
 	lastPull  time.Time
 	lastErrAt time.Time
 	lastErr   string
+	requests  uint64     // LAPI requests ended since start
+	errors    uint64     // of which failed
 	dropped   [2]counter // the inbound rules' counters at the last read
 	window    [2]counter // drops counted since the last usage post, across counter resets
 }
@@ -47,13 +50,19 @@ func (d *daemon) setup(ctx context.Context) error {
 	return nil
 }
 
-// pull runs one tick: fetch and apply the stream, reconcile, read the counters, write the status file. A failed
-// fetch changes nothing in pf; it is returned after the rest of the tick has run, and the next tick pulls the full
-// set: the LAPI may have moved this bouncer's cursor past the delta it could not read (#4077).
+// pull runs one tick: fetch the stream, then finishPull.
 func (d *daemon) pull(ctx context.Context) error {
-	var fresh []netip.Addr
 	full := !d.synced
 	resp, err := d.api.pull(ctx, full)
+	return d.finishPull(ctx, full, resp, err)
+}
+
+// finishPull applies a fetched stream, reconciles, reads the counters and writes the status file. A failed fetch
+// changes nothing in pf; it is returned after the rest of the tick has run, and the next tick pulls the full set: the
+// LAPI may have moved this bouncer's cursor past the delta it could not read (#4077).
+func (d *daemon) finishPull(ctx context.Context, full bool, resp *streamResponse, err error) error {
+	var fresh []netip.Addr
+	d.count(err)
 	d.synced = err == nil
 	switch {
 	case err != nil:
@@ -238,8 +247,8 @@ func (d *daemon) writeStatus() {
 		LastPull:               unixOrZero(d.lastPull),
 		LastErrorTime:          unixOrZero(d.lastErrAt),
 		LastError:              d.lastErr,
-		LAPIRequests:           d.api.requests,
-		LAPIErrors:             d.api.errors,
+		LAPIRequests:           d.requests,
+		LAPIErrors:             d.errors,
 		Banned:                 map[string]familyBans{},
 		Dropped:                map[string]counter{},
 	}
@@ -259,24 +268,41 @@ func unixOrZero(t time.Time) int64 {
 	return t.Unix()
 }
 
-// sendUsage closes the usage window: reads the counters, then posts the window. A failed post is logged and the
-// window dropped.
+// sendUsage closes the usage window and posts it. A failed post is logged and the window dropped.
 func (d *daemon) sendUsage(ctx context.Context) {
+	body, err := d.usageBody(ctx)
+	if err != nil {
+		d.log.warnf("usage metrics not sent: %v", err)
+		return
+	}
+	d.finishUsage(d.api.postUsage(ctx, body))
+}
+
+// usageBody closes the usage window: reads the counters and renders the window, which starts again from zero.
+func (d *daemon) usageBody(ctx context.Context) ([]byte, error) {
 	d.readCounters(ctx)
 	in := usageInput{start: d.started, now: d.now(), window: usageInterval, dropped: d.window}
 	for f := range 2 {
 		in.origins[f] = d.origins(family(f))
 	}
 	d.window = [2]counter{}
-	body, err := usagePayload(in)
-	if err == nil {
-		err = d.api.postUsage(ctx, body)
-	}
+	return usagePayload(in)
+}
+
+func (d *daemon) finishUsage(err error) {
+	d.count(err)
 	if err != nil {
 		d.log.warnf("usage metrics not sent: %v", err)
 		return
 	}
 	d.log.debugf("usage metrics sent")
+}
+
+func (d *daemon) count(err error) {
+	d.requests++
+	if err != nil {
+		d.errors++
+	}
 }
 
 // since is cur's growth over prev; a counter below prev was reset by a filter reload and counted from zero.
@@ -297,32 +323,77 @@ func (d *daemon) shutdown(ctx context.Context) {
 	d.log.infof("tables flushed")
 }
 
+// lapiResult is one ended LAPI request: a pull (with the stream asked for) or a usage post.
+type lapiResult struct {
+	usage bool
+	full  bool
+	resp  *streamResponse
+	err   error
+}
+
 // run pulls at once, then on every tick; reconciles on SIGUSR1; posts usage on its ticker; writes the status file on
-// its own ticker; and flushes the tables and returns when ctx ends. done, when set, is told of each handled event
-// (tests synchronise on it).
+// its own ticker; and flushes the tables and returns when ctx ends. LAPI requests run one at a time off this
+// goroutine, so a hanging one delays none of the rest (#4117); ticks that come meanwhile wait for it to end. done,
+// when set, is told of each handled event (tests synchronise on it).
 func (d *daemon) run(ctx context.Context, ticks, usage, status <-chan time.Time, usr1 <-chan os.Signal, done func(string)) {
 	notify := func(event string) {
 		if done != nil {
 			done(event)
 		}
 	}
-	_ = d.pull(ctx)
-	notify("pull")
+	results := make(chan lapiResult, 1)
+	busy, pullDue, usageDue := false, true, false
+	next := func() { // starts the due request, a pull first, unless one is running
+		switch {
+		case busy:
+		case pullDue:
+			pullDue, busy = false, true
+			full := !d.synced
+			go func() {
+				resp, err := d.api.pull(ctx, full)
+				results <- lapiResult{full: full, resp: resp, err: err}
+			}()
+		case usageDue:
+			usageDue = false
+			body, err := d.usageBody(ctx)
+			if err != nil {
+				d.log.warnf("usage metrics not sent: %v", err)
+				notify("usage")
+				return
+			}
+			busy = true
+			go func() { results <- lapiResult{usage: true, err: d.api.postUsage(ctx, body)} }()
+		}
+	}
+	next()
 	for {
 		select {
 		case <-ctx.Done():
+			if busy {
+				<-results // ctx has ended the request too
+			}
 			d.shutdown(context.WithoutCancel(ctx))
 			return
+		case r := <-results:
+			busy = false
+			if r.usage {
+				d.finishUsage(r.err)
+				notify("usage")
+			} else {
+				_ = d.finishPull(ctx, r.full, r.resp, r.err)
+				notify("pull")
+			}
+			next()
 		case <-ticks:
-			_ = d.pull(ctx)
-			notify("pull")
+			pullDue = true
+			next()
 		case <-usr1:
 			d.log.infof("SIGUSR1: checking the tables")
 			d.reconcile(ctx)
 			notify("reconcile")
 		case <-usage:
-			d.sendUsage(ctx)
-			notify("usage")
+			usageDue = true
+			next()
 		case <-status:
 			d.writeStatus()
 			notify("status")

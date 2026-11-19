@@ -51,9 +51,6 @@ func TestPullSendsTheBouncerRequest(t *testing.T) {
 	if _, has := reqs[1].URL.Query()["startup"]; has {
 		t.Errorf("delta request carries startup: %s", reqs[1].URL.RawQuery)
 	}
-	if c.requests != 2 || c.errors != 0 {
-		t.Errorf("requests, errors = %d, %d; want 2, 0", c.requests, c.errors)
-	}
 }
 
 func TestPullKeepsTheLAPIURLsPathPrefix(t *testing.T) {
@@ -75,15 +72,12 @@ func TestPullKeepsTheLAPIURLsPathPrefix(t *testing.T) {
 	}
 }
 
-func TestPullFailsOnAnErrorStatusAndCountsIt(t *testing.T) {
+func TestPullFailsOnAnErrorStatus(t *testing.T) {
 	lapi := newStubLAPI(t, lapiReply{http.StatusForbidden, `{"message":"access forbidden"}`})
 	c, _ := newLAPIClient(testConfig(t, lapi.srv.URL+"/"))
 	_, err := c.pull(context.Background(), true)
 	if err == nil || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("pull = %v; want an error naming status 403", err)
-	}
-	if c.requests != 1 || c.errors != 1 {
-		t.Fatalf("requests, errors = %d, %d; want 1, 1", c.requests, c.errors)
 	}
 }
 
@@ -96,9 +90,6 @@ func TestPullRefusesAnOversizedBody(t *testing.T) {
 	if _, err := c.pull(context.Background(), true); err == nil || !strings.Contains(err.Error(), "larger") {
 		t.Fatalf("pull(oversized) = %v; want a size error", err)
 	}
-	if c.errors != 1 {
-		t.Fatalf("errors = %d; want 1", c.errors)
-	}
 	c.maxBody = int64(len(big))
 	if _, err := c.pull(context.Background(), true); err != nil {
 		t.Fatalf("pull(body exactly at the cap) = %v; want accepted", err)
@@ -110,9 +101,6 @@ func TestPullRefusesMalformedJSON(t *testing.T) {
 	c, _ := newLAPIClient(testConfig(t, lapi.srv.URL+"/"))
 	if _, err := c.pull(context.Background(), true); err == nil {
 		t.Fatal("pull(truncated JSON) = nil error")
-	}
-	if c.errors != 1 {
-		t.Fatalf("errors = %d; want 1", c.errors)
 	}
 }
 
