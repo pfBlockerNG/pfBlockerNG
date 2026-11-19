@@ -45,6 +45,24 @@ SCRAPE = (
 )
 
 
+_OUT: list[object] = []
+
+
+def say(*parts: object, end: str = "\n") -> None:
+    line = " ".join(str(p) for p in parts)
+    if _OUT:
+        _OUT[0].write_line(line)  # type: ignore[attr-defined]
+    else:
+        print(line, end=end)
+
+
+@pytest.fixture(autouse=True)
+def _reporter(request: pytest.FixtureRequest) -> Iterator[None]:
+    _OUT[:] = [request.config.pluginmanager.get_plugin("terminalreporter")]
+    yield
+    _OUT.clear()
+
+
 def sh(vm: h.SmokeVM, cmd: str, timeout: float = 120.0) -> str:
     r = vm.ssh("/bin/sh", "-c", cmd, timeout=timeout)
     assert r.returncode == 0, f"{cmd!r}: rc={r.returncode} out={r.stdout!r} err={r.stderr!r}"
@@ -88,12 +106,12 @@ def summarize(label: str, rows: list[tuple[int, str, int, int, int]]) -> tuple[i
     zeros = [r for r in alive if r[1] != "1"]
     lag = max(r[0] - r[3] for r in alive)
     age = max(r[0] - r[4] for r in alive)
-    print(
-        f"\n[4117] {label}: scrapes={len(rows)} alive={len(alive)} source_up!=1 while alive={len(zeros)} "
+    say(
+        f"[4117] {label}: scrapes={len(rows)} alive={len(alive)} source_up!=1 while alive={len(zeros)} "
         f"max mtime lag={lag}s max updated_at age={age}s first={rows[0]} last={rows[-1]}"
     )
     if zeros:
-        print(f"[4117] {label}: first zero rows: {zeros[:5]}")
+        say(f"[4117] {label}: first zero rows: {zeros[:5]}")
     return len(zeros), lag, age
 
 
@@ -114,7 +132,7 @@ def restart(vm: h.SmokeVM) -> None:
 def old_binary() -> str | None:
     go = shutil.which("go") or (os.path.join(os.environ.get("PFB_GO_ROOT", ""), "bin", "go"))
     if not go or not os.path.exists(go):
-        print("[4117] baseline skipped: no Go toolchain in the pytest environment")
+        say("[4117] baseline skipped: no Go toolchain in the pytest environment")
         return None
     src = tempfile.mkdtemp(prefix="pfb4117-")
     root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout
@@ -125,7 +143,7 @@ def old_binary() -> str | None:
         text=True,
     )
     if arch.returncode != 0:
-        print(f"[4117] baseline skipped: {arch.stderr.strip()}")
+        say(f"[4117] baseline skipped: {arch.stderr.strip()}")
         return None
     out = os.path.join(src, "pfb_crowdsec.old")
     env = dict(os.environ, CGO_ENABLED="0", GOOS="freebsd", GOARCH="amd64")
@@ -133,7 +151,7 @@ def old_binary() -> str | None:
         [go, "build", "-o", out, "."], cwd=os.path.join(src, "go/pfb_crowdsec"), env=env, capture_output=True, text=True
     )
     if b.returncode != 0:
-        print(f"[4117] baseline skipped: build failed {b.stderr.strip()}")
+        say(f"[4117] baseline skipped: build failed {b.stderr.strip()}")
         return None
     return out
 
@@ -164,7 +182,7 @@ def bouncer(smoke_vm: h.SmokeVM) -> Iterator[h.SmokeVM]:
     if probe != "28":
         sh(vm, "/usr/sbin/daemon -f /usr/bin/nc -lk 127.0.0.1 18080")
         url = LISTENER
-    print(f"[4117] blackhole probe curl exit={probe} (28 = timed out); LAPI url used: {url}")
+    say(f"[4117] blackhole probe curl exit={probe} (28 = timed out); LAPI url used: {url}")
     configure(vm, True, url)
     try:
         wait_running(vm)
@@ -184,12 +202,12 @@ def bouncer(smoke_vm: h.SmokeVM) -> Iterator[h.SmokeVM]:
 
 def test_4117_blackholed_lapi_soak_and_sigstop(bouncer: h.SmokeVM) -> None:
     vm = bouncer
-    print("[4117] binary:", sh(vm, f"{BIN} -version; sha256 -q {BIN}").replace("\n", " "))
+    say("[4117] binary:", sh(vm, f"{BIN} -version; sha256 -q {BIN}").replace("\n", " "))
 
     # 1. the fixed daemon against the blackholed LAPI
     zeros, lag, _ = summarize("fixed", scrapes(vm, SOAK))
     st = sh(vm, f"cat {STATUS}")
-    print("[4117] status after the soak:", st.strip())
+    say("[4117] status after the soak:", st.strip())
     assert '"last_pull":0' in st and '"lapi_errors":0' not in st, "the LAPI requests did not fail as a blackhole"
     assert "Timeout" in st or "deadline" in st or "timeout" in st, "the last error is not a timeout"
     assert zeros == 0, f"source_up read 0 in {zeros} scrapes while the bouncer ran"
@@ -205,11 +223,11 @@ def test_4117_blackholed_lapi_soak_and_sigstop(bouncer: h.SmokeVM) -> None:
         if row[1] == "0":
             seen = row
             break
-    print(f"[4117] SIGSTOP at {stop}; scrapes after: {rows}")
+    say(f"[4117] SIGSTOP at {stop}; scrapes after: {rows}")
     assert seen is not None, "source_up never read 0 after SIGSTOP"
     assert seen[2] == 1, "the stopped bouncer's pid must still be live"
     elapsed = seen[0] - stop
-    print(f"[4117] source_up 0 after SIGSTOP: {elapsed}s after the stop (3 x 10 s = 30 s plus one scrape)")
+    say(f"[4117] source_up 0 after SIGSTOP: {elapsed}s after the stop (3 x 10 s = 30 s plus one scrape)")
     sh(vm, f"kill -CONT $(cat {PID})")
     back = None
     for _ in range(20):
@@ -217,7 +235,7 @@ def test_4117_blackholed_lapi_soak_and_sigstop(bouncer: h.SmokeVM) -> None:
         if row[1] == "1":
             back = row
             break
-    print(f"[4117] after SIGCONT: {back}")
+    say(f"[4117] after SIGCONT: {back}")
     assert back is not None, "source_up did not come back after SIGCONT"
     assert elapsed <= 3 * 10 + 1 + 4, f"source_up 0 came {elapsed}s after SIGSTOP"
 
@@ -229,7 +247,7 @@ def test_4117_blackholed_lapi_soak_and_sigstop(bouncer: h.SmokeVM) -> None:
     upload(vm, old, f"{BIN}.old")
     sh(vm, f"cp -f {BIN}.old {BIN}")
     restart(vm)
-    print("[4117] baseline binary sha256:", sh(vm, f"sha256 -q {BIN}").strip())
+    say("[4117] baseline binary sha256:", sh(vm, f"sha256 -q {BIN}").strip())
     summarize("devel baseline", scrapes(vm, SOAK))
     sh(vm, f"cp -f {BIN}.new {BIN}")
     restart(vm)
