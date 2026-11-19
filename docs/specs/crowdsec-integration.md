@@ -424,3 +424,16 @@ stay banned and a missed ban would stay missing until the next restart.
 - **Start condition.** The config file exists exactly while the bouncer should run, so the rc script's start, the boot
   start included, starts nothing without it.
 - **Tab.** The CrowdSec tab follows Sync on every top row. Its second row holds Settings, and Status joins it with D7.
+
+## Amendment 2026-11-19 — the rule hook registers itself (#4072)
+
+- **Registration.** pfSense's `install_package_xml()` sets `filter_rule_function` from `<filter_rules_needed>` in memory
+  only, and then runs the package's install command. That command's `pfb_global()` re-reads `config.xml`, which drops the
+  unsaved registration, so pfSense CE 2.8.1 showed an empty `filter_rule_function` after `pkg add` of the package. The
+  update pass, which also runs as the install's resync, therefore writes the same registration itself when it is missing
+  (`pfb_crowdsec_register_rule_hook()`), as it already does for the package's `<logging>` block. It is still the only
+  `config.xml` side effect of the hook.
+- **Should run in a filter reload.** pfSense calls the hook without loading pfBlockerNG's globals, so "should run" (D4)
+  reads the stored master enable when `pfb_global()` has not run in that process.
+- **Signal.** The shutdown function sends `SIGUSR1` with `pkill -F <pidfile> -f <the bouncer's command line>` once
+  `isvalidpid()` confirms the pid, so a stale pidfile that names a reused pid signals nothing.

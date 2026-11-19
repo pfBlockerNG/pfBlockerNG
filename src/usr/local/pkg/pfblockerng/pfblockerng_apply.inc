@@ -1382,6 +1382,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		break;
 	}
 
+	// issue #4072: the CrowdSec rule hook's registration, which pfSense's own install loses
+	pfb_crowdsec_register_rule_hook();
+
 	// Materialize/refresh the routing when the drop-in is missing — covers a fresh
 	// registration AND the #484 lifecycle gap (core runs system_syslogd_start only at
 	// install/resync, so a CLI reload / uninstall->redeploy could lose the drop-in).

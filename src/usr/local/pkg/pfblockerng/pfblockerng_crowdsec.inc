@@ -360,6 +360,24 @@ EOF;
 	write_rcfile($rc);
 }
 
+/**
+ * Name the rule hook in pfBlockerNG's installedpackages/package/<n>/filter_rule_function, which pfSense reads on every filter
+ * reload (D5). pfSense's install_package_xml() sets it from <filter_rules_needed> in memory only, then runs the install command,
+ * whose pfb_global() re-reads config.xml and drops it; so the update pass, the install's resync included, registers it here.
+ */
+function pfb_crowdsec_register_rule_hook(): void {
+	foreach (config_get_path('installedpackages/package', []) as $idx => $pkg) {
+		if (($pkg['configurationfile'] ?? '') !== 'pfblockerng.xml') {
+			continue;
+		}
+		if (($pkg['filter_rule_function'] ?? '') !== 'pfb_crowdsec_rules') {
+			config_set_path("installedpackages/package/{$idx}/filter_rule_function", 'pfb_crowdsec_rules');
+			write_config('[pfBlockerNG] register the CrowdSec rule hook');
+		}
+		return;
+	}
+}
+
 /** The pgrep/pkill -f pattern (an extended regular expression) of the bouncer's command line as daemon(8) runs it from $dir. */
 function pfb_crowdsec_child_pattern(string $dir = PFB_CROWDSEC_DIR): string {
 	return '^' . str_replace('.', '\.', $dir) . '/bin/freebsd-[a-z0-9]+/pfb_crowdsec -c ';
