@@ -960,6 +960,7 @@ def test_a_reboot_brings_the_bouncer_back_with_the_full_set(bouncer: SmokeVM, en
 
     after = _await(lambda: _child(vm), lambda pid: pid is not None, "the bouncer running after the boot")
     assert after != before, f"a new process: {before} -> {after}"
+    assert len(_processes(vm).splitlines()) == 2, f"one bouncer and its supervisor: {_processes(vm)}"
     # The old process may pull once more before the shutdown stops it: the new one starts with a full pull
     engine.wait_for(
         lambda r: r.is_stream and r.startup, after=mark, timeout=SALVAGE, what="the new process's full pull"
@@ -996,6 +997,11 @@ def test_deinstall_leaves_nothing_behind(bouncer: SmokeVM, engine: StubLapi) -> 
     present = _leftovers(vm)
     assert {RC, CONFIG_FILE, STATUS_FILE} <= set(present.files), f"before-state: {present.files}"
     assert any(path.endswith("/pfb_crowdsec") for path in present.files), f"before-state, the binary: {present.files}"
+    pidfiles = _sh(vm, f"cat {PIDFILE} {DAEMON_PIDFILE}").split()
+    assert len(present.processes.splitlines()) == 2, (
+        f"before-state, one bouncer and its supervisor: {present.processes}"
+    )
+    mark = _log_mark(vm)
 
     try:
         deleted = vm.ssh("env ASSUME_ALWAYS_YES=yes pkg delete -y -g 'pfSense-pkg-pfBlockerNG*'", timeout=600.0)
@@ -1003,7 +1009,10 @@ def test_deinstall_leaves_nothing_behind(bouncer: SmokeVM, engine: StubLapi) -> 
 
         left = _leftovers(vm)
         assert left.files == [], f"left behind: {left.files}"
-        assert left.processes == "", f"still running: {left.processes}"
+        assert left.processes == "", (
+            f"still running: {left.processes}\nbefore: {present.processes} (pidfiles {pidfiles})\n"
+            f"log: {_bouncer_log(vm, mark)}\npkg delete:\n{deleted.stdout}"
+        )
         assert all(not table for table in left.tables.values()), f"table contents left: {left.tables}"
     finally:
         _php_ok(
