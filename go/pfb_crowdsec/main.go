@@ -102,7 +102,7 @@ func serve(cfg *config, out io.Writer, pfctlBin, device string) int {
 	defer ticker.Stop()
 	usage := time.NewTicker(usageInterval)
 	defer usage.Stop()
-	d.run(ctx, ticker.C, usage.C, usr1, nil)
+	d.run(ctx, ticker.C, usage.C, nil, usr1, nil)
 	log.infof("stopped")
 	return 0
 }

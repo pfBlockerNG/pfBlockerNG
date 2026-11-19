@@ -298,9 +298,10 @@ func (d *daemon) shutdown(ctx context.Context) {
 	d.log.infof("tables flushed")
 }
 
-// run pulls at once, then on every tick; reconciles on SIGUSR1; posts usage on its ticker; and flushes the tables
-// and returns when ctx ends. done, when set, is told of each handled event (tests synchronise on it).
-func (d *daemon) run(ctx context.Context, ticks, usage <-chan time.Time, usr1 <-chan os.Signal, done func(string)) {
+// run pulls at once, then on every tick; reconciles on SIGUSR1; posts usage on its ticker; writes the status file on
+// its own ticker; and flushes the tables and returns when ctx ends. done, when set, is told of each handled event
+// (tests synchronise on it).
+func (d *daemon) run(ctx context.Context, ticks, usage, status <-chan time.Time, usr1 <-chan os.Signal, done func(string)) {
 	notify := func(event string) {
 		if done != nil {
 			done(event)
@@ -323,6 +324,9 @@ func (d *daemon) run(ctx context.Context, ticks, usage <-chan time.Time, usr1 <-
 		case <-usage:
 			d.sendUsage(ctx)
 			notify("usage")
+		case <-status:
+			d.writeStatus()
+			notify("status")
 		}
 	}
 }

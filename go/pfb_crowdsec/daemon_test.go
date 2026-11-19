@@ -369,7 +369,7 @@ func TestRunReconcilesOnSIGUSR1AndFlushesOnShutdown(t *testing.T) {
 	if err := h.d.setup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	go func() { h.d.run(ctx, ticks, nil, usr1, func(e string) { events <- e }); result <- nil }()
+	go func() { h.d.run(ctx, ticks, nil, nil, usr1, func(e string) { events <- e }); result <- nil }()
 	if e := nextEvent(t, events, result); e != "pull" {
 		t.Fatalf("first event = %q; want the immediate start-up pull", e)
 	}
@@ -425,7 +425,7 @@ func TestRunPostsUsageOnItsTicker(t *testing.T) {
 	if err := h.d.setup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	go func() { h.d.run(ctx, nil, usage, nil, func(e string) { events <- e }); result <- nil }()
+	go func() { h.d.run(ctx, nil, usage, nil, nil, func(e string) { events <- e }); result <- nil }()
 	if e := nextEvent(t, events, result); e != "pull" {
 		t.Fatalf("first event = %q; want the start-up pull", e)
 	}
