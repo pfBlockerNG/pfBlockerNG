@@ -1,0 +1,58 @@
+{
+	"schema": 1,
+	"description": "A refused Cloudflare download keeps top-1m.csv, and its Bearer token reaches no reason or file.",
+	"hosts": {
+		"api.cloudflare.com": [
+			"127.0.0.1",
+			"203.0.113.15"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "cloudflare",
+		"top1m_token": "cf-secret-token"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/client/v4/radar/datasets/ranking_top_1000000": {
+				"status": 500,
+				"body": "error\n"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://api.cloudflare.com:{port:origin}/client/v4/radar/datasets/ranking_top_1000000",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "cloudflare"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"files": {
+					"db/top-1m.csv": "1,old.example.com\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/client/v4/radar/datasets/ranking_top_1000000",
+						"authorization": "Bearer cf-secret-token"
+					}
+				],
+				"reason": "500 Internal Server Error",
+				"stage": "fetch"
+			}
+		}
+	]
+}

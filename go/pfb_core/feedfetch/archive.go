@@ -305,7 +305,8 @@ func ctxEnded(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
-// extractionFailure is pfb_download()'s text for an extraction of what (an archive's MIME type, or "xlsx" for a
+// extractionFailure is pfb_download()'s text for an extraction of what (an archive's MIME type, "geoip" or "blacklist" for
+// an Extra's tar, or "xlsx" for a
 // workbook) that err ended: status 153 (SIGXFSZ) for one that outgrew the ceiling, else 1.
 func extractionFailure(what string, err error) string {
 	if errors.Is(err, errTooManyXLSXAddresses) {
@@ -325,6 +326,8 @@ func extractionFailure(what string, err error) string {
 		text = fmt.Sprintf("zip publish failed (tar exit %d)", code)
 	case "xlsx":
 		text = fmt.Sprintf("xlsx extraction failed (script exit %d)", code)
+	case "geoip", "blacklist": // an Extra's tar, extracted into its folder
+		text = fmt.Sprintf("%s extraction failed (tar exit %d)", what, code)
 	default:
 		text = fmt.Sprintf("tar extraction failed (tar exit %d)", code)
 	}

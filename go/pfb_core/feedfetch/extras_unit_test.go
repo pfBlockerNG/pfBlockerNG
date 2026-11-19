@@ -2,6 +2,7 @@ package feedfetch_test
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -61,6 +63,9 @@ func TestAnExtrasArchiveWithoutRoomIsRefusedAndKeepsThePublishedFile(t *testing.
 			got, _ := os.ReadFile(target)
 			if string(got) != tc.want || res.OK != (tc.want == "new\n") {
 				t.Errorf("(ok, asn.csv) = (%v, %q), want asn.csv %q", res.OK, got, tc.want)
+			}
+			if r := res.Rows[0]; !res.OK && (r.Stage != "size" || r.Reason != "staging_space_low") {
+				t.Errorf("refusal (stage, reason) = (%q, %q), want (size, staging_space_low)", r.Stage, r.Reason)
 			}
 		})
 	}
@@ -117,6 +122,9 @@ func TestACategoryArchiveWithoutRoomKeepsTheFolder(t *testing.T) {
 			if string(got) != tc.want || res.OK != (tc.want == "new\n") {
 				t.Errorf("(ok, ut1/ut1_adult) = (%v, %q), want ut1/ut1_adult %q", res.OK, got, tc.want)
 			}
+			if r := res.Rows[0]; !res.OK && (r.Stage != "size" || r.Reason != "staging_space_low") {
+				t.Errorf("refusal (stage, reason) = (%q, %q), want (size, staging_space_low)", r.Stage, r.Reason)
+			}
 		})
 	}
 }
@@ -162,6 +170,10 @@ func TestAnEndedContextIsNoMaxMindError(t *testing.T) {
 	if res.OK || res.MaxMindError {
 		t.Errorf("(ok, maxmind error) = (%v, %v), want (false, false)", res.OK, res.MaxMindError)
 	}
+	// The refusal names the aborted run, never a fault of the feed or the key.
+	if r := res.Rows[0]; r.Stage != "aborted" || r.Reason != context.Canceled.Error() {
+		t.Errorf("refusal (stage, reason) = (%q, %q), want (aborted, %q)", r.Stage, r.Reason, context.Canceled)
+	}
 }
 
 // A run cancelled while a geoip row downloads is aborted, not failed by MaxMind (#4059 review).
@@ -188,5 +200,69 @@ func TestARunCancelledMidTransferIsNoMaxMindError(t *testing.T) {
 		[]feedfetch.Extra{{Kind: "geoip", URL: url, Dir: t.TempDir(), Download: "GeoLite2-Country.tar.gz", File: "GeoLite2-Country.mmdb"}})
 	if res.OK || res.MaxMindError {
 		t.Errorf("(ok, maxmind error) = (%v, %v), want (false, false)", res.OK, res.MaxMindError)
+	}
+	// The refusal names the aborted run, never a fault of the feed or the key.
+	if r := res.Rows[0]; r.Stage != "aborted" || r.Reason != context.Canceled.Error() {
+		t.Errorf("refusal (stage, reason) = (%q, %q), want (aborted, %q)", r.Stage, r.Reason, context.Canceled)
+	}
+}
+
+// #2658 on the TOP1M row: a list archive no directory has room for is refused before extraction, and the list stays.
+func TestATop1MListWithoutRoomKeepsTheList(t *testing.T) {
+	var body bytes.Buffer
+	zw := zip.NewWriter(&body)
+	w, err := zw.Create("top-1m.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Write([]byte("1,new.example\n"))
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write(body.Bytes()) })}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	db := t.TempDir()
+	list := filepath.Join(db, "top-1m.csv")
+	if err := os.WriteFile(list, []byte("1,old.example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := &feedfetch.Fetcher{RetryDelay: 1}
+	f.Resolve = func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("203.0.113.11")}, nil
+	}
+	f.FreeBytes = func(string) (uint64, bool) { return uint64(body.Len() - 1), true }
+	url := "http://tranco-list.eu:" + strconv.Itoa(ln.Addr().(*net.TCPAddr).Port) + "/top-1m.csv.zip"
+	res := f.DownloadExtras(context.Background(), feedfetch.ExtrasConfig{DBDir: db}, []feedfetch.Extra{
+		{Kind: "top1m", URL: url, Dir: db, Download: "top-1m.csv.zip", File: "top-1m.csv", Provider: "tranco"}})
+	got, _ := os.ReadFile(list)
+	if r := res.Rows[0]; res.OK || string(got) != "1,old.example\n" || r.Stage != "size" || r.Reason != "staging_space_low" {
+		t.Errorf("(ok, list, stage, reason) = (%v, %q, %q, %q), want (false, the old list, size, staging_space_low)",
+			res.OK, got, r.Stage, r.Reason)
+	}
+}
+
+// A self-hosted source's transfer error never carries the URL's query into the refusal: a key in a configured Blacklist
+// URL stays out of what the verbs log.
+func TestATransferRefusalCarriesNoQuery(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	ln.Close() // nothing listens: the transfer fails with the client's error
+	f := &feedfetch.Fetcher{RetryDelay: 1}
+	f.Resolve = func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+	}
+	db := t.TempDir()
+	res := f.DownloadExtras(context.Background(), feedfetch.ExtrasConfig{DBDir: db}, []feedfetch.Extra{{Kind: "blacklist",
+		URL: "http://lists.example:" + port + "/bl.tar.gz?key=qtoken", Dir: db, Download: "bl.tar.gz", File: "bl.tar.gz", Name: "BL"}})
+	if r := res.Rows[0]; res.OK || r.Reason == "" || strings.Contains(r.Reason+r.Detected, "qtoken") {
+		t.Errorf("(ok, reason, detected) = (%v, %q, %q), want a refusal without the query", res.OK, r.Reason, r.Detected)
 	}
 }

@@ -50,7 +50,7 @@
 					}
 				],
 				"reason": "304 Not Modified",
-				"stage": "transfer"
+				"stage": "fetch"
 			}
 		}
 	]

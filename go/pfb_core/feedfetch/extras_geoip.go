@@ -26,7 +26,7 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 		if r := memberRefused(names, ok); r != nil {
 			return *r
 		}
-		return f.merged(share, func(dir string) error {
+		return published(f.mergeIntoDir, share, "geoip", func(dir string) error {
 			return checkedDatabases(dir, target, f.extractTarStripped(ctx, mime, raw, dir))
 		})
 	case mimeZip:
@@ -35,14 +35,14 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 			if r := memberRefused(names, ok); r != nil {
 				return *r
 			}
-			return f.merged(target, func(dir string) error {
+			return published(f.mergeIntoDir, target, "geoip", func(dir string) error {
 				return checkedDatabases(dir, target, f.extractZipStripped(ctx, raw, dir))
 			})
 		}
 		// tar -xOf of the zip: every member's bytes, published whole over target (a directory refuses it).
 		staged, err := os.CreateTemp(filepath.Dir(target), ".pfbstage_")
 		if err != nil {
-			return refused("publish", err.Error(), "")
+			return publishRefused
 		}
 		werr := extractZipPayload(ctx, raw, &capWriter{w: staged, left: f.ceiling()})
 		if cerr := staged.Chmod(0o644); werr == nil {
@@ -56,16 +56,16 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 		}
 		if werr != nil {
 			os.Remove(staged.Name())
-			return refused("extract", werr.Error(), filepath.Base(raw))
+			return extractRefused(mimeZip, werr)
 		}
-		if err := os.Rename(staged.Name(), target); err != nil {
+		if os.Rename(staged.Name(), target) != nil {
 			os.Remove(staged.Name())
-			return refused("publish", err.Error(), "")
+			return publishRefused
 		}
 		return accepted
 	}
-	if err := os.Rename(raw, target); err != nil {
-		return refused("publish", err.Error(), "")
+	if os.Rename(raw, target) != nil {
+		return publishRefused
 	}
 	return accepted
 }
@@ -83,16 +83,17 @@ func memberRefused(names []string, listed bool) *Result {
 	return &r
 }
 
-// merged is mergeIntoDir as a row's outcome: what stopped the extraction, else a publication that could not complete.
-func (f *Fetcher) merged(target string, extract func(dir string) error) Result {
+// published is a folder publisher (mergeIntoDir, replaceDir) as a row's outcome: what stopped the extraction of what,
+// else a publication that could not complete.
+func published(publish func(string, func(string) error) bool, target, what string, extract func(dir string) error) Result {
 	var xerr error
-	if f.mergeIntoDir(target, func(dir string) error { xerr = extract(dir); return xerr }) {
+	if publish(target, func(dir string) error { xerr = extract(dir); return xerr }) {
 		return accepted
 	}
 	if xerr != nil {
-		return refused("extract", xerr.Error(), "")
+		return extractRefused(what, xerr)
 	}
-	return refused("publish", "the extraction could not be published", "")
+	return publishRefused
 }
 
 var (

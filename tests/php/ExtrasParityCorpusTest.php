@@ -26,7 +26,7 @@ require_once __DIR__ . '/support/HttpFixtureReadiness.php';
  *   requests        what the servers recorded (host only where named; query only where named).
  *   reason, stage, detected   the step's last refusal, checked only where named: the last "pfb_validate: REJECT"
  *                   line's reason code, stage and detected, else the Extras log's last "— skipped" text or failed
- *                   transfer status, with stage "transfer".
+ *                   transfer status, with stage "fetch" (pfb_validate_log()'s name for a transfer refusal).
  *
  * `pfblockerng.sh asn_table` (the ASN conversion's, #4034) is a stand-in that records its call in db/script.calls.
  *
@@ -293,7 +293,7 @@ final class ExtrasParityCorpusTest extends TestCase
 
 	/**
 	 * The step's last refusal as reason, stage and detected: the last "pfb_validate: REJECT" line of the main log, else
-	 * the Extras log's last "— skipped" text or failed transfer status (stage "transfer"), else nothing.
+	 * the Extras log's last "— skipped" text or failed transfer status (stage "fetch"), else nothing.
 	 *
 	 * @return array{?string, ?string, ?string}
 	 */
@@ -305,11 +305,11 @@ final class ExtrasParityCorpusTest extends TestCase
 		}
 		$extras = (string) @file_get_contents($GLOBALS['pfb']['extraslog']);
 		if (preg_match_all("/\\[ [^\\]]+ \\] (.+?) \xe2\x80\x94 skipped/", $extras, $m)) {
-			return [end($m[1]), 'transfer', NULL];
+			return [end($m[1]), 'fetch', NULL];
 		}
 		preg_match_all('/\t\t(\d{3} .+)$/m', $extras, $m);
 		$failed = array_values(array_filter($m[1], static fn (string $s): bool => !in_array(substr($s, 0, 3), ['200', '221', '226'], TRUE)));
-		return $failed ? [rtrim(end($failed)), 'transfer', NULL] : [NULL, NULL, NULL];
+		return $failed ? [rtrim(end($failed)), 'fetch', NULL] : [NULL, NULL, NULL];
 	}
 
 	/** A file's content, NULL when nothing is at the path, or a marker for an entry that is not a regular file. */

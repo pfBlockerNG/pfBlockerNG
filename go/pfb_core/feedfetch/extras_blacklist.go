@@ -63,8 +63,8 @@ func (f *Fetcher) blacklist(ctx context.Context, cfg ExtrasConfig, x Extra, req 
 	if structural(ctx, mime, raw, io.Discard) != nil {
 		return refused("structural", "probe_failed", mime+" "+filepath.Base(raw))
 	}
-	if err := rename(raw, base); err != nil {
-		return refused("publish", err.Error(), "")
+	if rename(raw, base) != nil {
+		return publishRefused
 	}
 	name := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(base), ".tar.gz"), ".tar")
 	if !wordName(name) {
@@ -75,15 +75,10 @@ func (f *Fetcher) blacklist(ctx context.Context, cfg ExtrasConfig, x Extra, req 
 		os.Remove(base)
 		return *r
 	}
-	var xerr error
-	if !replaceDir(filepath.Join(cfg.DBDir, name), func(dir string) error {
-		xerr = f.extractCategories(ctx, mime, base, name, dir)
-		return xerr
-	}) {
-		if xerr != nil {
-			return refused("extract", xerr.Error(), "")
-		}
-		return refused("publish", "the category folder could not be replaced", "")
+	if r := published(replaceDir, filepath.Join(cfg.DBDir, name), "blacklist", func(dir string) error {
+		return f.extractCategories(ctx, mime, base, name, dir)
+	}); !r.OK {
+		return r
 	}
 	// No reader takes the change-detection sidecars of a category archive (issue #2738).
 	for _, sfx := range []string{".orig", ".xxhash128", ".md5"} {

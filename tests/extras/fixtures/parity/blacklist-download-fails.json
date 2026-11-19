@@ -54,7 +54,7 @@
 					}
 				],
 				"reason": "404 Not Found",
-				"stage": "transfer"
+				"stage": "fetch"
 			}
 		}
 	]

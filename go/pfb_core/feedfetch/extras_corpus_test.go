@@ -27,7 +27,7 @@ package feedfetch_test
 // null when none is open; checked only where named), report (the Blacklist report the bls verb prints, a line per
 // blacklist row; checked only where named), and reason, stage and detected (the refusal of the step's last refused row,
 // checked only where named: on the PHP side the last "pfb_validate: REJECT" line's reason code, stage and detected, else
-// the last "— skipped" text or failed transfer status of the Extras log, with stage "transfer"). Every refused row
+// the last "— skipped" text or failed transfer status of the Extras log, with stage "fetch"). Every refused row
 // carries a reason and a stage, and after every step no configured secret appears in a row's reason or detail, or in
 // the name or content of any file the run left (the servers' request log aside). `pfblockerng.sh asn_table`, the ASN conversion's step (#4034), is
 // recorded as a line in db/script.calls.
@@ -44,6 +44,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -299,16 +300,17 @@ func runExtrasScenario(t *testing.T, file string) {
 				refused = row
 			}
 		}
+		got := map[string]any{"reason": nil, "stage": nil, "detected": nil}
+		if refused != nil {
+			got = map[string]any{"reason": refused.Reason, "stage": refused.Stage, "detected": refused.Detected}
+		}
 		for key, want := range map[string]*string{"reason": st.Expect.Reason, "stage": st.Expect.Stage, "detected": st.Expect.Detected} {
-			if want == nil {
-				continue
-			}
-			actual[key] = nil
-			if refused != nil {
-				actual[key] = map[string]string{"reason": refused.Reason, "stage": refused.Stage, "detected": refused.Detected}[key]
+			if want != nil {
+				actual[key] = got[key]
 			}
 		}
-		checkSecrets(t, label, root, res.Rows, secrets(sc.Settings.MaxMindKey, sc.Settings.ASNToken, sc.Settings.Top1MToken, st.Extras))
+		checkSecrets(t, label, root, res.Rows,
+			secrets(sc.Settings.MaxMindAccount, sc.Settings.MaxMindKey, sc.Settings.ASNToken, sc.Settings.Top1MToken, st.Extras))
 		files := map[string]any{}
 		for rel := range st.Expect.Files {
 			files[rel] = observe(t, filepath.Join(root, rel))
@@ -383,18 +385,28 @@ func runExtrasScenario(t *testing.T, file string) {
 	}
 }
 
-// secrets are the configured secrets of a step: the MaxMind key, the ASN and TOP1M tokens, and the blacklist rows' passwords.
-func secrets(maxMindKey, asnToken, top1mToken string, extras []extrasExtra) []string {
+// secrets are the configured secrets of a step, each as it is configured and as it travels: the MaxMind key, the ASN and
+// TOP1M tokens and the blacklist rows' passwords, raw, URL-encoded (query and path escaping) and inside the Basic
+// authorization they make with their account or user.
+func secrets(maxMindAccount, maxMindKey, asnToken, top1mToken string, extras []extrasExtra) []string {
 	var out []string
-	for _, s := range []string{maxMindKey, asnToken, top1mToken} {
+	add := func(s string) {
 		if s != "" {
-			out = append(out, s)
+			out = append(out, s, url.QueryEscape(s), url.PathEscape(s))
 		}
 	}
-	for _, e := range extras {
-		if e.Password != "" {
-			out = append(out, e.Password)
+	basic := func(user, pass string) {
+		if pass != "" {
+			out = append(out, base64.StdEncoding.EncodeToString([]byte(user+":"+pass)))
 		}
+	}
+	add(maxMindKey)
+	add(asnToken)
+	add(top1mToken)
+	basic(maxMindAccount, maxMindKey)
+	for _, e := range extras {
+		add(e.Password)
+		basic(e.Username, e.Password)
 	}
 	return out
 }

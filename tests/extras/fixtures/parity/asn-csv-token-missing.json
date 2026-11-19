@@ -51,7 +51,7 @@
 					}
 				],
 				"reason": "403 Forbidden",
-				"stage": "transfer"
+				"stage": "fetch"
 			}
 		}
 	]

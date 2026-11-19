@@ -60,7 +60,7 @@
 					}
 				],
 				"reason": "feed host resolves to a non-permitted address",
-				"stage": "transfer"
+				"stage": "fetch"
 			}
 		}
 	]

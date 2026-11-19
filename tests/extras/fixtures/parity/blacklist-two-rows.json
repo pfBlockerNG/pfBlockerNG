@@ -69,7 +69,7 @@
 					}
 				],
 				"reason": "500 Internal Server Error",
-				"stage": "transfer"
+				"stage": "fetch"
 			}
 		}
 	]

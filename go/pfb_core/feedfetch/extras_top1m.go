@@ -3,7 +3,6 @@ package feedfetch
 import (
 	"bufio"
 	"bytes"
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/csv"
@@ -182,7 +181,7 @@ func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 		case Failed:
 			ledger(top1mProbeFailed)
 			if probe.reason != "" {
-				return refused("transfer", probe.reason, "")
+				return refused("fetch", probe.reason, "")
 			}
 			return transferRefused(probe.status)
 		case Unchanged:
@@ -225,12 +224,9 @@ func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 // top1mProbe is pfb_download()'s change_detect mode: a conditional GET with the validators stored beside the baseline,
 // its body kept at probeBody for the download to reuse.
 func (f *Fetcher) top1mProbe(ctx context.Context, req Request, x Extra, probeBody string) transfer {
-	src, reason := f.entry(ctx, req)
+	src, reason := f.extrasEntry(ctx, req)
 	if src == nil {
-		return transfer{reason: cmp.Or(reason, "invalid feed URL")}
-	}
-	if f.proxyUnusableFor(src) {
-		return transfer{reason: "proxy_unusable"}
+		return transfer{reason: reason}
 	}
 	return f.fetch(ctx, src, req, probeBody, readValidators(Feed{Dir: x.Dir, Name: x.Download}))
 }
@@ -291,8 +287,8 @@ func (f *Fetcher) top1mDownload(ctx context.Context, cfg ExtrasConfig, x Extra, 
 	var fetched *transfer
 	if _, err := os.Stat(probeBody); err == nil {
 		// The probe already downloaded the body: it is used instead of downloading twice.
-		if err := os.Rename(probeBody, raw); err != nil {
-			return refused("transfer", "probe body could not be staged", ""), nil
+		if os.Rename(probeBody, raw) != nil {
+			return refused("fetch", "probe body could not be staged", ""), nil
 		}
 	} else {
 		_, t, r := f.extrasFetch(ctx, req, raw)
@@ -326,15 +322,17 @@ func (f *Fetcher) top1mDownload(ctx context.Context, cfg ExtrasConfig, x Extra, 
 		return refused("size", "staging_space_low", filepath.Base(raw)), nil
 	}
 	stage, list, err := f.top1mStage(ctx, mime, raw, target)
-	if err != nil {
+	if errors.Is(err, errTop1MArchive) {
 		return refused("extract", err.Error(), filepath.Base(raw)), nil
+	} else if err != nil {
+		return extractRefused(mime, err), nil
 	}
 	defer os.Remove(stage)
 	if !top1mCandidate(stage, p) {
 		return refused("top1m", "semantic_invalid", list), nil
 	}
 	if !top1mCommit(stage, target, base, raw) {
-		return refused("publish", "the list could not be published", ""), nil
+		return publishRefused, nil
 	}
 	touch(filepath.Join(cfg.DBDir, "top-1m.update"))
 	return accepted, fetched
