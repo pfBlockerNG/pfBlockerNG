@@ -1782,6 +1782,17 @@ final class CfgGatewayTest extends TestCase
 			'varsynconchanges',
 			'varsynctimeout',
 			'varsyncdestinenable',
+			// issue #4071: the CrowdSec tab's Settings (section pfblockerngcrowdsec)
+			'enable',
+			'lapi_url',
+			'api_key',
+			'log_level',
+			'rules_all_interfaces',
+			'rules_interfaces',
+			'rules_log',
+			'rules_tag',
+			'rule_v4',
+			'rule_v6',
 		];
 
 		// Deduplicate (some keys appear in multiple sections).

@@ -92,6 +92,12 @@ trait SyncPolicyFixtureTrait
 
 			'global/alertrefresh',
 			'sync/syncscope',
+
+			// issue #4071: each node registers its own CrowdSec bouncer, logs at its own level and picks its own interfaces
+			'crowdsec/api_key',
+			'crowdsec/log_level',
+			'crowdsec/rules_all_interfaces',
+			'crowdsec/rules_interfaces',
 		]);
 	}
 
@@ -103,6 +109,7 @@ trait SyncPolicyFixtureTrait
 			'ip/maxmind_key'     => 'Xk9mR2vQ7tLp3sWz8nB4cD6fH1jK5gT0aY2uE_mmk',
 			'ip/asn_token'       => 'a1b2c3d4e5f607',
 			'dnsbl/top1m_token'  => 'eyJhbGciOiJIUzI1NiJ9.cf-top1m.Q3J5cHRv',
+			'crowdsec/api_key'   => 'Hq7-cs_bouncer.KEY~4f1e9a0b2c',
 		];
 	}
 
@@ -264,8 +271,10 @@ trait SyncPolicyFixtureTrait
 
 		// #3770: pfblockerngdns closes the policy sections; its enable is the one policy leaf, every other key is local.
 		$settings('dns');
+		// #4071: pfblockerngcrowdsec follows it; its key, log level and interfaces are local.
+		$settings('crowdsec');
 
-		$sy = 'installedpackages/pfblockerngsync/config/0';
+		$sy ='installedpackages/pfblockerngsync/config/0';
 		$put(FALSE, "{$sy}/syncscope", 'SYNC<syncscope>');
 		$put(FALSE, "{$sy}/varsynconchanges", 'SYNC<varsynconchanges>');
 		$put(FALSE, "{$sy}/row/0/ip", 'SYNC<target.ip>');

@@ -40,6 +40,8 @@ EDIT_HOOKS = "/pfblockerng/pfblockerng_edit_hooks.php"
 FEEDS = "/pfblockerng/pfblockerng_feeds.php"
 LOG = "/pfblockerng/pfblockerng_log.php"
 SYNC = "/pfblockerng/pfblockerng_sync.php"
+# issue #4071: the CrowdSec tab, after Sync on every top row; its Settings subtab is its landing page.
+CROWDSEC = "/pfblockerng/pfblockerng_crowdsec.php"
 SOFTWARE = "/pfblockerng/pfblockerng_software.php"
 WIZARD = "/wizard.php?xml=pfblockerng_wizard.xml"
 ALERTS = "/pfblockerng/pfblockerng_alerts.php"
@@ -169,6 +171,7 @@ def _top_tabs(reports: str, *, wizard: bool, software: bool = False) -> list[tup
         ("Feeds", FEEDS),
         ("Logs", LOG),
         ("Sync", SYNC),
+        ("CrowdSec", CROWDSEC),
     ]
     if software:
         tabs.append(("Software", SOFTWARE))
@@ -212,6 +215,7 @@ _UNRELATED_PAGES = (
     f"{ALERTS}?view=dnsbl_stat",
     LOG,
     SYNC,
+    CROWDSEC,
     UPDATE,
     HOOKS,
     EDIT_HOOKS,
@@ -254,6 +258,7 @@ _SUBTAB_CASES: tuple[tuple[str, tuple[tuple[str, str], ...], str | None], ...] =
     (EDITOR_IPV4, _IP_SUBTABS, "IPv4"),
     (EDITOR_IPV6, _IP_SUBTABS, "IPv6"),
     (REPUTATION, _IP_SUBTABS, "Reputation"),
+    (CROWDSEC, (("Settings", CROWDSEC),), "Settings"),
 )
 # The DNS-family pages: each prints the five-tab DNS row.
 _DNS_FAMILY_PAGES = tuple(path for path, subtabs, _ in _SUBTAB_CASES if subtabs is _DNS_SUBTABS)
@@ -273,6 +278,7 @@ _CRUMB_CASES: tuple[tuple[str, str, Crumb], ...] = (
     (CATEGORY_GEOIP, "GeoIP", _IP_PARENT),
     (EDITOR_IPV4, "IPv4", _IP_PARENT),
     (EDITOR_IPV6, "IPv6", _IP_PARENT),
+    (CROWDSEC, "Settings", Crumb("CrowdSec", CROWDSEC)),
 )
 
 _EDITOR_CASES = ((EDITOR_IPV4, "ipv4"), (EDITOR_IPV6, "ipv6"), (GROUP_EDITOR, "dnsbl"))
@@ -317,6 +323,8 @@ def test_top_row_offers_one_dns_tab_where_dnsbl_and_pfb_dns_were(path: str, webu
         *_CONTINENT_PAGES,
     }:
         assert active == ["IP"], f"{path}: IP must be the sole active tab, got {active}"
+    elif path == CROWDSEC:
+        assert active == ["CrowdSec"], f"{path}: CrowdSec must be the sole active tab, got {active}"
     else:
         assert "DNS" not in active, f"{path}: the DNS tab must not be selected off the DNS family"
 

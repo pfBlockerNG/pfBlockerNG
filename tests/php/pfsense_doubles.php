@@ -1108,6 +1108,14 @@ if (!function_exists('start_service')) {
 	}
 }
 
+if (!function_exists('filter_configure')) {
+	// pfSense filter.inc: queue a filter reload (check_reload_status does it, asynchronously). Off-appliance nothing reloads: each call
+	// is counted in $GLOBALS['pfb_test_filter_configure_calls'].
+	function filter_configure() {
+		$GLOBALS['pfb_test_filter_configure_calls'] = ($GLOBALS['pfb_test_filter_configure_calls'] ?? 0) + 1;
+	}
+}
+
 if (!function_exists('stop_service')) {
 	// pfSense services.inc: stop a named rc.d service. Recorded like restart_service() above.
 	function stop_service($service) {
