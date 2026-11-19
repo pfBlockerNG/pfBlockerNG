@@ -80,13 +80,13 @@ func TestTheScheduleProjectionAcceptsAndReadsBackWhatTheAdapterReadsOnEveryFixtu
 			if have := jsonOf(t, got); have != jsonOf(t, want) {
 				t.Errorf("%s\nread  %s\nwant  %s", c.Description, have, jsonOf(t, want))
 			}
-			// The API read shows only whether a provider's password is set (issue #3978)
-			public := projection(t, get(t, st, "schedule"), "schedule").Value
-			for i, p := range public["categoryProviders"].([]any) {
-				password := want["categoryProviders"].([]any)[i].(map[string]any)["password"].(string)
-				if have, hidden := jsonOf(t, p.(map[string]any)["password"]), jsonOf(t, map[string]any{"present": password != ""}); have != hidden {
-					t.Errorf("%s\nthe API reads provider %d's password as %s, want %s", c.Description, i, have, hidden)
-				}
+			// The API read is the same value, with each provider's password shown only as whether it is set (issue #3978)
+			for _, p := range want["categoryProviders"].([]any) {
+				provider := p.(map[string]any)
+				provider["password"] = map[string]any{"present": provider["password"] != ""}
+			}
+			if have := jsonOf(t, projection(t, get(t, st, "schedule"), "schedule").Value); have != jsonOf(t, want) {
+				t.Errorf("%s\nthe API reads %s\nwant           %s", c.Description, have, jsonOf(t, want))
 			}
 		})
 	}
