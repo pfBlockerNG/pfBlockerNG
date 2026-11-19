@@ -191,6 +191,9 @@ func TestAFailedUsagePostIsLoggedAndDropped(t *testing.T) {
 	if len(reqs) != 1 {
 		t.Fatalf("LAPI saw %d requests; want the one failed post and no retry", len(reqs))
 	}
+	if h.d.requests != 1 || h.d.errors != 1 {
+		t.Fatalf("lapi requests, errors = %d, %d; want the failed post counted: 1, 1", h.d.requests, h.d.errors)
+	}
 }
 
 // Two origins that share their first 255 characters still get two distinct labels within the schema limit.

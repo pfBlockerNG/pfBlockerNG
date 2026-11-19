@@ -525,3 +525,18 @@ amendment's start, stop and pidfile rules.
 - **Known limit.** A full config.xml restore marks the packages for reinstall (`/conf/needs_package_sync`), so the next boot's
   reinstall runs the installer's apply. A restore of one area (`installedpackages` alone) reloads the filter, whose rules follow the
   restored settings, but the bouncer process and its config file follow only at the next trigger.
+
+## Amendment 2026-11-19 — the status file has its own timer (#4117)
+
+The owner amended D1's "Status file" ([#4117](https://github.com/pfBlockerNG/pfBlockerNG/issues/4117)). With the
+file written only after each pull, a pull and a usage post that each ran into the 30 s request timeout left it about
+60 s old while the bouncer ran, and D6's `3 × update_frequency` check reported `source_up 0` for those scrapes.
+
+- The daemon writes the status file every `update_frequency` on its own timer, as well as after each pull. A slow or
+  timed-out LAPI request delays no write, because requests run outside the loop that writes it: one at a time, a due
+  pull before a due usage post, with ticks that come meanwhile waiting for the request to end. `SIGUSR1` and shutdown
+  are not held up by a request either.
+- A stale status file (D6's threshold, unchanged) therefore means the daemon itself is stuck or stopped. LAPI trouble
+  shows in `last_error`, `last_error_time` and the age of `last_pull`.
+- Every write is a consistent snapshot. A request shows in no field until it has ended, so `lapi_requests` and
+  `lapi_errors` count ended requests, and a write during a request carries the fields from before it.

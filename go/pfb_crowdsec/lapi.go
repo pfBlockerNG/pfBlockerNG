@@ -25,8 +25,6 @@ type lapiClient struct {
 	key        string
 	http       *http.Client
 	maxBody    int64
-	requests   uint64
-	errors     uint64
 }
 
 func newLAPIClient(cfg *config) (*lapiClient, error) {
@@ -71,10 +69,8 @@ func (c *lapiClient) postUsage(ctx context.Context, body []byte) error {
 }
 
 func (c *lapiClient) do(ctx context.Context, method, target string, body []byte, read func(io.Reader) error) error {
-	c.requests++
 	status, err := c.roundTrip(ctx, method, target, body, read)
 	if err != nil {
-		c.errors++
 		if strings.Contains(err.Error(), c.key) {
 			shown := ""
 			if status != 0 {
