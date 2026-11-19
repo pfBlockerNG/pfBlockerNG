@@ -158,6 +158,9 @@ final class ExtrasParityCorpusTest extends TestCase
 				$inode = @fileinode($whitelist);
 				$GLOBALS['pfb']['dnsbl_top1m_inc'] = $case['settings']['top1m_inclusions'] ?? '';
 				$GLOBALS['pfb']['dnsbl_top1m_cnt'] = (string) ($case['settings']['top1m_count'] ?? 1000);
+				// pfblockerng_download_extras() clears these itself; a whitelist step must not report an earlier step's.
+				$GLOBALS['pfb']['maxmind_feed_error'] = FALSE;
+				$GLOBALS['pfb']['top1m_changed'] = FALSE;
 				pfblockerng_top1m();
 				clearstatcache();
 				$actual = ['ok' => is_file($whitelist) && @fileinode($whitelist) !== $inode];

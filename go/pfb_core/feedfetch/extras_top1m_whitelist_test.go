@@ -93,3 +93,35 @@ func TestATop1MWhitelistThatCannotBePublishedKeepsThePrevious(t *testing.T) {
 		t.Errorf("dir holds %v, want %v", got, want)
 	}
 }
+
+// partReader yields its rows, then fails the read.
+type partReader struct{ rows string }
+
+func (r *partReader) Read(p []byte) (int, error) {
+	if r.rows == "" {
+		return 0, errors.New("I/O error")
+	}
+	n := copy(p, r.rows)
+	r.rows = r.rows[n:]
+	return n, nil
+}
+
+// A list whose read fails part-way keeps the previous whitelist. Today's PHP publishes the rows read before the failure
+// (fgets() returns FALSE as at the end of the list); Core refuses them (owner, 2026-11-19, #4067).
+func TestATop1MListThatCannotBeReadKeepsThePrevious(t *testing.T) {
+	saved := top1mWhitelistReader
+	t.Cleanup(func() { top1mWhitelistReader = saved })
+	top1mWhitelistReader = func(*os.File) io.Reader { return &partReader{rows: "1,a.com\n2,b.com\n"} }
+
+	dir := top1mWhitelistDir(t, "1,a.com\n")
+	res := Top1MWhitelist(Top1MWhitelistConfig{DBDir: dir, Provider: "tranco", Inclusions: []string{"com"}, Count: 1000})
+	if res.Published || res.Reason == "" {
+		t.Errorf("result = %+v, want a refusal", res)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "pfbalexawhitelist.txt")); string(b) != "old.com\n" {
+		t.Errorf("whitelist = %q, want the previous one", b)
+	}
+	if got, want := top1mWhitelistEntries(t, dir), []string{"pfbalexawhitelist.txt", "top-1m.csv"}; !slices.Equal(got, want) {
+		t.Errorf("dir holds %v, want %v", got, want)
+	}
+}

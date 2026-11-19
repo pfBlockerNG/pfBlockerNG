@@ -28,9 +28,12 @@ type Top1MWhitelistResult struct {
 // top1mWhitelistWriter is where the build writes its staging file, a test seam for a write that fails.
 var top1mWhitelistWriter = func(f *os.File) io.Writer { return f }
 
+// top1mWhitelistReader is how the build reads top-1m.csv, a test seam for a read that fails part-way.
+var top1mWhitelistReader = func(f *os.File) io.Reader { return f }
+
 // Top1MWhitelist is pfblockerng_top1m(): it derives pfbalexawhitelist.txt from top-1m.csv. Each valid row whose TLD is an
 // inclusion is written as its domain, lowercased and without a leading "www.", until Count domains are written. A list
-// without one valid row, or a build that cannot be written or published, keeps the previous whitelist. The update
+// without one valid row, or one that cannot be read, written or published, keeps the previous whitelist. The update
 // marker top-1m.update is removed whatever the outcome, unless there are no inclusions.
 func Top1MWhitelist(cfg Top1MWhitelistConfig) Top1MWhitelistResult {
 	if len(cfg.Inclusions) == 0 {
@@ -57,8 +60,8 @@ func Top1MWhitelist(cfg Top1MWhitelistConfig) Top1MWhitelistResult {
 	out := bufio.NewWriter(top1mWhitelistWriter(tmp))
 
 	var res Top1MWhitelistResult
-	var werr error
-	rd := bufio.NewReader(src)
+	var werr, rerr error
+	rd := bufio.NewReader(top1mWhitelistReader(src))
 	header := p.header
 	for res.Found < cfg.Count && werr == nil {
 		line, err := rd.ReadString('\n')
@@ -74,6 +77,9 @@ func Top1MWhitelist(cfg Top1MWhitelistConfig) Top1MWhitelistResult {
 			}
 		}
 		if err != nil {
+			if err != io.EOF {
+				rerr = err
+			}
 			break
 		}
 	}
@@ -84,6 +90,8 @@ func Top1MWhitelist(cfg Top1MWhitelistConfig) Top1MWhitelistResult {
 		werr = cerr
 	}
 	switch {
+	case rerr != nil: // today's PHP publishes the rows read before the failure (owner, 2026-11-19, #4067)
+		res.Reason = "could not read top-1m.csv"
 	case werr != nil:
 		res.Reason = "could not write the new whitelist"
 	case res.Parsed == 0:
