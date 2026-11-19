@@ -9,7 +9,7 @@ import (
 )
 
 // Top1MWhitelistConfig is what pfblockerng_top1m() reads: the database folder holding top-1m.csv, the provider the list
-// came from, the TLD inclusions and the count of domains to write.
+// came from, the TLD inclusions and the count of domains to write (at least 1, as the settings projection holds it).
 type Top1MWhitelistConfig struct {
 	DBDir      string
 	Provider   string

@@ -10,7 +10,7 @@ package feedfetch_test
 //	servers      [name]: HTTP servers on 127.0.0.1; "{port:<name>}" expands to a server's port.
 //	settings     {maxmind_account, maxmind_key, asn_token, sanity, top1m_source, top1m_token, top1m_inclusions,
 //	             top1m_count}: what the extras and DNSBL projections hold (top1m_source is the provider the TOP1M row
-//	             names; top1m_inclusions the TLD inclusions as stored, comma-separated; top1m_count defaults to 1000).
+//	             names; top1m_inclusions the TLD inclusions, comma-separated and passed as given; top1m_count defaults to 1000).
 //	ledger       the open message of the TOP1M download ledger entry before the first step; absent when none is open.
 //	seed         {"db/<path>" or "share/<path>": content or {"b64": bytes}}: files before the first step.
 //	routes       {server: {path: route}}: what each server answers (the feed-transfer corpus's route keys).

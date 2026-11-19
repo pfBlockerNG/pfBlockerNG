@@ -28,7 +28,7 @@ require_once __DIR__ . '/support/HttpFixtureReadiness.php';
  * `pfblockerng.sh asn_table` (the ASN conversion's, #4034) is a stand-in that records its call in db/script.calls.
  *
  * A "whitelist" step runs pfblockerng_top1m(), the TOP1M whitelist build, with the scenario's provider, TLD inclusions
- * (as stored, comma-separated) and count.
+ * (comma-separated, set as given: the pfb_filter() CSV check before it is not part of the build) and count.
  */
 #[CoversFunction('pfb_download')]
 #[CoversFunction('pfblockerng_top1m')]

@@ -82,10 +82,19 @@ func top1mRow(line string, p top1mProvider) (string, bool) {
 	if line == "" || !strings.Contains(line, ".") || p.domainCol > 0 && !strings.Contains(line, ",") {
 		return "", false
 	}
-	r := csv.NewReader(strings.NewReader(strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")))
-	r.FieldsPerRecord, r.LazyQuotes = -1, true
-	fields, err := r.Read()
-	if err != nil || len(fields) != p.columns {
+	line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+	var fields []string
+	if strings.Contains(line, `"`) {
+		r := csv.NewReader(strings.NewReader(line))
+		r.FieldsPerRecord, r.LazyQuotes = -1, true
+		var err error
+		if fields, err = r.Read(); err != nil {
+			return "", false
+		}
+	} else if line != "" { // an unquoted row is its commas; a csv.Reader per row made a full list 4x slower than PHP
+		fields = strings.Split(line, ",")
+	}
+	if len(fields) != p.columns {
 		return "", false
 	}
 	if p.rankDomain && !allIn(fields[0], "0123456789") || p.rankDomain && fields[0] == "" {
