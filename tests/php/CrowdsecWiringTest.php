@@ -176,4 +176,11 @@ final class CrowdsecWiringTest extends TestCase
 		$priv = (string) file_get_contents(__DIR__ . '/../../src/etc/inc/priv/pfblockerng.priv.inc');
 		$this->assertStringContainsString("\$priv_list['page-firewall-pfblockerng']['match'][] = \"pfblockerng/pfblockerng_crowdsec.php\";", $priv);
 	}
+
+	public function testTheStatusPageAndItsQueriesAreCoveredByThePackagePrivilege(): void
+	{
+		// issue #4073: the Status subtab pages its tables and runs its lookup through the query string
+		$priv = (string) file_get_contents(__DIR__ . '/../../src/etc/inc/priv/pfblockerng.priv.inc');
+		$this->assertStringContainsString("\$priv_list['page-firewall-pfblockerng']['match'][] = \"pfblockerng/pfblockerng_crowdsec_status.php*\";", $priv);
+	}
 }

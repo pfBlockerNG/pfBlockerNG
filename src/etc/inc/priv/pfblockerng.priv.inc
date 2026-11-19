@@ -55,6 +55,7 @@ $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_fe
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_log.php";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_sync.php";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_crowdsec.php";
+$priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_crowdsec_status.php*";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_category.php*";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_category_edit.php*";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_reputation.php";

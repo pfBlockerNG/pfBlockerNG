@@ -82,8 +82,7 @@ unset($tab);
 display_top_tabs($tab_array, TRUE);
 pfb_print_pending_changes_box();
 
-$tab_array	= array();
-$tab_array[]	= array(gettext('Settings'),	TRUE,	PFB_CROWDSEC_PAGE);
+$tab_array = pfb_crowdsec_subtabs(PFB_CROWDSEC_PAGE);
 display_top_tabs($tab_array, TRUE);
 
 $form = new Form('Save');

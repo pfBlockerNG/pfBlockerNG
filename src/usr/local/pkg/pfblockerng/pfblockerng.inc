@@ -13668,6 +13668,27 @@ function pfb_metrics_render(array $s): string {
 	$family('pfblockerng_update_last_start_timestamp_seconds', 'Unix time the latest update pass started.', $pass === NULL ? array() : array(array(array(), $pass['last_start'])));
 	$family('pfblockerng_update_last_end_timestamp_seconds', 'Unix time the latest update pass ended.', $pass === NULL ? array() : array(array(array(), $pass['last_end'])));
 
+	// The CrowdSec bouncer (crowdsec-integration.md D6): the fw_bouncer_* families keep the official bouncer's names, for its dashboards
+	$cs = $s['crowdsec'] ?? NULL;
+	$packets = $bytes = $banned = array();
+	foreach ($cs['dropped'] ?? array() as $type => $dropped) {
+		$packets[] = array(array('ip_type' => $type), $dropped['packets']);
+		$bytes[] = array(array('ip_type' => $type), $dropped['bytes']);
+	}
+	foreach ($cs['banned'] ?? array() as $type => $bans) {
+		foreach ($bans['origins'] as $origin => $count) {
+			$banned[] = array(array('origin' => (string) $origin, 'ip_type' => $type), $count);
+		}
+	}
+	$one = static fn (string $field): array => $cs === NULL ? array() : array(array(array(), $cs[$field]));
+	$family('fw_bouncer_dropped_packets', "Packets dropped by the CrowdSec bouncer's rules, per address family.", $packets);
+	$family('fw_bouncer_dropped_bytes', "Bytes dropped by the CrowdSec bouncer's rules, per address family.", $bytes);
+	$family('fw_bouncer_banned_ips', 'Values the CrowdSec bouncer bans, per origin and address family.', $banned);
+	$family('pfblockerng_crowdsec_lapi_requests_total', 'Requests the CrowdSec bouncer sent to the LAPI since it started.', $one('lapi_requests'));
+	$family('pfblockerng_crowdsec_lapi_errors_total', 'Failed LAPI requests of the CrowdSec bouncer since it started.', $one('lapi_errors'));
+	$family('pfblockerng_crowdsec_last_pull_timestamp_seconds', "Unix time of the CrowdSec bouncer's last successful pull.", $one('last_pull'));
+	$family('pfblockerng_crowdsec_last_error_timestamp_seconds', "Unix time of the CrowdSec bouncer's last error, 0 for none.", $one('last_error_time'));
+
 	$rows = array();
 	foreach ($s['source_up'] as $source => $up) {
 		$rows[] = array(array('source' => $source), $up ? 1 : 0);
@@ -13982,6 +14003,17 @@ function pfb_metrics_collect(?callable $core_call = NULL): array {
 		return $pass;
 	});
 
+	// The CrowdSec bouncer's status file (crowdsec-integration.md D6): no source while the bouncer should not run; down while it is
+	// stopped or the file is missing, unreadable, garbled or stale
+	$crowdsec = NULL;
+	if (pfb_crowdsec_should_run()) {
+		$crowdsec = $guard('crowdsec', function () use (&$up, $pfb): ?array {
+			$status = isvalidpid($pfb['crowdsec_pidfile'] ?? PFB_CROWDSEC_PIDFILE) ? pfb_crowdsec_status_read($pfb['crowdsec_status'] ?? PFB_CROWDSEC_STATUS) : NULL;
+			$up['crowdsec'] = $status !== NULL && pfb_crowdsec_status_fresh($status, time());
+			return $up['crowdsec'] ? $status : NULL;
+		});
+	}
+
 	return array(
 		'version'          => pfb_pkg_ver(),
 		'ip_tables'        => $ip_tables,
@@ -13995,6 +14027,7 @@ function pfb_metrics_collect(?callable $core_call = NULL): array {
 		'feed_success'     => $feed_success,
 		'feed_failing'     => $feed_failing,
 		'pass'             => $pass,
+		'crowdsec'         => $crowdsec,
 		'source_up'        => $up,
 	);
 }

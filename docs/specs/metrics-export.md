@@ -170,7 +170,8 @@ Prometheus text format (`\\`, `\"`, `\n`).
 | `pfblockerng_metrics_source_up` | gauge | `source` | 1 when that source was collected, 0 when it failed |
 
 `source` values: `pfctl`, `pf_rules`, `dnsbl_db`, `resolver_db`, `schedule_state` (Core's `GetSchedule`: 0 when Core does not
-answer), `sync_status`, `py_sync_status`, `pass_status`.
+answer), `sync_status`, `py_sync_status`, `pass_status`, and `crowdsec` while the CrowdSec bouncer should run
+(`docs/specs/crowdsec-integration.md` D6, which also names its families).
 
 Semantics operators rely on:
 

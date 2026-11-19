@@ -442,3 +442,20 @@ stay banned and a missed ban would stay missing until the next restart.
   a 6rd or 6to4 WAN gets its IPv6 rules on `<name>_stf`. A family with no selected interface left gets no rules.
 - **Signal.** The shutdown function sends `SIGUSR1` with `pkill -F <pidfile> -f <the bouncer's command line>` once
   `isvalidpid()` confirms the pid, so a stale pidfile that names a reused pid signals nothing.
+
+## Amendment 2026-11-19 — the Status subtab and the metrics source (#4073)
+
+- **Staleness.** The status file carries `updated_at` and `update_frequency_seconds`, so D6's "more than
+  `3 × update_frequency` old" uses the daemon's own frequency. "Running" is a live process in
+  `/var/run/pfb_crowdsec.pid`, the service status D4 uses.
+- **Shape.** The page and the metrics source read the status file only after checking every field: counts are
+  integers from 0 up to PHP's integer maximum, the update frequency is positive, and both families are present in
+  `banned` and `dropped`. Anything else, or a file over 1 MiB, reads as unreadable, so the source reports
+  `source_up 0` and the page shows no status.
+- **Families.** The `fw_bouncer_*` families are gauges, as in the official bouncer, with an `ip_type` of `ipv4` or
+  `ipv6`. `fw_bouncer_banned_ips` has one series per origin. The two `_total` families are counters.
+- **Lookup.** The key travels only in the `X-Api-Key` header. Redirects are not followed, because a redirect would
+  send the key to another host. An answer over 1 MiB fails the lookup. The LAPI answers `null` when no decision
+  matches, and the page shows that as "No decision".
+- **Log.** The page reads the last 1 MiB of `/var/log/system.log` and keeps the lines whose program is
+  `pfb_crowdsec`, in either the BSD or the RFC 5424 log format.

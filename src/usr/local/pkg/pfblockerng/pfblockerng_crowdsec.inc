@@ -20,13 +20,20 @@
  * limitations under the License.
  */
 
-// The CrowdSec bouncer pfb_crowdsec (go/pfb_crowdsec): its Settings, config file, service and rules. docs/specs/crowdsec-integration.md, D2-D5.
+// The CrowdSec bouncer pfb_crowdsec (go/pfb_crowdsec): its Settings, config file, service, rules and status. docs/specs/crowdsec-integration.md, D2-D7.
 
 const PFB_CROWDSEC_DIR = '/usr/local/pkg/pfblockerng/crowdsec';
 const PFB_CROWDSEC_PAGE = '/pfblockerng/pfblockerng_crowdsec.php';
+const PFB_CROWDSEC_STATUS_PAGE = '/pfblockerng/pfblockerng_crowdsec_status.php';
 const PFB_CROWDSEC_RCFILE = '/usr/local/etc/rc.d/pfb_crowdsec.sh';
 const PFB_CROWDSEC_CONFIG = '/usr/local/etc/pfb_crowdsec.json';
 const PFB_CROWDSEC_STATUS = '/var/run/pfb_crowdsec.json';
+// The status file's address families (go/pfb_crowdsec ipTypes) and their tables (D3); a larger status file is not the bouncer's
+const PFB_CROWDSEC_TABLES = ['ipv4' => 'crowdsec_v4', 'ipv6' => 'crowdsec_v6'];
+const PFB_CROWDSEC_STATUS_MAX = 1048576;
+// The Status subtab's lookup (D7): the whole request's time limit, and the largest answer read
+const PFB_CROWDSEC_LOOKUP_TIMEOUT = 5;
+const PFB_CROWDSEC_LOOKUP_MAX = 1048576;
 // The bouncer's own pid (daemon -p), which the rule hook signals; SIGUSR1 to daemon(8)'s supervisor (-P) would kill it (#4069)
 const PFB_CROWDSEC_PIDFILE = '/var/run/pfb_crowdsec.pid';
 const PFB_CROWDSEC_DAEMON_PIDFILE = '/var/run/pfb_crowdsec_daemon.pid';
@@ -52,16 +59,26 @@ function pfb_crowdsec_settings(): array {
 }
 
 /**
- * Should the bouncer run (D4): pfBlockerNG's master enable, the CrowdSec enable, and a key stored on this node. The master enable is
- * $pfb['enable'] once pfb_global() loaded it (a removal turns it off in its own process), else the stored one: pfSense's filter
- * reload calls the rule hook without loading pfBlockerNG's globals.
+ * Why the bouncer does not run (D4, shown by D7), or NULL when it should: pfBlockerNG's master enable, the CrowdSec enable, and a key
+ * stored on this node. The master enable is $pfb['enable'] once pfb_global() loaded it (a removal turns it off in its own process), else
+ * the stored one: pfSense's filter reload calls the rule hook without loading pfBlockerNG's globals.
  */
-function pfb_crowdsec_should_run(): bool {
+function pfb_crowdsec_off_reason(): ?string {
 	global $pfb;
 
+	if (($pfb['enable'] ?? PfbConfig::read('gen/enable_cb')) !== PfbToggle::On) {
+		return gettext('pfBlockerNG is disabled');
+	}
+	if (PfbConfig::read('crowdsec/enable') !== PfbToggle::On) {
+		return gettext('CrowdSec is disabled');
+	}
 	$key = PfbConfig::read('crowdsec/api_key');
-	return ($pfb['enable'] ?? PfbConfig::read('gen/enable_cb')) === PfbToggle::On && PfbConfig::read('crowdsec/enable') === PfbToggle::On
-	    && is_string($key) && $key !== '';
+	return (is_string($key) && $key !== '') ? NULL : gettext('no bouncer API key is stored on this node');
+}
+
+/** Should the bouncer run (D4): pfb_crowdsec_off_reason() finds no reason against it. */
+function pfb_crowdsec_should_run(): bool {
+	return pfb_crowdsec_off_reason() === NULL;
 }
 
 /**
@@ -244,6 +261,181 @@ function pfb_crowdsec_save(array $values): void {
 /** Append the CrowdSec tab to a pfBlockerNG top row; its own pages mark it selected. */
 function pfb_crowdsec_add_tab(array &$tab_array): void {
 	$tab_array[] = array(gettext('CrowdSec'), FALSE, PFB_CROWDSEC_PAGE);
+}
+
+/** The CrowdSec tab's second row, with the subtab at $page (PFB_CROWDSEC_PAGE or PFB_CROWDSEC_STATUS_PAGE) selected. */
+function pfb_crowdsec_subtabs(string $page): array {
+	return array(
+		array(gettext('Settings'), $page === PFB_CROWDSEC_PAGE, PFB_CROWDSEC_PAGE),
+		array(gettext('Status'), $page === PFB_CROWDSEC_STATUS_PAGE, PFB_CROWDSEC_STATUS_PAGE),
+	);
+}
+
+/**
+ * The bouncer's status file (D1, go/pfb_crowdsec status.go), checked field by field: NULL when it is missing, unreadable, larger than
+ * PFB_CROWDSEC_STATUS_MAX, not JSON, or not the daemon's shape (each count an integer from 0 up to PHP_INT_MAX, a positive update
+ * frequency, both families in `banned` and `dropped`).
+ *
+ * @return array{version: string, start_time: int, update_frequency_seconds: int, updated_at: int, last_pull: int, last_error_time: int,
+ *   last_error: string, lapi_requests: int, lapi_errors: int, banned: array<string, array{total: int, origins: array<array-key, int>}>,
+ *   dropped: array<string, array{packets: int, bytes: int}>}|null families keyed as PFB_CROWDSEC_TABLES; an origin may read back as an
+ *   int key (PHP array keys)
+ */
+function pfb_crowdsec_status_read(string $path = PFB_CROWDSEC_STATUS): ?array {
+	$raw = is_file($path) ? @file_get_contents($path, FALSE, NULL, 0, PFB_CROWDSEC_STATUS_MAX + 1) : FALSE;
+	if (!is_string($raw) || strlen($raw) > PFB_CROWDSEC_STATUS_MAX) {
+		return NULL;
+	}
+	// Objects stay objects, so a JSON list is never taken for a map; an integer beyond PHP_INT_MAX decodes as a float and is refused
+	$doc = json_decode($raw, FALSE, 8);
+	$get = static fn (mixed $object, string $key): mixed => ($object instanceof stdClass && property_exists($object, $key)) ? $object->$key : NULL;
+	$count = static fn (mixed $value): ?int => (is_int($value) && $value >= 0) ? $value : NULL;
+
+	$status = array('version' => $get($doc, 'version'), 'last_error' => $get($doc, 'last_error'));
+	foreach (array('start_time', 'update_frequency_seconds', 'updated_at', 'last_pull', 'last_error_time', 'lapi_requests', 'lapi_errors') as $field) {
+		$status[$field] = $count($get($doc, $field));
+	}
+	if (!is_string($status['version']) || !is_string($status['last_error']) || in_array(NULL, $status, TRUE)
+	    || $status['update_frequency_seconds'] === 0) {
+		return NULL;
+	}
+	foreach (array_keys(PFB_CROWDSEC_TABLES) as $family) {
+		$bans = $get($get($doc, 'banned'), $family);
+		$origins = $get($bans, 'origins');
+		// An empty JSON list is as empty as the {} Go writes for no origins
+		$origins = $origins instanceof stdClass ? array_map($count, get_object_vars($origins)) : ($origins === array() ? array() : NULL);
+		$dropped = $get($get($doc, 'dropped'), $family);
+		$status['banned'][$family] = array('total' => $count($get($bans, 'total')), 'origins' => $origins);
+		$status['dropped'][$family] = array('packets' => $count($get($dropped, 'packets')), 'bytes' => $count($get($dropped, 'bytes')));
+		if ($origins === NULL || in_array(NULL, $origins, TRUE) || in_array(NULL, $status['banned'][$family], TRUE)
+		    || in_array(NULL, $status['dropped'][$family], TRUE)) {
+			return NULL;
+		}
+	}
+	return $status;
+}
+
+/** A status file is fresh while it is at most three update intervals old (D6); older, the bouncer has stopped writing it. */
+function pfb_crowdsec_status_fresh(array $status, int $now): bool {
+	return $now - $status['updated_at'] <= 3 * $status['update_frequency_seconds'];
+}
+
+/**
+ * One table's entries as `pfctl -t <table> -T show` lists them (D7), or NULL when pfctl fails, as it does for a table that does not exist.
+ *
+ * @return list<string>|null
+ */
+function pfb_crowdsec_table_entries(string $table): ?array {
+	global $pfb;
+
+	$out = array();
+	exec(escapeshellarg($pfb['pfctl'] ?? '/sbin/pfctl') . ' -t ' . escapeshellarg($table) . ' -T show 2>/dev/null', $out, $rc);
+	return $rc === 0 ? array_values(array_filter(array_map('trim', $out), static fn (string $entry): bool => $entry !== '')) : NULL;
+}
+
+/**
+ * The last $lines lines of the system log tagged pfb_crowdsec (D7, D4's `daemon -T pfb_crowdsec`), oldest first, in either of pfSense's
+ * log formats (BSD `<time> <host> pfb_crowdsec[<pid>]:`, or RFC 5424 `<pri>1 <time> <host> pfb_crowdsec`). Only the log's last
+ * PFB_CROWDSEC_STATUS_MAX bytes are read.
+ *
+ * @return list<string>
+ */
+function pfb_crowdsec_log_tail(string $log = '/var/log/system.log', int $lines = 50): array {
+	$fh = @fopen($log, 'rb');
+	if ($fh === FALSE) {
+		return array();
+	}
+	$size = @filesize($log);
+	@fseek($fh, max(0, (int) $size - PFB_CROWDSEC_STATUS_MAX));
+	$raw = (string) @stream_get_contents($fh);
+	fclose($fh);
+	$tagged = preg_grep('/^(?:\S+\s+\d+\s+\d\d:\d\d:\d\d\s+\S+\s+pfb_crowdsec(?:\[\d+\])?:|<\d+>1\s+\S+\s+\S+\s+pfb_crowdsec\s)/',
+	    explode("\n", mb_scrub($raw, 'UTF-8')));
+	return array_slice(array_values($tagged), -$lines);
+}
+
+/**
+ * The Status subtab's lookup (D7): the decisions the LAPI at $url holds for $ip, from `GET /v1/decisions?ip=<ip>` with the bouncer key.
+ * $ip must be an IP address, else nothing is sent. The key is never part of the result.
+ *
+ * @param callable(string, string): array{status: int, body: string, error: string}|null $get the request (NULL: pfb_crowdsec_lapi_get())
+ * @return array{error: ?string, decisions: list<array{value: string, scope: string, origin: string, scenario: string, type: string,
+ *   duration: string}>}
+ */
+function pfb_crowdsec_lookup(string $ip, string $url, string $key, ?callable $get = NULL): array {
+	$fail = static fn (string $error): array => array('error' => $error, 'decisions' => array());
+	if (filter_var($ip, FILTER_VALIDATE_IP) === FALSE) {
+		return $fail(gettext('The lookup address is not an IP address.'));
+	}
+	// The key goes into a request header: it must be what the Settings accept (printable ASCII, no whitespace)
+	if ($url === '' || !preg_match('/^[\x21-\x7e]{1,256}$/D', $key)) {
+		return $fail(gettext('Store the Remote LAPI URL and the Bouncer API key on the Settings subtab first.'));
+	}
+	$answer = ($get ?? 'pfb_crowdsec_lapi_get')(rtrim($url, '/') . '/v1/decisions?ip=' . rawurlencode($ip), $key);
+	if ($answer['error'] !== '') {
+		return $fail(sprintf(gettext('The LAPI request failed: %s'), $answer['error']));
+	}
+	if ($answer['status'] !== 200) {
+		return $fail(sprintf(gettext('The LAPI answered HTTP %d.'), $answer['status']));
+	}
+	// The LAPI answers `null` when no decision matches
+	$list = json_decode($answer['body'], TRUE, 8);
+	if ($list === NULL && trim($answer['body']) === 'null') {
+		return array('error' => NULL, 'decisions' => array());
+	}
+	if (!is_array($list) || !array_is_list($list) || array_filter($list, 'is_array') !== $list) {
+		return $fail(gettext('The LAPI answer is not a list of decisions.'));
+	}
+	$decisions = array();
+	foreach ($list as $decision) {
+		$row = array();
+		foreach (array('value', 'scope', 'origin', 'scenario', 'type', 'duration') as $field) {
+			$row[$field] = is_scalar($decision[$field] ?? NULL) ? (string) $decision[$field] : '';
+		}
+		$decisions[] = $row;
+	}
+	return array('error' => NULL, 'decisions' => $decisions);
+}
+
+/**
+ * The lookup's request: curl options for a GET carrying the bouncer key, PFB_CROWDSEC_LOOKUP_TIMEOUT seconds for the whole request,
+ * no redirect (it would carry the key elsewhere).
+ */
+function pfb_crowdsec_lapi_curl_options(string $key): array {
+	return array(
+		CURLOPT_HTTPGET        => TRUE,
+		CURLOPT_HTTPHEADER     => array("X-Api-Key: {$key}", 'Accept: application/json', 'User-Agent: pfBlockerNG'),
+		CURLOPT_TIMEOUT        => PFB_CROWDSEC_LOOKUP_TIMEOUT,
+		CURLOPT_CONNECTTIMEOUT => PFB_CROWDSEC_LOOKUP_TIMEOUT,
+		CURLOPT_FOLLOWLOCATION => FALSE,
+		CURLOPT_NOSIGNAL       => TRUE,
+	);
+}
+
+/**
+ * GET $url with the bouncer key (pfb_crowdsec_lapi_curl_options()). An answer larger than PFB_CROWDSEC_LOOKUP_MAX is a failed request.
+ *
+ * @return array{status: int, body: string, error: string} error is '' on success; it never carries the key
+ */
+function pfb_crowdsec_lapi_get(string $url, string $key): array {
+	$body = '';
+	$ch = curl_init($url);
+	curl_setopt_array($ch, pfb_crowdsec_lapi_curl_options($key) + array(
+		CURLOPT_WRITEFUNCTION => static function ($ch, string $chunk) use (&$body): int {
+			if (strlen($body) + strlen($chunk) > PFB_CROWDSEC_LOOKUP_MAX) {
+				return 0;
+			}
+			$body .= $chunk;
+			return strlen($chunk);
+		},
+	));
+	// No curl_close(): a no-op since PHP 8.0, deprecated in 8.5
+	$ok = curl_exec($ch);
+	return array(
+		'status' => (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE),
+		'body'   => $body,
+		'error'  => $ok === FALSE ? (curl_error($ch) ?: gettext('no answer')) : '',
+	);
 }
 
 /**
