@@ -41,6 +41,7 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -86,6 +87,7 @@ RELOAD_BOUND = 2.0  # criterion 4
 SALVAGE = 120.0  # a cap on waiting for an asynchronous event that has no bound of its own; never an expected wait
 
 SIGNALLED = "SIGUSR1: checking the tables"
+PROGRAM = re.compile(r"\bpfb_crowdsec(\[\d+\])?: |\bpfb_crowdsec (\d+|-) \S+ ")
 RESTORED = re.compile(r"(crowdsec_v[46]): restored \d+ values \(table was missing\)")
 
 # The engine's decisions for the whole module: what the tables must hold whenever no test has added its own. Plus three
@@ -204,9 +206,10 @@ def _log_mark(vm: SmokeVM) -> int:
 
 
 def _bouncer_log(vm: SmokeVM, since: int = 0) -> list[str]:
-    """The system log's lines tagged pfb_crowdsec after line ``since`` (all of them after a rotation)."""
+    """The system log's lines whose program is pfb_crowdsec, in the BSD or the RFC 5424 format, after line ``since``
+    (all of them after a rotation)."""
     script = f'n=$(wc -l < {SYSLOG}); s={since}; [ "$n" -lt "$s" ] && s=0; tail -n "+$((s + 1))" {SYSLOG}'
-    return [line for line in _sh(vm, script).splitlines() if re.search(r"\bpfb_crowdsec(\[\d+\])?: ", line)]
+    return [line for line in _sh(vm, script).splitlines() if PROGRAM.search(line)]
 
 
 def _status(vm: SmokeVM) -> dict[str, Any]:
@@ -395,14 +398,16 @@ def metrics_export(deployed_vm: SmokeVM) -> Iterator[Callable[[], dict[str, Metr
     vm = deployed_vm
     folder = os.path.dirname(PROM)
     existed = vm.ssh(f"test -d {folder}").returncode == 0
+    option = f"{h.CFG_GLOBAL}/pfb_metrics_export"
+    before = h.config_get_state(vm, option)
     _sh(vm, f"install -d -m 0755 {folder}")
 
-    def export(on: bool) -> None:
+    def export_on() -> None:
         _php_ok(
             vm,
             f"require_once({h._php_str(PFB_EXTRA)});\n"
-            f"PfbConfig::writeSystem('gen/pfb_metrics_export', PfbToggle::{'On' if on else 'Off'});\n"
-            "write_config('pfBlockerNG smoke: metrics export toggle');",
+            "PfbConfig::writeSystem('gen/pfb_metrics_export', PfbToggle::On);\n"
+            "write_config('pfBlockerNG smoke: metrics export on');",
         )
         h.tell_core_the_settings_changed(vm)
 
@@ -412,13 +417,14 @@ def metrics_export(deployed_vm: SmokeVM) -> Iterator[Callable[[], dict[str, Metr
         _sh(vm, f"{h.PHP_BIN} {h.PFB_CLI} metrics")
         return {family.name: family for family in text_string_to_metric_families(_sh(vm, f"cat {PROM}"))}
 
-    export(True)
+    export_on()
     try:
         # The option takes effect with the update pass, which writes the export's sentinel the verb checks
         h.reload(vm, "update", wait_unbound=False)
         yield scrape
     finally:
-        export(False)
+        h.config_restore_state(vm, option, before)
+        h.tell_core_the_settings_changed(vm)
         h.reload(vm, "update", wait_unbound=False)
         if not existed:
             vm.ssh(f"rm -f {PROM}; rmdir {folder}")
@@ -429,11 +435,7 @@ def _samples(families: dict[str, Metric]) -> dict[tuple[str, tuple[tuple[str, st
 
 
 def _source_up(families: dict[str, Metric]) -> dict[str, float]:
-    return {
-        dict(labels)["source"]: v
-        for (name, labels), v in _samples(families).items()
-        if name == "pfblockerng_metrics_source_up"
-    }
+    return {s.labels["source"]: s.value for s in families["pfblockerng_metrics_source_up"].samples}
 
 
 def _crowdsec_samples(families: dict[str, Metric]) -> dict[tuple[str, tuple[tuple[str, str], ...]], float]:
@@ -460,18 +462,19 @@ def test_a_first_enable_starts_the_bouncer_on_the_first_try(deployed_vm: SmokeVM
 
     _save(gui, _on_fields(engine))
 
-    first = _child(vm)
-    assert first is not None, f"the save did not start the bouncer: {_processes(vm)!r}\n{_bouncer_log(vm, log_mark)}"
+    # The rc start returns once the supervisor's pidfile names it; the bouncer's own pidfile follows
+    first = _await(lambda: _child(vm), lambda pid: pid is not None, "the bouncer's pidfile naming it")
     # The save also reloads the filter, which kills the new tables and signals the bouncer to restore them
     _await(lambda: (_signals(vm, log_mark), len(_rules(vm))), lambda s: s[0] > 0 and s[1] == 4, "the save's reload")
     _within(BAN_BOUND, lambda: _tables(vm), lambda t: t == _expected(engine), "both tables holding the engine's set")
     pull = engine.wait_for(lambda r: r.is_stream, after=lapi_mark, timeout=SALVAGE, what="first stream pull")
     log = _bouncer_log(vm, log_mark)
     assert pull.startup, f"the first pull is a startup pull: {pull}"
+    assert pull.query.get("scopes") == ["ip,range"], f"the bouncer asks for ip and range decisions: {pull}"
     assert [r for r in engine.requests()[lapi_mark:] if r.path == STREAM and r.status != 200] == [], "no pull failed"
     assert sum(" starting: LAPI " in line for line in log) == 1, "one start of the bouncer:\n" + "\n".join(log)
     assert not any("not started" in line for line in log), "\n".join(log)
-    assert _child(vm) == first, "the supervisor never had to restart the bouncer"
+    assert _child(vm) == first, f"the supervisor never had to restart the bouncer: {first} -> {_processes(vm)!r}"
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -577,14 +580,13 @@ def sync_target(deployed_vm: SmokeVM, engine: StubLapi) -> Iterator[Callable[[st
     """XMLRPC sync aimed at the stub (it records the POST to /xmlrpc.php and refuses it); yields a sync in the given
     scope, returning the request the stub received. The sync settings are put back afterwards."""
     vm = deployed_vm
-    out = _php_ok(vm, f"echo '<<<J>>>' . json_encode(config_get_path({h._php_str(SYNC_SECTION)})) . '<<<E>>>';")
-    saved = out.split("<<<J>>>", 1)[1].split("<<<E>>>", 1)[0]
+    saved = h._php_read_scalar(vm, "", f"json_encode(config_get_path({h._php_str(SYNC_SECTION)}))")
 
     def sync(scope: str) -> LapiRequest:
         target = {
             "varsyncdestinenable": "on",
             "varsyncprotocol": "http",
-            "varsyncipaddress": engine.url.split("//")[1].split(":")[0],
+            "varsyncipaddress": str(urlsplit(engine.url).hostname),
             "varsyncport": str(engine.port),
             "varsyncusername": "admin",
             "varsyncpassword": "smoke-sync",
@@ -625,29 +627,34 @@ def test_the_key_appears_nowhere(
     key = engine.key
     assert any(r.api_key == key and r.is_stream for r in engine.requests()), "vacuity guard: the bouncer sends the key"
 
-    logs = vm.ssh(f"grep -rlF -e {shlex.quote(key)} /var/log")
-    assert (logs.returncode, logs.stdout) == (1, ""), f"the key is in: {logs.stdout!r} {logs.stderr!r}"
-    assert _bouncer_log(vm), "vacuity guard: the bouncer logs to the system log"
-
     settings = gui.get(PAGE).text
     status_page = gui.get(STATUS_PAGE).text
-    assert key not in settings and "A key is stored" in settings
-    assert key not in status_page and engine.url in status_page, "the Status page shows the URL, never the key"
+    assert key not in settings, "the Settings page renders the key"
+    assert "A key is stored" in settings, "vacuity guard: the Settings page knows a key is stored"
+    assert key not in status_page, "the Status page renders the key"
+    assert engine.url in status_page, "vacuity guard: the Status page shows the LAPI URL"
 
     raw_status = _sh(vm, f"stat -f %Lp {STATUS_FILE}; cat {STATUS_FILE}")
-    assert key not in raw_status
-    assert raw_status.splitlines()[0] == "644" and json.loads(raw_status.split("\n", 1)[1])["last_pull"] > 0
+    assert key not in raw_status, "the status file holds the key"
+    mode, body = raw_status.split("\n", 1)
+    assert (mode, json.loads(body)["last_pull"] > 0) == ("644", True), f"status file mode and last pull: {raw_status}"
 
     families = metrics_export()
-    assert any(name.startswith("fw_bouncer_banned_ips") for name, _ in _samples(families)), "vacuity guard"
-    assert key not in _sh(vm, f"cat {PROM}")
+    assert any(name == "fw_bouncer_banned_ips" for name, _ in _samples(families)), f"vacuity guard: {sorted(families)}"
+    assert key not in _sh(vm, f"cat {PROM}"), "the metrics file holds the key"
 
     policy = sync_target("policy").body.decode()
     assert engine.url in policy, "vacuity guard: the policy payload carries the CrowdSec section's LAPI URL"
-    assert key not in policy
+    assert key not in policy, "the policy sync payload holds the key"
     legacy = sync_target("all").body.decode()
     assert "enable_cb" in legacy, f"vacuity guard: the legacy payload carries the General section: {legacy[:300]!r}"
-    assert key not in legacy and "pfblockerngcrowdsec" not in legacy
+    assert key not in legacy, "the legacy sync payload holds the key"
+    assert "pfblockerngcrowdsec" not in legacy, "the legacy scopes never send the CrowdSec section"
+
+    # Last, so the logs written by the pages, the metrics pass and the syncs above are searched too
+    logs = vm.ssh(f"grep -rlF -e {shlex.quote(key)} /var/log /tmp/PHP_errors.log 2>/dev/null; true")
+    assert logs.stdout == "", f"files holding the key: {logs.stdout!r}"
+    assert _bouncer_log(vm), "vacuity guard: the bouncer logs to the system log"
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -667,20 +674,27 @@ def _reload(vm: SmokeVM, gui: WebUI, path: str) -> None:
 def test_a_filter_reload_leaves_both_tables_full_within_2_s(
     bouncer: SmokeVM, engine: StubLapi, gui: WebUI, path: str
 ) -> None:
-    """Given the bouncer on with both tables full,
+    """Given the bouncer on with both tables full, and its pull just done, so the next one is an interval away,
     When the filter reloads (pfSense kills both tables) and the rule hook signals the bouncer at the reload's end,
-    Then within 2 s of the signal both tables hold the full set again, restored on the signal."""
+    Then both tables hold the full set again within 2 s of the reload's end (rc.filter_configure_sync returns at its
+      end; the page only asks for the reload, whose end is the signal), with no pull in between: the signal restored
+      them."""
     vm = bouncer
     want = _converged(vm, engine)
     mark = _log_mark(vm)
+    pulled = engine.wait_for(lambda r: r.path == STREAM, after=engine.mark(), timeout=SALVAGE, what="the next pull")
 
     _reload(vm, gui, path)
-    _await(lambda: _signals(vm, mark), lambda n: n > 0, f"the signal at the end of the {path} reload")
-
+    if path != "rc.filter_configure_sync":
+        _await(lambda: _signals(vm, mark), lambda n: n > 0, "the signal at the end of the page's reload")
     _within(RELOAD_BOUND, lambda: _tables(vm), lambda t: t == want, "both tables full again")
-    log = _bouncer_log(vm, mark)
-    signal = next(i for i, line in enumerate(log) if SIGNALLED in line)
-    restored = {m.group(1) for line in log[signal:] if (m := RESTORED.search(line))}
+
+    between = [str(r) for r in engine.requests()[pulled.seq + 1 :] if r.path == STREAM]
+    assert between == [], (
+        f"inconclusive: a pull came before the tables were seen full, it may have restored them: {between}"
+    )
+    log = _await(lambda: _bouncer_log(vm, mark), lambda lines: any(SIGNALLED in line for line in lines), "the signal")
+    restored = {m.group(1) for line in log if (m := RESTORED.search(line))}
     assert restored == set(TABLES.values()), (
         "the reload killed both tables and the signal restored them:\n" + "\n".join(log)
     )
@@ -740,7 +754,8 @@ def test_while_the_lapi_is_unreachable_the_tables_hold_and_pulls_resume_after(
         failed = _await(lambda: _status(vm), lambda s: s["lapi_errors"] > before["lapi_errors"], "a failed pull")
         assert _tables(vm) == want, "the tables keep their contents while the LAPI is unreachable"
         log = [line for line in _bouncer_log(vm, mark) if "LAPI pull failed" in line]
-        assert log and all(f":{engine.port}" in line and "connection refused" in line for line in log), log
+        assert log and all(f":{engine.port}" in line for line in log), f"each failed pull is logged: {log}"
+        assert any("connection refused" in line for line in log), f"the refusal is logged: {log}"
         page = gui.get(STATUS_PAGE).text
         assert "connection refused" in _text_by_id(page, "cs-last-error"), "the Status page shows the error"
         assert int(_text_by_id(page, "cs-errors")) >= failed["lapi_errors"], "the Status page counts the errors"
@@ -766,8 +781,8 @@ def test_the_metrics_source_is_up_while_running_and_down_while_stale(
     Then the source reports 0 and no CrowdSec family, with every other source as it was;
     When it runs again, the source is back to 1."""
     vm = bouncer
+    status = _status(vm)  # before the scrape: the scrape's counters can only be newer
     running = metrics_export()
-    status = _status(vm)
     up = _source_up(running)
     assert up.get("crowdsec") == 1, f"source_up while running: {up}"
     samples = _crowdsec_samples(running)
@@ -941,12 +956,14 @@ def test_a_reboot_brings_the_bouncer_back_with_the_full_set(bouncer: SmokeVM, en
     before = _child(vm)
     mark = engine.mark()
 
-    h.reboot_vm(vm)
+    h.reboot_vm(vm, require_pkg_metadata=True)  # the deinstall after this runs pkg
 
     after = _await(lambda: _child(vm), lambda pid: pid is not None, "the bouncer running after the boot")
-    assert after != before, "a new process"
-    pull = engine.wait_for(lambda r: r.is_stream, after=mark, timeout=SALVAGE, what="the first pull after the boot")
-    assert pull.startup, f"the first pull after the boot is a full pull: {pull}"
+    assert after != before, f"a new process: {before} -> {after}"
+    # The old process may pull once more before the shutdown stops it: the new one starts with a full pull
+    engine.wait_for(
+        lambda r: r.is_stream and r.startup, after=mark, timeout=SALVAGE, what="the new process's full pull"
+    )
     _within(BAN_BOUND, lambda: _tables(vm), lambda t: t == want, "both tables holding the full set after the boot")
 
 

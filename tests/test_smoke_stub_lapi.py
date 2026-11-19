@@ -195,6 +195,18 @@ def test_wait_for_returns_the_request_once_it_arrives(stub: StubLapi) -> None:
     assert (seen.seq, seen.startup) == (after, True)
 
 
+def test_wait_for_skips_the_requests_before_after(stub: StubLapi) -> None:
+    _pull(stub, startup=True)
+    after = stub.mark()
+    _pull(stub)
+
+    seen = stub.wait_for(lambda r: r.is_stream, after=after, timeout=30, what="a pull from the mark on")
+
+    assert (seen.seq, seen.startup) == (after, False), "the earlier startup pull is before the mark"
+    with pytest.raises(RuntimeError, match="stuck/environment"):
+        stub.wait_for(lambda r: r.startup, after=after, timeout=0.2, what="a startup pull from the mark on")
+
+
 def test_wait_for_names_what_it_saw_when_the_cap_expires(stub: StubLapi) -> None:
     _pull(stub, startup=True)
 
