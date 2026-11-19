@@ -724,13 +724,6 @@ pfb_core_service();
 restart_service('pfb_core');
 update_status(" done.\n");
 
-// issue #4071: the CrowdSec bouncer runs only while it should (pfBlockerNG on, CrowdSec on, a key on this node). The update pass ends
-// early during an install, so the installer applies it itself; an upgrade's removal step stopped the package services, so this
-// starts it again on the new binary
-update_status("Applying the CrowdSec bouncer service...");
-pfb_crowdsec_apply();
-update_status(" done.\n");
-
 if ($ufound) {
 	$final = pfb_stop_start_unbound();
 	// issue #3216: the restart mirrors its own progress (dots, "\nStarting Unbound Resolver")
@@ -743,6 +736,13 @@ if ($ufound) {
 		update_status(" Unbound Resolver did not restart; see the pfBlockerNG log.\n");
 	}
 }
+
+// issue #4071: the CrowdSec bouncer runs only while it should (pfBlockerNG on, CrowdSec on, a key on this node). The update pass ends
+// early during an install, so the installer applies it itself; an upgrade's removal step stopped the package services, so this
+// starts it again on the new binary
+update_status("Applying the CrowdSec bouncer service...");
+pfb_crowdsec_apply();
+update_status(" done.\n");
 
 // Upgrade EasyList to new Format
 update_status(" Upgrading previous EasyLists to new format...");

@@ -90,6 +90,7 @@ final class RegistryPassTest extends TestCase
 			self::SYNC_SECTION   => 'NEWCFG',
 			self::DNS_SECTION    => 'NEWCFG',
 			self::DNS_SHARED_SECTION => 'NEWCFG',
+			PFB_SECTIONS['crowdsec'] => 'NEWCFG',
 		], $modes);
 	}
 
