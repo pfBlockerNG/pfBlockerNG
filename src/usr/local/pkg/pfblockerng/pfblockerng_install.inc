@@ -724,6 +724,12 @@ pfb_core_service();
 restart_service('pfb_core');
 update_status(" done.\n");
 
+// issue #4071: the CrowdSec bouncer runs only while it should (pfBlockerNG on, CrowdSec on, a key on this node); the removal before an
+// upgrade stopped it and removed its config file, so this starts it again on the new binary
+update_status("Applying the CrowdSec bouncer service...");
+pfb_crowdsec_apply();
+update_status(" done.\n");
+
 if ($ufound) {
 	$final = pfb_stop_start_unbound();
 	// issue #3216: the restart mirrors its own progress (dots, "\nStarting Unbound Resolver")

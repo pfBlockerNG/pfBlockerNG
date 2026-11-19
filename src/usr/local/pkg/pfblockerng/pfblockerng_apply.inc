@@ -5265,6 +5265,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		pfb_sync_receive_legacy_absorb($pfb['dbdir']);
 	}
 
+	// issue #4071: the CrowdSec bouncer follows the master enable and its own settings here (the pass also runs after an XMLRPC
+	// receive and the install or upgrade resync). Turned on or off, its rules change with the one filter reload below.
+	if (pfb_crowdsec_apply()) {
+		$pfb['filter_configure'] = TRUE;
+	}
+
 	#################################
 	#  Call filter_configure once	#
 	#################################

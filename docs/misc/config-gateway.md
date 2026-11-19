@@ -19,7 +19,7 @@ or checking foreign-key exclusions.
 - **Path addressing (issue #1931):** registry keys = `'<alias>/<config-key>'` path
   strings — `'gen/pfb_keep'`, `'ip/suppression'` — alias resolved through
   `PFB_SECTIONS` map (`gen`/`dnsbl`/`ss`/`ip`/`rep`, plus `global`/`sync` since
-  issue #2123, `dns` since issue #3515, and `dns_shared` since issue #3649), single home of real section paths. Same-named keys in different
+  issue #2123, `dns` since issue #3515, `dns_shared` since issue #3649, and `crowdsec` since issue #4071), single home of real section paths. Same-named keys in different
   sections cannot collide — which is what lets #2123 register the DNSBL page's
   `dnsbl/auto*` scalars while the identically named per-feed-row and per-continent keys
   stay foreign. Bare-name lookups throw (`InvalidArgumentException`) — no dual
@@ -323,6 +323,13 @@ Authorization = property of **write**, not call site (generalises
     Package downgrade remains unsupported: an older package cannot consume the new shared section,
     but retains its own snapshot and node-local settings. Restore the pre-upgrade configuration
     backup or reinstall the current package; never copy another node's snapshot or erase one to downgrade.
+  - **`crowdsec/*`** (issue #4071, the CrowdSec tab's Settings, section `installedpackages/pfblockerngcrowdsec/config/0`; spec
+    `docs/specs/crowdsec-integration.md` D2): `enable`, `rules_all_interfaces`, `rules_log`, `rule_v4` and `rule_v6` are
+    `PfbToggle` (defaults Off, On, Off, On, On); `lapi_url`, `api_key`, `log_level` (default `info`), `rules_interfaces`
+    (comma-joined interface names) and `rules_tag` are plain strings. Sync: `api_key`, `log_level` and the two interface
+    fields are `local`, the rest `policy`; the section is a settings section of `pfb_sync_policy_sections()` (allowlist) and
+    of no legacy scope. All new keys, no grandfather: absent keeps the bouncer off. The Settings page writes the section
+    through `pfb_crowdsec_save()`; the key is never rendered back, and an empty key field keeps it.
   - **`enable_rep`/`enable_pdup`/`enable_dedup` → `PfbToggle`** (issue #1896, Reputation
     "Max"/"pMax"/"dMax" toggles): default Off. Section
     (`pfblockerngreputation/config/0`) also holds unregistered scalars (`p24_*_var`,
