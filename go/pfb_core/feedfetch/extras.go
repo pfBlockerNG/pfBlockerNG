@@ -55,7 +55,8 @@ type ExtrasConfig struct {
 // mime, plaintext, structural, member or extract, or top1m, publish, aborted (the run's context ended) or unsupported;
 // Reason is the code pfb_validate_log() writes wherever today's PHP writes one. No URL query and no secret reaches them,
 // except a secret under six bytes as plain text: such a secret collides with reason text too often to be told from it. A
-// row refused for its own reason just as the run's context ends reads aborted: the run ended.
+// row refused for its own reason just as the run's context ends reads aborted: the run ended. Status is set on a transfer
+// refusal only.
 type ExtrasRow struct {
 	Kind, Download string
 	Result
@@ -102,14 +103,13 @@ func (f *Fetcher) DownloadExtras(ctx context.Context, cfg ExtrasConfig, extras [
 				req.Username, req.Password = cfg.MaxMindAccount, cfg.MaxMindKey
 			}
 			r = f.extra(ctx, cfg, x, req)
-			if !r.OK && x.Kind == "geoip" && ctx.Err() == nil { // an aborted run is no MaxMind failure
-				res.MaxMindError = true
-			}
 		}
 		if !r.OK {
 			res.OK = false
 			if err := ctx.Err(); err != nil {
 				r = refused("aborted", err.Error(), "") // the run ended, not the feed or its key
+			} else if x.Kind == "geoip" {
+				res.MaxMindError = true
 			}
 			r.Reason, r.Detected = cfg.redact(r.Reason, x), cfg.redact(r.Detected, x)
 		}
@@ -130,8 +130,9 @@ var accepted = Result{OK: true}
 // escaping a quote inside it) or to white space; an apostrophe, in the path or the query, is part of the URL.
 var urlQuery = regexp.MustCompile(`(?i)((?:https?|ftp)://(?:\\.|[^\s"?\\])*)\?(?:\\.|[^\s"\\])*`)
 
-// urlUserinfo is a URL's user and password, as a Blacklist row's ftp://user:pass@host carries them.
-var urlUserinfo = regexp.MustCompile(`(?i)((?:https?|ftp)://)(?:\\.|[^\s"/?#@\\])*@`)
+// urlUserinfo is a URL's user and password, as a Blacklist row's ftp://user:pass@host carries them, through the last "@"
+// before the host, as net/url splits them.
+var urlUserinfo = regexp.MustCompile(`(?i)((?:https?|ftp)://)(?:\\.|[^\s"/?#\\])*@`)
 
 // redact is what a refused row may carry: every URL query, as pfb_redact_url() hides it, and every secret of the run and
 // row, raw, as it travels in a URL or in the Basic authorization it makes, gone, the longest form first. A secret under
@@ -189,15 +190,22 @@ func (f *Fetcher) extrasFetch(ctx context.Context, req Request, raw string) (*so
 	}
 	t := f.fetch(ctx, src, req, raw, nil)
 	if t.reason != "" {
-		stage := "fetch"
-		if t.reason == "download_too_large" {
-			stage = "size" // pfb_validate_log()'s stage for the transfer ceiling
-		}
-		r := refused(stage, t.reason, "")
-		r.Status = t.status
+		r := transferFailed(t)
 		return nil, t, &r
 	}
 	return src, t, nil
+}
+
+// transferFailed is a transfer that ended with a reason: the transfer ceiling is pfb_validate_log()'s size stage, any
+// other reason its fetch stage.
+func transferFailed(t transfer) Result {
+	stage := "fetch"
+	if t.reason == "download_too_large" {
+		stage = "size"
+	}
+	r := refused(stage, t.reason, "")
+	r.Status = t.status
+	return r
 }
 
 // transferRefused is a final status the row does not accept.

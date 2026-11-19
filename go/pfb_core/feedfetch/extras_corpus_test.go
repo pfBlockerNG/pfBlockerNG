@@ -425,13 +425,18 @@ func checkSecrets(t *testing.T, label, root string, rows []feedfetch.ExtrasRow, 
 			}
 		}
 	}
-	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || p == filepath.Join(root, "requests.log") {
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if p == filepath.Join(root, "requests.log") {
 			return nil
 		}
 		var content []byte
 		if d.Type().IsRegular() {
-			content, _ = os.ReadFile(p)
+			if content, err = os.ReadFile(p); err != nil {
+				return err
+			}
 		}
 		for _, s := range secrets {
 			if strings.Contains(d.Name(), s) || bytes.Contains(content, []byte(s)) {
@@ -440,6 +445,9 @@ func checkSecrets(t *testing.T, label, root string, rows []feedfetch.ExtrasRow, 
 		}
 		return nil
 	})
+	if err != nil {
+		t.Errorf("%s: the run root was not read whole for secrets: %v", label, err)
+	}
 }
 
 // contentBytes is a seeded or expected file: text (ports expanded) or {"b64": bytes}.

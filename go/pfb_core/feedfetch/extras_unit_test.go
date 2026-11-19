@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -267,5 +268,26 @@ func TestATransferRefusalCarriesNoQuery(t *testing.T) {
 		URL: "http://lists.example:" + port + "/bl.tar.gz?key=qtoken", Dir: db, Download: "bl.tar.gz", File: "bl.tar.gz", Name: "BL"}})
 	if r := res.Rows[0]; res.OK || r.Reason == "" || strings.Contains(r.Reason+r.Detected, "qtoken") {
 		t.Errorf("(ok, reason, detected) = (%v, %q, %q), want a refusal without the query", res.OK, r.Reason, r.Detected)
+	}
+}
+
+// A TOP1M body declared past the transfer ceiling is a size refusal, whether the dcc probe or the download meets it.
+func TestATOP1MBodyPastTheCeilingIsASizeRefusal(t *testing.T) {
+	srvURL, _ := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", strconv.FormatInt(feedfetch.DefaultMaxBytes+1, 10))
+	})
+	u, err := url.Parse(srvURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, detect := range []bool{true, false} {
+		dir := t.TempDir()
+		res := extrasFetcher().DownloadExtras(context.Background(), feedfetch.ExtrasConfig{DBDir: dir, Detect: detect},
+			[]feedfetch.Extra{{Kind: "top1m", URL: "http://tranco-list.eu:" + u.Port() + "/top-1m.csv.zip", Dir: dir,
+				Download: "top-1m.csv.zip", File: "top-1m.csv", Provider: "tranco"}})
+		if r := res.Rows[0]; res.OK || r.Stage != "size" || r.Reason != "download_too_large" {
+			t.Errorf("detect %v: refusal (stage, reason) = (%q, %q), want (size, download_too_large)", detect, r.Stage,
+				r.Reason)
+		}
 	}
 }

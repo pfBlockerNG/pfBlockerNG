@@ -181,7 +181,7 @@ func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Requ
 		case Failed:
 			ledger(top1mProbeFailed)
 			if probe.reason != "" {
-				return refused("fetch", probe.reason, "")
+				return transferFailed(probe)
 			}
 			return transferRefused(probe.status)
 		case Unchanged:

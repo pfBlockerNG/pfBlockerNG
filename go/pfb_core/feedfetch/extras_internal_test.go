@@ -537,3 +537,42 @@ func TestRedactHidesARowsQueryPastASpace(t *testing.T) {
 		t.Errorf("redact = %q still holds the query", got)
 	}
 }
+
+// A URL's userinfo is hidden through the last "@" before its host, as net/url splits it; an "@" in the path stays.
+func TestRedactHidesUserinfoThroughTheLastAt(t *testing.T) {
+	const in = "fetch ftp://user:pa@rest@host/x/a@b failed"
+	if got, want := (ExtrasConfig{}).redact(in, Extra{}), "fetch ftp://[redacted]@host/x/a@b failed"; got != want {
+		t.Errorf("redact(%q) = %q, want %q", in, got, want)
+	}
+}
+
+// errFrom is a context whose Err turns to Canceled from its failFrom-th call on (0: never).
+type errFrom struct {
+	context.Context
+	calls, failFrom int
+}
+
+func (c *errFrom) Err() error {
+	c.calls++
+	if c.failFrom > 0 && c.calls >= c.failFrom {
+		return context.Canceled
+	}
+	return nil
+}
+
+// A GeoIP row refused just as the run's context ends is one decision: an aborted row is no MaxMind failure.
+func TestAnAbortedGeoIPRowIsNoMaxMindFailure(t *testing.T) {
+	run := func(ctx context.Context) ExtrasResult {
+		return (&Fetcher{RetryDelay: 1}).DownloadExtras(ctx, ExtrasConfig{DBDir: t.TempDir()},
+			[]Extra{{Kind: "geoip", URL: "http://", Dir: t.TempDir(), Download: "GeoLite2-Country.tar.gz",
+				File: "GeoLite2-Country.mmdb"}})
+	}
+	count := &errFrom{Context: context.Background()}
+	if res := run(count); res.OK || !res.MaxMindError || res.Rows[0].Stage != "fetch" {
+		t.Fatalf("a live run's refusal = %+v, want a MaxMind failure at fetch", res)
+	}
+	res := run(&errFrom{Context: context.Background(), failFrom: count.calls})
+	if res.Rows[0].Stage == "aborted" && res.MaxMindError {
+		t.Errorf("an aborted row also reads as a MaxMind failure: %+v", res)
+	}
+}
