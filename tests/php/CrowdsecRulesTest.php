@@ -50,7 +50,8 @@ final class CrowdsecRulesTest extends TestCase
 	{
 		$GLOBALS['config'] = $this->savedConfig;
 		$GLOBALS['pfb'] = $this->savedPfb;
-		unset($GLOBALS['pfb_test_real_interface'], $GLOBALS['pfb_test_mwexec'], $GLOBALS['pfb_test_valid_pids']);
+		unset($GLOBALS['pfb_test_real_interface'], $GLOBALS['pfb_test_real_interface_inet6'], $GLOBALS['pfb_test_mwexec'],
+			$GLOBALS['pfb_test_valid_pids']);
 	}
 
 	private static function store(array $over = []): void
@@ -142,6 +143,29 @@ final class CrowdsecRulesTest extends TestCase
 		self::store(['rules_all_interfaces' => '', 'rules_interfaces' => 'opt7,lan']);
 		$GLOBALS['pfb_test_real_interface']['opt7'] = NULL;
 		$this->assertStringStartsWith("block drop in quick on { vtnet1 } inet from <crowdsec_v4>", pfb_crowdsec_rules('pfearly'));
+	}
+
+	public function testEachFamilysRulesUseThatFamilysRealInterface(): void
+	{
+		// A 6rd or 6to4 WAN carries its IPv6 on wan_stf: pfSense answers that only when asked for inet6
+		self::store(['rules_all_interfaces' => '', 'rules_interfaces' => 'wan,lan']);
+		$GLOBALS['pfb_test_real_interface_inet6'] = ['wan' => 'wan_stf'];
+		$this->assertSame(
+			"block drop in quick on { vtnet0 vtnet1 } inet from <crowdsec_v4> to any label \"CrowdSec IPv4\"\n"
+			. "block drop out quick on { vtnet0 vtnet1 } inet from any to <crowdsec_v4> label \"CrowdSec IPv4 out\"\n"
+			. "block drop in quick on { wan_stf vtnet1 } inet6 from <crowdsec_v6> to any label \"CrowdSec IPv6\"\n"
+			. "block drop out quick on { wan_stf vtnet1 } inet6 from any to <crowdsec_v6> label \"CrowdSec IPv6 out\"\n",
+			pfb_crowdsec_rules('pfearly'));
+	}
+
+	public function testAFamilyWithNoSelectedInterfaceLeftGetsNoRulesAndTheOtherKeepsItsOwn(): void
+	{
+		self::store(['rules_all_interfaces' => '', 'rules_interfaces' => 'opt1']);
+		$GLOBALS['pfb_test_real_interface_inet6'] = ['opt1' => NULL];
+		$this->assertSame(
+			"block drop in quick on { vtnet2.10 } inet from <crowdsec_v4> to any label \"CrowdSec IPv4\"\n"
+			. "block drop out quick on { vtnet2.10 } inet from any to <crowdsec_v4> label \"CrowdSec IPv4 out\"\n",
+			pfb_crowdsec_rules('pfearly'));
 	}
 
 	public function testNoSelectedInterfaceLeftGivesNoRulesRatherThanRulesOnEveryInterface(): void

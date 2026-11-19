@@ -1407,8 +1407,13 @@ if (!function_exists('get_real_interface')) {
 	// pfSense interfaces.inc: map friendly interface name to the real OS interface
 	// (e.g. 'lan' -> 'em1').  Tests seed $GLOBALS['pfb_test_real_interface'] (map
 	// of name => real-name, or NULL: pfSense's answer for an interface that is not configured); absent key returns the input
-	// unchanged (identity).
+	// unchanged (identity). $GLOBALS['pfb_test_real_interface_inet6'] overrides the map for $type 'inet6' (a 6rd or 6to4
+	// WAN answers <name>_stf there).
 	function get_real_interface($interface = 'wan', $type = '') {
+		$v6 = $GLOBALS['pfb_test_real_interface_inet6'] ?? [];
+		if ($type === 'inet6' && array_key_exists($interface, $v6)) {
+			return $v6[$interface];
+		}
 		$map = $GLOBALS['pfb_test_real_interface'] ?? [];
 		return array_key_exists($interface, $map) ? $map[$interface] : $interface;
 	}
