@@ -1,0 +1,58 @@
+{
+	"schema": 1,
+	"description": "A contiguous-file member (tar type 7) is a regular file: it is extracted, and replaces the earlier member of its name.",
+	"hosts": {
+		"download.maxmind.com": [
+			"127.0.0.1",
+			"203.0.113.7"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"maxmind_account": "123456",
+		"maxmind_key": "abcdef"
+	},
+	"seed": {
+		"share/GeoLite2-Country.mmdb": {
+			"b64": "AE9MRC1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+		}
+	},
+	"routes": {
+		"origin": {
+			"/geoip/databases/GeoLite2-Country/download": {
+				"body_b64": "H4sIAAAAAAAC/+3TTQqCUBSG4bsUN6DdK9ecp+HEH4giGoWVAwcqmIKtqbW0lraQNTRoEoXU+0w+OKMzeYOsCvMms02vasumPm3VJBicrKI47MQbZG+q9WN7w5VSK6G0Y2vXlfp+V46tlDCk+IL22KR1/4r4U0nom16yipeLjRlF/kycL9co7aK8PFj7qugEflkwiv7lc/+uMFz6/7x4vn7VP4UAAAAAAAAAAAAAAACM2w1tlMd0ACgAAA=="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://download.maxmind.com:{port:origin}/geoip/databases/GeoLite2-Country/download?suffix=tar.gz",
+					"file_dwn": "GeoLite2-Country.tar.gz",
+					"file": "GeoLite2-Country.mmdb",
+					"folder": "share",
+					"type": "geoip"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"share/GeoLite2-Country.mmdb": {
+						"b64": "AE5FVy1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+					}
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					}
+				]
+			}
+		}
+	]
+}

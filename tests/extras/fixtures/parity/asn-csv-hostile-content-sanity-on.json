@@ -1,0 +1,59 @@
+{
+	"schema": 1,
+	"description": "A CSV with a NUL, invalid UTF-8 and a short row is published as the gzip holds it, with the content scan on.",
+	"hosts": {
+		"ipinfo.io": [
+			"127.0.0.1",
+			"203.0.113.5"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"asn_token": "tok123",
+		"sanity": true
+	},
+	"seed": {
+		"share/asn.csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare,cloudflare.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/data/free/asn.csv.gz": {
+				"body_b64": "H4sIAAAAAAAC/ysuSSwqic8s0EnNSwFRicV5OnmJuak6Kfm5iZl5XIZ6BiCoA6GNTE11HIMNdfxKcxj8QKrySnP0UisScwtyUrmMoEqNkJQa6TglpvwPDXGz0ElKTIErNYYqdQw25gIACfhYb4IAAAA="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://ipinfo.io:{port:origin}/data/free/asn.csv.gz?token=",
+					"file_dwn": "asn.csv.gz",
+					"file": "asn.csv",
+					"folder": "share",
+					"type": "asn"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"share/asn.csv": {
+						"b64": "c3RhcnRfaXAsZW5kX2lwLGFzbixuYW1lLGRvbWFpbgoxLjAuMC4wLDEuMC4wLjI1NSxBUzEsTnVsAE5hbWUsbnVsLmV4YW1wbGUKMi4wLjAuMCwyLjAuMC4yNTUsQVMyLEJhZP9VVEY4LGJhZC5leGFtcGxlCjMuMC4wLjAsQVMzCg=="
+					},
+					"share/asn.csv.gz.raw": null,
+					"db/asn.update": "",
+					"db/script.calls": "asn_table\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/data/free/asn.csv.gz",
+						"query": "token=tok123"
+					}
+				]
+			}
+		}
+	]
+}

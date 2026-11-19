@@ -1,0 +1,71 @@
+{
+	"schema": 1,
+	"description": "White space before an opening quote is skipped. Text after a closing quote is malformed CSV and the row is skipped; str_getcsv() appends that text, so today's PHP keeps a.example.com and tail.examplex (old_expect). Core reads the list with encoding/csv (owner, 2026-11-19).",
+	"hosts": {
+		"tranco-list.eu": [
+			"127.0.0.1",
+			"203.0.113.11"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "com,example,examplex"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/top-1m.csv.zip": {
+				"body_b64": "UEsDBBQAAAAIAAAAIVhdGvoERQAAAGAAAAAKAAAAdG9wLTFtLmNzdjPUUVAqLkhMTtVLrUjMLchJVeIy0uFUKklMQggY6yglgnlKQK5ecn4ul4kOUEVmDlxJBZepjlJSYnJ2jFJxTmJxBkIvAFBLAQIUAxQAAAAIAAAAIVhdGvoERQAAAGAAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAG0AAAAAAA=="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://tranco-list.eu:{port:origin}/top-1m.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "tranco"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/top-1m.csv": {
+						"b64": "MSwgInNwYWNlLmV4YW1wbGUiCjIsCSJ0YWIuZXhhbXBsZSIKMywiYS5leGFtInBsZS5jb20KNCwidGFpbC5leGFtcGxlIngKNSwiYmFja1wic2xhc2guZXhhbXBsZSIK"
+					}
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			}
+		},
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "space.example\ntab.example\n"
+				}
+			},
+			"old_expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "space.example\ntab.example\na.example.com\ntail.examplex\n"
+				}
+			}
+		}
+	]
+}

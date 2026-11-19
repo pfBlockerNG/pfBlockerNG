@@ -96,18 +96,39 @@ func wordName(s string) bool {
 	return true
 }
 
-// linkMember is a hard-link member: name, under dir, becomes another name for target, already extracted there.
+// linkMember is a hard-link member: name, under dir, becomes another name for target, already extracted there, and
+// replaces what an earlier member left under that name (removeEarlier). A link whose target is not an extracted file (a
+// skipped link or special member, a member outside the categories, a path that cannot exist, or none at all) is
+// skipped, and still replaces the earlier entry of its name, as any later member does. A link to itself is a no-op.
 func linkMember(dir, target, name string) error {
 	for _, n := range []string{target, name} {
 		if !filepath.IsLocal(filepath.FromSlash(n)) {
 			return errUnsafeMember
 		}
 	}
-	p := filepath.Join(dir, filepath.FromSlash(name))
+	from, p := filepath.Join(dir, filepath.FromSlash(target)), filepath.Join(dir, filepath.FromSlash(name))
+	if p == from {
+		return nil
+	}
+	if err := removeEarlier(p); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(from); err != nil || !info.Mode().IsRegular() {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	return os.Link(filepath.Join(dir, filepath.FromSlash(target)), p)
+	return os.Link(from, p)
+}
+
+// removeEarlier removes what an earlier member left at p before a later file, link or skipped member takes the name, so
+// the later member wins: a file, or an empty folder. A folder that holds other members refuses the archive.
+func removeEarlier(p string) error {
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // extractCategories is `tar -xf --include='*domains' -s <blacklistRules>` into dir, then pfb_blacklist_tar_finalize_staged():
@@ -121,7 +142,7 @@ func (f *Fetcher) extractCategories(ctx context.Context, mime, archive, name, di
 			// tar renames a hard link's target by the same rules, so a linked category is published too.
 			return linkMember(dir, categoryName(h.Linkname, name), categoryName(h.Name, name))
 		}
-		return f.writeMember(dir, categoryName(h.Name, name), h.Typeflag == tar.TypeDir, h.Typeflag == tar.TypeReg, r)
+		return f.writeMember(dir, categoryName(h.Name, name), h.Typeflag == tar.TypeDir, regularMember(h), r)
 	})
 	if err != nil {
 		return err

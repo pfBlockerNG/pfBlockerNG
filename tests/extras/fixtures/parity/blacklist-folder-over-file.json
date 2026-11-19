@@ -1,0 +1,50 @@
+{
+	"schema": 1,
+	"description": "A later folder member replaces an earlier file of its name, as any later member does.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"body_b64": "H4sIAAAAAAAC/+3WQQrCMBCF4aw9hSewk3TSnCfaLoRWxbbQ4xu7DAhuGsH+32ZCVoHhPXLuq9jO/VS19yFeb6PZgCSN6jqTfIrYxlj1TkMQfd9bK00wRzEFzOMUn+kpZp/W5Z+6JQ6PvjsY7Mw5y3+1Uf6D95/zn85Z/q2m/HvyX37/yy/63+X7r2tH/5ew0P177/9L3PT3903+Ncu/eFeT/xLS8mkAAAAAAAAAAAAA4E+8AJDqiroAKAAA"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"report": "\tUT1 ... Completed\n",
+				"files": {
+					"db/ut1/ut1_adult/x": "x.example\n",
+					"db/ut1/ut1_cat": "cat.example\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

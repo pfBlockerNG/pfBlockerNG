@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -166,7 +167,11 @@ func stripped(name string) string {
 
 func (f *Fetcher) extractTarStripped(ctx context.Context, mime, raw, dir string) error {
 	return walkTar(ctx, mime, raw, func(h *tar.Header, r io.Reader) error {
-		return f.writeMember(dir, stripped(h.Name), h.Typeflag == tar.TypeDir, h.Typeflag == tar.TypeReg, r)
+		name := stripped(h.Name)
+		if h.Typeflag == tar.TypeLink && path.Clean(stripped(h.Linkname)) == path.Clean(name) {
+			return nil // a hard link to its own name (GNU tar's second copy of a file) leaves that file in place
+		}
+		return f.writeMember(dir, name, h.Typeflag == tar.TypeDir, regularMember(h), r)
 	})
 }
 
@@ -201,19 +206,42 @@ func (f *Fetcher) extractZipStripped(ctx context.Context, raw, dir string) error
 	return nil
 }
 
+// regularMember tells a tar member that holds a file's bytes. Its type flag decides, never its mode bits, and a type
+// tar does not know is a regular file, as POSIX and both tars take it; links, special files, folders, pax global
+// headers and GNU dump-folder and volume-label entries are not.
+func regularMember(h *tar.Header) bool {
+	switch h.Typeflag {
+	case tar.TypeLink, tar.TypeSymlink, tar.TypeChar, tar.TypeBlock, tar.TypeDir, tar.TypeFifo, tar.TypeXGlobalHeader, 'D', 'V':
+		return false
+	}
+	return true
+}
+
 // writeMember writes one stripped member under dir: a directory, or a regular file under the per-file ceiling.
-// shortcut: a link or special member is skipped (tar would create it); the hostile-input rows of #3978 decide that.
+// A link or special member is skipped where tar would create it (owner, plan of #3978): a symbolic link in a published
+// folder would read its target as data. A later member replaces the earlier file of its name.
 func (f *Fetcher) writeMember(dir, name string, isDir, isReg bool, r io.Reader) error {
-	if name == "" {
+	rel := filepath.FromSlash(name)
+	if filepath.Clean(rel) == "." { // no name, or the extraction folder itself
 		return nil
 	}
 	// unsafeMember refused such names before extraction; this keeps the write itself inside dir.
-	if !filepath.IsLocal(filepath.FromSlash(name)) {
+	if !filepath.IsLocal(rel) {
 		return errUnsafeMember
 	}
-	p := filepath.Join(dir, filepath.FromSlash(name))
+	p := filepath.Join(dir, rel)
 	if isDir {
+		if info, err := os.Lstat(p); err == nil && !info.IsDir() {
+			if err := removeEarlier(p); err != nil {
+				return err
+			}
+		}
 		return os.MkdirAll(p, 0o755)
+	}
+	// A later member of a name replaces the earlier one, never writing through a hard link it shares; a skipped member
+	// drops it too.
+	if err := removeEarlier(p); err != nil {
+		return err
 	}
 	if !isReg {
 		return nil

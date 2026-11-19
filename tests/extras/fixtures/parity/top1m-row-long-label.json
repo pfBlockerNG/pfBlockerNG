@@ -1,0 +1,65 @@
+{
+	"schema": 1,
+	"description": "A label over 63 bytes is kept, as today's PHP keeps it; the list is published whole.",
+	"hosts": {
+		"tranco-list.eu": [
+			"127.0.0.1",
+			"203.0.113.11"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "com,de,example"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/top-1m.csv.zip": {
+				"body_b64": "UEsDBBQAAAAIAAAAIVhfwUHPGwAAAFYAAAAKAAAAdG9wLTFtLmNzdjPVSaQQ6CXn53KZ6aTn56fopVYk5hbkpHIBAFBLAQIUAxQAAAAIAAAAIVhfwUHPGwAAAFYAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAEMAAAAAAA=="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://tranco-list.eu:{port:origin}/top-1m.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "tranco"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/top-1m.csv": {
+						"b64": "NSxhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhLmNvbQo2LGdvb2QuZXhhbXBsZQo="
+					}
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			}
+		},
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com\ngood.example\n"
+				}
+			}
+		}
+	]
+}

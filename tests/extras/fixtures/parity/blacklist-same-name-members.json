@@ -1,0 +1,49 @@
+{
+	"schema": 1,
+	"description": "Two members of the same name: the later one is published, as tar overwrites the earlier.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"body_b64": "H4sIAAAAAAAC/+3UQQ6CMBCF4Vl7Ck8gU1Pb8xSpCUkBQ0vi8S0udS3R8H+bl8zqbd60qQndkkrTTUPoxyxfoJWz9pXVe6oaJ8ZeztZ7tevdGHVejiobWHIJc60i+3Tr51xO8RGGe4oHwc60P7F//7F/r+x/Czlep7HjAQAAAAAAAAAAAAAAAPyrJ7B0R54AKAAA"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"report": "\tUT1 ... Completed\n",
+				"files": {
+					"db/ut1/ut1_adult": "second.example\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

@@ -1,0 +1,66 @@
+{
+	"schema": 1,
+	"description": "A symbolic link and a FIFO domains member publish no category; the regular one does. Today's PHP publishes the link, which reads its target as a category, and the FIFO (old_expect); Core skips them (owner, plan of #3978).",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"body_b64": "H4sIAAAAAAAC/+3UQQ7CIBCF4Vl7ip5AoEE4D7UsmlAl0qrHF7vTTVc1Jv2/zUxYkby86ZIK/Zwm1V/HMFyKbEBXztplVt9Ta+PE2FNrvdf2/W6Mdl4aLT8wlync6ldkn5bwj/EZxpziQbAzXVLxPqQt67/e/7p/9r/1zkrTqjidVQ6lPHr6v1n+ecjxz/LX3rTSOO4/AAAAAAAAAAAAAADAqhdpVsW8ACgAAA=="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"report": "\tUT1 ... Completed\n",
+				"files": {
+					"db/ut1/ut1_adult": "adult.example\n",
+					"db/ut1/ut1_evil": null,
+					"db/ut1/ut1_pipe": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			},
+			"old_expect": {
+				"ok": true,
+				"report": "\tUT1 ... Completed\n",
+				"files": {
+					"db/ut1/ut1_adult": "adult.example\n",
+					"db/ut1/ut1_evil": "<not a regular file>",
+					"db/ut1/ut1_pipe": "<not a regular file>"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

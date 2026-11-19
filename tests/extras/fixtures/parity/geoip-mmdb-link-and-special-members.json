@@ -1,0 +1,77 @@
+{
+	"schema": 1,
+	"description": "A symbolic link and a FIFO member are not published; the database is. Today's PHP publishes both (old_expect); Core skips them (owner, plan of #3978).",
+	"hosts": {
+		"download.maxmind.com": [
+			"127.0.0.1",
+			"203.0.113.7"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"maxmind_account": "123456",
+		"maxmind_key": "abcdef"
+	},
+	"seed": {
+		"share/GeoLite2-Country.mmdb": {
+			"b64": "AE9MRC1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+		}
+	},
+	"routes": {
+		"origin": {
+			"/geoip/databases/GeoLite2-Country/download": {
+				"body_b64": "H4sIAAAAAAAC/+3UT2rCQBTH8TmKF4h5M4yZfW3JxiiIpbiS1Mwi0Jhg4r8zeRbP0it0cBkQoRQL7fezecO8xRt4/Cb19aTsvInG9W7TbU8rI8aKFh2nvc6wqop39R0SJNZea9CvIlaUtiNjnQvHcK9Hzmo1EPUAu7bLt+Ep6p+avrxF49nrdDFfRln2/KTOl88sP2blphiu60rhT0tv5t/vy4+fmXE3/9LPv3VJyL+JfbeOm7xtDwX5f/T+m7Lxv7V/48SpQcL/DwAAAAAAAAAAAAAAcNcXPJg4tQAoAAA="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://download.maxmind.com:{port:origin}/geoip/databases/GeoLite2-Country/download?suffix=tar.gz",
+					"file_dwn": "GeoLite2-Country.tar.gz",
+					"file": "GeoLite2-Country.mmdb",
+					"folder": "share",
+					"type": "geoip"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"share/GeoLite2-Country.mmdb": {
+						"b64": "AE5FVy1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+					},
+					"share/evil": null,
+					"share/pipe": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					}
+				]
+			},
+			"old_expect": {
+				"ok": true,
+				"files": {
+					"share/GeoLite2-Country.mmdb": {
+						"b64": "AE5FVy1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+					},
+					"share/evil": "<not a regular file>",
+					"share/pipe": "<not a regular file>"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					}
+				]
+			}
+		}
+	]
+}

@@ -1,0 +1,65 @@
+{
+	"schema": 1,
+	"description": "Quoted domains, as str_getcsv() reads the line with its ending: an unterminated quote takes the line break into the domain, which is then no domain.",
+	"hosts": {
+		"tranco-list.eu": [
+			"127.0.0.1",
+			"203.0.113.11"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "example"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/top-1m.csv.zip": {
+				"body_b64": "UEsDBBQAAAAIAAAAIVgkCvXPNgAAAFEAAAAKAAAAdG9wLTFtLmNzdjPUUSoszS9JTdFLrUjMLchJVeIy0lFKVFJKQggY61QoVcK4XCY6SvkFqXlwvqlOen4+XDsXAFBLAQIUAxQAAAAIAAAAIVgkCvXPNgAAAFEAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAF4AAAAAAA=="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://tranco-list.eu:{port:origin}/top-1m.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "tranco"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/top-1m.csv": {
+						"b64": "MSwicXVvdGVkLmV4YW1wbGUiCjIsImEiImIuZXhhbXBsZSIKMyx4InkuZXhhbXBsZQo0LCJvcGVuLmV4YW1wbGUKNSxnb29kLmV4YW1wbGUK"
+					}
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			}
+		},
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "quoted.example\ngood.example\n"
+				}
+			}
+		}
+	]
+}

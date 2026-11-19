@@ -335,3 +335,36 @@ func TestACategorySwapThatFailsPutsTheFolderBack(t *testing.T) {
 		t.Errorf("the database folder holds %d entries after the failed swap, want the category folder only", len(entries))
 	}
 }
+
+// A hard link whose target cannot be a file (its path runs through a file) is skipped like any target that was not
+// extracted, not a refusal of the whole archive.
+func TestAHardLinkThroughAFileIsSkipped(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ut1_adult"), []byte("adult.example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := linkMember(dir, "ut1_adult/sub", "ut1_x"); err != nil {
+		t.Fatalf("linkMember through a file = %v, want the link skipped", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "ut1_x")); !os.IsNotExist(err) {
+		t.Errorf("ut1_x exists (%v), want nothing published", err)
+	}
+}
+
+// A member whose name resolves to the extraction folder itself ("t/." once its top folder is stripped) writes nothing,
+// and the folder stays a folder.
+func TestAMemberNamingTheExtractionFolderWritesNothing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "staged")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := &Fetcher{}
+	for _, isReg := range []bool{false, true} {
+		if err := f.writeMember(dir, ".", false, isReg, strings.NewReader("x")); err != nil {
+			t.Errorf("writeMember(.) regular=%v = %v, want nothing written", isReg, err)
+		}
+		if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+			t.Fatalf("the extraction folder is gone or no longer a folder (%v, %v)", info, err)
+		}
+	}
+}

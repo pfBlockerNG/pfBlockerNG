@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 )
@@ -76,23 +78,31 @@ func top1mIdentity(provider, url string, headers []string) string {
 
 var top1mDomain = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*\.(?:[A-Za-z]{2,}|[Xx][Nn]--[A-Za-z0-9][A-Za-z0-9-]+)$`)
 
-// top1mRow is pfb_top1m_parse_source_row(): the lowercased domain of one line of the list, or false.
-// shortcut: quoting follows encoding/csv, not str_getcsv(); the hostile-input rows of #3978 pin where they differ.
+// top1mRow is pfb_top1m_parse_source_row(): the lowercased domain of one line of the list, or false. A row is read as
+// CSV by encoding/csv, not with str_getcsv()'s quirks (owner, 2026-11-19): Unicode white space before a field is
+// skipped, quoted or not. Text after a closing quote stays in the field with its quote (LazyQuotes), where PHP drops the
+// quote, and a line break an unterminated quote takes in stays too: top1mDomain, which has no quote and no (?m), refuses
+// both.
 func top1mRow(line string, p top1mProvider) (string, bool) {
 	if line == "" || !strings.Contains(line, ".") || p.domainCol > 0 && !strings.Contains(line, ",") {
 		return "", false
 	}
-	line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 	var fields []string
 	if strings.Contains(line, `"`) {
+		// The line keeps its ending here, as str_getcsv() gets it: an unterminated quote takes the line break into the field.
 		r := csv.NewReader(strings.NewReader(line))
-		r.FieldsPerRecord, r.LazyQuotes = -1, true
+		r.FieldsPerRecord, r.LazyQuotes, r.TrimLeadingSpace = -1, true, true
 		var err error
 		if fields, err = r.Read(); err != nil {
 			return "", false
 		}
-	} else if line != "" { // an unquoted row is its commas; a csv.Reader per row made a full list 4x slower than PHP
-		fields = strings.Split(line, ",")
+	} else { // an unquoted row is its commas; a csv.Reader per row made a full list 4x slower than PHP
+		fields = strings.Split(strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"), ",")
+		for i, f := range fields {
+			if f != "" && (f[0] <= ' ' || f[0] >= utf8.RuneSelf) { // most fields start with neither
+				fields[i] = strings.TrimLeftFunc(f, unicode.IsSpace)
+			}
+		}
 	}
 	if len(fields) != p.columns {
 		return "", false

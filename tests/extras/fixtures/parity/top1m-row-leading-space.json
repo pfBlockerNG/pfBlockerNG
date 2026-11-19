@@ -1,0 +1,71 @@
+{
+	"schema": 1,
+	"description": "White space before a field is skipped, quoted row or not. str_getcsv() keeps it on an unquoted field, so today's PHP refuses both domains (old_expect). Core reads rows as CSV with encoding/csv (owner, 2026-11-19).",
+	"hosts": {
+		"tranco-list.eu": [
+			"127.0.0.1",
+			"203.0.113.11"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "example"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/top-1m.csv.zip": {
+				"body_b64": "UEsDBBQAAAAIAAAAIVhkDzBWJAAAADEAAAAKAAAAdG9wLTFtLmNzdjPUUchJTUzRS61IzC3ISeVSMlLSUShKzMuGixjrpOfnIxQAAFBLAQIUAxQAAAAIAAAAIVhkDzBWJAAAADEAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAEwAAAAAAA=="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://tranco-list.eu:{port:origin}/top-1m.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "tranco"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/top-1m.csv": {
+						"b64": "MSwgbGVhZC5leGFtcGxlCiIyIiwgcmFuay5leGFtcGxlCjMsZ29vZC5leGFtcGxlCg=="
+					}
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			}
+		},
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "lead.example\nrank.example\ngood.example\n"
+				}
+			},
+			"old_expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "good.example\n"
+				}
+			}
+		}
+	]
+}
