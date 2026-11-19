@@ -77,15 +77,18 @@ func top1mIdentity(provider, url string, headers []string) string {
 var top1mDomain = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*\.(?:[A-Za-z]{2,}|[Xx][Nn]--[A-Za-z0-9][A-Za-z0-9-]+)$`)
 
 // top1mRow is pfb_top1m_parse_source_row(): the lowercased domain of one line of the list, or false.
-// shortcut: quoting follows encoding/csv, not str_getcsv(); the hostile-input rows of #3978 pin where they differ.
+// shortcut: quoting follows encoding/csv, not str_getcsv(); top1m-row-quotes pins the cases a list can hold, and a
+// quirk of str_getcsv() it does not name may still differ.
 func top1mRow(line string, p top1mProvider) (string, bool) {
 	if line == "" || !strings.Contains(line, ".") || p.domainCol > 0 && !strings.Contains(line, ",") {
 		return "", false
 	}
+	raw := line
 	line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 	var fields []string
 	if strings.Contains(line, `"`) {
-		r := csv.NewReader(strings.NewReader(line))
+		// The line keeps its ending here, as str_getcsv() gets it: an unterminated quote takes the line break into the field.
+		r := csv.NewReader(strings.NewReader(raw))
 		r.FieldsPerRecord, r.LazyQuotes = -1, true
 		var err error
 		if fields, err = r.Read(); err != nil {

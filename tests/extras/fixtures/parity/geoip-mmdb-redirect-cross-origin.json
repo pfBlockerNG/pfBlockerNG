@@ -1,0 +1,73 @@
+{
+	"schema": 1,
+	"description": "A redirect to another host does not carry the MaxMind credentials there.",
+	"hosts": {
+		"download.maxmind.com": [
+			"127.0.0.1",
+			"203.0.113.7"
+		],
+		"mirror.example": [
+			"127.0.0.1",
+			"203.0.113.8"
+		]
+	},
+	"servers": [
+		"origin",
+		"mirror"
+	],
+	"settings": {
+		"maxmind_account": "123456",
+		"maxmind_key": "abcdef"
+	},
+	"seed": {
+		"share/GeoLite2-Country.mmdb": {
+			"b64": "AE9MRC1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+		}
+	},
+	"routes": {
+		"origin": {
+			"/geoip/databases/GeoLite2-Country/download": {
+				"status": 302,
+				"location": "http://mirror.example:{port:mirror}/db.tar.gz"
+			}
+		},
+		"mirror": {
+			"/db.tar.gz": {
+				"body_b64": "H4sIAAAAAAAC/+3OMQ6CQBSE4T2KFwDfbhbpRUPjYmI0xsqgUFAACUKiZ/IsnsUruLGktDAm/l8zLzPNS8t2VfWlCZJ2aPrudjRirGjR03S0hHVdnNQnxJtZ+05vnCJWlLaRsXHsT9/rKLZaTUR9wXDp886/ov5UttwHyXqXbTeHwLnFXN0fT5dfXdUU4bmtFQAAAAAAAAAAAAAAAADgJ70AJndJKgAoAAA="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://download.maxmind.com:{port:origin}/geoip/databases/GeoLite2-Country/download?suffix=tar.gz",
+					"file_dwn": "GeoLite2-Country.tar.gz",
+					"file": "GeoLite2-Country.mmdb",
+					"folder": "share",
+					"type": "geoip"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"share/GeoLite2-Country.mmdb": {
+						"b64": "AE5FVy1DT1VOVFJZLU1NREIAq83vTWF4TWluZC5jb20="
+					}
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/geoip/databases/GeoLite2-Country/download",
+						"authorization": "Basic MTIzNDU2OmFiY2RlZg=="
+					},
+					{
+						"server": "mirror",
+						"path": "/db.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

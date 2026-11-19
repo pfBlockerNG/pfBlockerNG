@@ -1,0 +1,54 @@
+{
+	"schema": 1,
+	"description": "A NUL makes the list a binary stream, which is no list: top-1m.csv stays.",
+	"hosts": {
+		"tranco-list.eu": [
+			"127.0.0.1",
+			"203.0.113.11"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {
+		"top1m_source": "tranco"
+	},
+	"seed": {
+		"db/top-1m.csv": "1,old.example.com\n"
+	},
+	"routes": {
+		"origin": {
+			"/top-1m.csv.zip": {
+				"body_b64": "UEsDBBQAAAAIAAAAIVjAUgLeHAAAAB4AAAAKAAAAdG9wLTFtLmNzdjPUSa1IZMgtyEnVS87P5TLSSc/PT9EDioGEuABQSwECFAMUAAAACAAAACFYwFIC3hwAAAAeAAAACgAAAAAAAAAAAAAAgAEAAAAAdG9wLTFtLmNzdlBLBQYAAAAAAQABADgAAABEAAAAAAA="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://tranco-list.eu:{port:origin}/top-1m.csv.zip",
+					"file_dwn": "top-1m.csv.zip",
+					"file": "top-1m.csv",
+					"folder": "db",
+					"type": "top1m",
+					"provider": "tranco"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"files": {
+					"db/top-1m.csv": "1,old.example.com\n",
+					"db/top-1m.csv.zip.raw": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			}
+		}
+	]
+}

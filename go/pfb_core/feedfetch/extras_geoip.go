@@ -202,7 +202,8 @@ func (f *Fetcher) extractZipStripped(ctx context.Context, raw, dir string) error
 }
 
 // writeMember writes one stripped member under dir: a directory, or a regular file under the per-file ceiling.
-// shortcut: a link or special member is skipped (tar would create it); the hostile-input rows of #3978 decide that.
+// A link or special member is skipped where tar would create it (owner, plan of #3978): a symbolic link in a published
+// folder would read its target as data.
 func (f *Fetcher) writeMember(dir, name string, isDir, isReg bool, r io.Reader) error {
 	if name == "" {
 		return nil
