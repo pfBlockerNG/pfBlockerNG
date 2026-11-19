@@ -281,6 +281,12 @@ projections, keyed by `feeds/ipv4`, `feeds/ipv6` and `feeds/dnsbl`.
 | `id` (key) | string `[A-Za-z0-9_-]+`, not `0`: the item's `xml` |
 | `selected` | bool, `false`: id in `blacklist_selected` |
 | `categories` | string `[A-Za-z0-9_,.-]*`, `""`: the item's `selected` CSV |
+| `title`, `feed` | string without control characters, `""`: the item's `title` and `feed`, set by the package's Blacklist definitions. A write that changes one is refused |
+| `username` | string without control characters, `""`: the item's `username`, which the Extras transfer of the provider's archive authenticates with |
+| `password` | secret string without control characters, `""`: the item's `password` |
+
+An item whose title, feed, username or password is not text without control characters does not project, like one whose
+categories hold another character.
 
 A missing or invalid stored slot field reads as its default, independently of the other slot fields. This differs from
 the old PHP runtime model: an override on with an invalid slot rejects that entire model, while the projection gives

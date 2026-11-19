@@ -5858,23 +5858,30 @@ function pfb_core_schedule_group_slots(mixed $section): array {
 }
 
 /**
- * The Blacklist's items as Core's `categoryProviders`, keyed by their index in `item` (issue #3941): an item whose id is no identity
- * or holds a comma, that is Shallalist, has no feed, has categories outside [A-Za-z0-9_,.-], or repeats an id before it, is left out.
+ * The Blacklist's items as Core's `categoryProviders`, keyed by their index in `item` (issues #3941, #3978): an item whose id is no
+ * identity or holds a comma, that is Shallalist, has no feed, has categories outside [A-Za-z0-9_,.-], has a title, feed, username or
+ * password that is not text without control characters, or repeats an id before it, is left out. An absent title, username or
+ * password reads as empty.
  *
  * @param array<mixed> $blacklist
- * @return array<int, array{id: string, selected: bool, categories: string}>
+ * @return array<int, array{id: string, selected: bool, categories: string, title: string, feed: string, username: string, password: string}>
  */
 function pfb_core_schedule_providers(array $blacklist): array {
 	$csv = $blacklist['blacklist_selected'] ?? NULL;
 	$chosen = is_string($csv) && $csv !== '' ? array_flip(explode(',', $csv)) : [];
+	$text = static fn(mixed $v): ?string => $v === NULL ? '' : (is_string($v) && preg_match('/\p{C}/u', $v) === 0 ? $v : NULL);
 	$providers = $ids = [];
 	foreach (is_array($blacklist['item'] ?? NULL) ? $blacklist['item'] : [] as $n => $item) {
 		$id = is_array($item) ? ($item['xml'] ?? NULL) : NULL;
 		$categories = is_array($item) ? ($item['selected'] ?? '') : NULL;
-		if (pfb_blacklist_identity_valid($id) && !str_contains($id, ',') && ($item['title'] ?? NULL) !== 'Shallalist' && is_string($item['feed'] ?? NULL)
-		    && $item['feed'] !== '' && is_string($categories) && preg_match('/^[A-Za-z0-9_,.-]*$/D', $categories) === 1
-		    && !isset($ids[$id])) {
-			$providers[$n] = ['id' => $id, 'selected' => isset($chosen[$id]), 'categories' => $categories];
+		[$title, $feed, $username, $password] = is_array($item)
+			? [$text($item['title'] ?? NULL), $text($item['feed'] ?? NULL), $text($item['username'] ?? NULL), $text($item['password'] ?? NULL)]
+			: [NULL, NULL, NULL, NULL];
+		if (pfb_blacklist_identity_valid($id) && !str_contains($id, ',') && $title !== NULL && $title !== 'Shallalist' && $feed !== NULL
+		    && $feed !== '' && is_string($categories) && preg_match('/^[A-Za-z0-9_,.-]*$/D', $categories) === 1 && $username !== NULL
+		    && $password !== NULL && !isset($ids[$id])) {
+			$providers[$n] = ['id' => $id, 'selected' => isset($chosen[$id]), 'categories' => $categories, 'title' => $title, 'feed' => $feed,
+				'username' => $username, 'password' => $password];
 			$ids[$id] = TRUE;
 		}
 	}
@@ -5938,11 +5945,14 @@ function pfb_core_schedule_faults(mixed $value, array $current): array {
 		return $faults;
 	}
 	$id = static fn(string $pattern): callable => static fn(mixed $v): ?string => is_string($v) && preg_match($pattern, $v) === 1 && $v !== '0' ? NULL : 'not a valid id';
+	$text = static fn(mixed $v): ?string => is_string($v) && preg_match('/\p{C}/u', $v) === 0 ? NULL : 'not text without control characters';
 	$items = [
 		'groups'            => ['id' => $id('/^(?:ipv4|ipv6|dnsbl)\/[A-Za-z0-9_]+$/D'), 'override' => $bool] + $slot,
 		'categoryProviders' => ['id' => $id('/^[A-Za-z0-9_-]+$/D'), 'selected' => $bool,
-			'categories' => static fn(mixed $v): ?string => is_string($v) && preg_match('/^[A-Za-z0-9_,.-]*$/D', $v) === 1 ? NULL : 'holds a character outside A-Z a-z 0-9 _ , . -'],
+			'categories' => static fn(mixed $v): ?string => is_string($v) && preg_match('/^[A-Za-z0-9_,.-]*$/D', $v) === 1 ? NULL : 'holds a character outside A-Z a-z 0-9 _ , . -',
+			'title' => $text, 'feed' => $text, 'username' => $text, 'password' => $text],
 	];
+	$providers = array_column($current['categoryProviders'], NULL, 'id');
 	foreach ($items as $field => $fields) {
 		$known = array_flip(array_column($current[$field], 'id'));
 		$seen = [];
@@ -5957,6 +5967,12 @@ function pfb_core_schedule_faults(mixed $value, array $current): array {
 				$faults[] = ['field' => "{$prefix}.id", 'message' => 'not unique'];
 			} elseif ($fields['id']($item['id']) === NULL && !isset($known[$item['id']])) {
 				$faults[] = ['field' => "{$prefix}.id", 'message' => 'config.xml holds no such ' . ($field === 'groups' ? 'group' : 'provider') . ': Core cannot create one here'];
+			} elseif ($field === 'categoryProviders' && isset($providers[$item['id']])) {
+				foreach (['title', 'feed'] as $fixed) {	// the package's Blacklist definitions set them
+					if (is_string($item[$fixed] ?? NULL) && $item[$fixed] !== $providers[$item['id']][$fixed]) {
+						$faults[] = ['field' => "{$prefix}.{$fixed}", 'message' => 'set by the package: Core cannot change it'];
+					}
+				}
 			}
 			$seen[$item['id']] = TRUE;
 		}
@@ -6018,21 +6034,23 @@ function pfb_core_schedule_merge(array $wanted, array $current, array &$sections
 	$at = array_combine(array_column($providers, 'id'), array_keys($providers));
 	$csv = is_string($list['blacklist_selected'] ?? NULL) && $list['blacklist_selected'] !== '' ? explode(',', $list['blacklist_selected']) : [];
 	$was = $csv;
-	$categories = FALSE;
+	$changed = FALSE;
 	foreach ($wanted['categoryProviders'] as $provider) {
 		$n = $at[$provider['id']] ?? NULL;
 		if ($n === NULL) {
 			continue;
 		}
-		if ($provider['categories'] !== $providers[$n]['categories']) {
-			$items[$n]['selected'] = $provider['categories'];
-			$categories = TRUE;
+		foreach (['categories' => 'selected', 'username' => 'username', 'password' => 'password'] as $field => $key) {
+			if ($provider[$field] !== $providers[$n][$field]) {
+				$items[$n][$key] = $provider[$field];
+				$changed = TRUE;
+			}
 		}
 		if ($provider['selected'] !== $providers[$n]['selected']) {
 			$csv = $provider['selected'] ? [...$csv, $provider['id']] : array_values(array_diff($csv, [$provider['id']]));
 		}
 	}
-	if ($categories) {
+	if ($changed) {
 		$sections["{$blacklist}/item"] = $items;
 	}
 	if ($csv !== $was) {

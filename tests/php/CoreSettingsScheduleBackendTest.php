@@ -177,9 +177,9 @@ final class CoreSettingsScheduleBackendTest extends TestCase
 			],
 			'categoryUpdates' => TRUE, 'categoryFrequency' => 'EveryDay',
 			'categoryProviders' => [
-				['id' => 'ut1', 'selected' => TRUE, 'categories' => 'adult'],
-				['id' => 'ut2', 'selected' => TRUE, 'categories' => 'phishing'],
-				['id' => 'ut3', 'selected' => FALSE, 'categories' => ''],
+				['id' => 'ut1', 'selected' => TRUE, 'categories' => 'adult', 'title' => 'UT1', 'feed' => 'https://example.org/ut1', 'username' => '', 'password' => ''],
+				['id' => 'ut2', 'selected' => TRUE, 'categories' => 'phishing', 'title' => 'UT2', 'feed' => 'https://example.org/ut2', 'username' => '', 'password' => ''],
+				['id' => 'ut3', 'selected' => FALSE, 'categories' => '', 'title' => 'UT3', 'feed' => 'https://example.org/ut3', 'username' => '', 'password' => ''],
 			],
 		], $read['settings']['schedule'], 'the Shallalist provider is not projected');
 		foreach ([['weekday', 4], ['scheduledUpdates', FALSE], ['categoryFrequency', 'Weekly']] as [$field, $value]) {
@@ -202,11 +202,13 @@ final class CoreSettingsScheduleBackendTest extends TestCase
 			['xml' => '0', 'title' => 'Zero', 'feed' => 'https://example.org/z', 'selected' => ''],
 			['xml' => 'markup', 'title' => 'Markup', 'feed' => 'https://example.org/m', 'selected' => 'a<b'],
 			['xml' => 'ut4', 'title' => 'UT4', 'feed' => 'https://example.org/ut4', 'selected' => 'ok'],
+			['xml' => 'break', 'title' => 'Break', 'feed' => 'https://example.org/b', 'selected' => '', 'username' => 'u', 'password' => "a\nb"],
+			['xml' => 'nontext', 'title' => 'NonText', 'feed' => 'https://example.org/n', 'selected' => '', 'username' => ['u'], 'password' => 'p'],
 		]]]);
 
 		$providers = $this->read()['settings']['schedule']['categoryProviders'];
 
-		$this->assertSame(['ut1', 'ut4'], array_column($providers, 'id'));
+		$this->assertSame(['ut1', 'ut4'], array_column($providers, 'id'), 'a username or password that is not text without control characters leaves its provider out');
 		$this->assertSame('adult', $providers[0]['categories'], 'the first of a repeated id');
 	}
 
@@ -411,6 +413,41 @@ final class CoreSettingsScheduleBackendTest extends TestCase
 		});
 
 		$this->assertWrittenOnly([self::BLACKLIST . '/item/2/selected' => ['', 'adult,porn']], $before, $reply);
+	}
+
+	public function testAProvidersUsernameAndPasswordReachItsItemOnly(): void
+	{
+		$before = $GLOBALS['config'];
+
+		$reply = $this->writeSchedule(static function (array $s): array {
+			$s['categoryProviders'][2]['username'] = 'bl-user';
+			$s['categoryProviders'][2]['password'] = 'bl-pass1';
+			return $s;
+		});
+
+		$this->assertWrittenOnly([self::BLACKLIST . '/item/2/username' => [NULL, 'bl-user'], self::BLACKLIST . '/item/2/password' => [NULL, 'bl-pass1']],
+			$before, $reply);
+	}
+
+	/** @return array<string, array{0: string, 1: string}> */
+	public static function packageFields(): array
+	{
+		return ['the feed' => ['feed', 'https://hostile.example/ut3'], 'the title' => ['title', 'Other']];
+	}
+
+	#[DataProvider('packageFields')]
+	public function testAProvidersFeedOrTitleIsThePackagesAndAChangeIsRefusedWithNothingWritten(string $field, string $value): void
+	{
+		$before = $GLOBALS['config'];
+
+		$reply = $this->writeSchedule(static function (array $s) use ($field, $value): array {
+			$s['categoryProviders'][2][$field] = $value;
+			return $s;
+		});
+
+		$this->assertSame('invalid_argument', $reply['error']['code'] ?? NULL, json_encode($reply));
+		$this->assertContains("schedule.categoryProviders[2].{$field}", array_column($reply['error']['fieldErrors'] ?? [], 'field'), json_encode($reply));
+		$this->assertNothingWritten($before, "a changed {$field}");
 	}
 
 	/** @return array<string, array{0: string}> */
@@ -647,7 +684,8 @@ final class CoreSettingsScheduleBackendTest extends TestCase
 		$current = $this->read()['settings']['schedule'];
 		$value = $current;
 		$value['groups'][] = ['id' => 'ipv4/OnlyInCurrent', 'override' => FALSE, 'weekday' => 7, 'hour' => 0, 'minute' => 0];
-		$value['categoryProviders'][] = ['id' => 'only', 'selected' => FALSE, 'categories' => ''];
+		$value['categoryProviders'][] = ['id' => 'only', 'selected' => FALSE, 'categories' => '', 'title' => 'Only', 'feed' => 'https://example.org/only',
+			'username' => '', 'password' => ''];
 		$known = $current;
 		$known['groups'][] = $value['groups'][4];
 		$known['categoryProviders'][] = $value['categoryProviders'][3];

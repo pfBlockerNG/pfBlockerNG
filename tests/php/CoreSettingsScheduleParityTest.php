@@ -86,14 +86,16 @@ final class CoreSettingsScheduleParityTest extends TestCase
 		foreach (['defaults', 'scheduled-off', 'default-slot', 'override-on', 'override-on-absent-slot', 'override-on-invalid-slot', 'override-off-stored-slot',
 			'three-families-in-order', 'groups-that-do-not-project', 'blacklist-disabled', 'blacklist-weekly', 'blacklist-selected-without-categories',
 			'blacklist-provider-excluded', 'blacklist-provider-not-selected', 'blacklist-never', 'feed-states', 'override-token-not-on',
-			'blacklist-frequency-daily', 'blacklist-enable-on-token', 'blacklist-enable-lowercase-disable', 'blacklist-enable-zero-token'] as $id) {
+			'blacklist-frequency-daily', 'blacklist-enable-on-token', 'blacklist-enable-lowercase-disable', 'blacklist-enable-zero-token',
+			'blacklist-credentials'] as $id) {
 			$this->assertContains($id, $ids, "the coverage matrix row {$id}");
 		}
 		$refused = array_column($doc['refused'], 'id');
 		$this->assertSame(array_values(array_unique($refused)), $refused, 'a refused row id appears once');
 		foreach (['group-id-without-family', 'group-id-unknown-family', 'group-id-name-with-dash', 'group-id-name-with-space', 'provider-id-zero',
 			'provider-id-comma', 'provider-id-empty', 'provider-categories-markup', 'weekday-zero', 'weekday-eight', 'hour-24', 'minute-60',
-			'minute-negative', 'minute-20', 'scheduled-updates-string'] as $id) {
+			'minute-negative', 'minute-20', 'scheduled-updates-string', 'provider-feed-changed', 'provider-title-changed', 'provider-username-line-break',
+			'provider-password-line-break'] as $id) {
 			$this->assertContains($id, $refused, "the hostile row {$id}");
 		}
 	}
@@ -143,7 +145,7 @@ final class CoreSettingsScheduleParityTest extends TestCase
 		$schedule = array_merge(['scheduledUpdates' => TRUE, 'weekday' => 7, 'hour' => 0, 'minute' => 0, 'groups' => [], 'categoryUpdates' => FALSE,
 			'categoryFrequency' => 'Never', 'categoryProviders' => []], $row['schedule']);
 		$group = ['override' => FALSE, 'weekday' => 7, 'hour' => 0, 'minute' => 0];
-		$provider = ['selected' => FALSE, 'categories' => ''];
+		$provider = ['selected' => FALSE, 'categories' => '', 'title' => 'UT1', 'feed' => 'https://example.org/ut1', 'username' => '', 'password' => ''];
 		$schedule['groups'] = array_map(static fn(array $g): array => $g + $group, $schedule['groups']);
 		$schedule['categoryProviders'] = array_map(static fn(array $p): array => $p + $provider, $schedule['categoryProviders']);
 		$ingest = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_ingest_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];

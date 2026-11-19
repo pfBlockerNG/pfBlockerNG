@@ -28,6 +28,7 @@ type scheduleFixture struct {
 		Description string          `json:"description"`
 		Schedule    json.RawMessage `json:"schedule"`
 		Field       string          `json:"field"`
+		AdapterOnly bool            `json:"adapterOnly"` // only the adapter refuses it: it compares with what config.xml holds
 	} `json:"refused"`
 }
 
@@ -73,7 +74,11 @@ func TestTheScheduleProjectionAcceptsAndReadsBackWhatTheAdapterReadsOnEveryFixtu
 			if err := json.Unmarshal(c.Schedule, &want); err != nil {
 				t.Fatal(err)
 			}
-			if have := jsonOf(t, projection(t, get(t, st, "schedule"), "schedule").Value); have != jsonOf(t, want) {
+			clear, err := st.GetClear("schedule") // a secret reads back as it was saved
+			if err != nil {
+				t.Fatal(err)
+			}
+			if have := jsonOf(t, clear); have != jsonOf(t, want) {
 				t.Errorf("%s\nread  %s\nwant  %s", c.Description, have, jsonOf(t, want))
 			}
 		})
@@ -86,6 +91,9 @@ func TestTheScheduleProjectionRefusesTheFixturesHostileInputNamingTheField(t *te
 		t.Fatal(err)
 	}
 	for _, c := range loadScheduleFixture(t).Refused {
+		if c.AdapterOnly {
+			continue
+		}
 		t.Run(c.ID, func(t *testing.T) {
 			err := st.Validate(scheduleChanges(t, c.Schedule))
 			v, ok := err.(*ValidationError)
