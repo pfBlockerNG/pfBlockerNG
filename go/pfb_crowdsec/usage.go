@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"hash/fnv"
 	"slices"
 	"strings"
 	"time"
@@ -64,8 +66,10 @@ func usagePayload(in usageInput) ([]byte, error) {
 		slices.Sort(origins)
 		for _, origin := range origins {
 			label := origin
-			if len(label) > maxLabel { // the LAPI schema's MetricsLabels limit
-				label = strings.ToValidUTF8(label[:maxLabel], "")
+			if len(label) > maxLabel { // the LAPI schema's MetricsLabels limit; the digest keeps long origins apart
+				h := fnv.New32a()
+				h.Write([]byte(origin))
+				label = fmt.Sprintf("%s~%08x", strings.ToValidUTF8(label[:maxLabel-9], ""), h.Sum32())
 			}
 			items = append(items, metricItem{Name: "active_decisions", Value: float64(in.origins[f][origin]), Unit: "ip",
 				Labels: map[string]string{"origin": label, "ip_type": ipTypes[f]}})
