@@ -39,6 +39,7 @@ import contextlib
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -60,6 +61,7 @@ import pytest
 from ..timing import step_min_seconds, timed, timed_step  # issue #605 — per-step timing (PFB_TIMING)
 from . import cron_entries, stub_responses
 from ._matrix import own_variant
+from .stub_lapi import StubLapi
 
 if TYPE_CHECKING:
     from .ha_pair import HaPair  # type-only: ha_pair imports helpers, which imports this module
@@ -1854,6 +1856,22 @@ def webhook_sink(smoke_vm: SmokeVM) -> Iterator[_MockCallbackSink]:
         yield server
     finally:
         server.stop()
+
+
+@pytest.fixture(scope="module")
+def stub_lapi(smoke_vm: SmokeVM) -> Iterator[StubLapi]:
+    """A stub CrowdSec LAPI on the runner with its own bouncer key (``tests/smoke/stub_lapi.py``).
+
+    The guest reaches it at ``stub_lapi.url`` (``http://192.168.89.2:<port>``) via the WAN SLIRP host alias, the path
+    ``mock_feeds`` rides. MODULE-scoped: a bouncer runs against one engine for a whole module, and each test adds and
+    deletes its own decisions. Shut down on teardown.
+    """
+    stub = StubLapi(f"smoke-{secrets.token_hex(16)}", guest_host=GUEST_TO_HOST_ALIAS)
+    stub.start()
+    try:
+        yield stub
+    finally:
+        stub.stop()
 
 
 # --------------------------------------------------------------------------- #
