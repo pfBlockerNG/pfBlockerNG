@@ -83,8 +83,15 @@ func TestAnExtrasMemberPastTheCeilingKeepsWhatWasPublished(t *testing.T) {
 					feedfetch.ExtrasConfig{DBDir: dir, MaxMindAccount: "1", MaxMindKey: "k"},
 					[]feedfetch.Extra{{Kind: tc.kind, URL: "http://" + tc.host + ":" + port + "/" + tc.download,
 						Dir: dir, Download: tc.download, File: tc.file, Name: "UT1", Provider: "tranco"}})
-				got, _ := os.ReadFile(published)
-				if res.OK != room || (string(got) == oldCopy) == room {
+				got, err := os.ReadFile(published)
+				if err != nil {
+					t.Fatalf("ok %v, %s: %v", res.OK, tc.published, err)
+				}
+				want := []byte(oldCopy)
+				if room {
+					want = tc.member
+				}
+				if res.OK != room || !bytes.Equal(got, want) {
 					t.Errorf("(ok, %s replaced) = (%v, %v), want (%v, %v)", tc.published, res.OK, string(got) != oldCopy,
 						room, room)
 				}
