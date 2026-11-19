@@ -49,7 +49,8 @@ type ExtrasVerb struct {
 }
 
 // RunExtras runs the verb as pfblockerng.php does and returns its exit code with the run's result. A name that is not an
-// Extras verb exits 1 without a download.
+// Extras verb exits 1 without a download. A dcc that changed the TOP1M list reports it in the result (Top1MChanged); the
+// caller starts the DNSBL update, which PHP's pfb_top1m_dispatch_if_changed() does for a dcc run by hand.
 func (f *Fetcher) RunExtras(ctx context.Context, v ExtrasVerb) (int, ExtrasResult) {
 	log := func(m string) {
 		if v.Log != nil {
@@ -61,7 +62,7 @@ func (f *Fetcher) RunExtras(ctx context.Context, v ExtrasVerb) (int, ExtrasResul
 		return 1, ExtrasResult{OK: false}
 	}
 	extras := v.plan(log)
-	if len(extras) == 0 {
+	if len(extras) == 0 && v.Name != "dc" && v.Name != "dcc" { // dc and dcc download an empty table, then convert
 		return 0, ExtrasResult{OK: true}
 	}
 	s := v.Settings
@@ -98,16 +99,13 @@ func (v ExtrasVerb) plan(log func(string)) []Extra {
 			File: "asn.csv"},
 	}
 	maxmind := s.MaxMindAccount != "" && s.MaxMindKey != ""
-	var rows []Extra
+	csv := !s.MaxMindCSVDisabled // the IP tab skips the GeoIP CSV (:371-373)
+	var keep []bool
 	switch v.Name {
 	case "dc":
-		rows = table[:2]
+		keep = []bool{true, csv}
 	case "dcc":
-		for i, keep := range []bool{maxmind, maxmind, s.Top1M, s.ASNToken != "", s.ASNToken != ""} {
-			if keep {
-				rows = append(rows, table[i])
-			}
-		}
+		keep = []bool{maxmind, maxmind && csv, s.Top1M, s.ASNToken != "", s.ASNToken != ""}
 	case "bu":
 		if !maxmind {
 			log("\nTerminating MaxMind download due to invalid Account or Key")
@@ -125,8 +123,11 @@ func (v ExtrasVerb) plan(log func(string)) []Extra {
 	case "bl", "bls":
 		return v.blacklist(log)
 	}
-	if s.MaxMindCSVDisabled {
-		rows = slices.DeleteFunc(slices.Clone(rows), func(x Extra) bool { return x.Kind == "geoip" && x.File == "" })
+	var rows []Extra
+	for i, k := range keep {
+		if k {
+			rows = append(rows, table[i])
+		}
 	}
 	return rows
 }
@@ -154,7 +155,7 @@ func (v ExtrasVerb) blacklist(log func(string)) []Extra {
 		// The base of the feed's path: PHP's pathinfo() keeps a query, which can carry a key, in a name written to disk.
 		name := ""
 		if u, err := url.Parse(p.Feed); err == nil {
-			name = path.Base(u.Path)
+			name = path.Base(u.EscapedPath()) // as written, as pathinfo() takes it
 		}
 		if p.ID == "ut1" { // keyed on the id, never the feed: the name decides the category folder (issue #2636)
 			name = "ut1.tar.gz"
@@ -183,7 +184,8 @@ func (v ExtrasVerb) exit(ctx context.Context, res ExtrasResult) int {
 	switch v.Name {
 	case "dc", "dcc":
 		ok := res.OK
-		if !res.MaxMindError && (!s.MaxMindCSVDisabled || s.MaxMindKey != "" || s.MaxMindAccount != "") && v.Convert != nil {
+		// A run whose context ended converts nothing: its geoip rows read aborted, not MaxMind errors, but are not new.
+		if !res.MaxMindError && ctx.Err() == nil && (!s.MaxMindCSVDisabled || s.MaxMindKey != "" || s.MaxMindAccount != "") && v.Convert != nil {
 			ok = v.Convert(ctx) && ok
 		}
 		_, err := os.Stat(filepath.Join(v.DBDir, "geoip.update"))
