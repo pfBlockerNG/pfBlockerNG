@@ -80,7 +80,8 @@ its `deleted` list, then its `new` list:
   reads `pfctl -s states` once per pull and, for each new address found there, runs
   `pfctl -k <addr>` and `pfctl -k 0.0.0.0/0 -k <addr>` (`::/0` for IPv6).
 - A failed pull keeps the tables as they are and is retried on the next tick. Enforcement
-  continues on the last known set while the LAPI is unreachable.
+  continues on the last known set while the LAPI is unreachable. The retry is a full pull
+  (#4077 amendment).
 
 **Reconcile.** After every pull, and immediately on `SIGUSR1`, the daemon reads
 `pfctl -vvs Tables` once. If a table is missing, it re-creates it as at start-up. If a

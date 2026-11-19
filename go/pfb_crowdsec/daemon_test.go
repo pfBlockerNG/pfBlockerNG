@@ -645,11 +645,9 @@ func TestAFailedAddAndDeleteOfTheSameSizeAreRepairedOnce(t *testing.T) {
 	}
 }
 
-// Scenario (#4077): the LAPI moves the bouncer's stream cursor once it has written a delta, so a delta the daemon
-// fails to read is lost for good. Given a synced daemon, when a delta pull fails (body over the cap, invalid JSON, or
-// a timeout while the body is read), then the tables stay as they are, and the next pull asks for the full set
-// (startup=true). Its reply replaces memory and both tables: a value whose delete rode the lost delta is gone, and
-// only a value new to the daemon has its states killed. The pull after that is a delta again.
+// Scenario (#4077): given a synced daemon, when a delta pull fails (over the cap, invalid JSON, timeout), the tables
+// stay and the next pull asks for startup=true; its reply replaces memory and both tables, states are killed only for
+// addresses new to the daemon, and the pull after that is a delta again.
 func TestAFailedDeltaPullIsFollowedByAFullResync(t *testing.T) {
 	// The engine's set after the lost delta, which deleted ids 1 and 4 and added id 7.
 	const fullBody = `{"new":[
@@ -740,5 +738,40 @@ func TestAFailedDeltaPullIsFollowedByAFullResync(t *testing.T) {
 				t.Fatalf("startup parameter of the two pulls after the failure = %q; want %q", startups, want)
 			}
 		})
+	}
+}
+
+// The resync itself replaces both tables, before the reconcile reads them: a lost delta that swapped one value for
+// another leaves each table's count unchanged, which the reconcile alone would never notice (#4077).
+func TestAResyncReplacesTablesWhoseCountDidNotChange(t *testing.T) {
+	const fullBody = `{"new":[
+	 {"id":2,"origin":"cscli","type":"ban","scope":"Ip","value":"198.51.100.11","duration":"4h","scenario":"manual"},
+	 {"id":3,"origin":"crowdsec","type":"ban","scope":"Range","value":"203.0.113.0/24","duration":"4h","scenario":"s"},
+	 {"id":8,"origin":"crowdsec","type":"ban","scope":"Ip","value":"198.51.100.80","duration":"4h","scenario":"s"},
+	 {"id":5,"origin":"crowdsec","type":"ban","scope":"Range","value":"2001:db8:beef::/48","duration":"4h","scenario":"s"},
+	 {"id":9,"origin":"crowdsec","type":"ban","scope":"Ip","value":"2001:db8:cafe::1","duration":"4h","scenario":"s"}
+	],"deleted":[]}`
+	h := synced(t, ok(`{"new":[`), ok(fullBody))
+	ctx := context.Background()
+	if err := h.d.pull(ctx); err == nil {
+		t.Fatal("the lost delta's pull = nil; want an error")
+	}
+	h.pf.takeCalls()
+	if err := h.d.pull(ctx); err != nil {
+		t.Fatalf("the resync pull = %v", err)
+	}
+	assertTable(t, h.pf, "crowdsec_v4", "198.51.100.11", "198.51.100.80", "203.0.113.0/24")
+	assertTable(t, h.pf, "crowdsec_v6", "2001:db8:beef::/48", "2001:db8:cafe::1")
+	var before []string // the table operations run before the reconcile's first read of the tables
+	for _, c := range h.pf.takeCalls() {
+		if slices.Equal(c.args, []string{"-vvs", "Tables"}) {
+			break
+		}
+		if len(c.args) == 6 && c.args[2] == "-T" {
+			before = append(before, c.args[1]+" "+c.args[3])
+		}
+	}
+	if want := []string{"crowdsec_v4 replace", "crowdsec_v6 replace"}; !slices.Equal(before, want) {
+		t.Fatalf("table operations before the reconcile = %q; want %q", before, want)
 	}
 }
