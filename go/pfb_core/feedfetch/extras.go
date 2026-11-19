@@ -53,8 +53,10 @@ type ExtrasConfig struct {
 // ExtrasRow is one Extra's outcome. A refused row's Reason, Stage and Detected say why, as Result does for a feed, so the
 // verbs can tell a bad key from a full disk. Unlike a feed's, every refusal has a Stage: pfb_validate_log()'s fetch, size,
 // mime, plaintext, structural, member or extract, or top1m, publish, aborted (the run's context ended) or unsupported;
-// Reason is the code pfb_validate_log() writes wherever today's PHP writes one. No secret of six bytes or more, and no URL
-// query, reaches them. A row refused for its own reason just as the run's context ends reads aborted: the run ended.
+// Reason is the code pfb_validate_log() writes wherever today's PHP writes one. No URL query and no secret reaches them,
+// except a secret under six bytes as plain text (in practice a short Blacklist password a hostile FTP server echoes): such
+// a secret collides with reason text too often to be told from it. A row refused for its own reason just as the run's
+// context ends reads aborted: the run ended.
 type ExtrasRow struct {
 	Kind, Download string
 	Result
@@ -125,22 +127,27 @@ func refused(stage, reason, detected string) Result {
 // accepted is a row that succeeded.
 var accepted = Result{OK: true}
 
-// urlQuery is a URL's query string in a reason, to its closing quote (Go's client quotes the URL it failed on, escaping a
-// quote inside it), or to white space.
-var urlQuery = regexp.MustCompile(`(?i)((?:https?|ftp)://[^\s"'?]*)\?(?:\\.|[^\s"'\\])*`)
+// urlQuery is a URL's query string in a reason, to its closing double quote (Go's client quotes the URL it failed on,
+// escaping a quote inside it) or to white space; an apostrophe, in the path or the query, is part of the URL.
+var urlQuery = regexp.MustCompile(`(?i)((?:https?|ftp)://[^\s"?]*)\?(?:\\.|[^\s"\\])*`)
 
 // redact is what a refused row may carry: every URL query, as pfb_redact_url() hides it, and every secret of the run and
 // row, raw, as it travels in a URL or in the Basic authorization it makes, gone, the longest form first. A secret under
-// six bytes is left: as plain text it would rewrite the reason codes themselves.
+// six bytes stays as plain text, where it would collide with reason text too often; its Basic authorization, eight bytes
+// or more, still goes.
 func (cfg ExtrasConfig) redact(s string, x Extra) string {
 	s = urlQuery.ReplaceAllString(s, "$1?[redacted]")
 	var forms []string
 	add := func(user, secret string) {
+		if secret == "" {
+			return
+		}
 		if len(secret) >= 6 {
 			forms = append(forms, secret, rawURLEncode(secret), url.QueryEscape(secret), url.PathEscape(secret))
-			if user != "" {
-				forms = append(forms, base64.StdEncoding.EncodeToString([]byte(user+":"+secret)))
-			}
+		}
+		// A password alone is still sent, as Basic ":<password>".
+		if auth := base64.StdEncoding.EncodeToString([]byte(user + ":" + secret)); len(auth) >= 8 {
+			forms = append(forms, auth)
 		}
 	}
 	add(cfg.MaxMindAccount, cfg.MaxMindKey)
@@ -148,7 +155,7 @@ func (cfg ExtrasConfig) redact(s string, x Extra) string {
 	add("", cfg.Top1MToken)
 	add(x.Username, x.Password)
 	slices.SortFunc(forms, func(a, b string) int { return len(b) - len(a) })
-	for _, form := range slices.Compact(forms) {
+	for _, form := range forms {
 		s = strings.ReplaceAll(s, form, "[redacted]")
 	}
 	return s
@@ -219,22 +226,7 @@ func extractRefused(what string, err error, detail string) Result {
 	case errors.Is(err, errTop1MArchive):
 		return refused("extract", err.Error(), detail)
 	}
-	format, ok := extrasExtraction[what]
-	if !ok {
-		return refused("extract", extractionFailure(what, err), detail)
-	}
-	code := exitFailed
-	switch {
-	case errors.Is(err, errNoCategory):
-		code = 0
-	case errors.Is(err, errCeiling):
-		code = exitCeiling
-	}
-	text := fmt.Sprintf(format, code)
-	if code == exitCeiling {
-		text += " -- output exceeded the extraction size ceiling"
-	}
-	return refused("extract", text, detail)
+	return refused("extract", extractionFailure(what, err), detail)
 }
 
 // publishRefused is a publication that did not complete; the error's paths stay out of the reason.

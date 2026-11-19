@@ -26,7 +26,7 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 		if r := memberRefused(names, ok); r != nil {
 			return *r
 		}
-		return published(f.mergeIntoDir, share, "geoip", func(dir string) error {
+		return published(f.mergeIntoDir, share, "geoip", filepath.Base(raw), func(dir string) error {
 			return checkedDatabases(dir, target, f.extractTarStripped(ctx, mime, raw, dir))
 		})
 	case mimeZip:
@@ -35,7 +35,7 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 			if r := memberRefused(names, ok); r != nil {
 				return *r
 			}
-			return published(f.mergeIntoDir, target, "geoip zip", func(dir string) error {
+			return published(f.mergeIntoDir, target, "geoip zip", filepath.Base(raw), func(dir string) error {
 				return checkedDatabases(dir, target, f.extractZipStripped(ctx, raw, dir))
 			})
 		}
@@ -83,15 +83,15 @@ func memberRefused(names []string, listed bool) *Result {
 	return &r
 }
 
-// published is a folder publisher (mergeIntoDir, replaceDir) as a row's outcome: what stopped the extraction of what,
-// else a publication that could not complete.
-func published(publish func(string, func(string) error) bool, target, what string, extract func(dir string) error) Result {
+// published is a folder publisher (mergeIntoDir, replaceDir) as a row's outcome: what stopped the extraction of what from
+// the archive named detail, else a publication that could not complete.
+func published(publish func(string, func(string) error) bool, target, what, detail string, extract func(dir string) error) Result {
 	var xerr error
 	if publish(target, func(dir string) error { xerr = extract(dir); return xerr }) {
 		return accepted
 	}
 	if xerr != nil {
-		return extractRefused(what, xerr, "")
+		return extractRefused(what, xerr, detail)
 	}
 	return publishRefused
 }

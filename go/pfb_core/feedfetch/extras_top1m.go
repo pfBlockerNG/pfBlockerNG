@@ -326,8 +326,7 @@ func (f *Fetcher) top1mDownload(ctx context.Context, cfg ExtrasConfig, x Extra, 
 		if !archive { // a plain body is only copied: what failed is the disk, not an extraction
 			return publishRefused, nil
 		}
-		return extractRefused(map[string]string{mimeGzip: "top1m gzip", mimeTar: "top1m tar", mimeZip: "top1m zip"}[mime], err,
-			filepath.Base(raw)), nil
+		return extractRefused(top1mExtraction[mime], err, filepath.Base(raw)), nil
 	}
 	defer os.Remove(stage)
 	if !top1mCandidate(stage, p) {
@@ -341,6 +340,9 @@ func (f *Fetcher) top1mDownload(ctx context.Context, cfg ExtrasConfig, x Extra, 
 }
 
 var errTop1MArchive = errors.New("archive is not one TOP1M list")
+
+// top1mExtraction is the extrasExtraction name of each archive the TOP1M row extracts.
+var top1mExtraction = map[string]string{mimeGzip: "top1m gzip", mimeTar: "top1m tar", mimeZip: "top1m zip"}
 
 // top1mStage writes the list a body holds to a file beside target: a gzip's stream, the one member of a zip or tar, or
 // the body itself. It also returns the list's name: the member's, else target's.

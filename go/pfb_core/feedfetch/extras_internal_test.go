@@ -471,23 +471,47 @@ func TestABlacklistArchiveThatCannotBeKeptIsAPublicationFailure(t *testing.T) {
 	tw.Close()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write(tb.Bytes()) }))
 	t.Cleanup(srv.Close)
-	real := rename
+	origRename := rename
 	rename = func(from, to string) error {
 		if strings.HasSuffix(from, ".raw") {
 			return os.ErrPermission
 		}
-		return real(from, to)
+		return origRename(from, to)
 	}
-	t.Cleanup(func() { rename = real })
+	t.Cleanup(func() { rename = origRename })
 	f := &Fetcher{RetryDelay: 1}
 	f.Resolve = func(context.Context, string) ([]netip.Addr, error) {
 		return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("203.0.113.9")}, nil
 	}
 	db := t.TempDir()
-	url := "http://bl.example:" + srv.URL[strings.LastIndex(srv.URL, ":")+1:] + "/ut1.tar"
+	feedURL := "http://bl.example:" + srv.URL[strings.LastIndex(srv.URL, ":")+1:] + "/ut1.tar"
 	res := f.DownloadExtras(context.Background(), ExtrasConfig{DBDir: db},
-		[]Extra{{Kind: "blacklist", URL: url, Dir: db, Download: "ut1.tar", File: "ut1.tar", Name: "UT1"}})
+		[]Extra{{Kind: "blacklist", URL: feedURL, Dir: db, Download: "ut1.tar", File: "ut1.tar", Name: "UT1"}})
 	if r := res.Rows[0]; res.OK || r.Stage != "publish" || r.Reason != "publication_failed" || strings.Contains(r.Reason, db) {
 		t.Errorf("(ok, stage, reason) = (%v, %q, %q), want (false, publish, publication_failed)", res.OK, r.Stage, r.Reason)
+	}
+}
+
+// An apostrophe in a URL's path or query does not stop the query being hidden, and a password sent without a user is
+// hidden in the Basic authorization it makes.
+func TestRedactHidesQueriesPastAnApostropheAndAUserlessAuthorization(t *testing.T) {
+	cfg := ExtrasConfig{MaxMindKey: "maxmind-key"}
+	for in, gone := range map[string]string{
+		`Get "https://h/x?token=ab'SECRETVALUE": dial`:                   "SECRETVALUE",
+		`Get "https://h/o'brien/list.tgz?key=PATHSECRET": dial`:          "PATHSECRET",
+		"auth " + base64.StdEncoding.EncodeToString([]byte(":hunter22")): "Omh1bnRlcjIy",
+	} {
+		if got := cfg.redact(in, Extra{Password: "hunter22"}); strings.Contains(got, gone) {
+			t.Errorf("redact(%q) = %q still holds %q", in, got, gone)
+		}
+	}
+}
+
+// A short password's Basic authorization is long enough to hide without touching reason codes.
+func TestRedactHidesAShortPasswordsAuthorization(t *testing.T) {
+	auth := base64.StdEncoding.EncodeToString([]byte("user:pw12"))
+	if got := (ExtrasConfig{}).redact("auth "+auth+" staging_space_low", Extra{Username: "user", Password: "pw12"}); strings.Contains(got, auth) ||
+		!strings.Contains(got, "staging_space_low") {
+		t.Errorf("redact = %q, want the authorization hidden and the reason code kept", got)
 	}
 }

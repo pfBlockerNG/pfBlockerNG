@@ -305,16 +305,34 @@ func ctxEnded(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
-// extractionFailure is pfb_download()'s text for an extraction of what (an archive's MIME type, or "xlsx" for a
+// extractionFailure is pfb_download()'s text for an extraction of what (an Extra's name in extrasExtraction, an archive's
+// MIME type, or "xlsx" for a
 // workbook) that err ended: status 153 (SIGXFSZ) for one that outgrew the ceiling, else 1.
 func extractionFailure(what string, err error) string {
 	if errors.Is(err, errTooManyXLSXAddresses) {
 		return err.Error()
 	}
 	code := exitFailed
-	if errors.Is(err, errCeiling) {
+	switch {
+	case errors.Is(err, errNoCategory):
+		code = 0 // PHP's tar exits 0 on a Blacklist archive with no category
+	case errors.Is(err, errCeiling):
 		code = exitCeiling
 	}
+	var text string
+	if format, ok := extrasExtraction[what]; ok {
+		text = fmt.Sprintf(format, code)
+	} else {
+		text = mimeExtractionFailure(what, code)
+	}
+	if code == exitCeiling {
+		text += " -- output exceeded the extraction size ceiling"
+	}
+	return text
+}
+
+// mimeExtractionFailure is pfb_download()'s text for an extraction of a MIME type (or "xlsx") that ended with code.
+func mimeExtractionFailure(what string, code int) string {
 	var text string
 	switch what {
 	case mimeGzip:
@@ -327,9 +345,6 @@ func extractionFailure(what string, err error) string {
 		text = fmt.Sprintf("xlsx extraction failed (script exit %d)", code)
 	default:
 		text = fmt.Sprintf("tar extraction failed (tar exit %d)", code)
-	}
-	if code == exitCeiling {
-		text += " -- output exceeded the extraction size ceiling"
 	}
 	return text
 }
