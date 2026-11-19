@@ -1,0 +1,58 @@
+{
+	"schema": 1,
+	"description": "A truncated gzip fails its structural check: the folder and the archive stay.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"seed": {
+		"db/ut1/ut1_adult": "old.example\n",
+		"db/ut1/ut1_old": "gone.example\n",
+		"db/ut1.tar.gz": "old archive\n"
+	},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"body_b64": "H4sIAAAAAAAC/+2ZwU7EIBRFWfsV8wMKvEJZm8ws3cwfgHQxkaopbezM19tpFyYYU2NaxqT3bCDdQHJz3nukLtjnl3CKbeRsLcSA0XpcB9J13EulSRkj1PW7FFIR22mWgS62thmuwraJ+8rf+i60/F/kL0kXyP8m+fu32p5e49L5l0r9nL8sk/ypJM12Avmvzhj6Q9Xb+j1Udww="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"report": "\tUT1 ... Failed\n",
+				"files": {
+					"db/ut1/ut1_adult": "old.example\n",
+					"db/ut1/ut1_old": "gone.example\n",
+					"db/ut1/ut1.update": null,
+					"db/ut1.tar.gz.raw": null,
+					"db/ut1.tar.gz": "old archive\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

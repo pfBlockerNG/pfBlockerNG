@@ -82,7 +82,7 @@ func TestAnExtraOfAnUntranslatedKindIsRefusedBeforeItIsFetched(t *testing.T) {
 	dir := t.TempDir()
 	url := "http://dsi.ut-capitole.fr:" + strconv.Itoa(ln.Addr().(*net.TCPAddr).Port) + "/blacklists/download/ads.tar.gz"
 	res := f.DownloadExtras(context.Background(), feedfetch.ExtrasConfig{DBDir: dir},
-		[]feedfetch.Extra{{Kind: "blacklist", URL: url, Dir: dir, Download: "ads.tar.gz", File: "ads"}})
+		[]feedfetch.Extra{{Kind: "unknown", URL: url, Dir: dir, Download: "ads.tar.gz", File: "ads"}})
 	srv.Close()
 	entries, _ := os.ReadDir(dir)
 	if res.OK || asked.Load() || len(entries) != 0 {

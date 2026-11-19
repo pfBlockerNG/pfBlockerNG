@@ -1,0 +1,59 @@
+{
+	"schema": 1,
+	"description": "A failed download keeps the category folder and the archive, and reports the row failed.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"seed": {
+		"db/ut1/ut1_adult": "old.example\n",
+		"db/ut1/ut1_old": "gone.example\n",
+		"db/ut1.tar.gz": "old archive\n"
+	},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"status": 404,
+				"body": "missing\n"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"report": "\tUT1 ... Failed\n",
+				"files": {
+					"db/ut1/ut1_adult": "old.example\n",
+					"db/ut1/ut1_old": "gone.example\n",
+					"db/ut1/ut1.update": null,
+					"db/ut1.tar.gz.raw": null,
+					"db/ut1.tar.gz": "old archive\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

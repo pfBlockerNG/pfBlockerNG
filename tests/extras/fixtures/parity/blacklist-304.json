@@ -1,0 +1,91 @@
+{
+	"schema": 1,
+	"description": "A 304 is a success only while a .orig copy stands beside the archive, which a published update removes.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"seed": {
+		"db/ut1/ut1_adult": "old.example\n",
+		"db/ut1/ut1_old": "gone.example\n",
+		"db/ut1.tar.gz": "old archive\n"
+	},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"status": 304
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"report": "\tUT1 ... Failed\n",
+				"files": {
+					"db/ut1/ut1_adult": "old.example\n",
+					"db/ut1/ut1_old": "gone.example\n",
+					"db/ut1/ut1.update": null,
+					"db/ut1.tar.gz.raw": null,
+					"db/ut1.tar.gz": "old archive\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		},
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"seed": {
+				"db/ut1.tar.gz.orig": "o\n"
+			},
+			"expect": {
+				"ok": true,
+				"report": "\tUT1 ... Completed\n",
+				"files": {
+					"db/ut1/ut1_adult": "old.example\n",
+					"db/ut1/ut1_old": "gone.example\n",
+					"db/ut1/ut1.update": null,
+					"db/ut1.tar.gz": "old archive\n",
+					"db/ut1.tar.gz.orig": "o\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}
