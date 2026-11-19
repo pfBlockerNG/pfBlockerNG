@@ -54,9 +54,8 @@ type ExtrasConfig struct {
 // verbs can tell a bad key from a full disk. Unlike a feed's, every refusal has a Stage: pfb_validate_log()'s fetch, size,
 // mime, plaintext, structural, member or extract, or top1m, publish, aborted (the run's context ended) or unsupported;
 // Reason is the code pfb_validate_log() writes wherever today's PHP writes one. No URL query and no secret reaches them,
-// except a secret under six bytes as plain text (in practice a short Blacklist password a hostile FTP server echoes): such
-// a secret collides with reason text too often to be told from it. A row refused for its own reason just as the run's
-// context ends reads aborted: the run ended.
+// except a secret under six bytes as plain text: such a secret collides with reason text too often to be told from it. A
+// row refused for its own reason just as the run's context ends reads aborted: the run ended.
 type ExtrasRow struct {
 	Kind, Download string
 	Result
@@ -139,6 +138,9 @@ var urlUserinfo = regexp.MustCompile(`(?i)((?:https?|ftp)://)(?:\\.|[^\s"/?#@\\]
 // six bytes stays as plain text, where it would collide with reason text too often; its Basic authorization, eight bytes
 // or more, still goes.
 func (cfg ExtrasConfig) redact(s string, x Extra) string {
+	if _, query, ok := strings.Cut(x.URL, "?"); ok && query != "" {
+		s = strings.ReplaceAll(s, "?"+query, "?[redacted]") // whole, though a space would end urlQuery's match
+	}
 	s = urlQuery.ReplaceAllString(s, "$1?[redacted]")
 	s = urlUserinfo.ReplaceAllString(s, "$1[redacted]@")
 	var forms []string

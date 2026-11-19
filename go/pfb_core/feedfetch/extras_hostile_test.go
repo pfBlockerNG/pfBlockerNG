@@ -1,6 +1,7 @@
 package feedfetch_test
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"net/http"
@@ -72,6 +73,14 @@ func TestAnExtrasMemberPastTheCeilingKeepsWhatWasPublished(t *testing.T) {
 			list, gzipOf(t, list), "top1m extraction failed (gunzip exit 153)" + past, "top-1m.csv.gz.raw"},
 		{"asn gzip member", "asn", "ipinfo.io", "asn.csv.gz", "asn.csv", "asn.csv",
 			list, gzipOf(t, list), "asn extraction failed (gunzip exit 153)" + past, "asn.csv.gz.raw"},
+		{"asn tar member", "asn", "ipinfo.io", "asn.csv.tar", "asn.csv", "asn.csv",
+			list, tarNamed(t, "asn.csv", list), "tar extraction failed (tar exit 153)" + past, "asn.csv.tar.raw"},
+		{"top1m tar member", "top1m", "tranco-list.eu", "top-1m.csv.tar", "top-1m.csv", "top-1m.csv",
+			list, tarNamed(t, "top-1m.csv", list), "top1m extraction failed (tar exit 153)" + past, "top-1m.csv.tar.raw"},
+		{"geoip zip of several members", "geoip", "download.maxmind.com", "GeoLite2-Country-CSV.zip",
+			"GeoLite2-Country-CSV", "GeoLite2-Country-CSV/blocks.csv", list,
+			zipMembersNamed(t, "GeoLite2-Country-CSV_1/blocks.csv", list, "GeoLite2-Country-CSV_1/LICENSE.txt", []byte("l\n")),
+			"geoip zip extraction failed (tar exit 153)" + past, "GeoLite2-Country-CSV.zip.raw"},
 	} {
 		port, _ := extrasPort(t, tc.body, time.Time{})
 		for _, room := range []bool{true, false} {
@@ -112,6 +121,26 @@ func TestAnExtrasMemberPastTheCeilingKeepsWhatWasPublished(t *testing.T) {
 			})
 		}
 	}
+}
+
+// zipMembersNamed is a zip of each name and its bytes, in order.
+func zipMembersNamed(t *testing.T, pairs ...any) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for i := 0; i < len(pairs); i += 2 {
+		w, err := zw.Create(pairs[i].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(pairs[i+1].([]byte)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 // With the proxy unusable (pfb_proxy_unusable), every Extra is refused before it is fetched, and nothing is written.

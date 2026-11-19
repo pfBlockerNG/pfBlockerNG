@@ -528,3 +528,12 @@ func TestRedactHidesUserinfoAndAQueryPastAnEscapedQuote(t *testing.T) {
 		}
 	}
 }
+
+// A row's own query is hidden whole, past a space that ends the URL pattern (Go's client quotes a URL with %q, which keeps
+// a space; PHP's FILTER_VALIDATE_URL would have refused the URL).
+func TestRedactHidesARowsQueryPastASpace(t *testing.T) {
+	const u = "http://127.0.0.1:1/ut1.tar?k=a SECRETSPACE"
+	if got := (ExtrasConfig{}).redact(`Get "`+u+`": dial tcp`, Extra{URL: u}); strings.Contains(got, "SECRETSPACE") {
+		t.Errorf("redact = %q still holds the query", got)
+	}
+}
