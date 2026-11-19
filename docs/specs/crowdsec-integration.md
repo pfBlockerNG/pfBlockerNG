@@ -438,5 +438,7 @@ stay banned and a missed ban would stay missing until the next restart.
   Settings accept, such as `123` or `quick`, as a number or a keyword, and pfSense then drops every CrowdSec rule.
 - **Should run in a filter reload.** pfSense calls the hook without loading pfBlockerNG's globals, so "should run" (D4)
   reads the stored master enable when `pfb_global()` has not run in that process.
+- **Interfaces per family.** `{ifaces}` is resolved per family (`get_real_interface($name, 'inet6')` for the IPv6 rules), so
+  a 6rd or 6to4 WAN gets its IPv6 rules on `<name>_stf`. A family with no selected interface left gets no rules.
 - **Signal.** The shutdown function sends `SIGUSR1` with `pkill -F <pidfile> -f <the bouncer's command line>` once
   `isvalidpid()` confirms the pid, so a stale pidfile that names a reused pid signals nothing.

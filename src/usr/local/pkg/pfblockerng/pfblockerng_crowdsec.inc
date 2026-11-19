@@ -390,8 +390,8 @@ function pfb_crowdsec_child_pattern(string $dir = PFB_CROWDSEC_DIR): string {
 /**
  * pfSense's filter_rule_function (pfblockerng.xml filter_rules_needed), called for each rule type on every filter reload (D5).
  * Only `pfearly`, and only while the bouncer should run: per enabled family an inbound rule (the bouncer's counter parser reads its
- * shape) and an outbound one, `on` the selected interfaces' real names unless "all interfaces" is on (a selection with none left
- * gives no rules), `log` and `tag` when set. A stored tag the Settings would refuse is left out: it reaches the ruleset verbatim.
+ * shape) and an outbound one, `on` the selected interfaces' real names for that family unless "all interfaces" is on (a family with
+ * none left gets no rules), `log` and `tag` when set. A stored tag the Settings would refuse is left out: it reaches the ruleset verbatim.
  * The tables are never declared: the bouncer creates them. The reload kills them (#4070), so the first call that returns rules
  * registers pfb_crowdsec_signal() to run when this process ends, after the kill.
  */
@@ -402,24 +402,27 @@ function pfb_crowdsec_rules(string $type): string {
 		return '';
 	}
 	$s = pfb_crowdsec_settings();
-	$on = '';
-	if ($s['rules_all_interfaces'] !== PfbToggle::On) {
-		$real = array_filter(array_map('get_real_interface', explode(',', (string) $s['rules_interfaces'])));
-		if ($real === []) {
-			return '';
-		}
-		$on = ' on { ' . implode(' ', $real) . ' }';
-	}
-	$opt = ($s['rules_log'] === PfbToggle::On ? ' log' : '') . " quick{$on}";
+	$selected = $s['rules_all_interfaces'] === PfbToggle::On ? NULL : explode(',', (string) $s['rules_interfaces']);
+	$log = $s['rules_log'] === PfbToggle::On ? ' log' : '';
 	// Quoted: unquoted, pf reads a tag such as `123` or `quick` as a number or a keyword, and pfSense then drops every rule here
 	$tag = is_string($s['rules_tag']) && preg_match(PFB_CROWDSEC_TAG_PATTERN, $s['rules_tag']) ? " tag \"{$s['rules_tag']}\"" : '';
 
 	$rules = '';
 	foreach (['4' => ['rule_v4', 'inet'], '6' => ['rule_v6', 'inet6']] as $n => [$field, $af]) {
-		if ($s[$field] === PfbToggle::On) {
-			$rules .= "block drop in{$opt} {$af} from <crowdsec_v{$n}> to any label \"CrowdSec IPv{$n}\"{$tag}\n"
-			    . "block drop out{$opt} {$af} from any to <crowdsec_v{$n}> label \"CrowdSec IPv{$n} out\"{$tag}\n";
+		if ($s[$field] !== PfbToggle::On) {
+			continue;
 		}
+		$on = '';
+		if ($selected !== NULL) {
+			// Per family: a 6rd or 6to4 WAN carries its IPv6 on <name>_stf
+			$real = array_filter(array_map(static fn (string $i): ?string => get_real_interface($i, $af), $selected));
+			if ($real === []) {
+				continue;
+			}
+			$on = ' on { ' . implode(' ', $real) . ' }';
+		}
+		$rules .= "block drop in{$log} quick{$on} {$af} from <crowdsec_v{$n}> to any label \"CrowdSec IPv{$n}\"{$tag}\n"
+		    . "block drop out{$log} quick{$on} {$af} from any to <crowdsec_v{$n}> label \"CrowdSec IPv{$n} out\"{$tag}\n";
 	}
 	if ($rules !== '' && !$registered) {
 		register_shutdown_function('pfb_crowdsec_signal');
