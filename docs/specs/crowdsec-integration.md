@@ -314,3 +314,28 @@ Red-before-green per `.agents/policy/testing.md`:
 ## Open forks
 
 None. Criteria 4 and 5 are verifications with the fallback already decided in D3 and D4.
+
+## Amendment 2026-11-19 — criteria 4 and 5 verified on pfSense CE (#4070)
+
+Run on pfSense CE 2.8.1 with the upstream cs-firewall-bouncer v0.0.38 FreeBSD binary, the
+four D4 rules injected at `pfearly` through a package `filter_rule_function`, and a stub LAPI.
+Commands and output: [#4070 evidence](https://github.com/pfBlockerNG/pfBlockerNG/issues/4070#issuecomment-7002188805).
+
+- **D3's table creation is needed.** Tables that only the rules reference are not listed by
+  `pfctl -s Tables`, and the bouncer exits with `pf init failed: table crowdsec_v4 doesn't
+  exist`. `pfctl -t <table> -T add -f /dev/null` creates each table (persistent, empty, and
+  idempotent on a second run), and the bouncer then starts and fills them. The rc script's
+  start runs it for both tables on every start, not only on the first enable.
+- **D4's save-and-restore is needed.** A filter reload does not empty the tables; it removes
+  them. pf's own ruleset load keeps them, but after the load `filter_configure_sync()` runs
+  `pfctl -t <name> -T kill` on every table in `pfctl -sT` that is not a configured alias, a
+  captive portal alias or a `get_pf_reserved()` name. That happens on both
+  `/etc/rc.filter_configure_sync` and Status > Filter Reload (`filter_configure()`), and pfSense
+  has no hook that adds a name to the list. A prototype of D4's save-and-restore kept both
+  tables' contents on both paths: the shutdown function runs after the kill, in the CLI process
+  and in the php-fpm worker that serves `check_reload_status`. The restore must first re-create
+  each table with `pfctl -t <table> -T add -f /dev/null`, also when the saved list is empty,
+  and then feed the saved addresses through `xargs`.
+- pfSense Plus was not tested: the smoke pool has no Plus VM identity outside CI secrets. The
+  kill comes from pfSense core's `filter.inc`, so Plus is expected to behave the same, but
+  this is unverified until it runs on a Plus box.
