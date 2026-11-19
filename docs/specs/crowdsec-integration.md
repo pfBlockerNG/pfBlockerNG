@@ -1,165 +1,215 @@
-# CrowdSec integration (packaged firewall bouncer)
+# CrowdSec integration (pfb_crowdsec bouncer)
 
 Issue: [#1585](https://github.com/pfBlockerNG/pfBlockerNG/issues/1585) · map
-[#1577](https://github.com/pfBlockerNG/pfBlockerNG/issues/1577)
+[#1577](https://github.com/pfBlockerNG/pfBlockerNG/issues/1577) · implementation
+[#4068](https://github.com/pfBlockerNG/pfBlockerNG/issues/4068)
 
 ## Goal
 
 An operator who runs a CrowdSec Security Engine elsewhere can have pfSense drop the
 addresses that engine bans, on every interface and in both directions, without installing
-the CrowdSec package. The pfBlockerNG package ships the official CrowdSec firewall bouncer
-(`cs-firewall-bouncer`, pf mode) unchanged and adds only what pfSense needs around it: a
-settings page, the bouncer's config file, a service, the firewall rules that use its
-tables, a status page and metrics. The bouncer keeps working across pfSense upgrades
-because it comes with the pfBlockerNG package.
+the CrowdSec package. pfBlockerNG gains a **CrowdSec** tab and `pfb_crowdsec`, a small Go
+daemon whose only job is to be a CrowdSec firewall bouncer: it polls the engine's Local API
+(LAPI) every 10 s and keeps two PF tables equal to the engine's active bans. pfBlockerNG
+generates the rules that use those tables, runs the daemon as a service, shows its status
+and exports its metrics.
 
-The bouncer is a separate component that only ships in the pfBlockerNG package. It has
-its own page, menu entry and enable switch, and works whether pfBlockerNG itself is
-enabled or not. It shares pfBlockerNG's build, packaging, coding and testing standards,
-and its conventions for logs and metrics, nothing else.
+The daemon's behaviour is modelled on the official firewall bouncer's pf mode
+(`crowdsecurity/cs-firewall-bouncer`), without what that bouncer carries for other
+platforms and for CrowdSec's generated API client.
 
 pfSense's own logs reach the remote engine through pfSense's built-in remote syslog. The
 engine does all parsing and decides; pfSense only enforces.
 
 ## Fixed constraints
 
-- **The bouncer is upstream's, unmodified.** `crowdsecurity/cs-firewall-bouncer` is built
-  from a pinned release tag through the same go recipe route as `pfb-core`
-  (`docs/build-pkg-portable.md`): vendored, CGO off, `-trimpath`, one binary per machine
-  (`freebsd-amd64`, `freebsd-arm64`). No patches. Its behaviour is the bouncer's own:
-  - it drives PF through `/sbin/pfctl` (batched `-T add`/`-T delete` from a temp file,
-    `-k` to kill the states of newly banned addresses);
-  - its decision loop is go-cs-bouncer's `StreamBouncer`: a full pull with
-    `startup=true`, then deltas every `update_frequency` (10 s);
-  - it refuses to start if a configured table is not found in `pfctl -s Tables` output
-    (a substring match), and flushes both tables when it stops;
-  - it pushes usage metrics to the LAPI itself;
-  - TLS uses the system trust store, and the LAPI is reached through the routing table.
-- **Licensing.** cs-firewall-bouncer, go-cs-bouncer, crowdsec and the hub are MIT, which is
-  compatible with pfBlockerNG's Apache-2.0. The bouncer's licence text and its
-  dependencies' notices ship with the package, the same way `pfb-core`'s third-party
-  notices do. `crowdsecurity/pfSense-pkg-crowdsec` carries no licence, so none of its PHP
-  is copied; this spec reuses its approach only (the settings it offers, the rule shape,
-  the `filter_rules_needed` hook and the table snapshot around filter reloads).
-- **Independent of pfBlockerNG at runtime.** pfBlockerNG's master enable, its sync pass,
-  its feed and Update pipeline, `pfb-core`, its XMLRPC sync and its metrics export never
-  start, stop, configure or read the bouncer, and the bouncer's code never calls them.
-- **Nothing in `config.xml` but settings.** No aliases and no rules are stored. The only
-  `config.xml` side effect of the rule hook is pfSense core's own
+- **Our own daemon, standard library only.** `pfb_crowdsec` lives in `go/pfb_crowdsec/`,
+  a Go module whose `go.mod` has no `require` lines: no third-party modules and no
+  `golang.org/x`. It is built by the same builder and go recipe route as `pfb-core`
+  (`docs/build-pkg-portable.md`): CGO off, `-trimpath`, `GOTOOLCHAIN=local`, one binary per
+  machine (`freebsd-amd64`, `freebsd-arm64`), installed as
+  `/usr/local/pkg/pfblockerng/crowdsec/bin/<machine>/pfb_crowdsec`.
+- **Licensing.** The daemon is pfBlockerNG code under Apache-2.0. Upstream's bouncer is MIT,
+  so chunks of it may be adapted; any source file that does keeps upstream's copyright and
+  MIT notice at its top, and the package then ships upstream's `LICENSE` beside the binary.
+  `crowdsecurity/pfSense-pkg-crowdsec` carries no licence, so none of its PHP is copied; only
+  its approach (the settings it offers and the rule shape) is reused.
+- **Part of pfBlockerNG, not a feed.** The bouncer runs only while pfBlockerNG's master
+  enable and the CrowdSec enable are both on. It never goes through the feed or Update
+  pipeline, and `pfb-core` neither runs nor watches it.
+- **Nothing in `config.xml` but settings.** No aliases and no rules are stored, and the
+  banned addresses exist only in the daemon's memory and the PF tables. The only `config.xml`
+  side effect of the rule hook is pfSense core's own
   `installedpackages/package/<n>/filter_rule_function` registration, which
   `pkg-utils.inc` writes at install from `<filter_rules_needed>`.
-- Its settings fields go through `PfbConfig` (`docs/misc/config-gateway.md`), like every
-  field the package registers.
-- Appliance code is PHP and POSIX sh only.
+- Settings fields go through `PfbConfig` (`docs/misc/config-gateway.md`).
+- Appliance code outside the daemon is PHP and POSIX sh only.
 
 ## Decisions
 
-### D1. Settings
+### D1. The daemon
 
-A new page `/pfblockerng/crowdsec_bouncer.php`, with its own menu entry
-**Firewall > CrowdSec Bouncer**, holds the settings and, below them, the status (D7).
-The fields mirror the firewall-bouncer part of the official package. They live in a new
-`PFB_SECTIONS` alias `crowdsec` (`installedpackages/pfblockerngcrowdsec/config/0`). All of
-them are `sync => 'local'`: each node registers and runs its own bouncer, and XMLRPC sync
-never copies a LAPI key to a peer.
+**Invocation.** `pfb_crowdsec -c <config>` runs it; `pfb_crowdsec -t -c <config>` validates
+the config and exits; `pfb_crowdsec -version` prints the version.
 
-| Key | UI | Default | Validation |
-| --- | --- | --- | --- |
-| `crowdsec/enable` | Enable checkbox | off | — |
-| `crowdsec/lapi_url` | Remote LAPI URL | empty | `http://` or `https://` URL with a host; required when enabled |
-| `crowdsec/api_key` | Bouncer API key (password field) | empty | 1–256 printable ASCII, no whitespace; required when enabled |
-| `crowdsec/log_level` | Log level select | `info` | `trace`, `debug`, `info`, `warning`, `error` |
-| `crowdsec/rules_all_interfaces` | Apply to all interfaces | on | — |
-| `crowdsec/rules_interfaces` | Interface selection (multi) | empty | each a configured interface; at least one when "all" is off |
-| `crowdsec/rules_log` | Log blocked packets | off | — |
-| `crowdsec/rules_tag` | Tag | empty | empty, or `[A-Za-z0-9_-]{1,63}` |
-| `crowdsec/rule_v4` | Enable the IPv4 rules | on | — |
-| `crowdsec/rule_v6` | Enable the IPv6 rules | on | — |
-| `crowdsec/metrics_export` | Metrics export | off | as `gen/pfb_metrics_export` (D6) |
+**Config.** A JSON file (D3) with `api_url`, `api_key`, `update_frequency` (default and
+minimum `10s`), `table_v4`, `table_v6`, `log_level` and `status_file`. Unknown keys are
+an error.
 
-- The page tells the operator to register the bouncer on the engine with
-  `cscli bouncers add <name>` and paste the key, as the official package does.
-- The key is never echoed back into the form, logged, or shown on the status page. An
-  empty key field on save keeps the stored key.
-- The page's own save applies everything (D3); it never runs pfBlockerNG's sync pass.
+**Start-up.**
 
-### D2. Bouncer config file
+1. Validate the config and check that `/sbin/pfctl` and `/dev/pf` exist.
+2. Create both tables if missing with `pfctl -t <table> -T add -f /dev/null` (pfctl creates
+   a persistent, empty table; see the #4070 amendment), then flush both.
+3. Pull the full decision set with `GET /v1/decisions/stream?startup=true`. Until that
+   succeeds, retry every `update_frequency`, log each failure, and leave the tables empty.
 
-- Path `/usr/local/etc/crowdsec_bouncer/crowdsec-firewall-bouncer.yaml`, owner root, mode
-  `0600`, outside the `/var` RAM disk. It is written atomically (temp file in the same
-  directory, `chmod 0600` before the key is written, `rename()`).
-- A save rewrites it while the bouncer is enabled, and removes it when disabled.
-- Content is the official pf-mode file with these values; every other key keeps upstream's
-  default:
+**Loop.** Every `update_frequency`, `GET /v1/decisions/stream` (without `startup`) and apply
+its `deleted` list, then its `new` list:
 
-```yaml
-mode: pf
-update_frequency: 10s
-log_mode: stdout
-log_level: <crowdsec/log_level>
-api_url: <crowdsec/lapi_url>
-api_key: <crowdsec/api_key>
-insecure_skip_verify: false
-disable_ipv6: false
-deny_action: DROP
-deny_log: false
-supported_decisions_types:
-  - ban
-blacklists_ipv4: crowdsec_v4
-blacklists_ipv6: crowdsec_v6
-pf:
-  anchor_name: ""
-prometheus:
-  enabled: false
-```
+- Only decisions of type `ban` with scope `ip` or `range` (case-insensitive) are used. Each
+  value is parsed with `net/netip` as an address or prefix; anything else is logged once
+  per pull and skipped. A value goes to `table_v4` or `table_v6` by family.
+- The daemon keeps, per value, the set of decision IDs that ban it. A value is added to its
+  table when its first decision arrives, and deleted when its last decision is deleted.
+  Expiry needs no local timer: the LAPI reports expired decisions as deleted.
+- Adds and deletes are batched: one `pfctl -t <table> -T add|delete -f <file>` per table
+  per pull, from a mode-`0600` temp file holding one validated address per line. Values
+  never reach a shell; pfctl runs with an argument vector.
+- For newly added single addresses only, states are killed as upstream does: the daemon
+  reads `pfctl -s states` once per pull and, for each new address found there, runs
+  `pfctl -k <addr>` and `pfctl -k 0.0.0.0/0 -k <addr>` (`::/0` for IPv6).
+- A failed pull keeps the tables as they are and is retried on the next tick. Enforcement
+  continues on the last known set while the LAPI is unreachable.
 
-- `disable_ipv6` stays false even when the IPv6 rules are off, so both tables always
-  exist and the status page and metrics stay uniform.
-- The table names `crowdsec_v4` and `crowdsec_v6` contain neither each other nor the
-  official package's `crowdsec_blacklists`/`crowdsec6_blacklists`, so the bouncer's
-  substring table check cannot match the wrong table. They are outside the `pfB_` prefix
-  that pfBlockerNG's table cleanup matches (`grep '^pfB_'`, case-sensitive).
-- The bouncer's Prometheus listener stays off, as in the official package. Nothing listens
-  on a port; the page and the export collect the same numbers themselves (D6).
+**Reconcile.** After every pull, and immediately on `SIGUSR1`, the daemon reads
+`pfctl -vvs Tables` once. If a table is missing, it re-creates it as at start-up. If a
+table is missing or its address count differs from the in-memory set, it replaces the table's
+contents with `pfctl -t <table> -T replace -f <file>`. This is how the tables come back
+after a filter reload, which kills them (#4070 amendment; D5).
 
-### D3. Service
+**Shutdown.** `SIGTERM` or `SIGINT` flushes both tables and exits 0. A stopped bouncer
+enforces nothing (fail-open), as with the official bouncer.
 
-- New `<service>` entry `crowdsec_bouncer` ("CrowdSec firewall bouncer"), rc file
-  `/usr/local/etc/rc.d/crowdsec_bouncer.sh`, status
-  `isvalidpid('/var/run/crowdsec_bouncer.pid')`.
+**LAPI client.** One `net/http` client with keep-alive and a 30 s timeout per request.
+Requests send `X-Api-Key` and `User-Agent: pfb_crowdsec/<version>`. TLS uses the system
+trust store. Response bodies are capped at 256 MiB, and a body that is not valid JSON fails
+the pull.
+
+**Usage metrics.** Every 15 minutes (go-cs-bouncer's default), the daemon posts to
+`POST /v1/usage-metrics` a `remediation_components` entry of type `pfb_crowdsec` with its
+version, start time, the window, and per window:
+
+- `dropped` packets and bytes per `ip_type`;
+- `active_decisions` per `origin` and `ip_type`.
+
+These follow the official bouncer's metric names and units. A failed post is logged and
+dropped.
+
+**Counters.** Each pull, the daemon reads `pfctl -v -s rules` and takes the packet and byte
+counters of the inbound rule for each table. It finds them the way upstream does, matching
+`^block .* from <table> .* label "`.
+
+**Status file.** After each pull, the daemon writes `status_file` atomically (temp file and
+`rename()`, mode `0644`, no secrets) as JSON with:
+
+- version and start time;
+- time of the last successful pull, and time and text of the last error;
+- LAPI request and error counts since start;
+- banned values per family and per origin;
+- dropped packets and bytes per family.
+
+**Logging.** Plain lines on stdout, `level=<lvl> msg=<text>`, filtered by `log_level`. The
+service sends them to syslog (D4).
+
+**Left out on purpose.** Everything the official bouncer carries that pf mode on pfSense
+does not need:
+
+- the Prometheus listener;
+- systemd notification;
+- host and OS probing;
+- log-file rotation;
+- YAML;
+- the iptables, nftables and ipset backends;
+- the generated API client and JWT machine login;
+- TLS client certificates;
+- anchors;
+- decision types other than `ban`.
+
+### D2. Settings
+
+A new **CrowdSec** tab in pfBlockerNG has two subtabs: **Settings**
+(`/pfblockerng/pfblockerng_crowdsec.php`) and **Status**
+(`/pfblockerng/pfblockerng_crowdsec_status.php`, D7). The fields mirror the
+firewall-bouncer part of the official package and live in a new `PFB_SECTIONS` alias
+`crowdsec` (`installedpackages/pfblockerngcrowdsec/config/0`).
+
+| Key | UI | Default | Sync | Validation |
+| --- | --- | --- | --- | --- |
+| `crowdsec/enable` | Enable checkbox | off | policy | — |
+| `crowdsec/lapi_url` | Remote LAPI URL | empty | policy | `http://` or `https://` URL with a host; required when enabled |
+| `crowdsec/api_key` | Bouncer API key (password field) | empty | **local** | 1–256 printable ASCII, no whitespace; required when enabled |
+| `crowdsec/log_level` | Log level select | `info` | local | `debug`, `info`, `warning`, `error` |
+| `crowdsec/rules_all_interfaces` | Apply to all interfaces | on | local | — |
+| `crowdsec/rules_interfaces` | Interface selection (multi) | empty | local | each a configured interface; at least one when "all" is off |
+| `crowdsec/rules_log` | Log blocked packets | off | policy | — |
+| `crowdsec/rules_tag` | Tag | empty | policy | empty, or `[A-Za-z0-9_-]{1,63}` |
+| `crowdsec/rule_v4` | Enable the IPv4 rules | on | policy | — |
+| `crowdsec/rule_v6` | Enable the IPv6 rules | on | policy | — |
+
+- Sync classes follow `docs/specs/xmlrpc-per-field-sync.md`'s rule: the key is a
+  credential, the interfaces are interfaces and the log level is a log setting, so they are
+  `local`; the rest is `policy`. `pfblockerngcrowdsec` joins the synced sections in
+  allowlist mode. Each node registers its own bouncer on the engine, so the key never leaves
+  the node. A peer that receives
+  `enable` without having its own key shows that on its Status subtab and does not start the
+  bouncer.
+- The page tells the operator to register the bouncer with `cscli bouncers add <name>` and
+  paste the key, as the official package does.
+- The key is never echoed back into the form, logged, or shown on any page. An empty key
+  field on save keeps the stored key.
+
+### D3. Config file
+
+- `/usr/local/etc/pfb_crowdsec.json`, owner root, mode `0600`, outside the `/var` RAM disk.
+  It is written atomically (temp file in the same directory, `chmod 0600` before the key is
+  written, `rename()`), and removed when the bouncer is off.
+- Values: `api_url`, `api_key` and `log_level` from D2, `update_frequency` `10s`,
+  `table_v4` `crowdsec_v4`, `table_v6` `crowdsec_v6`, and `status_file`
+  `/var/run/pfb_crowdsec.json`.
+- The table names contain neither each other nor the official package's
+  `crowdsec_blacklists`/`crowdsec6_blacklists`. They are outside the `pfB_` prefix that
+  pfBlockerNG's table cleanup matches (`grep '^pfB_'`, case-sensitive).
+
+### D4. Service
+
+- New `<service>` entry `pfb_crowdsec` ("pfBlockerNG CrowdSec bouncer"), rc file
+  `/usr/local/etc/rc.d/pfb_crowdsec.sh`, status `isvalidpid('/var/run/pfb_crowdsec.pid')`.
 - The rc script is generated with `write_rcfile()` the way `pfb_core_service()` generates
   Core's. It picks this machine's binary by `uname -p`, and runs it under daemon(8) with
-  restart on exit (`-r -R 5`), supervisor and child pidfiles, std fds detached, and its
-  output sent to syslog (`-S -l daemon -T crowdsec_bouncer`). With no binary for this
-  machine it logs and starts nothing.
-- Stop sends TERM, and KILL after 5 s, as Core's does. The bouncer flushes both tables
-  on a clean stop, so a stopped service enforces nothing (fail-open), as with the official
-  package.
-- The page's save starts the service when the bouncer turns on, restarts it when the
-  config file content changed, and stops it when the bouncer turns off. It reloads the
-  filter (D4) when any rule setting or the enable changed, and turning the bouncer on
-  reloads the filter before starting the service, so the tables exist when the bouncer
-  checks for them.
-- The package's install and upgrade regenerate the rc script and, while the bouncer is
-  enabled, the config file; the service then starts with the other package services.
-- At boot, pfSense loads the filter before it starts package services, which gives the
-  same order.
-- If acceptance criterion 5 shows that the bouncer's table check fails on tables that
-  exist only through rule references, the rc script's start first runs
-  `pfctl -t <table> -T add -f /dev/null` for both tables. pfctl creates a missing table
-  as persistent and adds nothing. A table created this way is not declared in the
-  ruleset, so criterion 4 is re-checked against it.
-- Deinstall stops the service and removes the rc file, the binary, the config file, the
-  metrics file and the cron entry (D6).
+  restart on exit (`-r -R 5`), supervisor and child pidfiles, std fds detached, and output
+  to syslog (`-S -l daemon -T pfb_crowdsec`). With no binary for this machine it logs and
+  starts nothing. Stop sends TERM, and KILL after 5 s.
+- **Should run** = pfBlockerNG master enable on, `crowdsec/enable` on, and a stored key.
+  - The Settings subtab's save writes the config file and applies at once: start, restart
+    when the file changed, or stop. It reloads the filter when the enable or any rule
+    setting changed.
+  - pfBlockerNG's sync pass (master enable changes, XMLRPC receive, install and upgrade)
+    applies the same "should run" decision, so turning pfBlockerNG off stops the bouncer
+    and removes its rules.
+  - The daemon creates its own tables (D1), so there is no ordering to get right between
+    the filter reload and the start.
+- Deinstall stops the service and removes the rc file, the binaries, the config file and
+  the status file.
 
-### D4. Firewall rules
+### D5. Firewall rules
 
 - `pfblockerng.xml` gains
-  `<filter_rules_needed>crowdsec_bouncer_rules</filter_rules_needed>`. pfSense calls it
-  for each rule type; it returns rules only for `pfearly`, and only while the bouncer is
-  enabled.
-- For each enabled family, two rules, in the official package's shape, which the
-  bouncer's metrics parser expects (`^block .* from <table> .* label "`):
+  `<filter_rules_needed>pfb_crowdsec_rules</filter_rules_needed>`. pfSense calls it for
+  each rule type; it returns rules only for `pfearly`, and only while the bouncer should
+  run (D4).
+- For each enabled family, two rules in the official package's shape. The daemon's counter
+  parser relies on the inbound rule's shape:
 
 ```text
 block drop in  {log} quick {on {ifaces}} inet  from <crowdsec_v4> to any label "CrowdSec IPv4" {tag tag}
@@ -170,150 +220,141 @@ block drop out {log} quick {on {ifaces}} inet6 from any to <crowdsec_v6> label "
 
 - `{ifaces}` are the real interface names from `get_real_interface()`, and are omitted
   when "all interfaces" is on. `{log}` and `{tag}` appear only when set.
-- The tables are never declared with `table <…>` in the ruleset. They exist because the
-  rules reference them.
-- **Filter reloads.** If a reload empties the tables (verified by acceptance criterion 4),
-  `crowdsec_bouncer_rules('pfearly')` saves the tables' contents with `pfctl -T show`
-  before pfSense loads the new ruleset. It restores them afterwards from a shutdown
-  function, feeding addresses through `xargs pfctl -t <table> -T add` so no single
-  command exceeds `ARG_MAX`. This is an original implementation of the approach the
-  official package uses. If the reload keeps the contents, this code is not added.
-- A reboot needs nothing: the bouncer pulls the full decision set at startup.
+- The tables are never declared with `table <…>` in the ruleset.
+- **Filter reloads.** pfSense kills both tables after every filter reload (#4070
+  amendment). When `pfb_crowdsec_rules('pfearly')` returns rules, it also registers a
+  shutdown function that sends `SIGUSR1` to the daemon's pid (from
+  `/var/run/pfb_crowdsec.pid`, checked with `isvalidpid()`). The shutdown function runs
+  after the kill, and the daemon re-creates and refills both tables at once (D1 Reconcile).
+  If the signal is missed, the next pull's reconcile restores them within
+  `update_frequency`. pfBlockerNG keeps no copy of the addresses.
+- A reboot needs nothing: the daemon pulls the full decision set at start-up.
 
-### D5. Logs and telemetry
+### D6. Logs, telemetry and metrics
 
-- The bouncer logs to syslog under the tag `crowdsec_bouncer` (D3), so it lands in the
+- The daemon's log goes to syslog under the tag `pfb_crowdsec` (D4), so it lands in the
   system log and goes wherever the operator's remote syslog sends it.
 - pfSense's own logs (filter, pfBlockerNG, HAProxy, nginx) reach the remote engine through
-  **Status > System Logs > Settings > Remote Logging**. The bouncer configures none of
-  this, and the settings page says so in one line.
+  **Status > System Logs > Settings > Remote Logging**. pfBlockerNG configures none of
+  this, and the Settings subtab says so in one line.
+- **node_exporter.** pfBlockerNG's metrics export (`docs/specs/metrics-export.md`) gains a
+  `crowdsec` source. While the bouncer should run, `pfb_metrics_write()` reads
+  `/var/run/pfb_crowdsec.json` and writes these families into `pfblockerng.prom`:
+  - `fw_bouncer_dropped_packets`, `fw_bouncer_dropped_bytes` (per `ip_type`) and
+    `fw_bouncer_banned_ips` (per `origin` and `ip_type`), under the official bouncer's names
+    so its dashboards work;
+  - `pfblockerng_crowdsec_lapi_requests_total`, `pfblockerng_crowdsec_lapi_errors_total`,
+    `pfblockerng_crowdsec_last_pull_timestamp_seconds` and
+    `pfblockerng_crowdsec_last_error_timestamp_seconds`.
 
-### D6. Metrics
+  The source reports `source_up 0`, with the rest of the file intact, when the service is
+  not running or the status file is missing, unreadable, or more than
+  `3 × update_frequency` old. With the bouncer off, the source is absent.
+- **LAPI usage metrics** are pushed by the daemon itself (D1).
 
-- **LAPI usage metrics:** the bouncer pushes them itself (go-cs-bouncer
-  `MetricsProvider`), with upstream's default interval. This needs no listener.
-- **Collector.** One PHP function, `crowdsec_bouncer_collect()`, gathers what the bouncer's
-  own pf-mode metrics would show, the same way the bouncer does it:
-  - dropped packets and bytes per family, from the inbound rule's label counters in
-    `pfctl -v -sr`;
-  - addresses in each table, from `pfctl -T show`;
-  - whether the service is running, and the time and text of the last error line the
-    bouncer logged.
+### D7. Status subtab
 
-  The status page (D7) calls it on load. Nothing is lost against the bouncer's
-  own pf-mode metrics, which come from the same `pfctl` output with an empty `origin`
-  label. Only go-cs-bouncer's LAPI request counters are not available.
-- **node_exporter export.** It follows `docs/specs/metrics-export.md`'s rules for the
-  `Metrics export` field (requires `pfSense-pkg-node_exporter`; disabled checkbox, red
-  notice and install link when absent; a POST of `on` without it refused), but runs on its
-  own:
-  - While the bouncer and its `Metrics export` are both on, a pfSense cron entry
-    (`install_cron_job()`) runs `crowdsec_bouncer_collect()` every minute under
-    `timeout -s TERM -k 5 50` and publishes `/var/tmp/node_exporter/crowdsec_bouncer.prom`.
-    It publishes by atomic `rename()` with mode `0644`, never creates the directory, and
-    refuses a symlinked one.
-  - Families use the bouncer's upstream names and labels, so dashboards built for the
-    official bouncer work as-is: `fw_bouncer_dropped_packets`, `fw_bouncer_dropped_bytes`
-    and `fw_bouncer_banned_ips`, each with `ip_type` (`ipv4`/`ipv6`) and `origin=""`.
-    Added to them are `crowdsec_bouncer_up` (service running, 0/1) and
-    `crowdsec_bouncer_last_error_timestamp_seconds`.
-  - Turning either off, or deinstalling, removes the cron entry and the file.
+The bouncer-only subset of the official package's status page:
 
-### D7. Status
-
-Below the settings, the page shows the bouncer-only subset of the official package's
-status page, from `crowdsec_bouncer_collect()` and two direct reads:
-
-- **Service:** running or stopped.
-- **LAPI:** the LAPI URL (never the key), and the last error the bouncer logged, with its
-  time.
-- **Decisions:** addresses per family, and the contents of each table from
-  `pfctl -T show`, paged 100 per page.
+- **Service:** running or stopped, or why it does not run (pfBlockerNG off, CrowdSec off,
+  no key on this node).
+- **LAPI:** the LAPI URL (never the key), the last successful pull, the last error with
+  its time, and the request and error counts.
+- **Decisions:** banned values per family and per origin, and the contents of each table
+  from `pfctl -T show`, paged 100 per page.
 - **Lookup:** one address field. The server queries `GET /v1/decisions?ip=<addr>` with the
   bouncer key and shows each matching decision's value, scope, origin, scenario, type and
   expiry. The address is validated as an IP before the request, which has a 5 s timeout.
 - **Counters:** dropped packets and bytes per family.
-- **Log:** the last 50 system log lines tagged `crowdsec_bouncer`.
+- **Log:** the last 50 system log lines tagged `pfb_crowdsec`.
 
+Everything except the table contents, the lookup and the log comes from the status file.
 Everything is read on page load; there is no control socket and no write action. The
 engine-side views (log processors, remediation components, alerts, hub, deleting
 decisions) stay on the remote engine.
 
 ## Acceptance criteria
 
-1. With the bouncer enabled and a reachable LAPI, the service is running, both tables
-   exist, and a ban added on the engine is in the matching table within 20 s. Removing it
-   on the engine removes it from the table within 20 s.
+1. With the bouncer enabled and a reachable LAPI, the service runs, both tables exist,
+   and a ban added on the engine is in the matching table within 20 s. Removing it on the
+   engine removes it from the table within 20 s. A value banned by two decisions stays
+   until both are removed.
 2. Traffic from and to a banned address is dropped on the selected interfaces only, and
-   the rules carry the configured log and tag options.
-3. The config file exists with mode `0600` and the exact content of D2. It is absent with
-   the bouncer off. The key appears in no log, page or metrics file.
-4. A filter reload (Status > Filter Reload) leaves both tables' contents unchanged.
-   Verified first without D4's save-and-restore. If contents are lost, the save-and-restore
-   is added and the check must then pass.
-5. Enabling the bouncer from a box that has never had it starts it on the first try: the
-   bouncer's table check passes on tables that exist only through the generated rules
-   (otherwise D3's table creation is added and the check must then pass).
-6. Stopping the service empties both tables. Disabling the bouncer also removes the rules,
-   the config file and the running process.
+   the rules carry the configured log and tag options. An established connection from a
+   newly banned address is cut.
+3. The config file exists with mode `0600` and the D3 values, and is absent with the
+   bouncer off. The key appears in no log, page, status file, metrics file or sync payload.
+4. After a filter reload (Status > Filter Reload and `/etc/rc.filter_configure_sync`), both
+   tables hold the full set again within 2 s. With the signal suppressed, they are back by
+   the next pull.
+5. Enabling the bouncer on a box that has never had it starts it on the first try.
+6. Stopping the service empties both tables. Turning the bouncer off, or pfBlockerNG's
+   master enable off, also removes the rules and the config file and stops the process.
 7. A reboot brings the service back with the full decision set and no manual step.
-8. The bouncer runs, starts, stops and reports the same with pfBlockerNG's master enable
-   on or off, and no pfBlockerNG save, sync pass or Update touches it.
+8. With the LAPI unreachable, the tables keep their contents, errors are logged and shown,
+   and pulls resume when it returns.
 9. Nothing listens on a TCP or UDP port for the bouncer (`sockstat -l`).
-10. With `Metrics export` on, `crowdsec_bouncer.prom` appears within one minute, parses
-    with the Prometheus Python client, and its counters match `pfctl -v -sr` and the table
-    sizes.
-11. The status page shows every item in D7, and the lookup of a banned address shows its
+10. `go/pfb_crowdsec/go.mod` has no `require` lines, and the binary's `go version -m`
+    lists no dependencies.
+11. `pfblockerng.prom` carries the D6 families, with `source_up 1` while the bouncer
+    runs, and `source_up 0` (other sources intact) when it is stopped or its status file is
+    stale.
+12. The LAPI receives usage metrics from the bouncer (visible with `cscli metrics`).
+13. The Status subtab shows every D7 item, and the lookup of a banned address shows its
     decision.
-12. Neither `config.xml` nor XMLRPC sync carries any CrowdSec rule, alias or table, and the
-    LAPI key never reaches a sync peer.
-13. Deinstall leaves no rc file, binary, config file, metrics file, cron entry or table
-    contents behind.
+14. XMLRPC sync carries exactly the D2 fields marked `policy`, never the key. No address,
+    table or rule is synced.
+15. Deinstall leaves no rc file, binary, config file, status file or table contents behind.
 
 ## Tests
 
 Red-before-green per `.agents/policy/testing.md`:
 
-- PHPUnit: registry entries and validation of every D1 field, including hostile values for
-  the URL, key, tag and interfaces. A saved empty key keeps the stored key.
-- PHPUnit: config file rendering against exact expected YAML. Atomic write with mode
-  `0600` set before the key is written, and removal when disabled.
-- PHPUnit: rule generation against exact expected text for each combination of families,
-  interfaces, log and tag, and no output for other rule types or when disabled.
-- PHPUnit: the generated rc script against expected text (binary choice by machine,
-  daemon(8) flags, stop timing).
-- PHPUnit: the save's start, restart-on-change, stop and filter-reload decisions, with the
-  filter reload ordered before the first start, and none of them depending on
-  pfBlockerNG's master enable.
-- PHPUnit: the collector against fixture `pfctl -v -sr`, `pfctl -T show` and log output,
-  and the rendered `.prom` text against exact expected output; the cron entry added and
-  removed with the two toggles; the export rules shared with `metrics-export.md`.
-- PHPUnit: if D4's save-and-restore is added, its batching through `xargs` and its
-  restore after a simulated reload.
-- UI tier: the page's fields, validation messages, the key never rendered, the metrics
-  checkbox states without node_exporter, and the status sections against fixture
-  collector output and a stub LAPI answer.
-- Smoke (VM): the built bouncer against a stub LAPI in the smoke harness (serving
-  `/v1/decisions/stream`, `/v1/decisions` and the usage-metrics endpoint) covers criteria
-  1, 3–10 and 13.
+- Go unit tests, with a fake pfctl runner and an `httptest` LAPI:
+  - stream parsing, including hostile input: malformed JSON, oversized bodies, bad and
+    mixed-family values, unknown scopes and types, duplicate IDs;
+  - per-value reference counting;
+  - batching, and the files passed to pfctl;
+  - state kills limited to new single addresses found in the states list;
+  - reconcile on a missing table, on a short table, and on `SIGUSR1`;
+  - start-up retry, shutdown flush, and a failed pull leaving the tables alone;
+  - the status file's content and atomic write;
+  - the usage-metrics payload against the LAPI schema;
+  - log-level filtering;
+  - the key never written to logs or the status file.
+- PHPUnit:
+  - registry entries, sync classes and validation of every D2 field, with hostile values
+    for the URL, key, tag and interfaces;
+  - config file rendering and its atomic `0600` write;
+  - rule text for every combination of families, interfaces, log and tag, and no output
+    for other rule types or when the bouncer should not run;
+  - the shutdown-function signal;
+  - the generated rc script;
+  - the "should run" decision on save and in the sync pass;
+  - the metrics source, including the stale and missing status-file cases.
+- UI tier: both subtabs. Fields and validation messages, the key never rendered, every
+  "does not run" reason, and the status sections against a fixture status file and a stub
+  LAPI answer.
+- Smoke (VM): the built daemon against a stub LAPI in the smoke harness, serving
+  `/v1/decisions/stream`, `/v1/decisions` and `/v1/usage-metrics` and able to add and remove
+  decisions. It covers criteria 1, 3–9, 11, 12 and 15.
 
 ## Out of scope
 
-- Shipping the CrowdSec Security Engine, log processor, LAPI, parsers, scenarios or hub on
-  pfSense; the bouncer is the only CrowdSec binary the package ships.
-- Modifying or forking the bouncer, and enabling its Prometheus listener.
+- Shipping any CrowdSec binary: the Security Engine, log processor, LAPI, parsers,
+  scenarios, hub, or the official bouncer.
 - Routing decisions through the feed or Update pipeline, or through `pfb-core`.
-- CrowdSec change hooks, and a HAProxy, AppSec or captcha bouncer of the package's own
+- CrowdSec change hooks, and a HAProxy, AppSec or captcha bouncer of pfBlockerNG's own
   (HAProxy uses the official SPOA bouncer).
+- Decision types other than `ban` (captcha, throttle), and TLS client certificates.
 - Migrating settings or state from the official CrowdSec package.
 - Configuring pfSense remote syslog.
-- Showing CrowdSec data in pfBlockerNG's own pages, reports, alerts, widget or metrics.
-- CARP-aware behaviour; each node runs its own bouncer.
+- CARP-aware behaviour; each node runs its own bouncer with its own key.
 - Separate resource or response-time budgets.
 
 ## Open forks
 
-None. Criteria 4 and 5 are verifications with the fallback already decided in D3 and D4.
+None.
 
 ## Amendment 2026-11-19 — criteria 4 and 5 verified on pfSense CE (#4070)
 
@@ -339,3 +380,17 @@ Commands and output: [#4070 evidence](https://github.com/pfBlockerNG/pfBlockerNG
 - pfSense Plus was not tested: the smoke pool has no Plus VM identity outside CI secrets. The
   kill comes from pfSense core's `filter.inc`, so Plus is expected to behave the same, but
   this is unverified until it runs on a Plus box.
+
+## Amendment 2026-11-19 — own daemon instead of the official bouncer
+
+The owner replaced the packaged official bouncer with `pfb_crowdsec`, pfBlockerNG's own
+standard-library daemon. The official bouncer pulls in CrowdSec's generated API client and
+about 40 modules that pf mode does not use. The bouncer also moved into pfBlockerNG as the
+CrowdSec tab, and runs only while pfBlockerNG is enabled. The previous amendment's findings
+still hold and are met differently. That amendment uses the earlier numbering: its D3
+(service) and D4 (rules) correspond to this version's D4 and D5.
+
+- the daemon creates its own tables at start-up and on every reconcile (D1), instead of the
+  rc script;
+- after a filter reload, the rule hook signals the daemon, which refills the tables from
+  memory (D5), instead of pfBlockerNG saving and restoring them.
