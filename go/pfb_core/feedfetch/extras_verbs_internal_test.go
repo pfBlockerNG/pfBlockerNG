@@ -437,3 +437,36 @@ func TestABlacklistArchiveNameIsThePathAsWritten(t *testing.T) {
 		}
 	}
 }
+
+// A feed with no path is skipped, never downloaded under an empty name: Dir joined with "" is the database folder
+// itself. A URL inside a scheme-less feed's query does not name the file (#4119 review, round 3).
+func TestAFeedWithNoPathIsSkipped(t *testing.T) {
+	for feed, want := range map[string]string{
+		"https://user:pw@lists.example":             "",
+		"https://user:pw@lists.example?x=/a.tar.gz": "",
+		"lists.example/a.tar.gz?u=http://x/y":       "a.tar.gz",
+	} {
+		s := verbSettings()
+		s.Providers[1].Feed = feed
+		var log strings.Builder
+		rows := ExtrasVerb{Name: "bl", Args: []string{"ex"}, DBDir: "/db", Settings: s}.plan(func(m string) { log.WriteString(m) })
+		switch {
+		case want == "" && (len(rows) != 0 || log.String() != "\nBlacklist provider [ ex ] skipped: its feed names no file\n"):
+			t.Errorf("%s: rows %+v, log %q; want none and the skip", feed, rows, log.String())
+		case want != "" && (len(rows) != 1 || rows[0].Download != want):
+			t.Errorf("%s: rows %+v, want the name %q", feed, rows, want)
+		}
+	}
+}
+
+// Only a failed geoip row blocks the conversion: an aborted TOP1M or ASN row does not (pfblockerng.php:668-670).
+func TestAnAbortedNonGeoIPRowDoesNotBlockTheConversion(t *testing.T) {
+	converted := false
+	v := ExtrasVerb{Name: "dcc", DBDir: t.TempDir(), Settings: verbSettings(),
+		Convert: func(context.Context) bool { converted = true; return true }}
+	res := ExtrasResult{Rows: []ExtrasRow{{Kind: "geoip", Result: accepted},
+		{Kind: "top1m", Result: refused("aborted", context.Canceled.Error(), "")}}}
+	if code := v.exit(context.Background(), res); code != 1 || !converted {
+		t.Errorf("(exit, converted) = (%d, %v), want (1, true)", code, converted)
+	}
+}

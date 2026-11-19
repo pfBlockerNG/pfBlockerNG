@@ -181,12 +181,11 @@ func (v ExtrasVerb) blacklist(log func(string)) []Extra {
 // archiveName is the last segment of the feed's path as written, as pathinfo() takes it, without the query or fragment
 // that PHP keeps (a key in a name written to disk). A feed with no path names no file ("").
 func archiveName(feed string) string {
-	rest := feed
-	if _, after, ok := strings.Cut(feed, "://"); ok {
+	rest, _, _ := strings.Cut(feed, "#")
+	rest, _, _ = strings.Cut(rest, "?")
+	if _, after, ok := strings.Cut(rest, "://"); ok {
 		rest = after
 	}
-	rest, _, _ = strings.Cut(rest, "#")
-	rest, _, _ = strings.Cut(rest, "?")
 	_, p, ok := strings.Cut(rest, "/") // past the authority, userinfo included
 	if !ok {
 		return ""
