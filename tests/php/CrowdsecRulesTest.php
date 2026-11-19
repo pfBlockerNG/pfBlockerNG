@@ -151,6 +151,34 @@ final class CrowdsecRulesTest extends TestCase
 		$this->assertSame('', pfb_crowdsec_rules('pfearly'));
 	}
 
+	/** @return iterable<string, array{string}> stored tags the Settings refuse: a peer's sync or a hand edit can still store them */
+	public static function hostileTags(): iterable
+	{
+		yield 'a newline and a rule' => ["pfb\npass in quick all"];
+		yield 'a carriage return'    => ["pfb\rpass"];
+		yield 'a space'              => ['pfb pass'];
+		yield 'a quote'              => ['pfb"'];
+		yield 'a brace'              => ['pfb}'];
+		yield 'a semicolon'          => ['pfb;'];
+		yield 'a hash'               => ['pfb#'];
+		yield '64 characters'        => [str_repeat('a', 64)];
+		yield 'a trailing newline'   => ["pfb\n"];
+		yield 'non-ASCII'            => ['pfbé'];
+	}
+
+	#[DataProvider('hostileTags')]
+	public function testAStoredTagTheSettingsWouldRefuseIsLeftOutAndTheRulesStay(string $tag): void
+	{
+		self::store(['rules_tag' => 'pfb_cs-1']);
+		$this->assertStringContainsString(' tag pfb_cs-1', pfb_crowdsec_rules('pfearly'), 'before: a valid tag is rendered');
+
+		self::store(['rules_tag' => $tag]);
+		$rules = pfb_crowdsec_rules('pfearly');
+		$this->assertSame(4, substr_count($rules, "\n"), 'four rules and nothing else');
+		$this->assertStringNotContainsString(' tag', $rules);
+		$this->assertStringNotContainsString('pass', $rules);
+	}
+
 	// ---- no output ---------------------------------------------------------------------------
 
 	/** @return iterable<string, array{string}> */
@@ -246,6 +274,13 @@ final class CrowdsecRulesTest extends TestCase
 		$out = self::reload(['types' => ['filter', 'pfearly', 'nat'], 'running' => FALSE, 'alive' => TRUE]);
 		$this->assertSame(0, $out['exit'], $out['stderr']);
 		$this->assertSame("rules filter none\nrules pfearly none\nrules nat none\nreturned\n", $out['stdout']);
+	}
+
+	public function testAReloadWhileTheBouncerRunsWithBothFamiliesOffSignalsNothing(): void
+	{
+		$out = self::reload(['types' => ['pfearly'], 'running' => TRUE, 'alive' => TRUE, 'families' => FALSE]);
+		$this->assertSame(0, $out['exit'], $out['stderr']);
+		$this->assertSame("rules pfearly none\nreturned\n", $out['stdout'], 'no rules reference the tables, so there is nothing to restore');
 	}
 
 	public function testAReloadWithoutALiveBouncerSignalsNothing(): void

@@ -1406,10 +1406,11 @@ if (!function_exists('mwexec')) {
 if (!function_exists('get_real_interface')) {
 	// pfSense interfaces.inc: map friendly interface name to the real OS interface
 	// (e.g. 'lan' -> 'em1').  Tests seed $GLOBALS['pfb_test_real_interface'] (map
-	// of name => real-name); absent key returns the input unchanged (identity).
+	// of name => real-name, or NULL: pfSense's answer for an interface that is not configured); absent key returns the input
+	// unchanged (identity).
 	function get_real_interface($interface = 'wan', $type = '') {
 		$map = $GLOBALS['pfb_test_real_interface'] ?? [];
-		return $map[$interface] ?? $interface;
+		return array_key_exists($interface, $map) ? $map[$interface] : $interface;
 	}
 }
 

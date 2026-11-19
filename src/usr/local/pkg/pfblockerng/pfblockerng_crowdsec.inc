@@ -20,7 +20,7 @@
  * limitations under the License.
  */
 
-// The CrowdSec bouncer pfb_crowdsec (go/pfb_crowdsec): its Settings, config file and service. docs/specs/crowdsec-integration.md, D2-D4.
+// The CrowdSec bouncer pfb_crowdsec (go/pfb_crowdsec): its Settings, config file, service and rules. docs/specs/crowdsec-integration.md, D2-D5.
 
 const PFB_CROWDSEC_DIR = '/usr/local/pkg/pfblockerng/crowdsec';
 const PFB_CROWDSEC_PAGE = '/pfblockerng/pfblockerng_crowdsec.php';
@@ -31,6 +31,7 @@ const PFB_CROWDSEC_STATUS = '/var/run/pfb_crowdsec.json';
 const PFB_CROWDSEC_PIDFILE = '/var/run/pfb_crowdsec.pid';
 const PFB_CROWDSEC_DAEMON_PIDFILE = '/var/run/pfb_crowdsec_daemon.pid';
 const PFB_CROWDSEC_LOG_LEVELS = ['debug', 'info', 'warning', 'error'];
+const PFB_CROWDSEC_TAG_PATTERN = '/^[A-Za-z0-9_-]{1,63}$/D';
 // The section's fields in the spec's order, and those the generated rules depend on (the enable and the rule settings)
 const PFB_CROWDSEC_FIELDS = ['enable', 'lapi_url', 'api_key', 'log_level', 'rules_all_interfaces', 'rules_interfaces', 'rules_log',
 	'rules_tag', 'rule_v4', 'rule_v6'];
@@ -50,12 +51,17 @@ function pfb_crowdsec_settings(): array {
 	return $settings;
 }
 
-/** Should the bouncer run (D4): pfBlockerNG's master enable, the CrowdSec enable, and a key stored on this node. */
+/**
+ * Should the bouncer run (D4): pfBlockerNG's master enable, the CrowdSec enable, and a key stored on this node. The master enable is
+ * $pfb['enable'] once pfb_global() loaded it (a removal turns it off in its own process), else the stored one: pfSense's filter
+ * reload calls the rule hook without loading pfBlockerNG's globals.
+ */
 function pfb_crowdsec_should_run(): bool {
 	global $pfb;
 
 	$key = PfbConfig::read('crowdsec/api_key');
-	return ($pfb['enable'] ?? NULL) === PfbToggle::On && PfbConfig::read('crowdsec/enable') === PfbToggle::On && is_string($key) && $key !== '';
+	return ($pfb['enable'] ?? PfbConfig::read('gen/enable_cb')) === PfbToggle::On && PfbConfig::read('crowdsec/enable') === PfbToggle::On
+	    && is_string($key) && $key !== '';
 }
 
 /**
@@ -127,7 +133,7 @@ function pfb_crowdsec_validate(array $post, string $storedKey, array $interfaces
 
 	$values['rules_log'] = $toggle('rules_log');
 	$tag = $text('rules_tag');
-	if ($tag === NULL || ($tag !== '' && !preg_match('/^[A-Za-z0-9_-]{1,63}$/D', $tag))) {
+	if ($tag === NULL || ($tag !== '' && !preg_match(PFB_CROWDSEC_TAG_PATTERN, $tag))) {
 		$errors[] = gettext('The Tag must be empty, or 1 to 63 letters, digits, _ or -.');
 		$tag = '';
 	}
@@ -265,9 +271,9 @@ function pfb_crowdsec_service(string $dir = PFB_CROWDSEC_DIR): void {
 	$childpid = escapeshellarg($pfb['crowdsec_pidfile'] ?? PFB_CROWDSEC_PIDFILE);
 	$bin = escapeshellarg("{$dir}/bin");
 	// pgrep/pkill -f patterns (extended regular expressions): the supervisor, by daemon(8)'s title or, until it is set, by its own
-	// command line; and the bouncer as daemon(8) runs it
+	// command line; and the bouncer
 	$supervisor = escapeshellarg('^(daemon: pfb_crowdsec\[|/usr/sbin/daemon .*-t pfb_crowdsec )');
-	$child = escapeshellarg('^' . str_replace('.', '\.', $dir) . '/bin/freebsd-[a-z0-9]+/pfb_crowdsec -c ');
+	$child = escapeshellarg(pfb_crowdsec_child_pattern($dir));
 
 	$rc		= array();
 	$rc['file']	= 'pfb_crowdsec.sh';
@@ -352,6 +358,66 @@ EOF;
 	// A survivor must fail the restart: the start would otherwise report success over it
 	$rc['restart']	= "\trc_stop || return 1\n\trc_start\n";
 	write_rcfile($rc);
+}
+
+/** The pgrep/pkill -f pattern (an extended regular expression) of the bouncer's command line as daemon(8) runs it from $dir. */
+function pfb_crowdsec_child_pattern(string $dir = PFB_CROWDSEC_DIR): string {
+	return '^' . str_replace('.', '\.', $dir) . '/bin/freebsd-[a-z0-9]+/pfb_crowdsec -c ';
+}
+
+/**
+ * pfSense's filter_rule_function (pfblockerng.xml filter_rules_needed), called for each rule type on every filter reload (D5).
+ * Only `pfearly`, and only while the bouncer should run: per enabled family an inbound rule (the bouncer's counter parser reads its
+ * shape) and an outbound one, `on` the selected interfaces' real names unless "all interfaces" is on (a selection with none left
+ * gives no rules), `log` and `tag` when set. A stored tag the Settings would refuse is left out: it reaches the ruleset verbatim.
+ * The tables are never declared: the bouncer creates them. The reload kills them (#4070), so the first call that returns rules
+ * registers pfb_crowdsec_signal() to run when this process ends, after the kill.
+ */
+function pfb_crowdsec_rules(string $type): string {
+	static $registered = FALSE;
+
+	if ($type !== 'pfearly' || !pfb_crowdsec_should_run()) {
+		return '';
+	}
+	$s = pfb_crowdsec_settings();
+	$on = '';
+	if ($s['rules_all_interfaces'] !== PfbToggle::On) {
+		$real = array_filter(array_map(static fn (string $i): string => (string) get_real_interface($i), explode(',', (string) $s['rules_interfaces'])),
+		    static fn (string $r): bool => $r !== '');
+		if ($real === []) {
+			return '';
+		}
+		$on = ' on { ' . implode(' ', $real) . ' }';
+	}
+	$opt = ($s['rules_log'] === PfbToggle::On ? ' log' : '') . " quick{$on}";
+	$tag = is_string($s['rules_tag']) && preg_match(PFB_CROWDSEC_TAG_PATTERN, $s['rules_tag']) ? " tag {$s['rules_tag']}" : '';
+
+	$rules = '';
+	foreach (['4' => ['rule_v4', 'inet'], '6' => ['rule_v6', 'inet6']] as $n => [$field, $af]) {
+		if ($s[$field] === PfbToggle::On) {
+			$rules .= "block drop in{$opt} {$af} from <crowdsec_v{$n}> to any label \"CrowdSec IPv{$n}\"{$tag}\n"
+			    . "block drop out{$opt} {$af} from any to <crowdsec_v{$n}> label \"CrowdSec IPv{$n} out\"{$tag}\n";
+		}
+	}
+	if ($rules !== '' && !$registered) {
+		register_shutdown_function('pfb_crowdsec_signal');
+		$registered = TRUE;
+	}
+	return $rules;
+}
+
+/**
+ * After a filter reload (D5): SIGUSR1 makes the bouncer re-create and refill its tables from memory at once. Only to the pid in
+ * PFB_CROWDSEC_PIDFILE that isvalidpid() confirms, and only while its command line is the bouncer's (a stale pidfile may name a reused
+ * pid); never to daemon(8)'s supervisor, which SIGUSR1 kills (#4069). A missed signal costs at most one pull: the next one reconciles.
+ */
+function pfb_crowdsec_signal(): void {
+	global $pfb;
+
+	$pidfile = $pfb['crowdsec_pidfile'] ?? PFB_CROWDSEC_PIDFILE;
+	if (isvalidpid($pidfile)) {
+		mwexec('/bin/pkill -USR1 -F ' . escapeshellarg($pidfile) . ' -f ' . escapeshellarg(pfb_crowdsec_child_pattern()), TRUE);
+	}
 }
 
 /** Package removal (D4): stop the bouncer and remove its rc script, config file, status file and pidfiles. The binaries are package files. */

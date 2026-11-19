@@ -35,6 +35,8 @@
 	<donotsave>true</donotsave>
 	<include_file>/usr/local/pkg/pfblockerng/pfblockerng.inc</include_file>
 	<ramdisk_dir_names>pfblockerng</ramdisk_dir_names>
+	<!-- pkg-utils.inc registers it as installedpackages/package/<n>/filter_rule_function on install and upgrade; the CrowdSec rules (D5) -->
+	<filter_rules_needed>pfb_crowdsec_rules</filter_rules_needed>
 	<menu>
 		<name>pfBlockerNG</name>
 		<section>Firewall</section>
