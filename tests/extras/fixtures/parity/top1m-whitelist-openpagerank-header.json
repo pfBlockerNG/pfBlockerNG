@@ -1,0 +1,24 @@
+{
+	"schema": 1,
+	"description": "Open PageRank: the first line is skipped as the header, even when it reads like a row; the domain is the second of five columns.",
+	"settings": {
+		"top1m_source": "openpagerank",
+		"top1m_inclusions": "com"
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "1,skip.com,com,1,1\n2,a.com,com,9.1,100\n3,b.org,org,8,10\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "a.com\n",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}

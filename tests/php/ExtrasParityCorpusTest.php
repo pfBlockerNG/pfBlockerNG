@@ -19,14 +19,19 @@ require_once __DIR__ . '/support/HttpFixtureReadiness.php';
  * pfblockerng_download_extras() lives in that file too; it is loaded the way Top1mDccDetectorTest loads its helpers.
  *
  * Logical outcome per step:
- *   ok              pfblockerng_download_extras()'s return.
+ *   ok              pfblockerng_download_extras()'s return; for a whitelist step, whether a new
+ *                   db/pfbalexawhitelist.txt stands (a new inode at the path).
  *   maxmind_error   $pfb['maxmind_feed_error'] after the step.
  *   files           {"db/<path>" or "share/<path>": content, {"b64": bytes} or null when absent}: only the files named.
  *   requests        what the servers recorded (host only where named; query only where named).
  *
  * `pfblockerng.sh asn_table` (the ASN conversion's, #4034) is a stand-in that records its call in db/script.calls.
+ *
+ * A "whitelist" step runs pfblockerng_top1m(), the TOP1M whitelist build, with the scenario's provider, TLD inclusions
+ * (comma-separated, set as given: the pfb_filter() CSV check before it is not part of the build) and count.
  */
 #[CoversFunction('pfb_download')]
+#[CoversFunction('pfblockerng_top1m')]
 final class ExtrasParityCorpusTest extends TestCase
 {
 	private string $root = '';
@@ -147,14 +152,27 @@ final class ExtrasParityCorpusTest extends TestCase
 				$before[$rel] = @fileinode("{$this->root}/{$rel}");
 			}
 
-			$this->assertContains($step['run'], ['download', 'dcc'], "{$label}: unknown run");
-			// dcc is the cron verb whose TOP1M row runs the change detector first.
-			$GLOBALS['argv'] = ['pfblockerng.php', $step['run'] === 'dcc' ? 'dcc' : 'extras'];
-			$GLOBALS['pfb']['extras'] = [];
-			foreach ($step['extras'] as $extra) {
-				$GLOBALS['pfb']['extras'][] = $this->extra($extra);
+			$this->assertContains($step['run'], ['download', 'dcc', 'whitelist'], "{$label}: unknown run");
+			if ($step['run'] === 'whitelist') {
+				$whitelist = "{$GLOBALS['pfb']['dbdir']}/pfbalexawhitelist.txt";
+				$inode = @fileinode($whitelist);
+				$GLOBALS['pfb']['dnsbl_top1m_inc'] = $case['settings']['top1m_inclusions'] ?? '';
+				$GLOBALS['pfb']['dnsbl_top1m_cnt'] = (string) ($case['settings']['top1m_count'] ?? 1000);
+				// pfblockerng_download_extras() clears these itself; a whitelist step must not report an earlier step's.
+				$GLOBALS['pfb']['maxmind_feed_error'] = FALSE;
+				$GLOBALS['pfb']['top1m_changed'] = FALSE;
+				pfblockerng_top1m();
+				clearstatcache();
+				$actual = ['ok' => is_file($whitelist) && @fileinode($whitelist) !== $inode];
+			} else {
+				// dcc is the cron verb whose TOP1M row runs the change detector first.
+				$GLOBALS['argv'] = ['pfblockerng.php', $step['run'] === 'dcc' ? 'dcc' : 'extras'];
+				$GLOBALS['pfb']['extras'] = [];
+				foreach ($step['extras'] as $extra) {
+					$GLOBALS['pfb']['extras'][] = $this->extra($extra);
+				}
+				$actual = ['ok' => pfblockerng_download_extras(30, 3)];
 			}
-			$actual = ['ok' => pfblockerng_download_extras(30, 3)];
 			$actual['maxmind_error'] = (bool) ($GLOBALS['pfb']['maxmind_feed_error'] ?? FALSE);
 			$actual['top1m_changed'] = (bool) ($GLOBALS['pfb']['top1m_changed'] ?? FALSE);
 			if (array_key_exists('ledger', $want)) {

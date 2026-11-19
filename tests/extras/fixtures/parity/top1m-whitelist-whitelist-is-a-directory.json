@@ -1,0 +1,25 @@
+{
+	"schema": 1,
+	"description": "When the whitelist path is a directory, publication fails and the directory stays; the update marker is still removed.",
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "com"
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "1,a.com\n",
+		"db/pfbalexawhitelist.txt/keep": "x"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": false,
+				"files": {
+					"db/pfbalexawhitelist.txt": "<not a regular file>",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}

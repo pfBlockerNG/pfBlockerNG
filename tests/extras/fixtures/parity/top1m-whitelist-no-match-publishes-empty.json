@@ -1,0 +1,25 @@
+{
+	"schema": 1,
+	"description": "A valid list with no domain of an included TLD publishes an empty whitelist over the previous one.",
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "com"
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "1,a.org\n2,b.net\n",
+		"db/pfbalexawhitelist.txt": "old.com\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}

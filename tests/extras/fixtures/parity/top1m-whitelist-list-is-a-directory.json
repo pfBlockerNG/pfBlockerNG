@@ -1,0 +1,25 @@
+{
+	"schema": 1,
+	"description": "A directory at top-1m.csv holds no valid row: the previous whitelist stays and the update marker is removed.",
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "com"
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/pfbalexawhitelist.txt": "old.com\n",
+		"db/top-1m.csv/x": "1,a.com\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": false,
+				"files": {
+					"db/pfbalexawhitelist.txt": "old.com\n",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}

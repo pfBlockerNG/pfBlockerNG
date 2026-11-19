@@ -1,0 +1,24 @@
+{
+	"schema": 1,
+	"description": "Only rows whose TLD is an inclusion are written, lowercased, one bare domain per line, in list order.",
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "com"
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "1,google.com\n2,example.org\n3,EXAMPLE.COM\n4,example.net\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "google.com\nexample.com\n",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}

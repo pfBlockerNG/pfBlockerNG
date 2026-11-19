@@ -1,0 +1,25 @@
+{
+	"schema": 1,
+	"description": "A list without one valid row (an error page) publishes nothing: the previous whitelist stays.",
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "com"
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "error, service temporarily unavailable.\n<html>x.com</html>\n",
+		"db/pfbalexawhitelist.txt": "old.com\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": false,
+				"files": {
+					"db/pfbalexawhitelist.txt": "old.com\n",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}

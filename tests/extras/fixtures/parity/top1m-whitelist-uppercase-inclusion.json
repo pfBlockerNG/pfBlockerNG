@@ -1,0 +1,24 @@
+{
+	"schema": 1,
+	"description": "An inclusion is matched as written against the lowercased TLD, so an uppercase inclusion matches nothing; the list is still valid and an empty whitelist is published.",
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "COM"
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "1,a.com\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}

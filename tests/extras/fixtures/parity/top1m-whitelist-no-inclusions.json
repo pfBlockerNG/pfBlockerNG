@@ -1,0 +1,25 @@
+{
+	"schema": 1,
+	"description": "No TLD inclusions: nothing is built, the previous whitelist stays and the update marker is left in place.",
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": ""
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "1,a.com\n",
+		"db/pfbalexawhitelist.txt": "old.com\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": false,
+				"files": {
+					"db/pfbalexawhitelist.txt": "old.com\n",
+					"db/top-1m.update": ""
+				}
+			}
+		}
+	]
+}

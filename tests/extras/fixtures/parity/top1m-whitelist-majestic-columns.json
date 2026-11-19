@@ -1,0 +1,24 @@
+{
+	"schema": 1,
+	"description": "Majestic: the header is skipped and the domain is the third of twelve columns.",
+	"settings": {
+		"top1m_source": "majestic",
+		"top1m_inclusions": "com"
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "GlobalRank,TldRank,Domain,TLD,RefSubNets,RefIPs,IDN_Domain,IDN_TLD,PrevGlobalRank,PrevTldRank,PrevRefSubNets,PrevRefIPs\n1,1,www.a.com,com,1,1,a.com,com,1,1,1,1\n2,1,b.org,org,1,1,b.org,org,1,1,1,1\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "a.com\n",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}

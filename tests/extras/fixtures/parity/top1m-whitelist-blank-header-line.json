@@ -1,0 +1,24 @@
+{
+	"schema": 1,
+	"description": "The first physical line is the header even when it is blank, so the row after it is read as data.",
+	"settings": {
+		"top1m_source": "openpagerank",
+		"top1m_inclusions": "com"
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "\n1,a.org,org,1,1\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}
