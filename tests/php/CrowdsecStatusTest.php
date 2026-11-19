@@ -167,7 +167,6 @@ final class CrowdsecStatusTest extends TestCase
 
 		$this->assertCount(1, $this->requests);
 		$this->assertSame(['error' => $shown, 'decisions' => []], $result);
-		$this->assertStringNotContainsString(self::KEY, (string) $result['error']);
 	}
 
 	public function testANonStringFieldReadsAsTextAndAMissingOneAsEmpty(): void
@@ -302,11 +301,13 @@ final class CrowdsecStatusTest extends TestCase
 	public function testTheLogShowsTheLastFiftyLinesTaggedPfbCrowdsecInEitherFormat(): void
 	{
 		$log = "{$this->root}/system.log";
-		$lines = ['Nov 19 09:59:59 pfSense pfb_crowdsec_other[1]: level=info msg=not ours'];
+		$lines = [];
 		for ($i = 1; $i <= 60; $i++) {
 			$lines[] = sprintf('Nov %2d 10:00:%02d pfSense pfb_crowdsec[42]: level=info msg=pull %d', 9, $i % 60, $i);
 			$lines[] = "Nov 19 10:00:00 pfSense php-fpm[7]: /index.php: pfb_crowdsec[42]: msg=quoted {$i}";
 		}
+		// Inside the last 50: a filter that took it would push 'pull 12' out
+		$lines[] = 'Nov 19 10:00:59 pfSense pfb_crowdsec_other[1]: level=info msg=not ours';
 		$lines[] = '<30>1 2026-11-19T10:01:00.123+00:00 pfSense.home.arpa pfb_crowdsec 42 - - level=error msg=rfc5424';
 		$lines[] = '<30>1 2026-11-19T10:01:01+00:00 pfSense.home.arpa pfb_crowdsecd 43 - - level=error msg=not ours';
 		file_put_contents($log, implode("\n", $lines) . "\n");

@@ -136,6 +136,7 @@ PHP);
 		$answer = pfb_crowdsec_lapi_get($this->url('/big'), self::KEY);
 
 		$this->assertNotSame('', $answer['error'], 'an answer one byte over the cap is a failed request');
+		$this->assertStringNotContainsString(self::KEY, $answer['error']);
 		$this->assertLessThanOrEqual(PFB_CROWDSEC_LOOKUP_MAX, strlen($answer['body']), 'nothing past the cap is kept');
 	}
 
@@ -144,6 +145,7 @@ PHP);
 		$answer = pfb_crowdsec_lapi_get($this->url('/silent'), self::KEY);
 
 		$this->assertStringContainsString('timed out', $answer['error'], 'the request gives up on its own, before the server answers');
+		$this->assertStringNotContainsString(self::KEY, $answer['error']);
 		$this->assertSame('', $answer['body']);
 	}
 
