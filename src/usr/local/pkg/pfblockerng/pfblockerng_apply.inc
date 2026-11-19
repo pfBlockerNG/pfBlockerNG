@@ -1382,8 +1382,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		break;
 	}
 
-	// issue #4072: the CrowdSec rule hook's registration, which pfSense's own install loses
-	pfb_crowdsec_register_rule_hook();
+	// issue #4072: the CrowdSec rule hook's registration, which pfSense's own install loses. A running bouncer has no rules
+	// until the filter reloads with it
+	$pfb_crowdsec_hook_new = pfb_crowdsec_register_rule_hook() && pfb_crowdsec_should_run();
+	if ($pfb_crowdsec_hook_new) {
+		$pfb['filter_configure'] = TRUE;
+	}
 
 	// Materialize/refresh the routing when the drop-in is missing — covers a fresh
 	// registration AND the #484 lifecycle gap (core runs system_syslogd_start only at
@@ -1400,6 +1404,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		pfb_dnsbl_webserver_retire();
 		if ($pfb_sync_absorb) {
 			pfb_sync_receive_legacy_absorb($pfb['dbdir']);
+		}
+		// An install or upgrade ends here, before the pass's own reload; a boot loads the filter anyway
+		if ($pfb_crowdsec_hook_new && !is_platform_booting()) {
+			filter_configure();
 		}
 		$log = 'Sync terminated during boot process.';
 		pfb_logger("\n{$log}\nUPDATE PROCESS ENDED\n", 1);

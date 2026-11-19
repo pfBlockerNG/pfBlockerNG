@@ -112,7 +112,7 @@ final class CrowdsecRuleHookRegistrationTest extends TestCase
 		$apply = file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
 		$this->assertIsString($apply);
 		$pass = substr($apply, (int) strpos($apply, 'function sync_package_pfblockerng('));
-		$call = strpos($pass, 'pfb_crowdsec_register_rule_hook();');
+		$call = strpos($pass, 'pfb_crowdsec_register_rule_hook()');
 		$boot = strpos($pass, "if (is_platform_booting() || \$g['pfblockerng_install'])");
 		$this->assertNotFalse($call, 'the pass registers the hook');
 		$this->assertNotFalse($boot);

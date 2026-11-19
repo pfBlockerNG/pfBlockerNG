@@ -364,8 +364,10 @@ EOF;
  * Name the rule hook in pfBlockerNG's installedpackages/package/<n>/filter_rule_function, which pfSense reads on every filter
  * reload (D5). pfSense's install_package_xml() sets it from <filter_rules_needed> in memory only, then runs the install command,
  * whose pfb_global() re-reads config.xml and drops it; so the update pass, the install's resync included, registers it here.
+ *
+ * @return bool TRUE when it wrote the registration (the filter has not reloaded with the hook yet)
  */
-function pfb_crowdsec_register_rule_hook(): void {
+function pfb_crowdsec_register_rule_hook(): bool {
 	foreach (config_get_path('installedpackages/package', []) as $idx => $pkg) {
 		if (($pkg['configurationfile'] ?? '') !== 'pfblockerng.xml') {
 			continue;
@@ -373,9 +375,11 @@ function pfb_crowdsec_register_rule_hook(): void {
 		if (($pkg['filter_rule_function'] ?? '') !== 'pfb_crowdsec_rules') {
 			config_set_path("installedpackages/package/{$idx}/filter_rule_function", 'pfb_crowdsec_rules');
 			write_config('[pfBlockerNG] register the CrowdSec rule hook');
+			return TRUE;
 		}
-		return;
+		return FALSE;
 	}
+	return FALSE;
 }
 
 /** The pgrep/pkill -f pattern (an extended regular expression) of the bouncer's command line as daemon(8) runs it from $dir. */
@@ -400,15 +404,15 @@ function pfb_crowdsec_rules(string $type): string {
 	$s = pfb_crowdsec_settings();
 	$on = '';
 	if ($s['rules_all_interfaces'] !== PfbToggle::On) {
-		$real = array_filter(array_map(static fn (string $i): string => (string) get_real_interface($i), explode(',', (string) $s['rules_interfaces'])),
-		    static fn (string $r): bool => $r !== '');
+		$real = array_filter(array_map('get_real_interface', explode(',', (string) $s['rules_interfaces'])));
 		if ($real === []) {
 			return '';
 		}
 		$on = ' on { ' . implode(' ', $real) . ' }';
 	}
 	$opt = ($s['rules_log'] === PfbToggle::On ? ' log' : '') . " quick{$on}";
-	$tag = is_string($s['rules_tag']) && preg_match(PFB_CROWDSEC_TAG_PATTERN, $s['rules_tag']) ? " tag {$s['rules_tag']}" : '';
+	// Quoted: unquoted, pf reads a tag such as `123` or `quick` as a number or a keyword, and pfSense then drops every rule here
+	$tag = is_string($s['rules_tag']) && preg_match(PFB_CROWDSEC_TAG_PATTERN, $s['rules_tag']) ? " tag \"{$s['rules_tag']}\"" : '';
 
 	$rules = '';
 	foreach (['4' => ['rule_v4', 'inet'], '6' => ['rule_v6', 'inet6']] as $n => [$field, $af]) {
