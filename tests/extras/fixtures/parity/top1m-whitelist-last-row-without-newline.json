@@ -1,0 +1,24 @@
+{
+	"schema": 1,
+	"description": "A last row without a newline is read.",
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "com"
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "1,a.com\n2,b.com"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "a.com\nb.com\n",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}

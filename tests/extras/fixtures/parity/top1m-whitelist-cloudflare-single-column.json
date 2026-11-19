@@ -1,0 +1,24 @@
+{
+	"schema": 1,
+	"description": "Cloudflare Radar: the header is skipped and each line is a bare domain.",
+	"settings": {
+		"top1m_source": "cloudflare",
+		"top1m_inclusions": "com"
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "domain\nA.com\nb.org\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "a.com\n",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}

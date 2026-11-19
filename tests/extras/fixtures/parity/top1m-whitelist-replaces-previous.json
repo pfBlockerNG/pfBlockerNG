@@ -1,0 +1,25 @@
+{
+	"schema": 1,
+	"description": "A valid build replaces the previous whitelist.",
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "com"
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "1,new.com\n",
+		"db/pfbalexawhitelist.txt": "old.com\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "new.com\n",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}

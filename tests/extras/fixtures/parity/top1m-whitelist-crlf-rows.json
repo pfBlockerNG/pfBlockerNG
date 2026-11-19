@@ -1,0 +1,24 @@
+{
+	"schema": 1,
+	"description": "CRLF line endings are read like LF ones.",
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "com"
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "1,a.com\r\n2,b.org\r\n3,c.com\r\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "a.com\nc.com\n",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}

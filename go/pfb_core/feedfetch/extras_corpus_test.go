@@ -8,8 +8,9 @@ package feedfetch_test
 //	description  what the scenario pins.
 //	hosts        {name: [addresses]}: the vetting resolver; every connection goes to 127.0.0.1.
 //	servers      [name]: HTTP servers on 127.0.0.1; "{port:<name>}" expands to a server's port.
-//	settings     {maxmind_account, maxmind_key, asn_token, sanity, top1m_source, top1m_token}: what the extras and DNSBL
-//	             projections hold (top1m_source is the provider the TOP1M row names).
+//	settings     {maxmind_account, maxmind_key, asn_token, sanity, top1m_source, top1m_token, top1m_inclusions,
+//	             top1m_count}: what the extras and DNSBL projections hold (top1m_source is the provider the TOP1M row
+//	             names; top1m_inclusions the TLD inclusions as stored, comma-separated; top1m_count defaults to 1000).
 //	ledger       the open message of the TOP1M download ledger entry before the first step; absent when none is open.
 //	seed         {"db/<path>" or "share/<path>": content or {"b64": bytes}}: files before the first step.
 //	routes       {server: {path: route}}: what each server answers (the feed-transfer corpus's route keys).
@@ -24,6 +25,9 @@ package feedfetch_test
 // named), top1m_changed (TOP1M changed under dcc), and ledger (the TOP1M download ledger's open message after the step, or
 // null when none is open; checked only where named). `pfblockerng.sh asn_table`, the ASN conversion's step (#4034), is
 // recorded as a line in db/script.calls.
+//
+// A "whitelist" step (no extras) runs the TOP1M whitelist build, pfblockerng_top1m(); its ok is whether a new
+// db/pfbalexawhitelist.txt was published.
 
 import (
 	"bytes"
@@ -88,6 +92,8 @@ type extrasScenario struct {
 		Sanity         bool   `json:"sanity"`
 		Top1MSource    string `json:"top1m_source"`
 		Top1MToken     string `json:"top1m_token"`
+		Top1MInc       string `json:"top1m_inclusions"`
+		Top1MCount     *int   `json:"top1m_count"`
 	} `json:"settings"`
 	Ledger *string        `json:"ledger"`
 	Seed   map[string]any `json:"seed"`
@@ -222,7 +228,7 @@ func runExtrasScenario(t *testing.T, file string) {
 		mu.Unlock()
 		log.reset(t)
 		seed(st.Seed)
-		if st.Run != "download" && st.Run != "dcc" {
+		if st.Run != "download" && st.Run != "dcc" && st.Run != "whitelist" {
 			t.Fatalf("%s: unknown run %q", label, st.Run)
 		}
 		cfg.Detect = st.Run == "dcc"
@@ -241,7 +247,19 @@ func runExtrasScenario(t *testing.T, file string) {
 				Provider: e.Provider,
 			})
 		}
-		res := f.DownloadExtras(context.Background(), cfg, extras)
+		var res feedfetch.ExtrasResult
+		if st.Run == "whitelist" {
+			wl := feedfetch.Top1MWhitelistConfig{DBDir: cfg.DBDir, Provider: sc.Settings.Top1MSource, Count: 1000}
+			if sc.Settings.Top1MInc != "" {
+				wl.Inclusions = strings.Split(sc.Settings.Top1MInc, ",")
+			}
+			if sc.Settings.Top1MCount != nil {
+				wl.Count = *sc.Settings.Top1MCount
+			}
+			res.OK = feedfetch.Top1MWhitelist(wl).Published
+		} else {
+			res = f.DownloadExtras(context.Background(), cfg, extras)
+		}
 		if res.Top1MLedger != nil { // "" closes the entry; any other text opens it with that message
 			if ledger = nil; *res.Top1MLedger != "" {
 				ledger = res.Top1MLedger

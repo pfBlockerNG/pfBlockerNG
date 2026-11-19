@@ -1,0 +1,24 @@
+{
+	"schema": 1,
+	"description": "A leading www. is stripped once, so www.example.com whitelists example.com (and the exact lookup also allows www.); wwwx and deeper names stay as they are; www.com becomes com; a domain listed with and without www. is written twice.",
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "com"
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "1,www.example.com\n2,www.www.a.com\n3,wwwx.com\n4,www.com\n5,example.com\n6,sub.www.b.com\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "example.com\nwww.a.com\nwwwx.com\ncom\nexample.com\nsub.www.b.com\n",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}

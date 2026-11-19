@@ -1,0 +1,25 @@
+{
+	"schema": 1,
+	"description": "A count of 1 writes the first matching domain only.",
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "com",
+		"top1m_count": 1
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "1,a.org\n2,b.com\n3,c.com\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "b.com\n",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}

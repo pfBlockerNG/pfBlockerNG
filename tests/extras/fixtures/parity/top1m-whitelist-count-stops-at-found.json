@@ -1,0 +1,25 @@
+{
+	"schema": 1,
+	"description": "The build stops once the count of written domains is reached; rows of other TLDs do not count toward it.",
+	"settings": {
+		"top1m_source": "tranco",
+		"top1m_inclusions": "com",
+		"top1m_count": 2
+	},
+	"seed": {
+		"db/top-1m.update": "",
+		"db/top-1m.csv": "1,a.com\n2,b.org\n3,c.com\n4,d.com\n"
+	},
+	"steps": [
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "a.com\nc.com\n",
+					"db/top-1m.update": null
+				}
+			}
+		}
+	]
+}
