@@ -80,7 +80,8 @@ its `deleted` list, then its `new` list:
   reads `pfctl -s states` once per pull and, for each new address found there, runs
   `pfctl -k <addr>` and `pfctl -k 0.0.0.0/0 -k <addr>` (`::/0` for IPv6).
 - A failed pull keeps the tables as they are and is retried on the next tick. Enforcement
-  continues on the last known set while the LAPI is unreachable.
+  continues on the last known set while the LAPI is unreachable. The retry is a full pull
+  (#4077 amendment).
 
 **Reconcile.** After every pull, and immediately on `SIGUSR1`, the daemon reads
 `pfctl -vvs Tables` once. If a table is missing, it re-creates it as at start-up. If a
@@ -394,3 +395,22 @@ still hold and are met differently. That amendment uses the earlier numbering: i
   rc script;
 - after a filter reload, the rule hook signals the daemon, which refills the tables from
   memory (D5), instead of pfBlockerNG saving and restoring them.
+
+## Amendment 2026-11-19 — a failed delta pull is followed by a full pull (#4077)
+
+The owner amended D1's "A failed pull keeps the tables as they are and is retried on the
+next tick" ([#4077](https://github.com/pfBlockerNG/pfBlockerNG/issues/4077)). The LAPI moves
+a bouncer's stream cursor as soon as it has written a `/v1/decisions/stream` reply. A delta
+the daemon then fails to use (body over the cap, invalid JSON, or a timeout while reading it)
+is lost, and a retried delta would only ask for the changes after it. A missed delete would
+stay banned and a missed ban would stay missing until the next restart.
+
+- A failed pull still changes nothing in pf. Enforcement continues on the last known set
+  while pulls fail.
+- After any failed pull, the next pull asks for `startup=true` again, and keeps doing so
+  until one succeeds.
+- A successful `startup=true` reply replaces the daemon's whole in-memory set. Both tables
+  are then replaced with `pfctl -t <table> -T replace -f <file>`, and states are killed for
+  the single addresses that were not banned before, as for a delta. The start-up pull takes
+  the same path, which is the same as adding to the empty tables.
+- The pull after a successful full pull is a delta again.

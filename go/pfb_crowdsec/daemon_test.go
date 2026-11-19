@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -640,5 +642,136 @@ func TestAFailedAddAndDeleteOfTheSameSizeAreRepairedOnce(t *testing.T) {
 	h.d.reconcile(context.Background())
 	if got := callStrings(h.pf.takeCalls()); !slices.Equal(got, []string{"-vvs Tables"}) {
 		t.Fatalf("calls after the repair = %q; want only the tables read", got)
+	}
+}
+
+// Scenario (#4077): given a synced daemon, when a delta pull fails (over the cap, invalid JSON, timeout), the tables
+// stay and the next pull asks for startup=true; its reply replaces memory and both tables, states are killed only for
+// addresses new to the daemon, and the pull after that is a delta again.
+func TestAFailedDeltaPullIsFollowedByAFullResync(t *testing.T) {
+	// The engine's set after the lost delta, which deleted ids 1 and 4 and added id 7.
+	const fullBody = `{"new":[
+	 {"id":2,"origin":"cscli","type":"ban","scope":"Ip","value":"198.51.100.11","duration":"4h","scenario":"manual"},
+	 {"id":3,"origin":"crowdsec","type":"ban","scope":"Range","value":"203.0.113.0/24","duration":"4h","scenario":"s"},
+	 {"id":5,"origin":"crowdsec","type":"ban","scope":"Range","value":"2001:db8:beef::/48","duration":"4h","scenario":"s"},
+	 {"id":7,"origin":"crowdsec","type":"ban","scope":"Ip","value":"198.51.100.30","duration":"4h","scenario":"s"}
+	],"deleted":[]}`
+	const lostDelta = `{"new":[
+	 {"id":7,"origin":"crowdsec","type":"ban","scope":"Ip","value":"198.51.100.30","duration":"4h","scenario":"s"}
+	],"deleted":[
+	 {"id":1,"origin":"crowdsec","type":"ban","scope":"Ip","value":"198.51.100.10","duration":"-1s","scenario":"s"},
+	 {"id":4,"origin":"CAPI","type":"ban","scope":"Ip","value":"2001:db8:dead::1","duration":"-1s","scenario":"s"}
+	]}`
+	cases := map[string]struct {
+		lost  []lapiReply // the failing delta, when the harness's stub LAPI serves it
+		setup func(*testing.T, *harness)
+	}{
+		"body over the cap": {[]lapiReply{ok(lostDelta + strings.Repeat(" ", 4096))},
+			func(_ *testing.T, h *harness) { h.d.api.maxBody = 2048 }},
+		"invalid JSON": {[]lapiReply{ok(lostDelta[:len(lostDelta)/2])}, func(*testing.T, *harness) {}},
+		"timeout mid-body": {nil, func(t *testing.T, h *harness) {
+			// The server has sent its reply's start and moved the cursor; the client times out reading the rest.
+			stall := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, lostDelta[:len(lostDelta)/2])
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+			}))
+			t.Cleanup(stall.Close)
+			h.d.api.streamURL = stall.URL + "/v1/decisions/stream"
+			h.d.api.http.Timeout = 100 * time.Millisecond
+		}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := synced(t, append(tc.lost, ok(fullBody), ok(emptyDelta))...)
+			h.pf.states = "vtnet0 tcp 192.168.1.1:22 <- 198.51.100.30:50122       ESTABLISHED:ESTABLISHED\n" +
+				"vtnet0 tcp 192.168.1.1:22 <- 198.51.100.11:50123       ESTABLISHED:ESTABLISHED\n"
+			streamURL := h.d.api.streamURL
+			tc.setup(t, h)
+			ctx := context.Background()
+			if err := h.d.pull(ctx); err == nil {
+				t.Fatal("the lost delta's pull = nil; want an error")
+			}
+			assertTable(t, h.pf, "crowdsec_v4", startupV4...)
+			assertTable(t, h.pf, "crowdsec_v6", startupV6...)
+			h.d.api.streamURL, h.d.api.maxBody, h.d.api.http.Timeout = streamURL, defaultMaxBody, requestTimeout
+			h.pf.takeCalls()
+
+			if err := h.d.pull(ctx); err != nil {
+				t.Fatalf("the pull after the failure = %v", err)
+			}
+			wantV4 := []string{"198.51.100.11", "198.51.100.30", "203.0.113.0/24"}
+			wantV6 := []string{"2001:db8:beef::/48"}
+			assertTable(t, h.pf, "crowdsec_v4", wantV4...)
+			assertTable(t, h.pf, "crowdsec_v6", wantV6...)
+			if got := h.d.bans.keys(inet); !slices.Equal(got, wantV4) {
+				t.Fatalf("in-memory IPv4 set = %q; want %q", got, wantV4)
+			}
+			if got := h.d.bans.keys(inet6); !slices.Equal(got, wantV6) {
+				t.Fatalf("in-memory IPv6 set = %q; want %q", got, wantV6)
+			}
+			var replaced, kills []string
+			for _, c := range h.pf.takeCalls() {
+				switch {
+				case len(c.args) == 6 && c.args[3] == "replace":
+					replaced = append(replaced, c.args[1])
+				case c.args[0] == "-k":
+					kills = append(kills, c.String())
+				}
+			}
+			if want := []string{"crowdsec_v4", "crowdsec_v6"}; !slices.Equal(replaced, want) {
+				t.Fatalf("tables replaced by the resync = %q; want %q", replaced, want)
+			}
+			if want := []string{"-k 198.51.100.30", "-k 0.0.0.0/0 -k 198.51.100.30"}; !slices.Equal(kills, want) {
+				t.Fatalf("kills = %q; want %q (only the address new to the daemon)", kills, want)
+			}
+
+			if err := h.d.pull(ctx); err != nil {
+				t.Fatalf("the pull after the resync = %v", err)
+			}
+			reqs, _ := h.lapi.requests()
+			var startups []string
+			for _, r := range reqs[len(reqs)-2:] {
+				startups = append(startups, r.URL.Query().Get("startup"))
+			}
+			if want := []string{"true", ""}; !slices.Equal(startups, want) {
+				t.Fatalf("startup parameter of the two pulls after the failure = %q; want %q", startups, want)
+			}
+		})
+	}
+}
+
+// The resync itself replaces both tables, before the reconcile reads them: a lost delta that swapped one value for
+// another leaves each table's count unchanged, which the reconcile alone would never notice (#4077).
+func TestAResyncReplacesTablesWhoseCountDidNotChange(t *testing.T) {
+	const fullBody = `{"new":[
+	 {"id":2,"origin":"cscli","type":"ban","scope":"Ip","value":"198.51.100.11","duration":"4h","scenario":"manual"},
+	 {"id":3,"origin":"crowdsec","type":"ban","scope":"Range","value":"203.0.113.0/24","duration":"4h","scenario":"s"},
+	 {"id":8,"origin":"crowdsec","type":"ban","scope":"Ip","value":"198.51.100.80","duration":"4h","scenario":"s"},
+	 {"id":5,"origin":"crowdsec","type":"ban","scope":"Range","value":"2001:db8:beef::/48","duration":"4h","scenario":"s"},
+	 {"id":9,"origin":"crowdsec","type":"ban","scope":"Ip","value":"2001:db8:cafe::1","duration":"4h","scenario":"s"}
+	],"deleted":[]}`
+	h := synced(t, ok(`{"new":[`), ok(fullBody))
+	ctx := context.Background()
+	if err := h.d.pull(ctx); err == nil {
+		t.Fatal("the lost delta's pull = nil; want an error")
+	}
+	h.pf.takeCalls()
+	if err := h.d.pull(ctx); err != nil {
+		t.Fatalf("the resync pull = %v", err)
+	}
+	assertTable(t, h.pf, "crowdsec_v4", "198.51.100.11", "198.51.100.80", "203.0.113.0/24")
+	assertTable(t, h.pf, "crowdsec_v6", "2001:db8:beef::/48", "2001:db8:cafe::1")
+	var before []string // the table operations run before the reconcile's first read of the tables
+	for _, c := range h.pf.takeCalls() {
+		if slices.Equal(c.args, []string{"-vvs", "Tables"}) {
+			break
+		}
+		if len(c.args) == 6 && c.args[2] == "-T" {
+			before = append(before, c.args[1]+" "+c.args[3])
+		}
+	}
+	if want := []string{"crowdsec_v4 replace", "crowdsec_v6 replace"}; !slices.Equal(before, want) {
+		t.Fatalf("table operations before the reconcile = %q; want %q", before, want)
 	}
 }
