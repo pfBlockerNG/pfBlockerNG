@@ -12,19 +12,21 @@ import (
 
 // The Extras (#3978): the translation of pfblockerng_download_extras() and the Extras branches of pfb_download(), held
 // to the parity corpus in tests/extras/fixtures/parity. A failed or refused Extra keeps what it published before. The
-// asn, geoip and top1m types are translated so far; any other kind is refused before it is fetched.
+// asn, blacklist, geoip and top1m types are translated; any other kind is refused before it is fetched.
 
 // extrasTimeout is what every pfblockerng.php verb passes pfblockerng_download_extras().
 const extrasTimeout = 600 * time.Second
 
 // Extra is one row of the Extras table (pfblockerng.php:166-256).
 type Extra struct {
-	Kind     string // asn, geoip or top1m
+	Kind     string // asn, blacklist, geoip or top1m
 	URL      string // an asn URL ends in "token=": the token is appended, encoded
 	Dir      string // the folder: the GeoIP share or the database folder
 	Download string // the download's file name in Dir (file_dwn)
 	File     string // the published file's name in Dir; empty for the GeoLite2 CSV zip
 	Provider string // top1m: the provider (PfbTop1mSource), which also names its row shape
+	// A blacklist row: the provider's title, which names it in the report, and any credentials of its own.
+	Name, Username, Password string
 }
 
 // ExtrasConfig is what the extras projection and the Core's flags give a run. The secrets are held in memory only.
@@ -49,6 +51,8 @@ type ExtrasResult struct {
 	// Top1MLedger is what the TOP1M download ledger entry (dnsbl/top1m/download) is to become: nil leaves it, "" closes it,
 	// and any other text opens it with that message.
 	Top1MLedger *string
+	// Report is the Blacklist report the bls verb prints: "\t<name> ... Completed" or "... Failed", a line per blacklist row.
+	Report string
 }
 
 // DownloadExtras downloads every Extra in order, as pfblockerng_download_extras() does.
@@ -63,6 +67,15 @@ func (f *Fetcher) DownloadExtras(ctx context.Context, cfg ExtrasConfig, extras [
 			if !f.top1m(ctx, cfg, x, req, &res) {
 				res.OK = false
 			}
+			continue
+		}
+		if x.Kind == "blacklist" {
+			req.Username, req.Password = x.Username, x.Password
+			verdict := "Completed"
+			if !f.blacklist(ctx, cfg, x, req) {
+				res.OK, verdict = false, "Failed"
+			}
+			res.Report += "\t" + x.Name + " ... " + verdict + "\n"
 			continue
 		}
 		switch x.Kind {

@@ -1,0 +1,68 @@
+{
+	"schema": 1,
+	"description": "A folder an interrupted swap left aside is put back even when the download then fails.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"seed": {
+		"db/.pfbstagebak2_ut1/ut1_adult": "old.example\n"
+	},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"status": 500,
+				"body": "error\n"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"old_expect": {
+				"ok": false,
+				"report": "\tUT1 ... Failed\n",
+				"files": {
+					"db/ut1/ut1_adult": null,
+					"db/.pfbstagebak2_ut1/ut1_adult": "old.example\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			},
+			"expect": {
+				"ok": false,
+				"report": "\tUT1 ... Failed\n",
+				"files": {
+					"db/ut1/ut1_adult": "old.example\n",
+					"db/.pfbstagebak2_ut1/ut1_adult": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

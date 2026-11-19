@@ -16,14 +16,16 @@ package feedfetch_test
 //	routes       {server: {path: route}}: what each server answers (the feed-transfer corpus's route keys).
 //	steps        [step]: run in order on the same directories.
 //
-// A step: run ("download", or "dcc": the cron verb whose TOP1M row runs the change detector first), extras ([{url, file_dwn,
-// file, folder ("db" or "share"), type, and provider on a top1m row}]), routes and seed (replacing or
+// A step: run ("download"; "dcc": the cron verb whose TOP1M row runs the change detector first; or "bls": the verb that
+// prints the Blacklist report), extras ([{url, file_dwn, file, folder ("db" or "share"), type, provider on a top1m row,
+// and name, username and password on a blacklist row}]), routes and seed (replacing or
 // adding before the step), expect and, where Core deliberately differs (an owner decision), old_expect (today's PHP answer,
 // which only the PHP runner reads): ok, maxmind_error, replaced (paths that must hold a new file afterwards, even when its
 // bytes are the same), files ({path: content, {"b64": bytes}, or null when nothing is there; any other entry reads
 // "<not a regular file>"}: only the paths named), and requests (what the servers recorded; host and query only where
 // named), top1m_changed (TOP1M changed under dcc), and ledger (the TOP1M download ledger's open message after the step, or
-// null when none is open; checked only where named). `pfblockerng.sh asn_table`, the ASN conversion's step (#4034), is
+// null when none is open; checked only where named), and report (the Blacklist report the bls verb prints, a line per
+// blacklist row; checked only where named). `pfblockerng.sh asn_table`, the ASN conversion's step (#4034), is
 // recorded as a line in db/script.calls.
 //
 // A "whitelist" step (no extras) runs the TOP1M whitelist build, pfblockerng_top1m(); its ok is whether a new
@@ -59,6 +61,9 @@ type extrasExtra struct {
 	Folder   string `json:"folder"`
 	Type     string `json:"type"`
 	Provider string `json:"provider"`
+	Name     string `json:"name"`
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 type extrasExpect struct {
@@ -66,6 +71,7 @@ type extrasExpect struct {
 	MaxmindError bool                `json:"maxmind_error"`
 	Top1MChanged bool                `json:"top1m_changed"`
 	Ledger       json.RawMessage     `json:"ledger"`
+	Report       *string             `json:"report"`
 	Replaced     []string            `json:"replaced"`
 	Files        map[string]any      `json:"files"`
 	Requests     []map[string]string `json:"requests"`
@@ -228,7 +234,7 @@ func runExtrasScenario(t *testing.T, file string) {
 		mu.Unlock()
 		log.reset(t)
 		seed(st.Seed)
-		if st.Run != "download" && st.Run != "dcc" && st.Run != "whitelist" {
+		if st.Run != "download" && st.Run != "dcc" && st.Run != "bls" && st.Run != "whitelist" {
 			t.Fatalf("%s: unknown run %q", label, st.Run)
 		}
 		cfg.Detect = st.Run == "dcc"
@@ -244,7 +250,7 @@ func runExtrasScenario(t *testing.T, file string) {
 			}
 			extras = append(extras, feedfetch.Extra{
 				Kind: e.Type, URL: expand(e.URL), Dir: filepath.Join(root, e.Folder), Download: e.FileDwn, File: e.File,
-				Provider: e.Provider,
+				Provider: e.Provider, Name: e.Name, Username: e.Username, Password: e.Password,
 			})
 		}
 		var res feedfetch.ExtrasResult
@@ -271,6 +277,9 @@ func runExtrasScenario(t *testing.T, file string) {
 			if ledger != nil {
 				actual["ledger"] = *ledger
 			}
+		}
+		if st.Expect.Report != nil {
+			actual["report"] = res.Report
 		}
 		files := map[string]any{}
 		for rel := range st.Expect.Files {
@@ -331,6 +340,9 @@ func runExtrasScenario(t *testing.T, file string) {
 		}
 		if want.Replaced != nil {
 			wantMap["replaced"] = want.Replaced
+		}
+		if want.Report != nil {
+			wantMap["report"] = *want.Report
 		}
 		if !reflect.DeepEqual(wantMap, actual) {
 			t.Errorf("%s: %s\nwant %#v\n got %#v", label, sc.Description, wantMap, actual)

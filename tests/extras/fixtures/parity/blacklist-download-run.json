@@ -1,0 +1,48 @@
+{
+	"schema": 1,
+	"description": "A blacklist row in a run of another verb publishes the same way.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"body_b64": "H4sIAAAAAAAC/+2ZwU7EIBRFWfsV8wMKvEJZm8ws3cwfgHQxkaopbezM19tpFyYYU2NaxqT3bCDdQHJz3nukLtjnl3CKbeRsLcSA0XpcB9J13EulSRkj1PW7FFIR22mWgS62thmuwraJ+8rf+i60/F/kL0kXyP8m+fu32p5e49L5l0r9nL8sk/ypJM12Avmvzhj6Q9Xb+j1Udwxs3f+uCXHhM2b9p7T+k7zWf/if2X/eowJs3X9n/dIjwHz/V4n/BRmC/1nytx7dH/5P/kceO7f8C+AP/gsN/7MwBA7/4f/o/71b4/X/G/+L7/O/gP9Z5n/oD/8n/z94z8/8cov+T6n/RpXwPwcX6A//J/+Ph8f902GFM2b9Fyb9/yOkgf85aCrra8gPAAAAALAZPgFXPGxRACgAAA=="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "download",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/ut1/ut1_adult": "adult.example\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

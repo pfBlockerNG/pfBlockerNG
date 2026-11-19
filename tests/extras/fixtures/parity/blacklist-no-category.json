@@ -1,0 +1,60 @@
+{
+	"schema": 1,
+	"description": "An archive with no domains member publishes nothing: the folder stays, the new archive is kept.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"seed": {
+		"db/ut1/ut1_adult": "old.example\n",
+		"db/ut1/ut1_old": "gone.example\n",
+		"db/ut1.tar.gz": "old archive\n"
+	},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"body_b64": "H4sIAAAAAAAC/+3TPQ7CMAxAYc+cghs0SVMyI9GRpTdIaQdEWPJzfwILUmcUCfV9iyVP9vDm4G+PcE85ddN4vlxH+T1Vnaz9zGo7KyfaDsY6p+x7r7XSTo5KGigp+1hPkX2Kq1+e60GwT/O3f7+UkLsSQ2rev9n0b/TQ03+T90kfAAAAAAAAAAAAAADgr70ADvz/8wAoAAA="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"report": "\tUT1 ... Failed\n",
+				"files": {
+					"db/ut1/ut1_adult": "old.example\n",
+					"db/ut1/ut1_old": "gone.example\n",
+					"db/ut1/ut1.update": null,
+					"db/ut1.tar.gz.raw": null,
+					"db/ut1.tar.gz": {
+						"b64": "H4sIAAAAAAAC/+3TPQ7CMAxAYc+cghs0SVMyI9GRpTdIaQdEWPJzfwILUmcUCfV9iyVP9vDm4G+PcE85ddN4vlxH+T1Vnaz9zGo7KyfaDsY6p+x7r7XSTo5KGigp+1hPkX2Kq1+e60GwT/O3f7+UkLsSQ2rev9n0b/TQ03+T90kfAAAAAAAAAAAAAADgr70ADvz/8wAoAAA="
+					}
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

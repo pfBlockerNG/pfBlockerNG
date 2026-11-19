@@ -1,6 +1,7 @@
 package feedfetch_test
 
 import (
+	"archive/tar"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -65,6 +66,61 @@ func TestAnExtrasArchiveWithoutRoomIsRefusedAndKeepsThePublishedFile(t *testing.
 	}
 }
 
+// #2658 on a blacklist row: a category archive no directory has room for is refused before extraction, and the
+// category folder stays.
+func TestACategoryArchiveWithoutRoomKeepsTheFolder(t *testing.T) {
+	var tarball bytes.Buffer
+	tw := tar.NewWriter(&tarball)
+	if err := tw.WriteHeader(&tar.Header{Name: "bl/adult/domains", Mode: 0o644, Size: 4}); err != nil {
+		t.Fatal(err)
+	}
+	tw.Write([]byte("new\n"))
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var body bytes.Buffer
+	zw := gzip.NewWriter(&body)
+	zw.Write(tarball.Bytes())
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write(body.Bytes()) })}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	for _, tc := range []struct {
+		name string
+		free uint64
+		want string
+	}{{"room for the archive", uint64(body.Len()), "new\n"}, {"one byte short", uint64(body.Len() - 1), "old\n"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := t.TempDir()
+			published := filepath.Join(db, "ut1", "ut1_adult")
+			if err := os.Mkdir(filepath.Dir(published), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(published, []byte("old\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			f := &feedfetch.Fetcher{RetryDelay: 1}
+			f.Resolve = func(context.Context, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("203.0.113.9")}, nil
+			}
+			f.FreeBytes = func(string) (uint64, bool) { return tc.free, true }
+			url := "http://bl.example:" + strconv.Itoa(ln.Addr().(*net.TCPAddr).Port) + "/ut1.tar.gz"
+			res := f.DownloadExtras(context.Background(), feedfetch.ExtrasConfig{DBDir: db}, []feedfetch.Extra{
+				{Kind: "blacklist", URL: url, Dir: db, Download: "ut1.tar.gz", File: "ut1.tar.gz", Name: "UT1"}})
+			got, _ := os.ReadFile(published)
+			if string(got) != tc.want || res.OK != (tc.want == "new\n") {
+				t.Errorf("(ok, ut1/ut1_adult) = (%v, %q), want ut1/ut1_adult %q", res.OK, got, tc.want)
+			}
+		})
+	}
+}
+
 // An Extra of a kind not translated yet fails before anything is fetched or written.
 func TestAnExtraOfAnUntranslatedKindIsRefusedBeforeItIsFetched(t *testing.T) {
 	var asked atomic.Bool
@@ -82,7 +138,7 @@ func TestAnExtraOfAnUntranslatedKindIsRefusedBeforeItIsFetched(t *testing.T) {
 	dir := t.TempDir()
 	url := "http://dsi.ut-capitole.fr:" + strconv.Itoa(ln.Addr().(*net.TCPAddr).Port) + "/blacklists/download/ads.tar.gz"
 	res := f.DownloadExtras(context.Background(), feedfetch.ExtrasConfig{DBDir: dir},
-		[]feedfetch.Extra{{Kind: "blacklist", URL: url, Dir: dir, Download: "ads.tar.gz", File: "ads"}})
+		[]feedfetch.Extra{{Kind: "unknown", URL: url, Dir: dir, Download: "ads.tar.gz", File: "ads"}})
 	srv.Close()
 	entries, _ := os.ReadDir(dir)
 	if res.OK || asked.Load() || len(entries) != 0 {

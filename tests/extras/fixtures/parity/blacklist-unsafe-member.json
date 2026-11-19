@@ -1,0 +1,61 @@
+{
+	"schema": 1,
+	"description": "A member that leaves the folder refuses the archive before anything is extracted, and the archive is removed.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"seed": {
+		"db/ut1/ut1_adult": "old.example\n",
+		"db/ut1/ut1_old": "gone.example\n",
+		"db/ut1.tar.gz": "old archive\n"
+	},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"body_b64": "H4sIAAAAAAAC/+3TTQ6CMBBA4Vl7Ck9Af2zhPFVYEIsaW4zHp7BkZ6IkhvdtJpnVJJN3juFyjX3KSYV2jFm19yH0tyRfpIvauWUW66m1qcU4b13TaDfvja2tl6OWDYwph2c5RfZpeXrVvcPwiN1BsDNVpbpXH3+R/Qf9+1X/2p8s/W9hfj75AwAAAAAAAAAAAAAA/K8JQfrqGwAoAAA="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"report": "\tUT1 ... Failed\n",
+				"files": {
+					"db/ut1/ut1_adult": "old.example\n",
+					"db/ut1/ut1_old": "gone.example\n",
+					"db/ut1/ut1.update": null,
+					"db/ut1.tar.gz.raw": null,
+					"db/ut1.tar.gz": null,
+					"evil/domains": null,
+					"db/evil/domains": null,
+					"db/ut1_evil": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

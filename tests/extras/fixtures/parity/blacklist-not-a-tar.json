@@ -1,0 +1,135 @@
+{
+	"schema": 1,
+	"description": "A text list, a zip or a bzip2 tar is no category archive: the folder and the archive stay.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"seed": {
+		"db/ut1/ut1_adult": "old.example\n",
+		"db/ut1/ut1_old": "gone.example\n",
+		"db/ut1.tar.gz": "old archive\n"
+	},
+	"routes": {
+		"origin": {}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"routes": {
+				"origin": {
+					"/ut1.tar.gz": {
+						"body_b64": "YWR1bHQuZXhhbXBsZQphZHMuZXhhbXBsZQo="
+					}
+				}
+			},
+			"expect": {
+				"ok": false,
+				"report": "\tUT1 ... Failed\n",
+				"files": {
+					"db/ut1/ut1_adult": "old.example\n",
+					"db/ut1/ut1_old": "gone.example\n",
+					"db/ut1/ut1.update": null,
+					"db/ut1.tar.gz.raw": null,
+					"db/ut1.tar.gz": "old archive\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		},
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"routes": {
+				"origin": {
+					"/ut1.tar.gz": {
+						"body_b64": "UEsDBBQAAAAAAAAAIVhaYGAVDAAAAAwAAAAYAAAAYmxhY2tsaXN0cy9hZHVsdC9kb21haW5zemlwLmV4YW1wbGUKUEsBAhQDFAAAAAAAAAAhWFpgYBUMAAAADAAAABgAAAAAAAAAAAAAAIABAAAAAGJsYWNrbGlzdHMvYWR1bHQvZG9tYWluc1BLBQYAAAAAAQABAEYAAABCAAAAAAA="
+					}
+				}
+			},
+			"expect": {
+				"ok": false,
+				"report": "\tUT1 ... Failed\n",
+				"files": {
+					"db/ut1/ut1_adult": "old.example\n",
+					"db/ut1/ut1_old": "gone.example\n",
+					"db/ut1/ut1.update": null,
+					"db/ut1.tar.gz.raw": null,
+					"db/ut1.tar.gz": "old archive\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		},
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"routes": {
+				"origin": {
+					"/ut1.tar.gz": {
+						"body_b64": "QlpoOTFBWSZTWe6Ty0IAAYTfgcuQQAP/gCdakgB+L97wAAK4CDABWABjQ0NABkNAAAAADGhoaADIaAAAAACJRJtTUynhR6IbUyPU9Mmo0aZqNtU8h68xnDWRxSBImZaIWEJEBK3a9eybJX9Ida3mgQyoa8JauGGUqh1CDFH04jVDf58PGc6nYBKVpK0lvXDntXOhsiGmAhoQ0oUAQ3b5t3+HHlMAQ8Dah25qw3QpCkITIhoK1v06bZIVQ20MJUjkWFkJkWIWyoayWLr7IUuvK1r1LT75ELi4yIauHjdyicocYJMfND7HfdcQP4neO5D+8J5Wtmp0J7TpjgD+coUXUmifv0G5Koc0PghiPshb3jimfAeiUTONUNV+Ke7sAtLkMqF+q8fUEsNcUI9oy+fJV/4u5IpwoSHdJ5aE"
+					}
+				}
+			},
+			"expect": {
+				"ok": false,
+				"report": "\tUT1 ... Failed\n",
+				"files": {
+					"db/ut1/ut1_adult": "old.example\n",
+					"db/ut1/ut1_old": "gone.example\n",
+					"db/ut1/ut1.update": null,
+					"db/ut1.tar.gz.raw": null,
+					"db/ut1.tar.gz": "old archive\n"
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

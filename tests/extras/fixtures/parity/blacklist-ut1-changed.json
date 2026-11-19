@@ -1,0 +1,75 @@
+{
+	"schema": 1,
+	"description": "A category archive replaces the whole category folder: every domains member under its renamed category, a dash made an underscore, the archive kept and its sidecars dropped.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"seed": {
+		"db/ut1/ut1_adult": "old.example\n",
+		"db/ut1/ut1_old": "gone.example\n",
+		"db/ut1.tar.gz": "old archive\n"
+	},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"body_b64": "H4sIAAAAAAAC/+2ZwU7EIBRFWfsV8wMKvEJZm8ws3cwfgHQxkaopbezM19tpFyYYU2NaxqT3bCDdQHJz3nukLtjnl3CKbeRsLcSA0XpcB9J13EulSRkj1PW7FFIR22mWgS62thmuwraJ+8rf+i60/F/kL0kXyP8m+fu32p5e49L5l0r9nL8sk/ypJM12Avmvzhj6Q9Xb+j1Udwxs3f+uCXHhM2b9p7T+k7zWf/if2X/eowJs3X9n/dIjwHz/V4n/BRmC/1nytx7dH/5P/kceO7f8C+AP/gsN/7MwBA7/4f/o/71b4/X/G/+L7/O/gP9Z5n/oD/8n/z94z8/8cov+T6n/RpXwPwcX6A//J/+Ph8f902GFM2b9Fyb9/yOkgf85aCrra8gPAAAAALAZPgFXPGxRACgAAA=="
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"seed": {
+				"db/ut1.tar.gz.orig": "o\n",
+				"db/ut1.tar.gz.md5": "m\n",
+				"db/ut1.tar.gz.xxhash128": "x\n"
+			},
+			"expect": {
+				"ok": true,
+				"report": "\tUT1 ... Completed\n",
+				"files": {
+					"db/ut1/ut1_adult": "adult.example\n",
+					"db/ut1/ut1_ads_sub": "sub.example\n",
+					"db/ut1/ut1_a_b": "ab.example\n",
+					"db/ut1/ut1_a-b": null,
+					"db/ut1/ut1_y_z": "z.example\n",
+					"db/ut1/ut1.update": "",
+					"db/ut1/blacklists/adult/baddomains": "bad.example\n",
+					"db/ut1/blacklists/adult/urls": null,
+					"db/ut1/blacklists/README": null,
+					"db/ut1/ut1_old": null,
+					"db/ut1.tar.gz": {
+						"b64": "H4sIAAAAAAAC/+2ZwU7EIBRFWfsV8wMKvEJZm8ws3cwfgHQxkaopbezM19tpFyYYU2NaxqT3bCDdQHJz3nukLtjnl3CKbeRsLcSA0XpcB9J13EulSRkj1PW7FFIR22mWgS62thmuwraJ+8rf+i60/F/kL0kXyP8m+fu32p5e49L5l0r9nL8sk/ypJM12Avmvzhj6Q9Xb+j1Udwxs3f+uCXHhM2b9p7T+k7zWf/if2X/eowJs3X9n/dIjwHz/V4n/BRmC/1nytx7dH/5P/kceO7f8C+AP/gsN/7MwBA7/4f/o/71b4/X/G/+L7/O/gP9Z5n/oD/8n/z94z8/8cov+T6n/RpXwPwcX6A//J/+Ph8f902GFM2b9Fyb9/yOkgf85aCrra8gPAAAAALAZPgFXPGxRACgAAA=="
+					},
+					"db/ut1.tar.gz.raw": null,
+					"db/ut1.tar.gz.orig": null,
+					"db/ut1.tar.gz.md5": null,
+					"db/ut1.tar.gz.xxhash128": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

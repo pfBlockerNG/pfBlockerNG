@@ -27,6 +27,9 @@ require_once __DIR__ . '/support/HttpFixtureReadiness.php';
  *
  * `pfblockerng.sh asn_table` (the ASN conversion's, #4034) is a stand-in that records its call in db/script.calls.
  *
+ * A "bls" step runs pfblockerng_download_extras() as the bls verb does, which prints the Blacklist report: a line per
+ * blacklist row, compared as report where a step names it.
+ *
  * A "whitelist" step runs pfblockerng_top1m(), the TOP1M whitelist build, with the scenario's provider, TLD inclusions
  * (comma-separated, set as given: the pfb_filter() CSV check before it is not part of the build) and count.
  */
@@ -152,7 +155,7 @@ final class ExtrasParityCorpusTest extends TestCase
 				$before[$rel] = @fileinode("{$this->root}/{$rel}");
 			}
 
-			$this->assertContains($step['run'], ['download', 'dcc', 'whitelist'], "{$label}: unknown run");
+			$this->assertContains($step['run'], ['download', 'dcc', 'bls', 'whitelist'], "{$label}: unknown run");
 			if ($step['run'] === 'whitelist') {
 				$whitelist = "{$GLOBALS['pfb']['dbdir']}/pfbalexawhitelist.txt";
 				$inode = @fileinode($whitelist);
@@ -165,13 +168,18 @@ final class ExtrasParityCorpusTest extends TestCase
 				clearstatcache();
 				$actual = ['ok' => is_file($whitelist) && @fileinode($whitelist) !== $inode];
 			} else {
-				// dcc is the cron verb whose TOP1M row runs the change detector first.
-				$GLOBALS['argv'] = ['pfblockerng.php', $step['run'] === 'dcc' ? 'dcc' : 'extras'];
+				// dcc is the cron verb whose TOP1M row runs the change detector first; bls prints the Blacklist report.
+				$GLOBALS['argv'] = ['pfblockerng.php', in_array($step['run'], ['dcc', 'bls'], TRUE) ? $step['run'] : 'extras'];
 				$GLOBALS['pfb']['extras'] = [];
 				foreach ($step['extras'] as $extra) {
 					$GLOBALS['pfb']['extras'][] = $this->extra($extra);
 				}
-				$actual = ['ok' => pfblockerng_download_extras(30, 3)];
+				ob_start();
+				$actual = ['ok' => pfblockerng_download_extras(30, $step['run'] === 'bls' ? 'blacklist' : 3)];
+				$report = (string) ob_get_clean();
+				if (array_key_exists('report', $want)) {
+					$actual['report'] = $report;
+				}
 			}
 			$actual['maxmind_error'] = (bool) ($GLOBALS['pfb']['maxmind_feed_error'] ?? FALSE);
 			$actual['top1m_changed'] = (bool) ($GLOBALS['pfb']['top1m_changed'] ?? FALSE);
@@ -239,7 +247,10 @@ final class ExtrasParityCorpusTest extends TestCase
 		$GLOBALS['pfb']['script'] = "{$this->tools}/pfblockerng.sh";
 	}
 
-	/** One $pfb['extras'] row as the Extras table builds it: a TOP1M row carries its provider and auth headers. */
+	/**
+	 * One $pfb['extras'] row as the Extras table builds it: a TOP1M row carries its provider and auth headers, a
+	 * blacklist row its title and any credentials of its own.
+	 */
 	private function extra(array $e): array
 	{
 		$row = [
@@ -249,6 +260,11 @@ final class ExtrasParityCorpusTest extends TestCase
 			'folder'   => "{$this->root}/{$e['folder']}",
 			'type'     => $e['type'],
 		];
+		foreach (['name', 'username', 'password'] as $key) {
+			if (isset($e[$key])) {
+				$row[$key] = $e[$key];
+			}
+		}
 		if (isset($e['provider'])) {
 			$row['provider'] = $e['provider'];
 			$row['headers'] = pfb_top1m_auth_headers(pfb_top1m_providers()[$e['provider']], $this->top1mToken);
