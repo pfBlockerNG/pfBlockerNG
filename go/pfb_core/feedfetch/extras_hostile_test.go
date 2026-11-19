@@ -97,7 +97,7 @@ func writeFile(t *testing.T, path, content string) {
 }
 
 // An archive member past the per-file extraction ceiling (#2658) refuses the row: a GeoIP tar member, the one member of
-// a GeoIP zip, a Blacklist category member. What was published stays; with room, the same archive publishes.
+// a GeoIP zip, a Blacklist category member, the TOP1M list in its zip. What was published stays; with room, the same archive publishes.
 func TestAnExtrasMemberPastTheCeilingKeepsWhatWasPublished(t *testing.T) {
 	mmdb := append(make([]byte, 64<<10), "\xab\xcd\xefMaxMind.com"...)
 	domains := bytes.Repeat([]byte("big.example\n"), 64<<10/12)
@@ -111,6 +111,8 @@ func TestAnExtrasMemberPastTheCeilingKeepsWhatWasPublished(t *testing.T) {
 			"GeoLite2-Country.mmdb", zipOne(t, "GeoLite2-Country.mmdb", mmdb)},
 		{"blacklist member", "blacklist", "bl.example", "ut1.tar.gz", "ut1.tar.gz", "ut1/ut1_adult",
 			tarGz(t, "bl/adult/domains", domains)},
+		{"top1m zip member", "top1m", "tranco-list.eu", "top-1m.csv.zip", "top-1m.csv", "top-1m.csv",
+			zipOne(t, "top-1m.csv", bytes.Repeat([]byte("1,good.example\n"), 64<<10/15))},
 	} {
 		port := extrasServer(t, tc.body, time.Time{}, nil)
 		for _, room := range []bool{true, false} {
@@ -126,7 +128,7 @@ func TestAnExtrasMemberPastTheCeilingKeepsWhatWasPublished(t *testing.T) {
 				res := f.DownloadExtras(context.Background(),
 					feedfetch.ExtrasConfig{DBDir: dir, MaxMindAccount: "1", MaxMindKey: "k"},
 					[]feedfetch.Extra{{Kind: tc.kind, URL: "http://" + tc.host + ":" + port + "/" + tc.download,
-						Dir: dir, Download: tc.download, File: tc.file, Name: "UT1"}})
+						Dir: dir, Download: tc.download, File: tc.file, Name: "UT1", Provider: "tranco"}})
 				got, _ := os.ReadFile(published)
 				if res.OK != room || (string(got) == "old\n") == room {
 					t.Errorf("(ok, %s replaced) = (%v, %v), want (%v, %v)", tc.published, res.OK, string(got) != "old\n",

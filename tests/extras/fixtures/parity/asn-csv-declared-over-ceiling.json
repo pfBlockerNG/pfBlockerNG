@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "A declared length over the transfer ceiling is refused: asn.csv stays.",
+	"description": "A declared length over the transfer ceiling is refused once, without a retry: asn.csv stays. A transfer cut short would be retried, so the one request recorded is what tells the refusal.",
 	"hosts": {
 		"ipinfo.io": [
 			"127.0.0.1",

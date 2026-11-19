@@ -1,0 +1,53 @@
+{
+	"schema": 1,
+	"description": "An absolute member name refuses the archive before anything is extracted, and the archive is removed.",
+	"hosts": {
+		"bl.example": [
+			"127.0.0.1",
+			"203.0.113.9"
+		]
+	},
+	"servers": [
+		"origin"
+	],
+	"settings": {},
+	"seed": {
+		"db/ut1/ut1_adult": "old.example\n"
+	},
+	"routes": {
+		"origin": {
+			"/ut1.tar.gz": {
+				"body_b64": "H4sIAAAAAAAC/+3UQQqDMBCF4Vn3FD1BMykxOU+KLoSklRpLj9/o0o0rheL/bR7MamB480gmtlMqpn3l2D9H2YFW3rklq3WqWi/WNXcXgrp5bq36IFeVA0xjie+6ipzTcvxb9415SN1FcDKm5MF0nz7t+AC2+9+s+2+Dp/9HmE9P/QEAAAAAAAAAAAAAAP7XD9/j/PUAKAAA"
+			}
+		}
+	},
+	"steps": [
+		{
+			"run": "bls",
+			"extras": [
+				{
+					"url": "http://bl.example:{port:origin}/ut1.tar.gz",
+					"file_dwn": "ut1.tar.gz",
+					"file": "ut1.tar.gz",
+					"folder": "db",
+					"type": "blacklist",
+					"name": "UT1"
+				}
+			],
+			"expect": {
+				"ok": false,
+				"report": "\tUT1 ... Failed\n",
+				"files": {
+					"db/ut1/ut1_adult": "old.example\n",
+					"db/ut1.tar.gz": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/ut1.tar.gz"
+					}
+				]
+			}
+		}
+	]
+}

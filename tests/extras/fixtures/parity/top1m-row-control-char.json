@@ -11,7 +11,8 @@
 		"origin"
 	],
 	"settings": {
-		"top1m_source": "tranco"
+		"top1m_source": "tranco",
+		"top1m_inclusions": "com,example"
 	},
 	"seed": {
 		"db/top-1m.csv": "1,old.example.com\n"
@@ -63,6 +64,21 @@
 						"path": "/top-1m.csv.zip"
 					}
 				]
+			}
+		},
+		{
+			"run": "whitelist",
+			"expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "good.example\n"
+				}
+			},
+			"old_expect": {
+				"ok": true,
+				"files": {
+					"db/pfbalexawhitelist.txt": "old.example.com\n"
+				}
 			}
 		}
 	]

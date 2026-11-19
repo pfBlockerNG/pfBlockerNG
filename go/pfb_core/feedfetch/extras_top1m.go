@@ -76,9 +76,9 @@ func top1mIdentity(provider, url string, headers []string) string {
 
 var top1mDomain = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*\.(?:[A-Za-z]{2,}|[Xx][Nn]--[A-Za-z0-9][A-Za-z0-9-]+)$`)
 
-// top1mRow is pfb_top1m_parse_source_row(): the lowercased domain of one line of the list, or false.
-// shortcut: quoting follows encoding/csv, not str_getcsv(); top1m-row-quotes pins the cases a list can hold, and a
-// quirk of str_getcsv() it does not name may still differ.
+// top1mRow is pfb_top1m_parse_source_row(): the lowercased domain of one line of the list, or false. A quoted row is
+// read as CSV by encoding/csv, not with str_getcsv()'s quirks (owner, 2026-11-19): white space before an opening quote
+// is skipped, and text after a closing quote makes the row malformed, where PHP appends it to the field.
 func top1mRow(line string, p top1mProvider) (string, bool) {
 	if line == "" || !strings.Contains(line, ".") || p.domainCol > 0 && !strings.Contains(line, ",") {
 		return "", false
@@ -89,7 +89,7 @@ func top1mRow(line string, p top1mProvider) (string, bool) {
 	if strings.Contains(line, `"`) {
 		// The line keeps its ending here, as str_getcsv() gets it: an unterminated quote takes the line break into the field.
 		r := csv.NewReader(strings.NewReader(raw))
-		r.FieldsPerRecord, r.LazyQuotes = -1, true
+		r.FieldsPerRecord, r.LazyQuotes, r.TrimLeadingSpace = -1, true, true
 		var err error
 		if fields, err = r.Read(); err != nil {
 			return "", false

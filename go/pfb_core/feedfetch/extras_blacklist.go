@@ -96,18 +96,30 @@ func wordName(s string) bool {
 	return true
 }
 
-// linkMember is a hard-link member: name, under dir, becomes another name for target, already extracted there.
+// linkMember is a hard-link member: name, under dir, becomes another name for target, already extracted there, and
+// replaces what an earlier member wrote under it, as tar does. A link to a member that was skipped (a link or special
+// member) is skipped with it.
 func linkMember(dir, target, name string) error {
 	for _, n := range []string{target, name} {
 		if !filepath.IsLocal(filepath.FromSlash(n)) {
 			return errUnsafeMember
 		}
 	}
+	from := filepath.Join(dir, filepath.FromSlash(target))
+	if info, err := os.Lstat(from); err != nil || !info.Mode().IsRegular() {
+		return nil
+	}
 	p := filepath.Join(dir, filepath.FromSlash(name))
+	if p == from {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	return os.Link(filepath.Join(dir, filepath.FromSlash(target)), p)
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Link(from, p)
 }
 
 // extractCategories is `tar -xf --include='*domains' -s <blacklistRules>` into dir, then pfb_blacklist_tar_finalize_staged():
