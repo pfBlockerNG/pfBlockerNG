@@ -437,3 +437,31 @@ func TestPublishAndReadAllocateAConstant(t *testing.T) {
 		t.Fatalf("entries = %d", r.Entries)
 	}
 }
+
+// A publish whose delta cannot be written fails before its index rename: it leaves no file of the new generation, so a
+// full disk does not keep an unpublished body that blocks the retry.
+func TestAFailedDeltaLeavesNoFileOfTheNewGeneration(t *testing.T) {
+	s, dir := newStore(t)
+	publish(t, s, id, 1, nil, "10", "20")
+	applied(t, s, id, 1)
+	before := names(t, dir)
+	// A directory that is not empty where the remove part goes: the add part is renamed into place, the remove part is not.
+	block := filepath.Join(dir, dn(id, 2, 1, "remove"))
+	if err := os.MkdirAll(filepath.Join(block, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Publish(id, []string{"20", "30"}, nil); err == nil {
+		t.Fatal("Publish succeeded with the remove part blocked")
+	}
+	if err := os.RemoveAll(block); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(t, dir); !slices.Equal(got, before) {
+		t.Fatalf("files after the failed publish = %q; want %q", got, before)
+	}
+	publish(t, s, id, 2, nil, "20", "30")
+	r := mustGet(t, s, id, &resources.Cursor{1, dg("10", "20")})
+	if add, remove := delta(t, s, id, r); !slices.Equal(add, []string{"30"}) || !slices.Equal(remove, []string{"10"}) {
+		t.Fatalf("delta add %v remove %v", add, remove)
+	}
+}
