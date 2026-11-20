@@ -99,11 +99,28 @@ final class CrowdsecStatusPageRenderTest extends TestCase
 
 		$html = self::render('// Decisions and counters', "// The tables' contents", ['status' => $status]);
 
-		preg_match_all('~<tr class="cs-banned"><td>(.*?)</td><td>(.*?)</td><td>(.*?)</td></tr>~', $html, $rows, PREG_SET_ORDER);
-		$ipv4 = array_map(static fn (array $row): array => array_slice($row, 1), array_filter($rows, static fn (array $row): bool => $row[1] === 'IPv4'));
-		$this->assertContains(['IPv4', '&lt;script&gt;alert(1)&lt;/script&gt;&quot;&#039;&amp;', '2'], $ipv4, 'the hostile origin, escaped: ' . $html);
-		$this->assertContains(['IPv4', '123', '1'], $ipv4, 'the integer origin');
+		$this->assertSame([
+			['IPv4 (rows 3)', '&lt;script&gt;alert(1)&lt;/script&gt;&quot;&#039;&amp;', '2'],
+			['123', '1'],
+			['Total', '3'],
+			['IPv6 (rows 1)', 'Total', '0'],
+		], self::bannedRows($html), 'the hostile origin escaped, the integer origin, and one family cell spanning its origins and total: ' . $html);
+		$this->assertStringContainsString('<td rowspan="3" style="vertical-align: middle">IPv4</td>', $html, 'the family cell is centred');
 		$this->assertStringNotContainsString('<script>', $html);
+	}
+
+	/**
+	 * The Decisions panel's rows, each the list of its cells' text; a cell spanning rows reads "<text> (rows N)".
+	 *
+	 * @return list<list<string>>
+	 */
+	private static function bannedRows(string $html): array
+	{
+		preg_match_all('~<tr class="cs-banned">(.*?)</tr>~s', $html, $rows);
+		return array_map(static function (string $row): array {
+			preg_match_all('~<td(?: rowspan="(\d+)"[^>]*)?>(.*?)</td>~s', $row, $cells, PREG_SET_ORDER);
+			return array_map(static fn (array $cell): string => strip_tags($cell[2]) . ($cell[1] === '' ? '' : " (rows {$cell[1]})"), $cells);
+		}, $rows[1]);
 	}
 
 	// ---- the lookup's decisions -------------------------------------------------------------------
