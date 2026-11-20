@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -14,11 +15,14 @@ use PHPUnit\Framework\TestCase;
  *     receive marks pending changes and runs a tick) and an install or upgrade (the resync);
  *   - the installer applies it once the package's services are registered (start_service() acts only on a registered one);
  *   - removal stops the service and leaves no rc file, config file, status file or pidfile (the binaries are package files);
- *   - the Settings page is covered by the package's page privilege.
+ *   - the Settings page is covered by the package's page privilege;
+ *   - both CrowdSec pages print the same two tab rows (pfb_crowdsec_display_tabs()): pfBlockerNG's top row with the CrowdSec tab
+ *     selected, the pending-changes box, and the Settings/Status subtabs with the page's own selected.
  *
  * The pass and the installer cannot run off-appliance, so their wiring is read from source; the teardown runs for real.
  */
 #[CoversFunction('pfb_crowdsec_teardown')]
+#[CoversFunction('pfb_crowdsec_display_tabs')]
 final class CrowdsecWiringTest extends TestCase
 {
 	private const PKG = __DIR__ . '/../../src/usr/local/pkg';
@@ -38,7 +42,7 @@ final class CrowdsecWiringTest extends TestCase
 	{
 		rmdir_recursive($this->dir);
 		$GLOBALS['pfb'] = $this->savedPfb;
-		unset($GLOBALS['pfb_test_service_calls']);
+		unset($GLOBALS['pfb_test_service_calls'], $GLOBALS['pfb_test_top_tabs'], $GLOBALS['pfb_test_info_boxes']);
 	}
 
 	private static function source(string $path): string
@@ -155,7 +159,9 @@ final class CrowdsecWiringTest extends TestCase
 	public function testEveryPageWithATopRowAddsTheSharedTail(): void
 	{
 		// The GeoIP pages are generated from pfblockerng_geoip.inc's templates, and the ones on disk already call the tail
-		$files = array_merge(glob(__DIR__ . '/../../src/usr/local/www/pfblockerng/*.php') ?: [], [self::PKG . '/pfblockerng/pfblockerng_geoip.inc']);
+		// and the CrowdSec pages' shared helper holds their row
+		$files = array_merge(glob(__DIR__ . '/../../src/usr/local/www/pfblockerng/*.php') ?: [],
+		    [self::PKG . '/pfblockerng/pfblockerng_geoip.inc', self::PKG . '/pfblockerng/pfblockerng_crowdsec.inc']);
 		$checked = 0;
 		foreach ($files as $file) {
 			$text = (string) file_get_contents($file);
@@ -169,6 +175,54 @@ final class CrowdsecWiringTest extends TestCase
 				basename($file) . ': the tab comes from the tail, never a copy');
 		}
 		$this->assertGreaterThanOrEqual(17, $checked, 'vacuity guard: the package pages were read');
+	}
+
+	/** @return iterable<string, array{string, string, string, bool}> the page, its selected subtab's name, the Alerts default view, whether changes are pending */
+	public static function tabRows(): iterable
+	{
+		yield 'Settings'                    => ['/pfblockerng/pfblockerng_crowdsec.php', 'Settings', '', FALSE];
+		yield 'Status'                      => ['/pfblockerng/pfblockerng_crowdsec_status.php', 'Status', '', FALSE];
+		yield 'Settings, a default view, pending changes' => ['/pfblockerng/pfblockerng_crowdsec.php', 'Settings', 'unified', TRUE];
+		yield 'Status, a default view, pending changes'   => ['/pfblockerng/pfblockerng_crowdsec_status.php', 'Status', 'unified', TRUE];
+	}
+
+	#[DataProvider('tabRows')]
+	public function testBothPagesPrintTheTopRowThePendingBoxAndTheirSubtabsInThatOrder(string $page, string $subtab, string $view, bool $pending): void
+	{
+		$GLOBALS['pfb']['config_global'] = $view === '' ? [] : ['pfbpageload' => $view];
+		$GLOBALS['pfb']['pending_marker'] = "{$this->dir}/pfb_pending_changes";
+		if ($pending) {
+			file_put_contents($GLOBALS['pfb']['pending_marker'], 'v1');
+		}
+		$GLOBALS['pfb_test_top_tabs'] = [];
+		$GLOBALS['pfb_test_info_boxes'] = [];
+		$GLOBALS['pfb_test_allowed_pages'] = ['pkg_mgr_installed.php' => FALSE];
+
+		pfb_crowdsec_display_tabs($page);
+
+		$top = [['General', FALSE, '/pfblockerng/pfblockerng_general.php'], ['IP', FALSE, '/pfblockerng/pfblockerng_ip.php'],
+			['DNS', FALSE, '/pfblockerng/pfblockerng_dns_general.php'], ['Update', FALSE, '/pfblockerng/pfblockerng_update.php'],
+			['Reports', FALSE, '/pfblockerng/pfblockerng_alerts.php' . ($view === '' ? '' : "?view={$view}")],
+			['Feeds', FALSE, '/pfblockerng/pfblockerng_feeds.php'], ['Logs', FALSE, '/pfblockerng/pfblockerng_log.php'],
+			['Sync', FALSE, '/pfblockerng/pfblockerng_sync.php'], ['CrowdSec', TRUE, '/pfblockerng/pfblockerng_crowdsec.php']];
+		$sub = [['Settings', $subtab === 'Settings', '/pfblockerng/pfblockerng_crowdsec.php'],
+			['Status', $subtab === 'Status', '/pfblockerng/pfblockerng_crowdsec_status.php']];
+		// Each row with the number of info boxes shown before it: the pending-changes box sits between the rows
+		$this->assertSame([[$top, 0], [$sub, $pending ? 1 : 0]], $GLOBALS['pfb_test_top_tabs']);
+		$this->assertCount($pending ? 1 : 0, $GLOBALS['pfb_test_info_boxes']);
+	}
+
+	public function testEachPageHandsItsOwnPageToTheTabHelperAfterAnyInputErrors(): void
+	{
+		$www = __DIR__ . '/../../src/usr/local/www/pfblockerng';
+		$settings = (string) file_get_contents("{$www}/pfblockerng_crowdsec.php");
+		$status = (string) file_get_contents("{$www}/pfblockerng_crowdsec_status.php");
+
+		$this->assertSame(1, substr_count($settings, 'pfb_crowdsec_display_tabs(PFB_CROWDSEC_PAGE);'));
+		$this->assertSame(1, substr_count($status, 'pfb_crowdsec_display_tabs(PFB_CROWDSEC_STATUS_PAGE);'));
+		$this->assertSame(0, substr_count($settings . $status, 'display_top_tabs('), 'the rows are printed by the helper only');
+		$this->assertLessThan(strpos($settings, 'pfb_crowdsec_display_tabs('), strpos($settings, 'print_input_errors('),
+		    'the Settings page prints its input errors above the tabs');
 	}
 
 	public function testTheSettingsPageIsCoveredByThePackagePrivilege(): void

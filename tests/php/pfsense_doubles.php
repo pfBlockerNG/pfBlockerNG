@@ -1312,6 +1312,16 @@ if (!function_exists('print_info_box')) {
 	}
 }
 
+if (!function_exists('display_top_tabs')) {
+	// pfSense guiconfig.inc: print a tab row. Off-appliance, record [rows, info boxes shown before it] in
+	// $GLOBALS['pfb_test_top_tabs'] (when a test seeds it) so a page's rows and their order against its boxes can be asserted.
+	function display_top_tabs(& $tab_array, $no_drop_down = false, $type = 'pills', $usepost = "") {
+		if (isset($GLOBALS['pfb_test_top_tabs'])) {
+			$GLOBALS['pfb_test_top_tabs'][] = [$tab_array, count($GLOBALS['pfb_test_info_boxes'] ?? [])];
+		}
+	}
+}
+
 if (!function_exists('get_configured_interface_with_descr')) {
 	// pfSense interfaces.inc: returns a map of interface_name => friendly description.
 	// Off-appliance, use pfb_test_interfaces if seeded; otherwise return an empty map.

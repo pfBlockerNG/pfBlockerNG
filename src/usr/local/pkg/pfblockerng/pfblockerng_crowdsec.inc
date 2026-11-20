@@ -281,17 +281,41 @@ function pfb_crowdsec_save(array $values): void {
 	}
 }
 
-/** Append the CrowdSec tab to a pfBlockerNG top row; its own pages mark it selected. */
-function pfb_crowdsec_add_tab(array &$tab_array): void {
-	$tab_array[] = array(gettext('CrowdSec'), FALSE, PFB_CROWDSEC_PAGE);
-}
-
 /** The CrowdSec tab's second row, with the subtab at $page (PFB_CROWDSEC_PAGE or PFB_CROWDSEC_STATUS_PAGE) selected. */
 function pfb_crowdsec_subtabs(string $page): array {
 	return array(
 		array(gettext('Settings'), $page === PFB_CROWDSEC_PAGE, PFB_CROWDSEC_PAGE),
 		array(gettext('Status'), $page === PFB_CROWDSEC_STATUS_PAGE, PFB_CROWDSEC_STATUS_PAGE),
 	);
+}
+
+/**
+ * Print the CrowdSec pages' tab rows: pfBlockerNG's top row with the CrowdSec tab selected, the pending-changes box, and the
+ * subtab row with $page (PFB_CROWDSEC_PAGE or PFB_CROWDSEC_STATUS_PAGE) selected.
+ */
+function pfb_crowdsec_display_tabs(string $page): void {
+	// Define default Alerts Tab href link (Top row)
+	$get_req = pfb_alerts_default_page();
+
+	$tab_array	= array();
+	$tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
+	$tab_array[]	= array(gettext('IP'),		FALSE,	'/pfblockerng/pfblockerng_ip.php');
+	$tab_array[]	= array(gettext('DNS'),		FALSE,	'/pfblockerng/pfblockerng_dns_general.php');
+	$tab_array[]	= array(gettext('Update'),	FALSE,	'/pfblockerng/pfblockerng_update.php');
+	$tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
+	$tab_array[]	= array(gettext('Feeds'),	FALSE,	'/pfblockerng/pfblockerng_feeds.php');
+	$tab_array[]	= array(gettext('Logs'),	FALSE,	'/pfblockerng/pfblockerng_log.php');
+	$tab_array[]	= array(gettext('Sync'),	FALSE,	'/pfblockerng/pfblockerng_sync.php');
+	pfb_software_add_tab($tab_array);
+	foreach ($tab_array as &$tab) {
+		$tab[1] = ($tab[2] === PFB_CROWDSEC_PAGE);
+	}
+	unset($tab);
+	display_top_tabs($tab_array, TRUE);
+	pfb_print_pending_changes_box();
+
+	$tab_array = pfb_crowdsec_subtabs($page);
+	display_top_tabs($tab_array, TRUE);
 }
 
 /**

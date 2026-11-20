@@ -12643,7 +12643,7 @@ function pfb_print_pending_changes_box(bool $on_update_page = FALSE): void {
  */
 function pfb_software_add_tab(array &$tab_array, bool $active = FALSE, ?bool $provenance_ok = null): void {
 	// issue #4071: every top row ends with this call, the generated GeoIP pages too, so the CrowdSec tab is added here, after Sync
-	pfb_crowdsec_add_tab($tab_array);
+	$tab_array[] = array(gettext('CrowdSec'), FALSE, PFB_CROWDSEC_PAGE);
 	$provenance_ok = $provenance_ok ?? pfb_software_provenance_ok();
 	if ($provenance_ok && isAllowedPage('pkg_mgr_installed.php')) {
 		$tab_array[] = array(gettext('Software'), $active, '/pfblockerng/pfblockerng_software.php');
