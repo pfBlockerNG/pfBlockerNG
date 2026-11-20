@@ -13,6 +13,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 16,384-byte budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `5dacd18fe`  crowdsec: write the status file on its own timer  (#4120) — quota notice; Codex at its limit; three review rounds
 - `c7a5a0d4e`  crowdsec: take the bouncer off the update pass and run it the way Core is run  (#4143) — quota notice; Codex at its limit; three review rounds
 - `cce29053b7`  geoip: convert the MaxMind CSVs into the country and continent lists in Go  (#4130) — quota notice only; owner merged; Codex at usage limit
 - `40b5c030fd`  core: download the IPinfo ASN and MaxMind GeoLite2 Extras in Go  (#4059) — reviewed `1659988577` only; last 3 fix commits unreviewed, re-ask spent; Codex at usage limit
