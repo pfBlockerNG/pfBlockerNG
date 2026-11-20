@@ -468,10 +468,14 @@ func contentBytes(t *testing.T, content any, expand func(string) string) []byte 
 }
 
 // observe is what a path holds: its content, nil when nothing is there, or a marker for an entry that is not a regular
-// file (a directory left where a file was expected to be gone must not read as absent).
+// file (a directory left where a file was expected to be gone must not read as absent). A share entry Core publishes as
+// a link through its archive's link (.<archive>/<entry>, #4142) reads as the file it names, as today's path names it.
 func observe(t *testing.T, path string) any {
 	t.Helper()
 	info, err := os.Lstat(path)
+	if to, lerr := os.Readlink(path); lerr == nil && feedfetch.EntryLink(filepath.Dir(path), to, filepath.Base(path)) {
+		info, err = os.Stat(path)
+	}
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -506,7 +510,10 @@ func TestObserveTellsADirectoryFromNothing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "f"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for path, want := range map[string]any{"asn.update": "<not a regular file>", "missing": nil, "f": "x"} {
+	if err := os.Symlink("f", filepath.Join(root, "foreign")); err != nil {
+		t.Fatal(err) // a link that is no share entry link reads as what it is, not as its target
+	}
+	for path, want := range map[string]any{"asn.update": "<not a regular file>", "missing": nil, "f": "x", "foreign": "<not a regular file>"} {
 		if got := observe(t, filepath.Join(root, path)); got != want {
 			t.Errorf("observe(%s) = %#v, want %#v", path, got, want)
 		}

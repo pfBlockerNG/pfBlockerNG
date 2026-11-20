@@ -13,10 +13,10 @@ import (
 	"strings"
 )
 
-// publishGeoIP is the geoip branch of pfb_download(). A tar (gzipped or not) is extracted with its top folder stripped
-// into a directory staged inside the share, and each member then replaces its live copy (pfb_geoip_extract_tar_to_share);
-// a zip of more than one member does the same inside target (pfb_stage_publish_dir_merge), which only the CSV row, whose
-// target is the share, accepts. A zip of one member is published whole over target. Every member name is checked before
+// publishGeoIP is the geoip branch of pfb_download(). A tar (gzipped or not) is extracted with its top folder stripped,
+// and its members are published into the share by mergeIntoDir (pfb_geoip_extract_tar_to_share); a zip of more than one
+// member does the same inside target (pfb_stage_publish_dir_merge), which only the CSV row, whose target is the share,
+// accepts. A zip of one member is published whole over target. Every member name is checked before
 // anything is written (ADR-46). Any other accepted body is renamed over target. On a database row a body, or the
 // archive's member of that name, must be a MaxMind DB (owner, #4058).
 func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target string) Result {
@@ -26,7 +26,7 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 		if r := memberRefused(names, ok); r != nil {
 			return *r
 		}
-		return published(f.mergeIntoDir, share, "geoip", filepath.Base(raw), func(dir string) error {
+		return published(archiveMerge(raw), share, "geoip", filepath.Base(raw), func(dir string) error {
 			return checkedDatabases(dir, target, f.extractTarStripped(ctx, mime, raw, dir))
 		})
 	case mimeZip:
@@ -35,7 +35,7 @@ func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target str
 			if r := memberRefused(names, ok); r != nil {
 				return *r
 			}
-			return published(f.mergeIntoDir, target, "geoip zip", filepath.Base(raw), func(dir string) error {
+			return published(archiveMerge(raw), target, "geoip zip", filepath.Base(raw), func(dir string) error {
 				return checkedDatabases(dir, target, f.extractZipStripped(ctx, raw, dir))
 			})
 		}
@@ -83,22 +83,25 @@ func memberRefused(names []string, listed bool) *Result {
 	return &r
 }
 
-// published is a folder publisher (mergeIntoDir, replaceDir) as a row's outcome: what stopped the extraction of what from
-// the archive named detail, else a publication that could not complete, naming what a rollback that could not finish
-// left behind.
-func published(publish func(string, func(string) error) (bool, string), target, what, detail string,
+// published is a folder publisher (archiveMerge, replaceDir) as a row's outcome: what stopped the extraction of what from
+// the archive named detail, else a publication that could not complete.
+func published(publish func(string, func(string) error) bool, target, what, detail string,
 	extract func(dir string) error) Result {
 	var xerr error
-	ok, left := publish(target, func(dir string) error { xerr = extract(dir); return xerr })
+	ok := publish(target, func(dir string) error { xerr = extract(dir); return xerr })
 	switch {
 	case ok:
 		return accepted
-	case left != "":
-		return refused("publish", "rollback_incomplete", left)
 	case xerr != nil:
 		return extractRefused(what, xerr, detail)
 	}
 	return publishRefused
+}
+
+// archiveMerge is mergeIntoDir for the archive downloaded to raw (<download>.raw), named by its download.
+func archiveMerge(raw string) func(string, func(string) error) bool {
+	archive := strings.TrimSuffix(filepath.Base(raw), ".raw")
+	return func(target string, extract func(string) error) bool { return mergeIntoDir(target, archive, extract) }
 }
 
 var (
@@ -109,12 +112,6 @@ var (
 
 // rename is os.Rename, a test seam for a publication that fails part-way.
 var rename = os.Rename
-
-// removeAll is os.RemoveAll, a test seam for a rollback that cannot take a published entry out.
-var removeAll = os.RemoveAll
-
-// link is os.Link, a test seam for link(2) as FreeBSD has it.
-var link = os.Link
 
 // unsafeMember is pfb_archive_unsafe_member(): the first name that is absolute, has a ".." component, a component over
 // 255 bytes or is over 1024 bytes; "" when there is none.
@@ -327,90 +324,99 @@ func copyZipMember(ctx context.Context, zf *zip.File, w io.Writer) error {
 	return err
 }
 
-// mergeIntoDir is pfb_stage_publish_dir_merge(): extract fills a directory staged inside target, and each of its
-// top-level entries then replaces its live counterpart by rename. A directory on either side (a live one, or a staged one
-// whose name is taken) refuses the whole publication before the first move. Every live file it replaces is hard-linked
-// aside first, so a rename that fails part-way puts the earlier ones back: the share holds one generation, never a mix
-// (PHP leaves the mix). A file that cannot be put back keeps its copy in the ".pfbbackup_" directory. Each swap is one
-// rename, so a reader that opens several of the files while a merge runs can still see both generations, as in PHP.
-// A rollback that cannot finish reports what it left, space-separated: the backup directory, then each entry it published
-// and could not remove.
-func (f *Fetcher) mergeIntoDir(target string, extract func(dir string) error) (bool, string) {
+// mergeIntoDir publishes an archive's entries into target, the share (#4142). extract fills a generation reached through
+// one hidden link per archive, target/.<archive>, which replaceDir swaps in one step, and each entry is a fixed link
+// through it (<entry> -> .<archive>/<entry>), so every entry of the archive switches with that one rename and a reader
+// never sees two generations of it. An entry that is still a real file, or a link this code did not make, becomes its
+// link by one rename; one that a newer generation no longer holds reads as missing. A member named with a leading dot,
+// a live directory, a live link to a folder (the country folder among them) or a member directory over a live file
+// refuses the whole publication before anything changes. An entry relink that fails after the archive link switched
+// reports a failed publication, and the next one finishes the switch.
+func mergeIntoDir(target, archive string, extract func(dir string) error) bool {
+	if archive == "" || strings.HasPrefix(archive, ".") || strings.Contains(archive, "/") || strings.HasSuffix(archive, ".entry") {
+		return false // it would name no link of its own beside the entries, or another archive's lock or temp link
+	}
 	if info, err := os.Lstat(target); err != nil || !info.IsDir() {
-		return false, ""
+		return false
 	}
-	staged, err := os.MkdirTemp(target, ".pfbstagedir_")
-	if err != nil {
-		return false, ""
-	}
-	defer os.RemoveAll(staged)
-	if os.Chmod(staged, 0o755) != nil || extract(staged) != nil {
-		return false, ""
-	}
-	entries, err := os.ReadDir(staged)
-	if err != nil {
-		return false, ""
-	}
-	for _, e := range entries {
-		live := filepath.Join(target, e.Name())
-		info, err := os.Lstat(live)
-		if err == nil && (info.IsDir() || e.IsDir()) {
-			return false, ""
+	hidden := "." + archive
+	var names []string
+	if !replaceDir(filepath.Join(target, hidden), func(dir string) error {
+		if err := extract(dir); err != nil {
+			return err
 		}
-	}
-	backup, err := os.MkdirTemp(target, ".pfbbackup_")
-	if err != nil {
-		return false, ""
-	}
-	keepBackup := false // a rollback that could not put a file back leaves its copy here
-	defer func() {
-		if !keepBackup {
-			os.RemoveAll(backup)
-		}
-	}()
-	kept := map[string]bool{}
-	for _, e := range entries {
-		live := filepath.Join(target, e.Name())
-		if _, err := os.Lstat(live); err == nil {
-			if backupEntry(live, filepath.Join(backup, e.Name())) != nil {
-				return false, ""
-			}
-			kept[e.Name()] = true
-		}
-	}
-	for i, e := range entries {
-		if rename(filepath.Join(staged, e.Name()), filepath.Join(target, e.Name())) != nil {
-			var left []string
-			for _, done := range entries[:i] {
-				live := filepath.Join(target, done.Name())
-				if kept[done.Name()] {
-					if rename(filepath.Join(backup, done.Name()), live) != nil {
-						keepBackup = true
-					}
-				} else if removeAll(live) != nil {
-					left = append(left, live)
-				}
-			}
-			if keepBackup {
-				left = append([]string{backup}, left...)
-			}
-			return false, strings.Join(left, " ")
-		}
-	}
-	return true, ""
-}
-
-// backupEntry keeps a live entry aside by a hard link, and a symbolic link as the link it is: FreeBSD's link(2) follows
-// one, which fails for a dangling link and turns a restored link into a copy of its target.
-func backupEntry(live, backup string) error {
-	if info, err := os.Lstat(live); err == nil && info.Mode()&fs.ModeSymlink != 0 {
-		to, err := os.Readlink(live)
+		entries, err := os.ReadDir(dir)
 		if err != nil {
 			return err
 		}
-		return os.Symlink(to, backup)
+		for _, e := range entries {
+			if !mergeable(target, e) {
+				return errLiveEntry
+			}
+			names = append(names, e.Name())
+		}
+		return nil
+	}) {
+		return false
 	}
-	return link(live, backup)
+	tmp := filepath.Join(target, hidden+".entry")
+	os.Remove(tmp) // a killed run's
+	for _, name := range names {
+		live, want := filepath.Join(target, name), hidden+"/"+name
+		if to, err := os.Readlink(live); err == nil && to == want {
+			continue
+		}
+		if os.Symlink(want, tmp) != nil || rename(tmp, live) != nil {
+			os.Remove(tmp)
+			return false
+		}
+	}
+	return true
+}
+
+// errLiveEntry is a member that may not replace what stands at its name in the share.
+var errLiveEntry = errors.New("member may not replace its live entry")
+
+// mergeable reports whether the staged entry e may take its name in target: not a dot name, and either nothing there, an
+// entry link of this code (entryLink), or, for a member file, a file or a link that names no folder (dangling, or to a
+// file). A link to a folder, or one whose target cannot be told, refuses, where PHP's merge replaces any link: the
+// country folder is one.
+func mergeable(target string, e os.DirEntry) bool {
+	if strings.HasPrefix(e.Name(), ".") {
+		return false
+	}
+	live := filepath.Join(target, e.Name())
+	info, err := os.Lstat(live)
+	switch {
+	case os.IsNotExist(err):
+		return true
+	case err != nil || info.IsDir():
+		return false
+	case info.Mode()&os.ModeSymlink != 0:
+		if to, _ := os.Readlink(live); entryLink(target, to, e.Name()) {
+			return true
+		}
+		if to, err := os.Stat(live); err == nil && to.IsDir() || err != nil && !os.IsNotExist(err) {
+			return false // a link to a folder (the country folder, or an administrator's), or one that cannot be told
+		}
+	}
+	return !e.IsDir()
+}
+
+// entryLink reports whether to, the text of the link at target/name, is an entry link of this code:
+// .<archive>/<name>, where target/.<archive> is an archive link to one of its generations.
+func entryLink(target, to, name string) bool {
+	archive, entry, ok := strings.Cut(to, "/")
+	if !ok || entry != name || !strings.HasPrefix(archive, ".") || archive == "." || archive == ".." {
+		return false
+	}
+	link := filepath.Join(target, archive)
+	gen, err := os.Readlink(link)
+	if err != nil {
+		return false
+	}
+	_, ours := generationOf(link, gen)
+	return ours
 }
 
 // checkedDatabases refuses an extraction (err already nil) that holds a database file without the MaxMind DB marker, or,

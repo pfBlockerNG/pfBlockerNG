@@ -7,3 +7,6 @@ func Classify(head []byte) string { return classify(head) }
 
 // SetExtractMax sets the per-file ceiling of an extraction, which no corpus row can lower: PHP's is a constant.
 func (f *Fetcher) SetExtractMax(n int64) { f.extractMax = n }
+
+// EntryLink is entryLink: whether to, the text of the link at target/name, is a share entry link of this code.
+func EntryLink(target, to, name string) bool { return entryLink(target, to, name) }
