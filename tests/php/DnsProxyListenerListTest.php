@@ -50,17 +50,21 @@ final class DnsProxyListenerListTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		$this->finish();
-		$this->clocks = [];
-		foreach ($this->savedGlobals as $name => [$existed, $value]) {
-			if ($existed) {
-				$GLOBALS[$name] = $value;
-			} else {
-				unset($GLOBALS[$name]);
+		// A stand-in that had to be killed is reported, after the rest of the teardown
+		try {
+			$this->finish();
+		} finally {
+			$this->clocks = [];
+			foreach ($this->savedGlobals as $name => [$existed, $value]) {
+				if ($existed) {
+					$GLOBALS[$name] = $value;
+				} else {
+					unset($GLOBALS[$name]);
+				}
 			}
+			$this->savedGlobals = [];
+			rmdir_recursive($this->dir);
 		}
-		$this->savedGlobals = [];
-		rmdir_recursive($this->dir);
 	}
 
 	/**

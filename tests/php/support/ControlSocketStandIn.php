@@ -38,7 +38,7 @@ trait ControlSocketStandIn
 		return $record;
 	}
 
-	/** Let every stand-in gateway go: its stdin closes, which is all a silent one waits for. One that does not end is killed and reported STUCK/ENVIRONMENT. */
+	/** Let every stand-in gateway go: its stdin closes, which is all a silent one waits for; one that does not end is killed and reported STUCK/ENVIRONMENT. */
 	private function finish(): void
 	{
 		$stuck = NULL;
@@ -47,7 +47,7 @@ trait ControlSocketStandIn
 			stream_set_blocking($pipes[1], FALSE);
 			stream_set_blocking($pipes[2], FALSE);
 			try {
-				pfb_test_finish_process([$proc, $pipes, 'the stand-in gateway'], 10.0);
+				pfb_test_finish_process([$proc, $pipes, 'the stand-in gateway']);
 			} catch (RuntimeException $e) {
 				$stuck ??= $e;
 			}
@@ -96,7 +96,7 @@ trait ControlSocketStandIn
 			// stream_select, not stream_set_timeout: the latter is a no-op on a proc_open pipe, and fgets() would wait forever (issue #4128)
 			$read = [$pipes[1]];
 			$write = $except = NULL;
-			$ack = (stream_select($read, $write, $except, 10) === 1) ? fgets($pipes[1]) : 'nothing within 10 s';
+			$ack = stream_select($read, $write, $except, 10) === 1 ? fgets($pipes[1]) : 'nothing within 10 s';
 			if ($ack !== "ack\n") {
 				throw new RuntimeException('STUCK/ENVIRONMENT: the stand-in gateway did not acknowledge its write: ' . var_export($ack, TRUE));
 			}
