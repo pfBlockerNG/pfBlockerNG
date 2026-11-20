@@ -607,5 +607,9 @@ severity for the whole stream, so the mapping is the daemon's. This changes D1's
   Settings**' log level, `notice` by default: there only `warning` and `error` lines reach the system log, D7's log
   tail and remote syslog until the operator lowers that level. The rc script's own `logger -p daemon.info` lines were
   already filtered the same way.
+- **Owner decision (2026-11-21).** The mapping stays exact (debug → debug, info → info, warning → warning,
+  error → err): the bouncer has those levels, and the operator chooses the lowest severity pfSense keeps. Flooring
+  debug and info at `notice` would force debug lines on an operator who wants info and above. The Settings subtab's
+  log level help says so and points at the System Logs log level.
 - **Command line.** `-syslog` follows `-c <config>`, so `pfb_crowdsec_child_pattern()`, which matches the command line
   up to `-c` and the space after it, still finds the bouncer, including one an earlier version's rc script started and a package upgrade left running.
