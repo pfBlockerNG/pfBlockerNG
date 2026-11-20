@@ -373,6 +373,9 @@ func TestRunReconcilesOnSIGUSR1AndFlushesOnShutdown(t *testing.T) {
 	if e := nextEvent(t, events, result); e != "pull" {
 		t.Fatalf("first event = %q; want the immediate start-up pull", e)
 	}
+	if e := nextEvent(t, events, result); e != "usage" {
+		t.Fatalf("second event = %q; want the usage post that follows the first successful pull", e)
+	}
 	assertTable(t, h.pf, "crowdsec_v4", startupV4...)
 	reqsBefore, _ := h.lapi.requests()
 
@@ -405,16 +408,12 @@ func TestRunReconcilesOnSIGUSR1AndFlushesOnShutdown(t *testing.T) {
 		t.Fatalf("event after a tick = %q; want pull", e)
 	}
 
-	cancel()
-	select {
-	case <-result:
-	case <-time.After(time.Minute):
-		t.Fatal("STUCK/ENVIRONMENT: the run loop did not stop within a minute")
-	}
+	stopRun(t, cancel, result)
 	assertTable(t, h.pf, "crowdsec_v4")
 	assertTable(t, h.pf, "crowdsec_v6")
 }
 
+// Scenario: after the post that follows the first successful pull, each usage tick posts again.
 func TestRunPostsUsageOnItsTicker(t *testing.T) {
 	h := newHarness(t, ok(startupBody))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -426,22 +425,24 @@ func TestRunPostsUsageOnItsTicker(t *testing.T) {
 		t.Fatal(err)
 	}
 	go func() { h.d.run(ctx, nil, usage, nil, nil, func(e string) { events <- e }); result <- nil }()
-	if e := nextEvent(t, events, result); e != "pull" {
-		t.Fatalf("first event = %q; want the start-up pull", e)
+	for _, want := range []string{"pull", "usage"} {
+		if e := nextEvent(t, events, result); e != want {
+			t.Fatalf("start-up event = %q; want %s", e, want)
+		}
 	}
-	select {
-	case usage <- time.Now():
-	case err := <-result:
-		t.Fatalf("run returned %v before the usage tick", err)
-	}
+	send(t, usage, "usage", result)
 	if e := nextEvent(t, events, result); e != "usage" {
-		t.Fatalf("event = %q; want usage", e)
+		t.Fatalf("event after the usage tick = %q; want usage", e)
 	}
-	cancel()
-	<-result
+	stopRun(t, cancel, result)
 	reqs, _ := h.lapi.requests()
-	if last := reqs[len(reqs)-1]; last.URL.Path != "/v1/usage-metrics" || last.Method != http.MethodPost {
-		t.Fatalf("last request = %s %s; want the usage post", last.Method, last.URL.Path)
+	var got []string
+	for _, r := range reqs {
+		got = append(got, r.Method+" "+r.URL.Path)
+	}
+	want := []string{"GET /v1/decisions/stream", "POST /v1/usage-metrics", "POST /v1/usage-metrics"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("requests = %q; want %q", got, want)
 	}
 }
 

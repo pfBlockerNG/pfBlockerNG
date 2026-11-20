@@ -138,10 +138,10 @@ final class CrowdsecMetricsSourceTest extends TestCase
 		fw_bouncer_banned_ips{origin="crowdsec",ip_type="ipv4"} 3
 		fw_bouncer_banned_ips{origin="lists:firehol \"x\"",ip_type="ipv4"} 2
 		fw_bouncer_banned_ips{origin="cscli",ip_type="ipv6"} 1
-		# HELP pfblockerng_crowdsec_lapi_requests_total Requests the CrowdSec bouncer sent to the LAPI since it started.
+		# HELP pfblockerng_crowdsec_lapi_requests_total LAPI requests the CrowdSec bouncer completed since it started.
 		# TYPE pfblockerng_crowdsec_lapi_requests_total counter
 		pfblockerng_crowdsec_lapi_requests_total 120
-		# HELP pfblockerng_crowdsec_lapi_errors_total Failed LAPI requests of the CrowdSec bouncer since it started.
+		# HELP pfblockerng_crowdsec_lapi_errors_total Completed LAPI requests of the CrowdSec bouncer that failed, since it started.
 		# TYPE pfblockerng_crowdsec_lapi_errors_total counter
 		pfblockerng_crowdsec_lapi_errors_total 3
 		# HELP pfblockerng_crowdsec_last_pull_timestamp_seconds Unix time of the CrowdSec bouncer's last successful pull.

@@ -295,3 +295,20 @@ func assertTable(t *testing.T, pf *fakePF, name string, want ...string) {
 		t.Fatalf("table %s = %v; want %v", name, got, want)
 	}
 }
+
+// pull runs one pull synchronously, as run does on its own goroutines: fetch the stream, then finishPull.
+func (d *daemon) pull(ctx context.Context) error {
+	full := !d.synced
+	resp, err := d.api.pull(ctx, full)
+	return d.finishPull(ctx, full, resp, err)
+}
+
+// sendUsage closes the usage window and posts it synchronously, as run does on its own goroutines.
+func (d *daemon) sendUsage(ctx context.Context) {
+	body, err := d.usageBody(ctx)
+	if err != nil {
+		d.log.warnf("usage metrics not sent: %v", err)
+		return
+	}
+	d.finishUsage(d.api.postUsage(ctx, body))
+}

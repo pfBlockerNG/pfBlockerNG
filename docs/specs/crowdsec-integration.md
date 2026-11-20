@@ -97,7 +97,8 @@ Requests send `X-Api-Key` and `User-Agent: pfb_crowdsec/<version>`. TLS uses the
 trust store. Response bodies are capped at 256 MiB, and a body that is not valid JSON fails
 the pull.
 
-**Usage metrics.** Every 15 minutes (go-cs-bouncer's default), the daemon posts to
+**Usage metrics.** Every 15 minutes (go-cs-bouncer's default; first right after the first successful pull, #4117
+amendment), the daemon posts to
 `POST /v1/usage-metrics` a `remediation_components` entry of type `pfb_crowdsec` with its
 version, start time, the window, and per window:
 
@@ -111,7 +112,8 @@ dropped.
 counters of the inbound rule for each table. It finds them the way upstream does, matching
 `^block .* from <table> .* label "`.
 
-**Status file.** After each pull, the daemon writes `status_file` atomically (temp file and
+**Status file.** After each pull (and every `update_frequency` on its own timer, #4117 amendment), the daemon writes
+`status_file` atomically (temp file and
 `rename()`, mode `0644`, no secrets) as JSON with:
 
 - version and start time;
@@ -526,17 +528,26 @@ amendment's start, stop and pidfile rules.
   reinstall runs the installer's apply. A restore of one area (`installedpackages` alone) reloads the filter, whose rules follow the
   restored settings, but the bouncer process and its config file follow only at the next trigger.
 
-## Amendment 2026-11-19 — the status file has its own timer (#4117)
+## Amendment 2026-11-20 — the status file has its own timer, and the first usage post follows the first pull (#4117)
 
-The owner amended D1's "Status file" ([#4117](https://github.com/pfBlockerNG/pfBlockerNG/issues/4117)). With the
-file written only after each pull, a pull and a usage post that each ran into the 30 s request timeout left it about
-60 s old while the bouncer ran, and D6's `3 × update_frequency` check reported `source_up 0` for those scrapes.
+The owner amended D1's "Status file" ([#4117](https://github.com/pfBlockerNG/pfBlockerNG/issues/4117), 2026-11-19) and
+"Usage metrics" ([#4074](https://github.com/pfBlockerNG/pfBlockerNG/issues/4074), 2026-11-20). With the file written
+only after each pull, a pull and a usage post that each ran into the 30 s request timeout left it about 60 s old while
+the bouncer ran, and D6's `3 × update_frequency` check reported `source_up 0` for those scrapes.
 
-- The daemon writes the status file every `update_frequency` on its own timer, as well as after each pull. A slow or
-  timed-out LAPI request delays no write, because requests run outside the loop that writes it: one at a time, a due
-  pull before a due usage post, with ticks that come meanwhile waiting for the request to end. `SIGUSR1` and shutdown
-  are not held up by a request either.
-- A stale status file (D6's threshold, unchanged) therefore means the daemon itself is stuck or stopped. LAPI trouble
-  shows in `last_error`, `last_error_time` and the age of `last_pull`.
-- Every write is a consistent snapshot. A request shows in no field until it has ended, so `lapi_requests` and
-  `lapi_errors` count ended requests, and a write during a request carries the fields from before it.
+- **Status file.** The daemon writes it every `update_frequency` on its own timer, as well as after each pull. LAPI
+  requests run outside the loop that writes it, so a slow or timed-out request delays no write, no `SIGUSR1` reconcile
+  and no shutdown. pfctl work stays on that loop (applying a pull, the reconcile, the counter reads, each bounded by the
+  1-minute pfctl timeout), so it can delay a write.
+- **Stale.** A stale status file (D6's threshold, unchanged) therefore means the daemon itself is stuck or stopped. LAPI
+  trouble shows in `last_error`, `last_error_time` and the age of `last_pull`.
+- **Consistent fields.** A request shows in no field until it has ended, so `lapi_requests` and `lapi_errors` count
+  ended requests, and a write during a request carries the fields from before it.
+- **Requests.** One runs at a time. When one ends and both are due, the usage post runs before the pull: a usage post
+  is due at most once per interval, so it cannot hold pulls back, while a pull is due again every `update_frequency`
+  and, with requests as slow as that, a pull-first order never posted usage. Ticks that come during a request wait for
+  it to end, and several pull ticks make one pull.
+- **Usage timing.** The first usage post is made right after the first successful pull has been applied, as the next
+  LAPI request. After it, posts follow the 15-minute ticker started with the daemon, at 15, 30, 45 … minutes after
+  start, each waiting for a request in flight. A later successful pull is followed by no post of its own. A post's
+  window is the time since the previous post, or since start for the first one, rather than a fixed 15 minutes.

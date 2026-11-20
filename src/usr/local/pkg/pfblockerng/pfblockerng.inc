@@ -13696,8 +13696,8 @@ function pfb_metrics_render(array $s): string {
 	$family('fw_bouncer_dropped_packets', "Packets dropped by the CrowdSec bouncer's rules, per address family.", $packets);
 	$family('fw_bouncer_dropped_bytes', "Bytes dropped by the CrowdSec bouncer's rules, per address family.", $bytes);
 	$family('fw_bouncer_banned_ips', 'Values the CrowdSec bouncer bans, per origin and address family.', $banned);
-	$family('pfblockerng_crowdsec_lapi_requests_total', 'Requests the CrowdSec bouncer sent to the LAPI since it started.', $one('lapi_requests'));
-	$family('pfblockerng_crowdsec_lapi_errors_total', 'Failed LAPI requests of the CrowdSec bouncer since it started.', $one('lapi_errors'));
+	$family('pfblockerng_crowdsec_lapi_requests_total', 'LAPI requests the CrowdSec bouncer completed since it started.', $one('lapi_requests'));
+	$family('pfblockerng_crowdsec_lapi_errors_total', 'Completed LAPI requests of the CrowdSec bouncer that failed, since it started.', $one('lapi_errors'));
 	$family('pfblockerng_crowdsec_last_pull_timestamp_seconds', "Unix time of the CrowdSec bouncer's last successful pull.", $one('last_pull'));
 	$family('pfblockerng_crowdsec_last_error_timestamp_seconds', "Unix time of the CrowdSec bouncer's last error, 0 for none.", $one('last_error_time'));
 

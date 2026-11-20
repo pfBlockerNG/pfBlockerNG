@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -60,7 +61,7 @@ func send(t *testing.T, ch chan<- time.Time, what string, result <-chan error) {
 	case ch <- testEpoch:
 	case err := <-result:
 		t.Fatalf("run returned %v before taking the %s tick", err, what)
-	case <-time.After(time.Minute): // salvage watchdog only: a loop that blocks for a whole request takes it later
+	case <-time.After(time.Minute): // salvage watchdog only
 		t.Fatalf("STUCK/ENVIRONMENT: the run loop did not take the %s tick within a minute", what)
 	}
 }
@@ -68,7 +69,7 @@ func send(t *testing.T, ch chan<- time.Time, what string, result <-chan error) {
 // Scenario: the LAPI takes a request and never answers (a blackholed address). Given a running daemon whose pull or
 // usage post is waiting on it, when the status ticker fires, then the status file is written at once, before the
 // request ends, stamped with the current time, and its other fields are those from before the request: the request
-// shows in no field until it has ended.
+// shows in no field until it has ended. SIGUSR1 is handled at once too.
 func TestTheStatusFileIsWrittenWhileALAPIRequestHangs(t *testing.T) {
 	for _, tc := range []struct {
 		name, blocked string
@@ -96,6 +97,7 @@ func TestTheStatusFileIsWrittenWhileALAPIRequestHangs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			api.http.Timeout = 0 // the request ends only with ctx: a loop that waited on it could never take a tick
 			h.d.api = api
 			var clock atomic.Int64
 			clock.Store(testEpoch.Unix())
@@ -106,15 +108,15 @@ func TestTheStatusFileIsWrittenWhileALAPIRequestHangs(t *testing.T) {
 			if err := h.d.setup(ctx); err != nil {
 				t.Fatal(err)
 			}
-			usage, tick := make(chan time.Time), make(chan time.Time)
+			tick := make(chan time.Time)
+			usr1 := make(chan os.Signal)
 			events := make(chan string, 16)
 			result := make(chan error, 1)
-			go func() { h.d.run(ctx, nil, usage, tick, nil, func(e string) { events <- e }); result <- nil }()
-			if tc.blocked == "/v1/usage-metrics" {
+			go func() { h.d.run(ctx, nil, nil, tick, usr1, func(e string) { events <- e }); result <- nil }()
+			if tc.blocked == "/v1/usage-metrics" { // the post that follows the first successful pull
 				if e := nextEvent(t, events, result); e != "pull" {
 					t.Fatalf("first event = %q; want the start-up pull", e)
 				}
-				send(t, usage, "usage", result)
 			}
 			lapi.await(t, result)
 
@@ -132,17 +134,17 @@ func TestTheStatusFileIsWrittenWhileALAPIRequestHangs(t *testing.T) {
 					t.Errorf("%s while the %s hangs = %#v; want %#v", field, tc.name, st[field], want)
 				}
 			}
-			info, err := os.Stat(h.cfg.StatusFile)
-			if err != nil || info.Mode().Perm() != 0o644 {
-				t.Fatalf("status file = %v, %v; want mode 0644", info, err)
+
+			select {
+			case usr1 <- syscall.SIGUSR1:
+			case <-time.After(time.Minute): // salvage watchdog only
+				t.Fatalf("STUCK/ENVIRONMENT: the run loop did not take SIGUSR1 while the %s hangs", tc.name)
+			}
+			if e := nextEvent(t, events, result); e != "reconcile" {
+				t.Fatalf("event after SIGUSR1 = %q; want reconcile, while the %s hangs", e, tc.name)
 			}
 
-			cancel()
-			select {
-			case <-result:
-			case <-time.After(time.Minute): // salvage watchdog only: ctx ends the hanging request
-				t.Fatal("STUCK/ENVIRONMENT: the run loop did not stop within a minute")
-			}
+			stopRun(t, cancel, result)
 			assertTable(t, h.pf, "crowdsec_v4")
 			assertTable(t, h.pf, "crowdsec_v6")
 		})

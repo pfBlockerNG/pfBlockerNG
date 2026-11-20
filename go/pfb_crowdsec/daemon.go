@@ -29,10 +29,12 @@ type daemon struct {
 	errors    uint64     // of which failed
 	dropped   [2]counter // the inbound rules' counters at the last read
 	window    [2]counter // drops counted since the last usage post, across counter resets
+	windowAt  time.Time  // when that window opened: start-up or the last usage post
 }
 
 func newDaemon(cfg *config, log *logger, pf *pfctl, api *lapiClient, now func() time.Time) *daemon {
-	return &daemon{cfg: cfg, log: log, pf: pf, api: api, bans: newBanSet(), now: now, started: now()}
+	start := now()
+	return &daemon{cfg: cfg, log: log, pf: pf, api: api, bans: newBanSet(), now: now, started: start, windowAt: start}
 }
 
 func (d *daemon) tables() [2]string { return [2]string{d.cfg.TableV4, d.cfg.TableV6} }
@@ -48,13 +50,6 @@ func (d *daemon) setup(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-// pull runs one tick: fetch the stream, then finishPull.
-func (d *daemon) pull(ctx context.Context) error {
-	full := !d.synced
-	resp, err := d.api.pull(ctx, full)
-	return d.finishPull(ctx, full, resp, err)
 }
 
 // finishPull applies a fetched stream, reconciles, reads the counters and writes the status file. A failed fetch
@@ -269,24 +264,15 @@ func unixOrZero(t time.Time) int64 {
 	return t.Unix()
 }
 
-// sendUsage closes the usage window and posts it. A failed post is logged and the window dropped.
-func (d *daemon) sendUsage(ctx context.Context) {
-	body, err := d.usageBody(ctx)
-	if err != nil {
-		d.log.warnf("usage metrics not sent: %v", err)
-		return
-	}
-	d.finishUsage(d.api.postUsage(ctx, body))
-}
-
 // usageBody closes the usage window: reads the counters and renders the window, which starts again from zero.
 func (d *daemon) usageBody(ctx context.Context) ([]byte, error) {
 	d.readCounters(ctx)
-	in := usageInput{start: d.started, now: d.now(), window: usageInterval, dropped: d.window}
+	now := d.now()
+	in := usageInput{start: d.started, now: now, window: now.Sub(d.windowAt), dropped: d.window}
 	for f := range 2 {
 		in.origins[f] = d.origins(family(f))
 	}
-	d.window = [2]counter{}
+	d.window, d.windowAt = [2]counter{}, now
 	return usagePayload(in)
 }
 
@@ -324,36 +310,21 @@ func (d *daemon) shutdown(ctx context.Context) {
 	d.log.infof("tables flushed")
 }
 
-// lapiResult is one ended LAPI request: a pull (with the stream asked for) or a usage post.
-type lapiResult struct {
-	usage bool
-	full  bool
-	resp  *streamResponse
-	err   error
-}
-
-// run pulls at once, then on every tick; reconciles on SIGUSR1; posts usage on its ticker; writes the status file on
-// its own ticker; and flushes the tables and returns when ctx ends. LAPI requests run one at a time off this
-// goroutine, so a hanging one delays none of the rest (#4117); ticks that come meanwhile wait for it to end. done,
-// when set, is told of each handled event (tests synchronise on it).
+// run pulls at once, then on every tick; reconciles on SIGUSR1; posts usage after the first successful pull and on its
+// ticker; writes the status file on its own ticker; and flushes the tables and returns when ctx ends. LAPI requests run
+// off this goroutine one at a time, a due usage post first, so a slow one delays none of the rest (#4117). done, when
+// set, is told of each handled event (tests synchronise on it).
 func (d *daemon) run(ctx context.Context, ticks, usage, status <-chan time.Time, usr1 <-chan os.Signal, done func(string)) {
 	notify := func(event string) {
 		if done != nil {
 			done(event)
 		}
 	}
-	results := make(chan lapiResult, 1)
+	finished := make(chan func(), 1) // an ended request's handling, run here
 	busy, pullDue, usageDue := false, true, false
-	next := func() { // starts the due request, a pull first, unless one is running
+	next := func() {
 		switch {
 		case busy:
-		case pullDue:
-			pullDue, busy = false, true
-			full := !d.synced
-			go func() {
-				resp, err := d.api.pull(ctx, full)
-				results <- lapiResult{full: full, resp: resp, err: err}
-			}()
 		case usageDue:
 			usageDue = false
 			body, err := d.usageBody(ctx)
@@ -363,27 +334,33 @@ func (d *daemon) run(ctx context.Context, ticks, usage, status <-chan time.Time,
 				return
 			}
 			busy = true
-			go func() { results <- lapiResult{usage: true, err: d.api.postUsage(ctx, body)} }()
+			go func() {
+				err := d.api.postUsage(ctx, body)
+				finished <- func() { d.finishUsage(err); notify("usage") }
+			}()
+		case pullDue:
+			pullDue, busy = false, true
+			full := !d.synced
+			go func() {
+				resp, err := d.api.pull(ctx, full)
+				finished <- func() {
+					first := d.lastPull.IsZero()
+					_ = d.finishPull(ctx, full, resp, err)
+					usageDue = usageDue || first && err == nil
+					notify("pull")
+				}
+			}()
 		}
 	}
 	next()
 	for {
 		select {
 		case <-ctx.Done():
-			if busy {
-				<-results // ctx has ended the request too
-			}
 			d.shutdown(context.WithoutCancel(ctx))
 			return
-		case r := <-results:
+		case handle := <-finished:
 			busy = false
-			if r.usage {
-				d.finishUsage(r.err)
-				notify("usage")
-			} else {
-				_ = d.finishPull(ctx, r.full, r.resp, r.err)
-				notify("pull")
-			}
+			handle()
 			next()
 		case <-ticks:
 			pullDue = true
