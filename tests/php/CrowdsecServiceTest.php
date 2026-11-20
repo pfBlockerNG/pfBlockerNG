@@ -14,7 +14,9 @@ use PHPUnit\Framework\TestCase;
  *
  * Intent pinned here:
  *   - start runs this machine's pfb_crowdsec (bin/freebsd-amd64 or bin/freebsd-arm64 by `uname -p`) under daemon(8): restarted 5 s
- *     after it exits (-r -R 5), its output to syslog as daemon.* tagged pfb_crowdsec (-S -l daemon -T pfb_crowdsec), std fds detached,
+ *     after it exits (-r -R 5), std fds detached; the bouncer sends its lines to syslog itself, each at its level's severity (-syslog,
+ *     #4158), and its stdout and stderr (lines syslog refused, a Go crash trace) go to syslog at daemon.err tagged pfb_crowdsec
+ *     (-S -l daemon -s err -T pfb_crowdsec);
  *     the supervisor's pid in its own file (-P) and the bouncer's in /var/run/pfb_crowdsec.pid (-p), the file the rule hook signals
  *     (#4069: SIGUSR1 to daemon(8)'s supervisor kills it);
  *   - it starts only while its config file exists (pfb_crowdsec_apply() writes it exactly while the bouncer should run), and only
@@ -78,7 +80,7 @@ final class CrowdsecServiceTest extends TestCase
 
 	private function childArgs(string $binary): string
 	{
-		return "{$binary} -c {$GLOBALS['pfb']['crowdsec_config']}";
+		return "{$binary} -c {$GLOBALS['pfb']['crowdsec_config']} -syslog";
 	}
 
 	private function binary(string $target = 'freebsd-amd64'): string
@@ -136,9 +138,9 @@ final class CrowdsecServiceTest extends TestCase
 		[$status, $out] = $this->rc('start');
 
 		$this->assertSame(0, $status, $out);
-		$this->assertSame(['-r', '-R', '5', '-S', '-l', 'daemon', '-T', 'pfb_crowdsec', '-t', 'pfb_crowdsec',
+		$this->assertSame(['-r', '-R', '5', '-S', '-l', 'daemon', '-s', 'err', '-T', 'pfb_crowdsec', '-t', 'pfb_crowdsec',
 			'-P', $GLOBALS['pfb']['crowdsec_daemon_pidfile'], '-p', $GLOBALS['pfb']['crowdsec_pidfile'],
-			$this->binary(), '-c', $GLOBALS['pfb']['crowdsec_config']], $this->lines('daemon.argv'));
+			$this->binary(), '-c', $GLOBALS['pfb']['crowdsec_config'], '-syslog'], $this->lines('daemon.argv'));
 		$this->assertSame(['0 1 2 '], $this->lines('fds'), 'stdin, stdout and stderr are detached');
 		$this->assertSame(["check {$GLOBALS['pfb']['crowdsec_config']}", 'launch'], $this->lines('events'), 'the config is checked first');
 		$this->assertStringContainsString('started', implode("\n", $this->lines('logger')));

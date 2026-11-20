@@ -114,7 +114,7 @@ func TestSIGTERMDuringSetupStillFlushesBothTables(t *testing.T) {
 	}
 	cfg := testConfig(t, newStubLAPI(t).srv.URL+"/")
 	out := &lockedWriter{w: &bytes.Buffer{}}
-	if code := serve(cfg, out, pfctlBin, device); code != 0 {
+	if code := serve(cfg, out, nil, pfctlBin, device); code != 0 {
 		t.Fatalf("serve returned %d; want 0 for a stop during start-up", code)
 	}
 	data, _ := os.ReadFile(argsLog)

@@ -101,7 +101,9 @@ $section->addInput(new Form_Select(
 	gettext('Log level'),
 	$pconfig['log_level'],
 	array_combine(PFB_CROWDSEC_LOG_LEVELS, PFB_CROWDSEC_LOG_LEVELS)
-))->setHelp('The bouncer logs to the system log, tagged <code>pfb_crowdsec</code>. pfSense\'s own logs reach the engine through '
+))->setHelp('The bouncer logs to the system log, tagged <code>pfb_crowdsec</code>, each line at its own syslog severity. pfSense keeps '
+	. 'only lines at or above <strong>Status &gt; System Logs &gt; Settings</strong>\' log level (notice by default on CE 2.9 and Plus): '
+	. 'to see info or debug lines, choose that level there too. pfSense\'s own logs reach the engine through '
 	. '<strong>Status &gt; System Logs &gt; Settings &gt; Remote Logging</strong>, which pfBlockerNG does not configure.')
   ->setAttribute('style', 'width: auto');
 $form->add($section);

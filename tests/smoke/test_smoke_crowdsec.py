@@ -27,6 +27,11 @@ Criteria and their tests:
      first answered pull (#4117 amendment), so the post of the running process is there, or seconds away.
 * 15 deinstall leaves nothing behind — ``test_deinstall_leaves_nothing_behind`` (last: it reinstalls the package).
 
+Each log line reaches syslog at its level's severity (#4158) —
+``test_each_log_line_reaches_syslog_at_its_levels_severity``.
+pfSense CE 2.9 and Plus 26.x keep daemon lines in the system log only from the System Logs log level up (notice by
+default), so the module raises it to info, which the tests' info lines need; CE 2.8 keeps daemon.info and up anyway.
+
 Run::
 
     scripts/local-smoke.sh --marker smoke --filter crowdsec
@@ -80,6 +85,11 @@ SUPERVISOR = r"^(daemon: pfb_crowdsec\[|/usr/sbin/daemon .*-t pfb_crowdsec )"
 TABLES = {4: "crowdsec_v4", 6: "crowdsec_v6"}
 SYSLOG = "/var/log/system.log"
 FILTER_LOG = "/var/log/filter.log"
+SYSLOG_LEVEL = "syslog/default_log_level"
+# A syslogd drop-in of this module: each severity of the bouncer's daemon-facility lines to a file of its own
+SEVERITY_DROPIN = "/var/etc/syslog.d/zz_pfb_crowdsec_smoke.conf"
+SEVERITY_LOG = "/var/log/pfb_crowdsec_smoke_{}.log"
+SEVERITIES = ("debug", "info", "notice", "warning", "err")
 PROM = "/var/tmp/node_exporter/pfblockerng.prom"
 PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
@@ -91,6 +101,7 @@ RELOAD_BOUND = 2.0  # criterion 4
 SALVAGE = 120.0  # a cap on waiting for an asynchronous event that has no bound of its own; never an expected wait
 
 SIGNALLED = "SIGUSR1: checking the tables"
+FAILED = "LAPI pull failed"
 PROGRAM = re.compile(r"\bpfb_crowdsec(\[\d+\])?: |\bpfb_crowdsec (\d+|-) \S+ ")
 # syslog can join two of the bouncer's messages on one line: read every match on a line
 RESTORED = re.compile(r"(crowdsec_v[46]): restored \d+ values \(table was missing\)")
@@ -320,6 +331,11 @@ def _converged(vm: SmokeVM, stub: StubLapi) -> dict[str, set[Net] | None]:
     )
 
 
+def _syslogd_apply(vm: SmokeVM) -> None:
+    """Regenerate syslogd's configuration from config.xml and restart it."""
+    _php_ok(vm, "require_once('syslog.inc');\nsystem_syslogd_start();")
+
+
 def _turn_off_and_forget(vm: SmokeVM) -> None:
     """Remove the CrowdSec section and apply that (the bouncer stops, its config file goes), reload the filter, and
     kill both tables: as if the bouncer had never been set up."""
@@ -345,14 +361,19 @@ def deployed_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
     vm = smoke_vm
     h.deploy(vm)
     master = h.config_get_state(vm, MASTER)
-    h.set_package_enabled(vm, True)
+    level = h.config_get_state(vm, SYSLOG_LEVEL)
     try:
+        h.config_set(vm, SYSLOG_LEVEL, "info")
+        _syslogd_apply(vm)
+        h.set_package_enabled(vm, True)
         yield vm
     finally:
         try:
             _turn_off_and_forget(vm)
         finally:
             h.config_restore_state(vm, MASTER, master)
+            h.config_restore_state(vm, SYSLOG_LEVEL, level)
+            _syslogd_apply(vm)
 
 
 @pytest.fixture(scope="module")
@@ -677,6 +698,64 @@ def test_the_key_appears_nowhere(
     logs = vm.ssh(f"grep -rlF -e {shlex.quote(key)} /var/log /tmp/PHP_errors.log 2>/dev/null; true")
     assert logs.stdout == "", f"files holding the key: {logs.stdout!r}"
     assert _bouncer_log(vm), "vacuity guard: the bouncer logs to the system log"
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# #4158: severities
+# --------------------------------------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def by_severity(deployed_vm: SmokeVM) -> Iterator[Callable[[], dict[str, list[str]]]]:
+    """syslogd also writes the bouncer's lines to one file per severity; yields a read of those files' bouncer lines
+    (``level=`` lines), by severity. The drop-in and the files go afterwards."""
+    vm = deployed_vm
+    files = {sev: SEVERITY_LOG.format(sev) for sev in SEVERITIES}
+    dropin = "!pfb_crowdsec\n" + "".join(f"daemon.={sev}\t{path}\n" for sev, path in files.items())
+    _sh(vm, f"touch {' '.join(files.values())} && printf %s {shlex.quote(dropin)} > {SEVERITY_DROPIN}")
+    _sh(vm, "pkill -HUP -F /var/run/syslog.pid syslogd")
+    # syslogd reads the drop-in on the HUP, at a moment of its own: a probe line in the info file shows it has
+    probe = "level=info msg=smoke probe"
+    _await(
+        lambda: _sh(vm, f"logger -p daemon.info -t pfb_crowdsec {shlex.quote(probe)}; cat {files['info']}"),
+        lambda text: probe in text,
+        "syslogd writing the drop-in's files",
+    )
+
+    def read() -> dict[str, list[str]]:
+        return {
+            sev: [line for line in _sh(vm, f"cat {path}").splitlines() if "level=" in line]
+            for sev, path in files.items()
+        }
+
+    try:
+        yield read
+    finally:
+        vm.ssh(f"rm -f {SEVERITY_DROPIN}; pkill -HUP -F /var/run/syslog.pid syslogd; rm -f {' '.join(files.values())}")
+
+
+def test_each_log_line_reaches_syslog_at_its_levels_severity(
+    bouncer: SmokeVM, engine: StubLapi, by_severity: Callable[[], dict[str, list[str]]]
+) -> None:
+    """Given the bouncer on, and syslogd writing its lines to one file per severity,
+    When it logs an info line (a SIGUSR1 check) and error lines (pulls failing while the LAPI is unreachable),
+    Then the info line arrives at info and the error lines at err, the text unchanged, and no line arrives at a
+      severity other than its level's."""
+    vm = bouncer
+    _sh(vm, f"pkill -USR1 -F {PIDFILE} -f {shlex.quote(CHILD)}")
+    with engine.outage():
+        lines = _await(
+            by_severity,
+            lambda got: all(
+                any(text in line for found in got.values() for line in found) for text in (SIGNALLED, FAILED)
+            ),
+            "the signal's info line and a failed pull's error line, at any severity",
+        )
+    assert any(SIGNALLED in line for line in lines["info"]), f"the signal's line at info: {lines}"
+    assert any(FAILED in line for line in lines["err"]), f"the failed pull's line at err: {lines}"
+    for severity, level in (("debug", "debug"), ("info", "info"), ("warning", "warning"), ("err", "error")):
+        assert all(f"level={level} msg=" in line for line in lines[severity]), f"{severity}: {lines[severity]}"
+    assert lines["notice"] == [], f"no bouncer line at notice: {lines['notice']}"
 
 
 # --------------------------------------------------------------------------------------------------------------------

@@ -59,6 +59,30 @@ func TestTestFlagValidatesTheConfigAndExits(t *testing.T) {
 	}
 }
 
+// The rc script runs the daemon with -syslog (#4158).
+func TestSyslogFlagIsAccepted(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := realMain([]string{"-t", "-c", writeConfigFile(t, validConfigMap()), "-syslog"}, &out, &errOut); code != 0 {
+		t.Fatalf("exit = %d (stderr %q); want 0", code, errOut.String())
+	}
+}
+
+// serve sends its lines to the syslog it is given: a start that fails logs its error there at err.
+func TestServeLogsToTheSyslogItIsGiven(t *testing.T) {
+	path, conn := fakeSyslogd(t)
+	var out bytes.Buffer
+	missing := filepath.Join(t.TempDir(), "pfctl")
+	if code := serve(testConfig(t, "http://127.0.0.1:1/"), &out, dialSyslogAt(path), missing, missing); code != 1 {
+		t.Fatalf("serve without pfctl = %d; want 1", code)
+	}
+	if got := readSyslog(t, conn); !strings.HasPrefix(got, "<27>") || !strings.Contains(got, "level=error msg="+missing) {
+		t.Fatalf("datagram = %q; want the start's error at err", got)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("stdout = %q; want nothing while syslog takes the lines", out.String())
+	}
+}
+
 func TestMissingConfigFlagIsAUsageError(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := realMain(nil, &out, &errOut); code != 2 {
@@ -134,7 +158,7 @@ func TestServeFlushesTheTablesAndExitsZeroOnSIGTERM(t *testing.T) {
 	var out lockedWriter
 	out.w = &bytes.Buffer{}
 	code := make(chan int, 1)
-	go func() { code <- serve(cfg, &out, pfctlBin, device) }()
+	go func() { code <- serve(cfg, &out, nil, pfctlBin, device) }()
 	for i := 0; ; i++ { // readiness: the status file appears after the first pull, signal handling is armed by then
 		if _, err := os.Stat(cfg.StatusFile); err == nil {
 			break

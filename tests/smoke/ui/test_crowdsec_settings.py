@@ -110,6 +110,9 @@ def test_the_form_offers_every_setting_and_never_renders_the_stored_key(
     assert key not in html, "the stored bouncer key was rendered into the page"
     assert "cscli bouncers add" in html, "the page tells the operator how to get a key"
     assert "Remote Logging" in html, "the page says where pfSense's own logs go"
+    # #4158: each line at its level's severity, and pfSense keeps only what its own System Logs level lets through
+    assert "its own syslog severity" in html, "the log level help says each line has its level's severity"
+    assert "System Logs &gt; Settings</strong>' log level" in html, "the log level help points at pfSense's level"
     assert "A key is stored" in html, "the page says that a key is stored, without showing it"
 
 
