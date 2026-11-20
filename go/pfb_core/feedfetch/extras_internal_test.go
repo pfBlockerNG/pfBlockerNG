@@ -62,7 +62,7 @@ func TestAMergeThatFailsPartWayRestoresWhatItReplaced(t *testing.T) {
 	}
 	t.Cleanup(func() { rename = real })
 	f := &Fetcher{}
-	ok := f.mergeIntoDir(share, func(dir string) error {
+	ok, _ := f.mergeIntoDir(share, func(dir string) error {
 		for name, content := range map[string]string{"a.csv": "new a\n", "b.csv": "new b\n"} {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 				return err
@@ -105,7 +105,7 @@ func TestAFailedRollbackKeepsTheBackup(t *testing.T) {
 	}
 	t.Cleanup(func() { rename = real })
 	f := &Fetcher{}
-	ok := f.mergeIntoDir(share, func(dir string) error {
+	ok, _ := f.mergeIntoDir(share, func(dir string) error {
 		for name, content := range map[string]string{"a.csv": "new a\n", "b.csv": "new b\n"} {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 				return err
@@ -147,7 +147,7 @@ func TestALiveSymlinkIsBackedUpAsALink(t *testing.T) {
 		if err := os.Symlink(filepath.Join(t.TempDir(), "gone.mmdb"), filepath.Join(share, "GeoLite2-Country.mmdb")); err != nil {
 			t.Fatal(err)
 		}
-		ok := (&Fetcher{}).mergeIntoDir(share, func(dir string) error {
+		ok, _ := (&Fetcher{}).mergeIntoDir(share, func(dir string) error {
 			return os.WriteFile(filepath.Join(dir, "GeoLite2-Country.mmdb"), []byte("new"), 0o644)
 		})
 		got, err := os.ReadFile(filepath.Join(share, "GeoLite2-Country.mmdb"))
@@ -173,7 +173,7 @@ func TestALiveSymlinkIsBackedUpAsALink(t *testing.T) {
 			return real(from, to)
 		}
 		t.Cleanup(func() { rename = real })
-		ok := (&Fetcher{}).mergeIntoDir(share, func(dir string) error {
+		ok, _ := (&Fetcher{}).mergeIntoDir(share, func(dir string) error {
 			for _, name := range []string{"a.csv", "b.csv"} {
 				if err := os.WriteFile(filepath.Join(dir, name), []byte("new\n"), 0o644); err != nil {
 					return err
@@ -574,5 +574,57 @@ func TestAnAbortedGeoIPRowIsNoMaxMindFailure(t *testing.T) {
 	res := run(&errFrom{Context: context.Background(), failFrom: count.calls})
 	if res.Rows[0].Stage == "aborted" && res.MaxMindError {
 		t.Errorf("an aborted row also reads as a MaxMind failure: %+v", res)
+	}
+}
+
+// servedOnce serves body at a public name that resolves to this host, and returns the URL of path on it.
+func servedOnce(t *testing.T, host, path string, body []byte) (*Fetcher, string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write(body) }))
+	t.Cleanup(srv.Close)
+	f := &Fetcher{RetryDelay: 1}
+	f.Resolve = func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("203.0.113.9")}, nil
+	}
+	return f, "http://" + host + ":" + srv.URL[strings.LastIndex(srv.URL, ":")+1:] + path
+}
+
+// A run cancelled while a GeoIP merge rolls back still names what the rollback left: the row reads aborted, and its
+// detection keeps the backup path (CodeRabbit on #4119).
+func TestAnAbortedRowKeepsAnIncompleteRollbacksResidue(t *testing.T) {
+	var zipped bytes.Buffer
+	zw := zip.NewWriter(&zipped)
+	for _, name := range []string{"a.csv", "b.csv"} {
+		w, err := zw.Create("GeoLite2-Country-CSV_20261119/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Write([]byte("new\n"))
+	}
+	zw.Close()
+	f, url := servedOnce(t, "download.maxmind.com", "/csv.zip", zipped.Bytes())
+	share := t.TempDir()
+	if err := os.WriteFile(filepath.Join(share, "a.csv"), []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	real := rename
+	rename = func(from, to string) error {
+		if strings.Contains(from, ".pfbstagedir_") && filepath.Base(to) == "b.csv" {
+			cancel() // the run ends while the merge fails part-way
+			return os.ErrPermission
+		}
+		if strings.Contains(from, ".pfbbackup_") {
+			return os.ErrPermission // and a.csv cannot be put back
+		}
+		return real(from, to)
+	}
+	t.Cleanup(func() { rename = real })
+	res := f.DownloadExtras(ctx, ExtrasConfig{DBDir: t.TempDir(), MaxMindAccount: "1", MaxMindKey: "k"},
+		[]Extra{{Kind: "geoip", URL: url, Dir: share, Download: "GeoLite2-Country-CSV.zip"}})
+	backups, _ := filepath.Glob(filepath.Join(share, ".pfbbackup_*"))
+	if r := res.Rows[0]; r.Stage != "aborted" || len(backups) != 1 || r.Detected != backups[0] {
+		t.Errorf("(stage, detected) = (%q, %q), want (aborted, the backup %v)", r.Stage, r.Detected, backups)
 	}
 }

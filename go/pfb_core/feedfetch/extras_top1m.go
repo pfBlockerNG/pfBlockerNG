@@ -21,21 +21,22 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 )
 
-// top1mProvider is a row of pfb_top1m_providers() as far as a download needs it: how a row of the list is read, and
-// whether the provider takes the Bearer token.
+// top1mProvider is a row of pfb_top1m_providers() as far as a download needs it: how a row of the list is read, whether
+// the provider takes the Bearer token, and the list's URL.
 type top1mProvider struct {
 	rankDomain         bool // the first column is a numeric rank (parse "rank_domain")
 	header             bool // the first line is a header
 	domainCol, columns int
 	bearer             bool // Cloudflare Radar: "Authorization: Bearer <token>"
+	url                string
 }
 
 var top1mProviders = map[string]top1mProvider{
-	"tranco":       {rankDomain: true, domainCol: 1, columns: 2},
-	"cisco":        {rankDomain: true, domainCol: 1, columns: 2},
-	"openpagerank": {header: true, domainCol: 1, columns: 5},
-	"majestic":     {header: true, domainCol: 2, columns: 12},
-	"cloudflare":   {header: true, domainCol: 0, columns: 1, bearer: true},
+	"tranco":       {rankDomain: true, domainCol: 1, columns: 2, url: "https://tranco-list.eu/top-1m.csv.zip"},
+	"cisco":        {rankDomain: true, domainCol: 1, columns: 2, url: "https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip"},
+	"openpagerank": {header: true, domainCol: 1, columns: 5, url: "https://openpagerank.keywordseverywhere.com/downloads/top10milliondomains.csv.zip"},
+	"majestic":     {header: true, domainCol: 2, columns: 12, url: "https://downloads.majestic.com/majestic_million.csv"},
+	"cloudflare":   {header: true, domainCol: 0, columns: 1, bearer: true, url: "https://api.cloudflare.com/client/v4/radar/datasets/ranking_top_1000000"},
 }
 
 // top1mProviderOf is pfb_top1m_active_provider(): an unknown provider is Tranco.

@@ -30,8 +30,8 @@ func (f *Fetcher) fetchRsync(ctx context.Context, src *source, req Request, dst 
 	}
 	// rsync's temporary file (".NAME.XXXXXX" beside dst) outlives a kill, this run's or an earlier one's (#3911).
 	temps := filepath.Join(filepath.Dir(dst), "."+filepath.Base(dst)+".*")
-	removeAll(temps)
-	defer removeAll(temps)
+	removeGlob(temps)
+	defer removeGlob(temps)
 	limit := req.maxBytes()
 	ctx, cancel := context.WithTimeout(ctx, req.timeout())
 	defer cancel()
@@ -71,7 +71,7 @@ func (f *Fetcher) fetchRsync(ctx context.Context, src *source, req Request, dst 
 	return transfer{status: 200}
 }
 
-func removeAll(pattern string) {
+func removeGlob(pattern string) {
 	matches, _ := filepath.Glob(pattern)
 	for _, m := range matches {
 		os.Remove(m)

@@ -79,7 +79,8 @@ func (f *Fetcher) blacklist(ctx context.Context, cfg ExtrasConfig, x Extra, req 
 		os.Remove(base)
 		return *r
 	}
-	if r := published(replaceDir, filepath.Join(cfg.DBDir, name), "blacklist", filepath.Base(base), func(dir string) error {
+	whole := func(target string, extract func(string) error) (bool, string) { return replaceDir(target, extract), "" }
+	if r := published(whole, filepath.Join(cfg.DBDir, name), "blacklist", filepath.Base(base), func(dir string) error {
 		return f.extractCategories(ctx, mime, base, name, dir)
 	}); !r.OK {
 		return r
