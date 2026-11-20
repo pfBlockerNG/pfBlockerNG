@@ -23,7 +23,6 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_crowdsec_status_read')]
 #[CoversFunction('pfb_crowdsec_log_tail')]
 #[CoversFunction('pfb_crowdsec_table_entries')]
-#[CoversFunction('pfb_crowdsec_subtabs')]
 final class CrowdsecStatusTest extends TestCase
 {
 	private const SECTION = 'installedpackages/pfblockerngcrowdsec/config/0';
@@ -69,14 +68,6 @@ final class CrowdsecStatusTest extends TestCase
 		$GLOBALS['pfb']['enable'] = PfbToggle::Off;
 		$this->assertSame('pfBlockerNG is disabled', pfb_crowdsec_off_reason(), 'pfBlockerNG off is named first');
 		$this->assertFalse(pfb_crowdsec_should_run());
-	}
-
-	public function testTheSecondRowSelectsTheGivenSubtab(): void
-	{
-		$this->assertSame([['Settings', FALSE, PFB_CROWDSEC_PAGE], ['Status', TRUE, PFB_CROWDSEC_STATUS_PAGE]],
-		    pfb_crowdsec_subtabs(PFB_CROWDSEC_STATUS_PAGE));
-		$this->assertSame([['Settings', TRUE, PFB_CROWDSEC_PAGE], ['Status', FALSE, PFB_CROWDSEC_STATUS_PAGE]],
-		    pfb_crowdsec_subtabs(PFB_CROWDSEC_PAGE));
 	}
 
 	// ---- the lookup ---------------------------------------------------------------------------

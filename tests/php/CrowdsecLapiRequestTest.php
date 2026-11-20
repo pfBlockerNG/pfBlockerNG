@@ -142,6 +142,7 @@ PHP);
 
 	public function testAServerThatDoesNotAnswerIsCutOffByTheTimeLimit(): void
 	{
+		$this->assertSame(5, PFB_CROWDSEC_LOOKUP_TIMEOUT, 'D7: 5 s for the whole request');
 		$answer = pfb_crowdsec_lapi_get($this->url('/silent'), self::KEY);
 
 		$this->assertStringContainsString('timed out', $answer['error'], 'the request gives up on its own, before the server answers');

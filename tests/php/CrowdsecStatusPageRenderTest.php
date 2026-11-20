@@ -77,15 +77,11 @@ final class CrowdsecStatusPageRenderTest extends TestCase
 	/** The status file as the page reads it, with $origins as the IPv4 origins. */
 	private function statusRead(array $origins): array
 	{
-		$ipv4 = new stdClass();
-		foreach ($origins as $origin => $count) {
-			$ipv4->{(string) $origin} = $count;
-		}
 		$path = "{$this->root}/status.json";
 		file_put_contents($path, json_encode([
 			'version' => '0.1.0', 'start_time' => 1, 'update_frequency_seconds' => 10, 'updated_at' => 1000, 'last_pull' => 4,
 			'last_error_time' => 0, 'last_error' => '', 'lapi_requests' => 9, 'lapi_errors' => 0,
-			'banned' => ['ipv4' => ['total' => array_sum($origins), 'origins' => $ipv4], 'ipv6' => ['total' => 0, 'origins' => new stdClass()]],
+			'banned' => ['ipv4' => ['total' => array_sum($origins), 'origins' => (object) $origins], 'ipv6' => ['total' => 0, 'origins' => new stdClass()]],
 			'dropped' => ['ipv4' => ['packets' => 0, 'bytes' => 0], 'ipv6' => ['packets' => 0, 'bytes' => 0]],
 		], JSON_THROW_ON_ERROR));
 		$status = pfb_crowdsec_status_read($path);
@@ -151,11 +147,12 @@ final class CrowdsecStatusPageRenderTest extends TestCase
 	public function testATableShowsOneHundredEntriesToAPage(int $page, int $first, int $last): void
 	{
 		$entries = array_map(static fn (int $n): string => "198.51.100.{$n}", range(1, 250));
-		$entriesFile = "{$this->root}/entries";
-		file_put_contents($entriesFile, implode('', array_map(static fn (string $entry): string => "   {$entry}\n", $entries)));
+		$entries6 = array_map(static fn (int $n): string => sprintf('2001:db8::%x', $n), range(1, 250));
+		foreach (['crowdsec_v4' => $entries, 'crowdsec_v6' => $entries6] as $table => $list) {
+			file_put_contents("{$this->root}/{$table}", implode('', array_map(static fn (string $entry): string => "   {$entry}\n", $list)));
+		}
 		$GLOBALS['pfb']['pfctl'] = "{$this->root}/pfctl";
-		file_put_contents($GLOBALS['pfb']['pfctl'], "#!/bin/sh\n[ \"\$2\" = crowdsec_v4 ] || { echo 'pfctl: Table does not exist.' >&2; exit 1; }\n"
-		    . 'cat ' . escapeshellarg($entriesFile) . "\n");
+		file_put_contents($GLOBALS['pfb']['pfctl'], "#!/bin/sh\ncat " . escapeshellarg("{$this->root}/") . "\"\$2\"\n");
 		chmod($GLOBALS['pfb']['pfctl'], 0755);
 		$_GET = ['page_ipv4' => (string) $page];
 
@@ -164,5 +161,9 @@ final class CrowdsecStatusPageRenderTest extends TestCase
 		$this->assertSame(1, preg_match('~<pre id="cs-table-ipv4">(.*?)</pre>~s', $html, $shown), 'the table is shown: ' . $html);
 		$this->assertSame(array_slice($entries, $first - 1, $last - $first + 1), explode("\n", $shown[1]), "entries {$first} to {$last}");
 		$this->assertStringContainsString("<p id=\"cs-table-ipv4-count\">250 entries; page {$page} of 3.</p>", $html);
+		// The IPv6 table keeps its own page: the IPv4 page number does not move it
+		$this->assertSame(1, preg_match('~<pre id="cs-table-ipv6">(.*?)</pre>~s', $html, $shown6), 'the IPv6 table is shown: ' . $html);
+		$this->assertSame(array_slice($entries6, 0, 100), explode("\n", $shown6[1]), 'the IPv6 table stays on its first page');
+		$this->assertStringContainsString('<p id="cs-table-ipv6-count">250 entries; page 1 of 3.</p>', $html);
 	}
 }

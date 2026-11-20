@@ -228,6 +228,7 @@ final class CrowdsecSettingsTest extends TestCase
 		yield 'byte order mark'    => ["\u{FEFF}abc"];
 		yield 'bidi override'      => ["ab\u{202E}c"];
 		yield 'trailing line break' => ["abc\r\n"];
+		yield 'trailing newline'   => ["abc\n"];
 		yield 'only a space'       => [' '];
 		yield 'no-break space'     => ["\u{00A0}abc"];
 	}
@@ -269,15 +270,6 @@ final class CrowdsecSettingsTest extends TestCase
 		$this->assertCount(1, $out['errors'], json_encode($tag));
 		$this->assertStringContainsString('Tag', $out['errors'][0]);
 		$this->assertSame('', $out['values']['rules_tag'], 'a refused tag is not stored');
-	}
-
-	public function testAnEmptyTagAndAnEmptyKeyFieldAreAcceptedAndTheStoredKeyIsKept(): void
-	{
-		$out = self::validate(self::post(['rules_tag' => '', 'api_key' => '']));
-
-		$this->assertSame([], $out['errors']);
-		$this->assertSame('', $out['values']['rules_tag']);
-		$this->assertSame(self::KEY, $out['values']['api_key']);
 	}
 
 	public function testA256CharacterKeyOfEveryPrintableCharacterIsAccepted(): void

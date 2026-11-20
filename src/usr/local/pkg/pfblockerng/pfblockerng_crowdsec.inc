@@ -87,7 +87,7 @@ function pfb_crowdsec_should_run(): bool {
 
 /**
  * An http:// or https:// URL with a host, and no credentials, query or fragment: what the bouncer accepts as its api_url (its
- * config check, go/pfb_crowdsec config.go, parses it with net/url). A character a URL never holds unencoded (space, quotes, <, >,
+ * config check, go/pfb_crowdsec config.go, parses it with net/url). A character a URL never holds unencoded (ASCII space, quotes, <, >,
  * \, ^, `, {, |, }) is refused, as is a % that starts no escape and an authority net/url refuses: the host is a name without
  * brackets, colons or escapes, or a bracketed IPv6 address with an optional %25 zone, and the port, when there is a colon, is
  * digits only. The URL reaches a JSON file and curl, never a shell, so $ ' ; & ( * ! pass.
@@ -113,14 +113,13 @@ function pfb_crowdsec_url_valid(string $url): bool {
  */
 function pfb_crowdsec_validate(array $post, string $storedKey, array $interfaces): array {
 	$errors = [];
-	$text = static fn (string $field): ?string => is_string($post[$field] ?? '') ? pfb_sanitize_text($post[$field] ?? '') : NULL;
 	// Narrower than the sanitize-at-ingestion rule: a stripped key or tag is a different value than the one typed, which D2 refuses
-	$raw = static fn (string $field): ?string => is_string($post[$field] ?? '') ? ($post[$field] ?? '') : NULL;
+	$raw = static fn (string $field): ?string => is_string($value = $post[$field] ?? '') ? $value : NULL;
 	$toggle = static fn (string $field): string => (($post[$field] ?? '') === 'on') ? 'on' : '';
 	$values = ['enable' => $toggle('enable')];
 	$enabled = $values['enable'] === 'on';
 
-	$url = $text('lapi_url');
+	$url = is_string($post['lapi_url'] ?? '') ? pfb_sanitize_text($post['lapi_url'] ?? '') : NULL;
 	if ($url === NULL || ($url !== '' && !pfb_crowdsec_url_valid($url))) {
 		$errors[] = gettext('The Remote LAPI URL must be an http:// or https:// URL with a host, without credentials, query or fragment.');
 	} elseif ($url === '' && $enabled) {
@@ -277,16 +276,8 @@ function pfb_crowdsec_save(array $values): void {
 		filter_configure();
 	}
 	if ($policy !== pfb_crowdsec_policy_state()) {
-		pfb_mark_pending_changes();	// applies on the next Update, not on save
+		pfb_mark_pending_changes();	// applied here already; the peers receive it on the next Update
 	}
-}
-
-/** The CrowdSec tab's second row, with the subtab at $page (PFB_CROWDSEC_PAGE or PFB_CROWDSEC_STATUS_PAGE) selected. */
-function pfb_crowdsec_subtabs(string $page): array {
-	return array(
-		array(gettext('Settings'), $page === PFB_CROWDSEC_PAGE, PFB_CROWDSEC_PAGE),
-		array(gettext('Status'), $page === PFB_CROWDSEC_STATUS_PAGE, PFB_CROWDSEC_STATUS_PAGE),
-	);
 }
 
 /**
@@ -294,7 +285,6 @@ function pfb_crowdsec_subtabs(string $page): array {
  * subtab row with $page (PFB_CROWDSEC_PAGE or PFB_CROWDSEC_STATUS_PAGE) selected.
  */
 function pfb_crowdsec_display_tabs(string $page): void {
-	// Define default Alerts Tab href link (Top row)
 	$get_req = pfb_alerts_default_page();
 
 	$tab_array	= array();
@@ -314,7 +304,10 @@ function pfb_crowdsec_display_tabs(string $page): void {
 	display_top_tabs($tab_array, TRUE);
 	pfb_print_pending_changes_box();
 
-	$tab_array = pfb_crowdsec_subtabs($page);
+	$tab_array = array(
+		array(gettext('Settings'), $page === PFB_CROWDSEC_PAGE, PFB_CROWDSEC_PAGE),
+		array(gettext('Status'), $page === PFB_CROWDSEC_STATUS_PAGE, PFB_CROWDSEC_STATUS_PAGE),
+	);
 	display_top_tabs($tab_array, TRUE);
 }
 
@@ -656,7 +649,7 @@ function pfb_crowdsec_rules(string $type): string {
 	$tag = is_string($s['rules_tag']) && preg_match(PFB_CROWDSEC_TAG_PATTERN, $s['rules_tag']) ? " tag \"{$s['rules_tag']}\"" : '';
 
 	$rules = '';
-	foreach (['ipv4' => ['rule_v4', 'inet', '4'], 'ipv6' => ['rule_v6', 'inet6', '6']] as $family => [$field, $af, $n]) {
+	foreach (['4' => ['rule_v4', 'inet'], '6' => ['rule_v6', 'inet6']] as $n => [$field, $af]) {
 		if ($s[$field] !== PfbToggle::On) {
 			continue;
 		}
@@ -669,7 +662,7 @@ function pfb_crowdsec_rules(string $type): string {
 			}
 			$on = ' on { ' . implode(' ', $real) . ' }';
 		}
-		$table = PFB_CROWDSEC_TABLES[$family];
+		$table = PFB_CROWDSEC_TABLES["ipv{$n}"];
 		$rules .= "block drop in{$log} quick{$on} {$af} from <{$table}> to any label \"CrowdSec IPv{$n}\"{$tag}\n"
 		    . "block drop out{$log} quick{$on} {$af} from any to <{$table}> label \"CrowdSec IPv{$n} out\"{$tag}\n";
 	}
