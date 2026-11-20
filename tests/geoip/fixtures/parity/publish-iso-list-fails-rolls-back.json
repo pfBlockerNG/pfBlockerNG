@@ -20,7 +20,8 @@
 			"cc/KR_v4.txt": "",
 			"cc/.pfb_generation_swapping": null
 		},
-		"tree": "16d9798a768962752fe79ecf541dc0a47f0a33b5cf6e456ece13756c66cbbbdd"
+		"tree": "16d9798a768962752fe79ecf541dc0a47f0a33b5cf6e456ece13756c66cbbbdd",
+		"catalog": "08d65d91df7e4041ce9d5a44ac4e58149a141b7a0c07a32497dd2547d34f8edb"
 	},
 	"old_expect": {
 		"ok": false,
@@ -31,6 +32,7 @@
 			"db/geoip.txt/inside": "a folder\n",
 			"cc/.pfb_generation_swapping": null
 		},
-		"tree": "c67b80de5eaf717df79bfc513cc4f6082ea46cc6dffc906f6de9ccd09784c452"
+		"tree": "c67b80de5eaf717df79bfc513cc4f6082ea46cc6dffc906f6de9ccd09784c452",
+		"catalog": null
 	}
 }

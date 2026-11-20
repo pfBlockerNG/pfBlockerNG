@@ -18,6 +18,7 @@
 			"cc/North_America_v4.txt": "# previous\n",
 			"db/geoip.txt": "previous\n"
 		},
-		"tree": "d3c265b70b087b999fd433353bf66fed48b962ef104e8045926da85c2596fd53"
+		"tree": "d3c265b70b087b999fd433353bf66fed48b962ef104e8045926da85c2596fd53",
+		"catalog": null
 	}
 }

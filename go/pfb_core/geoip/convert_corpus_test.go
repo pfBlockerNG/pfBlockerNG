@@ -10,9 +10,10 @@ package geoip_test
 //	share_mtime  the Locations file's modification time (RFC 3339), which maxmind_ver reports.
 //	share        {name: content}: the MaxMind CSVs in the share folder.
 //	seed         {path: content}: files under the root before the run (a previous generation).
-//	expect       ok (the conversion's answer), files ({path: content, or null when absent}: only the paths named) and
+//	expect       ok (the conversion's answer), files ({path: content, or null when absent}: only the paths named),
 //	             tree (sha256 over every file the run leaves at the root outside share/, as sorted "<path>\0<sha256>\n"
-//	             lines).
+//	             lines, the catalog file cc/.geo_catalog left out) and catalog (the geo-catalog's digest, or null when the
+//	             published generation has none; see catalogDigest).
 //	old_expect   today's PHP answer where Core deliberately differs (an owner decision): the PHP runner asserts it, this
 //	             runner asserts expect and refuses an old_expect equal to it.
 //
@@ -39,6 +40,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -83,9 +85,10 @@ func (c corpusContent) bytes(t *testing.T) []byte {
 }
 
 type conversionExpect struct {
-	OK    bool                      `json:"ok"`
-	Files map[string]*corpusContent `json:"files"`
-	Tree  string                    `json:"tree"`
+	OK      bool                      `json:"ok"`
+	Files   map[string]*corpusContent `json:"files"`
+	Tree    string                    `json:"tree"`
+	Catalog *string                   `json:"catalog"`
 }
 
 type conversionCase struct {
@@ -198,8 +201,14 @@ func TestConversionCorpus(t *testing.T) {
 				}
 			}
 			got["files"] = gotFiles
+			catalog, ok := published["cc/.geo_catalog"]
+			delete(published, "cc/.geo_catalog")
 			sums, listing := tree(published)
 			got["tree"] = sums
+			got["catalog"] = nil
+			if ok {
+				got["catalog"] = catalogDigest(t, catalog)
+			}
 
 			wantFiles := map[string]any{}
 			for rel, content := range c.Expect.Files {
@@ -209,7 +218,10 @@ func TestConversionCorpus(t *testing.T) {
 				}
 				wantFiles[rel] = shown(content.bytes(t))
 			}
-			want := map[string]any{"ok": c.Expect.OK, "files": wantFiles, "tree": c.Expect.Tree}
+			want := map[string]any{"ok": c.Expect.OK, "files": wantFiles, "tree": c.Expect.Tree, "catalog": nil}
+			if c.Expect.Catalog != nil {
+				want["catalog"] = *c.Expect.Catalog
+			}
 			if !reflect.DeepEqual(got, want) {
 				gj, _ := json.MarshalIndent(got, "", "  ")
 				wj, _ := json.MarshalIndent(want, "", "  ")
@@ -285,6 +297,48 @@ func todays(t *testing.T, root string) map[string][]byte {
 		}
 	}
 	return files
+}
+
+// catalogDigest is the corpus digest of a catalog file, which must be a canonical resource body (JSON Lines, unique and
+// in byte order, each line ending in a newline): the sha256 of its rows' lines
+// "<kind>\0<page>\0<family>\0<position>\0<iso>\0<country>\0<networks>\n" (a field a row lacks is empty) in byte
+// order, as tests/php/GeoipConversionCorpusTest.php reads the same rows back from the pages, whatever each side's JSON
+// encoder spells.
+func catalogDigest(t *testing.T, body []byte) string {
+	t.Helper()
+	if len(body) > 0 && body[len(body)-1] != '\n' {
+		t.Fatalf("catalog does not end in a newline")
+	}
+	members := strings.Split(strings.TrimSuffix(string(body), "\n"), "\n")
+	if len(body) == 0 {
+		members = nil
+	}
+	var lines []string
+	for i, m := range members {
+		if i > 0 && m <= members[i-1] {
+			t.Fatalf("catalog line %d is not after the line before it in byte order: %q", i+1, m)
+		}
+		var row struct {
+			Kind, Page, ISO, Country   string
+			Family, Position, Networks *int
+		}
+		d := json.NewDecoder(strings.NewReader(m))
+		d.DisallowUnknownFields()
+		if err := d.Decode(&row); err != nil || d.More() {
+			t.Fatalf("catalog line %d is not one row: %q: %v", i+1, m, err)
+		}
+		n := func(p *int) string {
+			if p == nil {
+				return ""
+			}
+			return strconv.Itoa(*p)
+		}
+		lines = append(lines, strings.Join([]string{row.Kind, row.Page, n(row.Family), n(row.Position), row.ISO,
+			row.Country, n(row.Networks)}, "\x00")+"\n")
+	}
+	slices.Sort(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "")))
+	return hex.EncodeToString(sum[:])
 }
 
 // tree is the corpus digest of the files, and their listing for a failure message.

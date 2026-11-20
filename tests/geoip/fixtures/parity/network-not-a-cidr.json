@@ -13,7 +13,8 @@
 			"cc/US_v4.txt": null,
 			"cc/US_v6.txt": null
 		},
-		"tree": "d102fa3700f2a74722c4c258376c6c48cd998b4df93834972f6d5161ebc140e1"
+		"tree": "d102fa3700f2a74722c4c258376c6c48cd998b4df93834972f6d5161ebc140e1",
+		"catalog": null
 	},
 	"old_expect": {
 		"ok": true,
@@ -21,6 +22,7 @@
 			"cc/US_v4.txt": "3.0.0.0/15\nbanana\n1.2.3.4/8\n2001:db8::/32\n",
 			"cc/US_v6.txt": "2600::/12\n192.0.2.0/24\n"
 		},
-		"tree": "2c1b8f68c14d54093df61cb689d850badcbab30c8ce38c5c6b62dadc030e8286"
+		"tree": "2c1b8f68c14d54093df61cb689d850badcbab30c8ce38c5c6b62dadc030e8286",
+		"catalog": "e8ce4f390f2e2851b7282e018784d8cffe0ddc97bcc84930d0fced2205340415"
 	}
 }

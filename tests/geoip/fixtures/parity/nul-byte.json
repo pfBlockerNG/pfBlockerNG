@@ -16,13 +16,15 @@
 		"files": {
 			"cc/KR_v4.txt": null
 		},
-		"tree": "d102fa3700f2a74722c4c258376c6c48cd998b4df93834972f6d5161ebc140e1"
+		"tree": "d102fa3700f2a74722c4c258376c6c48cd998b4df93834972f6d5161ebc140e1",
+		"catalog": null
 	},
 	"old_expect": {
 		"ok": true,
 		"files": {
 			"cc/KR_v4.txt": "7.0.0.0/8\u0000x\n"
 		},
-		"tree": "0a086ebcee21ddc5a0388c8ae347994a43d07c282a6b51d2d1e111ff3c95de42"
+		"tree": "0a086ebcee21ddc5a0388c8ae347994a43d07c282a6b51d2d1e111ff3c95de42",
+		"catalog": "2adfce7f36dc09a9750c5809d2bb7063c2410d289d63ef60f1cecde4481ca0e9"
 	}
 }

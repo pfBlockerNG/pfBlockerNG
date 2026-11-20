@@ -12,6 +12,7 @@
 		"files": {
 			"cc/US_v4.txt": "3.0.0.0/15\n"
 		},
-		"tree": "17e4bfa40fe69841fffc76935a53e4ce6bfb0fa078a448c1f4a1deecca11724b"
+		"tree": "17e4bfa40fe69841fffc76935a53e4ce6bfb0fa078a448c1f4a1deecca11724b",
+		"catalog": "f6a05e97f926ec0b8069da5f806f78899a82cf86b3378d94db6ae711df9ddab1"
 	}
 }

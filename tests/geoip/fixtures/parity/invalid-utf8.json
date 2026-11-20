@@ -16,7 +16,8 @@
 		"files": {
 			"cc/KR_v4.txt": null
 		},
-		"tree": "d102fa3700f2a74722c4c258376c6c48cd998b4df93834972f6d5161ebc140e1"
+		"tree": "d102fa3700f2a74722c4c258376c6c48cd998b4df93834972f6d5161ebc140e1",
+		"catalog": null
 	},
 	"old_expect": {
 		"ok": true,
@@ -25,6 +26,7 @@
 				"b64": "Ny4wLjAuMC84/go="
 			}
 		},
-		"tree": "2a16103686de8838b754d8d8bfea19bf0dd7f875eb27ad5632a5dbb53483c737"
+		"tree": "2a16103686de8838b754d8d8bfea19bf0dd7f875eb27ad5632a5dbb53483c737",
+		"catalog": "f9489f3523240cff9c451a508af86dfaacbec77a4967f157d1658bd44f61e46f"
 	}
 }

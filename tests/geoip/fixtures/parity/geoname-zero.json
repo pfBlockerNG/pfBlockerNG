@@ -13,6 +13,7 @@
 			"cc/ZZ_v4.txt": null,
 			"cc/US_rep_v4.txt": "17.1.0.0/16\n"
 		},
-		"tree": "32cd37f783218035ceb518a9362f51ffcf5414c71dc0f70e191279a751d0b9f2"
+		"tree": "32cd37f783218035ceb518a9362f51ffcf5414c71dc0f70e191279a751d0b9f2",
+		"catalog": "168a5a8e605c6c4ba239fe68647795acf9179451416f350075b018412e5b5066"
 	}
 }

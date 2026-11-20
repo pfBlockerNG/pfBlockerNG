@@ -13,6 +13,7 @@
 			"cc/KR_v4.txt": "7.0.0.0/8\n",
 			"cc/GB_v4.txt": "2.0.0.0/8\n"
 		},
-		"tree": "d8c111753bca7704225da3a61a92c0b25b7239f551e4bd769fcb047df99d1eed"
+		"tree": "d8c111753bca7704225da3a61a92c0b25b7239f551e4bd769fcb047df99d1eed",
+		"catalog": "19cdd2be5421189b7b2b83f34443cb1e7fb9975a7f033cda9f0f653bcd1baf03"
 	}
 }

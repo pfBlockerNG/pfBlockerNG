@@ -24,7 +24,14 @@ use PHPUnit\Framework\TestCase;
  *   files   {"<path>": content ({"b64": bytes} when it is not UTF-8), or null when absent}: only the files named.
  *   tree    sha256 over every file under cc/, db/ and log/ and any other folder the run leaves at the root (sorted
  *           "<path>\0<sha256 of content>\n" lines), so a stray file or a staged folder left behind changes it. The pages
- *           (www/) are slice 8's (#4037) and are not part of it.
+ *           (www/) are slice 8's (#4037) and are not part of it, nor is Go's catalog file (cc/.geo_catalog).
+ *   catalog the geo-catalog (#4034 slice 5b), or null when there is none: what the continent pages and the Reputation
+ *           page in www/ hold, read back from them here; Go's cc/.geo_catalog there. A "page" row per continent page
+ *           ({"kind", "page": $continent_en, "continent": $continent}), a "country" row per option of its lists
+ *           ({"kind", "page", "family": 4|6, "position" from 1, "iso", "country", "networks"}), and a "reputation" row
+ *           per option of the Reputation tab ({"kind", "position", "iso", "country", "networks"}). Spelled as the sha256
+ *           of the rows' lines "<kind>\0<page>\0<family>\0<position>\0<iso>\0<country>\0<networks>\n" (a field a
+ *           row lacks is empty), sorted in byte order, so that it does not depend on either side's JSON encoder.
  * A continent file's "# Generated from MaxMind Inc. on: <local time>" line reads "{now}" in both.
  */
 #[CoversFunction('pfblockerng_get_countries')]
@@ -114,6 +121,8 @@ final class GeoipConversionCorpusTest extends TestCase
 			$actual['files'][$rel] = is_file($path) ? self::shown(self::normalize((string) file_get_contents($path))) : NULL;
 		}
 		$actual['tree'] = $this->tree();
+		$rows = $this->catalog();
+		$actual['catalog'] = $rows === NULL ? NULL : self::catalogDigest($rows);
 
 		$want += ['files' => []];
 		ksort($want);
@@ -179,6 +188,73 @@ final class GeoipConversionCorpusTest extends TestCase
 			fclose($h);
 			$this->assertSame($case['records'], $records, var_export(base64_decode($case['in'], TRUE), TRUE));
 		}
+	}
+
+	/**
+	 * The catalog the pages hold: each continent page's $continent, $continent_en and option lists, and the Reputation
+	 * page's $options_ccexclude, as rows (see the class comment); NULL when www/ holds no page.
+	 *
+	 * @return list<array<string,mixed>>|null
+	 */
+	private function catalog(): ?array
+	{
+		$rows = [];
+		foreach (glob("{$this->root}/www/pfblockerng_*.php") ?: [] as $page) {
+			$src = (string) file_get_contents($page);
+			if (basename($page) === 'pfblockerng_reputation.php') {
+				$this->assertSame(1, preg_match('/^\$options_ccexclude\t= array\((.*?)\);$/ms', $src, $m), $page);
+				foreach (self::options($m[1]) as $i => [$iso, $country, $networks]) {
+					$rows[] = ['kind' => 'reputation', 'position' => $i + 1, 'iso' => $iso, 'country' => $country,
+						'networks' => $networks];
+				}
+				continue;
+			}
+			$this->assertSame(1, preg_match('/^\$continent\t+= "(.*)";\t\/\/ Continent name \(Locale/m', $src, $c), $page);
+			$this->assertSame(1, preg_match('/^\$continent_en\t+= "(.*)";\t\/\/ Continent name \(English/m', $src, $en), $page);
+			$this->assertSame("pfblockerng_{$en[1]}.php", basename($page));
+			$rows[] = ['kind' => 'page', 'page' => $en[1], 'continent' => $c[1]];
+			foreach ([4, 6] as $family) {
+				$this->assertSame(1, preg_match("/^\\\$options_countries{$family}\t+= array\((.*?)\);\$/ms", $src, $m), $page);
+				foreach (self::options($m[1]) as $i => [$iso, $country, $networks]) {
+					$rows[] = ['kind' => 'country', 'page' => $en[1], 'family' => $family, 'position' => $i + 1, 'iso' => $iso,
+						'country' => $country, 'networks' => $networks];
+				}
+			}
+		}
+		return $rows === [] ? NULL : $rows;
+	}
+
+	/**
+	 * The options of a generated array literal: '"<iso>" => "<country> <iso> (<networks>)"', in order.
+	 *
+	 * @return list<array{string, string, int}>
+	 */
+	private static function options(string $literal): array
+	{
+		preg_match_all('/"([^"]*)" => "([^"]*)"/', $literal, $m, PREG_SET_ORDER);
+		$out = [];
+		foreach ($m as [, $iso, $label]) {
+			if (preg_match('/^(.*) ' . preg_quote($iso, '/') . ' \((\d+)\)$/s', $label, $l) !== 1) {
+				throw new RuntimeException("an option label that is not \"<country> {$iso} (<n>)\": {$label}");
+			}
+			$out[] = [$iso, $l[1], (int) $l[2]];
+		}
+		return $out;
+	}
+
+	/** @param list<array<string,mixed>> $rows */
+	private static function catalogDigest(array $rows): string
+	{
+		$lines = [];
+		foreach ($rows as $row) {
+			$fields = [];
+			foreach (['kind', 'page', 'family', 'position', 'iso', 'country', 'networks'] as $key) {
+				$fields[] = (string) ($row[$key] ?? '');
+			}
+			$lines[] = implode("\0", $fields) . "\n";
+		}
+		sort($lines, SORT_STRING);
+		return hash('sha256', implode('', $lines));
 	}
 
 	/** @param string|array<string,mixed> $content */

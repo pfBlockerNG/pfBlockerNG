@@ -12,13 +12,15 @@
 		"files": {
 			"cc/US_v4.txt": null
 		},
-		"tree": "d102fa3700f2a74722c4c258376c6c48cd998b4df93834972f6d5161ebc140e1"
+		"tree": "d102fa3700f2a74722c4c258376c6c48cd998b4df93834972f6d5161ebc140e1",
+		"catalog": null
 	},
 	"old_expect": {
 		"ok": true,
 		"files": {
 			"cc/US_v4.txt": "3.0.0.0/15\nStates [6252001]\n"
 		},
-		"tree": "1f14ad4e3d66a071b5a3e963f44a861da904f4202696eec8eb59acea1bf324f7"
+		"tree": "1f14ad4e3d66a071b5a3e963f44a861da904f4202696eec8eb59acea1bf324f7",
+		"catalog": "6d748bc21303bca7e4ab1316444ef92e905f708b41ff82120068203df5c53159"
 	}
 }

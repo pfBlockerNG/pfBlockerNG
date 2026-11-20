@@ -19,7 +19,8 @@
 			"cc/A1_US_v4.txt": "11.0.0.0/8\n12.0.0.0/8\n",
 			"cc/A2_DE_v4.txt": "14.0.0.0/8\n"
 		},
-		"tree": "11e0b1648f0280db2f9dbf8087c706ac32798a8e4eb0357d501f73e9e66f1402"
+		"tree": "11e0b1648f0280db2f9dbf8087c706ac32798a8e4eb0357d501f73e9e66f1402",
+		"catalog": "93ce2718f8cdd78b1dda6a97a0d7aebf1c5b56e587b124878a89ecf81308776e"
 	},
 	"old_expect": {
 		"ok": true,
@@ -31,6 +32,7 @@
 			"cc/A2_US_rep_v4.txt": "15.0.0.0/8\n",
 			"cc/A1_US_rep_v4.txt": ""
 		},
-		"tree": "7b03acf82db1468cbbed6ce63687c7e23b8eb06a7a8b7a593d4156e97a8b36f5"
+		"tree": "7b03acf82db1468cbbed6ce63687c7e23b8eb06a7a8b7a593d4156e97a8b36f5",
+		"catalog": "f093f1d82bf24f06d51cee1bd5754dd730d83fd12c6d7cc98f77d58f84fe4152"
 	}
 }

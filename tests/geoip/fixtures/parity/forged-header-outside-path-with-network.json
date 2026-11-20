@@ -16,7 +16,8 @@
 			"outside_v4.txt": "kept\n",
 			"cc/KR_v4.txt": null
 		},
-		"tree": "2cf5a67f1a48f515773fb66f8f6333b7a1587fb1b07331e5dac9833c9716f6cd"
+		"tree": "2cf5a67f1a48f515773fb66f8f6333b7a1587fb1b07331e5dac9833c9716f6cd",
+		"catalog": null
 	},
 	"old_expect": {
 		"ok": true,
@@ -24,6 +25,7 @@
 			"outside_v4.txt": null,
 			"cc/KR_v4.txt": "7.0.0.0/8\n"
 		},
-		"tree": "4e59e5284677a4af93b5cd783911f260d828020bb344143b549a2872a49a3d5d"
+		"tree": "4e59e5284677a4af93b5cd783911f260d828020bb344143b549a2872a49a3d5d",
+		"catalog": "d88926df019115c22aaed55b6da7600111fc089dc9d143391987a42b78114441"
 	}
 }
