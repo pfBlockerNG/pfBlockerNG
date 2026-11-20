@@ -23,8 +23,8 @@ use PHPUnit\Framework\TestCase;
  *   - stop sends TERM to the supervisor and to the bouncer (which empties its tables; it keeps handling TERM until it exits), KILL
  *     to both at 5 s, and fails at 7 s keeping the pidfiles;
  *   - the script does nothing to PF itself (the bouncer creates its own tables);
- *   - start, stop and restart run under one lock, as Core's do (#4139): the script runs itself once more under `lockf -k -t 20`, and
- *     that run takes no second lock; a lock not had within 20 s does nothing and fails (lockf's 75). Two starts at once therefore
+ *   - start and stop each run under one lock, as Core's do (#4139; restart is stop then start): the script runs itself once more
+ *     under `lockf -k -t 20`, and that run takes no second lock; a lock not had within 20 s does nothing and fails (lockf's 75). Two starts at once therefore
  *     run one after the other, and the second keeps the first one's bouncer: no start kills a running pair;
  *   - every signal goes to a pid a pidfile names and only while its command line is a bouncer's or a supervisor's (Core's rule);
  *   - the start records the sha256 of the binary it runs, which the apply compares with the installed one (#4139);
@@ -539,6 +539,7 @@ final class CrowdsecServiceTest extends TestCase
 	{
 		$this->install();
 		$this->arrange(running: TRUE);
+		file_put_contents($GLOBALS['pfb']['crowdsec_binary_record'], self::BINARY_SHA . ' ' . $this->binary() . "\n");
 
 		[$status, $out] = $this->rc('stop');
 
@@ -547,6 +548,22 @@ final class CrowdsecServiceTest extends TestCase
 		$this->assertSame([], $this->livePids());
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['crowdsec_daemon_pidfile']);
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['crowdsec_pidfile']);
+		$this->assertFileExists($GLOBALS['pfb']['crowdsec_binary_record'], 'the record outlives a stop: only a start rewrites it');
+	}
+
+	public function testAStartStopsABouncerWhoseSupervisorIsGoneBeforeItLaunches(): void
+	{
+		// Given a bouncer its pidfile names, with its supervisor gone
+		$this->install();
+		$this->arrange(running: TRUE);
+		file_put_contents("{$this->dir}/state/procs", self::CHILD . "|{$this->binary()} -c {$GLOBALS['pfb']['crowdsec_config']}|\n");
+		unlink($GLOBALS['pfb']['crowdsec_daemon_pidfile']);
+
+		[$status, $out] = $this->rc('start');
+
+		// Then the start ends it first and launches one pair
+		$this->assertSame(0, $status, $out);
+		$this->assertSame(['check ' . $GLOBALS['pfb']['crowdsec_config'], 'TERM ' . self::CHILD . ' @0', 'launch'], $this->lines('events'));
 	}
 
 	public function testStopOfABouncerWhoseSupervisorIsGoneSignalsTheBouncer(): void

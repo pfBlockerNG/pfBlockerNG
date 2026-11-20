@@ -223,11 +223,12 @@ function pfb_crowdsec_apply(): bool {
 	$was = is_file($config);
 
 	if (!pfb_crowdsec_should_run()) {
-		// A supervisor outlives its bouncer between restarts (-R 5), when the bouncer pidfile names no live process
+		// The file first: it is the rc start's gate, so a start racing this stop (a restart's start) launches nothing. A supervisor
+		// outlives its bouncer between restarts (-R 5), when the bouncer pidfile names no live process
+		unlink_if_exists($config);
 		if ($was || is_service_running('pfb_crowdsec')) {
 			stop_service('pfb_crowdsec');
 		}
-		unlink_if_exists($config);
 		return $was;
 	}
 
@@ -265,10 +266,9 @@ function pfb_crowdsec_rule_state(): array {
 }
 
 /**
- * The Settings subtab's save (D4): store $values (pfb_crowdsec_validate()'s, over the section's other keys), write the rule hook's
- * registration when it is missing, apply the decision at once, and reload the filter when the enable or a rule setting changed, the
- * bouncer was turned on or off, or the hook was registered while it should run. The page then runs the save-mode pass, which sends the
- * change to the peers as the General save does.
+ * The Settings subtab's save (D4): store $values (pfb_crowdsec_validate()'s, over the section's other keys), then
+ * pfb_crowdsec_resync() with whether a rule setting changed. The page then runs the save-mode pass, which sends the change to the peers
+ * as the General save does.
  *
  * @param array<string, string> $values
  */

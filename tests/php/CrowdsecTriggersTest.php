@@ -180,20 +180,13 @@ final class CrowdsecTriggersTest extends TestCase
 		);
 	}
 
-	/** @return iterable<string, array{array<string,string>}> */
-	public static function policyChanges(): iterable
-	{
-		yield 'LAPI URL' => [['lapi_url' => 'http://192.0.2.7:8080']];
-	}
-
-	#[DataProvider('policyChanges')]
-	public function testTheCrowdsecSaveMarksNoPendingChangesForAPolicySetting(array $change): void
+	public function testTheCrowdsecSaveMarksNoPendingChangesForAPolicySetting(): void
 	{
 		config_set_path(self::GENERAL . '/enable_cb', 'on');
 		config_set_path(self::CROWDSEC, self::crowdsec('on'));
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['pending_marker'], 'before-state: nothing is pending');
 
-		pfb_crowdsec_save(array_replace(self::crowdsec('on'), $change));
+		pfb_crowdsec_save(array_replace(self::crowdsec('on'), ['lapi_url' => 'http://192.0.2.7:8080']));
 
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['pending_marker'], 'the save syncs at once: nothing waits for the next Update');
 	}

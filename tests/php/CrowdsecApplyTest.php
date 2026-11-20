@@ -255,6 +255,25 @@ final class CrowdsecApplyTest extends TestCase
 		$this->assertFileDoesNotExist($this->config);
 	}
 
+	public function testTheOffPathRemovesTheFileBeforeItStopsSoAStartInBetweenStartsNothing(): void
+	{
+		// Given a running bouncer that should no longer run
+		config_set_path(self::SECTION, self::stored());
+		pfb_crowdsec_config_write(pfb_crowdsec_config_json(pfb_crowdsec_settings()), $this->config);
+		$GLOBALS['pfb_test_service_running']['pfb_crowdsec'] = TRUE;
+		config_set_path(self::SECTION . '/enable', '');
+		$seen = [];
+		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen): void {
+			$seen[] = [$fn, is_file($this->config)];
+		};
+
+		pfb_crowdsec_apply();
+		unset($GLOBALS['pfb_test_service_hook']);
+
+		// Then the rc start's gate is gone before the stop runs: a start between the stop and the unlink would launch a pair
+		$this->assertSame([['stop_service', FALSE]], $seen);
+	}
+
 	public function testABouncerThatWasNeverOnStaysOffWithoutAnyServiceCall(): void
 	{
 		config_set_path(self::SECTION, self::stored(['enable' => '']));

@@ -507,13 +507,15 @@ amendment's start, stop and pidfile rules.
   the change with no filter reload.
 - **Start and stop.** The rc script has Core's shape (`pfb_core_service()`): start and stop each run under one lock
   (`lockf -k -t 20 /var/run/pfb_crowdsec.lock`; restart is stop then start, each locked), so two starts run one after the other, and the second keeps the bouncer the first one
-  started. Start keeps a supervisor its pidfile names; otherwise it stops what is left and launches. Stop signals a pid only while a
+  started. Start keeps a supervisor its pidfile names; otherwise it stops what is left and launches. Restart's stop and start take
+  the lock one after the other, and the off path removes the config file before its stop, so a start that falls between them
+  launches nothing. Stop signals a pid only while a
   pidfile names it and its command line is the bouncer's or the supervisor's, and removes the pidfiles once nothing runs. The #4123
   stop by command line alone, the start's handling of daemon(8)'s status 3 and the `lockf -s -n -t 0` pidfile removal are gone: under
   the lock no start can race a stop. Package removal leaves the pidfiles to the stop (#4135).
 - **Upgrade.** As pfB-DNS's, pfSense's own stop under `rc.packages ... DEINSTALL` with a pkg install, upgrade or reinstall leaves the
   bouncer running (`pfb_rc_package_upgrade_keep()`, the same check). The rc start records the sha256 and path of the binary it runs in
-  `/var/run/pfb_crowdsec.sha256`; the installer's apply restarts a running bouncer once when that binary is no longer the installed one,
+  `/var/run/pfb_crowdsec.sha256` (kept across a stop, rewritten by each start); the installer's apply restarts a running bouncer once when that binary is no longer the installed one,
   when no record exists (a start by an earlier version's rc script), or when its config file changed, and otherwise leaves it alone. A
   `pkg delete` stops it and removes everything.
 - **Differences from pfB-DNS and Core**, each kept for a reason: the start runs only while the config file exists (D4's gate, and the
