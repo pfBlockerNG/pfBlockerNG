@@ -106,7 +106,7 @@ final class CrowdsecStatusPageRenderTest extends TestCase
 			['IPv6 (rows 1)', 'Total', '0'],
 		], self::bannedRows($html), 'the hostile origin escaped, the integer origin, and one family cell spanning its origins and total: ' . $html);
 		$this->assertStringContainsString('<td rowspan="3" style="vertical-align: middle">IPv4</td>', $html, 'the family cell is centred');
-		$this->assertSame(2, substr_count($html, '<div class="table-responsive"><table class="table table-condensed table-striped">'),
+		$this->assertSame(2, substr_count($html, '<div class="table-responsive"><table class="table table-condensed'),
 		    'the Decisions and Dropped tables each scroll sideways on a narrow screen: ' . $html);
 		$this->assertStringNotContainsString('<script>', $html);
 	}

@@ -94,7 +94,8 @@ if ($status !== NULL) {
 		$dropped .= "<tr class=\"cs-dropped\"><td>{$label}</td><td>{$status['dropped'][$family]['packets']}</td>"
 		    . "<td>{$status['dropped'][$family]['bytes']}</td></tr>\n";
 	}
-	$panel(gettext('Decisions'), '<div class="table-responsive"><table class="table table-condensed table-striped">'
+	// Not striped: a stripe would cut across the Family cell that spans its family's rows
+	$panel(gettext('Decisions'), '<div class="table-responsive"><table class="table table-condensed">'
 	    . '<thead><tr><th>' . gettext('Family') . '</th><th>' . gettext('Origin') . '</th><th>' . gettext('Banned values')
 	    . "</th></tr></thead><tbody>{$banned}</tbody></table></div>");
 	$panel(gettext('Dropped'), '<div class="table-responsive"><table class="table table-condensed table-striped">'
