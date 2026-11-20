@@ -21,6 +21,8 @@ func TestAMalformedRowKeepsThePreviousGeneration(t *testing.T) {
 		"network 0": {"GeoLite2-Country-Blocks-IPv4.csv", testBlocks + "0,6252001,6252001,,0,0,\n"},
 		// Only the first record is the header: a second one is a share put together from two files.
 		"header row repeated": {"GeoLite2-Country-Blocks-IPv4.csv", testBlocks + blocksHeader},
+		// A record without a network is a record: a header after it is a second one.
+		"header row after a record": {"GeoLite2-Country-Blocks-IPv4.csv", ",6252001,6252001,,0,0,\n" + testBlocks},
 		"country name with a LF": {"GeoLite2-Country-Locations-en.csv", locationsHeader +
 			"6252001,en,NA,\"North America\",US,\"United\nStates\",0\n"},
 		"continent name with a CR": {"GeoLite2-Country-Locations-en.csv", locationsHeader +
@@ -80,6 +82,14 @@ func TestABlankLineBeforeTheHeaderIsNoRecord(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(c.CCDir, "US_v4.txt")); string(b) != "3.0.0.0/15\n" {
 		t.Errorf("US_v4.txt = %q", b)
+	}
+}
+
+// The header is matched as split() reads a line, trimmed.
+func TestAHeaderWithSurroundingSpaceIsTheHeader(t *testing.T) {
+	c, log := conversionRoot(t, "network "+strings.TrimPrefix(testBlocks, "network"))
+	if !c.Run(context.Background()) {
+		t.Fatalf("conversion failed:\n%s", log)
 	}
 }
 
