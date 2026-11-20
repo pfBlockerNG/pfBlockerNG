@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -57,7 +57,10 @@ const (
 		"3.0.0.0/15,6252001,6252001,,0,0,\n"
 )
 
-// conversionRoot is a share with the given IPv4 Blocks file and a previous generation in the country folder.
+// previousGeneration is the generation conversionRoot publishes before the run, as a conversion names it.
+const previousGeneration = ".cc.1.00000000"
+
+// conversionRoot is a share with the given IPv4 Blocks file and a previous generation the country folder links to.
 func conversionRoot(t *testing.T, blocksV4 string) (Conversion, *bytes.Buffer) {
 	t.Helper()
 	root := t.TempDir()
@@ -66,8 +69,8 @@ func conversionRoot(t *testing.T, blocksV4 string) (Conversion, *bytes.Buffer) {
 		"share/GeoLite2-Country-Locations-en.csv": testLocations,
 		"share/GeoLite2-Country-Blocks-IPv4.csv":  blocksV4,
 		"share/GeoLite2-Country-Blocks-IPv6.csv":  testBlocks,
-		"cc/US_v4.txt":                            "192.0.2.0/24\n",
-		"db/geoip.txt":                            "previous\n",
+		previousGeneration + "/US_v4.txt":         "192.0.2.0/24\n",
+		previousGeneration + "/.geoip_isos":       "previous\n",
 	} {
 		path := filepath.Join(root, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -77,25 +80,51 @@ func conversionRoot(t *testing.T, blocksV4 string) (Conversion, *bytes.Buffer) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.Symlink(previousGeneration, filepath.Join(root, "cc")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	var log bytes.Buffer
-	return Conversion{Share: share, CCDir: filepath.Join(root, "cc"), ISOs: filepath.Join(root, "db", "geoip.txt"),
-		LogDir: filepath.Join(root, "log"), Locale: "en", Now: time.Date(2026, 11, 20, 9, 15, 0, 0, time.FixedZone("x", 3600)),
-		Log: &log}, &log
+	return Conversion{Share: share, CCDir: filepath.Join(root, "cc"), LogDir: filepath.Join(root, "log"), Locale: "en",
+		Now: time.Date(2026, 11, 20, 9, 15, 0, 0, time.FixedZone("x", 3600)), Log: &log}, &log
 }
 
-// assertPrevious checks the previous generation stands and nothing staged or set aside is left beside it.
+// assertPrevious checks the country folder still links to the previous generation, unchanged, and nothing staged is
+// left beside it.
 func assertPrevious(t *testing.T, c Conversion) {
 	t.Helper()
+	if to, err := os.Readlink(c.CCDir); err != nil || to != previousGeneration {
+		t.Errorf("cc links to %q, %v; want %s", to, err, previousGeneration)
+	}
 	if b, err := os.ReadFile(filepath.Join(c.CCDir, "US_v4.txt")); err != nil || string(b) != "192.0.2.0/24\n" {
 		t.Errorf("US_v4.txt = %q, %v; want the previous list", b, err)
 	}
-	if b, err := os.ReadFile(c.ISOs); err != nil || string(b) != "previous\n" {
-		t.Errorf("geoip.txt = %q, %v; want the previous list", b, err)
+	if b, err := os.ReadFile(filepath.Join(c.CCDir, ".geoip_isos")); err != nil || string(b) != "previous\n" {
+		t.Errorf(".geoip_isos = %q, %v; want the previous list", b, err)
 	}
-	for _, pattern := range []string{c.CCDir + ".*", c.ISOs + ".*"} {
-		if left, _ := filepath.Glob(pattern); len(left) != 0 {
-			t.Errorf("left behind: %v", left)
+	assertBeside(t, c, previousGeneration)
+}
+
+// assertBeside checks the country folder's parent holds the share, the log, the link and the named generations, and
+// nothing else (the lock file aside).
+func assertBeside(t *testing.T, c Conversion, generations ...string) {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Dir(c.CCDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range entries {
+		if e.Name() != ".cc.lock" {
+			got = append(got, e.Name())
 		}
+	}
+	want := append([]string{"cc", "log", "share"}, generations...)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("beside the country folder: %v, want %v", got, want)
 	}
 }
 
@@ -163,48 +192,6 @@ func TestTheLogIsTodays(t *testing.T) {
 	if want := " Processing ISO IPv6 Continent/Country Data\n\n Failed to load file: " + filepath.Join(c.Share, "GeoLite2-Country-Blocks-IPv6.csv") + "\n"; !strings.HasSuffix(log.String(), want) {
 		t.Errorf("log = %q, want it to end %q", log, want)
 	}
-}
-
-// The publication lock is exclusive: held elsewhere, a publication waits for it and gives up when its context ends.
-func TestAHeldPublicationLockEndsWithTheContext(t *testing.T) {
-	dir := t.TempDir()
-	held, err := os.OpenFile(filepath.Join(dir, ".pfb_generation.lock"), os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer held.Close()
-	if err := syscall.Flock(int(held.Fd()), syscall.LOCK_SH); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if f, ok := publicationLock(ctx, dir); ok {
-		f.Close()
-		t.Fatal("took the lock a reader holds")
-	}
-	syscall.Flock(int(held.Fd()), syscall.LOCK_UN)
-	f, ok := publicationLock(context.Background(), dir)
-	if !ok {
-		t.Fatal("a free lock was not taken")
-	}
-	f.Close()
-}
-
-// A rollback removes only the files it published: a directory standing at a published name stays, as PHP's unlink()
-// leaves it.
-func TestARollbackLeavesADirectoryAtAPublishedName(t *testing.T) {
-	c, _ := conversionRoot(t, testBlocks)
-	dir := filepath.Join(c.CCDir, "CN_v4.txt")
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if c.Run(context.Background()) {
-		t.Fatal("published over a directory")
-	}
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		t.Errorf("the directory at CN_v4.txt is gone: %v", err)
-	}
-	assertPrevious(t, c)
 }
 
 // Under a locale other than English, PHP passes the continent code to escapeshellarg(), which throws on a NUL: the

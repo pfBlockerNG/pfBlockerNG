@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "A staged list cannot replace its live path (a folder stands there): every file already moved is put back, the ISO list too, and the previous generation stays whole.",
+	"description": "A folder stands at a list's name in the previous generation. Core publishes a new generation whole by one link rename (#4140), so the folder blocks nothing and the conversion succeeds; today's PHP renames each file into the live folder, fails on the folder, puts every moved file back and keeps the previous generation (old_expect).",
 	"share_mtime": "2026-11-17T08:30:00Z",
 	"share": {
 		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1835841,en,AS,Asia,KR,\"Korea, Republic of\",0\n",
@@ -14,6 +14,14 @@
 		"db/geoip.txt": "previous\n"
 	},
 	"expect": {
+		"ok": true,
+		"files": {
+			"cc/AD_v4.txt": "",
+			"cc/.pfb_generation_swapping": null
+		},
+		"tree": "16d9798a768962752fe79ecf541dc0a47f0a33b5cf6e456ece13756c66cbbbdd"
+	},
+	"old_expect": {
 		"ok": false,
 		"files": {
 			"cc/AD_v4.txt": "192.0.2.0/24\n",
