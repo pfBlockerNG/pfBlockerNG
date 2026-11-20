@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
@@ -476,6 +477,8 @@ func TestCorruptIndex(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, dir := newStore(t)
 			publish(t, s, id, 1, nil, "1")
+			applied(t, s, id, 1)
+			publish(t, s, id, 2, nil, "2") // delta files too, for the recovery to remove
 			corrupt(t, filepath.Join(dir, "index.json"))
 			os.WriteFile(filepath.Join(dir, "stray.tmp"), []byte("x"), 0o600)
 			_, err := s.Get(id, nil)
@@ -827,6 +830,7 @@ func TestReadersNeverSeeATornPublish(t *testing.T) {
 	publish(t, w, id, 1, nil, x...)
 	done := make(chan struct{})
 	var wg sync.WaitGroup
+	var served atomic.Int64
 	for range 4 {
 		wg.Add(1)
 		go func() {
@@ -862,6 +866,7 @@ func TestReadersNeverSeeATornPublish(t *testing.T) {
 					t.Errorf("body read %d bytes whose digest is not the reply's %s: %v", len(b), r.Digest, err)
 					return
 				}
+				served.Add(1)
 			}
 		}()
 	}
@@ -876,4 +881,7 @@ func TestReadersNeverSeeATornPublish(t *testing.T) {
 	}
 	close(done)
 	wg.Wait()
+	if served.Load() == 0 {
+		t.Fatal("no reader was served a body: the race was never checked")
+	}
 }

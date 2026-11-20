@@ -229,7 +229,7 @@ func (r *memberReader) Read(p []byte) (int, error) {
 
 // PublishFrom stores body, which must already be canonical (members as Canonical leaves them, one per line, the last
 // newline optional), and metadata as id's current body, a line at a time. A body that is not canonical is refused and
-// changes nothing. The generation advances only when the body or the metadata bytes change; a removed id is brought back
+// changes nothing, except that an index that could not be read is cleared first, as by any write (loadWriter). The generation advances only when the body or the metadata bytes change; a removed id is brought back
 // either way. When the consumer applied an earlier generation, the delta from it is written here, by one merge pass.
 func (s *Store) PublishFrom(id string, body io.Reader, metadata map[string]any) (uint64, error) {
 	if !ValidID(id) {
@@ -309,8 +309,12 @@ func (s *Store) PublishFrom(id string, body io.Reader, metadata map[string]any) 
 	}
 	e.Current = gen{g, written.Digest, written.Length, written.Entries, meta}
 	e.Delta = nil
-	if e.Applied != nil {
-		if e.Delta, err = s.writeDelta(id, g, *e.Applied); err != nil {
+	if a := e.Applied; a != nil {
+		if e.Delta, err = s.writeDelta(id, g, *a); err != nil {
+			// The index still names the generation before: nothing refers to these files, and they would hold the space a retry needs.
+			os.Remove(path)
+			os.Remove(s.deltaPath(id, g, a.Generation, PartAdd))
+			os.Remove(s.deltaPath(id, g, a.Generation, PartRemove))
 			return 0, err
 		}
 	}
@@ -687,7 +691,9 @@ func (p *partWriter) finish(sync bool) (file, error) {
 func (p *partWriter) commit() (file, error) {
 	f, err := p.finish(true)
 	if err == nil {
-		err = os.Rename(p.path+".tmp", p.path)
+		if err = os.Rename(p.path+".tmp", p.path); err != nil {
+			os.Remove(p.path + ".tmp")
+		}
 	}
 	return f, err
 }

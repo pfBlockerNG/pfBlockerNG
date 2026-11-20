@@ -193,19 +193,22 @@ func TestGetResourceBodyWithoutAStoreIsUnavailable(t *testing.T) {
 // Neither call holds a body in memory: GetResources over 16 large resources, and a body read of one, allocate a small
 // constant, far below the bodies' size.
 func TestResourceCallsAllocateAConstant(t *testing.T) {
-	const n, budget = 40_000, 2 << 20 // 16 bodies of about 600 kB each
+	// 16 bodies of about 600 kB each; G0, the one read, is 200,000 members (about 2.6 MB), larger than the budget.
+	const n, budget = 40_000, 2 << 20
 	r := newResRig(t)
-	members := make([]string, n)
 	req := map[string]string{}
 	for i := range 16 {
+		members := make([]string, n)
+		if i == 0 {
+			members = make([]string, 5*n)
+		}
 		for j := range members {
-			members[j] = fmt.Sprintf("10.%d.%d.%d", i, j/256, j%256)
+			members[j] = fmt.Sprintf("%d.%d.%d.%d", 10+i, j>>16, j>>8&255, j&255)
 		}
 		id := fmt.Sprintf("ip-set/G%d/ipv4", i)
 		r.pub(id, nil, members...)
 		req[id] = `{}`
 	}
-	members = nil
 	discard := func(method, body string) {
 		resp, err := r.core.client.Post("http://pfb-core/v1/"+method, "application/json", strings.NewReader(body))
 		if err != nil {
@@ -231,4 +234,16 @@ func TestResourceCallsAllocateAConstant(t *testing.T) {
 			t.Errorf("%s allocated %d bytes; want at most %d", what, got, budget)
 		}
 	}
+}
+
+// A field that is null is absent: a members request with "from": null is served, an add request with it lacks from.
+func TestGetResourceBodyTakesANullFieldAsAbsent(t *testing.T) {
+	r := newResRig(t)
+	r.pub("dnsbl/main", nil, "a.example")
+	rep := r.core.post("GetResourceBody", `{"id":"dnsbl/main","generation":"1","part":"members","from":null}`)
+	if rep.status != 200 || string(rep.body) != "a.example\n" {
+		t.Fatalf("status %d, body %q; want 200 and the body", rep.status, rep.body)
+	}
+	wantError(t, r.core.post("GetResourceBody", `{"id":"dnsbl/main","generation":"1","part":"add","from":null}`),
+		400, "invalid_argument", "from")
 }

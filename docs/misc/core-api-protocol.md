@@ -795,7 +795,7 @@ error at start: every resource is `not_found` until the Core Updater creates it.
 `{"id": "<id>", "generation": "<decimal string>", "part": "members"}` asks for the body of a generation the store holds: the
 current one or the applied baseline. `{"id": "<id>", "generation": "<g>", "part": "add" | "remove", "from": "<f>"}` asks for
 a part of the delta from generation `f` to the current generation `g`; a `delta` item names both. The generations are the
-strings `GetResources` gave, sent back as they are.
+strings `GetResources` gave, sent back as they are. A field that is `null` is absent, as in a `GetResources` cursor.
 
 **Reply.** HTTP `200`, `Content-Type: text/plain; charset=utf-8`, `Cache-Control: no-store` and a `Content-Length`: the
 part's lines, one per line, each ending in a newline, in canonical order (byte order, unique). A `members` body is exactly

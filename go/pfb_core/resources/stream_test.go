@@ -404,16 +404,18 @@ func TestPublishAndReadAllocateAConstant(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	base := mustGet(t, s, id, nil)
 	applied(t, s, id, 1)
-	allocs("PublishFrom with a 1% delta", func() {
-		if _, err := s.PublishFrom(id, &lazy{n: n + n/200, skip: func(i int) bool { return i%200 == 0 }}, nil); err != nil {
+	// Both delta parts outgrow the budget: m0 to m149999 leave (1.6 MB), m300000 to m599999 come (3.3 MB).
+	allocs("PublishFrom with a delta larger than the budget", func() {
+		if _, err := s.PublishFrom(id, &lazy{n: 2 * n, skip: func(i int) bool { return i < n/2 }}, nil); err != nil {
 			t.Fatal(err)
 		}
 	})
 	var r resources.Reply
-	allocs("Get", func() {
+	allocs("Get of the delta", func() {
 		var err error
-		if r, err = s.Get(id, nil); err != nil {
+		if r, err = s.Get(id, &resources.Cursor{Generation: 1, Digest: base.Digest}); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -433,8 +435,8 @@ func TestPublishAndReadAllocateAConstant(t *testing.T) {
 			f.Close()
 		})
 	}
-	if r.Entries != n+n/200-(n+n/200+199)/200 {
-		t.Fatalf("entries = %d", r.Entries)
+	if r.Kind != resources.KindDelta || r.Entries != 2*n-n/2 || r.Adds != n || r.Removes != n/2 {
+		t.Fatalf("reply = %+v; want a delta of %d adds and %d removes to %d entries", r, n, n/2, 2*n-n/2)
 	}
 }
 
