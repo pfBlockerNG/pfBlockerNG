@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "Invalid UTF-8 in a country name and in a network is carried as bytes.",
+	"description": "Invalid UTF-8 in a country name and in a network is carried as bytes. Core refuses the share, whose network is not one network, and keeps the previous generation (#4127); today's PHP writes it into the list (old_expect).",
 	"share_mtime": "2026-11-17T08:30:00Z",
 	"share": {
 		"GeoLite2-Country-Locations-en.csv": {
@@ -12,6 +12,13 @@
 		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
 	},
 	"expect": {
+		"ok": false,
+		"files": {
+			"cc/KR_v4.txt": null
+		},
+		"tree": "d102fa3700f2a74722c4c258376c6c48cd998b4df93834972f6d5161ebc140e1"
+	},
+	"old_expect": {
 		"ok": true,
 		"files": {
 			"cc/KR_v4.txt": {

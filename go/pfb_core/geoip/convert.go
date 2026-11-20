@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,6 +54,16 @@ var continentStems = []string{"Africa", "Antarctica", "Asia", "Europe", "North_A
 // errFatal is where today's PHP dies with an Error: a list operation on a Top Spammers entry (whose ISO is a string), or
 // escapeshellarg() refusing a continent code. The conversion stops and publishes nothing.
 var errFatal = errors.New("today's conversion dies here with a PHP Error")
+
+var errMalformed = errors.New("malformed row")
+
+// malformed refuses a row the continent files could not carry: split() reads them line by line, so a field written into
+// them that spans lines forges headers, and a network that is not one breaks the list it lands in (#4127). The
+// conversion stops and the previous generation stays; today's PHP writes the row as it was read.
+func (c Conversion) malformed(path string) error {
+	c.log(" [ MAXMIND UPDATE FAIL, malformed row in %s, using previous Country code database ]\n", filepath.Base(path))
+	return errMalformed
+}
 
 // country is an entry of $pfb_geoip['country']. A field PHP leaves unset reads as "".
 type country struct {
@@ -210,6 +221,9 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 				return nil
 			}
 		}
+		if slices.ContainsFunc(cc[:6], func(f string) bool { return strings.ContainsAny(f, "\r\n") }) {
+			return c.malformed(locations)
+		}
 		entry := &country{id: cc[0], continent: cc[3], name: cc[5], iso: []string{cc[4]}}
 		continentEn := cc[3]
 		if cc[1] != "en" {
@@ -283,11 +297,25 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 		c.log(" Processing ISO IPv%s Continent/Country Data\n", family)
 		dup := 0
 		blocks := filepath.Join(c.Share, "GeoLite2-Country-Blocks-IPv"+family+".csv")
+		// The first record that is not a blank line is the header; a second one is a share put together from two files.
+		header := true
 		read, err := eachRow(ctx, blocks, func(cc []string) error {
-			if field(cc, 0) == "network" {
-				return nil
-			}
 			network, gid, reg := field(cc, 0), field(cc, 1), field(cc, 2)
+			blank := !slices.ContainsFunc(cc, func(f string) bool { return trim(f) != "" })
+			// The network is read as split() reads a line, trimmed; "0" is checked too, though PHP's empty() would skip it.
+			switch n := trim(network); {
+			case header && n == "network":
+				header = false
+				return nil
+			case n == "":
+				header = header && blank
+				network = "" // white space alone is no network, skipped as an empty one is
+			default:
+				header = false
+				if _, err := netip.ParsePrefix(n); err != nil {
+					return c.malformed(blocks)
+				}
+			}
 			iso, isoRep := "", ""
 			if family == "4" {
 				delete(unlisted, gid)
@@ -478,18 +506,20 @@ func (c Conversion) split(s stage) {
 						}
 						continue
 					}
-					if strings.Contains(line, "Continent IPv") {
+					// A header is matched at the start of its line, where continents() writes it; today's PHP matches it
+					// anywhere in a '#' line, so a country name holding header text forges one (#4127).
+					if strings.HasPrefix(line, "# Continent IPv") {
 						_, after, _ := strings.Cut(line, ":")
 						continent = trim(strings.ReplaceAll(after, ":", ""))
 					}
-					if strings.Contains(line, "ISO Code: ") {
-						isocode = strings.ReplaceAll(line, "# ISO Code: ", "")
+					if strings.HasPrefix(line, "# ISO Code: ") {
+						isocode = strings.TrimPrefix(line, "# ISO Code: ")
 						list = isocode + "_v" + family + ".txt"
 						if sf.cont != "Top Spammers" && word(isocode) {
 							s.remove(list)
 						}
 					}
-					if (strings.Contains(line, "Total Networks: 0") || strings.Contains(line, "Total Networks: NA")) && word(isocode) {
+					if (line == "# Total Networks: 0" || line == "# Total Networks: NA") && word(isocode) {
 						s.truncate(list)
 					}
 				}

@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "Quoted fields: a country name with a comma, and a network with a line break that starts a header line.",
+	"description": "Quoted fields: a country name with a comma, and a network with a line break that starts a header line. Core refuses a share whose network field spans lines, and keeps the previous generation (#4127); today's PHP writes it as it was read, so the forged header reroutes the networks after it and empties DE's list (old_expect).",
 	"share_mtime": "2026-11-17T08:30:00Z",
 	"share": {
 		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n1835841,en,AS,Asia,KR,\"Korea, Republic of\",0\n",
@@ -8,6 +8,14 @@
 		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
 	},
 	"expect": {
+		"ok": false,
+		"files": {
+			"cc/KR_v4.txt": null,
+			"cc/DE_v4.txt": null
+		},
+		"tree": "d102fa3700f2a74722c4c258376c6c48cd998b4df93834972f6d5161ebc140e1"
+	},
+	"old_expect": {
 		"ok": true,
 		"files": {
 			"cc/KR_v4.txt": "7.0.0.0/8\n",

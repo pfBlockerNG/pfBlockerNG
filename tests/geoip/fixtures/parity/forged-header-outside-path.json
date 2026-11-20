@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "A quoted network whose line break forges an ISO Code header naming a path outside the country folder: today's PHP removes '<staged folder>/../outside_v4.txt', a file beside the country folder; Core never uses a code that is not a word as a path (#4034).",
+	"description": "A quoted network whose line break forges an ISO Code header naming a path outside the country folder: today's PHP removes '<staged folder>/../outside_v4.txt', a file beside the country folder; Core never uses a code that is not a word as a path (#4034). Core refuses the share (a network field spanning lines, #4127) and keeps the previous generation.",
 	"share_mtime": "2026-11-17T08:30:00Z",
 	"share": {
 		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1835841,en,AS,Asia,KR,\"Korea, Republic of\",0\n",
@@ -11,12 +11,12 @@
 		"outside_v4.txt": "kept\n"
 	},
 	"expect": {
-		"ok": true,
+		"ok": false,
 		"files": {
 			"outside_v4.txt": "kept\n",
-			"cc/KR_v4.txt": "7.0.0.0/8\n"
+			"cc/KR_v4.txt": null
 		},
-		"tree": "6a54d34884216159056732c48355208964b09f1192d8d94123b21dac68d7ca8f"
+		"tree": "2cf5a67f1a48f515773fb66f8f6333b7a1587fb1b07331e5dac9833c9716f6cd"
 	},
 	"old_expect": {
 		"ok": true,
