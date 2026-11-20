@@ -1,29 +1,22 @@
 {
 	"schema": 1,
-	"description": "A 10 MiB network field is written as it is. Core refuses the share, whose network is not one network, and keeps the previous generation (#4127); today's PHP writes it into the list (old_expect).",
+	"description": "A 10 MiB field (is_anycast) is read whole: the row's network lands in its country's list.",
 	"share_mtime": "2026-11-17T08:30:00Z",
 	"share": {
 		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n",
 		"GeoLite2-Country-Blocks-IPv4.csv": {
-			"prefix": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n1.0.1.0/24,1814991,1814991,,0,0,\n9",
+			"prefix": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n1.0.1.0/24,1814991,1814991,,0,0,\n4.0.0.0/8,6252001,6252001,,0,0,",
 			"repeat": "9",
 			"times": 10485760,
-			"suffix": ",6252001,6252001,,0,0,\n"
+			"suffix": "\n"
 		},
 		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
 	},
 	"expect": {
-		"ok": false,
-		"files": {
-			"cc/CN_v4.txt": null
-		},
-		"tree": "d102fa3700f2a74722c4c258376c6c48cd998b4df93834972f6d5161ebc140e1"
-	},
-	"old_expect": {
 		"ok": true,
 		"files": {
-			"cc/CN_v4.txt": "1.0.1.0/24\n"
+			"cc/US_v4.txt": "3.0.0.0/15\n4.0.0.0/8\n"
 		},
-		"tree": "5dc554721a24f1ceb6abf08882e6a63c8992b29e567b5d73c44b8dc18be992fb"
+		"tree": "4e958be90ee75cab68adae53afab635e32ad1803879dd9311e181c6f8ce28f85"
 	}
 }

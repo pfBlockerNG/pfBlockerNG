@@ -175,6 +175,9 @@ func TestAForgedGlobHeaderRemovesNothing(t *testing.T) {
 			t.Errorf("%s was removed", name)
 		}
 	}
+	if string(s["US_v4.txt"]) != "3.0.0.0/15\n" || s.has("*_v4.txt") {
+		t.Errorf("US_v4.txt = %q, *_v4.txt staged: %v; want the networks after the forged header in no list", s["US_v4.txt"], s.has("*_v4.txt"))
+	}
 }
 
 // A MaxMind CSV path that is a directory reads as a failed read: nothing is converted. Today's PHP opens it, reads

@@ -53,8 +53,8 @@ func TestPHPSemanticsMatchTheTable(t *testing.T) {
 const (
 	testLocations = "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n" +
 		"6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n"
-	testBlocks = "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n" +
-		"3.0.0.0/15,6252001,6252001,,0,0,\n"
+	blocksHeader = "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n"
+	testBlocks   = blocksHeader + "3.0.0.0/15,6252001,6252001,,0,0,\n"
 )
 
 // previousGeneration is the generation conversionRoot publishes before the run, as a conversion names it.
