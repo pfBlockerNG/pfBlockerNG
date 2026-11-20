@@ -734,7 +734,8 @@ The resource store is a directory (`--resource-dir`) that holds the bodies the C
 pfB-DNS to fetch: IP sets, IP aggregates, the geo catalog and DNSBL scopes (issue #4032; spec `docs/specs/go-updater-pipeline.md`
 section 8.2). Only the Core Updater writes it. The Core API reads it and never writes it, never creates its directory, and
 never follows a symlink out of it. It holds data and caches, never settings or secrets. Per resource it keeps the current
-generation and the applied baseline, the generation the Outpost apply last reported applied, and nothing else.
+generation, the applied baseline (the generation the Outpost apply last reported applied) and the delta between them, and
+nothing else.
 
 **Resource ids.** `ip-set/<group>/<family>`, `ip-aggregate/<class>/<family>`, `geo-catalog` and `dnsbl/<scope>`. A
 `<group>`, `<class>` or `<scope>` is one segment of `[A-Za-z0-9_-]+`, a `<family>` is `ipv4` or `ipv6`, and an id is at most
@@ -742,9 +743,12 @@ generation and the applied baseline, the generation the Outpost apply last repor
 
 **Body and digest.** A body is canonical: its members are unique and sorted in byte order, one per line, each line ending
 in a newline. Its `digest` is the xxh128 of that body, 32 lower-case hexadecimal characters, and `entries` is the number of
-members. A member is not empty, is valid UTF-8, holds no control character and does not start with `#`. A **generation** is a number the Core Updater advances when a body or its `metadata` changes. `metadata` is an object the
+members. A member is not empty, is valid UTF-8, holds no control character, does not start with `#` and is at most 1 MiB
+long. A body whose records carry one value each (IP or CIDR members, domains) holds that value per line; a body whose
+records carry several fields (a `dnsbl/*` scope with per-entry flags, the `geo-catalog` rows) holds one JSON object per
+line (JSON Lines), each line a member like any other (owner, 2026-11-17, #4049). A **generation** is a number the Core Updater advances when a body or its `metadata` changes. `metadata` is an object the
 Core Updater publishes with the body (for an IP set, its action and direction). A change of metadata alone is a new generation,
-answered as a `delta` with empty `add` and `remove`.
+answered as a `delta` whose `addEntries` and `removeEntries` are `0`.
 
 **Request.** `{"resources": {"<id>": <cursor>, ...}}`. A cursor is `{}` (none) or `{"generation": "<decimal string>", "digest":
 "<32 hex>"}`: the generation and digest of the body the caller applied. Both fields come together; a field that is `null` is
@@ -804,7 +808,7 @@ array.
 **Errors**, in the JSON envelope: `not_found` (`404`) when the store does not hold that part (the resource is unknown or
 removed, the generation is neither the current one nor the applied baseline, or the delta is not the one from that
 generation to the current one: it was pruned when another generation was published or applied; ask `GetResources` again);
-`unavailable` (`503`) when the file fails verification, or without `--resource-dir`; `invalid_argument` (`400`) when `id` is
+`unavailable` (`503`) when the store's index cannot be read or the file fails verification, or without `--resource-dir`; `invalid_argument` (`400`) when `id` is
 missing or not a resource id, `generation` or `from` is not a string of decimal digits that fits 64 bits, `part` is not one
 of the three, `from` is missing with `add` or `remove`, or present with `members`. The field error names the parameter.
 

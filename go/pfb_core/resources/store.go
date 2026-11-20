@@ -170,7 +170,7 @@ func validSeg(s string) bool {
 // character or starts with "#" (PHP drops such a line, so the Outpost could not mirror it) is refused.
 func Canonical(members []string) ([]string, error) {
 	for _, m := range members {
-		if m == "" || m[0] == '#' || !utf8.ValidString(m) || strings.IndexFunc(m, unicode.IsControl) >= 0 {
+		if m == "" || m[0] == '#' || len(m) > MaxMemberLength || !utf8.ValidString(m) || strings.IndexFunc(m, unicode.IsControl) >= 0 {
 			return nil, fmt.Errorf("invalid member %q", m)
 		}
 	}
@@ -260,11 +260,12 @@ func (s *Store) PublishFrom(id string, body io.Reader, metadata map[string]any) 
 	}
 	step("body-written")
 	if e != nil && e.Current.Digest == written.Digest && bytes.Equal(e.Current.Metadata, meta) {
-		// The body the index names is lost or damaged: write it back under the same generation, index untouched.
-		if f, err := openVerified(s.bodyPath(id, e.Current.Generation), e.Current.file()); err == nil {
-			f.Close()
-			os.Remove(path + ".tmp")
-		} else {
+		// The body the index names is lost or damaged: write it back under the same generation. Otherwise the copy
+		// just written goes with the prune below.
+		if check(s.bodyPath(id, e.Current.Generation), e.Current.file()) != nil {
+			if err := syncFile(path + ".tmp"); err != nil {
+				return 0, err
+			}
 			if err := os.Rename(path+".tmp", s.bodyPath(id, e.Current.Generation)); err != nil {
 				return 0, err
 			}
@@ -272,14 +273,25 @@ func (s *Store) PublishFrom(id string, body io.Reader, metadata map[string]any) 
 				return 0, err
 			}
 		}
-		if e.Removed {
-			e.Removed = false
+		save := e.Removed
+		e.Removed = false
+		// A delta that is lost or damaged, or that an older index never recorded, is written back too.
+		if a := e.Applied; a != nil && a.Generation != e.Current.Generation && !s.deltaHeld(id, e) {
+			if e.Delta, err = s.writeDelta(id, e.Current.Generation, *a); err != nil {
+				return 0, err
+			}
+			save = save || e.Delta != nil
+		}
+		if save {
 			if err := s.save(idx); err != nil {
 				return 0, err
 			}
 		}
 		// A publish killed after its index rename left the old files behind: settle them.
 		return e.Current.Generation, s.prune(id, e)
+	}
+	if err := syncFile(path + ".tmp"); err != nil {
+		return 0, err
 	}
 	if err := os.Rename(path+".tmp", path); err != nil {
 		return 0, err
@@ -306,6 +318,13 @@ func (s *Store) PublishFrom(id string, body io.Reader, metadata map[string]any) 
 	err = s.prune(id, e)
 	step("pruned")
 	return g, err
+}
+
+// deltaHeld reports whether e's delta is recorded and both its parts read back as recorded.
+func (s *Store) deltaHeld(id string, e *entry) bool {
+	d := e.delta()
+	return d != nil && check(s.deltaPath(id, e.Current.Generation, d.From, PartAdd), d.Add) == nil &&
+		check(s.deltaPath(id, e.Current.Generation, d.From, PartRemove), d.Remove) == nil
 }
 
 // writeDelta writes the add and remove parts from the baseline's body to generation g's, by one merge pass over the two
@@ -459,7 +478,7 @@ func (s *Store) Get(id string, cursor *Cursor) (Reply, error) {
 		if cursor != nil && cursor.Generation == cur.Generation && cursor.Digest == cur.Digest {
 			return Reply{Kind: KindUnchanged, Generation: cur.Generation}, nil
 		}
-		if err := s.check(s.bodyPath(id, cur.Generation), cur.file()); err != nil {
+		if err := check(s.bodyPath(id, cur.Generation), cur.file()); err != nil {
 			// A publish between the index read and the body read prunes the generation just read: read again.
 			if s.moved(id, cur.Generation) {
 				continue
@@ -469,9 +488,7 @@ func (s *Store) Get(id string, cursor *Cursor) (Reply, error) {
 		r := Reply{Kind: KindFull, Generation: cur.Generation, Digest: cur.Digest, Entries: cur.Entries, Metadata: cur.Metadata}
 		a, d := e.Applied, e.delta()
 		if cursor != nil && d != nil && a.Generation == cursor.Generation && a.Digest == cursor.Digest &&
-			s.check(s.bodyPath(id, a.Generation), a.file()) == nil &&
-			s.check(s.deltaPath(id, cur.Generation, d.From, PartAdd), d.Add) == nil &&
-			s.check(s.deltaPath(id, cur.Generation, d.From, PartRemove), d.Remove) == nil {
+			check(s.bodyPath(id, a.Generation), a.file()) == nil && s.deltaHeld(id, e) {
 			r.Kind, r.From, r.Adds, r.Removes = KindDelta, d.From, d.Add.Entries, d.Remove.Entries
 		}
 		return r, nil
@@ -544,7 +561,7 @@ func (s *Store) held(id string, g uint64, part string, from uint64) (string, fil
 }
 
 // check reads path whole against want (openVerified) and closes it.
-func (s *Store) check(path string, want file) error {
+func check(path string, want file) error {
 	f, err := openVerified(path, want)
 	if err == nil {
 		f.Close()
@@ -601,7 +618,7 @@ func openVerified(path string, want file) (*os.File, error) {
 // lineScanner reads one line at a time, its newline dropped and nothing else: a carriage return stays in the line.
 func lineScanner(r io.Reader) *bufio.Scanner {
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, chunk), MaxMemberLength+1)
+	sc.Buffer(make([]byte, chunk), MaxMemberLength+2) // a member one byte too long, and its newline, still fit
 	sc.Split(func(data []byte, atEOF bool) (int, []byte, error) {
 		if i := bytes.IndexByte(data, '\n'); i >= 0 {
 			return i + 1, data[:i], nil
@@ -645,10 +662,10 @@ func (p *partWriter) line(m []byte) {
 	p.file.Length += int64(len(m)) + 1
 }
 
-// finish flushes, syncs and closes the temporary file, removing it on failure.
-func (p *partWriter) finish() (file, error) {
+// finish flushes and closes the temporary file, synced when sync is set, removing it on failure.
+func (p *partWriter) finish(sync bool) (file, error) {
 	err := p.w.Flush()
-	if err == nil {
+	if err == nil && sync {
 		err = p.f.Sync()
 	}
 	if cerr := p.f.Close(); err == nil {
@@ -665,11 +682,24 @@ func (p *partWriter) finish() (file, error) {
 
 // commit finishes the file and renames it into place.
 func (p *partWriter) commit() (file, error) {
-	f, err := p.finish()
+	f, err := p.finish(true)
 	if err == nil {
 		err = os.Rename(p.path+".tmp", p.path)
 	}
 	return f, err
+}
+
+// syncFile syncs a file written unsynced before it is renamed into place.
+func syncFile(path string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // abort removes a temporary file the writer did not finish.
@@ -680,7 +710,8 @@ func (p *partWriter) abort() {
 	}
 }
 
-// writeBody writes a canonical body read from r to path's temporary name, synced and closed; the caller renames it. A
+// writeBody writes a canonical body read from r to path's temporary name, closed but not synced; the caller syncs and
+// renames it. A
 // member that is empty, not UTF-8, holds a control character, starts with "#" or is longer than MaxMemberLength, or a
 // line not strictly after the one before it in byte order, refuses the body and leaves no file.
 func writeBody(path string, r io.Reader) (file, error) {
@@ -693,7 +724,7 @@ func writeBody(path string, r io.Reader) (file, error) {
 	prev := make([]byte, 0, 256)
 	for sc.Scan() {
 		m := sc.Bytes()
-		if len(m) == 0 || m[0] == '#' || !utf8.Valid(m) || bytes.IndexFunc(m, unicode.IsControl) >= 0 {
+		if len(m) == 0 || m[0] == '#' || len(m) > MaxMemberLength || !utf8.Valid(m) || bytes.IndexFunc(m, unicode.IsControl) >= 0 {
 			return file{}, fmt.Errorf("invalid member %.80q", m)
 		}
 		if p.file.Entries > 0 && bytes.Compare(prev, m) >= 0 {
@@ -702,14 +733,17 @@ func writeBody(path string, r io.Reader) (file, error) {
 		prev = append(prev[:0], m...)
 		p.line(m)
 	}
-	if err := sc.Err(); err != nil {
+	if err := sc.Err(); errors.Is(err, bufio.ErrTooLong) {
+		return file{}, fmt.Errorf("invalid member: longer than %d bytes", MaxMemberLength)
+	} else if err != nil {
 		return file{}, fmt.Errorf("the body cannot be read: %w", err)
 	}
-	return p.finish()
+	// Synced only once it turns out to be a new generation: an unchanged publish never waits on the disk.
+	return p.finish(false)
 }
 
-// readFile reads a regular file opened without following a symlink; size >= 0 is the exact size it must have.
-func readFile(path string, size int64) ([]byte, error) {
+// readFile reads a regular file opened without following a symlink.
+func readFile(path string) ([]byte, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
@@ -719,8 +753,8 @@ func readFile(path string, size int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !fi.Mode().IsRegular() || size >= 0 && fi.Size() != size {
-		return nil, fmt.Errorf("%s: not a regular file of %d bytes", path, size)
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s: not a regular file", path)
 	}
 	return io.ReadAll(f)
 }
@@ -730,7 +764,7 @@ func (s *Store) load() (*index, error) {
 	if fi, err := os.Lstat(path); err == nil && !fi.Mode().IsRegular() {
 		return nil, fmt.Errorf("%w: %s is not a regular file", errCorrupt, path)
 	}
-	raw, err := readFile(path, -1)
+	raw, err := readFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -778,11 +812,13 @@ func (s *Store) save(idx *index) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(s.dir, indexName)
-	if err := writeTmp(path, raw); err != nil {
+	p, err := createPart(filepath.Join(s.dir, indexName))
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(path+".tmp", path); err != nil {
+	defer p.abort()
+	p.w.Write(raw)
+	if _, err := p.commit(); err != nil {
 		return err
 	}
 	step("index-renamed")
@@ -796,30 +832,6 @@ func (s *Store) syncDir() error {
 	}
 	defer d.Close()
 	return d.Sync()
-}
-
-// writeTmp writes path+".tmp" whole, synced and closed; the caller renames it. One writer, so the name is fixed.
-func writeTmp(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	os.Remove(tmp) // a new file, so its mode is 0600 whatever a leftover had
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(data)
-	if err == nil {
-		err = f.Sync()
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		os.Remove(tmp)
-	}
-	return err
 }
 
 // prune deletes every file of id except the bodies of e's current generation and applied baseline and the delta between them.

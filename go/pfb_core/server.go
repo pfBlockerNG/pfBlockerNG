@@ -20,8 +20,9 @@ import (
 	"time"
 )
 
-// docs/misc/core-api-protocol.md is the contract this file serves: POST /v1/<Method>, one JSON object in and out, the
-// error envelope and its HTTP statuses, requestId replay, the limits, and who may call.
+// docs/misc/core-api-protocol.md is the contract this file serves: POST /v1/<Method>, one JSON object in and out (a
+// GetResourceBody success is plain text), the error envelope and its HTTP statuses, requestId replay, the limits, and who
+// may call.
 
 const (
 	apiVersion               = "v1"
@@ -292,7 +293,7 @@ func (s *server) write(w http.ResponseWriter, r response) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Content-Length", strconv.FormatInt(b.size, 10))
 		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(r.status)
 		_, _ = io.Copy(w, b.f) // a caller that went away ends the copy
 		return
 	}
