@@ -116,17 +116,20 @@ def _sh(vm: SmokeVM, command: str, *, timeout: float = 60.0) -> str:
     return result.stdout
 
 
-def _within(seconds: float, probe: Callable[[], T], accept: Callable[[T], bool], what: str) -> T:
-    """Poll ``probe`` until ``accept`` holds, for at most ``seconds``, the bound the criterion itself sets; past it the
-    criterion fails, showing the last value seen."""
-    deadline = time.monotonic() + seconds
+def _within(
+    seconds: float, probe: Callable[[], T], accept: Callable[[T], bool], what: str, *, since: float | None = None
+) -> T:
+    """Poll ``probe`` until ``accept`` holds, for at most ``seconds`` from ``since`` (a ``time.monotonic()`` reading,
+    default now), the bound the criterion itself sets. A value counts only when the probe that read it ended within
+    the bound; past it the criterion fails, showing the last value seen."""
+    deadline = (time.monotonic() if since is None else since) + seconds
     while True:
         value = probe()
+        left = deadline - time.monotonic()
+        if left < 0:
+            raise AssertionError(f"{what}: not within {seconds:g} s; last seen: {value!r}")
         if accept(value):
             return value
-        left = deadline - time.monotonic()
-        if left <= 0:
-            raise AssertionError(f"{what}: not within {seconds:g} s; last seen: {value!r}")
         time.sleep(min(0.25, left))
 
 
@@ -218,8 +221,10 @@ def _status(vm: SmokeVM) -> dict[str, Any]:
     return dict(json.loads(_sh(vm, f"cat {STATUS_FILE}")))
 
 
-def _guest_now(vm: SmokeVM) -> int:
-    return int(_sh(vm, "date +%s").strip())
+def _status_age(vm: SmokeVM) -> int:
+    """The status file's age in seconds by the guest's clock (its ``updated_at`` against ``date +%s``)."""
+    now, _, body = _sh(vm, f"date +%s; cat {STATUS_FILE}").partition("\n")
+    return int(now) - int(json.loads(body)["updated_at"])
 
 
 def _config_file(vm: SmokeVM) -> tuple[str, dict[str, Any]] | None:
@@ -463,12 +468,19 @@ def test_a_first_enable_starts_the_bouncer_on_the_first_try(deployed_vm: SmokeVM
     log_mark, lapi_mark = _log_mark(vm), engine.mark()
 
     _save(gui, _on_fields(engine))
+    saved = time.monotonic()
 
     # The rc start returns once the supervisor's pidfile names it; the bouncer's own pidfile follows
     first = _await(lambda: _child(vm), lambda pid: pid is not None, "the bouncer's pidfile naming it")
     # The save also reloads the filter, which kills the new tables and signals the bouncer to restore them
     _await(lambda: (_signals(vm, log_mark), len(_rules(vm))), lambda s: s[0] > 0 and s[1] == 4, "the save's reload")
-    _within(BAN_BOUND, lambda: _tables(vm), lambda t: t == _expected(engine), "both tables holding the engine's set")
+    _within(
+        BAN_BOUND,
+        lambda: _tables(vm),
+        lambda t: t == _expected(engine),
+        "both tables holding the engine's set after the save",
+        since=saved,
+    )
     pull = engine.wait_for(lambda r: r.is_stream, after=lapi_mark, timeout=SALVAGE, what="first stream pull")
     log = _bouncer_log(vm, log_mark)
     assert pull.startup, f"the first pull is a startup pull: {pull}"
@@ -687,9 +699,19 @@ def test_a_filter_reload_leaves_both_tables_full_within_2_s(
     pulled = engine.wait_for(lambda r: r.path == STREAM, after=engine.mark(), timeout=SALVAGE, what="the next pull")
 
     _reload(vm, gui, path)
+    ended = time.monotonic()  # rc.filter_configure_sync returns at the reload's end
     if path != "rc.filter_configure_sync":
-        _await(lambda: _signals(vm, mark), lambda n: n > 0, "the signal at the end of the page's reload")
-    _within(RELOAD_BOUND, lambda: _tables(vm), lambda t: t == want, "both tables full again")
+        # The page's reload ends with the signal, which came after the last poll that did not see it began
+        cap = ended + SALVAGE
+        while True:
+            polled = time.monotonic()
+            if _signals(vm, mark) > 0:
+                break
+            if polled > cap:
+                raise RuntimeError(f"stuck/environment: no signal from the page's reload within {SALVAGE:g} s")
+            ended = polled
+            time.sleep(0.25)
+    _within(RELOAD_BOUND, lambda: _tables(vm), lambda t: t == want, "both tables full again", since=ended)
 
     between = [str(r) for r in engine.requests()[pulled.seq + 1 :] if r.path == STREAM]
     assert between == [], (
@@ -810,12 +832,25 @@ def test_the_metrics_source_is_up_while_running_and_down_while_stale(
     others = {s: v for s, v in up.items() if s != "crowdsec"}
     assert others, "vacuity guard: the other sources are exported"
 
+    # Each scrape with the status file's age read just before and just after it: (before, after, source_up)
+    scrapes: list[tuple[int, int, float | None]] = []
+
+    def scrape_aged() -> dict[str, Metric]:
+        before = _status_age(vm)
+        families = metrics_export()
+        scrapes.append((before, _status_age(vm), _source_up(families).get("crowdsec")))
+        return families
+
     child = _child(vm)
     _sh(vm, f"kill -STOP {child}")
     try:
-        stale = _await(metrics_export, lambda f: _source_up(f).get("crowdsec") == 0, "the stale source reported down")
-        age = _guest_now(vm) - _status(vm)["updated_at"]
-        assert age > 3 * UPDATE_FREQUENCY, f"down only once stale: the status file is {age} s old"
+        stale = _await(scrape_aged, lambda f: _source_up(f).get("crowdsec") == 0, "the stale source reported down")
+        limit = 3 * UPDATE_FREQUENCY
+        early = [s for s in scrapes if s[2] == 0 and s[1] <= limit]
+        late = [s for s in scrapes if s[2] != 0 and s[0] > limit]
+        assert (early, late) == ([], []), (
+            f"down only past {limit} s, and down once past it: (age before, age after, source_up) {scrapes}"
+        )
         assert _crowdsec_samples(stale) == {}, "a down source exports none of its families"
         assert {s: v for s, v in _source_up(stale).items() if s != "crowdsec"} == others, "the other sources are intact"
     finally:
