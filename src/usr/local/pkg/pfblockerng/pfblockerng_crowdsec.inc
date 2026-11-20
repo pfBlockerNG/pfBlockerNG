@@ -460,7 +460,8 @@ function pfb_crowdsec_lapi_get(string $url, string $key): array {
  * PFB_CROWDSEC_DAEMON_PIDFILE and the bouncer's in PFB_CROWDSEC_PIDFILE; the start returns once the supervisor's pidfile names it
  * (5 s). No binary for this machine starts nothing and is not a failure; an unknown machine, a refused file, a failed daemon(8) or
  * no supervisor are. Two starts at once leave one bouncer (#4123): daemon(8) locks its pidfiles, the second daemon(8) finds them
- * locked (status 3), and that start waits for the first one's supervisor like its own.
+ * locked (status 3), and that start waits for the first one's supervisor like its own. A start that comes later, once the first
+ * pair runs, replaces it through its own stop (TERM, or KILL at 5 s when the TERM lands before daemon(8) handles it).
  * Stop: TERM to every supervisor (daemon(8) passes it on, and the bouncer empties its tables), to the bouncers only when no
  * supervisor is left, KILL to all at 5 s; still running at 7 s fails the stop and keeps the pidfiles. Every process is found by
  * its command line, never by a pidfile alone, so a pair no pidfile names stops too and a reused pid is never signalled. daemon(8)

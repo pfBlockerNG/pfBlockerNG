@@ -474,7 +474,9 @@ other's daemon(8) had locked them. daemon(8)'s lock no longer protected an unlin
 named one pair, and the service's stop left the other running (2 of 3 reboots on the smoke pool).
 
 - **Start.** A daemon(8) that finds the pidfiles locked (exit status 3, "already running") is not a failure: the start
-  waits for the running supervisor in its pidfile, as for its own, and fails only if none appears within 5 s.
+  waits for the running supervisor in its pidfile, as for its own, and fails only if none appears within 5 s. A start
+  that runs its stop after the other start's pair is up replaces that pair: still one bouncer, restarted once. A TERM
+  that reaches daemon(8) before it handles signals is lost, and that stop KILLs the pair at 5 s.
 - **Stop.** TERM, the wait and KILL find the supervisors and bouncers by command line alone, not by pidfile, so every
   bouncer stops, including a pair no pidfile names. A reused pid still never matches.
 - **Pidfiles.** daemon(8) removes its own pidfiles when it exits. The stop removes the ones a KILL left with

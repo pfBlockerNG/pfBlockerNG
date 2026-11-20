@@ -18,13 +18,13 @@ use PHPUnit\Framework\TestCase;
  *   - it starts only while its config file exists (the Settings save and the update pass write it exactly while the bouncer should
  *     run), and only a config the binary accepts (`-t`); no binary for this machine starts nothing and is not a failure, an unknown
  *     machine is; a start over a running bouncer keeps it;
- *   - stop sends TERM to the supervisor (daemon(8) passes it on, and the bouncer empties its tables), or to the bouncer when no
- *     supervisor is left, KILL to both at 5 s, and fails at 7 s keeping the pidfiles; a pid is signalled only while its command line
- *     is the bouncer's or its supervisor's;
+ *   - stop sends TERM to every supervisor (daemon(8) passes it on, and the bouncer empties its tables), or to the bouncers when no
+ *     supervisor is left, KILL to all at 5 s, and fails at 7 s keeping the pidfiles; a pid is signalled only while its command line
+ *     is a bouncer's or a supervisor's;
  *   - the script does nothing to PF itself (the bouncer creates its own tables);
  *   - two starts at once leave one bouncer (#4123): a start never removes a pidfile that a running daemon(8) holds locked, so the
  *     second daemon(8) finds the lock taken and that start reports the bouncer the first one runs; stop and the start's own stop end
- *     every bouncer and supervisor by command line, not only the pair the pidfiles name.
+ *     every bouncer and supervisor by command line, TERM first, not only the pair the pidfiles name.
  *
  * The real generator's output is written through the write_rcfile() double and executed under dash. Every absolute command path
  * is redirected to a command double (a path with no double fails the test instead of running a host binary); `sleep 1` is one
@@ -56,19 +56,18 @@ final class CrowdsecServiceTest extends TestCase
 		}
 		# daemon(8)'s supervisor holds both pidfiles locked while it runs; ending, it removes them (a KILLed one cannot)
 		gone() {
-			if [ "$1" = "$(cat "$S/holder" 2>/dev/null)" ]; then
+			if [ "$1" = "$SUPERVISOR" ] && [ -s "$S/locks" ]; then
 				[ -n "$2" ] || rm -f "$DAEMONPID" "$CHILDPID"
-				true > "$S/locks"; true > "$S/holder"
+				true > "$S/locks"
 			fi
 		}
-		# match PIDFILE PATTERN, or match '' PATTERN for every process whose command line matches
+		# all PATTERN: every process whose command line matches
 		all() {
 			while IFS='|' read -r pid args due; do
 				if [ -n "$pid" ] && printf '%s\n' "$args" | grep -Eq -- "$1"; then echo "$pid"; fi
 			done < "$S/procs"
 		}
 		match() {
-			if [ -z "$1" ]; then out="$(all "$2")"; [ -n "$out" ] || return 1; echo "$out"; return 0; fi
 			[ -r "$1" ] || return 1
 			read -r want < "$1" || return 1
 			while IFS='|' read -r pid args due; do
@@ -108,7 +107,7 @@ final class CrowdsecServiceTest extends TestCase
 			if [ "$1" = -F ] && [ "$3" = -f ] && [ "$#" -eq 4 ]; then
 				pids="$(match "$2" "$4")" || exit 1
 			elif [ "$1" = -f ] && [ "$#" -eq 2 ]; then
-				pids="$(match '' "$2")" || exit 1
+				pids="$(all "$2")"; [ -n "$pids" ] || exit 1
 			else
 				ev "bad-${0##*/}"; exit 2
 			fi
@@ -154,16 +153,9 @@ final class CrowdsecServiceTest extends TestCase
 			done
 			echo "${attached:-none}" > "$S/fds"
 			ev launch
-			if [ -s "$S/locks" ]; then exit 3; fi
-			if [ "$DAEMON_EXIT" = 3 ]; then
-				# Another start's daemon(8) took the pidfiles' lock first: its pair is the one that runs
-				printf '%s|daemon: pfb_crowdsec[%s] (daemon)|\n%s|%s|\n' "$SUPERVISOR" "$CHILD" "$CHILD" "$(echo "$@" | cut -d' ' -f15-)" >> "$S/procs"
-				printf '%s\n%s\n' "$DAEMONPID" "$CHILDPID" > "$S/locks"; echo "$SUPERVISOR" > "$S/holder"
-				echo 1 > "$S/launched"
-				exit 3
-			fi
-			[ "$DAEMON_EXIT" = 0 ] || exit "$DAEMON_EXIT"
-			printf '%s\n%s\n' "$DAEMONPID" "$CHILDPID" > "$S/locks"; echo "$SUPERVISOR" > "$S/holder"
+			# 3: another start's daemon(8) took the pidfiles' lock first, and its pair is the one that runs
+			case "$DAEMON_EXIT" in 0|3) ;; *) exit "$DAEMON_EXIT" ;; esac
+			printf '%s\n%s\n' "$DAEMONPID" "$CHILDPID" > "$S/locks"
 			true > "$DAEMONPID"; true > "$CHILDPID"
 			shift 14
 			printf '%s|daemon: pfb_crowdsec[%s] (daemon)|\n%s|%s|\n' "$SUPERVISOR" "$CHILD" "$CHILD" "$*" >> "$S/procs"
@@ -171,6 +163,7 @@ final class CrowdsecServiceTest extends TestCase
 			if [ "$SUPERVISOR_AT" = 0 ]; then
 				echo "$SUPERVISOR" > "$DAEMONPID"; echo "$CHILD" > "$CHILDPID"
 			fi
+			exit "$DAEMON_EXIT"
 			;;
 		*)
 			ev "unexpected ${0##*/}"
@@ -283,7 +276,7 @@ final class CrowdsecServiceTest extends TestCase
 			array_values($vars)
 		)));
 		file_put_contents("{$state}/ticks", "0\n");
-		foreach (['events', 'procs', 'logger', 'daemon.argv', 'fds', 'launched', 'locks', 'holder'] as $file) {
+		foreach (['events', 'procs', 'logger', 'daemon.argv', 'fds', 'launched', 'locks'] as $file) {
 			file_put_contents("{$state}/{$file}", '');
 		}
 		if ($configured) {
@@ -560,6 +553,54 @@ final class CrowdsecServiceTest extends TestCase
 		// Then no bouncer and no supervisor is left
 		$this->assertSame(0, $status, $out);
 		$this->assertSame([], $this->livePids(), 'every pfb_crowdsec bouncer and supervisor ended: ' . implode(' ', $this->lines('events')));
+	}
+
+	public function testStopSendsTermToAStrayPairsSupervisorAtOnceNotKillAtFiveTicks(): void
+	{
+		// Given the pair in the pidfiles and a stray pair beside it
+		$this->install();
+		$this->arrange(running: TRUE);
+		$this->addStrayPair();
+
+		// When the service stops
+		[$status, $out] = $this->rc('stop');
+
+		// Then the stray supervisor gets TERM with the other one (its bouncer empties its tables), and nothing needs KILL
+		$this->assertSame(0, $status, $out);
+		$this->assertSame(['TERM ' . self::SUPERVISOR . ' @0', 'TERM ' . self::STRAY_SUPERVISOR . ' @0'], $this->lines('events'));
+	}
+
+	public function testStopKillsAStrayPairThatIgnoresTerm(): void
+	{
+		// Given the pair in the pidfiles and a stray pair beside it, both ignoring TERM
+		$this->install();
+		$this->arrange(running: TRUE, scenario: ['TERM_AFTER' => 'never']);
+		$this->addStrayPair();
+
+		// When the service stops
+		[$status, $out] = $this->rc('stop');
+
+		// Then both pairs get KILL at 5 ticks and none is left
+		$this->assertSame(0, $status, $out);
+		$this->assertSame([], $this->livePids(), implode(' ', $this->lines('events')));
+		$this->assertContains('KILL ' . self::STRAY_SUPERVISOR . ' @5', $this->lines('events'));
+		$this->assertContains('KILL ' . self::STRAY_CHILD . ' @5', $this->lines('events'));
+	}
+
+	public function testStopKillsAStraySupervisorBetweenRestartsThatIgnoresTerm(): void
+	{
+		// Given no pidfile and a stray supervisor waiting to restart its bouncer (-R 5), ignoring TERM
+		$this->install();
+		$this->arrange(scenario: ['TERM_AFTER' => 'never']);
+		file_put_contents("{$this->dir}/state/procs", self::STRAY_SUPERVISOR . '|daemon: pfb_crowdsec[' . self::STRAY_CHILD . "] (daemon)|\n");
+
+		// When the service stops
+		[$status, $out] = $this->rc('stop');
+
+		// Then the stop waits for it and KILLs it at 5 ticks
+		$this->assertSame(0, $status, $out);
+		$this->assertSame(['TERM ' . self::STRAY_SUPERVISOR . ' @0', 'KILL ' . self::STRAY_SUPERVISOR . ' @5'], $this->lines('events'));
+		$this->assertSame([], $this->livePids());
 	}
 
 	public function testStartOverAStrayPairThatNoPidfileNamesLeavesOnlyTheNewPair(): void
