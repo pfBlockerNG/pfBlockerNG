@@ -167,7 +167,8 @@ func validSeg(s string) bool {
 
 // Canonical returns members sorted in byte order without duplicates, the order of PHP's pfb_canonical_alias_set. It sorts
 // and compacts members in place, so the input slice is spent. A member that is empty, not UTF-8, holds a control
-// character or starts with "#" (PHP drops such a line, so the Outpost could not mirror it) is refused.
+// character or starts with "#" (PHP drops such a line, so the Outpost could not mirror it), or is longer than
+// MaxMemberLength, is refused.
 func Canonical(members []string) ([]string, error) {
 	for _, m := range members {
 		if m == "" || m[0] == '#' || len(m) > MaxMemberLength || !utf8.ValidString(m) || strings.IndexFunc(m, unicode.IsControl) >= 0 {
@@ -261,7 +262,8 @@ func (s *Store) PublishFrom(id string, body io.Reader, metadata map[string]any) 
 	step("body-written")
 	if e != nil && e.Current.Digest == written.Digest && bytes.Equal(e.Current.Metadata, meta) {
 		// The body the index names is lost or damaged: write it back under the same generation. Otherwise the copy
-		// just written goes with the prune below.
+		// just written is removed.
+		defer os.Remove(path + ".tmp")
 		if check(s.bodyPath(id, e.Current.Generation), e.Current.file()) != nil {
 			if err := syncFile(path + ".tmp"); err != nil {
 				return 0, err
@@ -277,10 +279,11 @@ func (s *Store) PublishFrom(id string, body io.Reader, metadata map[string]any) 
 		e.Removed = false
 		// A delta that is lost or damaged, or that an older index never recorded, is written back too.
 		if a := e.Applied; a != nil && a.Generation != e.Current.Generation && !s.deltaHeld(id, e) {
+			before := e.Delta
 			if e.Delta, err = s.writeDelta(id, e.Current.Generation, *a); err != nil {
 				return 0, err
 			}
-			save = save || e.Delta != nil
+			save = save || e.Delta != before // one that cannot be written back leaves the index with its files
 		}
 		if save {
 			if err := s.save(idx); err != nil {
@@ -691,7 +694,7 @@ func (p *partWriter) commit() (file, error) {
 
 // syncFile syncs a file written unsynced before it is renamed into place.
 func syncFile(path string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	f, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return err
 	}
@@ -711,9 +714,8 @@ func (p *partWriter) abort() {
 }
 
 // writeBody writes a canonical body read from r to path's temporary name, closed but not synced; the caller syncs and
-// renames it. A
-// member that is empty, not UTF-8, holds a control character, starts with "#" or is longer than MaxMemberLength, or a
-// line not strictly after the one before it in byte order, refuses the body and leaves no file.
+// renames it. A member that is empty, not UTF-8, holds a control character, starts with "#" or is longer than
+// MaxMemberLength, or a line not strictly after the one before it in byte order, refuses the body and leaves no file.
 func writeBody(path string, r io.Reader) (file, error) {
 	p, err := createPart(path)
 	if err != nil {
