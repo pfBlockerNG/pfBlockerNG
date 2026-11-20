@@ -88,9 +88,9 @@ function pfb_crowdsec_should_run(): bool {
 /**
  * An http:// or https:// URL with a host, and no credentials, query or fragment: what the bouncer accepts as its api_url (its
  * config check, go/pfb_crowdsec config.go, parses it with net/url). A character a URL never holds unencoded (space, quotes, <, >,
- * \, ^, `, {, |, }) is refused, which also keeps every shell metacharacter that needs quoting out of the file; so are a % that
- * starts no escape and an authority net/url refuses: the host is a name without brackets, colons or escapes, or a bracketed
- * IPv6 address with an optional %25 zone, and the port, when there is a colon, is digits only.
+ * \, ^, `, {, |, }) is refused, as is a % that starts no escape and an authority net/url refuses: the host is a name without
+ * brackets, colons or escapes, or a bracketed IPv6 address with an optional %25 zone, and the port, when there is a colon, is
+ * digits only. The URL reaches a JSON file and curl, never a shell, so $ ' ; & ( * ! pass.
  */
 function pfb_crowdsec_url_valid(string $url): bool {
 	if (strlen($url) > 2048 || preg_match('/[\x00-\x20"<>\\\\^`{|}\x7f]|%(?![0-9A-Fa-f]{2})/', $url) || str_contains($url, '?')
