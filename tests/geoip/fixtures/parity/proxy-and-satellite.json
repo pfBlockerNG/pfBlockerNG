@@ -1,0 +1,22 @@
+{
+	"schema": 1,
+	"description": "Proxy and satellite networks: one registered elsewhere goes to A1_<registered>_rep or A2_<registered>_rep, one with neither id to A1 or A2, and one with a country of its own is dropped: it is staged as A1_A1 or A2_A2, which no continent file lists.",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n",
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n1.0.1.0/24,1814991,1814991,,0,0,\n11.0.0.0/8,6252001,6252001,,1,0,\n12.0.0.0/8,6252001,2921044,,1,0,\n13.0.0.0/8,,,,1,0,\n14.0.0.0/8,2921044,2921044,,0,1,\n15.0.0.0/8,,6252001,,0,1,\n16.0.0.0/8,,,,0,1,\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"expect": {
+		"ok": true,
+		"files": {
+			"cc/A1_v4.txt": "13.0.0.0/8\n",
+			"cc/A1_A1_v4.txt": null,
+			"cc/A1_DE_rep_v4.txt": "12.0.0.0/8\n",
+			"cc/A2_v4.txt": "16.0.0.0/8\n",
+			"cc/A2_US_rep_v4.txt": "15.0.0.0/8\n",
+			"cc/A1_US_rep_v4.txt": ""
+		},
+		"tree": "7b03acf82db1468cbbed6ce63687c7e23b8eb06a7a8b7a593d4156e97a8b36f5"
+	}
+}

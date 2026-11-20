@@ -1,0 +1,18 @@
+{
+	"schema": 1,
+	"description": "Networks that are not a CIDR, have host bits set, or belong to the other family are written as they are.",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n",
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n1.0.1.0/24,1814991,1814991,,0,0,\nbanana,6252001,6252001,,0,0,\n1.2.3.4/8,6252001,6252001,,0,0,\n2001:db8::/32,6252001,6252001,,0,0,\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n192.0.2.0/24,6252001,6252001,,0,0,\n"
+	},
+	"expect": {
+		"ok": true,
+		"files": {
+			"cc/US_v4.txt": "3.0.0.0/15\nbanana\n1.2.3.4/8\n2001:db8::/32\n",
+			"cc/US_v6.txt": "2600::/12\n192.0.2.0/24\n"
+		},
+		"tree": "2c1b8f68c14d54093df61cb689d850badcbab30c8ce38c5c6b62dadc030e8286"
+	}
+}

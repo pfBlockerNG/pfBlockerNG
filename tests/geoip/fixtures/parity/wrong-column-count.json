@@ -1,0 +1,18 @@
+{
+	"schema": 1,
+	"description": "Rows with too few and too many columns.",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n1835841,en,AS,Asia,KR\n2635167,en,EU,Europe,GB,United Kingdom,0,extra,more\n",
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n1.0.1.0/24,1814991,1814991,,0,0,\n7.0.0.0/8,1835841\n2.0.0.0/8,2635167,2635167,,0,0,,x,y\n8.0.0.0/8\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"expect": {
+		"ok": true,
+		"files": {
+			"cc/KR_v4.txt": "7.0.0.0/8\n",
+			"cc/GB_v4.txt": "2.0.0.0/8\n"
+		},
+		"tree": "d8c111753bca7704225da3a61a92c0b25b7239f551e4bd769fcb047df99d1eed"
+	}
+}

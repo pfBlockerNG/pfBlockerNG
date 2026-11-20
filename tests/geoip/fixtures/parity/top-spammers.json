@@ -1,0 +1,18 @@
+{
+	"schema": 1,
+	"description": "Top Spammers lists the fixed twenty in their order, with a represented list where the country has one.",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n",
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n1.0.1.0/24,1814991,1814991,,0,0,\n1.0.2.0/24,2921044,1814991,,0,0,\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"expect": {
+		"ok": true,
+		"files": {
+			"cc/Top_Spammers_v4.info": "# Generated from MaxMind Inc. on: {now}\n# Continent IPv4: Top_Spammers\n# Continent en: Top_Spammers\n# Country: China (1814991)\n# ISO Code: CN\n# Total Networks: Top20\nTop20\n# Country: China (1814991)\n# ISO Code: CN_rep\n# Total Networks: Top20\nTop20\n# Country: Germany (2921044)\n# ISO Code: DE\n# Total Networks: Top20\nTop20\n",
+			"cc/Top_Spammers_v6.info": "# Generated from MaxMind Inc. on: {now}\n# Continent IPv6: Top_Spammers\n# Continent en: Top_Spammers\n# Country: China (1814991)\n# ISO Code: CN\n# Total Networks: Top20\nTop20\n# Country: Germany (2921044)\n# ISO Code: DE\n# Total Networks: Top20\nTop20\n"
+		},
+		"tree": "32fb5ca3d5157458b0d1ddb490b83a53629c14a6de1bda5311c8e6696bff0997"
+	}
+}

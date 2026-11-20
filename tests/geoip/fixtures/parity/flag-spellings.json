@@ -1,0 +1,18 @@
+{
+	"schema": 1,
+	"description": "The proxy flag compared as PHP compares it with 1: ' 1', '1.0', '01', '1e0' and '1 ' count (those networks, having a country, are dropped like any proxy network with one), 'true' and '0x1' do not.",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n",
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n1.0.1.0/24,1814991,1814991,,0,0,\n20.0.0.0/8,6252001,6252001,, 1,0,\n21.0.0.0/8,6252001,6252001,,1.0,0,\n22.0.0.0/8,6252001,6252001,,01,0,\n23.0.0.0/8,6252001,6252001,,1e0,0,\n24.0.0.0/8,6252001,6252001,,true,0,\n25.0.0.0/8,6252001,6252001,,0x1,0,\n26.0.0.0/8,6252001,6252001,,1 ,0,\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"expect": {
+		"ok": true,
+		"files": {
+			"cc/A1_A1_v4.txt": null,
+			"cc/US_v4.txt": "3.0.0.0/15\n24.0.0.0/8\n25.0.0.0/8\n"
+		},
+		"tree": "a25bae6f7082b15b60c19aa8a393a0e552659285b4d050b988bab0f3c7eb1009"
+	}
+}

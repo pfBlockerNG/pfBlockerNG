@@ -1,0 +1,21 @@
+{
+	"schema": 1,
+	"description": "A first conversion: each country's networks land in its list and its continent file, a network registered elsewhere in the registered country's _rep list, a proxy or satellite network in the A1_ or A2_ lists.",
+	"locale": "en",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n6255147,en,AS,Asia,,,0\n",
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n1.0.1.0/24,1814991,1814991,,0,0,\n3.0.0.0/15,6252001,6252001,,0,0,\n5.1.0.0/21,2921044,6252001,,0,0,\n8.8.8.0/24,,6252001,,1,0,\n9.9.9.0/24,2921044,2921044,,0,1,\n10.0.0.0/8,,,,1,0,\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2001:200::/23,1814991,1814991,,0,0,\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"expect": {
+		"ok": true,
+		"files": {
+			"cc/US_v4.txt": "3.0.0.0/15\n",
+			"cc/US_rep_v4.txt": "5.1.0.0/21\n",
+			"cc/CN_v6.txt": "2001:200::/23\n",
+			"log/maxmind_ver": "MaxMind GeoLite2 Date/Time Stamp\nLast-Modified: 2026-11-17 08:30:00\nDuplicate Represented IP4 Networks: 2\n"
+		},
+		"tree": "e20d98c5db8a47779a853798b7b27e5bec7f27e9e84bf068449c6556d9e2f665"
+	}
+}
