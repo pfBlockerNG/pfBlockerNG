@@ -468,10 +468,14 @@ func contentBytes(t *testing.T, content any, expand func(string) string) []byte 
 }
 
 // observe is what a path holds: its content, nil when nothing is there, or a marker for an entry that is not a regular
-// file (a directory left where a file was expected to be gone must not read as absent).
+// file (a directory left where a file was expected to be gone must not read as absent). A share entry Core publishes as
+// a link through its archive's link (.<archive>/<entry>, #4142) reads as the file it names, as today's path names it.
 func observe(t *testing.T, path string) any {
 	t.Helper()
 	info, err := os.Lstat(path)
+	if to, lerr := os.Readlink(path); lerr == nil && shareEntryLink(path, to) {
+		info, err = os.Stat(path)
+	}
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -486,6 +490,12 @@ func observe(t *testing.T, path string) any {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// shareEntryLink reports whether to, the text of the link at path, is a share entry's link: .<archive>/<entry>.
+func shareEntryLink(path, to string) bool {
+	archive, entry, ok := strings.Cut(to, "/")
+	return ok && strings.HasPrefix(archive, ".") && archive != ".." && entry == filepath.Base(path)
 }
 
 // inode is the file's inode number, 0 when nothing is there: a publication by rename gives the path a new one.
