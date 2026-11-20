@@ -13,8 +13,9 @@ use PHPUnit\Framework\Attributes\DataProvider;
  * binary); `sleep 1` is one tick of a controlled clock, so the 5 s and 7 s deadlines are counted in ticks, never measured.
  *
  * A test class calls sandboxUp() from setUp() and sandboxDown() from tearDown(), and its arrange() generates the script and
- * hands it to sandboxArrange(). The class names its service with rcService(), childArgs() and arrangeInstalled(); the rows
- * below, the lock, stop, survivor and start-confirmation contract both services share, then run for each of them.
+ * hands it to sandboxArrange(). The class names its service with rcService(), childArgs(), binary(), preLaunchEvents() and
+ * arrangeInstalled(); the rows below, the lock, stop, survivor and start-confirmation contract both services share, then run
+ * for each of them.
  *
  * Pids: a running pair is supervisor 1001 and child 1002 (the pidfiles name them), the pair a start launches 3001 and 3002.
  */
@@ -128,7 +129,7 @@ trait CoreRcSandboxTrait
 			echo "${attached:-none}" > "$S/fds"
 			ev launch
 			# The lock marker of the locked run, as the daemon inherits it (unset: anything the daemon runs takes the lock again)
-			eval "echo \"\${$LOCK_VAR-unset}\"" > "$S/daemon.env"
+			printenv "$LOCK_VAR" > "$S/daemon.env" || echo unset > "$S/daemon.env"
 			[ "$DAEMON_EXIT" = 0 ] || exit "$DAEMON_EXIT"
 			supervisor=; child=
 			while [ "$#" -gt 0 ]; do
@@ -137,6 +138,7 @@ trait CoreRcSandboxTrait
 				-p) child="$2"; shift 2 ;;
 				-o|-R|-t|-l|-T) shift 2 ;;
 				-r|-S) shift ;;
+				-*) ev "bad-daemon $1"; exit 2 ;;
 				*) break ;;
 				esac
 			done
@@ -161,8 +163,9 @@ trait CoreRcSandboxTrait
 	private array $savedRcDir = [];
 
 	/**
-	 * @return array{tag: string, pidfile: string, daemon_pidfile: string, lockfile: string, lock_var: string} the daemon(8) tag, the
-	 *   $pfb keys of the child's pidfile, the supervisor's pidfile and the lock file, and the variable that marks the locked run
+	 * @return array{tag: string, pidfile: string, daemon_pidfile: string, lockfile: string, lock_var: string, started: string, lock_held: string}
+	 *   the daemon(8) tag; the $pfb keys of the child's pidfile, the supervisor's pidfile and the lock file; the variable that marks
+	 *   the locked run; and the log text of a confirmed start and of a lock another start or stop held
 	 */
 	abstract private static function rcService(): array;
 
@@ -188,11 +191,11 @@ trait CoreRcSandboxTrait
 	 * @param list<string> $dirs sandbox folders to create
 	 * @param array<string, string> $pfb the $pfb entries pointed into the sandbox (relative to it)
 	 */
-	private function sandboxUp(string $prefix, array $doubles, array $dirs, array $pfb): void
+	private function sandboxUp(array $doubles, array $dirs, array $pfb): void
 	{
 		$this->savedPfb = $GLOBALS['pfb'] ?? [];
 		$this->savedRcDir = [array_key_exists('pfb_test_rcfile_dir', $GLOBALS), $GLOBALS['pfb_test_rcfile_dir'] ?? NULL];
-		$this->dir = sys_get_temp_dir() . "/{$prefix}_" . bin2hex(random_bytes(6));
+		$this->dir = sys_get_temp_dir() . '/' . static::rcService()['tag'] . '_rc_' . bin2hex(random_bytes(6));
 		foreach (['bin', 'state', 'run', 'rc', ...$dirs] as $sub) {
 			$this->assertTrue(mkdir("{$this->dir}/{$sub}", 0777, TRUE), "sandbox mkdir failed: {$sub}");
 		}
@@ -265,15 +268,15 @@ trait CoreRcSandboxTrait
 			file_put_contents("{$state}/{$file}", '');
 		}
 		if ($running) {
-			file_put_contents($this->pidfile('daemon_pidfile'), "1001\n");
-			file_put_contents($this->pidfile('pidfile'), "1002\n");
+			file_put_contents($this->rcPath('daemon_pidfile'), "1001\n");
+			file_put_contents($this->rcPath('pidfile'), "1002\n");
 			$tag = static::rcService()['tag'];
 			file_put_contents("{$state}/procs", "1001|daemon: {$tag}[1002] (daemon)|\n1002|" . ($child ?? $this->childArgs($this->binary())) . "|\n");
 		}
 	}
 
 	/** @param 'pidfile'|'daemon_pidfile'|'lockfile' $which */
-	private function pidfile(string $which): string
+	private function rcPath(string $which): string
 	{
 		return $GLOBALS['pfb'][static::rcService()[$which]];
 	}
@@ -309,6 +312,13 @@ trait CoreRcSandboxTrait
 		return trim((string) file_get_contents("{$this->dir}/state/ticks"));
 	}
 
+	/** The child alive under its pidfile while its supervisor (and its pidfile) is gone. */
+	private function orphanedChild(): void
+	{
+		unlink($this->rcPath('daemon_pidfile'));
+		file_put_contents("{$this->dir}/state/procs", "1002|{$this->childArgs($this->binary())}|\n");
+	}
+
 	/**
 	 * A supervisor daemon(3) has forked and that has not set its process title yet: its pidfile names it, its command line is still the
 	 * one daemon(8) was started with (the sandbox redirects /usr/sbin/daemon to its daemon double), and the child has no pidfile yet.
@@ -316,9 +326,9 @@ trait CoreRcSandboxTrait
 	private function supervisorOnItsLaunchCommandLine(): void
 	{
 		$tag = static::rcService()['tag'];
-		file_put_contents($this->pidfile('daemon_pidfile'), "1001\n");
-		file_put_contents("{$this->dir}/state/procs", "1001|{$this->dir}/bin/daemon -r -R 5 -t {$tag} -P {$this->pidfile('daemon_pidfile')} "
-			. "-p {$this->pidfile('pidfile')} {$this->childArgs($this->binary())}|\n");
+		file_put_contents($this->rcPath('daemon_pidfile'), "1001\n");
+		file_put_contents("{$this->dir}/state/procs", "1001|{$this->dir}/bin/daemon -r -R 5 -t {$tag} -P {$this->rcPath('daemon_pidfile')} "
+			. "-p {$this->rcPath('pidfile')} {$this->childArgs($this->binary())}|\n");
 	}
 
 	// ---- the lock: starts and stops run one after the other ------------------------------------------------------------
@@ -333,7 +343,7 @@ trait CoreRcSandboxTrait
 
 		// Then it ran itself once under lockf (lock file kept, 20 s wait), and that locked run launched without locking again
 		$this->assertSame(0, $status, $out);
-		$this->assertSame(["-k -t 20 {$this->pidfile('lockfile')} /bin/sh {$this->dir}/run.sh start"], $this->lines('lockf.calls'));
+		$this->assertSame(["-k -t 20 {$this->rcPath('lockfile')} /bin/sh {$this->dir}/run.sh start"], $this->lines('lockf.calls'));
 		$this->assertSame([...$this->preLaunchEvents(), 'launch'], $this->lines('events'));
 		// ...and the daemon does not inherit the locked run's marker: a start from anything it runs takes the lock again
 		$this->assertSame(['unset'], $this->lines('daemon.env'));
@@ -343,14 +353,14 @@ trait CoreRcSandboxTrait
 	{
 		// Given a start in flight: daemon(8) has created the supervisor's pidfile but not yet written its pid into it
 		$this->arrangeInstalled();
-		$this->assertNotFalse(file_put_contents($this->pidfile('daemon_pidfile'), ''));
+		$this->assertNotFalse(file_put_contents($this->rcPath('daemon_pidfile'), ''));
 
 		// When the service stops
 		[$status, $out] = $this->rc('stop');
 
 		// Then the stop ran itself under the same lock as the starts (so it waits for that start's confirmation), and only once
 		$this->assertSame(0, $status, $out);
-		$this->assertSame(["-k -t 20 {$this->pidfile('lockfile')} /bin/sh {$this->dir}/run.sh stop"], $this->lines('lockf.calls'));
+		$this->assertSame(["-k -t 20 {$this->rcPath('lockfile')} /bin/sh {$this->dir}/run.sh stop"], $this->lines('lockf.calls'));
 	}
 
 	public function testStartThatCannotTakeTheLockInTimeLaunchesNothingAndSaysSo(): void
@@ -366,7 +376,7 @@ trait CoreRcSandboxTrait
 		$this->assertSame([], $this->lines('events'), 'something was launched or signalled without the lock');
 		$logged = $this->lines('logger');
 		$this->assertCount(1, $logged, 'expected one log line, got: ' . implode(' | ', $logged));
-		$this->assertStringContainsString('lock for 20 s - not started', $logged[0]);
+		$this->assertStringContainsString(static::rcService()['lock_held'] . ' for 20 s - not started', $logged[0]);
 	}
 
 	public function testStopThatCannotTakeTheLockInTimeSignalsNothingAndFails(): void
@@ -381,11 +391,11 @@ trait CoreRcSandboxTrait
 		$this->assertSame(75, $status, $out);
 		$this->assertSame([], $this->lines('events'), 'something was signalled without the lock');
 		$this->assertSame(['1001', '1002'], $this->livePids());
-		$this->assertFileExists($this->pidfile('daemon_pidfile'));
-		$this->assertFileExists($this->pidfile('pidfile'));
+		$this->assertFileExists($this->rcPath('daemon_pidfile'));
+		$this->assertFileExists($this->rcPath('pidfile'));
 		$logged = $this->lines('logger');
 		$this->assertCount(1, $logged, 'expected one log line, got: ' . implode(' | ', $logged));
-		$this->assertStringContainsString('lock for 20 s - not stopped', $logged[0]);
+		$this->assertStringContainsString(static::rcService()['lock_held'] . ' for 20 s - not stopped', $logged[0]);
 	}
 
 	// ---- stop: only what a pidfile names, TERM then KILL ---------------------------------------------------------------
@@ -426,8 +436,8 @@ trait CoreRcSandboxTrait
 		$this->assertSame(['TERM 1001 @0', 'TERM 1002 @0', 'KILL 1001 @5', 'KILL 1002 @5'], $this->lines('signal.ticks'));
 		$this->assertSame('5', $this->ticks(), 'KILL was not sent at the 5 s tick');
 		$this->assertSame([], $this->livePids());
-		$this->assertFileDoesNotExist($this->pidfile('pidfile'));
-		$this->assertFileDoesNotExist($this->pidfile('daemon_pidfile'));
+		$this->assertFileDoesNotExist($this->rcPath('pidfile'));
+		$this->assertFileDoesNotExist($this->rcPath('daemon_pidfile'));
 	}
 
 	public function testStopNeverSignalsAProcessThatReusedAPidfilePid(): void
@@ -443,13 +453,20 @@ trait CoreRcSandboxTrait
 		$this->assertSame(['1001', '1002'], $this->livePids());
 	}
 
-	public function testStopNeverSignalsAnotherDaemonWhoseTitleOnlyStartsWithTheTag(): void
+	/** @return array<string, array{0: string}> another service's supervisor whose tag begins with this one's, %s standing for its tag */
+	public static function anotherDaemon(): array
 	{
-		// Given the supervisor pidfile names a daemon(8) started for another service whose title begins with this one's
-		$tag = static::rcService()['tag'];
+		return ['by its title' => ['daemon: %s_other[1002] (daemon)'], 'by its launch command line' => ['@BIN@/daemon -r -t %s_other -P /x /usr/sbin/other']];
+	}
+
+	#[DataProvider('anotherDaemon')]
+	public function testStopNeverSignalsAnotherDaemonWhoseTagOnlyStartsWithThisOne(string $args): void
+	{
+		// Given the supervisor pidfile names a daemon(8) started for another service whose tag begins with this one's
 		$this->arrangeInstalled();
-		file_put_contents($this->pidfile('daemon_pidfile'), "1001\n");
-		file_put_contents("{$this->dir}/state/procs", "1001|{$this->dir}/bin/daemon -r -t {$tag}_other -P /x /usr/sbin/other|\n");
+		file_put_contents($this->rcPath('daemon_pidfile'), "1001\n");
+		$args = str_replace('@BIN@', "{$this->dir}/bin", sprintf($args, static::rcService()['tag']));
+		file_put_contents("{$this->dir}/state/procs", "1001|{$args}|\n");
 
 		// When the service stops
 		[$status, $out] = $this->rc('stop');
@@ -487,7 +504,7 @@ trait CoreRcSandboxTrait
 		$this->assertSame(0, $status, $out);
 		$this->assertSame([], $this->lines('events'), 'the supervisor of the earlier start was signalled or launched again');
 		$this->assertSame(['1001'], $this->livePids());
-		$this->assertFileExists($this->pidfile('daemon_pidfile'));
+		$this->assertFileExists($this->rcPath('daemon_pidfile'));
 	}
 
 	public function testStopSignalsASupervisorThatHasNotSetItsProcessTitleYet(): void
@@ -503,15 +520,14 @@ trait CoreRcSandboxTrait
 		$this->assertSame(0, $status, $out);
 		$this->assertSame(['TERM 1001'], $this->lines('events'));
 		$this->assertSame([], $this->livePids());
-		$this->assertFileDoesNotExist($this->pidfile('daemon_pidfile'));
+		$this->assertFileDoesNotExist($this->rcPath('daemon_pidfile'));
 	}
 
 	public function testStartStopsAnOrphanedChildBeforeLaunchingAgain(): void
 	{
 		// Given the child alive under its pidfile while its supervisor is gone
 		$this->arrangeInstalled(running: TRUE);
-		unlink($this->pidfile('daemon_pidfile'));
-		file_put_contents("{$this->dir}/state/procs", "1002|{$this->childArgs($this->binary())}|\n");
+		$this->orphanedChild();
 
 		// When the service starts
 		[$status, $out] = $this->rc('start');
@@ -520,6 +536,21 @@ trait CoreRcSandboxTrait
 		$this->assertSame(0, $status, $out);
 		$this->assertSame([...$this->preLaunchEvents(), 'TERM 1002', 'launch'], $this->lines('events'));
 		$this->assertSame(['3001', '3002'], $this->livePids());
+	}
+
+	public function testStopOfAnOrphanedChildSignalsTheChild(): void
+	{
+		// Given the child alive under its pidfile while its supervisor is gone
+		$this->arrangeInstalled(running: TRUE);
+		$this->orphanedChild();
+
+		// When the service stops
+		[$status, $out] = $this->rc('stop');
+
+		// Then the child alone is terminated
+		$this->assertSame(0, $status, $out);
+		$this->assertSame(['TERM 1002'], $this->lines('events'));
+		$this->assertSame([], $this->livePids());
 	}
 
 	// ---- a child that survives KILL fails the stop, and every start or restart over it ---------------------------------
@@ -538,8 +569,8 @@ trait CoreRcSandboxTrait
 		$this->assertSame('7', $this->ticks(), 'the stop did not give up at the 7 s tick');
 		$this->assertSame(['1002'], $this->livePids());
 		$this->assertStringContainsString('still running after KILL', implode("\n", $this->lines('logger')));
-		$this->assertFileExists($this->pidfile('pidfile'));
-		$this->assertFileExists($this->pidfile('daemon_pidfile'));
+		$this->assertFileExists($this->rcPath('pidfile'));
+		$this->assertFileExists($this->rcPath('daemon_pidfile'));
 	}
 
 	public function testRestartOverAChildThatSurvivesKillFailsWithoutLaunching(): void
@@ -558,8 +589,7 @@ trait CoreRcSandboxTrait
 	{
 		// Given the child alive under its pidfile, its supervisor gone, and the child ignoring TERM and surviving KILL
 		$this->arrangeInstalled(running: TRUE, scenario: ['TERM_AFTER' => 'never', 'KILL_IGNORED' => '1002']);
-		unlink($this->pidfile('daemon_pidfile'));
-		file_put_contents("{$this->dir}/state/procs", "1002|{$this->childArgs($this->binary())}|\n");
+		$this->orphanedChild();
 
 		// When the service starts
 		[$status, $out] = $this->rc('start');
@@ -590,8 +620,8 @@ trait CoreRcSandboxTrait
 		// Then the start waited, one tick per poll, until the pidfile named the supervisor, and only then said started
 		$this->assertSame(0, $status, $out);
 		$this->assertSame($at, $this->ticks(), 'the start did not wait for the supervisor pidfile');
-		$this->assertSame('3001', trim((string) file_get_contents($this->pidfile('daemon_pidfile'))));
-		$this->assertMatchesRegularExpression('~(?<!not) started$~m', implode("\n", $this->lines('logger')));
+		$this->assertSame('3001', trim((string) file_get_contents($this->rcPath('daemon_pidfile'))));
+		$this->assertStringContainsString(static::rcService()['started'], implode("\n", $this->lines('logger')));
 	}
 
 	/** @return array<string, array{0: string}> */
@@ -614,7 +644,7 @@ trait CoreRcSandboxTrait
 		$this->assertSame('5', $this->ticks(), 'the start did not give up at the fifth tick');
 		$logged = implode("\n", $this->lines('logger'));
 		$this->assertStringContainsString('started no supervisor', $logged);
-		$this->assertDoesNotMatchRegularExpression('~(?<!not) started$~m', $logged);
+		$this->assertStringNotContainsString(static::rcService()['started'], $logged);
 	}
 
 	public function testStartWhoseDaemonCommandFailsIsNotStartedAndSaysWhy(): void
@@ -630,6 +660,6 @@ trait CoreRcSandboxTrait
 		$this->assertSame('0', $this->ticks(), 'the start waited for a supervisor of a daemon(8) that failed');
 		$logged = implode("\n", $this->lines('logger'));
 		$this->assertStringContainsString('failed with status 6', $logged);
-		$this->assertDoesNotMatchRegularExpression('~(?<!not) started$~m', $logged);
+		$this->assertStringNotContainsString(static::rcService()['started'], $logged);
 	}
 }

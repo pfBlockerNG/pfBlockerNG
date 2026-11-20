@@ -55,7 +55,7 @@ final class CrowdsecServiceTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$this->sandboxUp('pfb_crowdsec_rc', ['daemon', 'logger', 'uname', 'pgrep', 'pkill', 'sleep', 'lockf', 'ps', 'sha256'],
+		$this->sandboxUp(['daemon', 'logger', 'uname', 'pgrep', 'pkill', 'sleep', 'lockf', 'ps', 'sha256'],
 			['conf', 'crowdsec/bin/freebsd-amd64', 'crowdsec/bin/freebsd-arm64'], [
 				'crowdsec_config'         => 'conf/pfb_crowdsec.json',
 				'crowdsec_pidfile'        => 'run/pfb_crowdsec.pid',
@@ -73,7 +73,7 @@ final class CrowdsecServiceTest extends TestCase
 	private static function rcService(): array
 	{
 		return ['tag' => 'pfb_crowdsec', 'pidfile' => 'crowdsec_pidfile', 'daemon_pidfile' => 'crowdsec_daemon_pidfile',
-			'lockfile' => 'crowdsec_lockfile', 'lock_var' => 'PFB_CROWDSEC_LOCKED'];
+			'lockfile' => 'crowdsec_lockfile', 'lock_var' => 'PFB_CROWDSEC_LOCKED', 'started' => 'CrowdSec bouncer started', 'lock_held' => 'held the lock'];
 	}
 
 	private function childArgs(string $binary): string
@@ -131,8 +131,7 @@ final class CrowdsecServiceTest extends TestCase
 
 	public function testStartRunsThisMachinesBouncerUnderDaemonWithRestartSyslogAndBothPidfiles(): void
 	{
-		$this->install();
-		$this->arrange();
+		$this->arrangeInstalled();
 
 		[$status, $out] = $this->rc('start');
 
@@ -150,8 +149,7 @@ final class CrowdsecServiceTest extends TestCase
 	public function testASecondStartKeepsTheBouncerTheFirstOneStartedAndKillsNothing(): void
 	{
 		// Given one start that launched the bouncer (two starts at once run one after the other under the lock)
-		$this->install();
-		$this->arrange();
+		$this->arrangeInstalled();
 		[$first] = $this->rc('start');
 		$this->assertSame(0, $first);
 		$this->assertSame(['check ' . $GLOBALS['pfb']['crowdsec_config'], 'launch'], $this->lines('events'), 'before-state: one launch');
@@ -214,8 +212,7 @@ final class CrowdsecServiceTest extends TestCase
 
 	public function testStartWithAConfigTheBouncerRejectsFailsAndLogsWhy(): void
 	{
-		$this->install();
-		$this->arrange(scenario: ['CHECK_EXIT' => '1']);
+		$this->arrangeInstalled(scenario: ['CHECK_EXIT' => '1']);
 
 		[$status] = $this->rc('start');
 
@@ -226,8 +223,7 @@ final class CrowdsecServiceTest extends TestCase
 
 	public function testStartOverAStalePidfileOfAnotherProcessLaunchesAndSignalsNothing(): void
 	{
-		$this->install();
-		$this->arrange();
+		$this->arrangeInstalled();
 		file_put_contents($GLOBALS['pfb']['crowdsec_daemon_pidfile'], "77\n");
 		file_put_contents($GLOBALS['pfb']['crowdsec_pidfile'], "78\n");
 		file_put_contents("{$this->dir}/state/procs", "77|/usr/sbin/sshd|\n78|/usr/local/sbin/unbound|\n");
@@ -245,8 +241,7 @@ final class CrowdsecServiceTest extends TestCase
 
 	public function testStopSendsTermToTheSupervisorAndTheBouncerAndRemovesThePidfiles(): void
 	{
-		$this->install();
-		$this->arrange(running: TRUE);
+		$this->arrangeInstalled(running: TRUE);
 		file_put_contents($GLOBALS['pfb']['crowdsec_binary_record'], self::BINARY_SHA . ' ' . $this->binary() . "\n");
 
 		[$status, $out] = $this->rc('stop');
@@ -257,19 +252,6 @@ final class CrowdsecServiceTest extends TestCase
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['crowdsec_daemon_pidfile']);
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['crowdsec_pidfile']);
 		$this->assertFileExists($GLOBALS['pfb']['crowdsec_binary_record'], 'the record outlives a stop: only a start rewrites it');
-	}
-
-	public function testStopOfABouncerWhoseSupervisorIsGoneSignalsTheBouncer(): void
-	{
-		$this->install();
-		$this->arrange(running: TRUE);
-		file_put_contents("{$this->dir}/state/procs", "1002|{$this->childArgs($this->binary())}|\n");
-
-		[$status] = $this->rc('stop');
-
-		$this->assertSame(0, $status);
-		$this->assertSame(['TERM 1002'], $this->lines('events'));
-		$this->assertSame([], $this->livePids());
 	}
 
 	// ---- package upgrade: pfSense's own stop leaves the bouncer running (pfB-DNS's rule) ------------
@@ -291,8 +273,7 @@ final class CrowdsecServiceTest extends TestCase
 	#[DataProviderExternal(DnsProxyUpgradeStopTest::class, 'upgradeRows')]
 	public function testAStopUnderAPackageUpgradeLeavesTheBouncerRunningAndSaysSo(array $ancestors): void
 	{
-		$this->install();
-		$this->arrange(running: TRUE);
+		$this->arrangeInstalled(running: TRUE);
 		$this->ancestry($ancestors);
 
 		[$status, $out] = $this->rc('stop');
@@ -308,8 +289,7 @@ final class CrowdsecServiceTest extends TestCase
 	#[DataProviderExternal(DnsProxyUpgradeStopTest::class, 'teardownRows')]
 	public function testAStopThatIsNoPackageUpgradeStopsTheBouncer(array $ancestors): void
 	{
-		$this->install();
-		$this->arrange(running: TRUE);
+		$this->arrangeInstalled(running: TRUE);
 		$this->ancestry($ancestors);
 
 		[$status, $out] = $this->rc('stop');
@@ -320,8 +300,7 @@ final class CrowdsecServiceTest extends TestCase
 
 	public function testARestartUnderAPackageUpgradeStillStopsAndStartsTheBouncer(): void
 	{
-		$this->install();
-		$this->arrange(running: TRUE);
+		$this->arrangeInstalled(running: TRUE);
 		$this->ancestry(['/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG DEINSTALL', '/bin/sh /tmp/x', 'pkg upgrade -y x']);
 
 		[$status, $out] = $this->rc('restart');
@@ -334,8 +313,7 @@ final class CrowdsecServiceTest extends TestCase
 	public function testAPairNoPidfileNamesIsNeverSignalledByStopOrStart(): void
 	{
 		// Given a supervisor and a bouncer that no pidfile names (Core's rule: only what a pidfile names is signalled)
-		$this->install();
-		$this->arrange();
+		$this->arrangeInstalled();
 		file_put_contents("{$this->dir}/state/procs", "4001|daemon: pfb_crowdsec[4002] (daemon)|\n4002|{$this->childArgs($this->binary())}|\n");
 
 		[$stop] = $this->rc('stop');

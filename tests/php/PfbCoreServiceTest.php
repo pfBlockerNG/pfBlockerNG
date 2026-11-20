@@ -16,7 +16,7 @@ use PHPUnit\Framework\TestCase;
  *     daemon(8): restarted when it exits, its output in the package log, its socket the one PHP calls, stdio detached;
  *   - a package that ships no pfb-core for this machine starts nothing and is not a failure; an unknown machine is;
  *   - a start over a Core that serves keeps it, also a supervisor that has not set its process title yet; a restart stops first;
- *   - starts are serialized by a lock (a start that cannot get it in 10 s launches nothing) and return once the supervisor is confirmed;
+ *   - starts are serialized by a lock (a start that cannot get it in 20 s launches nothing) and return once the supervisor is confirmed;
  *     a daemon(8) that fails is a failed start;
  *   - stop signals only the processes its own pidfiles name while their command line is pfb-core's, TERM first, KILL at 5 s; a Core
  *     still running 7 s after TERM fails the stop (pidfiles kept), and a start or restart over it launches nothing;
@@ -43,7 +43,7 @@ final class PfbCoreServiceTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$this->sandboxUp('pfb_core_rc', ['daemon', 'logger', 'lockf', 'uname', 'pgrep', 'pkill', 'sleep'],
+		$this->sandboxUp(['daemon', 'logger', 'lockf', 'uname', 'pgrep', 'pkill', 'sleep'],
 			['log', 'core/bin/freebsd-amd64', 'core/bin/freebsd-arm64'], [
 				'core_socket'         => 'run/pfb_core/api.sock',
 				'core_state'          => 'db/pfb_core',
@@ -64,7 +64,7 @@ final class PfbCoreServiceTest extends TestCase
 	private static function rcService(): array
 	{
 		return ['tag' => 'pfb_core', 'pidfile' => 'core_pidfile', 'daemon_pidfile' => 'core_daemon_pidfile', 'lockfile' => 'core_lockfile',
-			'lock_var' => 'PFB_CORE_START_LOCKED'];
+			'lock_var' => 'PFB_CORE_START_LOCKED', 'started' => 'Core API started', 'lock_held' => 'held the start lock'];
 	}
 
 	private function childArgs(string $binary): string
@@ -85,7 +85,7 @@ final class PfbCoreServiceTest extends TestCase
 	private function arrangeInstalled(bool $running = FALSE, array $scenario = [], ?string $child = NULL): void
 	{
 		$this->install('freebsd-amd64');
-		$this->arrange('amd64', running: $running, childArgs: $child ?? '', scenario: $scenario);
+		$this->arrange(running: $running, scenario: $scenario, child: $child);
 	}
 
 	/** The installed pfb-core of one architecture: an executable file is all the start looks at. */
@@ -102,7 +102,7 @@ final class PfbCoreServiceTest extends TestCase
 	 *
 	 * @param array<string, string> $scenario overrides of the double's variables (sandboxArrange())
 	 */
-	private function arrange(string $machine = 'amd64', bool $running = FALSE, string $termAfter = '2', string $childArgs = '', array $scenario = []): void
+	private function arrange(string $machine = 'amd64', bool $running = FALSE, array $scenario = [], ?string $child = NULL): void
 	{
 		pfb_core_service("{$this->dir}/core");
 		$text = @file_get_contents("{$this->dir}/rc/pfb_core.sh");
@@ -111,9 +111,8 @@ final class PfbCoreServiceTest extends TestCase
 		// scripts and rsync (issue #3975), which it is told, are the host paths an argument may name
 		$named = ['/usr/local/pkg/pfblockerng/pfb_core_settings.sh', '/usr/local/pkg/pfblockerng/pfb_core_update.sh', '/usr/local/pkg/pfblockerng/pfb_core_maintenance.sh', '/usr/local/pkg/pfblockerng/pfb_core_metrics.sh', '/usr/local/pkg/pfblockerng/pfb_core_counters.sh', '--zoneinfo /etc/localtime', self::RSYNC,
 			...self::LOCAL_DIRS, ...self::SCRIPT_DIRS];
-		$this->sandboxArrange($text, $named, $scenario + ['MACHINE' => $machine, 'TERM_AFTER' => $termAfter], $running, $childArgs !== '' ? $childArgs : NULL);
+		$this->sandboxArrange($text, $named, $scenario + ['MACHINE' => $machine, 'TERM_AFTER' => '2'], $running, $child);
 	}
-
 
 	/** @return array<string, array{0: string, 1: string}> */
 	public static function machines(): array
@@ -152,11 +151,10 @@ final class PfbCoreServiceTest extends TestCase
 
 	public function testMaintenanceProducerPreservesQuotedRuntimePathsAndSupervisorIdentity(): void
 	{
-		$this->install('freebsd-amd64');
 		$GLOBALS['pfb']['core_socket'] = "{$this->dir}/run/api space's.sock";
 		$GLOBALS['pfb']['core_state'] = "{$this->dir}/state space's";
 		$GLOBALS['pfb']['core_log'] = "{$this->dir}/log/core space's.log";
-		$this->arrange();
+		$this->arrangeInstalled();
 		[$status, $out] = $this->rc('start');
 		$this->assertSame(0, $status, $out);
 		$args = $this->lines('daemon.argv');
@@ -176,7 +174,6 @@ final class PfbCoreServiceTest extends TestCase
 		}
 	}
 
-
 	public function testTheServiceFileNamesTheMetricsAndCountersPrograms(): void
 	{
 		$this->install('freebsd-amd64');
@@ -186,7 +183,6 @@ final class PfbCoreServiceTest extends TestCase
 		$text = (string) file_get_contents("{$this->dir}/rc/pfb_core.sh");
 		$this->assertStringContainsString("--maintenance-cmd '/usr/local/pkg/pfblockerng/pfb_core_maintenance.sh' --metrics-cmd '/usr/local/pkg/pfblockerng/pfb_core_metrics.sh' --counters-cmd '/usr/local/pkg/pfblockerng/pfb_core_counters.sh' --zoneinfo", $text);
 	}
-
 
 	/** @param list<string> $dirs @return list<string> the flags of the feed phase (issue #3975) Core is started with */
 	private function feedFlags(array $dirs = self::LOCAL_DIRS, string $userAgent = self::USER_AGENT): array
@@ -204,10 +200,9 @@ final class PfbCoreServiceTest extends TestCase
 	public function testStartTellsCoreTheFolderOfAFileFeedTheScriptFoldersRsyncAndTheUserAgentAndNamesTheDbdirByItsRealPath(): void
 	{
 		// Given the package's database folder is a link to the real folder (the rc script must name what realpath() resolves, as pfb_filter() compares)
-		$this->install('freebsd-amd64');
 		$this->assertTrue(mkdir("{$this->dir}/real_db", 0700));
 		$this->assertTrue(symlink("{$this->dir}/real_db", "{$this->dir}/dbdir"));
-		$this->arrange('amd64');
+		$this->arrangeInstalled();
 
 		// When the service starts
 		[$status, $out] = $this->rc('start');
@@ -224,9 +219,8 @@ final class PfbCoreServiceTest extends TestCase
 	public function testTheUserAgentCoreIsToldHasNoLineBreak(): void
 	{
 		// Given a unique id the platform wrote with a trailing newline (Core refuses a user agent with a line break, so Core would not start)
-		$this->install('freebsd-amd64');
 		$GLOBALS['pfb']['curl_defaults'][CURLOPT_USERAGENT] = self::USER_AGENT . "\n";
-		$this->arrange('amd64');
+		$this->arrangeInstalled();
 
 		// When the service starts
 		[$status, $out] = $this->rc('start');
@@ -267,9 +261,8 @@ final class PfbCoreServiceTest extends TestCase
 
 	public function testStopNeverSignalsAnIndependentUpdateWorkerNamedByAStaleChildPidfile(): void
 	{
-		$this->install('freebsd-amd64');
+		$this->arrangeInstalled(running: TRUE);
 		$worker = "{$this->dir}/core/bin/freebsd-amd64/pfb-core --update-worker {$this->dir}/db/pfb_core/update.log";
-		$this->arrange('amd64', running: TRUE, childArgs: $worker);
 		file_put_contents("{$this->dir}/state/procs", "1001|/usr/sbin/cron|\n1002|{$worker}|\n");
 
 		[$status, $out] = $this->rc('stop');
@@ -279,12 +272,10 @@ final class PfbCoreServiceTest extends TestCase
 		$this->assertSame(['1001', '1002'], $this->livePids());
 	}
 
-
 	public function testStartPushesNothingToCoreAndNamesNoPhpVerb(): void
 	{
 		// Given a Core whose socket exists, as soon as the service starts
-		$this->install('freebsd-amd64');
-		$this->arrange('amd64');
+		$this->arrangeInstalled();
 		$this->assertTrue(mkdir(dirname($GLOBALS['pfb']['core_socket']), 0700, TRUE));
 		$server = stream_socket_server('unix://' . $GLOBALS['pfb']['core_socket'], $errno, $errstr);
 		$this->assertNotFalse($server, "socket: {$errstr}");
