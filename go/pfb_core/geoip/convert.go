@@ -201,6 +201,7 @@ var continentFile = strings.NewReplacer(" ", "_", `"`, "")
 func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (stage, bool, error) {
 	cs := &countries{byKey: map[string]*country{}}
 	english := map[string]string{}
+	listed, placed := false, false // a MaxMind country, and one with a continent file to go in
 	read, err := eachRow(ctx, locations, func(cc []string) error {
 		if field(cc, 0) == "geoname_id" {
 			return nil
@@ -228,6 +229,8 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 			continentEn = v
 		}
 		entry.continentEn = continentFile.Replace(continentEn)
+		listed = true
+		placed = placed || !empty(entry.continentEn) && word(entry.continentEn)
 		cs.set(cc[0], entry)
 		if i := slices.Index(topSpammers, cc[4]); i >= 0 {
 			iso := cc[4]
@@ -237,6 +240,11 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 	})
 	if err != nil {
 		return nil, false, err
+	}
+	if listed && !placed {
+		// Today's PHP publishes the generation without MaxMind's countries, deleting their previous lists (#4125).
+		c.log(" [ MAXMIND UPDATE FAIL, no MaxMind country has a continent, using previous Country code database ]\n")
+		return nil, false, nil
 	}
 	generationOK := read
 
