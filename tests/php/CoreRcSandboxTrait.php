@@ -98,6 +98,8 @@ trait CoreRcSandboxTrait
 			# is not modelled, LOCKF_EXIT stands for a wait that ran out (75) and runs nothing
 			[ "$1" = -k ] && [ "$2" = -t ] && [ "$3" = 20 ] && [ "$#" -ge 5 ] || { ev bad-lockf; exit 2; }
 			printf '%s\n' "$*" >> "$S/lockf.calls"
+			# What the supervisor's pidfile was when the lock was asked for: absent, empty or its pid
+			if [ ! -e "$DAEMON_PIDFILE" ]; then echo absent; elif [ -s "$DAEMON_PIDFILE" ]; then cat "$DAEMON_PIDFILE"; else echo empty; fi >> "$S/lockf.pidfile"
 			[ -z "$LOCKF_EXIT" ] || exit "$LOCKF_EXIT"
 			shift 4
 			exec "$@"
@@ -145,7 +147,7 @@ trait CoreRcSandboxTrait
 			# pidfile_open() creates the supervisor's pidfile before daemon(3); its pid is written later (SUPERVISOR_AT ticks on), and
 			# until it sets its title the supervisor's command line is the one daemon(8) was started with
 			true > "$supervisor"
-			[ "$SUPERVISOR_AT" = never ] || echo "$(( $(tick) + SUPERVISOR_AT ))|$supervisor|3001" > "$S/pending"
+			[ "$SUPERVISOR_AT" = never ] || echo "$(( $(tick) + SUPERVISOR_AT ))|$supervisor|$SUPERVISOR_PID" > "$S/pending"
 			settle
 			echo 3002 > "$child"
 			printf '%s\n' "3001|$orig|" "3002|$*|" >> "$S/procs"
@@ -233,8 +235,9 @@ trait CoreRcSandboxTrait
 	 *
 	 * @param list<string> $hostWords host paths the script may name without opening them (or that its programs are told)
 	 * @param array<string, string> $vars the double's variables: MACHINE, TERM_AFTER (ticks a TERMed process takes to exit, or never),
-	 *   SUPERVISOR_AT (ticks after daemon(8) the supervisor writes its pidfile, or never), DAEMON_EXIT (status of daemon(8)), LOCKF_EXIT
-	 *   (status of a lockf whose wait ran out), KILL_IGNORED (pids that survive KILL), and the service's own
+	 *   SUPERVISOR_AT (ticks after daemon(8) the supervisor writes its pidfile, or never), SUPERVISOR_PID (the pid it writes there),
+	 *   DAEMON_EXIT (status of daemon(8)), LOCKF_EXIT (status of a lockf whose wait ran out), KILL_IGNORED (pids that survive KILL),
+	 *   and the service's own
 	 * @param ?string $child the running child's command line (default: this machine's binary)
 	 */
 	private function sandboxArrange(string $text, array $hostWords, array $vars, bool $running, ?string $child = NULL): void
@@ -257,14 +260,14 @@ trait CoreRcSandboxTrait
 		file_put_contents("{$this->dir}/run.sh", $script);
 		$state = "{$this->dir}/state";
 		$vars += ['MACHINE' => 'amd64', 'TERM_AFTER' => '1', 'SUPERVISOR_AT' => '0', 'DAEMON_EXIT' => '0', 'LOCKF_EXIT' => '', 'KILL_IGNORED' => '',
-			'LOCK_VAR' => static::rcService()['lock_var']];
+			'LOCK_VAR' => static::rcService()['lock_var'], 'DAEMON_PIDFILE' => $this->rcPath('daemon_pidfile'), 'SUPERVISOR_PID' => '3001'];
 		file_put_contents("{$state}/scenario", implode('', array_map(
 			static fn (string $k, string $v): string => "{$k}=" . escapeshellarg($v) . "\n",
 			array_keys($vars),
 			array_values($vars)
 		)));
 		file_put_contents("{$state}/ticks", "0\n");
-		foreach (['events', 'procs', 'logger', 'daemon.argv', 'daemon.env', 'fds', 'lockf.calls', 'signal.ticks', 'pending', 'ancestry', 'ancestry.self'] as $file) {
+		foreach (['events', 'procs', 'logger', 'daemon.argv', 'daemon.env', 'fds', 'lockf.calls', 'lockf.pidfile', 'signal.ticks', 'pending', 'ancestry', 'ancestry.self'] as $file) {
 			file_put_contents("{$state}/{$file}", '');
 		}
 		if ($running) {
@@ -361,12 +364,16 @@ trait CoreRcSandboxTrait
 		// Then the stop ran itself under the same lock as the starts (so it waits for that start's confirmation), and only once
 		$this->assertSame(0, $status, $out);
 		$this->assertSame(["-k -t 20 {$this->rcPath('lockfile')} /bin/sh {$this->dir}/run.sh stop"], $this->lines('lockf.calls'));
+		// ...before touching the start's pidfile, which was still there, empty, when the stop asked for the lock
+		$this->assertSame(['empty'], $this->lines('lockf.pidfile'));
 	}
 
 	public function testStartThatCannotTakeTheLockInTimeLaunchesNothingAndSaysSo(): void
 	{
-		// Given another start holds the lock past lockf's wait (lockf then exits 75 without running the start)
-		$this->arrangeInstalled(scenario: ['LOCKF_EXIT' => '75']);
+		// Given an orphaned child a locked start would stop, and another start holding the lock past lockf's wait (lockf then exits 75
+		// without running the start)
+		$this->arrangeInstalled(running: TRUE, scenario: ['LOCKF_EXIT' => '75']);
+		$this->orphanedChild();
 
 		// When the service starts
 		[$status, $out] = $this->rc('start');
@@ -374,6 +381,8 @@ trait CoreRcSandboxTrait
 		// Then it fails with lockf's status, launches and signals nothing, and logs one error naming the lock
 		$this->assertSame(75, $status, $out);
 		$this->assertSame([], $this->lines('events'), 'something was launched or signalled without the lock');
+		$this->assertSame(['1002'], $this->livePids());
+		$this->assertFileExists($this->rcPath('pidfile'));
 		$logged = $this->lines('logger');
 		$this->assertCount(1, $logged, 'expected one log line, got: ' . implode(' | ', $logged));
 		$this->assertStringContainsString(static::rcService()['lock_held'] . ' for 20 s - not started', $logged[0]);
@@ -642,6 +651,24 @@ trait CoreRcSandboxTrait
 		// Then it gives up after five ticks with the error, and never claims the service started
 		$this->assertSame(1, $status, $out);
 		$this->assertSame('5', $this->ticks(), 'the start did not give up at the fifth tick');
+		$logged = implode("\n", $this->lines('logger'));
+		$this->assertStringContainsString('started no supervisor', $logged);
+		$this->assertStringNotContainsString(static::rcService()['started'], $logged);
+	}
+
+	public function testStartFailsWhenThePidfileNamesAnUnrelatedProcess(): void
+	{
+		// Given the supervisor's pidfile, once written, names a live process that is no supervisor of this service
+		$this->arrangeInstalled(scenario: ['SUPERVISOR_PID' => '77']);
+		file_put_contents("{$this->dir}/state/procs", "77|/usr/sbin/cron|\n");
+
+		// When the service starts
+		[$status, $out] = $this->rc('start');
+
+		// Then it is not taken for the supervisor: the start gives up after five ticks and never claims the service started
+		$this->assertSame(1, $status, $out);
+		$this->assertSame('5', $this->ticks(), 'the start did not give up at the fifth tick');
+		$this->assertSame('77', trim((string) file_get_contents($this->rcPath('daemon_pidfile'))), 'the pidfile did not name the unrelated pid');
 		$logged = implode("\n", $this->lines('logger'));
 		$this->assertStringContainsString('started no supervisor', $logged);
 		$this->assertStringNotContainsString(static::rcService()['started'], $logged);
