@@ -66,6 +66,7 @@ def _bouncer_should_run(vm: SmokeVM) -> Iterator[None]:
         absent = vm.ssh(f"pfctl -t {table} -T show", timeout=30).returncode != 0
         assert absent, f"precondition: no {table} table on the session VM (it would be killed afterwards)"
     saved = helpers._php_read_scalar(vm, "", f"json_encode(config_get_path({helpers._php_str(SECTION)}))")
+    assert saved != "", f"could not read {SECTION} to put it back afterwards"
     master = helpers.config_get_state(vm, MASTER)
     settings = {
         "enable": "on",
@@ -93,7 +94,7 @@ def _bouncer_should_run(vm: SmokeVM) -> Iterator[None]:
         vm.ssh(f"pfctl -t {TABLES[0]} -T kill; pfctl -t {TABLES[1]} -T kill; true", timeout=30)
         restore = (
             f"config_del_path({helpers._php_str(SECTION)});"
-            if saved in ("", "null")
+            if saved == "null"
             else f"config_set_path({helpers._php_str(SECTION)}, json_decode({helpers._php_str(saved)}, TRUE));"
         )
         _php_ok(vm, restore + "\nwrite_config('pfBlockerNG smoke: restore the CrowdSec settings');")
