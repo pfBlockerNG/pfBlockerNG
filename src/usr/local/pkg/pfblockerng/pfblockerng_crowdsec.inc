@@ -39,6 +39,9 @@ const PFB_CROWDSEC_LOG_WINDOW = 1048576;
 // The bouncer's own pid (daemon -p), which the rule hook signals; SIGUSR1 to daemon(8)'s supervisor (-P) would kill it (#4069)
 const PFB_CROWDSEC_PIDFILE = '/var/run/pfb_crowdsec.pid';
 const PFB_CROWDSEC_DAEMON_PIDFILE = '/var/run/pfb_crowdsec_daemon.pid';
+// The lock the rc script's starts and stops share, and the start's record of the binary it runs (`sha256 -r`: hash, space, path)
+const PFB_CROWDSEC_LOCKFILE = '/var/run/pfb_crowdsec.lock';
+const PFB_CROWDSEC_BINARY_RECORD = '/var/run/pfb_crowdsec.sha256';
 const PFB_CROWDSEC_LOG_LEVELS = ['debug', 'info', 'warning', 'error'];
 const PFB_CROWDSEC_TAG_PATTERN = '/^[A-Za-z0-9_-]{1,63}$/D';
 // The bouncer key (D2): it travels in a request header, so no whitespace or control character
@@ -204,9 +207,9 @@ function pfb_crowdsec_config_write(string $content, string $path): bool {
 }
 
 /**
- * Apply the "should run" decision (D4). Called by the Settings save, by pfBlockerNG's update pass (after a master enable change or
- * an XMLRPC receive) and by the installer (the pass ends early during an install). While the bouncer should run: write the config file and
- * start the service, or restart it when the file changed. Otherwise: stop it and remove the file, which also keeps the rc script's
+ * Apply the "should run" decision (D4). Called by the Settings save and by pfb_crowdsec_resync(), never by the update pass. While the
+ * bouncer should run: write the config file and start the service, or restart it when the file or the installed binary changed
+ * (pfb_crowdsec_binary_changed()). Otherwise: stop it and remove the file, which also keeps the rc script's
  * own start (at boot) from starting it. The rc script is (re)generated on every call.
  *
  * @return bool TRUE when the bouncer was turned on or off (the config file appeared or went): its rules change, so the caller
@@ -236,10 +239,24 @@ function pfb_crowdsec_apply(): bool {
 	}
 	if (!is_service_running('pfb_crowdsec')) {
 		start_service('pfb_crowdsec');
-	} elseif ($old !== $json) {
+	} elseif ($old !== $json || pfb_crowdsec_binary_changed()) {
 		restart_service('pfb_crowdsec');
 	}
 	return !$was;
+}
+
+/**
+ * Does the running bouncer run another binary than the one installed now (an upgrade replaced it)? The rc start records the sha256 and
+ * the path of what it runs; no record, or one that cannot be read, counts as changed (a start by an earlier version's rc script).
+ */
+function pfb_crowdsec_binary_changed(): bool {
+	global $pfb;
+
+	$record = @file_get_contents($pfb['crowdsec_binary_record'] ?? PFB_CROWDSEC_BINARY_RECORD);
+	if (!is_string($record) || !preg_match('/^([0-9a-f]{64}) (\/\S+)$/D', trim($record), $m)) {
+		return TRUE;
+	}
+	return @hash_file('sha256', $m[2]) !== $m[1];
 }
 
 /** The settings the generated rules depend on, as read now: a save that changes one reloads the filter. */
@@ -480,22 +497,22 @@ function pfb_crowdsec_lapi_get(string $url, string $key): array {
 }
 
 /**
- * (Re)generate /usr/local/etc/rc.d/pfb_crowdsec.sh, the bouncer's service (D4).
+ * (Re)generate /usr/local/etc/rc.d/pfb_crowdsec.sh, the bouncer's service (D4), in the shape of Core's (pfb_core_service()).
  *
- * Start: only while the config file exists (pfb_crowdsec_apply() keeps it exactly while the bouncer should run, so the boot start
- * follows the settings too); a bouncer whose supervisor its pidfile names keeps running. Otherwise it runs this machine's
+ * Start and stop run under one lock (PFB_CROWDSEC_LOCKFILE, waited for at most 20 s; a start or stop that cannot get it does nothing
+ * and exits 75), so two starts run one after the other and the second keeps the first one's bouncer. Start: only while the config file
+ * exists (pfb_crowdsec_apply() keeps it exactly while the bouncer should run, so the boot start follows the settings too); a
+ * supervisor its pidfile names keeps running. Otherwise it stops what is left (a survivor fails the start) and runs this machine's
  * pfb_crowdsec ($dir/bin/freebsd-amd64 or freebsd-arm64, by `uname -p`) once `pfb_crowdsec -t` accepts the file, under daemon(8):
  * restarted 5 s after it exits, std fds detached, output to syslog (daemon facility, tag pfb_crowdsec), the supervisor's pid in
- * PFB_CROWDSEC_DAEMON_PIDFILE and the bouncer's in PFB_CROWDSEC_PIDFILE; the start returns once the supervisor's pidfile names it
- * (5 s). No binary for this machine starts nothing and is not a failure; an unknown machine, a refused file, a failed daemon(8) or
- * no supervisor are. Two starts at once leave one bouncer (#4123): daemon(8) locks its pidfiles, the second daemon(8) finds them
- * locked (status 3), and that start waits for the first one's supervisor like its own. A start that comes later, once the first
- * pair runs, replaces it through its own stop (TERM, or KILL at 5 s when the TERM lands before daemon(8) handles it).
- * Stop: TERM to every supervisor (daemon(8) passes it on, and the bouncer empties its tables), to the bouncers only when no
- * supervisor is left, KILL to all at 5 s; still running at 7 s fails the stop and keeps the pidfiles. Every process is found by
- * its command line, never by a pidfile alone, so a pair no pidfile names stops too and a reused pid is never signalled. daemon(8)
- * removes its pidfiles as it exits; the stop removes the ones a KILL left, but never one a running daemon(8) holds locked: a
- * start racing the stop would lose the lock and run a second bouncer. Nothing here touches PF.
+ * PFB_CROWDSEC_DAEMON_PIDFILE and the bouncer's in PFB_CROWDSEC_PIDFILE, and the sha256 of the binary it runs in
+ * PFB_CROWDSEC_BINARY_RECORD; the start returns once the supervisor's pidfile names it (5 s). No binary for this machine starts nothing
+ * and is not a failure; an unknown machine, a refused file, a failed daemon(8) or no supervisor are.
+ * Stop: TERM to the supervisor (daemon(8) passes it on, and the bouncer empties its tables), or to the bouncer when no supervisor is
+ * left, KILL to both at 5 s; still running at 7 s fails the stop and keeps the pidfiles. A pid is signalled only while a pidfile names
+ * it and its command line is the bouncer's or the supervisor's. pfSense's own stop under a package upgrade or reinstall leaves the
+ * bouncer running (pfb_rc_package_upgrade_keep(), as pfB-DNS's); the installer then restarts it only when its binary or its file
+ * changed. Nothing here touches PF.
  *
  * @param string $dir the package's crowdsec directory (a test points it at a temp directory)
  */
@@ -506,7 +523,10 @@ function pfb_crowdsec_service(string $dir = PFB_CROWDSEC_DIR): void {
 	$config = escapeshellarg($pfb['crowdsec_config'] ?? PFB_CROWDSEC_CONFIG);
 	$daemonpid = escapeshellarg($pfb['crowdsec_daemon_pidfile'] ?? PFB_CROWDSEC_DAEMON_PIDFILE);
 	$childpid = escapeshellarg($pfb['crowdsec_pidfile'] ?? PFB_CROWDSEC_PIDFILE);
+	$lockfile = escapeshellarg($pfb['crowdsec_lockfile'] ?? PFB_CROWDSEC_LOCKFILE);
+	$record = escapeshellarg($pfb['crowdsec_binary_record'] ?? PFB_CROWDSEC_BINARY_RECORD);
 	$bin = escapeshellarg("{$dir}/bin");
+	$keep = pfb_rc_package_upgrade_keep();
 	// pgrep/pkill -f patterns (extended regular expressions): the supervisor, by daemon(8)'s title or, until it is set, by its own
 	// command line; and the bouncer
 	$supervisor = escapeshellarg('^(daemon: pfb_crowdsec\[|/usr/sbin/daemon .*-t pfb_crowdsec )');
@@ -515,6 +535,16 @@ function pfb_crowdsec_service(string $dir = PFB_CROWDSEC_DIR): void {
 	$rc		= array();
 	$rc['file']	= 'pfb_crowdsec.sh';
 	$rc['start']	= <<<EOF
+
+	# Starts and stops are serialized (Core's lock): lockf holds it (file kept, at most 20 s) while this script runs itself once more
+	if [ -z "\${PFB_CROWDSEC_LOCKED:-}" ]; then
+		PFB_CROWDSEC_LOCKED=1 /usr/bin/lockf -k -t 20 {$lockfile} /bin/sh "\$0" start
+		lockstatus="\$?"
+		if [ "\${lockstatus}" -eq 75 ]; then
+			/usr/bin/logger -p daemon.err -t pfb_crowdsec "ERROR [{$prefix}] CrowdSec bouncer: another start or stop held the lock for 20 s - not started"
+		fi
+		exit "\${lockstatus}"
+	fi
 
 	# Only while the bouncer should run: pfBlockerNG writes the config file then, and removes it otherwise
 	if [ ! -f {$config} ]; then
@@ -547,11 +577,13 @@ function pfb_crowdsec_service(string $dir = PFB_CROWDSEC_DIR): void {
 	fi
 
 	rc_stop || exit 1
+	unset PFB_CROWDSEC_LOCKED
+	# What it runs, for the installer to compare with the binary it installs
+	/sbin/sha256 -r "\${binary}" > {$record}
 	# Detach std fds (#662): the caller's pipe must not stay open in the daemon
 	/usr/sbin/daemon -r -R 5 -S -l daemon -T pfb_crowdsec -t pfb_crowdsec -P {$daemonpid} -p {$childpid} "\${binary}" -c {$config} </dev/null >/dev/null 2>&1
 	daemonstatus="\$?"
-	# 3: a concurrent start's daemon(8) holds the pidfiles locked and runs the bouncer; wait for its supervisor as for this one's
-	if [ "\${daemonstatus}" -ne 0 ] && [ "\${daemonstatus}" -ne 3 ]; then
+	if [ "\${daemonstatus}" -ne 0 ]; then
 		/usr/bin/logger -p daemon.err -t pfb_crowdsec "ERROR [{$prefix}] CrowdSec bouncer: daemon(8) failed with status \${daemonstatus} - not started"
 		exit 1
 	fi
@@ -570,17 +602,34 @@ function pfb_crowdsec_service(string $dir = PFB_CROWDSEC_DIR): void {
 EOF;
 	$rc['stop']	= <<<EOF
 
-	# TERM to every supervisor, which passes it on (a TERM to the bouncer as well would be a second one); to the bouncers only
-	# when no supervisor is left. By command line, so a pair no pidfile names stops too (#4123). KILL to all at 5 s, give up at
-	# 7 s keeping the pidfiles (they still name the survivor)
-	/bin/pkill -TERM -f {$supervisor} 2>/dev/null || /bin/pkill -TERM -f {$child} 2>/dev/null
+	# pfSense stops package services while pkg upgrades or reinstalls this package: the bouncer keeps running, and the installer
+	# restarts it only when its binary or its file changed. Only pfSense's own call has no argument; restart passes one
+	if [ "\$#" -eq 0 ] && [ -z "\${PFB_CROWDSEC_LOCKED:-}" ]; then
+{$keep}
+		if [ "\${keep}" = keep ]; then
+			/usr/bin/logger -p daemon.info -t pfb_crowdsec "INFO [{$prefix}] CrowdSec bouncer left running across the package upgrade"
+			return 0
+		fi
+	fi
+	if [ -z "\${PFB_CROWDSEC_LOCKED:-}" ]; then
+		PFB_CROWDSEC_LOCKED=1 /usr/bin/lockf -k -t 20 {$lockfile} /bin/sh "\$0" stop
+		lockstatus="\$?"
+		if [ "\${lockstatus}" -eq 75 ]; then
+			/usr/bin/logger -p daemon.err -t pfb_crowdsec "ERROR [{$prefix}] CrowdSec bouncer: another start or stop held the lock for 20 s - not stopped"
+		fi
+		return "\${lockstatus}"
+	fi
+
+	# TERM to the supervisor, which passes it on (a TERM to the bouncer as well would be a second one); to the bouncer only when
+	# no supervisor is left. KILL to both at 5 s, give up at 7 s keeping the pidfiles (they still name the survivor)
+	/bin/pkill -TERM -F {$daemonpid} -f {$supervisor} 2>/dev/null || /bin/pkill -TERM -F {$childpid} -f {$child} 2>/dev/null
 	waited=0
 	killed=0
-	while /bin/pgrep -f {$supervisor} >/dev/null 2>&1 || /bin/pgrep -f {$child} >/dev/null 2>&1; do
+	while /bin/pgrep -F {$daemonpid} -f {$supervisor} >/dev/null 2>&1 || /bin/pgrep -F {$childpid} -f {$child} >/dev/null 2>&1; do
 		if [ "\${waited}" -ge 5 ] && [ "\${killed}" -eq 0 ]; then
 			/usr/bin/logger -p daemon.warning -t pfb_crowdsec "WARNING [{$prefix}] CrowdSec bouncer ignored TERM for 5 s, sending KILL"
-			/bin/pkill -KILL -f {$supervisor} 2>/dev/null
-			/bin/pkill -KILL -f {$child} 2>/dev/null
+			/bin/pkill -KILL -F {$daemonpid} -f {$supervisor} 2>/dev/null
+			/bin/pkill -KILL -F {$childpid} -f {$child} 2>/dev/null
 			killed=1
 			continue
 		fi
@@ -591,22 +640,26 @@ EOF;
 		/bin/sleep 1
 		waited="\$((waited + 1))"
 	done
-	# What a KILL left: lockf(1) removes a pidfile only while no daemon(8) holds it locked. Removing a locked one would let a
-	# concurrent start's daemon(8) lock a fresh file and run a second bouncer (#4123)
-	/usr/bin/lockf -s -n -t 0 {$daemonpid} /usr/bin/true
-	/usr/bin/lockf -s -n -t 0 {$childpid} /usr/bin/true
-	return 0
+	/bin/rm -f {$daemonpid} {$childpid} {$record}
 
 EOF;
-	// A survivor must fail the restart: the start would otherwise report success over it
-	$rc['restart']	= "\trc_stop || return 1\n\trc_start\n";
+	// A survivor must fail the restart: the start would otherwise report success over it. The argument keeps the upgrade check out
+	$rc['restart']	= <<<EOF
+	if [ -z "\${PFB_CROWDSEC_LOCKED:-}" ]; then
+		PFB_CROWDSEC_LOCKED=1 /usr/bin/lockf -k -t 20 {$lockfile} /bin/sh "\$0" restart
+		return "\$?"
+	fi
+	rc_stop restart || return 1
+	rc_start
+
+EOF;
 	write_rcfile($rc);
 }
 
 /**
  * Name the rule hook in pfBlockerNG's installedpackages/package/<n>/filter_rule_function, which pfSense reads on every filter
  * reload (D5). pfSense's install_package_xml() sets it from <filter_rules_needed> in memory only, then runs the install command,
- * whose pfb_global() re-reads config.xml and drops it; so the update pass, the install's resync included, registers it here.
+ * whose pfb_global() re-reads config.xml and drops it; so each trigger that applies the bouncer registers it here (D4, #4139).
  *
  * @return bool TRUE when it wrote the registration (the filter has not reloaded with the hook yet)
  */
@@ -688,13 +741,16 @@ function pfb_crowdsec_signal(): void {
 	}
 }
 
-/** Package removal (D4): stop the bouncer and remove its rc script, config file, status file and pidfiles. The binaries are package files. */
+/**
+ * Package removal (D4): stop the bouncer and remove its rc script, config file, status file, lock and binary record. The pidfiles are the
+ * stop's, as Core's: it removes them once nothing runs and keeps them while a survivor does. The binaries are package files.
+ */
 function pfb_crowdsec_teardown(): void {
 	global $pfb;
 
 	stop_service('pfb_crowdsec');
 	foreach (['crowdsec_rcfile' => PFB_CROWDSEC_RCFILE, 'crowdsec_config' => PFB_CROWDSEC_CONFIG, 'crowdsec_status' => PFB_CROWDSEC_STATUS,
-	    'crowdsec_pidfile' => PFB_CROWDSEC_PIDFILE, 'crowdsec_daemon_pidfile' => PFB_CROWDSEC_DAEMON_PIDFILE] as $key => $path) {
+	    'crowdsec_lockfile' => PFB_CROWDSEC_LOCKFILE, 'crowdsec_binary_record' => PFB_CROWDSEC_BINARY_RECORD] as $key => $path) {
 		unlink_if_exists($pfb[$key] ?? $path);
 	}
 }

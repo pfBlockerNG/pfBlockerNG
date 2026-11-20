@@ -99,19 +99,25 @@ final class CrowdsecWiringTest extends TestCase
 			'crowdsec_rcfile'         => "{$this->dir}/pfb_crowdsec.sh",
 			'crowdsec_config'         => "{$this->dir}/pfb_crowdsec.json",
 			'crowdsec_status'         => "{$this->dir}/run_pfb_crowdsec.json",
-			'crowdsec_pidfile'        => "{$this->dir}/pfb_crowdsec.pid",
-			'crowdsec_daemon_pidfile' => "{$this->dir}/pfb_crowdsec_daemon.pid",
+			'crowdsec_lockfile'       => "{$this->dir}/pfb_crowdsec.lock",
+			'crowdsec_binary_record'  => "{$this->dir}/pfb_crowdsec.sha256",
 		];
 		foreach ($files as $key => $path) {
 			$GLOBALS['pfb'][$key] = $path;
 			file_put_contents($path, "x\n");
+		}
+		// The pidfiles are the stop's (as Core's): it removes them once nothing runs, and keeps them when a survivor does (#4135)
+		foreach (['crowdsec_pidfile' => 'pfb_crowdsec.pid', 'crowdsec_daemon_pidfile' => 'pfb_crowdsec_daemon.pid'] as $key => $name) {
+			$GLOBALS['pfb'][$key] = "{$this->dir}/{$name}";
+			file_put_contents("{$this->dir}/{$name}", "x\n");
 		}
 		file_put_contents("{$this->dir}/unrelated", "kept\n");
 
 		pfb_crowdsec_teardown();
 
 		$this->assertSame([['stop_service', 'pfb_crowdsec']], $GLOBALS['pfb_test_service_calls']);
-		$this->assertSame(['unrelated'], array_values(array_diff(scandir($this->dir), ['.', '..'])));
+		$this->assertEqualsCanonicalizing(['pfb_crowdsec.pid', 'pfb_crowdsec_daemon.pid', 'unrelated'], array_values(array_diff(scandir($this->dir), ['.', '..'])),
+			'the teardown removes every file it owns and leaves the pidfiles to the stop');
 	}
 
 	/** @return list<string> the top row's links after the shared tail is added */

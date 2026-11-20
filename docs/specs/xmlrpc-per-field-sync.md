@@ -787,3 +787,10 @@ the enable; everything else of the `pfblockerngdns` section stays local in every
   drift consequences the #3770 amendment describes.
 - **Apply.** The receive marks the change pending and starts the tick; the update pass applies the bouncer's
   "should run" decision (crowdsec-integration D4).
+
+## Amendment 2026-11-20 — the CrowdSec bouncer applies in the receive (#4139)
+
+The #4071 amendment's "Apply" changes: the update pass no longer applies the bouncer (crowdsec-integration, #4139 amendment). A receive
+that changed `pfblockerng` (the master enable) or `pfblockerngcrowdsec` applies the bouncer's "should run" decision in
+`plugin_xmlrpc_recv_done`, in the receive request, in scope `policy` and in the legacy scope `all`. The receive still marks the
+change pending and starts the tick for the rest of the policy.

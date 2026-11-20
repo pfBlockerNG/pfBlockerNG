@@ -7742,6 +7742,78 @@ function pfb_dns_proxy_certificate_sync(): void {
 }
 
 /**
+ * The rc stop's package-upgrade check, shared by pfB-DNS and the CrowdSec bouncer: sets `keep` to "keep" when an ancestor is
+ * pfSense's `rc.packages ... DEINSTALL` and the nearest classifiable pkg/pkg-static ancestor's operation (as pfb_pkg_operation()
+ * classifies it) is an install, upgrade or reinstall. The walk is bounded (64 processes) and splits argv words without globbing.
+ */
+function pfb_rc_package_upgrade_keep(): string {
+	return <<<'SH'
+		keep="$(
+			set -f
+			pid="$$"
+			deinstall=''
+			op=''
+			hops=0
+			while [ "${hops}" -lt 64 ]; do
+				line="$(/bin/ps -ww -o ppid= -o args= -p "${pid}" 2>/dev/null)" || break
+				set -- ${line}
+				[ "$#" -ge 2 ] || break
+				ppid="$1"
+				shift
+				seen=''
+				for word in "$@"; do
+					if [ "${seen}" = 1 ] && [ "${word}" = DEINSTALL ]; then deinstall=1; fi
+					[ "${word}" != /etc/rc.packages ] || seen=1
+				done
+				if [ -z "${op}" ]; then
+					case "${1##*/}" in
+						pkg|pkg-static)
+							shift
+							while [ "$#" -gt 0 ]; do
+								case "$1" in
+									-*=*) shift ;;
+									-[ojcrCR]|--option|--jail|--chroot|--rootdir|--config|--repo-conf-dir) shift; [ "$#" -eq 0 ] || shift ;;
+									-*) shift ;;
+									*) break ;;
+								esac
+							done
+							if [ "$#" -gt 0 ]; then
+								sub="$1"
+								shift
+								case "${sub}" in
+									[Dd][Ee][Ll][Ee][Tt][Ee]|[Rr][Ee][Mm][Oo][Vv][Ee]|[Aa][Uu][Tt][Oo][Rr][Ee][Mm][Oo][Vv][Ee]) op=delete ;;
+									[Uu][Pp][Gg][Rr][Aa][Dd][Ee]) op=upgrade ;;
+									[Ii][Nn][Ss][Tt][Aa][Ll][Ll])
+										op=install
+										for flag in "$@"; do
+											case "${flag}" in
+												--force) op=reinstall ;;
+												-[!-]*) case "${flag}" in *f*) op=reinstall ;; esac ;;
+											esac
+										done
+										;;
+								esac
+							fi
+							;;
+					esac
+				fi
+				case "${ppid}" in
+					''|*[!0-9]*) break ;;
+				esac
+				{ [ "${ppid}" -gt 1 ] && [ "${ppid}" != "${pid}" ]; } || break
+				pid="${ppid}"
+				hops="$((hops + 1))"
+			done
+			if [ "${deinstall}" = 1 ]; then
+				case "${op}" in
+					install|upgrade|reinstall) echo keep ;;
+				esac
+			fi
+		)"
+SH;
+}
+
+/**
  * (Re)generate /usr/local/etc/rc.d/pfb_dns_proxy.sh, the supervised DNS proxy service, from pfB-DNS's own settings (issue #3538: the
  * plain DNS interface list dns/pfb_dns_interface, DoT dns/pfb_dns_dot*, the DoH/DoQ settings and the certificate dns/pfb_dns_sslcertref;
  * the SAVED Resolver is the restore source only), the Resolver's Listen Port (unbound/port, which stays on loopback for Unbound;
@@ -7797,6 +7869,7 @@ function pfb_dns_proxy_certificate_sync(): void {
  */
 function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	global $pfb;
+	$keep = pfb_rc_package_upgrade_keep();
 
 	$LOG_PREFIX_PKG_PFBLOCKERNG = LOG_PREFIX_PKG_PFBLOCKERNG;
 	$daemonpid = PFB_DNS_PROXY_DAEMON_PIDFILE;
@@ -7994,68 +8067,7 @@ EOF;
 	# and the nearest pkg's operation is not a delete): the proxy keeps running and the next update applies the new version.
 	# Only pfSense's own call has no argument; start and restart pass one. The walk is bounded and splits argv words without globbing.
 	if [ "\$#" -eq 0 ]; then
-		keep="\$(
-			set -f
-			pid="\$\$"
-			deinstall=''
-			op=''
-			hops=0
-			while [ "\${hops}" -lt 64 ]; do
-				line="\$(/bin/ps -ww -o ppid= -o args= -p "\${pid}" 2>/dev/null)" || break
-				set -- \${line}
-				[ "\$#" -ge 2 ] || break
-				ppid="\$1"
-				shift
-				seen=''
-				for word in "\$@"; do
-					if [ "\${seen}" = 1 ] && [ "\${word}" = DEINSTALL ]; then deinstall=1; fi
-					[ "\${word}" != /etc/rc.packages ] || seen=1
-				done
-				if [ -z "\${op}" ]; then
-					case "\${1##*/}" in
-						pkg|pkg-static)
-							shift
-							while [ "\$#" -gt 0 ]; do
-								case "\$1" in
-									-*=*) shift ;;
-									-[ojcrCR]|--option|--jail|--chroot|--rootdir|--config|--repo-conf-dir) shift; [ "\$#" -eq 0 ] || shift ;;
-									-*) shift ;;
-									*) break ;;
-								esac
-							done
-							if [ "\$#" -gt 0 ]; then
-								sub="\$1"
-								shift
-								case "\${sub}" in
-									[Dd][Ee][Ll][Ee][Tt][Ee]|[Rr][Ee][Mm][Oo][Vv][Ee]|[Aa][Uu][Tt][Oo][Rr][Ee][Mm][Oo][Vv][Ee]) op=delete ;;
-									[Uu][Pp][Gg][Rr][Aa][Dd][Ee]) op=upgrade ;;
-									[Ii][Nn][Ss][Tt][Aa][Ll][Ll])
-										op=install
-										for flag in "\$@"; do
-											case "\${flag}" in
-												--force) op=reinstall ;;
-												-[!-]*) case "\${flag}" in *f*) op=reinstall ;; esac ;;
-											esac
-										done
-										;;
-								esac
-							fi
-							;;
-					esac
-				fi
-				case "\${ppid}" in
-					''|*[!0-9]*) break ;;
-				esac
-				{ [ "\${ppid}" -gt 1 ] && [ "\${ppid}" != "\${pid}" ]; } || break
-				pid="\${ppid}"
-				hops="\$((hops + 1))"
-			done
-			if [ "\${deinstall}" = 1 ]; then
-				case "\${op}" in
-					install|upgrade|reinstall) echo keep ;;
-				esac
-			fi
-		)"
+{$keep}
 		if [ "\${keep}" = keep ]; then
 			/bin/cp "\$0" {$kept} 2>/dev/null || true
 			/usr/bin/logger -p daemon.info -t pfb_dns_proxy "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy left running across the package upgrade; the next update applies the new version"

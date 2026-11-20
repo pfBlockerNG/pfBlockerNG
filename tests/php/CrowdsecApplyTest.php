@@ -47,6 +47,7 @@ final class CrowdsecApplyTest extends TestCase
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb']['enable'] = PfbToggle::On;
 		$GLOBALS['pfb']['crowdsec_config'] = $this->config;
+		$GLOBALS['pfb']['crowdsec_binary_record'] = "{$this->dir}/pfb_crowdsec.sha256";
 		$GLOBALS['pfb_test_service_calls'] = [];
 		$GLOBALS['pfb_test_service_running'] = ['pfb_crowdsec' => FALSE];
 		$GLOBALS['pfb_test_filter_configure_calls'] = 0;
@@ -157,15 +158,55 @@ final class CrowdsecApplyTest extends TestCase
 		$this->assertSame(self::KEY, json_decode((string) file_get_contents($this->config), TRUE)['api_key']);
 	}
 
-	public function testARunningBouncerWithAnUnchangedFileIsLeftAlone(): void
+	/** The record a start of the rc script writes: the sha256 of the binary it runs, and its path. */
+	private function recordStart(string $content): void
 	{
+		file_put_contents("{$this->dir}/pfb_crowdsec", $content);
+		file_put_contents($GLOBALS['pfb']['crowdsec_binary_record'], hash('sha256', $content) . " {$this->dir}/pfb_crowdsec\n");
+	}
+
+	public function testAnUpgradeThatInstallsTheSameBinaryLeavesTheRunningBouncerAlone(): void
+	{
+		// Given a bouncer running the binary installed now, its file unchanged
 		config_set_path(self::SECTION, self::stored());
 		pfb_crowdsec_config_write(pfb_crowdsec_config_json(pfb_crowdsec_settings()), $this->config);
 		$GLOBALS['pfb_test_service_running']['pfb_crowdsec'] = TRUE;
+		$this->recordStart("binary v1\n");
 
-		$this->assertFalse(pfb_crowdsec_apply());
+		// When the installer applies the decision
+		pfb_crowdsec_apply();
 
+		// Then nothing is restarted
 		$this->assertSame([], $this->calls());
+	}
+
+	public function testAnUpgradeThatInstallsAnotherBinaryRestartsTheBouncerOnce(): void
+	{
+		// Given a bouncer running a binary the upgrade has since replaced
+		config_set_path(self::SECTION, self::stored());
+		pfb_crowdsec_config_write(pfb_crowdsec_config_json(pfb_crowdsec_settings()), $this->config);
+		$GLOBALS['pfb_test_service_running']['pfb_crowdsec'] = TRUE;
+		$this->recordStart("binary v1\n");
+		file_put_contents("{$this->dir}/pfb_crowdsec", "binary v2\n");
+
+		// When the installer applies the decision
+		pfb_crowdsec_apply();
+
+		// Then it is restarted once, onto the new binary
+		$this->assertSame([['restart_service', 'pfb_crowdsec']], $this->calls());
+	}
+
+	public function testABouncerWithoutARecordOfItsBinaryIsRestartedOnce(): void
+	{
+		// Given a bouncer an earlier version's rc script started: it recorded no binary
+		config_set_path(self::SECTION, self::stored());
+		pfb_crowdsec_config_write(pfb_crowdsec_config_json(pfb_crowdsec_settings()), $this->config);
+		$GLOBALS['pfb_test_service_running']['pfb_crowdsec'] = TRUE;
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['crowdsec_binary_record']);
+
+		pfb_crowdsec_apply();
+
+		$this->assertSame([['restart_service', 'pfb_crowdsec']], $this->calls());
 	}
 
 	public function testAChangedFileRestartsARunningBouncer(): void

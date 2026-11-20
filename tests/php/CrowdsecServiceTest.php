@@ -3,8 +3,10 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/support/ProcessRunner.php';
+require_once __DIR__ . '/DnsProxyUpgradeStopTest.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProviderExternal;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -15,16 +17,18 @@ use PHPUnit\Framework\TestCase;
  *     after it exits (-r -R 5), its output to syslog as daemon.* tagged pfb_crowdsec (-S -l daemon -T pfb_crowdsec), std fds detached,
  *     the supervisor's pid in its own file (-P) and the bouncer's in /var/run/pfb_crowdsec.pid (-p), the file the rule hook signals
  *     (#4069: SIGUSR1 to daemon(8)'s supervisor kills it);
- *   - it starts only while its config file exists (the Settings save and the update pass write it exactly while the bouncer should
- *     run), and only a config the binary accepts (`-t`); no binary for this machine starts nothing and is not a failure, an unknown
+ *   - it starts only while its config file exists (pfb_crowdsec_apply() writes it exactly while the bouncer should run), and only
+ *     a config the binary accepts (`-t`); no binary for this machine starts nothing and is not a failure, an unknown
  *     machine is; a start over a running bouncer keeps it;
- *   - stop sends TERM to every supervisor (daemon(8) passes it on, and the bouncer empties its tables), or to the bouncers when no
- *     supervisor is left, KILL to all at 5 s, and fails at 7 s keeping the pidfiles; a pid is signalled only while its command line
- *     is a bouncer's or a supervisor's;
+ *   - stop sends TERM to the supervisor (daemon(8) passes it on, and the bouncer empties its tables), or to the bouncer when no
+ *     supervisor is left, KILL to both at 5 s, and fails at 7 s keeping the pidfiles;
  *   - the script does nothing to PF itself (the bouncer creates its own tables);
- *   - two starts at once leave one bouncer (#4123): a start never removes a pidfile that a running daemon(8) holds locked, so the
- *     second daemon(8) finds the lock taken and that start reports the bouncer the first one runs; stop and the start's own stop end
- *     every bouncer and supervisor by command line, TERM first, not only the pair the pidfiles name.
+ *   - start, stop and restart run under one lock, as Core's do (#4139): the script runs itself once more under `lockf -k -t 20`, and
+ *     that run takes no second lock; a lock not had within 20 s does nothing and fails (lockf's 75). Two starts at once therefore
+ *     run one after the other, and the second keeps the first one's bouncer: no start kills a running pair;
+ *   - every signal goes to a pid a pidfile names and only while its command line is a bouncer's or a supervisor's (Core's rule);
+ *   - the start records the sha256 of the binary it runs, which the apply compares with the installed one (#4139);
+ *   - pfSense's own stop under a package upgrade or reinstall leaves the bouncer running (pfB-DNS's rule, the same ancestry rows).
  *
  * The real generator's output is written through the write_rcfile() double and executed under dash. Every absolute command path
  * is redirected to a command double (a path with no double fails the test instead of running a host binary); `sleep 1` is one
@@ -33,7 +37,9 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_crowdsec_service')]
 final class CrowdsecServiceTest extends TestCase
 {
-	private const DOUBLES = ['daemon', 'logger', 'uname', 'pgrep', 'pkill', 'sleep', 'lockf', 'true'];
+	private const DOUBLES = ['daemon', 'logger', 'uname', 'pgrep', 'pkill', 'sleep', 'lockf', 'ps', 'sha256'];
+	private const BINARY_SHA = 'aaaabbbbccccddddeeeeffff00001111222233334444555566667777888899990';
+	private const KEPT_LOG = 'left running across the package upgrade';
 	private const SUPERVISOR = 2001;
 	private const CHILD = 2002;
 
@@ -118,16 +124,29 @@ final class CrowdsecServiceTest extends TestCase
 			done
 			;;
 		lockf)
-			# lockf -s -n -t 0 FILE CMD...: fails while daemon(8) holds FILE locked, or when FILE is gone; else runs CMD, removes FILE
-			[ "$1 $2 $3 $4" = '-s -n -t 0' ] && [ "$#" -ge 6 ] || { ev bad-lockf; exit 2; }
-			if grep -qxF -- "$5" "$S/locks"; then exit 75; fi
-			[ -e "$5" ] || exit 69
-			f="$5"; shift 5
-			"$@"; st="$?"
-			rm -f "$f"
-			exit "$st"
+			# lockf(1) as the rc script must call it (Core's double): -k -t 20 FILE COMMAND...; the lock itself is not modelled,
+			# LOCKF_EXIT stands for a wait that ran out (75) and runs nothing
+			[ "$1" = -k ] && [ "$2" = -t ] && [ "$3" = 20 ] && [ "$#" -ge 5 ] || { ev bad-lockf; exit 2; }
+			printf '%s\n' "$*" >> "$S/lockf.calls"
+			[ -z "$LOCKF_EXIT" ] || exit "$LOCKF_EXIT"
+			shift 4
+			exec "$@"
 			;;
-		true)
+		ps)
+			# pfB-DNS's double: the ancestry probe of a top-level stop (-ww -o ppid= -o args= -p PID) from the `ancestry` table
+			[ "$#" -eq 7 ] && [ "$1" = -ww ] && [ "$2" = -o ] && [ "$3" = 'ppid=' ] && [ "$4" = -o ] && [ "$5" = 'args=' ] && [ "$6" = -p ] || { ev bad-ps; exit 2; }
+			[ -s "$S/ancestry.self" ] || echo "$7" > "$S/ancestry.self"
+			read -r self < "$S/ancestry.self"
+			key="$7"
+			[ "$key" != "$self" ] || key=SELF
+			while IFS='|' read -r pid ppid args; do
+				if [ "$pid" = "$key" ]; then printf '%5s %s\n' "$ppid" "$args"; exit 0; fi
+			done < "$S/ancestry"
+			exit 1
+			;;
+		sha256)
+			[ "$#" -eq 2 ] && [ "$1" = -r ] || { ev bad-sha256; exit 2; }
+			printf '%s %s\n' "$BINARY_SHA" "$2"
 			;;
 		sleep)
 			[ "$#" -eq 1 ] && [ "$1" = 1 ] || { ev bad-sleep; exit 2; }
@@ -213,6 +232,8 @@ final class CrowdsecServiceTest extends TestCase
 			'crowdsec_config'         => "{$this->dir}/conf/pfb_crowdsec.json",
 			'crowdsec_pidfile'        => "{$this->dir}/run/pfb_crowdsec.pid",
 			'crowdsec_daemon_pidfile' => "{$this->dir}/run/pfb_crowdsec_daemon.pid",
+			'crowdsec_lockfile'       => "{$this->dir}/run/pfb_crowdsec.lock",
+			'crowdsec_binary_record'  => "{$this->dir}/run/pfb_crowdsec.sha256",
 		]);
 		$GLOBALS['pfb_test_rcfile_dir'] = "{$this->dir}/rc";
 	}
@@ -263,12 +284,13 @@ final class CrowdsecServiceTest extends TestCase
 			},
 			$text
 		);
-		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace($this->dir, '', $script),
+		// /etc/rc.packages is a word the package-upgrade check compares an ancestor's argv with, never a file the script opens
+		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace([$this->dir, '/etc/rc.packages'], '', $script),
 			"the rc script names a host path the test did not redirect:\n{$script}");
 		file_put_contents("{$this->dir}/run.sh", $script);
 		$state = "{$this->dir}/state";
 		$vars = $scenario + ['MACHINE' => $machine, 'TERM_AFTER' => '1', 'SUPERVISOR_AT' => '0', 'DAEMON_EXIT' => '0', 'CHECK_EXIT' => '0',
-			'KILL_IGNORED' => '', 'SUPERVISOR' => (string) self::SUPERVISOR, 'CHILD' => (string) self::CHILD,
+			'KILL_IGNORED' => '', 'LOCKF_EXIT' => '', 'BINARY_SHA' => self::BINARY_SHA, 'SUPERVISOR' => (string) self::SUPERVISOR, 'CHILD' => (string) self::CHILD,
 			'DAEMONPID' => $GLOBALS['pfb']['crowdsec_daemon_pidfile'], 'CHILDPID' => $GLOBALS['pfb']['crowdsec_pidfile']];
 		file_put_contents("{$state}/scenario", implode('', array_map(
 			static fn (string $k, string $v): string => "{$k}=" . escapeshellarg($v) . "\n",
@@ -276,7 +298,7 @@ final class CrowdsecServiceTest extends TestCase
 			array_values($vars)
 		)));
 		file_put_contents("{$state}/ticks", "0\n");
-		foreach (['events', 'procs', 'logger', 'daemon.argv', 'fds', 'launched', 'locks'] as $file) {
+		foreach (['events', 'procs', 'logger', 'daemon.argv', 'fds', 'launched', 'locks', 'lockf.calls', 'ancestry', 'ancestry.self'] as $file) {
 			file_put_contents("{$state}/{$file}", '');
 		}
 		if ($configured) {
@@ -337,6 +359,73 @@ final class CrowdsecServiceTest extends TestCase
 		$this->assertSame(['0 1 2'], $this->lines('fds'), 'stdin, stdout and stderr are detached');
 		$this->assertSame(["check {$GLOBALS['pfb']['crowdsec_config']}", 'launch'], $this->lines('events'), 'the config is checked first');
 		$this->assertStringContainsString('started', implode("\n", $this->lines('logger')));
+		$this->assertSame(self::BINARY_SHA . ' ' . $this->binary() . "\n", (string) @file_get_contents($GLOBALS['pfb']['crowdsec_binary_record']),
+			'the start records the sha256 of the binary it runs');
+	}
+
+	public function testStartRunsItselfUnderTheLockAndTheLockedRunTakesNoSecondLock(): void
+	{
+		$this->install();
+		$this->arrange();
+
+		[$status, $out] = $this->rc('start');
+
+		$this->assertSame(0, $status, $out);
+		$this->assertSame(["-k -t 20 {$GLOBALS['pfb']['crowdsec_lockfile']} /bin/sh {$this->dir}/run.sh start"], $this->lines('lockf.calls'));
+		$this->assertTrue($this->launched());
+	}
+
+	public function testStopRunsUnderTheSameLock(): void
+	{
+		$this->install();
+		$this->arrange(running: TRUE);
+
+		[$status, $out] = $this->rc('stop');
+
+		$this->assertSame(0, $status, $out);
+		$this->assertSame(["-k -t 20 {$GLOBALS['pfb']['crowdsec_lockfile']} /bin/sh {$this->dir}/run.sh stop"], $this->lines('lockf.calls'));
+	}
+
+	public function testAStartThatCannotTakeTheLockInTimeLaunchesNothingAndSaysSo(): void
+	{
+		$this->install();
+		$this->arrange(scenario: ['LOCKF_EXIT' => '75']);
+
+		[$status] = $this->rc('start');
+
+		$this->assertSame(75, $status);
+		$this->assertFalse($this->launched());
+		$this->assertStringContainsString('lock', implode("\n", $this->lines('logger')));
+	}
+
+	public function testAStopThatCannotTakeTheLockInTimeSignalsNothingAndFails(): void
+	{
+		$this->install();
+		$this->arrange(running: TRUE, scenario: ['LOCKF_EXIT' => '75']);
+
+		[$status] = $this->rc('stop');
+
+		$this->assertSame(75, $status);
+		$this->assertSame([], $this->lines('events'));
+		$this->assertSame([(string) self::SUPERVISOR, (string) self::CHILD], $this->livePids());
+	}
+
+	public function testASecondStartKeepsTheBouncerTheFirstOneStartedAndKillsNothing(): void
+	{
+		// Given one start that launched the bouncer (two starts at once run one after the other under the lock)
+		$this->install();
+		$this->arrange();
+		[$first] = $this->rc('start');
+		$this->assertSame(0, $first);
+		$this->assertSame(['check ' . $GLOBALS['pfb']['crowdsec_config'], 'launch'], $this->lines('events'), 'before-state: one launch');
+
+		// When the second start runs
+		[$second, $out] = $this->rc('start');
+
+		// Then it launches nothing and signals nothing: one bouncer, the first one's
+		$this->assertSame(0, $second, $out);
+		$this->assertSame(['check ' . $GLOBALS['pfb']['crowdsec_config'], 'launch'], $this->lines('events'), 'no second launch, no signal');
+		$this->assertSame([(string) self::SUPERVISOR, (string) self::CHILD], $this->livePids());
 	}
 
 	public function testStartOnAnArmMachineRunsTheArmBinary(): void
@@ -526,145 +615,6 @@ final class CrowdsecServiceTest extends TestCase
 		$this->assertSame(['77', '78'], $this->livePids());
 	}
 
-	// ---- concurrent starts (#4123) --------------------------------------------------------
-
-	private const STRAY_SUPERVISOR = 3001;
-	private const STRAY_CHILD = 3002;
-
-	/** A second pair that no pidfile names: what a lost start race left running before #4123. */
-	private function addStrayPair(): void
-	{
-		file_put_contents("{$this->dir}/state/procs", self::STRAY_SUPERVISOR . '|daemon: pfb_crowdsec[' . self::STRAY_CHILD . "] (daemon)|\n"
-			. self::STRAY_CHILD . "|{$this->binary()} -c {$GLOBALS['pfb']['crowdsec_config']}|\n", FILE_APPEND);
-	}
-
-	public function testStopEndsEveryBouncerAndSupervisorNotOnlyThePairThePidfilesName(): void
-	{
-		// Given the pair in the pidfiles and a stray pair beside it
-		$this->install();
-		$this->arrange(running: TRUE);
-		$this->addStrayPair();
-		$this->assertSame([(string) self::SUPERVISOR, (string) self::CHILD, (string) self::STRAY_SUPERVISOR, (string) self::STRAY_CHILD],
-			$this->livePids(), 'before-state: two pairs');
-
-		// When the service stops
-		[$status, $out] = $this->rc('stop');
-
-		// Then no bouncer and no supervisor is left
-		$this->assertSame(0, $status, $out);
-		$this->assertSame([], $this->livePids(), 'every pfb_crowdsec bouncer and supervisor ended: ' . implode(' ', $this->lines('events')));
-	}
-
-	public function testStopSendsTermToAStrayPairsSupervisorAtOnceNotKillAtFiveTicks(): void
-	{
-		// Given the pair in the pidfiles and a stray pair beside it
-		$this->install();
-		$this->arrange(running: TRUE);
-		$this->addStrayPair();
-
-		// When the service stops
-		[$status, $out] = $this->rc('stop');
-
-		// Then the stray supervisor gets TERM with the other one (its bouncer empties its tables), and nothing needs KILL
-		$this->assertSame(0, $status, $out);
-		$this->assertSame(['TERM ' . self::SUPERVISOR . ' @0', 'TERM ' . self::STRAY_SUPERVISOR . ' @0'], $this->lines('events'));
-	}
-
-	public function testStopKillsAStrayPairThatIgnoresTerm(): void
-	{
-		// Given the pair in the pidfiles and a stray pair beside it, both ignoring TERM
-		$this->install();
-		$this->arrange(running: TRUE, scenario: ['TERM_AFTER' => 'never']);
-		$this->addStrayPair();
-
-		// When the service stops
-		[$status, $out] = $this->rc('stop');
-
-		// Then both pairs get KILL at 5 ticks and none is left
-		$this->assertSame(0, $status, $out);
-		$this->assertSame([], $this->livePids(), implode(' ', $this->lines('events')));
-		$this->assertContains('KILL ' . self::STRAY_SUPERVISOR . ' @5', $this->lines('events'));
-		$this->assertContains('KILL ' . self::STRAY_CHILD . ' @5', $this->lines('events'));
-	}
-
-	public function testStopKillsAStraySupervisorBetweenRestartsThatIgnoresTerm(): void
-	{
-		// Given no pidfile and a stray supervisor waiting to restart its bouncer (-R 5), ignoring TERM
-		$this->install();
-		$this->arrange(scenario: ['TERM_AFTER' => 'never']);
-		file_put_contents("{$this->dir}/state/procs", self::STRAY_SUPERVISOR . '|daemon: pfb_crowdsec[' . self::STRAY_CHILD . "] (daemon)|\n");
-
-		// When the service stops
-		[$status, $out] = $this->rc('stop');
-
-		// Then the stop waits for it and KILLs it at 5 ticks
-		$this->assertSame(0, $status, $out);
-		$this->assertSame(['TERM ' . self::STRAY_SUPERVISOR . ' @0', 'KILL ' . self::STRAY_SUPERVISOR . ' @5'], $this->lines('events'));
-		$this->assertSame([], $this->livePids());
-	}
-
-	public function testStartOverAStrayPairThatNoPidfileNamesLeavesOnlyTheNewPair(): void
-	{
-		// Given a stray pair running and no pidfile
-		$this->install();
-		$this->arrange();
-		$this->addStrayPair();
-
-		// When the service starts
-		[$status, $out] = $this->rc('start');
-
-		// Then the stray pair is gone and exactly the started pair runs
-		$this->assertSame(0, $status, $out);
-		$this->assertSame([(string) self::SUPERVISOR, (string) self::CHILD], $this->livePids(), implode(' ', $this->lines('events')));
-	}
-
-	public function testStopKeepsThePidfilesThatARunningDaemonHoldsLocked(): void
-	{
-		// Given another start's daemon(8) that has locked both pidfiles and not yet written them
-		$this->install();
-		$this->arrange();
-		file_put_contents($GLOBALS['pfb']['crowdsec_daemon_pidfile'], '');
-		file_put_contents($GLOBALS['pfb']['crowdsec_pidfile'], '');
-		file_put_contents("{$this->dir}/state/locks", "{$GLOBALS['pfb']['crowdsec_daemon_pidfile']}\n{$GLOBALS['pfb']['crowdsec_pidfile']}\n");
-
-		// When a stop runs
-		[$status, $out] = $this->rc('stop');
-
-		// Then both pidfiles stay: removing them would let a second daemon(8) lock fresh ones and run a second bouncer
-		$this->assertSame(0, $status, $out);
-		$this->assertFileExists($GLOBALS['pfb']['crowdsec_daemon_pidfile'], 'the locked supervisor pidfile is kept');
-		$this->assertFileExists($GLOBALS['pfb']['crowdsec_pidfile'], 'the locked bouncer pidfile is kept');
-	}
-
-	public function testAStartWhoseDaemonFindsThePidfilesLockedReportsTheBouncerTheOtherStartRuns(): void
-	{
-		// Given a concurrent start whose daemon(8) takes the pidfiles' lock first (this start's daemon(8) exits 3, "already running")
-		$this->install();
-		$this->arrange(scenario: ['DAEMON_EXIT' => '3', 'SUPERVISOR_AT' => '1']);
-
-		// When this start runs
-		[$status, $out] = $this->rc('start');
-
-		// Then it succeeds once the other start's supervisor is in its pidfile, and one pair runs
-		$this->assertSame(0, $status, $out . implode("\n", $this->lines('logger')));
-		$this->assertSame([(string) self::SUPERVISOR, (string) self::CHILD], $this->livePids());
-		$this->assertStringNotContainsString('ERROR', implode("\n", $this->lines('logger')));
-	}
-
-	public function testAStartWhoseDaemonFindsThePidfilesLockedFailsWhenNoSupervisorAppears(): void
-	{
-		// Given daemon(8) exits 3 but no supervisor ever writes its pidfile
-		$this->install();
-		$this->arrange(scenario: ['DAEMON_EXIT' => '3', 'SUPERVISOR_AT' => 'never']);
-
-		// When the start runs
-		[$status] = $this->rc('start');
-
-		// Then it fails after the same five ticks as any start
-		$this->assertSame(1, $status);
-		$this->assertSame(['5'], $this->lines('ticks'));
-	}
-
 	public function testRestartStopsTheRunningBouncerThenStartsOne(): void
 	{
 		$this->install();
@@ -676,6 +626,65 @@ final class CrowdsecServiceTest extends TestCase
 		$events = $this->lines('events');
 		$this->assertSame('TERM ' . self::SUPERVISOR . ' @0', $events[0] ?? NULL);
 		$this->assertSame('launch', end($events));
+	}
+
+	// ---- package upgrade: pfSense's own stop leaves the bouncer running (pfB-DNS's rule) ------------
+
+	/** @param list<string> $ancestors the stop's ancestors above its own `sh -c`, nearest first (pfB-DNS's rows) */
+	private function ancestry(array $ancestors): void
+	{
+		$argvs = array_merge(['/bin/sh /usr/local/etc/rc.d/pfb_crowdsec.sh stop', 'sh -c /usr/local/etc/rc.d/pfb_crowdsec.sh stop'], $ancestors);
+		$rows = '';
+		foreach ($argvs as $i => $args) {
+			$pid = $i === 0 ? 'SELF' : (string) (500 + $i);
+			$ppid = $i === count($argvs) - 1 ? '1' : (string) (501 + $i);
+			$rows .= "{$pid}|{$ppid}|{$args}\n";
+		}
+		file_put_contents("{$this->dir}/state/ancestry", $rows);
+	}
+
+	/** @param list<string> $ancestors */
+	#[DataProviderExternal(DnsProxyUpgradeStopTest::class, 'upgradeRows')]
+	public function testAStopUnderAPackageUpgradeLeavesTheBouncerRunningAndSaysSo(array $ancestors): void
+	{
+		$this->install();
+		$this->arrange(running: TRUE);
+		$this->ancestry($ancestors);
+
+		[$status, $out] = $this->rc('stop');
+
+		$this->assertSame(0, $status, $out);
+		$this->assertSame([], $this->lines('events'), 'nothing signalled');
+		$this->assertSame([(string) self::SUPERVISOR, (string) self::CHILD], $this->livePids(), 'the bouncer runs on, same pids');
+		$this->assertFileExists($GLOBALS['pfb']['crowdsec_pidfile']);
+		$this->assertStringContainsString(self::KEPT_LOG, implode("\n", $this->lines('logger')));
+	}
+
+	/** @param list<string> $ancestors */
+	#[DataProviderExternal(DnsProxyUpgradeStopTest::class, 'teardownRows')]
+	public function testAStopThatIsNoPackageUpgradeStopsTheBouncer(array $ancestors): void
+	{
+		$this->install();
+		$this->arrange(running: TRUE);
+		$this->ancestry($ancestors);
+
+		[$status, $out] = $this->rc('stop');
+
+		$this->assertSame(0, $status, $out);
+		$this->assertSame([], $this->livePids(), 'an uninstall stops it');
+	}
+
+	public function testARestartUnderAPackageUpgradeStillStopsAndStartsTheBouncer(): void
+	{
+		$this->install();
+		$this->arrange(running: TRUE);
+		$this->ancestry(['/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG DEINSTALL', '/bin/sh /tmp/x', 'pkg upgrade -y x']);
+
+		[$status, $out] = $this->rc('restart');
+
+		$this->assertSame(0, $status, $out);
+		$this->assertSame('TERM ' . self::SUPERVISOR . ' @0', $this->lines('events')[0] ?? NULL);
+		$this->assertTrue($this->launched());
 	}
 
 	public function testRestartOverASurvivorLaunchesNothing(): void

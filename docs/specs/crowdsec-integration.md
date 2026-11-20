@@ -483,3 +483,40 @@ named one pair, and the service's stop left the other running (2 of 3 reboots on
 - **Pidfiles.** daemon(8) removes its own pidfiles when it exits. The stop removes the ones a KILL left with
   `lockf -s -n -t 0 <pidfile> /usr/bin/true`, which removes a file only while no daemon(8) holds it locked. A
   concurrent start's daemon(8) therefore keeps its lock, and the second daemon(8) cannot launch.
+
+## Amendment 2026-11-20 — the bouncer leaves the update pass (#4139)
+
+Owner decision: apart from pfBlockerNG's own enable, the bouncer is the one part of the package that does not depend on the update
+pass, and it is run the way Core and pfB-DNS are run. This replaces D4's "pfBlockerNG's sync pass ... applies the same 'should run'
+decision", the Settings save's "marks pending changes", the #4072 amendment's registration by the update pass, and the #4123
+amendment's start, stop and pidfile rules.
+
+- **Triggers.** Only these apply the "should run" decision, each when it happens: the CrowdSec Settings save; the General save of the
+  master enable, and the wizard, which resets every setting; an XMLRPC receive that changed the master enable's section or the CrowdSec
+  section, in the receive request itself (`plugin_xmlrpc_recv_done`), in scope `policy` and in the legacy scope `all`, which carries the
+  master enable; the installer; boot. The update pass, in save mode or any other, never starts, stops or restarts the bouncer.
+- **Rule hook.** Each trigger but boot writes the hook's registration when it is missing (`pfb_crowdsec_resync()`, the save itself), and
+  reloads the filter when it wrote it while the bouncer should run. The update pass no longer writes it.
+- **Boot.** pfSense's `rc.start_packages` runs every `/usr/local/etc/rc.d/*.sh` with `start` once, and runs no rcorder over that
+  folder. On pfSense CE 2.8.1 (smoke pool, one reboot with five planted scripts) the two `.sh` scripts that could start ran once each,
+  from the background shell `rc.start_packages` opens; a script without `.sh` never ran, whatever its rc.conf.d enable. The rc script's
+  own start is therefore the only boot start, and its config-file check remains the only "enabled" state: no rcvar is kept or toggled.
+- **Sync.** The Settings save marks no pending changes. Its page ends like the General save, with `$pfb['save'] = TRUE;
+  sync_package_pfblockerng();`, whose `pfblockerng_sync_on_changes()` sends the change to the manual targets at once. In the automatic
+  mode, every `write_config()` ends in pfSense's `carp_sync_client()`, which sends `filter sync`, so `rc.filter_synchronize` carries
+  the change with no filter reload.
+- **Start and stop.** The rc script has Core's shape (`pfb_core_service()`): start, stop and restart run under one lock
+  (`lockf -k -t 20 /var/run/pfb_crowdsec.lock`), so two starts run one after the other, and the second keeps the bouncer the first one
+  started. Start keeps a supervisor its pidfile names; otherwise it stops what is left and launches. Stop signals a pid only while a
+  pidfile names it and its command line is the bouncer's or the supervisor's, and removes the pidfiles once nothing runs. The #4123
+  stop by command line alone, the start's handling of daemon(8)'s status 3 and the `lockf -s -n -t 0` pidfile removal are gone: under
+  the lock no start can race a stop. Package removal leaves the pidfiles to the stop (#4135).
+- **Upgrade.** As pfB-DNS's, pfSense's own stop under `rc.packages ... DEINSTALL` with a pkg install, upgrade or reinstall leaves the
+  bouncer running (`pfb_rc_package_upgrade_keep()`, the same check). The rc start records the sha256 and path of the binary it runs in
+  `/var/run/pfb_crowdsec.sha256`; the installer's apply restarts a running bouncer once when that binary is no longer the installed one,
+  when no record exists (a start by an earlier version's rc script), or when its config file changed, and otherwise leaves it alone. A
+  `pkg delete` stops it and removes everything.
+- **Differences from pfB-DNS and Core**, each kept for a reason: the start runs only while the config file exists (D4's gate, and the
+  boot gate); stop sends TERM to the supervisor alone while one runs (the bouncer empties its tables on TERM, and daemon(8) passes it
+  on); the restart after an upgrade is the installer's, not the next update's (the update pass never touches the bouncer), and it
+  compares the binary's recorded hash, as the bouncer publishes no hash of its own.
