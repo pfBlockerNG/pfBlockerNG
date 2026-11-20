@@ -7,6 +7,8 @@ Marker ``ui_e2e``: a new page, driven through the real webConfigurator form (CSR
 * The save applies the "should run" decision at once: with pfBlockerNG on, the CrowdSec enable on and a key, the
   config file exists (mode 0600, the D3 values) and the bouncer runs; turning it off stops it and removes the file,
   and an empty key field keeps the stored key. pfBlockerNG's master enable off keeps it off.
+* Issue #4139: the save marks no pending changes (it syncs at once, as the General save does), and the General save of
+  pfBlockerNG's master enable stops the bouncer at once, without an Update.
 """
 
 from __future__ import annotations
@@ -32,6 +34,8 @@ SECTION = "installedpackages/pfblockerngcrowdsec/config/0"
 MASTER = f"{helpers.CFG_GLOBAL}/enable_cb"
 CONFIG_FILE = "/usr/local/etc/pfb_crowdsec.json"
 PIDFILE = "/var/run/pfb_crowdsec.pid"
+GENERAL = "/pfblockerng/pfblockerng_general.php"
+PENDING = "/usr/local/etc/pfb_pending_changes"
 # An address nothing answers on (RFC 5737): the bouncer runs and retries its first pull, which is all this test needs.
 LAPI = "http://192.0.2.10:8080"
 
@@ -190,3 +194,32 @@ def test_with_pfblockerng_off_the_save_stores_the_settings_but_starts_nothing(
     assert helpers.config_get(vm, f"{SECTION}/enable") == "on", "vacuity guard: the settings were stored"
     assert _file(vm) is None, "pfBlockerNG off: no config file"
     assert not _running(vm), "pfBlockerNG off: no bouncer"
+
+
+def test_a_policy_save_leaves_nothing_pending(webui: WebUI, crowdsec: helpers.SmokeVM) -> None:
+    vm = crowdsec
+    helpers.set_package_enabled(vm, True)
+    vm.ssh("/bin/rm", "-f", PENDING)
+    assert vm.ssh("/bin/sh", "-c", f"test -e {PENDING}").returncode != 0, "before-state: nothing is pending"
+
+    _save(webui, {"enable": "on", "lapi_url": LAPI, "api_key": f"smoke4139-{uuid.uuid4().hex}"})
+
+    assert helpers.config_get(vm, f"{SECTION}/enable") == "on", "vacuity guard: a policy setting changed"
+    pending = vm.ssh("/bin/sh", "-c", f"test -e {PENDING}").returncode == 0
+    assert not pending, "the save syncs at once: nothing waits for an Update"
+
+
+def test_turning_pfblockerng_off_on_the_general_page_stops_the_bouncer_at_once(
+    webui: WebUI, crowdsec: helpers.SmokeVM
+) -> None:
+    vm = crowdsec
+    helpers.set_package_enabled(vm, True)
+    _save(webui, {"enable": "on", "lapi_url": LAPI, "api_key": f"smoke4139-{uuid.uuid4().hex}"})
+    helpers.wait_until(lambda: _running(vm), timeout=30.0, what="before-state: the bouncer runs")
+
+    response = webui.post(GENERAL, {"enable_cb": ""}, timeout=300.0)  # type: ignore[arg-type]
+
+    assert response.status_code == 200, f"the General save answered HTTP {response.status_code}"
+    assert helpers.config_get(vm, MASTER) == "", "vacuity guard: pfBlockerNG is off"
+    assert _file(vm) is None, "the General save removed the config file"
+    assert not _running(vm), "the General save stopped the bouncer"
