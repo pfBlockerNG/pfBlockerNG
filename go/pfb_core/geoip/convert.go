@@ -299,8 +299,13 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 					prefix, owner = "A2_", "satellite"
 				}
 				if prefix != "" {
-					if !empty(gid) {
-						iso = prefix + cs.byKey[owner].firstISO()
+					// A network with a country of its own goes to A1_<country> or A2_<country>, listed under Proxy and
+					// Satellite (#4126); today's PHP stages it as A1_A1 or A2_A2, which no continent file lists.
+					if g := cs.byKey[gid]; !empty(gid) && g != nil && !empty(g.id) && !empty(g.firstISO()) {
+						iso = prefix + g.firstISO()
+						if err := cs.addISOOnce(owner, iso); err != nil {
+							return err
+						}
 					}
 					if !empty(reg) && !equal(gid, reg) {
 						dup++
