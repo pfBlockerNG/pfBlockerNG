@@ -14,13 +14,15 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
 
-// docs/misc/core-api-protocol.md is the contract this file serves: POST /v1/<Method>, one JSON object in and out, the
-// error envelope and its HTTP statuses, requestId replay, the limits, and who may call.
+// docs/misc/core-api-protocol.md is the contract this file serves: POST /v1/<Method>, one JSON object in and out (a
+// GetResourceBody success is plain text), the error envelope and its HTTP statuses, requestId replay, the limits, and who
+// may call.
 
 const (
 	apiVersion               = "v1"
@@ -265,10 +267,12 @@ func (s *server) shutdown(ctx context.Context) error {
 	return err
 }
 
-// response is one complete answer, kept as bytes so that a replay sends exactly what the first request got.
+// response is one complete answer, kept as bytes so that a replay sends exactly what the first request got; or, from a
+// read-only method, a body streamed from a file (never replayed).
 type response struct {
 	status int
 	body   []byte
+	stream *bodyStream
 }
 
 // errorResponse is the envelope of e; a code outside the table is answered as internal (an incomplete status is never sent).
@@ -284,6 +288,15 @@ func errorResponse(e *apiError) response {
 }
 
 func (s *server) write(w http.ResponseWriter, r response) {
+	if b := r.stream; b != nil {
+		defer b.f.Close()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Length", strconv.FormatInt(b.size, 10))
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(r.status)
+		_, _ = io.Copy(w, b.f) // a caller that went away ends the copy
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(r.status)
@@ -404,6 +417,9 @@ func (s *server) call(ctx context.Context, name string, m method, params []byte)
 		}
 	}()
 	result, err := m.call(ctx, params)
+	if b, ok := result.(*bodyStream); ok && err == nil {
+		return response{status: http.StatusOK, stream: b}
+	}
 	var e *apiError
 	switch {
 	case errors.As(err, &e):

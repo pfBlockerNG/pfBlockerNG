@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
@@ -197,11 +199,15 @@ func TestGetReplyKindByCursorAndStoreState(t *testing.T) {
 			if err != nil || r.Kind != tc.kind {
 				t.Fatalf("Get kind = %q, %v; want %q", r.Kind, err, tc.kind)
 			}
-			if tc.kind == resources.KindDelta && (!slices.Equal(r.Add, []string{"3.3.3.3"}) || !slices.Equal(r.Remove, []string{"1.1.1.1"}) || r.From != 1) {
-				t.Fatalf("delta = from %d add %v remove %v", r.From, r.Add, r.Remove)
+			if tc.kind == resources.KindDelta {
+				if add, remove := delta(t, s, aid, r); !slices.Equal(add, []string{"3.3.3.3"}) || !slices.Equal(remove, []string{"1.1.1.1"}) || r.From != 1 {
+					t.Fatalf("delta = from %d add %v remove %v", r.From, add, remove)
+				}
 			}
-			if tc.kind == resources.KindFull && (r.Members == nil || r.Digest != dg(r.Members...)) {
-				t.Fatalf("full = %v digest %s", r.Members, r.Digest)
+			if tc.kind == resources.KindFull {
+				if m := members(t, s, aid, r); r.Digest != dg(m...) {
+					t.Fatalf("full = %v digest %s", m, r.Digest)
+				}
 			}
 		})
 	}
@@ -212,14 +218,17 @@ func TestLifecycleForEveryResourceKind(t *testing.T) {
 		t.Run(rid, func(t *testing.T) {
 			s, dir := newStore(t)
 			publish(t, s, rid, 1, map[string]any{"k": "v"}, "b", "a")
-			if r := mustGet(t, s, rid, nil); r.Kind != resources.KindFull || !slices.Equal(r.Members, []string{"a", "b"}) || r.Generation != 1 {
+			if r := mustGet(t, s, rid, nil); r.Kind != resources.KindFull || !slices.Equal(members(t, s, rid, r), []string{"a", "b"}) || r.Generation != 1 {
 				t.Fatalf("full = %+v", r)
 			}
 			applied(t, s, rid, 1)
 			publish(t, s, rid, 2, map[string]any{"k": "v"}, "b", "c")
 			r := mustGet(t, s, rid, &resources.Cursor{1, dg("a", "b")})
-			if r.Kind != resources.KindDelta || !slices.Equal(r.Add, []string{"c"}) || !slices.Equal(r.Remove, []string{"a"}) {
+			if r.Kind != resources.KindDelta {
 				t.Fatalf("delta = %+v", r)
+			}
+			if add, remove := delta(t, s, rid, r); !slices.Equal(add, []string{"c"}) || !slices.Equal(remove, []string{"a"}) {
+				t.Fatalf("delta add %v remove %v", add, remove)
 			}
 			if err := s.Remove(rid); err != nil {
 				t.Fatal(err)
@@ -240,7 +249,7 @@ func TestRetentionTransitions(t *testing.T) {
 		publish(t, s, id, 1, nil, "1")
 		applied(t, s, id, 1)
 		publish(t, s, id, 2, nil, "2")
-		wantNames(t, dir, "index.json", bn(id, 1), bn(id, 2))
+		wantNames(t, dir, "index.json", bn(id, 1), bn(id, 2), dn(id, 2, 1, "add"), dn(id, 2, 1, "remove"))
 		return s, dir
 	}
 	t.Run("C1 first publish", func(t *testing.T) {
@@ -264,7 +273,7 @@ func TestRetentionTransitions(t *testing.T) {
 	t.Run("C5 applied report of the held baseline", func(t *testing.T) {
 		s, dir := two(t)
 		applied(t, s, id, 1)
-		wantNames(t, dir, "index.json", bn(id, 1), bn(id, 2))
+		wantNames(t, dir, "index.json", bn(id, 1), bn(id, 2), dn(id, 2, 1, "add"), dn(id, 2, 1, "remove"))
 		if r := mustGet(t, s, id, &resources.Cursor{1, dg("1")}); r.Kind != resources.KindDelta {
 			t.Fatalf("baseline lost: %+v", r)
 		}
@@ -276,7 +285,7 @@ func TestRetentionTransitions(t *testing.T) {
 		publish(t, s, id, 2, nil, "2")
 		applied(t, s, id, 2)
 		publish(t, s, id, 3, nil, "3")
-		wantNames(t, dir, "index.json", bn(id, 2), bn(id, 3))
+		wantNames(t, dir, "index.json", bn(id, 2), bn(id, 3), dn(id, 3, 2, "add"), dn(id, 3, 2, "remove"))
 		applied(t, s, id, 1)
 		wantNames(t, dir, "index.json", bn(id, 3))
 	})
@@ -290,7 +299,7 @@ func TestRetentionTransitions(t *testing.T) {
 		if err := s.Remove(id); err != nil {
 			t.Fatal(err)
 		}
-		wantNames(t, dir, "index.json", bn(id, 1), bn(id, 2))
+		wantNames(t, dir, "index.json", bn(id, 1), bn(id, 2), dn(id, 2, 1, "add"), dn(id, 2, 1, "remove"))
 		if err := s.RemovalApplied(id); err != nil {
 			t.Fatal(err)
 		}
@@ -352,8 +361,11 @@ func TestRetentionTransitions(t *testing.T) {
 		applied(t, s, id, 1)
 		publish(t, s, id, 2, map[string]any{"action": "permit", "direction": "ingress"}, "1")
 		r := mustGet(t, s, id, &resources.Cursor{1, dg("1")})
-		if r.Kind != resources.KindDelta || r.Add == nil || r.Remove == nil || len(r.Add)+len(r.Remove) != 0 {
-			t.Fatalf("reply = %+v; want a delta with empty non-nil add and remove", r)
+		if r.Kind != resources.KindDelta || r.Adds+r.Removes != 0 {
+			t.Fatalf("reply = %+v; want a delta with empty add and remove", r)
+		}
+		if add, remove := delta(t, s, id, r); len(add)+len(remove) != 0 {
+			t.Fatalf("delta add %v remove %v; want both empty", add, remove)
 		}
 		if string(r.Metadata) != `{"action":"permit","direction":"ingress"}` {
 			t.Fatalf("metadata = %s", r.Metadata)
@@ -365,7 +377,7 @@ func TestRetentionTransitions(t *testing.T) {
 		publish(t, s, "dnsbl/xy", 1, nil, "1")
 		publish(t, s, "dnsbl/x", 2, nil, "2")
 		wantNames(t, dir, "index.json", "dnsbl~x.2.body", "dnsbl~xy.1.body")
-		if r := mustGet(t, s, "dnsbl/xy", nil); !slices.Equal(r.Members, []string{"1"}) {
+		if r := mustGet(t, s, "dnsbl/xy", nil); !slices.Equal(members(t, s, "dnsbl/xy", r), []string{"1"}) {
 			t.Fatalf("sibling reply = %+v", r)
 		}
 		if err := s.Remove("dnsbl/x"); err != nil {
@@ -381,7 +393,7 @@ func TestRetentionTransitions(t *testing.T) {
 		publish(t, s, id, 1, nil, "1")
 		publish(t, s, id, 2, nil)
 		r := mustGet(t, s, id, nil)
-		if r.Kind != resources.KindFull || r.Members == nil || len(r.Members) != 0 || r.Entries != 0 || r.Digest != dg() || string(r.Metadata) != "{}" {
+		if r.Kind != resources.KindFull || len(members(t, s, id, r)) != 0 || r.Entries != 0 || r.Digest != dg() || string(r.Metadata) != "{}" {
 			t.Fatalf("reply = %+v", r)
 		}
 	})
@@ -465,14 +477,16 @@ func TestCorruptIndex(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, dir := newStore(t)
 			publish(t, s, id, 1, nil, "1")
+			applied(t, s, id, 1)
+			publish(t, s, id, 2, nil, "2") // delta files too, for the recovery to remove
 			corrupt(t, filepath.Join(dir, "index.json"))
 			os.WriteFile(filepath.Join(dir, "stray.tmp"), []byte("x"), 0o600)
 			_, err := s.Get(id, nil)
 			wantErr(t, "Get", err, resources.ErrUnavailable)
 			publish(t, s, other, 1, nil, "2")
 			wantNames(t, dir, "index.json", bn(other, 1))
-			if r := mustGet(t, s, other, nil); !slices.Equal(r.Members, []string{"2"}) {
-				t.Fatalf("members = %v", r.Members)
+			if r := mustGet(t, s, other, nil); !slices.Equal(members(t, s, other, r), []string{"2"}) {
+				t.Fatalf("reply = %+v", r)
 			}
 		})
 	}
@@ -523,7 +537,7 @@ func TestBrokenBodiesNeverServed(t *testing.T) {
 			publish(t, s, id, 2, nil, "20", "30")
 			corrupt(t, filepath.Join(dir, bn(id, 1)))
 			r := mustGet(t, s, id, &resources.Cursor{1, dg("10", "20")})
-			if r.Kind != resources.KindFull || !slices.Equal(r.Members, []string{"20", "30"}) {
+			if r.Kind != resources.KindFull || !slices.Equal(members(t, s, id, r), []string{"20", "30"}) {
 				t.Fatalf("reply = %+v; want the full current body", r)
 			}
 		})
@@ -581,7 +595,7 @@ func TestInconsistentIndexNeverServed(t *testing.T) {
 			publish(t, s, id, 2, nil, "20", "30")
 			edit(t, dir, "applied", f)
 			r := mustGet(t, s, id, &resources.Cursor{1, dg("10", "20")})
-			if r.Kind != resources.KindFull || !slices.Equal(r.Members, []string{"20", "30"}) {
+			if r.Kind != resources.KindFull || !slices.Equal(members(t, s, id, r), []string{"20", "30"}) {
 				t.Fatalf("reply = %+v; want the full current body", r)
 			}
 		})
@@ -625,7 +639,7 @@ func TestFIFOBodyNeverServed(t *testing.T) {
 		applied(t, s, id, 1)
 		publish(t, s, id, 2, nil, "20")
 		fifo(t, filepath.Join(dir, bn(id, 1)))
-		if r := mustGet(t, s, id, &resources.Cursor{1, dg()}); r.Kind != resources.KindFull || !slices.Equal(r.Members, []string{"20"}) {
+		if r := mustGet(t, s, id, &resources.Cursor{1, dg()}); r.Kind != resources.KindFull || !slices.Equal(members(t, s, id, r), []string{"20"}) {
 			t.Fatalf("reply = %+v; want the full current body", r)
 		}
 	})
@@ -680,7 +694,7 @@ func TestIdenticalPublishHealsALostBody(t *testing.T) {
 			index := snapshot(t, dir)["index.json"]
 			f(t, filepath.Join(dir, bn(id, 1)))
 			publish(t, s, id, 1, nil, "10", "20")
-			if r := mustGet(t, s, id, nil); r.Kind != resources.KindFull || !slices.Equal(r.Members, []string{"10", "20"}) {
+			if r := mustGet(t, s, id, nil); r.Kind != resources.KindFull || !slices.Equal(members(t, s, id, r), []string{"10", "20"}) {
 				t.Fatalf("reply = %+v", r)
 			}
 			if got := snapshot(t, dir); got["index.json"] != index || len(got) != 2 {
@@ -770,13 +784,14 @@ func TestDeltaRebuildsTheNewBodyExactly(t *testing.T) {
 		if rep.Kind != resources.KindDelta {
 			t.Fatalf("seed %d: kind %q", seed, rep.Kind)
 		}
-		for _, l := range [][]string{rep.Add, rep.Remove} {
+		add, remove := delta(t, s, id, rep)
+		for _, l := range [][]string{add, remove} {
 			if l == nil || !slices.IsSorted(l) || len(slices.Compact(slices.Clone(l))) != len(l) {
 				t.Fatalf("seed %d: add/remove not sorted unique non-nil: %v", seed, l)
 			}
 		}
-		for _, m := range rep.Add {
-			if slices.Contains(rep.Remove, m) {
+		for _, m := range add {
+			if slices.Contains(remove, m) {
 				t.Fatalf("seed %d: %q in add and remove", seed, m)
 			}
 		}
@@ -784,10 +799,10 @@ func TestDeltaRebuildsTheNewBodyExactly(t *testing.T) {
 		for _, m := range a {
 			set[m] = true
 		}
-		for _, m := range rep.Remove {
+		for _, m := range remove {
 			delete(set, m)
 		}
-		for _, m := range rep.Add {
+		for _, m := range add {
 			set[m] = true
 		}
 		got := []string{}
@@ -815,6 +830,8 @@ func TestReadersNeverSeeATornPublish(t *testing.T) {
 	publish(t, w, id, 1, nil, x...)
 	done := make(chan struct{})
 	var wg sync.WaitGroup
+	first := make(chan struct{}) // closed at the first body served: publishing starts only then
+	var once sync.Once
 	for range 4 {
 		wg.Add(1)
 		go func() {
@@ -831,13 +848,35 @@ func TestReadersNeverSeeATornPublish(t *testing.T) {
 					t.Errorf("Get: %v", err)
 					return
 				}
-				if r.Kind != resources.KindFull || !(slices.Equal(r.Members, x) && r.Digest == dg(x...) || slices.Equal(r.Members, y) && r.Digest == dg(y...)) {
-					t.Errorf("reply is neither body: kind %s, %d members, digest %s", r.Kind, len(r.Members), r.Digest)
+				if r.Kind != resources.KindFull || r.Digest != dg(x...) && r.Digest != dg(y...) {
+					t.Errorf("reply is neither body: kind %s, digest %s", r.Kind, r.Digest)
 					return
 				}
+				// A publish between the two reads prunes the generation the reply named: the caller asks again.
+				f, _, err := rd.Body(id, r.Generation, resources.PartMembers, 0)
+				if errors.Is(err, resources.ErrNotFound) {
+					continue
+				}
+				if err != nil {
+					t.Errorf("Body: %v", err)
+					return
+				}
+				b, err := io.ReadAll(f)
+				f.Close()
+				if err != nil || digest.Bytes(b) != r.Digest {
+					t.Errorf("body read %d bytes whose digest is not the reply's %s: %v", len(b), r.Digest, err)
+					return
+				}
+				once.Do(func() { close(first) })
 			}
 		}()
 	}
+	select {
+	case <-first:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no reader was served a body before publishing")
+	}
+	t.Cleanup(func() { close(done); wg.Wait() }) // runs before the store's directory is removed, also after a t.Fatal
 	for i := range 300 {
 		next := y
 		if i%2 == 1 {
@@ -847,6 +886,4 @@ func TestReadersNeverSeeATornPublish(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	close(done)
-	wg.Wait()
 }

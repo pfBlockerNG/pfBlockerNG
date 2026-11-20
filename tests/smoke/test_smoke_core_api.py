@@ -95,57 +95,93 @@ foreach (array_slice($argv, 1) as $path) {
 echo json_encode($info, JSON_INVALID_UTF8_SUBSTITUTE);
 """
 # issue #4032: fixture setup, run with no memory limit: a store of two generations of $n IPv4 members, written as
-# Core's store holds them (index.json + <id with / as ~>.<generation>.body). Generation 2 swaps $r members of
-# generation 1 for $r the first never held, spread over the whole range: even addresses of 10.0.0.0/8 are the
-# baseline, the odd ones the additions.
+# Core's store holds them (index.json + <id with / as ~>.<generation>.body, and the delta from the applied generation 1
+# as <id>.2.1.add and .remove, issue #4049). Generation 2 swaps $r members of generation 1 for $r the first never held,
+# spread over the whole range: even addresses of 10.0.0.0/8 are the baseline, the odd ones the additions.
 STORE_PHP = r"""<?php
 [, $dir, $n, $r] = $argv;
 $step = intdiv((int) $n, (int) $r);
-$base = $current = $added = [];
+$base = $current = $added = $removed = [];
 for ($i = 0; $i < $n; $i++) {
     $base[] = $ip = long2ip(0x0A000000 + 2 * $i);
-    if ($i % $step === 0) { $added[] = long2ip(0x0A000000 + 2 * $i + 1); } else { $current[] = $ip; }
+    if ($i % $step === 0) { $added[] = long2ip(0x0A000000 + 2 * $i + 1); $removed[] = $ip; } else { $current[] = $ip; }
 }
 $current = array_merge($current, $added);
 $metadata = ['action' => 'deny', 'direction' => ['ingress']];
-$gens = [];
-foreach ([1 => $base, 2 => $current] as $g => $members) {
+$gens = $parts = [];
+$write = function (string $name, array $members) use ($dir): array {
     sort($members, SORT_STRING);
-    $body = implode("\n", $members) . "\n";
-    file_put_contents("$dir/ip-set~Measure~ipv4.$g.body", $body);
-    chmod("$dir/ip-set~Measure~ipv4.$g.body", 0600);
-    $gens[$g] = ['generation' => (string) $g, 'digest' => hash('xxh128', $body), 'length' => strlen($body),
-        'entries' => count($members), 'metadata' => $metadata];
+    $body = $members === [] ? '' : implode("\n", $members) . "\n";
+    file_put_contents("$dir/$name", $body);
+    chmod("$dir/$name", 0600);
+    return ['digest' => hash('xxh128', $body), 'length' => strlen($body), 'entries' => count($members)];
+};
+foreach ([1 => $base, 2 => $current] as $g => $members) {
+    $gens[$g] = ['generation' => (string) $g] + $write("ip-set~Measure~ipv4.$g.body", $members)
+        + ['metadata' => $metadata];
+}
+foreach (['add' => $added, 'remove' => $removed] as $part => $members) {
+    $parts[$part] = $write("ip-set~Measure~ipv4.2.1.$part", $members);
 }
 file_put_contents("$dir/index.json", json_encode(['version' => 1, 'resources' => ['ip-set/Measure/ipv4' =>
-    ['current' => $gens[2], 'applied' => $gens[1]]]], JSON_UNESCAPED_SLASHES));
+    ['current' => $gens[2], 'applied' => $gens[1], 'delta' => ['from' => '1'] + $parts]]], JSON_UNESCAPED_SLASHES));
 chmod("$dir/index.json", 0600);
 chmod($dir, 0700);
 echo '@OPEN@' . json_encode(['digest' => $gens[1]['digest'],
     'entries' => [$gens[1]['entries'], $gens[2]['entries']]]) . '@CLOSE@';
 """
-# issue #4032: the measured PHP caller, run by the appliance's plain CLI with its own php.ini (no -d, no ini_set):
-# argv is the socket, the mode (full: no cursor; delta: from generation 1) and the baseline digest. The peak after
-# the call is what holding the decoded reply costs; verifying (a digest over the joined members) comes after it.
+# issue #4032, #4049: the measured PHP caller, run by the appliance's plain CLI with its own php.ini (no -d, no
+# ini_set): argv is the socket, the mode (full: no cursor; delta: from generation 1), the baseline digest and a scratch
+# directory. It asks GetResources for the item (no members), then streams each body part GetResourceBody serves into a
+# file with curl, as the Outpost apply does, and counts its lines from the file; the full body's digest is checked over
+# the file. The peak after the fetch is what fetching costs; verifying comes after it.
 CALLER_PHP = r"""<?php
 require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
-[, $socket, $mode, $digest] = $argv;
+[, $socket, $mode, $digest, $scratch] = $argv;
 $id = 'ip-set/Measure/ipv4';
 $cursor = $mode === 'delta' ? ['generation' => '1', 'digest' => $digest] : new stdClass();
+$fetch = function (array $params, string $path) use ($socket): int {
+    $fh = fopen($path, 'wb');
+    $ch = curl_init('http://localhost/v1/GetResourceBody');
+    curl_setopt_array($ch, [CURLOPT_UNIX_SOCKET_PATH => $socket, CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($params), CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_FILE => $fh, CURLOPT_TIMEOUT => 300]);
+    $ok = curl_exec($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    curl_close($ch);
+    fclose($fh);
+    return $ok === false ? 0 : $status;
+};
+$count = function (string $path): int {
+    $n = 0;
+    $h = fopen($path, 'rb');
+    while (fgets($h) !== false) { $n++; }
+    fclose($h);
+    return $n;
+};
 $baseline = memory_get_peak_usage(true);
 $start = hrtime(true);
 $reply = pfb_core_call('GetResources', ['resources' => [$id => $cursor]], $socket, 300);
-$wall = (hrtime(true) - $start) / 1e9;
-$afterCall = memory_get_peak_usage(true);
 $item = $reply['body']['resources'][$id] ?? [];
+$parts = ($item['kind'] ?? '') === 'delta' ? ['add', 'remove'] : (($item['kind'] ?? '') === 'full' ? ['members'] : []);
+$statuses = [];
+foreach ($parts as $part) {
+    $params = ['id' => $id, 'generation' => $item['generation'], 'part' => $part];
+    if ($part !== 'members') { $params['from'] = $item['from']; }
+    $statuses[$part] = $fetch($params, "$scratch/$part");
+}
+$wall = (hrtime(true) - $start) / 1e9;
+$afterFetch = memory_get_peak_usage(true);
 $out = ['status' => $reply['status'], 'error' => $reply['error'], 'kind' => $item['kind'] ?? null,
-    'generation' => $item['generation'] ?? null, 'from' => $item['from'] ?? null,
-    'members' => count($item['members'] ?? []), 'add' => count($item['add'] ?? []),
-    'remove' => count($item['remove'] ?? []),
-    'digest_ok' => isset($item['members'])
-        && hash('xxh128', implode("\n", $item['members']) . "\n") === $item['digest'],
+    'generation' => $item['generation'] ?? null, 'from' => $item['from'] ?? null, 'body_status' => $statuses,
+    'members' => isset($statuses['members']) ? $count("$scratch/members") : 0,
+    'add' => isset($statuses['add']) ? $count("$scratch/add") : 0,
+    'remove' => isset($statuses['remove']) ? $count("$scratch/remove") : 0,
+    'counts_ok' => ($item['kind'] ?? '') !== 'delta' || [$item['addEntries'] ?? null, $item['removeEntries'] ?? null]
+        === [$count("$scratch/add"), $count("$scratch/remove")],
+    'digest_ok' => isset($statuses['members']) && hash_file('xxh128', "$scratch/members") === $item['digest'],
     'memory_limit' => ini_get('memory_limit'), 'php_wall_s' => $wall, 'php_baseline_peak_bytes' => $baseline,
-    'php_peak_after_call_bytes' => $afterCall,
+    'php_peak_after_call_bytes' => $afterFetch,
     'php_peak_after_verify_bytes' => memory_get_peak_usage(true)];
 echo '@OPEN@' . json_encode($out) . '@CLOSE@';
 """
@@ -613,7 +649,10 @@ def stop_core(vm: SmokeVM, pid: str) -> None:
 
 
 def measure_resource(vm: SmokeVM, work: str, mode: str, digest: str) -> dict[str, Any]:
-    """One fresh Core over the store, asked for ``mode`` (full or delta) by curl, then by the PHP caller."""
+    """One fresh Core over the store, asked for ``mode`` (full or delta) by curl, then by the PHP caller.
+
+    curl asks GetResources and then streams each body part GetResourceBody serves (issue #4049) to /dev/null.
+    """
     api, log = f"{work}/run/api.sock", f"{work}/log"
     request = json.dumps({"resources": {MEASURE_ID: {"generation": "1", "digest": digest} if mode == "delta" else {}}})
     start = vm.ssh(
@@ -635,17 +674,26 @@ def measure_resource(vm: SmokeVM, work: str, mode: str, digest: str) -> dict[str
                 said = vm.ssh(f"tail -n 20 {log}", timeout=30).stdout
                 pytest.fail(f"STUCK: the {mode} Core never answered on {api} (curl: {up.stdout}{up.stderr}):\n{said}")
             time.sleep(1)
-        go = vm.ssh(
-            f"{CURL} -s -o /dev/null -w '%{{time_total}} %{{size_download}} %{{http_code}}' --unix-socket {api} "
-            f"-H 'Content-Type: application/json' --data {shlex.quote(request)} http://localhost/v1/GetResources",
-            timeout=600,
-        )
-        seconds, size, status = go.stdout.split() if go.stdout.count(" ") == 2 else ("0", "0", go.stdout)
-        assert (go.returncode, status) == (0, "200"), f"GetResources {mode} over curl: {go.stdout}{go.stderr}"
+        seconds, size = 0.0, 0
+        parts = [("add", '"from": "1", '), ("remove", '"from": "1", ')] if mode == "delta" else [("members", "")]
+        calls = [("GetResources", request)] + [
+            ("GetResourceBody", f'{{"id": "{MEASURE_ID}", "generation": "2", {frm}"part": "{part}"}}')
+            for part, frm in parts
+        ]
+        for method, body in calls:
+            go = vm.ssh(
+                f"{CURL} -s -o /dev/null -w '%{{time_total}} %{{size_download}} %{{http_code}}' --unix-socket {api} "
+                f"-H 'Content-Type: application/json' --data {shlex.quote(body)} http://localhost/v1/{method}",
+                timeout=600,
+            )
+            took, got, status = go.stdout.split() if go.stdout.count(" ") == 2 else ("0", "0", go.stdout)
+            assert (go.returncode, status) == (0, "200"), f"{method} {mode} over curl: {go.stdout}{go.stderr}"
+            seconds, size = seconds + float(took), size + int(got)
         rss = vm.ssh(f"{PROCSTAT} -r {pid}", timeout=30)
         held = re.search(r"maximum RSS\s+(\d+)", rss.stdout)
         assert held, f"no 'maximum RSS' row from {PROCSTAT} -r {pid}: rc={rss.returncode}\n{rss.stdout}{rss.stderr}"
-        caller = vm.ssh(f"{PHP} {work}/call.php {api} {mode} {digest} 2>&1", timeout=600)
+        vm.ssh(f"mkdir -p -m 700 {work}/fetch-{mode}", timeout=30)
+        caller = vm.ssh(f"{PHP} {work}/call.php {api} {mode} {digest} {work}/fetch-{mode} 2>&1", timeout=600)
     finally:
         stop_core(vm, pid)
     assert OPEN in caller.stdout and CLOSE in caller.stdout, (
@@ -692,9 +740,23 @@ def test_a_php_caller_holds_a_full_body_of_two_million_entries_and_its_one_perce
         full = measure_resource(core_vm, work, "full", store["digest"])
         box = core_vm.ssh("sysctl -n hw.physmem hw.ncpu", timeout=30).stdout.split()
 
-        want = {"kind": "delta", "from": "1", "generation": "2", "add": MEASURE_REPLACED, "remove": MEASURE_REPLACED}
+        want = {
+            "kind": "delta",
+            "from": "1",
+            "generation": "2",
+            "body_status": {"add": 200, "remove": 200},
+            "add": MEASURE_REPLACED,
+            "remove": MEASURE_REPLACED,
+            "counts_ok": True,
+        }
         assert {k: delta[k] for k in want} == want, f"delta: want {want}, got {delta}"
-        want = {"kind": "full", "generation": "2", "members": MEASURE_ENTRIES, "digest_ok": True}
+        want = {
+            "kind": "full",
+            "generation": "2",
+            "body_status": {"members": 200},
+            "members": MEASURE_ENTRIES,
+            "digest_ok": True,
+        }
         assert {k: full[k] for k in want} == want, f"full: want {want}, got {full}"
         # A diagnostic, never an assertion
         print(

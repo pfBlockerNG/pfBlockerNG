@@ -67,8 +67,8 @@ func TestWriterReadErrorDeletesNothing(t *testing.T) {
 		return out
 	}
 	before := snap()
-	if len(before) != 3 {
-		t.Fatalf("setup holds %d files; want the index and two bodies", len(before))
+	if len(before) != 5 {
+		t.Fatalf("setup holds %d files; want the index, two bodies and the delta's two parts", len(before))
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestEMFILEChild$")
 	cmd.Env = append(os.Environ(), emfileDirEnv+"="+dir)
@@ -85,7 +85,7 @@ func TestWriterReadErrorDeletesNothing(t *testing.T) {
 	if after := snap(); fmt.Sprint(after) != fmt.Sprint(before) {
 		t.Fatalf("a read error changed the store:\n before %v\n after  %v", before, after)
 	}
-	if r, err := s.Get(crashID, nil); err != nil || !slices.Equal(r.Members, []string{"2"}) {
+	if r, err := s.Get(crashID, nil); err != nil || !slices.Equal(bodyLines(t, s, crashID, r.Generation), []string{"2"}) {
 		t.Fatalf("Get = %+v, %v; want the current body", r, err)
 	}
 }

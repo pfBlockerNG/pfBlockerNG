@@ -111,12 +111,13 @@ func resJSONEqual(t *testing.T, got, want any) {
 
 func cur(g uint64, d string) string { return fmt.Sprintf(`{"generation":"%d","digest":%q}`, g, d) }
 
-func full(g string, members []string, d string, entries int, meta map[string]any) map[string]any {
-	return map[string]any{"kind": "full", "generation": g, "members": members, "digest": d, "entries": entries, "metadata": meta}
+func full(g string, d string, entries int, meta map[string]any) map[string]any {
+	return map[string]any{"kind": "full", "generation": g, "digest": d, "entries": entries, "metadata": meta}
 }
 
-func delta(g, from string, add, remove []string, d string, entries int, meta map[string]any) map[string]any {
-	return map[string]any{"kind": "delta", "generation": g, "from": from, "add": add, "remove": remove, "digest": d, "entries": entries, "metadata": meta}
+func delta(g, from string, adds, removes int, d string, entries int, meta map[string]any) map[string]any {
+	return map[string]any{"kind": "delta", "generation": g, "from": from, "addEntries": adds, "removeEntries": removes, "digest": d,
+		"entries": entries, "metadata": meta}
 }
 
 func unchanged(g string) map[string]any { return map[string]any{"kind": "unchanged", "generation": g} }
@@ -148,20 +149,26 @@ func TestGetResourcesWireShape(t *testing.T) {
 		want map[string]any
 	}{
 		"full without a cursor": {map[string]string{"ip-set/Full/ipv4": `{}`},
-			map[string]any{"ip-set/Full/ipv4": full("1", []string{"1.1.1.1", "10.0.0.0/8"}, fd, 2, meta)}},
+			map[string]any{"ip-set/Full/ipv4": full("1", fd, 2, meta)}},
 		"unchanged": {map[string]string{"ip-set/Full/ipv4": cur(1, fd)},
 			map[string]any{"ip-set/Full/ipv4": unchanged("1")}},
 		"delta": {map[string]string{"ip-set/Delta/ipv4": cur(1, d1)},
-			map[string]any{"ip-set/Delta/ipv4": delta("2", "1", []string{"10.0.0.4"}, []string{"10.0.0.1"}, d2, 3, meta)}},
+			map[string]any{"ip-set/Delta/ipv4": delta("2", "1", 1, 1, d2, 3, meta)}},
 		"delta after a metadata-only change": {map[string]string{"ip-set/Meta/ipv6": cur(1, md)},
-			map[string]any{"ip-set/Meta/ipv6": delta("2", "1", []string{}, []string{}, md, 1, m2)}},
+			map[string]any{"ip-set/Meta/ipv6": delta("2", "1", 0, 0, md, 1, m2)}},
 		"full of an empty set": {map[string]string{"dnsbl/empty": `{}`},
-			map[string]any{"dnsbl/empty": full("1", []string{}, ed, 0, map[string]any{})}},
+			map[string]any{"dnsbl/empty": full("1", ed, 0, map[string]any{})}},
 		"a good id and a never published one": {map[string]string{"ip-set/Full/ipv4": `{}`, "ip-set/Never/ipv4": `{}`},
-			map[string]any{"ip-set/Full/ipv4": full("1", []string{"1.1.1.1", "10.0.0.0/8"}, fd, 2, meta), "ip-set/Never/ipv4": errItem("not_found")}},
+			map[string]any{"ip-set/Full/ipv4": full("1", fd, 2, meta), "ip-set/Never/ipv4": errItem("not_found")}},
 	} {
 		t.Run(name, func(t *testing.T) { resJSONEqual(t, r.call(tc.req), tc.want) })
 	}
+	wantLines(t, "full", r.body("ip-set/Full/ipv4", "1", "members", ""), "1.1.1.1", "10.0.0.0/8")
+	wantLines(t, "delta add", r.body("ip-set/Delta/ipv4", "2", "add", "1"), "10.0.0.4")
+	wantLines(t, "delta remove", r.body("ip-set/Delta/ipv4", "2", "remove", "1"), "10.0.0.1")
+	wantLines(t, "metadata-only add", r.body("ip-set/Meta/ipv6", "2", "add", "1"))
+	wantLines(t, "metadata-only remove", r.body("ip-set/Meta/ipv6", "2", "remove", "1"))
+	wantLines(t, "empty set", r.body("dnsbl/empty", "1", "members", ""))
 }
 
 // The issue's matrix of cursor against current generation and applied baseline.
@@ -173,7 +180,7 @@ func TestGetResourcesCursorMatrix(t *testing.T) {
 	d1 := r.digest(id)
 	r.pub(id, nil, "10.0.0.1", "10.0.0.2")
 	d2 := r.digest(id)
-	whole := full("2", []string{"10.0.0.1", "10.0.0.2"}, d2, 2, map[string]any{})
+	whole := full("2", d2, 2, map[string]any{})
 	for name, tc := range map[string]struct {
 		cursor string
 		want   map[string]any
@@ -181,7 +188,7 @@ func TestGetResourcesCursorMatrix(t *testing.T) {
 		"no cursor":                       {`{}`, whole},
 		"current and its digest":          {cur(2, d2), unchanged("2")},
 		"current, another digest":         {cur(2, d1), whole},
-		"baseline and its digest":         {cur(1, d1), delta("2", "1", []string{"10.0.0.2"}, []string{}, d2, 2, map[string]any{})},
+		"baseline and its digest":         {cur(1, d1), delta("2", "1", 1, 0, d2, 2, map[string]any{})},
 		"baseline, another digest":        {cur(1, d2), whole},
 		"a generation the store lacks":    {cur(7, d1), whole},
 		"generation zero":                 {cur(0, d1), whole},
@@ -191,6 +198,9 @@ func TestGetResourcesCursorMatrix(t *testing.T) {
 			resJSONEqual(t, r.call(map[string]string{id: tc.cursor}), map[string]any{id: tc.want})
 		})
 	}
+	wantLines(t, "full", r.body(id, "2", "members", ""), "10.0.0.1", "10.0.0.2")
+	wantLines(t, "delta add", r.body(id, "2", "add", "1"), "10.0.0.2")
+	wantLines(t, "delta remove", r.body(id, "2", "remove", "1"))
 }
 
 // A store directory removed and republished restarts at generation 1: a cursor from before it is newer, and gets the full body.
@@ -210,7 +220,8 @@ func TestGetResourcesCursorNewerThanCurrentAfterTheStoreWasRebuilt(t *testing.T)
 		t.Fatalf("republished generation = %d, want 1", g)
 	}
 	resJSONEqual(t, r.call(map[string]string{id: cur(2, old)}),
-		map[string]any{id: full("1", []string{"c.example"}, r.digest(id), 1, map[string]any{})})
+		map[string]any{id: full("1", r.digest(id), 1, map[string]any{})})
+	wantLines(t, "republished body", r.body(id, "1", "members", ""), "c.example")
 }
 
 func TestGetResourcesServesEveryKindOfID(t *testing.T) {
@@ -220,9 +231,12 @@ func TestGetResourcesServesEveryKindOfID(t *testing.T) {
 	for _, id := range ids {
 		r.pub(id, nil, "member-of-"+strings.ReplaceAll(id, "/", "_"))
 		req[id] = `{}`
-		want[id] = full("1", []string{"member-of-" + strings.ReplaceAll(id, "/", "_")}, r.digest(id), 1, map[string]any{})
+		want[id] = full("1", r.digest(id), 1, map[string]any{})
 	}
 	resJSONEqual(t, r.call(req), want)
+	for _, id := range ids {
+		wantLines(t, id, r.body(id, "1", "members", ""), "member-of-"+strings.ReplaceAll(id, "/", "_"))
+	}
 	// 128 bytes is a valid id, only not published
 	long := "dnsbl/" + strings.Repeat("a", 122)
 	resJSONEqual(t, r.call(map[string]string{long: `{}`}), map[string]any{long: errItem("not_found")})
@@ -297,7 +311,7 @@ func TestGetResourcesAnUnreadableStoreAnswersUnavailablePerResource(t *testing.T
 			r.pub(ok, nil, "ok.example")
 			okDigest := r.digest(ok)
 			tc.damage(t, r)
-			want := map[string]any{bad: errItem("unavailable"), ok: full("1", []string{"ok.example"}, okDigest, 1, map[string]any{})}
+			want := map[string]any{bad: errItem("unavailable"), ok: full("1", okDigest, 1, map[string]any{})}
 			if tc.both {
 				want[ok] = errItem("unavailable")
 			}
@@ -397,7 +411,7 @@ func TestGetResourcesTakesTheEdgeCursors(t *testing.T) {
 	const id = "geo-catalog"
 	r.pub(id, nil, "XX")
 	d := r.digest(id)
-	want := map[string]any{id: full("1", []string{"XX"}, d, 1, map[string]any{})}
+	want := map[string]any{id: full("1", d, 1, map[string]any{})}
 	zero := strings.Repeat("0", 32)
 	for name, cursor := range map[string]string{
 		"null generation and digest": `{"generation":null,"digest":null}`,
@@ -430,7 +444,7 @@ func TestGetResourcesAGenerationAbove2To53IsExact(t *testing.T) {
 	if err := os.Rename(filepath.Join(r.dir, "ip-set~Big~ipv4.1.body"), filepath.Join(r.dir, "ip-set~Big~ipv4."+big+".body")); err != nil {
 		t.Fatal(err)
 	}
-	resJSONEqual(t, r.call(map[string]string{id: `{}`}), map[string]any{id: full(big, []string{"10.0.0.1"}, d, 1, map[string]any{})})
+	resJSONEqual(t, r.call(map[string]string{id: `{}`}), map[string]any{id: full(big, d, 1, map[string]any{})})
 	resJSONEqual(t, r.call(map[string]string{id: `{"generation":"` + big + `","digest":"` + d + `"}`}), map[string]any{id: unchanged(big)})
 }
 
