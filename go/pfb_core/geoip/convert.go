@@ -55,6 +55,8 @@ var continentStems = []string{"Africa", "Antarctica", "Asia", "Europe", "North_A
 // escapeshellarg() refusing a continent code. The conversion stops and publishes nothing.
 var errFatal = errors.New("today's conversion dies here with a PHP Error")
 
+var errMalformed = errors.New("malformed row")
+
 // malformed refuses a row the continent files could not carry: split() reads them line by line, so a field written into
 // them that spans lines forges headers, and a network that is not one breaks the list it lands in (#4127). The
 // conversion stops and the previous generation stays; today's PHP writes the row as it was read.
@@ -62,8 +64,6 @@ func (c Conversion) malformed(path string) error {
 	c.log(" [ MAXMIND UPDATE FAIL, malformed row in %s, using previous Country code database ]\n", filepath.Base(path))
 	return errMalformed
 }
-
-var errMalformed = errors.New("malformed row")
 
 // country is an entry of $pfb_geoip['country']. A field PHP leaves unset reads as "".
 type country struct {
@@ -302,8 +302,10 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 				return nil
 			}
 			network, gid, reg := field(cc, 0), field(cc, 1), field(cc, 2)
-			if _, err := netip.ParsePrefix(network); !empty(network) && err != nil {
-				return c.malformed(blocks)
+			if !empty(network) {
+				if _, err := netip.ParsePrefix(trim(network)); err != nil { // split() trims every line
+					return c.malformed(blocks)
+				}
 			}
 			iso, isoRep := "", ""
 			if family == "4" {
@@ -495,18 +497,20 @@ func (c Conversion) split(s stage) {
 						}
 						continue
 					}
-					if strings.Contains(line, "Continent IPv") {
+					// A header is matched at the start of its line, where continents() writes it; today's PHP matches it
+					// anywhere in a '#' line, so a country name holding header text forges one (#4127).
+					if strings.HasPrefix(line, "# Continent IPv") {
 						_, after, _ := strings.Cut(line, ":")
 						continent = trim(strings.ReplaceAll(after, ":", ""))
 					}
-					if strings.Contains(line, "ISO Code: ") {
-						isocode = strings.ReplaceAll(line, "# ISO Code: ", "")
+					if strings.HasPrefix(line, "# ISO Code: ") {
+						isocode = strings.TrimPrefix(line, "# ISO Code: ")
 						list = isocode + "_v" + family + ".txt"
 						if sf.cont != "Top Spammers" && word(isocode) {
 							s.remove(list)
 						}
 					}
-					if (strings.Contains(line, "Total Networks: 0") || strings.Contains(line, "Total Networks: NA")) && word(isocode) {
+					if (line == "# Total Networks: 0" || line == "# Total Networks: NA") && word(isocode) {
 						s.truncate(list)
 					}
 				}
