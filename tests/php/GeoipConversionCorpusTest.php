@@ -138,6 +138,26 @@ final class GeoipConversionCorpusTest extends TestCase
 		$this->assertSame($php, $go);
 	}
 
+	/**
+	 * The PHP comparisons the conversion leans on, as go/pfb_core/geoip/testdata/php_semantics.json records them for the
+	 * Go port: strnatcmp() (ksort(SORT_NATURAL) orders the countries with it), == between two CSV fields, and == 1.
+	 */
+	public function testPhpSemanticsTableIsPhps(): void
+	{
+		$table = json_decode((string) file_get_contents(dirname(__DIR__, 2) . '/go/pfb_core/geoip/testdata/php_semantics.json'),
+			TRUE, 512, JSON_THROW_ON_ERROR);
+		$this->assertNotEmpty($table['natcmp']);
+		foreach ($table['natcmp'] as [$a, $b, $sign]) {
+			$this->assertSame($sign, strnatcmp($a, $b) <=> 0, var_export([$a, $b], TRUE));
+		}
+		foreach ($table['equal'] as [$a, $b, $equal]) {
+			$this->assertSame($equal, $a == $b, var_export([$a, $b], TRUE));
+		}
+		foreach ($table['is_one'] as [$s, $one]) {
+			$this->assertSame($one, $s == 1, var_export($s, TRUE));
+		}
+	}
+
 	/** @param string|array<string,mixed> $content */
 	private function write(string $rel, string|array $content): void
 	{

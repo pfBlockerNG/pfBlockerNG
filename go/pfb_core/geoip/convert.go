@@ -1,10 +1,23 @@
 // Package geoip converts the MaxMind GeoLite2 Country CSVs into the country and continent lists pfBlockerNG's GeoIP
-// aliases read (#4034). Nothing calls it yet (slice 9, #4038).
+// aliases read (#4034): what pfblockerng_uc_countries() writes, and the per-country lists pfblockerng_get_countries()
+// splits out of the continent files, without the pages. Nothing calls it yet (slice 9, #4038).
 package geoip
 
 import (
 	"context"
+	"crypto/rand"
+	_ "embed"
+	"encoding/csv"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"syscall"
 	"time"
 )
 
@@ -19,7 +32,687 @@ type Conversion struct {
 	Log    io.Writer // the Extras log
 }
 
-// Run converts the CSVs and publishes the new generation whole; false leaves the previous one in place.
+//go:embed countries.json
+var countriesJSON []byte
+
+// known is $pfb_geoip_all, every country Geonames.org lists, in its order: [geoname_id, iso, name, continent].
+var known = func() [][4]string {
+	var rows [][4]string
+	if err := json.Unmarshal(countriesJSON, &rows); err != nil {
+		panic(err)
+	}
+	return rows
+}()
+
+// topSpammers is the fixed Top Spammers group, in its order.
+var topSpammers = []string{"CN", "RU", "JP", "UA", "GB", "DE", "BR", "FR", "IN", "TR",
+	"IT", "KR", "PL", "ES", "VN", "AR", "CO", "TW", "MX", "CL"}
+
+var continentStems = []string{"Africa", "Antarctica", "Asia", "Europe", "North_America", "Oceania", "South_America",
+	"Proxy_and_Satellite"}
+
+// errFatal is where today's PHP dies with an Error (a list operation on a Top Spammers entry, whose ISO is a string):
+// the conversion stops and publishes nothing.
+var errFatal = errors.New("a Top Spammers entry used as a country")
+
+// country is an entry of $pfb_geoip['country']. A field PHP leaves unset reads as "".
+type country struct {
+	id, continent, name, continentEn string
+	iso                              []string
+	isoText                          *string // a Top Spammers entry's ISO, a string where a country has a list
+}
+
+func (c *country) firstISO() string {
+	switch {
+	case c == nil:
+		return ""
+	case c.isoText != nil:
+		if *c.isoText == "" {
+			return ""
+		}
+		return (*c.isoText)[:1] // a string read at offset 0
+	case len(c.iso) > 0:
+		return c.iso[0]
+	}
+	return ""
+}
+
+// countries is $pfb_geoip['country']: its entries in PHP's array order.
+type countries struct {
+	keys  []string
+	byKey map[string]*country
+}
+
+func (cs *countries) set(key string, c *country) {
+	if _, ok := cs.byKey[key]; !ok {
+		cs.keys = append(cs.keys, key)
+	}
+	cs.byKey[key] = c
+}
+
+// addISO is $pfb_geoip['country'][$key]['iso'][] = $iso, which creates the entry when there is none.
+func (cs *countries) addISO(key, iso string) error {
+	c := cs.byKey[key]
+	if c == nil {
+		c = &country{}
+		cs.set(key, c)
+	}
+	if c.isoText != nil {
+		return errFatal
+	}
+	c.iso = append(c.iso, iso)
+	return nil
+}
+
+// addISOOnce adds iso unless the entry already lists it.
+func (cs *countries) addISOOnce(key, iso string) error {
+	if c := cs.byKey[key]; c != nil {
+		if c.isoText != nil {
+			return errFatal
+		}
+		if slices.Contains(c.iso, iso) {
+			return nil
+		}
+	}
+	return cs.addISO(key, iso)
+}
+
+// stage is the generation being built, file by file, before it is written to the staged folder.
+type stage struct {
+	files map[string][]byte
+	names []string
+}
+
+func (s *stage) has(name string) bool { _, ok := s.files[name]; return ok }
+
+func (s *stage) append(name string, b []byte) {
+	if !s.has(name) {
+		s.names = append(s.names, name)
+	}
+	s.files[name] = append(s.files[name], b...)
+}
+
+func (s *stage) truncate(name string) {
+	if !s.has(name) {
+		s.names = append(s.names, name)
+	}
+	s.files[name] = []byte{}
+}
+
+func (s *stage) remove(name string) {
+	if s.has(name) {
+		delete(s.files, name)
+		s.names = slices.DeleteFunc(s.names, func(n string) bool { return n == name })
+	}
+}
+
+func (c Conversion) log(format string, args ...any) {
+	if c.Log != nil {
+		fmt.Fprintf(c.Log, format, args...)
+	}
+}
+
+// csvReader reads a MaxMind CSV as fgetcsv() does for well-formed rows.
+// shortcut: a malformed quote (a bare quote, text after a closing one, PHP's backslash escape) is read by encoding/csv's
+// lazy rules, not fgetcsv()'s; MaxMind writes none. Upgrade if a corpus row shows a real file that needs them.
+func csvReader(r io.Reader) *csv.Reader {
+	cr := csv.NewReader(r)
+	cr.FieldsPerRecord = -1
+	cr.LazyQuotes = true
+	return cr
+}
+
+// eachRow calls row for every record of path; false when the file cannot be opened or read to its end.
+func eachRow(ctx context.Context, path string, row func([]string) error) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, nil
+	}
+	defer f.Close()
+	cr := csvReader(f)
+	for n := 0; ; n++ {
+		if n%4096 == 0 {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+		}
+		rec, err := cr.Read()
+		var parse *csv.ParseError
+		switch {
+		case errors.Is(err, io.EOF):
+			return true, nil
+		case errors.As(err, &parse):
+			continue // a row encoding/csv cannot read, even lazily, is skipped
+		case err != nil:
+			return false, nil // a read that fails part-way converts nothing rather than half a file
+		}
+		if err := row(rec); err != nil {
+			return false, err
+		}
+	}
+}
+
+func field(rec []string, i int) string {
+	if i < len(rec) {
+		return rec[i]
+	}
+	return ""
+}
+
+// Run converts the CSVs and publishes the new generation whole: the continent files, the per-country lists, Top
+// Spammers and the ISO list. False leaves the previous generation in place; maxmind_ver is written as the conversion
+// goes, as today.
 func (c Conversion) Run(ctx context.Context) bool {
-	return false
+	for _, dir := range []string{filepath.Dir(c.ISOs), c.LogDir, c.CCDir} {
+		os.MkdirAll(dir, 0o755)
+	}
+	c.log("Country code update Start\n")
+	locations := filepath.Join(c.Share, "GeoLite2-Country-Locations-"+c.Locale+".csv")
+	info, err := os.Stat(locations)
+	if err != nil {
+		c.log(" [ MAXMIND UPDATE FAIL, Language File Missing, using previous Country code database ]\n")
+		return false
+	}
+	var id [4]byte
+	rand.Read(id[:])
+	generation := fmt.Sprintf("%d.%s", os.Getpid(), hex.EncodeToString(id[:]))
+	stageDir, stageISOs := c.CCDir+".new."+generation, c.ISOs+".new."+generation
+	discard := func() {
+		os.RemoveAll(stageDir)
+		os.Remove(stageISOs)
+	}
+	discard()
+	mkErr := os.MkdirAll(stageDir, 0o755)
+	maxmindVer := filepath.Join(c.LogDir, "maxmind_ver")
+	os.WriteFile(maxmindVer, []byte("MaxMind GeoLite2 Date/Time Stamp\nLast-Modified: "+
+		info.ModTime().UTC().Format(time.DateTime)+"\n"), 0o644)
+	if mkErr != nil {
+		discard()
+		return false
+	}
+
+	built, ok, err := c.build(ctx, locations, maxmindVer)
+	if err != nil || !ok || ctx.Err() != nil {
+		discard()
+		return false
+	}
+	for _, name := range built.names {
+		if err := os.WriteFile(filepath.Join(stageDir, name), built.files[name], 0o644); err != nil {
+			discard()
+			return false
+		}
+	}
+	if err := os.WriteFile(stageISOs, built.files[isoListName], 0o644); err != nil {
+		discard()
+		return false
+	}
+	return c.publish(ctx, generation, stageDir, stageISOs, discard)
+}
+
+// isoListName is the staged ISO list's key in a stage; it is written beside the country folder, not in it.
+const isoListName = "\x00geoip_isos"
+
+// build is the conversion in memory: the staged folder's files, and whether every required one is there.
+func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (*stage, bool, error) {
+	generationOK := true
+	cs := &countries{byKey: map[string]*country{}}
+	topIndex := map[string]int{}
+	for i, iso := range topSpammers {
+		topIndex[iso] = i
+	}
+	english := map[string]string{}
+	read, err := eachRow(ctx, locations, func(cc []string) error {
+		if field(cc, 0) == "geoname_id" {
+			return nil
+		}
+		for i := 0; i <= 5; i++ {
+			if empty(field(cc, i)) {
+				return nil
+			}
+		}
+		entry := &country{id: cc[0], continent: cc[3], name: cc[5], iso: []string{cc[4]}}
+		continentEn := cc[3]
+		if cc[1] != "en" {
+			v, seen := english[cc[2]]
+			if !seen {
+				v = c.englishContinent(locations, cc[2])
+				english[cc[2]] = v
+			}
+			continentEn = v
+		}
+		entry.continentEn = strings.ReplaceAll(strings.ReplaceAll(continentEn, " ", "_"), `"`, "")
+		cs.set(cc[0], entry)
+		if i, ok := topIndex[cc[4]]; ok {
+			iso := cc[4]
+			cs.set(fmt.Sprintf("A%05d", i), &country{name: cc[5], isoText: &iso, id: cc[0]})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if !read {
+		generationOK = false
+	}
+
+	cs.set("proxy", &country{continent: "Proxy and Satellite", name: "Proxy", iso: []string{"A1"}, continentEn: "Proxy_and_Satellite"})
+	cs.set("satellite", &country{continent: "Proxy and Satellite", name: "Satellite", iso: []string{"A2"}, continentEn: "Proxy_and_Satellite"})
+	cs.set("6255147", &country{continent: "Asia", name: "AA ASIA UNDEFINED", iso: []string{"6255147"}, continentEn: "Asia"})
+	cs.set("6255148", &country{continent: "Europe", name: "AA EUROPE UNDEFINED", iso: []string{"6255148"}, continentEn: "Europe"})
+
+	s := &stage{files: map[string][]byte{}}
+	var isoList strings.Builder
+	unlisted := map[string]bool{} // $pfb_geoip_all's countries MaxMind has not listed in IPv4 yet
+	for _, k := range known {
+		unlisted[k[0]] = true
+		isoList.WriteString(k[1] + " [ " + k[2] + " ]," + k[1] + "_rep [ " + k[2] + " ],")
+		if cs.byKey[k[0]] == nil {
+			cs.set(k[0], &country{id: k[0], name: k[2], iso: []string{k[1], k[1] + "_rep"}, continent: k[3],
+				continentEn: strings.ReplaceAll(strings.ReplaceAll(k[3], " ", "_"), `"`, "")})
+			cs.addISO("proxy", "A1_"+k[1]+"_rep")
+			cs.addISO("satellite", "A2_"+k[1]+"_rep")
+		}
+	}
+	isoList.WriteString("Africa [Continent],Antarctica [Continent],Asia [Continent],Europe [Continent],North_America [Continent],Oceania [Continent]")
+	isoList.WriteString(",South_America [Continent],Proxy_and_Satellite [GeoIP]")
+	s.files[isoListName] = []byte(isoList.String())
+
+	// ksort(SORT_NATURAL), stable since PHP 8.0.
+	slices.SortStableFunc(cs.keys, natCompare)
+
+	tmp := map[string][]byte{} // $pfb['ccdir_tmp']: each ISO's networks, "<iso>_v<type>"
+	stamp := c.Now.Format(time.DateTime)
+	for _, family := range []string{"4", "6"} {
+		c.log(" Processing ISO IPv%s Continent/Country Data\n", family)
+		dup := 0
+		blocks := filepath.Join(c.Share, "GeoLite2-Country-Blocks-IPv"+family+".csv")
+		read, err := eachRow(ctx, blocks, func(cc []string) error {
+			if field(cc, 0) == "network" {
+				return nil
+			}
+			network, gid, reg := field(cc, 0), field(cc, 1), field(cc, 2)
+			iso, isoRep := "", ""
+			if family == "4" {
+				delete(unlisted, gid)
+				prefix, owner := "", reg
+				switch {
+				case isOne(field(cc, 4)):
+					prefix, owner = "A1_", "proxy"
+				case isOne(field(cc, 5)):
+					prefix, owner = "A2_", "satellite"
+				}
+				if prefix != "" {
+					if !empty(gid) {
+						iso = prefix + cs.byKey[owner].firstISO()
+					}
+					if !empty(reg) && !equal(gid, reg) {
+						dup++
+						isoRep = prefix + cs.byKey[reg].firstISO() + "_rep"
+					}
+					if empty(gid) && empty(reg) {
+						iso = strings.TrimSuffix(prefix, "_")
+					}
+				} else {
+					if !empty(gid) {
+						iso = cs.byKey[gid].firstISO()
+					}
+					if !empty(reg) && !equal(gid, reg) {
+						dup++
+						isoRep = cs.byKey[reg].firstISO() + "_rep"
+					}
+				}
+				if !empty(isoRep) && !empty(owner) {
+					if err := cs.addISOOnce(owner, isoRep); err != nil {
+						return err
+					}
+				}
+				if !empty(gid) {
+					// The country's first ISO is read again for each one: the first may just have created its entry.
+					for _, p := range [][2]string{{"", gid}, {"A1_", "proxy"}, {"A2_", "satellite"}} {
+						if err := cs.addISOOnce(p[1], p[0]+cs.byKey[gid].firstISO()+"_rep"); err != nil {
+							return err
+						}
+					}
+				}
+				if !empty(isoRep) && !empty(network) && word(isoRep) {
+					tmp[isoRep+"_v4"] = append(tmp[isoRep+"_v4"], network+"\n"...)
+				}
+			} else if !empty(gid) {
+				iso = cs.byKey[gid].firstISO()
+			}
+			if !empty(iso) && !empty(network) && word(iso) {
+				tmp[iso+"_v"+family] = append(tmp[iso+"_v"+family], network+"\n"...)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, false, err
+		}
+		if !read {
+			c.log("\n Failed to load file: %s\n", blocks)
+			generationOK = false
+			continue
+		}
+		if family == "4" {
+			for _, k := range known {
+				if unlisted[k[0]] {
+					cs.addISO("proxy", "A1_"+k[1]+"_rep")
+					cs.addISO("satellite", "A2_"+k[1]+"_rep")
+				}
+			}
+			clear(unlisted)
+		}
+		if dup != 0 {
+			appendFile(maxmindVer, fmt.Sprintf("Duplicate Represented IP%s Networks: %d\n", family, dup))
+		}
+		c.continents(cs, s, tmp, family, stamp)
+	}
+
+	if ctx.Err() != nil {
+		return nil, false, ctx.Err()
+	}
+	for _, family := range []string{"4", "6"} {
+		for _, stem := range continentStems {
+			if !s.has(stem + "_v" + family + ".txt") {
+				generationOK = false
+			}
+		}
+	}
+	if !generationOK {
+		return s, false, nil
+	}
+	c.split(s)
+	return s, true, nil
+}
+
+// continents writes one family's continent files and Top Spammers from the countries, in their order.
+func (c Conversion) continents(cs *countries, s *stage, tmp map[string][]byte, family, stamp string) {
+	for _, key := range cs.keys {
+		g := cs.byKey[key]
+		if strings.Contains(key, "A000") {
+			name := "Top_Spammers_v" + family + ".info"
+			if !s.has(name) {
+				s.append(name, []byte("# Generated from MaxMind Inc. on: "+stamp+"\n# Continent IPv"+family+
+					": Top_Spammers\n# Continent en: Top_Spammers\n"))
+			}
+			iso := ""
+			switch {
+			case g.isoText != nil:
+				iso = *g.isoText
+			case g.iso != nil:
+				iso = "Array" // a list where the entry is a Top Spammers one: PHP's array-to-string conversion
+			}
+			entry := "# Country: " + g.name + " (" + g.id + ")\n# ISO Code: " + iso + "\n# Total Networks: Top20\nTop20\n"
+			if _, ok := tmp[iso+"_rep_v"+family]; ok {
+				entry += "# Country: " + g.name + " (" + g.id + ")\n# ISO Code: " + iso + "_rep\n# Total Networks: Top20\nTop20\n"
+			}
+			s.append(name, []byte(entry))
+			continue
+		}
+		if empty(g.continentEn) || !word(g.continentEn) {
+			c.log("\n Failed to create Continent file: %s", g.continent)
+			continue
+		}
+		name := g.continentEn + "_v" + family + ".txt"
+		if !s.has(name) {
+			s.append(name, []byte("# Generated from MaxMind Inc. on: "+stamp+"\n# Continent IPv"+family+": "+
+				g.continent+"\n# Continent en: "+g.continentEn+"\n"))
+		}
+		if len(g.iso) == 0 {
+			c.log("\n Missing ISO data: %s", g.continent)
+			continue
+		}
+		geoID := ""
+		if !empty(g.id) {
+			geoID = " [" + g.id + "]"
+		}
+		for _, iso := range g.iso {
+			if !word(iso) {
+				continue
+			}
+			networks, ok := tmp[iso+"_v"+family]
+			if !ok {
+				s.append(name, []byte("# Country: "+g.name+geoID+"\n# ISO Code: "+iso+"\n# Total Networks: NA\n"))
+				continue
+			}
+			s.append(name, []byte(fmt.Sprintf("# Country: %s%s\n# ISO Code: %s\n# Total Networks: %d\n", g.name, geoID, iso,
+				countLines(networks))))
+			s.append(name, networks)
+		}
+		g.iso = g.iso[:1] // the represented ISOs are listed once, with IPv4
+	}
+}
+
+var splitFiles = []struct{ cont, file string }{
+	{"Africa", "Africa_v4.txt"}, {"Antarctica", "Antarctica_v4.txt"}, {"Asia", "Asia_v4.txt"},
+	{"Europe", "Europe_v4.txt"}, {"North America", "North_America_v4.txt"}, {"Oceania", "Oceania_v4.txt"},
+	{"South America", "South_America_v4.txt"}, {"Proxy and Satellite", "Proxy_and_Satellite_v4.txt"},
+	{"Top Spammers", "Top_Spammers_v4.info"},
+}
+
+// split is pfblockerng_get_countries()'s pass over the continent files that writes each ISO's list
+// ("<iso>_v<family>.txt") into the staged folder: a header starts an ISO's list afresh, its network lines follow, and a
+// header with no networks ("Total Networks: 0" or "NA") leaves it empty. Top Spammers names lists, it writes none.
+// An ISO code that is not a word is never a file name: today's PHP removes "<folder>/<iso>_v<family>.txt" for it
+// whatever it holds, a path outside the folder included (#4034 forbids it).
+// shortcut: a continent file is read as it stood when its pass began; PHP reads the open file, so a header naming that
+// continent's own file could cut its pass short there. Only a forged header can name one.
+func (c Conversion) split(s *stage) {
+	for _, sf := range splitFiles {
+		for _, family := range []string{"4", "6"} {
+			name := strings.ReplaceAll(sf.file, "v4", "v6")
+			if family == "4" {
+				name = sf.file
+			}
+			content, ok := s.files[name]
+			if !ok {
+				c.log("Continent data [ %s ] not found\n", sf.cont)
+				continue
+			}
+			content = slices.Clone(content)
+			isocode := ""
+			for _, raw := range strings.SplitAfter(string(content), "\n") {
+				if raw == "" {
+					continue
+				}
+				line := trim(raw)
+				list := isocode + "_v" + family + ".txt"
+				if strings.HasPrefix(line, "#") {
+					if strings.Contains(line, "ISO Code: ") {
+						isocode = strings.ReplaceAll(line, "# ISO Code: ", "")
+						list = isocode + "_v" + family + ".txt"
+						if sf.cont != "Top Spammers" && word(isocode) {
+							s.remove(list)
+						}
+					}
+					if (strings.Contains(line, "Total Networks: 0") || strings.Contains(line, "Total Networks: NA")) && word(isocode) {
+						s.truncate(list)
+					}
+					continue
+				}
+				if word(isocode) && sf.cont != "Top Spammers" && !empty(line) {
+					s.append(list, []byte(line+"\n"))
+				}
+			}
+			if isocode == "" && !strings.Contains(string(content), "Continent IPv") {
+				c.log("Continent data [ %s ] not found\n", sf.cont)
+			}
+		}
+	}
+}
+
+// englishContinent is the continent's English name as `grep -m1 ",en,<code>" <English Locations> | cut -d, -f4`
+// returns it to exec(): the fourth comma-separated field of the first line holding the text, the whole line when it
+// has no comma, its trailing white space stripped; "" when no line holds it or the file cannot be read.
+// shortcut: the code is matched as text, not as grep's basic regular expression, and a file grep would call binary is
+// read as text; MaxMind's codes are two letters.
+func (c Conversion) englishContinent(locations, code string) string {
+	path := strings.ReplaceAll(locations, "Locations-"+c.Locale, "Locations-en")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	needle := ",en," + code
+	for _, line := range strings.Split(string(b), "\n") {
+		if !strings.Contains(line, needle) {
+			continue
+		}
+		fields := strings.Split(line, ",")
+		out := ""
+		switch {
+		case len(fields) == 1:
+			out = line
+		case len(fields) >= 4:
+			out = fields[3]
+		}
+		return strings.TrimRight(out, " \t\n\v\f\r")
+	}
+	return ""
+}
+
+func appendFile(path, s string) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	if err != nil {
+		return
+	}
+	f.WriteString(s)
+	f.Close()
+}
+
+// publish replaces the live generation with the staged one under the publication lock readers share
+// (.pfb_generation.lock), with the swap marker readers refuse (.pfb_generation_swapping) standing while files move: every
+// live file is copied aside first, and a rename that fails puts them all back.
+func (c Conversion) publish(ctx context.Context, generation, stageDir, stageISOs string, discard func()) bool {
+	lock, ok := publicationLock(ctx, c.CCDir)
+	if !ok {
+		discard()
+		return false
+	}
+	defer lock.Close() // closing the file releases the lock
+	backupRoot := c.CCDir + ".old." + generation
+	backup := filepath.Join(backupRoot, "countries")
+	marker := filepath.Join(c.CCDir, ".pfb_generation_swapping")
+	os.MkdirAll(backup, 0o755)
+	os.MkdirAll(c.CCDir, 0o755)
+	fail := func() bool {
+		discard()
+		os.RemoveAll(backupRoot)
+		return false
+	}
+	originals := listed(c.CCDir)
+	for _, name := range originals {
+		if copyFile(filepath.Join(c.CCDir, name), filepath.Join(backup, name)) != nil {
+			return fail()
+		}
+	}
+	hadISOs := isFile(c.ISOs)
+	if hadISOs && copyFile(c.ISOs, filepath.Join(backupRoot, "geoip_isos")) != nil {
+		return fail()
+	}
+	if os.WriteFile(marker, []byte(generation), 0o644) != nil {
+		return fail()
+	}
+	published := map[string]bool{}
+	ok = true
+	for _, name := range listed(stageDir) {
+		published[name] = true
+		if os.Rename(filepath.Join(stageDir, name), filepath.Join(c.CCDir, name)) != nil {
+			ok = false
+			break
+		}
+	}
+	if ok && os.Rename(stageISOs, c.ISOs) != nil {
+		ok = false
+	}
+	if !ok {
+		for name := range published {
+			os.Remove(filepath.Join(c.CCDir, name))
+		}
+		for _, name := range listed(backup) {
+			os.Rename(filepath.Join(backup, name), filepath.Join(c.CCDir, name))
+		}
+		if hadISOs {
+			os.Rename(filepath.Join(backupRoot, "geoip_isos"), c.ISOs)
+		} else {
+			os.Remove(c.ISOs)
+		}
+		fail()
+		os.Remove(marker)
+		return false
+	}
+	for _, name := range originals {
+		if !published[name] {
+			os.Remove(filepath.Join(c.CCDir, name))
+		}
+	}
+	discard()
+	os.RemoveAll(backupRoot)
+	os.Remove(marker)
+	return true
+}
+
+// publicationLock is pfb_geoip_generation_publication_lock(): the folder's lock file held exclusively, tried every 20 ms
+// for up to 60 s as pfb_flock_bounded() does, or until ctx ends.
+func publicationLock(ctx context.Context, dir string) (*os.File, bool) {
+	f, err := os.OpenFile(filepath.Join(dir, ".pfb_generation.lock"), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, false
+	}
+	deadline := time.NewTimer(60 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return f, true
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			f.Close()
+			return nil, false
+		}
+		select {
+		case <-tick.C:
+		case <-deadline.C:
+			f.Close()
+			return nil, false
+		case <-ctx.Done():
+			f.Close()
+			return nil, false
+		}
+	}
+}
+
+// listed is glob("<dir>/*") kept to regular files (is_file follows a link): no dot file, in name order.
+func listed(dir string) []string {
+	entries, _ := os.ReadDir(dir)
+	var names []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), ".") && isFile(filepath.Join(dir, e.Name())) {
+			names = append(names, e.Name())
+		}
+	}
+	return names
+}
+
+func isFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
+func copyFile(from, to string) error {
+	in, err := os.Open(from)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }

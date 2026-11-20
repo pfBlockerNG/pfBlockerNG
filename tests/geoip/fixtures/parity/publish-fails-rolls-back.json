@@ -1,0 +1,26 @@
+{
+	"schema": 1,
+	"description": "A staged list cannot replace its live path (a folder stands there): every file already moved is put back, the ISO list too, and the previous generation stays whole.",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1835841,en,AS,Asia,KR,\"Korea, Republic of\",0\n",
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"seed": {
+		"cc/AD_v4.txt": "192.0.2.0/24\n",
+		"cc/US_v4.txt/inside": "a folder\n",
+		"cc/Africa_v4.txt": "# previous\n",
+		"db/geoip.txt": "previous\n"
+	},
+	"expect": {
+		"ok": false,
+		"files": {
+			"cc/AD_v4.txt": "192.0.2.0/24\n",
+			"cc/Africa_v4.txt": "# previous\n",
+			"db/geoip.txt": "previous\n",
+			"cc/.pfb_generation_swapping": null
+		},
+		"tree": "0b4435fa0126e84e7cfb05a1bc8cb57e671c6186503df175bd0e4ea329ec1754"
+	}
+}
