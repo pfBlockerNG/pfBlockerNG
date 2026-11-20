@@ -4,10 +4,11 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"unicode/utf8"
 )
 
 // fgetcsv reads a CSV as PHP's fgetcsv($handle, null, ",", "\"", "\\") does (php_fgetcsv() in ext/standard/file.c, in
-// the C locale, where every byte is one character), quirks included: white space before an opening quote is skipped,
+// the C.UTF-8 locale PHP starts in), quirks included: white space before an opening quote is skipped,
 // text after a closing quote joins the field, a backslash keeps the next character from closing it, a quoted field
 // runs on over line breaks (kept as read), and an unterminated one takes the rest of the file. A blank line is an
 // empty record (PHP's [null]).
@@ -28,13 +29,30 @@ func (c *fgetcsv) line() (string, bool) {
 	return s, s != ""
 }
 
-// lineEnd is php_fgetcsv_lookup_trailing_spaces(): where the line's ending ("\r\n", "\n" or "\r") starts.
+// lineEnd is php_fgetcsv_lookup_trailing_spaces() in C.UTF-8: walking the characters, a byte that is not valid UTF-8 is
+// passed over (mbrlen() answers -1 or -2), and when the last two characters read are "\r\n", or the last is "\n" or
+// "\r", that many bytes come off the end, whatever bytes they are.
+// The other places php_fgetcsv() asks mbrlen() read the same byte by byte: a quote, a backslash, a comma and a line
+// break are never inside a multibyte character.
+// UTF-8 is RFC 3629's, as FreeBSD's libc reads it; glibc also takes a sequence past U+10FFFF for a character.
+// shortcut: isSpace() is the ASCII set; FreeBSD's C.UTF-8 may also call 0x85 or 0xA0 a space before an opening quote.
+// Upgrade if a lab probe shows either differs on the appliance.
 func lineEnd(s string) int {
-	switch n := len(s); {
-	case n >= 2 && s[n-2:] == "\r\n":
-		return n - 2
-	case n >= 1 && (s[n-1] == '\n' || s[n-1] == '\r'):
-		return n - 1
+	var before, last byte
+	for i := 0; i < len(s); {
+		r, w := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && w <= 1 && s[i] != 0 {
+			i++
+			continue
+		}
+		before, last = last, s[i]
+		i += w
+	}
+	switch {
+	case last == '\n' && before == '\r':
+		return len(s) - 2
+	case last == '\n' || last == '\r':
+		return len(s) - 1
 	}
 	return len(s)
 }

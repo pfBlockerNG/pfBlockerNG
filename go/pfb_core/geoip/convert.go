@@ -50,9 +50,9 @@ var topSpammers = []string{"CN", "RU", "JP", "UA", "GB", "DE", "BR", "FR", "IN",
 var continentStems = []string{"Africa", "Antarctica", "Asia", "Europe", "North_America", "Oceania", "South_America",
 	"Proxy_and_Satellite"}
 
-// errFatal is where today's PHP dies with an Error (a list operation on a Top Spammers entry, whose ISO is a string):
-// the conversion stops and publishes nothing.
-var errFatal = errors.New("a Top Spammers entry used as a country")
+// errFatal is where today's PHP dies with an Error: a list operation on a Top Spammers entry (whose ISO is a string), or
+// escapeshellarg() refusing a continent code. The conversion stops and publishes nothing.
+var errFatal = errors.New("today's conversion dies here with a PHP Error")
 
 // country is an entry of $pfb_geoip['country']. A field PHP leaves unset reads as "".
 type country struct {
@@ -229,7 +229,10 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 		continentEn := cc[3]
 		if cc[1] != "en" {
 			if strings.IndexByte(cc[2], 0) >= 0 {
-				return errFatal // escapeshellarg() throws on a NUL
+				// escapeshellarg() throws on a NUL.
+				// shortcut: it also throws past the platform's argument-length limit (sysconf ARG_MAX), which no
+				// continent code reaches; upgrade if a corpus row needs one.
+				return errFatal
 			}
 			v, seen := english[cc[2]]
 			if !seen {
@@ -484,7 +487,7 @@ func (c Conversion) split(s stage) {
 					}
 				}
 			}
-			if continent == "" {
+			if empty(continent) {
 				c.log("Continent data [ %s ] not found\n", sf.cont)
 			}
 		}
