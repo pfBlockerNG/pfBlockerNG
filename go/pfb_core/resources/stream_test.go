@@ -343,6 +343,7 @@ func TestADeltaThatCannotBeRestoredLeavesTheIndex(t *testing.T) {
 	publish(t, s, id, 2, nil, "20", "30")
 	_, _, err := s.Body(id, 2, resources.PartAdd, 1)
 	wantErr(t, "Body of a delta that could not be restored", err, resources.ErrNotFound)
+	wantNames(t, dir, "index.json", bn(id, 1), bn(id, 2))
 	if r := mustGet(t, s, id, &resources.Cursor{1, dg("10", "20")}); r.Kind != resources.KindFull {
 		t.Fatalf("reply = %+v; want full", r)
 	}
@@ -362,7 +363,7 @@ func TestTheMemberLengthLimit(t *testing.T) {
 	far := strings.Repeat("a", 2*resources.MaxMemberLength) // longer than the reader holds a line
 	for _, in := range []string{over, over + "\n", far, far + "\n"} {
 		if _, err := s.PublishFrom(id, strings.NewReader(in), nil); err == nil || !strings.Contains(err.Error(), "invalid member") {
-			t.Fatalf("PublishFrom of a member of %d bytes = %v; want an invalid member", len(over), err)
+			t.Fatalf("PublishFrom of a member of %d bytes = %v; want an invalid member", len(strings.TrimSuffix(in, "\n")), err)
 		}
 	}
 }

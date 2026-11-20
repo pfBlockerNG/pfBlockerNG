@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
@@ -831,6 +832,8 @@ func TestReadersNeverSeeATornPublish(t *testing.T) {
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	var served atomic.Int64
+	first := make(chan struct{}) // closed at the first body served: publishing starts only then
+	var once sync.Once
 	for range 4 {
 		wg.Add(1)
 		go func() {
@@ -867,8 +870,14 @@ func TestReadersNeverSeeATornPublish(t *testing.T) {
 					return
 				}
 				served.Add(1)
+				once.Do(func() { close(first) })
 			}
 		}()
+	}
+	select {
+	case <-first:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no reader was served a body before publishing")
 	}
 	for i := range 300 {
 		next := y
@@ -881,7 +890,4 @@ func TestReadersNeverSeeATornPublish(t *testing.T) {
 	}
 	close(done)
 	wg.Wait()
-	if served.Load() == 0 {
-		t.Fatal("no reader was served a body: the race was never checked")
-	}
 }

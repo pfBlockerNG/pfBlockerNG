@@ -229,8 +229,8 @@ func (r *memberReader) Read(p []byte) (int, error) {
 
 // PublishFrom stores body, which must already be canonical (members as Canonical leaves them, one per line, the last
 // newline optional), and metadata as id's current body, a line at a time. A body that is not canonical is refused and
-// changes nothing, except that an index that could not be read is cleared first, as by any write (loadWriter). The generation advances only when the body or the metadata bytes change; a removed id is brought back
-// either way. When the consumer applied an earlier generation, the delta from it is written here, by one merge pass.
+// changes nothing, except that an index that could not be read is cleared first, as by any write (loadWriter). The
+// generation advances only when the body or the metadata bytes change; a removed id is brought back either way. When the consumer applied an earlier generation, the delta from it is written here, by one merge pass.
 func (s *Store) PublishFrom(id string, body io.Reader, metadata map[string]any) (uint64, error) {
 	if !ValidID(id) {
 		return 0, fmt.Errorf("%w: %q", ErrInvalidID, id)
@@ -309,17 +309,26 @@ func (s *Store) PublishFrom(id string, body io.Reader, metadata map[string]any) 
 	}
 	e.Current = gen{g, written.Digest, written.Length, written.Entries, meta}
 	e.Delta = nil
+	// Until the index names g nothing refers to its files: a failure before then removes them, so that they do not hold
+	// the space a retry needs.
+	discard := func() {
+		os.Remove(path)
+		if d := e.Delta; d != nil {
+			os.Remove(s.deltaPath(id, g, d.From, PartAdd))
+			os.Remove(s.deltaPath(id, g, d.From, PartRemove))
+		}
+	}
 	if a := e.Applied; a != nil {
 		if e.Delta, err = s.writeDelta(id, g, *a); err != nil {
-			// The index still names the generation before: nothing refers to these files, and they would hold the space a retry needs.
-			os.Remove(path)
-			os.Remove(s.deltaPath(id, g, a.Generation, PartAdd))
-			os.Remove(s.deltaPath(id, g, a.Generation, PartRemove))
+			discard()
 			return 0, err
 		}
 	}
 	e.Removed = false
 	if err := s.save(idx); err != nil {
+		if now, lerr := s.load(); lerr == nil && (now.Resources[id] == nil || now.Resources[id].Current.Generation != g) {
+			discard()
+		}
 		return 0, err
 	}
 	err = s.prune(id, e)
@@ -384,13 +393,14 @@ func (s *Store) writeDelta(id string, g uint64, base gen) (*delta, error) {
 		return nil, err
 	}
 	d := &delta{From: base.Generation}
-	if d.Add, err = add.commit(); err != nil {
-		return nil, err
+	if d.Add, err = add.commit(); err == nil {
+		if d.Remove, err = remove.commit(); err == nil {
+			err = s.syncDir()
+		}
 	}
-	if d.Remove, err = remove.commit(); err != nil {
-		return nil, err
-	}
-	if err := s.syncDir(); err != nil {
+	if err != nil { // no index names a part that failed: none is left behind
+		os.Remove(add.path)
+		os.Remove(remove.path)
 		return nil, err
 	}
 	step("delta-renamed")
