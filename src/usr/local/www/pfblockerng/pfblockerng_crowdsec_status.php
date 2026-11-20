@@ -83,18 +83,23 @@ $panel(gettext('LAPI'), "<table class=\"table table-condensed\">{$lapi}</table>"
 if ($status !== NULL) {
 	$banned = $dropped = '';
 	foreach ($families as $family => $label) {
+		// One Family cell spans the family's origin rows and its Total row
+		$cell = '<td rowspan="' . (count($status['banned'][$family]['origins']) + 1) . "\" style=\"vertical-align: middle\">{$label}</td>";
 		foreach ($status['banned'][$family]['origins'] as $origin => $count) {
-			$banned .= "<tr class=\"cs-banned\"><td>{$label}</td><td>{$h($origin)}</td><td>{$count}</td></tr>\n";
+			$banned .= "<tr class=\"cs-banned\">{$cell}<td>{$h($origin)}</td><td>{$count}</td></tr>\n";
+			$cell = '';
 		}
-		$banned .= "<tr class=\"cs-banned\"><td>{$label}</td><td><strong>" . gettext('Total') . "</strong></td>"
+		$banned .= "<tr class=\"cs-banned\">{$cell}<td><strong>" . gettext('Total') . "</strong></td>"
 		    . "<td><strong>{$status['banned'][$family]['total']}</strong></td></tr>\n";
 		$dropped .= "<tr class=\"cs-dropped\"><td>{$label}</td><td>{$status['dropped'][$family]['packets']}</td>"
 		    . "<td>{$status['dropped'][$family]['bytes']}</td></tr>\n";
 	}
-	$panel(gettext('Decisions'), '<table class="table table-condensed table-striped"><thead><tr><th>' . gettext('Family') . '</th><th>'
-	    . gettext('Origin') . '</th><th>' . gettext('Banned values') . "</th></tr></thead><tbody>{$banned}</tbody></table>");
-	$panel(gettext('Dropped'), '<table class="table table-condensed table-striped"><thead><tr><th>' . gettext('Family') . '</th><th>'
-	    . gettext('Packets') . '</th><th>' . gettext('Bytes') . "</th></tr></thead><tbody>{$dropped}</tbody></table>");
+	$panel(gettext('Decisions'), '<div class="table-responsive"><table class="table table-condensed table-striped">'
+	    . '<thead><tr><th>' . gettext('Family') . '</th><th>' . gettext('Origin') . '</th><th>' . gettext('Banned values')
+	    . "</th></tr></thead><tbody>{$banned}</tbody></table></div>");
+	$panel(gettext('Dropped'), '<div class="table-responsive"><table class="table table-condensed table-striped">'
+	    . '<thead><tr><th>' . gettext('Family') . '</th><th>' . gettext('Packets') . '</th><th>' . gettext('Bytes')
+	    . "</th></tr></thead><tbody>{$dropped}</tbody></table></div>");
 }
 
 // The tables' contents, PFB_CROWDSEC_PAGE_SIZE entries per page; each table keeps its own page number in the query
@@ -131,9 +136,9 @@ if ($lookup !== NULL && $lookup['error'] !== NULL) {
 		    . "<td>{$h($d['scenario'])}</td><td>{$h($d['type'])}</td><td>{$h($d['duration'])}</td></tr>\n";
 	}
 	$result = '<div id="cs-lookup-result">' . ($rows === '' ? '<p>' . sprintf(gettext('No decision for %s.'), $h($lookup_ip)) . '</p>'
-	    : '<table class="table table-condensed table-striped"><thead><tr><th>' . gettext('Value') . '</th><th>' . gettext('Scope')
-	    . '</th><th>' . gettext('Origin') . '</th><th>' . gettext('Scenario') . '</th><th>' . gettext('Type') . '</th><th>'
-	    . gettext('Expires in') . "</th></tr></thead><tbody>{$rows}</tbody></table>") . '</div>';
+	    : '<div class="table-responsive"><table class="table table-condensed table-striped"><thead><tr><th>' . gettext('Value')
+	    . '</th><th>' . gettext('Scope') . '</th><th>' . gettext('Origin') . '</th><th>' . gettext('Scenario') . '</th><th>' . gettext('Type')
+	    . '</th><th>' . gettext('Expires in') . "</th></tr></thead><tbody>{$rows}</tbody></table></div>") . '</div>';
 }
 $panel(gettext('Decision Lookup'), '<form method="get" class="form-inline" action="' . PFB_CROWDSEC_STATUS_PAGE . '">'
     . '<input type="text" class="form-control" name="lookup" placeholder="192.0.2.1" value="' . $h($lookup_ip) . '"> '

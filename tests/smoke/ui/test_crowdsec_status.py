@@ -274,11 +274,13 @@ def test_the_status_sections_show_the_status_file_and_never_the_key(webui: WebUI
     assert _text(_by_id(page, "cs-errors")) == "17"
     assert _rows(page, "cs-banned") == [
         ["IPv4", "crowdsec", "100"],
-        ["IPv4", "lists:firehol_level1", "51"],
-        ["IPv4", "Total", "151"],
+        ["lists:firehol_level1", "51"],
+        ["Total", "151"],
         ["IPv6", "cscli", "2"],
-        ["IPv6", "Total", "2"],
+        ["Total", "2"],
     ]
+    family_cells = re.findall(r'<tr class="cs-banned"><td rowspan="(\d+)"[^>]*>([^<]*)</td>', page)
+    assert family_cells == [("3", "IPv4"), ("2", "IPv6")], "one Family cell spans each family's origins and Total"
     assert _rows(page, "cs-dropped") == [["IPv4", "9876", "543210"], ["IPv6", "12", "960"]]
     log = _text(_by_id(page, "cs-log"))
     assert marker in log, f"the pfb_crowdsec system log line is shown: {log[-500:]!r}"
