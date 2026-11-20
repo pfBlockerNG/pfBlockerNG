@@ -4,6 +4,9 @@
 // Usage:
 //
 //	pfb_crowdsec -c <config>      run (logs `level=<lvl> msg=<text>` lines on stdout)
+//	pfb_crowdsec -c <config> -syslog
+//	                              run, logging those lines to syslog instead (facility daemon, tag pfb_crowdsec, each at its
+//	                              level's severity: debug, info, warning, err); a line syslog does not take goes to stdout
 //	pfb_crowdsec -t -c <config>   validate the config and exit
 //	pfb_crowdsec -version         print the version
 //
@@ -23,6 +26,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/syslog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -45,6 +49,7 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 	cfgPath := fs.String("c", "", "the JSON config file")
 	testOnly := fs.Bool("t", false, "validate the config and exit")
 	showVersion := fs.Bool("version", false, "print the version and exit")
+	toSyslog := fs.Bool("syslog", false, "log to syslog instead of stdout")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -53,7 +58,7 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if *cfgPath == "" || fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: pfb_crowdsec [-t] -c <config> | -version")
+		fmt.Fprintln(stderr, "usage: pfb_crowdsec [-t] -c <config> [-syslog] | -version")
 		return 2
 	}
 	cfg, err := loadConfig(*cfgPath)
@@ -65,11 +70,16 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "pfb_crowdsec: configuration OK")
 		return 0
 	}
-	return serve(cfg, stdout, pfctlPath, pfDevice)
+	var dial func() (*syslog.Writer, error)
+	if *toSyslog {
+		dial = func() (*syslog.Writer, error) { return syslog.New(syslog.LOG_DAEMON|syslog.LOG_INFO, "pfb_crowdsec") }
+	}
+	return serve(cfg, stdout, dial, pfctlPath, pfDevice)
 }
 
-// serve runs the daemon until SIGTERM or SIGINT; it returns 1 when it cannot start.
-func serve(cfg *config, out io.Writer, pfctlBin, device string) int {
+// serve runs the daemon until SIGTERM or SIGINT; it returns 1 when it cannot start. It logs to out, or to the syslog
+// dial opens when dial is not nil.
+func serve(cfg *config, out io.Writer, dial func() (*syslog.Writer, error), pfctlBin, device string) int {
 	// Before anything else, so that a SIGUSR1 sent during start-up queues a reconcile.
 	usr1, stopUSR1 := notifyUSR1()
 	defer stopUSR1()
@@ -77,6 +87,7 @@ func serve(cfg *config, out io.Writer, pfctlBin, device string) int {
 	defer stop()
 
 	log := newLogger(out, cfg.level)
+	log.toSyslog(dial)
 	log.setSecret(cfg.APIKey)
 	if err := preflight(pfctlBin, device); err != nil {
 		log.errorf("%v", err)
