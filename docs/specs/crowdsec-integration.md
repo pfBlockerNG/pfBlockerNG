@@ -97,8 +97,8 @@ Requests send `X-Api-Key` and `User-Agent: pfb_crowdsec/<version>`. TLS uses the
 trust store. Response bodies are capped at 256 MiB, and a body that is not valid JSON fails
 the pull.
 
-**Usage metrics.** Every 15 minutes (go-cs-bouncer's default; first right after the first successful pull, #4117
-amendment), the daemon posts to
+**Usage metrics.** Every 15 minutes from start (go-cs-bouncer's default), plus once right after the first successful
+pull (#4117 amendment), the daemon posts to
 `POST /v1/usage-metrics` a `remediation_components` entry of type `pfb_crowdsec` with its
 version, start time, the window, and per window:
 
