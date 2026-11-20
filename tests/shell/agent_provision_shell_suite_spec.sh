@@ -19,11 +19,11 @@ Describe 'provision-shell-suite.sh'
   make_sandbox() {
     rm -rf "$sandbox"
     mkdir -p "$stubdir" "$statedir" "$sandbox/core"
-    ln -s /usr/bin/id "$sandbox/core/id"
-    ln -s /usr/bin/grep "$sandbox/core/grep"
-    ln -s /usr/bin/chmod "$sandbox/core/chmod"
     # env resolves `sh` through the NEW PATH, so the sandbox must carry the shell too.
-    ln -s /usr/bin/sh "$sandbox/core/sh"
+    # Resolved, not hard-coded: macOS keeps sh and chmod in /bin only (issue #3612).
+    for tool in id grep chmod sh; do
+      ln -s "$(command -v "$tool")" "$sandbox/core/$tool"
+    done
     printf '#!/bin/sh\nexec "$@"\n' > "$stubdir/sudo"
     # An iprange install must make the binary probe succeed, like the real package.
     {

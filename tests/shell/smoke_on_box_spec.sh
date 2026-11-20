@@ -751,6 +751,7 @@ STUBEOF
     cat > "${FAKE_ROOT}/scripts/go_toolchain.py" <<'STUBEOF'
 #!/usr/bin/env python3
 import os
+import shlex
 import shutil
 import sys
 
@@ -765,8 +766,9 @@ if sys.argv[1] == "install":
     with open(root + "/go/bin/go", "w") as go:
         go.write("#!/bin/sh\necho go version go1.27.0\n")
     os.chmod(root + "/go/bin/go", 0o755)
-    print("export PFB_GO_ROOT=" + root)
-    print("export PATH=" + root + "/go/bin:" + os.environ["PATH"])
+    # Quoted as the real go_toolchain.py quotes them: a PATH entry may hold a space
+    print("export PFB_GO_ROOT=" + shlex.quote(root))
+    print("export PATH=" + shlex.quote(root + "/go/bin:" + os.environ["PATH"]))
 elif sys.argv[1] == "remove":
     shutil.rmtree(sys.argv[2])
 STUBEOF

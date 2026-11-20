@@ -55,7 +55,7 @@ run_budget_line() {
 	reset_reader
 	eval "$(init_budget_line)"
 	printf 'timeout=%s|reads=%s\n' \
-		"${pfbreentrytimeout}" "$(wc -l < "${reader_log}")"
+		"${pfbreentrytimeout}" "$(($(wc -l < "${reader_log}")))"
 }
 
 # Eval the SHIPPED ip_placeholder assignment + fallback block against $1 (or unset it
@@ -71,7 +71,7 @@ run_placeholder_lines() {
 	printf '%s' "${2:-}" > "${reader_out}"
 	reset_reader
 	eval "$(init_placeholder_lines)"
-	printf 'ph=%s|reads=%s\n' "${ip_placeholder}" "$(wc -l < "${reader_log}")"
+	printf 'ph=%s|reads=%s\n' "${ip_placeholder}" "$(($(wc -l < "${reader_log}")))"
 }
 
 # The shipped USE_MFS_TMPVAR assignment, with its config.xml reader replaced by a
@@ -99,7 +99,7 @@ run_mfs_assignment() {
 	fi
 	true > "${mfs_reader_log}"
 	eval "$(mfs_assignment)"
-	printf 'mfs=%s|reads=%s\n' "${USE_MFS_TMPVAR}" "$(wc -l < "${mfs_reader_log}")"
+	printf 'mfs=%s|reads=%s\n' "${USE_MFS_TMPVAR}" "$(($(wc -l < "${mfs_reader_log}")))"
 }
 
 Describe 'pfblockerng.sh init: re-entry timeout prefers the exported environment (issue #3140)'
