@@ -576,5 +576,11 @@ severity for the whole stream, so the mapping is the daemon's. This changes D1's
   `level=info`. When syslogd itself is down, daemon(8)'s own syslog(3) calls fail as the daemon's do, and lines written
   then are lost, as they were before. A file (`daemon -o`, as Core and pfB-DNS log) would keep them, but D6 sends the
   daemon's log to syslog only, and pfSense starts syslogd before the packages, so the window is a syslogd restart.
+- **What the system log keeps.** pfSense filters the daemon facility by severity, so `log_level` decides what the
+  daemon sends and pfSense what it keeps. CE 2.8 writes `daemon.info` and above to the system log: `debug` lines no
+  longer reach it. CE 2.9 and Plus 26.x write `daemon.<level>` and above, `<level>` being **Status > System Logs >
+  Settings**' log level, `notice` by default: there only `warning` and `error` lines reach the system log, D7's log
+  tail and remote syslog until the operator lowers that level. The rc script's own `logger -p daemon.info` lines were
+  already filtered the same way.
 - **Command line.** `-syslog` follows `-c <config>`, so `pfb_crowdsec_child_pattern()`, which matches the command line
   up to `-c` and the space after it, still finds the bouncer, including one an earlier version's rc script started and a package upgrade left running.
