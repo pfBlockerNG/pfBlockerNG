@@ -216,13 +216,13 @@ firewall-bouncer part of the official package and live in a new `PFB_SECTIONS` a
   parser relies on the inbound rule's shape:
 
 ```text
-block drop in  {log} quick {on {ifaces}} inet  from <crowdsec_v4> to any label "CrowdSec IPv4" ridentifier 177400401 {tag tag}
-block drop out {log} quick {on {ifaces}} inet  from any to <crowdsec_v4> label "CrowdSec IPv4 out" ridentifier 177400402 {tag tag}
-block drop in  {log} quick {on {ifaces}} inet6 from <crowdsec_v6> to any label "CrowdSec IPv6" ridentifier 177400601 {tag tag}
-block drop out {log} quick {on {ifaces}} inet6 from any to <crowdsec_v6> label "CrowdSec IPv6 out" ridentifier 177400602 {tag tag}
+block drop in  {log} quick {on {ifaces}} inet  from <crowdsec_v4> to any label "CrowdSec IPv4" label "descr=CrowdSec IPv4" ridentifier 177400401 {tag tag}
+block drop out {log} quick {on {ifaces}} inet  from any to <crowdsec_v4> label "CrowdSec IPv4 out" label "descr=CrowdSec IPv4 out" ridentifier 177400402 {tag tag}
+block drop in  {log} quick {on {ifaces}} inet6 from <crowdsec_v6> to any label "CrowdSec IPv6" label "descr=CrowdSec IPv6" ridentifier 177400601 {tag tag}
+block drop out {log} quick {on {ifaces}} inet6 from any to <crowdsec_v6> label "CrowdSec IPv6 out" label "descr=CrowdSec IPv6 out" ridentifier 177400602 {tag tag}
 ```
 
-- Each rule carries its fixed tracker (`ridentifier`, #4159 amendment).
+- Each rule carries its fixed tracker (`ridentifier`) and repeats its name as a `descr=` label (#4159 amendment).
 
 - `{ifaces}` are the real interface names from `get_real_interface()`, and are omitted
   when "all interfaces" is on. `{log}` and `{tag}` appear only when set.
@@ -558,8 +558,9 @@ the bouncer ran, and D6's `3 × update_frequency` check reported `source_up 0` f
 ## Amendment 2026-11-20 — the rules carry fixed trackers (#4159)
 
 [#4159](https://github.com/pfBlockerNG/pfBlockerNG/issues/4159): pfSense's `filterlog` writes a rule's `ridentifier` as the
-tracker field, and the four rules had none, so every drop by them was logged with tracker `0`: neither Status ▸ System
-Logs ▸ Firewall nor pfBlockerNG's reports and widget, which match packets to rules by tracker, could attribute it.
+tracker field, and the four rules had none, so every drop by them was logged with tracker `0`, and Status ▸ System Logs ▸
+Firewall could not name the rule. The trackers fix that and let pfBlockerNG match the rules by tracker: the dashboard
+widget does (#4161); the Alerts and Reports pipeline, which lists only rules on `<pfB_…>` tables, does not yet (#4164).
 
 - **Trackers.** Each of D5's rules carries a fixed `ridentifier` (`PFB_CROWDSEC_TRACKERS`): `177400401` and `177400402`
   for the IPv4 inbound and outbound rules, `177400601` and `177400602` for IPv6. They never change across reloads or
@@ -571,5 +572,8 @@ Logs ▸ Firewall nor pfBlockerNG's reports and widget, which match packets to r
   taken in `config.xml`. The rule hook runs inside pfSense's filter reload, where that set is not built, and a value
   that depends on the other rules would change when they do; the bouncer's four rules are fixed, as pfSense's own fixed
   rules are (its `virusprot` rule is always `1000000400`).
-- **Counters.** The daemon's counter parser (D1 "Counters") is unchanged: `pfctl` prints `ridentifier` after the label,
-  which its pattern allows.
+- **Names.** The firewall log names a rule from its labels: pfSense CE takes the first label, and versions with keyed labels
+  (pfSense's `master`, Plus 26.03) take only a `descr=` label. Each rule therefore carries its name as its first label and
+  again as `descr=<name>`, for example `label "CrowdSec IPv4" label "descr=CrowdSec IPv4"`.
+- **Counters.** The daemon's counter parser (D1 "Counters") is unchanged: `pfctl` prints the second label and `ridentifier`
+  after the first label, which its pattern allows.
