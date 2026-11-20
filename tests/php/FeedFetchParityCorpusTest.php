@@ -463,8 +463,10 @@ final class FeedFetchParityCorpusTest extends TestCase
 		$this->assertIsResource($proc);
 		$this->servers[$name] = $proc;
 		$this->ftpStdin[$name] = $pipes[0];
-		stream_set_timeout($pipes[1], 30);
-		$line = trim((string) fgets($pipes[1]));
+		// stream_select, not stream_set_timeout: the latter is a no-op on a proc_open pipe (issue #4128)
+		$read = [$pipes[1]];
+		$write = $except = NULL;
+		$line = (stream_select($read, $write, $except, 30) === 1) ? trim((string) fgets($pipes[1])) : '';
 		fclose($pipes[1]);
 		$this->assertSame(1, preg_match('/^PORT (\d+)$/', $line, $m),
 			"ftp server {$name} did not announce its port: '{$line}' " . trim((string) @file_get_contents($stderr)));

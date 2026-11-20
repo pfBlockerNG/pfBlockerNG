@@ -32,6 +32,12 @@ $conn = @stream_socket_accept($server, 5);
 if ($conn === FALSE) {
 	exit(3);
 }
+// The test releases a whole reply (up to one byte past the 64 KiB cap) before PHP reads any of it, so the connection must hold it
+// all: macOS gives a Unix socket 8 KiB by default (net.local.stream.sendspace), Linux about 200 KiB (issue #4128)
+if (!socket_set_option(socket_import_stream($conn), SOL_SOCKET, SO_SNDBUF, 262144)) {
+	fwrite(STDERR, "cannot raise SO_SNDBUF\n");
+	exit(5);
+}
 $read = static function ($stream, int $want): string {
 	$got = '';
 	while (strlen($got) < $want) {

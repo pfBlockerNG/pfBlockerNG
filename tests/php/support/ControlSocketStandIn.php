@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/PfbFlockClockFixture.php';
+require_once __DIR__ . '/ProcessRunner.php';
 
 /**
  * What the tests of the gateway's control-socket exchange (pfb_dns_proxy_ctl_exchange()) share: the stand-in gateway of
@@ -37,16 +38,24 @@ trait ControlSocketStandIn
 		return $record;
 	}
 
-	/** Let every stand-in gateway go: its stdin closes, which is all a silent one waits for. */
+	/** Let every stand-in gateway go: its stdin closes, which is all a silent one waits for. One that does not end is killed and reported STUCK/ENVIRONMENT. */
 	private function finish(): void
 	{
+		$stuck = NULL;
 		foreach ($this->servers as [$proc, $pipes]) {
 			@fclose($pipes[0]);
-			@fclose($pipes[1]);
-			@fclose($pipes[2]);
-			proc_close($proc);
+			stream_set_blocking($pipes[1], FALSE);
+			stream_set_blocking($pipes[2], FALSE);
+			try {
+				pfb_test_finish_process([$proc, $pipes, 'the stand-in gateway'], 10.0);
+			} catch (RuntimeException $e) {
+				$stuck ??= $e;
+			}
 		}
 		$this->servers = [];
+		if ($stuck !== NULL) {
+			throw $stuck;
+		}
 	}
 
 	/**
@@ -84,8 +93,10 @@ trait ControlSocketStandIn
 		foreach ($bytes === NULL ? [NULL] : str_split($bytes, self::RELEASE_PIECE) as $piece) {
 			fwrite($pipes[0], ($piece === NULL ? 'close' : 'x' . bin2hex($piece)) . "\n");
 			fflush($pipes[0]);
-			stream_set_timeout($pipes[1], 10);
-			$ack = fgets($pipes[1]);
+			// stream_select, not stream_set_timeout: the latter is a no-op on a proc_open pipe, and fgets() would wait forever (issue #4128)
+			$read = [$pipes[1]];
+			$write = $except = NULL;
+			$ack = (stream_select($read, $write, $except, 10) === 1) ? fgets($pipes[1]) : 'nothing within 10 s';
 			if ($ack !== "ack\n") {
 				throw new RuntimeException('STUCK/ENVIRONMENT: the stand-in gateway did not acknowledge its write: ' . var_export($ack, TRUE));
 			}
