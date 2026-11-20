@@ -13,6 +13,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 16,384-byte budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `cce29053b7`  geoip: convert the MaxMind CSVs into the country and continent lists in Go  (#4130) — quota notice only; owner merged; Codex at usage limit
 - `40b5c030fd`  core: download the IPinfo ASN and MaxMind GeoLite2 Extras in Go  (#4059) — reviewed `1659988577` only; last 3 fix commits unreviewed, re-ask spent; Codex at usage limit
 - `6a28bfa166`  dnsbl: remove the HSTS preload list  (#4056) — 103 files (over the 100 cap) and quota; review clean, Codex at usage limit
 - `1bb9841093`  dnsbl: remove the VIP response and the block-page web server  (#4054) — skipped at 323 files; review clean, Codex at usage limit
