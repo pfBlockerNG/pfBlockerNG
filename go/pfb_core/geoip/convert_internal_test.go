@@ -211,20 +211,18 @@ func TestANULInTheContinentCodeStopsTheConversion(t *testing.T) {
 }
 
 // "Continent data [ X ] not found" is logged as pfblockerng_get_countries() logs it: once the continent's name has been
-// read from either family's file, a missing file of the other family is not reported.
+// read from either family's file, a missing file of the other family is not reported. A forged header in Africa's IPv6
+// file removes Asia_v6.txt before its pass (the conversion refuses a share that could forge one, #4127; the split keeps
+// today's answer).
 func TestAMissingContinentFileIsLoggedAsToday(t *testing.T) {
-	c, log := conversionRoot(t, testBlocks)
-	locations := testLocations + "953987,en,AF,Africa,ZA,\"South Africa\",0\n"
-	v6 := testBlocks + "\"2c0f::/32\n# ISO Code: Asia\",953987,953987,,0,0,\n" // removes Asia_v6.txt before its pass
-	for name, content := range map[string]string{"GeoLite2-Country-Locations-en.csv": locations, "GeoLite2-Country-Blocks-IPv6.csv": v6} {
-		if err := os.WriteFile(filepath.Join(c.Share, name), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !c.Run(context.Background()) {
-		t.Fatalf("conversion failed:\n%s", log)
-	}
-	if strings.Contains(log.String(), "Continent data") {
-		t.Errorf("log = %q, want no missing-continent line", log)
+	var log bytes.Buffer
+	Conversion{Log: &log}.split(stage{
+		"Asia_v4.txt":   []byte("# Continent IPv4: Asia\n"),
+		"Asia_v6.txt":   []byte("# Continent IPv6: Asia\n"),
+		"Africa_v4.txt": []byte("# Continent IPv4: Africa\n"),
+		"Africa_v6.txt": []byte("# Continent IPv6: Africa\n# ISO Code: Asia\n2c0f::/32\n"),
+	})
+	if strings.Contains(log.String(), "Continent data [ Asia ]") || strings.Contains(log.String(), "Continent data [ Africa ]") {
+		t.Errorf("log = %q, want no missing-continent line for Asia or Africa", log.String())
 	}
 }

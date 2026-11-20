@@ -160,15 +160,19 @@ func TestStaleSiblingsAreRemovedByName(t *testing.T) {
 }
 
 // A forged "# ISO Code: *" header removes nothing: today's PHP hands it to unlink_if_exists(), which globs, and loses
-// almost every staged list while still succeeding (#4127).
+// almost every staged list while still succeeding. The conversion refuses a share that could forge one (#4127); the
+// split stays safe on its own.
 func TestAForgedGlobHeaderRemovesNothing(t *testing.T) {
-	c, log := conversionRoot(t, testBlocks+"\"4.0.0.0/8\n# ISO Code: *\",6252001,6252001,,0,0,\n")
-	if !c.Run(context.Background()) {
-		t.Fatalf("conversion failed:\n%s", log)
+	s := stage{
+		"Africa_v4.txt":        []byte("# Continent IPv4: Africa\n"),
+		"North_America_v4.txt": []byte("# Continent IPv4: North America\n# ISO Code: US\n3.0.0.0/15\n# ISO Code: *\n4.0.0.0/8\n"),
+		"CN_v6.txt":            []byte("2001::/32\n"),
+		"AD_v4.txt":            []byte(""),
 	}
-	for _, name := range []string{"Africa_v4.txt", "Asia_v4.txt", "US_v4.txt", "CN_v6.txt", "AD_v4.txt"} {
-		if _, err := os.Stat(filepath.Join(c.CCDir, name)); err != nil {
-			t.Errorf("%s: %v", name, err)
+	Conversion{}.split(s)
+	for _, name := range []string{"Africa_v4.txt", "North_America_v4.txt", "US_v4.txt", "CN_v6.txt", "AD_v4.txt"} {
+		if !s.has(name) {
+			t.Errorf("%s was removed", name)
 		}
 	}
 }

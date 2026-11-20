@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "A 10 MiB network field is written as it is.",
+	"description": "A 10 MiB network field is written as it is. Core refuses the share, whose network is not one network, and keeps the previous generation (#4127); today's PHP writes it into the list (old_expect).",
 	"share_mtime": "2026-11-17T08:30:00Z",
 	"share": {
 		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n",
@@ -13,6 +13,13 @@
 		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
 	},
 	"expect": {
+		"ok": false,
+		"files": {
+			"cc/CN_v4.txt": null
+		},
+		"tree": "d102fa3700f2a74722c4c258376c6c48cd998b4df93834972f6d5161ebc140e1"
+	},
+	"old_expect": {
 		"ok": true,
 		"files": {
 			"cc/CN_v4.txt": "1.0.1.0/24\n"
