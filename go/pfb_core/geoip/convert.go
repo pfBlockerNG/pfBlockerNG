@@ -297,15 +297,18 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 		c.log(" Processing ISO IPv%s Continent/Country Data\n", family)
 		dup := 0
 		blocks := filepath.Join(c.Share, "GeoLite2-Country-Blocks-IPv"+family+".csv")
-		header := true // only the first record is the header; a second one is a share put together from two files
+		// The first record that is not a blank line is the header; a second one is a share put together from two files.
+		header := true
 		read, err := eachRow(ctx, blocks, func(cc []string) error {
 			network, gid, reg := field(cc, 0), field(cc, 1), field(cc, 2)
-			// split() trims every line; "0" is checked too, though PHP's empty() would skip it
+			blank := !slices.ContainsFunc(cc, func(f string) bool { return trim(f) != "" })
+			// The network is read as split() reads a line, trimmed; "0" is checked too, though PHP's empty() would skip it.
 			switch n := trim(network); {
-			case header && network == "network":
+			case header && n == "network":
 				header = false
 				return nil
 			case n == "":
+				header = header && blank
 				network = "" // white space alone is no network, skipped as an empty one is
 			default:
 				header = false
