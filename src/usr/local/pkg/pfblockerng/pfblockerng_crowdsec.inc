@@ -725,6 +725,33 @@ function pfb_crowdsec_rules(string $type): string {
 }
 
 /**
+ * The bouncer's rules as filter/rule rows (#4161), while it should run: per enabled family the inbound and the outbound rule, each
+ * naming its table on the side it matches and carrying its tracker, so the dashboard widget counts them and their packets with
+ * pfBlockerNG's own rules (pfb_rule_alias_packets()).
+ *
+ * @return list<array{descr: string, tracker: int, type: string, source: array{address: string}, destination: array{address: string}}>
+ */
+function pfb_crowdsec_widget_rules(): array {
+	if (!pfb_crowdsec_should_run()) {
+		return [];
+	}
+	$s = pfb_crowdsec_settings();
+	$rows = [];
+	foreach (['4' => 'rule_v4', '6' => 'rule_v6'] as $n => $field) {
+		if ($s[$field] !== PfbToggle::On) {
+			continue;
+		}
+		$table = PFB_CROWDSEC_TABLES["ipv{$n}"];
+		$id = PFB_CROWDSEC_TRACKERS["ipv{$n}"];
+		$rows[] = ['descr' => "CrowdSec IPv{$n}", 'tracker' => $id['in'], 'type' => 'block', 'source' => ['address' => $table],
+			'destination' => ['address' => 'any']];
+		$rows[] = ['descr' => "CrowdSec IPv{$n} out", 'tracker' => $id['out'], 'type' => 'block', 'source' => ['address' => 'any'],
+			'destination' => ['address' => $table]];
+	}
+	return $rows;
+}
+
+/**
  * After a filter reload (D5): SIGUSR1 makes the bouncer re-create and refill its tables from memory at once. Only to the pid in
  * PFB_CROWDSEC_PIDFILE that isvalidpid() confirms, and only while its command line is the bouncer's (a stale pidfile may name a reused
  * pid); never to daemon(8)'s supervisor, which SIGUSR1 kills (#4069). A missed signal costs at most one pull: the next one reconciles.
