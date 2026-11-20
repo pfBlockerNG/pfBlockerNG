@@ -252,6 +252,20 @@ Interfaces reach Core only as `bindAddress` and `selfAddresses`, and the proxy i
 *Amendment 2026-11-18 (issue #4053): with the WebServer/VIP response removed, nothing needs a sinkhole, so `dnsbl/<scope>`
 carries no `sinkholeRequired`; the per-group counts stay. The same holds for the `dnsbl` object of the example below.*
 
+*Amendment 2026-11-20 (issue #4034, slice 5b): the `geo-catalog` body is the file `.geo_catalog` that the GeoIP conversion
+(`go/pfb_core/geoip`) writes into each country-list generation, so the lists and the catalog are published together or not
+at all. It is JSON Lines in byte order, one row per line:*
+
+- *a `page` row per continent page: `{"kind": "page", "page": <continent_en>, "continent": <locale name>}`;*
+- *a `country` row per entry of a page's lists: `{"kind": "country", "page", "family": 4 | 6, "position" (from 1), "iso",
+  "country", "networks"}`;*
+- *a `reputation` row per entry of the Reputation tab's IPv4 list: `{"kind": "reputation", "position", "iso", "country",
+  "networks"}`.*
+
+*The rows carry what `pfblockerng_get_countries()` writes into the `pfblockerng_<Continent>.php` pages and the Reputation
+page today, as data rather than page source; the Outpost apply renders the pages from them (#4037). The tests read today's
+pages back and compare their digests. ASN choices come with slice 5c.*
+
 - **Canonical body:** members sorted and unique in byte order, one per line, the order `pfb_canonical_alias_set` produces
   (`pfb.inc:14880`; `docs/misc/architecture-notes.md:1194-1197`). `digest` is the xxh128 of that body.
 - **Generation:** a `uint64` per resource, written as a decimal string on the wire, as `GetUpdate`'s cursor is

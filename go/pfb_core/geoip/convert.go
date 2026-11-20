@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -412,7 +413,7 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 	if !generationOK {
 		return nil, false, nil
 	}
-	c.split(s)
+	s[".geo_catalog"] = c.split(s)
 	s[".geoip_isos"] = []byte(isoList.String())
 	return s, true, nil
 }
@@ -487,48 +488,161 @@ var splitFiles = []struct{ cont, file string }{
 // header with no networks ("Total Networks: 0" or "NA") leaves it empty. Top Spammers names lists, it writes none.
 // An ISO code that is not a word is never a file name: today's PHP removes "<folder>/<iso>_v<family>.txt" for it
 // whatever it holds, a path outside the folder included (#4034 forbids it).
+// The same pass gathers what the continent pages and the Reputation tab list (#4034 slice 5b): it returns the
+// geo-catalog, the data today's PHP writes into those pages as source code (see catalog).
 // shortcut: a continent file is read as it stood when its pass began; PHP reads the open file, so a header naming that
 // continent's own file could cut its pass short there. Only a forged header can name one.
-func (c Conversion) split(s stage) {
+func (c Conversion) split(s stage) []byte {
+	pages := map[string]page{}
+	var reputation []option
 	for _, sf := range splitFiles {
-		continent := "" // read from either family's file, as $continent is
-		for _, family := range []string{"4", "6"} {
+		continent, continentEn := "", "" // read from either family's file, as $continent and $continent_en are
+		var lists [2][]option
+		for f, family := range []string{"4", "6"} {
 			name := strings.Replace(sf.file, "_v4", "_v"+family, 1)
-			content, ok := s[name]
-			if ok {
-				isocode := ""
-				for _, raw := range strings.SplitAfter(string(content), "\n") {
+			var options []option
+			add := func(country, iso string, networks int) {
+				o := option{country, iso, networks}
+				options = append(options, o)
+				if family == "4" && !strings.Contains(iso, "_rep") {
+					reputation = append(reputation, o)
+				}
+			}
+			if content, ok := s[name]; ok {
+				isocode, country, total, complete := "", "", 0, false
+				lines := strings.SplitAfter(string(content), "\n")
+				if lines[len(lines)-1] == "" {
+					lines = lines[:len(lines)-1] // fgets() reads no line after the last line feed
+				}
+				for i, raw := range lines {
 					line := trim(raw)
 					list := isocode + "_v" + family + ".txt"
 					if !strings.HasPrefix(line, "#") {
-						if word(isocode) && sf.cont != "Top Spammers" && !empty(line) {
-							s.append(list, []byte(line+"\n"))
+						if word(isocode) {
+							if sf.cont == "Top Spammers" {
+								total = countLines(s[list])
+							} else if total++; !empty(line) {
+								s.append(list, []byte(line+"\n"))
+							}
 						}
-						continue
-					}
-					// A header is matched at the start of its line, where continents() writes it; today's PHP matches it
-					// anywhere in a '#' line, so a country name holding header text forges one (#4127).
-					if strings.HasPrefix(line, "# Continent IPv") {
-						_, after, _ := strings.Cut(line, ":")
-						continent = trim(strings.ReplaceAll(after, ":", ""))
-					}
-					if strings.HasPrefix(line, "# ISO Code: ") {
-						isocode = strings.TrimPrefix(line, "# ISO Code: ")
-						list = isocode + "_v" + family + ".txt"
-						if sf.cont != "Top Spammers" && word(isocode) {
-							s.remove(list)
+						complete = true
+					} else {
+						// The ISO a list closes is listed at the next header, when it is in the staged folder.
+						if complete {
+							if s.has(list) {
+								add(country, isocode, total)
+							}
+							total, complete = 0, false
+						}
+						// A header is matched at the start of its line, where continents() writes it; today's PHP matches it
+						// anywhere in a '#' line, so a country name holding header text forges one (#4127).
+						if strings.HasPrefix(line, "# Continent IPv") {
+							_, after, _ := strings.Cut(line, ":")
+							continent = trim(strings.ReplaceAll(after, ":", ""))
+						}
+						if strings.HasPrefix(line, "# Continent en:") {
+							_, after, _ := strings.Cut(line, ":")
+							continentEn = trim(strings.ReplaceAll(after, ":", ""))
+						}
+						if strings.HasPrefix(line, "# Country: ") {
+							country = strings.ReplaceAll(line, "# Country: ", "")
+						}
+						if strings.HasPrefix(line, "# ISO Code: ") {
+							isocode = strings.TrimPrefix(line, "# ISO Code: ")
+							list = isocode + "_v" + family + ".txt"
+							if sf.cont != "Top Spammers" && word(isocode) {
+								s.remove(list)
+							}
+						}
+						if line == "# Total Networks: 0" || line == "# Total Networks: NA" {
+							if word(isocode) {
+								s.truncate(list)
+							}
+							complete = true
 						}
 					}
-					if (line == "# Total Networks: 0" || line == "# Total Networks: NA") && word(isocode) {
-						s.truncate(list)
+					// The last line closes the last ISO, complete or not.
+					if i == len(lines)-1 && word(isocode) && s.has(isocode+"_v"+family+".txt") {
+						add(country, isocode, total)
 					}
 				}
 			}
 			if empty(continent) {
+				// shortcut: today's PHP keeps this family's options for the next continent's list here; only a continent
+				// file without its "Continent IPv" header holds options, and continents() writes it first.
 				c.log("Continent data [ %s ] not found\n", sf.cont)
+				continue
+			}
+			if sf.cont != "Top Spammers" {
+				slices.SortFunc(options, func(a, b option) int { return strings.Compare(a.sortKey(), b.sortKey()) })
+			}
+			lists[f] = options
+		}
+		if word(continentEn) { // the page is pfblockerng_<continent_en>.php; a later continent naming it again replaces it
+			pages[continentEn] = page{continent, lists}
+		}
+	}
+	slices.SortFunc(reputation, func(a, b option) int { return strings.Compare(a.sortKey(), b.sortKey()) })
+	return catalog(pages, reputation)
+}
+
+// option is an entry of a continent page's country list or of the Reputation tab's, shown "<country> <iso> (<networks>)".
+type option struct {
+	country, iso string
+	networks     int
+}
+
+// sortKey is the string today's PHP sorts the options by (sort(SORT_STRING)) before it cuts the key at its first "|".
+func (o option) sortKey() string {
+	return o.country + `|"` + o.iso + `" => "` + o.country + " " + o.iso + " (" + strconv.Itoa(o.networks) + `)"`
+}
+
+// page is a continent page: its continent name in the locale and its IPv4 and IPv6 country lists.
+type page struct {
+	continent string
+	lists     [2][]option
+}
+
+// catalog is the geo-catalog resource body (docs/specs/go-updater-pipeline.md §7): JSON Lines in byte order, one row a
+// line. A "page" row per continent page ({"kind", "page": its continent_en, "continent"}), a "country" row per entry of
+// its lists ({"kind", "page", "family": 4 or 6, "position" from 1, "iso", "country", "networks"}), and a "reputation"
+// row per entry of the Reputation tab's IPv4 list ({"kind", "position", "iso", "country", "networks"}). The Outpost apply
+// renders the pages from it (#4037); today's PHP writes the same values into their source, where a quote in a name ends
+// the string it sits in.
+func catalog(pages map[string]page, reputation []option) []byte {
+	var lines []string
+	add := func(row any) {
+		b, _ := json.Marshal(row) // strings only, made valid UTF-8; nothing to fail
+		lines = append(lines, string(b))
+	}
+	type countryRow struct {
+		Kind     string `json:"kind"`
+		Page     string `json:"page,omitempty"`
+		Family   int    `json:"family,omitempty"`
+		Position int    `json:"position"`
+		ISO      string `json:"iso"`
+		Country  string `json:"country"`
+		Networks int    `json:"networks"`
+	}
+	for en, p := range pages {
+		add(struct {
+			Kind      string `json:"kind"`
+			Page      string `json:"page"`
+			Continent string `json:"continent"`
+		}{"page", en, p.continent})
+		for f, list := range p.lists {
+			for i, o := range list {
+				add(countryRow{"country", en, 4 + 2*f, i + 1, o.iso, o.country, o.networks})
 			}
 		}
 	}
+	for i, o := range reputation {
+		add(countryRow{Kind: "reputation", Position: i + 1, ISO: o.iso, Country: o.country, Networks: o.networks})
+	}
+	// shortcut: a name over the resource store's 1 MiB member limit is written as it is, and publishing the catalog then
+	// fails; the Core Updater that publishes it (#4038) reports that.
+	slices.Sort(lines)
+	return []byte(strings.Join(lines, "\n") + "\n")
 }
 
 // englishContinent is the continent's English name as `grep -m1 ",en,<code>" <English Locations> | cut -d, -f4`
