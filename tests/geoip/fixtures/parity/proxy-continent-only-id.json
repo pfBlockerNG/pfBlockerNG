@@ -17,7 +17,7 @@
 			"cc/A2_A2_v4.txt": null
 		},
 		"tree": "7a6f6f29ab75083fc4fe5833b20d6b5b075d135ef356c6b69f79f301ac1a47af",
-		"catalog": "306c43115f71e22a5b8bf6c5bc832cd55ac171b84367a122fe3feba5fa0f6d16"
+		"catalog": "74e9d8e20e34b150eb6bb9d6fbbca1231a589cce687968b5039758775639fadf"
 	},
 	"old_expect": {
 		"ok": true,
@@ -29,6 +29,6 @@
 			"cc/A2_A2_v4.txt": null
 		},
 		"tree": "18f1c042ad421ed2675d22277e253ec38cd5bde822d7c8740dae1c351cef52e7",
-		"catalog": "cd1f1dee92b5d510f1c5e68d01f8c6c21a2df1f401db427cd0aa9527e207cb10"
+		"catalog": "43a511331d264461ae10593d92b5ad9d2483d1d03abb6b20e8e6c99beabca221"
 	}
 }

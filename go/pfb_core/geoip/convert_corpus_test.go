@@ -301,9 +301,9 @@ func todays(t *testing.T, root string) map[string][]byte {
 
 // catalogDigest is the corpus digest of a catalog file, which must be a canonical resource body (JSON Lines, unique and
 // in byte order, each line ending in a newline): the sha256 of its rows' lines
-// "<kind>\0<page>\0<family>\0<position>\0<iso>\0<country>\0<networks>\n" (a field a row lacks is empty) in byte
-// order, as tests/php/GeoipConversionCorpusTest.php reads the same rows back from the pages, whatever each side's JSON
-// encoder spells.
+// "<kind>\0<page>\0<continent>\0<family>\0<position>\0<iso>\0<country>\0<networks>\n" (a field a row lacks is
+// empty) in byte order, as tests/php/GeoipConversionCorpusTest.php reads the same rows back from the pages, whatever
+// each side's JSON encoder spells.
 func catalogDigest(t *testing.T, body []byte) string {
 	t.Helper()
 	if len(body) > 0 && body[len(body)-1] != '\n' {
@@ -319,8 +319,8 @@ func catalogDigest(t *testing.T, body []byte) string {
 			t.Fatalf("catalog line %d is not after the line before it in byte order: %q", i+1, m)
 		}
 		var row struct {
-			Kind, Page, ISO, Country   string
-			Family, Position, Networks *int
+			Kind, Page, Continent, ISO, Country string
+			Family, Position, Networks          *int
 		}
 		d := json.NewDecoder(strings.NewReader(m))
 		d.DisallowUnknownFields()
@@ -333,8 +333,8 @@ func catalogDigest(t *testing.T, body []byte) string {
 			}
 			return strconv.Itoa(*p)
 		}
-		lines = append(lines, strings.Join([]string{row.Kind, row.Page, n(row.Family), n(row.Position), row.ISO,
-			row.Country, n(row.Networks)}, "\x00")+"\n")
+		lines = append(lines, strings.Join([]string{row.Kind, row.Page, row.Continent, n(row.Family), n(row.Position),
+			row.ISO, row.Country, n(row.Networks)}, "\x00")+"\n")
 	}
 	slices.Sort(lines)
 	sum := sha256.Sum256([]byte(strings.Join(lines, "")))

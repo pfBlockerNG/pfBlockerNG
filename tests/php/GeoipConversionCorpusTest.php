@@ -28,10 +28,11 @@ use PHPUnit\Framework\TestCase;
  *   catalog the geo-catalog (#4034 slice 5b), or null when there is none: what the continent pages and the Reputation
  *           page in www/ hold, read back from them here; Go's cc/.geo_catalog there. A "page" row per continent page
  *           ({"kind", "page": $continent_en, "continent": $continent}), a "country" row per option of its lists
- *           ({"kind", "page", "family": 4|6, "position" from 1, "iso", "country", "networks"}), and a "reputation" row
- *           per option of the Reputation tab ({"kind", "position", "iso", "country", "networks"}). Spelled as the sha256
- *           of the rows' lines "<kind>\0<page>\0<family>\0<position>\0<iso>\0<country>\0<networks>\n" (a field a
- *           row lacks is empty), sorted in byte order, so that it does not depend on either side's JSON encoder.
+ *           ({"kind", "page", "family": 4|6, "position" from 1, "iso", "country", "networks"}), and a "reputation"
+ *           row per option of the Reputation tab ({"kind", "position", "iso", "country", "networks"}). Spelled as the
+ *           sha256 of the rows' lines
+ *           "<kind>\0<page>\0<continent>\0<family>\0<position>\0<iso>\0<country>\0<networks>\n" (a field a row
+ *           lacks is empty), sorted in byte order, so that it does not depend on either side's JSON encoder.
  * A continent file's "# Generated from MaxMind Inc. on: <local time>" line reads "{now}" in both.
  */
 #[CoversFunction('pfblockerng_get_countries')]
@@ -248,7 +249,7 @@ final class GeoipConversionCorpusTest extends TestCase
 		$lines = [];
 		foreach ($rows as $row) {
 			$fields = [];
-			foreach (['kind', 'page', 'family', 'position', 'iso', 'country', 'networks'] as $key) {
+			foreach (['kind', 'page', 'continent', 'family', 'position', 'iso', 'country', 'networks'] as $key) {
 				$fields[] = (string) ($row[$key] ?? '');
 			}
 			$lines[] = implode("\0", $fields) . "\n";

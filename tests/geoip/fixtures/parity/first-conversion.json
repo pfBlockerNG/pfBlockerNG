@@ -18,7 +18,7 @@
 			"cc/A2_DE_v4.txt": "9.9.9.0/24\n"
 		},
 		"tree": "8ff32639e5c9e7c7be741e429691cf645d54620d47078c757026061d41f30ac8",
-		"catalog": "0b280b36881ac1d7daac655adc21f03e9750e507d79d344e62a702e35b0f71b7"
+		"catalog": "009c4f8f087e4c04b0782cc56b977d5bd110a04eafe06df36f0029a0f6d8044b"
 	},
 	"old_expect": {
 		"ok": true,
@@ -29,6 +29,6 @@
 			"log/maxmind_ver": "MaxMind GeoLite2 Date/Time Stamp\nLast-Modified: 2026-11-17 08:30:00\nDuplicate Represented IP4 Networks: 2\n"
 		},
 		"tree": "e20d98c5db8a47779a853798b7b27e5bec7f27e9e84bf068449c6556d9e2f665",
-		"catalog": "1f94d39bfc069795c03756c8618e77c4a5897ac73b4b0e11a8a06b564182fb75"
+		"catalog": "dcdcf9bfb280449eba0c9b42395ac3ffd06046a15f2ab1e503583c7e32c76c83"
 	}
 }
