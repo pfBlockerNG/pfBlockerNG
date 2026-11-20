@@ -132,6 +132,9 @@ func TestConversionCorpus(t *testing.T) {
 			if c.Schema != 1 {
 				t.Fatalf("schema %d", c.Schema)
 			}
+			if c.OldExpect != nil && reflect.DeepEqual(*c.OldExpect, c.Expect) {
+				t.Fatalf("%s: old_expect equals expect; drop it", file)
+			}
 			root := t.TempDir()
 			if err := os.Mkdir(filepath.Join(root, "share"), 0o700); err != nil {
 				t.Fatal(err)
