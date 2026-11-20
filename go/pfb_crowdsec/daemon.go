@@ -55,16 +55,16 @@ func (d *daemon) pull(ctx context.Context) error {
 	full := !d.synced
 	resp, err := d.api.pull(ctx, full)
 	d.synced = err == nil
-	switch {
-	case err != nil:
+	if err != nil {
 		d.lastErr, d.lastErrAt = err.Error(), d.now()
 		d.log.errorf("LAPI pull failed: %v", err)
-	case full:
+	} else {
 		d.lastPull = d.now()
-		fresh = d.replace(ctx, resp)
-	default:
-		d.lastPull = d.now()
-		fresh = d.apply(ctx, resp)
+		if full {
+			fresh = d.replace(ctx, resp)
+		} else {
+			fresh = d.apply(ctx, resp)
+		}
 	}
 	d.reconcile(ctx)
 	d.killStates(ctx, fresh)
@@ -105,10 +105,11 @@ func (d *daemon) replace(ctx context.Context, resp *streamResponse) []netip.Addr
 	d.bans = newBanSet()
 	res := d.bans.apply(resp)
 	d.logUnused(res)
+	tables := d.tables()
 	var fresh []netip.Addr
 	for f, bans := range res.add {
 		if d.load(ctx, family(f), "replace", bans) {
-			d.log.infof("%s: replaced with the full set of %d values", d.tables()[f], len(bans))
+			d.log.infof("%s: replaced with the full set of %d values", tables[f], len(bans))
 		}
 		for _, b := range bans {
 			if _, was := old.entries[b.key]; b.single && !was {

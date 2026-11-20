@@ -12,7 +12,10 @@ import (
 // usageInterval is go-cs-bouncer's default for POST /v1/usage-metrics.
 const usageInterval = 15 * time.Minute
 
-const maxLabel = 255
+const (
+	maxLabel     = 255
+	digestSuffix = len("~00000000") // the "~" and the 8 hex digits of a long origin's digest
+)
 
 // usageInput is one window's worth of figures: dropped counts for the window, active decisions now.
 type usageInput struct {
@@ -69,7 +72,7 @@ func usagePayload(in usageInput) ([]byte, error) {
 			if len(label) > maxLabel { // the LAPI schema's MetricsLabels limit; the digest keeps long origins apart
 				h := fnv.New32a()
 				h.Write([]byte(origin))
-				label = fmt.Sprintf("%s~%08x", strings.ToValidUTF8(label[:maxLabel-9], ""), h.Sum32())
+				label = fmt.Sprintf("%s~%08x", strings.ToValidUTF8(origin[:maxLabel-digestSuffix], ""), h.Sum32())
 			}
 			items = append(items, metricItem{Name: "active_decisions", Value: float64(in.origins[f][origin]), Unit: "ip",
 				Labels: map[string]string{"origin": label, "ip_type": ipTypes[f]}})
