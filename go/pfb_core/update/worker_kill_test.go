@@ -175,6 +175,7 @@ func TestOwnedWorkerCrashDoesNotContaminateTheNextAdmission(t *testing.T) {
 	}
 	awaitFile(t, dir+"/wrote")
 	awaitFile(t, dir+"/finished")
+	awaitUnlocked(t, log.Name())
 	if err := Recover(log.Name(), func(int64, map[string]int64, Result, error) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -284,6 +285,7 @@ func TestKilledWorkerSalvagesCompleteResultLinesWithoutClaimingSuccess(t *testin
 		t.Fatal(err)
 	}
 	awaitFile(t, dir+"/finished")
+	awaitUnlocked(t, log.Name())
 	err = Recover(log.Name(), func(_ int64, _ map[string]int64, res Result, runErr error) error {
 		calls++
 		if runErr == nil {
@@ -366,6 +368,25 @@ func TestWorkerDeathKeepsExclusionUntilTheNativeProgramExits(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(secondDir, "second")); !os.IsNotExist(err) {
 		t.Fatalf("a second native program started after worker death: %v", err)
+	}
+}
+
+// awaitUnlocked waits until the native program has exited: its "finished" marker is written before the exit that
+// drops the operation lock it inherited, so the marker alone does not mean the lock is free (#4040).
+func awaitUnlocked(t *testing.T, logPath string) {
+	t.Helper()
+	for deadline := time.Now().Add(stuck); ; time.Sleep(5 * time.Millisecond) {
+		lock, err := operationLock(logPath)
+		if err == nil {
+			lock.Close()
+			return
+		}
+		if !errors.Is(err, ErrRunning) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("STUCK: the native program still holds %s.lock", logPath)
+		}
 	}
 }
 
