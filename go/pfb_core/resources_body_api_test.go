@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 )
@@ -131,6 +132,45 @@ func TestGetResourceBodyRefusesABadRequestNamingTheField(t *testing.T) {
 	}
 }
 
+// Every body read closes its file, whether the caller read it all or went away.
+func TestGetResourceBodyClosesItsFile(t *testing.T) {
+	if _, err := os.Stat("/proc/self/fd"); err != nil {
+		t.Skip("no /proc/self/fd to count open files")
+	}
+	r := newResRig(t)
+	members := make([]string, 50_000)
+	for j := range members {
+		members[j] = fmt.Sprintf("10.0.%d.%d", j/256, j%256)
+	}
+	r.pub("dnsbl/main", nil, members...)
+	open := func() int {
+		ents, _ := os.ReadDir("/proc/self/fd")
+		n := 0
+		for _, e := range ents {
+			if to, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name())); err == nil && strings.HasPrefix(to, r.dir) {
+				n++
+			}
+		}
+		return n
+	}
+	for range 5 {
+		r.body("dnsbl/main", "1", "members", "")
+		resp, err := r.core.client.Post("http://pfb-core/v1/GetResourceBody", "application/json",
+			strings.NewReader(bodyParams("dnsbl/main", "1", "members", "")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close() // gone before the end of the body
+	}
+	deadline := time.Now().Add(watchdog)
+	for open() != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond) // the server notices the closed connection
+	}
+	if n := open(); n != 0 {
+		t.Fatalf("%d store files still open", n)
+	}
+}
+
 func TestGetResourceBodyWithoutAStoreIsUnavailable(t *testing.T) {
 	c := startCore(t, scratchDir(t))
 	wantError(t, c.post("GetResourceBody", bodyParams("dnsbl/main", "1", "members", "")), 503, "unavailable")
@@ -158,8 +198,9 @@ func TestResourceCallsAllocateAConstant(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer resp.Body.Close()
-		if n, err := io.Copy(io.Discard, resp.Body); err != nil || resp.StatusCode != 200 {
-			t.Fatalf("%s: status %d after %d bytes: %v", method, resp.StatusCode, n, err)
+		n, err := io.Copy(io.Discard, resp.Body)
+		if err != nil || resp.StatusCode != 200 || resp.ContentLength != n {
+			t.Fatalf("%s: status %d, %d bytes of a Content-Length of %d: %v", method, resp.StatusCode, n, resp.ContentLength, err)
 		}
 	}
 	for what, call := range map[string]func(){

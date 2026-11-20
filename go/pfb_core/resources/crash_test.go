@@ -69,7 +69,8 @@ func TestKilledPublishLeavesAWholeBody(t *testing.T) {
 	}{
 		{"body-written", oldBody, 1, false}, {"body-renamed", oldBody, 1, false}, {"index-renamed", newBody, 2, false},
 		{"pruned", newBody, 2, false},
-		{"body-renamed", oldBody, 1, true}, {"delta-renamed", oldBody, 1, true}, {"index-renamed", newBody, 2, true},
+		{"body-written", oldBody, 1, true}, {"body-renamed", oldBody, 1, true}, {"delta-renamed", oldBody, 1, true},
+		{"index-renamed", newBody, 2, true}, {"pruned", newBody, 2, true},
 	} {
 		t.Run(fmt.Sprintf("%s applied %v", tc.step, tc.applied), func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "store")

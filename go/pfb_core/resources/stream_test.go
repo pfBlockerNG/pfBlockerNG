@@ -2,6 +2,7 @@ package resources_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -286,6 +287,62 @@ func TestADamagedDeltaPartAnswersFull(t *testing.T) {
 				t.Fatalf("reply = %+v; want full", r)
 			}
 		})
+	}
+}
+
+// A publish that changes nothing writes back a delta that is lost or that an older index never recorded.
+func TestAnUnchangedPublishRestoresTheDelta(t *testing.T) {
+	for name, lose := range map[string]func(t *testing.T, dir string){
+		"part deleted": func(t *testing.T, dir string) {
+			if err := os.Remove(filepath.Join(dir, dn(id, 2, 1, "add"))); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"index without a delta": func(t *testing.T, dir string) {
+			idx := readIndex(t, dir)
+			delete(idx["resources"].(map[string]any)[id].(map[string]any), "delta")
+			raw, _ := json.Marshal(idx)
+			if err := os.WriteFile(filepath.Join(dir, "index.json"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, part := range []string{"add", "remove"} {
+				os.Remove(filepath.Join(dir, dn(id, 2, 1, part)))
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, dir := newStore(t)
+			publish(t, s, id, 1, nil, "10", "20")
+			applied(t, s, id, 1)
+			publish(t, s, id, 2, nil, "20", "30")
+			lose(t, dir)
+			publish(t, s, id, 2, nil, "20", "30")
+			r := mustGet(t, s, id, &resources.Cursor{1, dg("10", "20")})
+			if r.Kind != resources.KindDelta {
+				t.Fatalf("reply = %+v; want a delta", r)
+			}
+			if add, remove := delta(t, s, id, r); !slices.Equal(add, []string{"30"}) || !slices.Equal(remove, []string{"10"}) {
+				t.Fatalf("delta add %v remove %v", add, remove)
+			}
+		})
+	}
+}
+
+// A member of MaxMemberLength bytes is taken; one byte more is refused, by Canonical as by PublishFrom.
+func TestTheMemberLengthLimit(t *testing.T) {
+	s, _ := newStore(t)
+	at := strings.Repeat("a", resources.MaxMemberLength)
+	if _, err := s.PublishFrom(id, strings.NewReader(at+"\n"), nil); err != nil {
+		t.Fatalf("a member of %d bytes: %v", len(at), err)
+	}
+	over := at + "a"
+	if _, err := resources.Canonical([]string{over}); err == nil || !strings.Contains(err.Error(), "invalid member") {
+		t.Fatalf("Canonical of a member of %d bytes = %v; want an invalid member", len(over), err)
+	}
+	for _, in := range []string{over, over + "\n"} {
+		if _, err := s.PublishFrom(id, strings.NewReader(in), nil); err == nil || !strings.Contains(err.Error(), "invalid member") {
+			t.Fatalf("PublishFrom of a member of %d bytes = %v; want an invalid member", len(over), err)
+		}
 	}
 }
 
