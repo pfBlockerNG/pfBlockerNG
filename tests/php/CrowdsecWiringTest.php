@@ -120,6 +120,21 @@ final class CrowdsecWiringTest extends TestCase
 			'the teardown removes every file it owns and leaves the pidfiles to the stop');
 	}
 
+	public function testTheTeardownRemovesTheConfigFileBeforeItStopsSoAStartInBetweenStartsNothing(): void
+	{
+		$GLOBALS['pfb']['crowdsec_config'] = "{$this->dir}/pfb_crowdsec.json";
+		file_put_contents($GLOBALS['pfb']['crowdsec_config'], "{}\n");
+		$seen = [];
+		$GLOBALS['pfb_test_service_hook'] = static function (string $fn) use (&$seen): void {
+			$seen[] = [$fn, is_file($GLOBALS['pfb']['crowdsec_config'])];
+		};
+
+		pfb_crowdsec_teardown();
+		unset($GLOBALS['pfb_test_service_hook']);
+
+		$this->assertSame([['stop_service', FALSE]], $seen, 'the rc start\'s gate is gone before the stop runs');
+	}
+
 	/** @return list<string> the top row's links after the shared tail is added */
 	private static function tail(?bool $provenance_ok, bool $software_allowed): array
 	{

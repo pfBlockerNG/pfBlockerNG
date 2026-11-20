@@ -209,8 +209,8 @@ function pfb_crowdsec_config_write(string $content, string $path): bool {
 /**
  * Apply the "should run" decision (D4). Called by pfb_crowdsec_resync() (every trigger, the Settings save included), never by
  * the update pass. While the bouncer should run: write the config file and start the service, or restart it when the file or the
- * installed binary changed (pfb_crowdsec_binary_changed()). Otherwise: stop it and remove the file, which also keeps the rc script's
- * own start (at boot) from starting it. The rc script is (re)generated on every call.
+ * installed binary changed (pfb_crowdsec_binary_changed()). Otherwise: remove the file, then stop it. The file is the rc start's gate,
+ * so a start racing the stop launches nothing, and the boot start starts nothing. The rc script is (re)generated on every call.
  *
  * @return bool TRUE when the bouncer was turned on or off (the config file appeared or went): its rules change, so the caller
  *   reloads the filter
@@ -736,8 +736,10 @@ function pfb_crowdsec_signal(): void {
 function pfb_crowdsec_teardown(): void {
 	global $pfb;
 
+	// The config file first, as on the off path: a start racing the stop then launches nothing
+	unlink_if_exists($pfb['crowdsec_config'] ?? PFB_CROWDSEC_CONFIG);
 	stop_service('pfb_crowdsec');
-	foreach (['crowdsec_rcfile' => PFB_CROWDSEC_RCFILE, 'crowdsec_config' => PFB_CROWDSEC_CONFIG, 'crowdsec_status' => PFB_CROWDSEC_STATUS,
+	foreach (['crowdsec_rcfile' => PFB_CROWDSEC_RCFILE, 'crowdsec_status' => PFB_CROWDSEC_STATUS,
 	    'crowdsec_lockfile' => PFB_CROWDSEC_LOCKFILE, 'crowdsec_binary_record' => PFB_CROWDSEC_BINARY_RECORD] as $key => $path) {
 		unlink_if_exists($pfb[$key] ?? $path);
 	}

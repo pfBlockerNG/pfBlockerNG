@@ -515,7 +515,7 @@ amendment's start, stop and pidfile rules.
   the lock no start can race a stop. Package removal leaves the pidfiles to the stop (#4135).
 - **Upgrade.** As pfB-DNS's, pfSense's own stop under `rc.packages ... DEINSTALL` with a pkg install, upgrade or reinstall leaves the
   bouncer running (`pfb_rc_package_upgrade_keep()`, the same check). The rc start records the sha256 and path of the binary it runs in
-  `/var/run/pfb_crowdsec.sha256` (kept across a stop, rewritten by each start); the installer's apply restarts a running bouncer once when that binary is no longer the installed one,
+  `/var/run/pfb_crowdsec.sha256` (kept across a stop, rewritten by each start that launches); the installer's apply restarts a running bouncer once when that binary is no longer the installed one,
   when no record exists (a start by an earlier version's rc script), or when its config file changed, and otherwise leaves it alone. A
   `pkg delete` stops it and removes everything.
 - **Differences from pfB-DNS and Core**, each kept for a reason: the start runs only while the config file exists (D4's gate, and the
