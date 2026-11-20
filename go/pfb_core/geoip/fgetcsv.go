@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -38,10 +39,17 @@ func (c *fgetcsv) line() (string, bool) {
 // shortcut: isSpace() is the ASCII set; FreeBSD's C.UTF-8 may also call 0x85 or 0xA0 a space before an opening quote.
 // Upgrade if a lab probe shows either differs on the appliance.
 func lineEnd(s string) int {
+	n := len(s)
+	switch { // "\r" and "\n" are never inside a multibyte character, so most lines need no walk
+	case strings.HasSuffix(s, "\r\n"):
+		return n - 2
+	case n >= 2 && s[n-1] == '\n' && s[n-2] < 0x80:
+		return n - 1
+	}
 	var before, last byte
-	for i := 0; i < len(s); {
+	for i := 0; i < n; {
 		r, w := utf8.DecodeRuneInString(s[i:])
-		if r == utf8.RuneError && w <= 1 && s[i] != 0 {
+		if r == utf8.RuneError && w <= 1 {
 			i++
 			continue
 		}
@@ -50,11 +58,11 @@ func lineEnd(s string) int {
 	}
 	switch {
 	case last == '\n' && before == '\r':
-		return len(s) - 2
+		return n - 2
 	case last == '\n' || last == '\r':
-		return len(s) - 1
+		return n - 1
 	}
-	return len(s)
+	return n
 }
 
 // at is a C string's byte: its terminating NUL past the end.

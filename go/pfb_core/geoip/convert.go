@@ -230,8 +230,9 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 		if cc[1] != "en" {
 			if strings.IndexByte(cc[2], 0) >= 0 {
 				// escapeshellarg() throws on a NUL.
-				// shortcut: it also throws past the platform's argument-length limit (sysconf ARG_MAX), which no
-				// continent code reaches; upgrade if a corpus row needs one.
+				// shortcut: near the platform's argument-length limit (ARG_MAX) PHP also fails, by escapeshellarg()
+				// throwing or by exec() getting E2BIG (no English name); no continent code comes near it. Upgrade if a
+				// corpus row needs one.
 				return errFatal
 			}
 			v, seen := english[cc[2]]
