@@ -45,6 +45,8 @@ if ($_POST && isset($_POST['save'])) {
 	$input_errors = $checked['errors'];
 	if (!$input_errors) {
 		pfb_crowdsec_save($checked['values']);
+		$pfb['save'] = TRUE;
+		sync_package_pfblockerng();
 		header('Location: ' . PFB_CROWDSEC_PAGE);
 		exit;
 	}

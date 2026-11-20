@@ -307,6 +307,8 @@ if ($_POST) {
 			} elseif (!$pfb_core_errors) {
 				$pfb['save'] = TRUE;
 				sync_package_pfblockerng();
+				// issue #4139: the CrowdSec bouncer follows the master enable at once; the pass never applies it
+				pfb_crowdsec_resync();
 				header('Location: /pfblockerng/pfblockerng_general.php');
 				exit;
 			}

@@ -12,13 +12,12 @@ use PHPUnit\Framework\TestCase;
  * Pinned here:
  *   - the config file carries exactly the D3 values, is mode 0600 and replaced atomically (temporary file in the same folder,
  *     renamed over it), and a failed write leaves neither a temporary file nor a changed file;
- *   - pfb_crowdsec_apply(), which the Settings save and pfBlockerNG's update pass both call: while the bouncer should run it
+ *   - pfb_crowdsec_apply(), which the Settings save and the other triggers call (CrowdsecTriggersTest): while the bouncer should run it
  *     writes the file and starts the service, restarts it when the file changed and leaves it alone otherwise; while it should
  *     not run it stops the service and removes the file. It answers whether the bouncer's on/off state changed (the caller then
  *     reloads the filter, so that the rules follow);
  *   - pfb_crowdsec_save(): the Settings save stores the section, applies at once, and reloads the filter when the enable or a
- *     rule setting changed, or the bouncer started or stopped, and only then; it marks pending changes (applied on the next Update,
- *     like the other settings pages) when a setting of sync class `policy` changed, and for no other change.
+ *     rule setting changed, or the bouncer started or stopped, and only then.
  *
  * Off-appliance the services are the pfsense_doubles.php doubles: start/stop/restart are recorded, is_service_running() answers
  * from $GLOBALS['pfb_test_service_running'].
@@ -34,7 +33,6 @@ final class CrowdsecApplyTest extends TestCase
 
 	private string $dir = '';
 	private string $config = '';
-	private string $marker = '';
 	private mixed $savedConfig;
 	private mixed $savedPfb;
 
@@ -49,8 +47,6 @@ final class CrowdsecApplyTest extends TestCase
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb']['enable'] = PfbToggle::On;
 		$GLOBALS['pfb']['crowdsec_config'] = $this->config;
-		$this->marker = "{$this->dir}/pfb_pending_changes";
-		$GLOBALS['pfb']['pending_marker'] = $this->marker;
 		$GLOBALS['pfb_test_service_calls'] = [];
 		$GLOBALS['pfb_test_service_running'] = ['pfb_crowdsec' => FALSE];
 		$GLOBALS['pfb_test_filter_configure_calls'] = 0;
@@ -273,48 +269,6 @@ final class CrowdsecApplyTest extends TestCase
 		$this->assertCount(1, $GLOBALS['pfb_test_write_config_calls']);
 		$this->assertSame($reload ? 1 : 0, $GLOBALS['pfb_test_filter_configure_calls']);
 		$this->assertSame(pfb_crowdsec_should_run(), is_file($this->config), 'applied at once: the file exists exactly while it should run');
-	}
-
-	/** @return iterable<string, array{array<string,string>, bool}> what the save changes => whether it marks pending changes */
-	public static function markers(): iterable
-	{
-		// The peers receive the settings of sync class `policy`: their change waits for the next Update. The rest stays on this node.
-		yield 'enable'              => [['enable' => ''], TRUE];
-		yield 'LAPI URL'            => [['lapi_url' => 'http://192.0.2.7:8080'], TRUE];
-		yield 'log blocked packets' => [['rules_log' => 'on'], TRUE];
-		yield 'tag'                 => [['rules_tag' => 'cs'], TRUE];
-		yield 'IPv4 rules'          => [['rule_v4' => ''], TRUE];
-		yield 'IPv6 rules'          => [['rule_v6' => ''], TRUE];
-		yield 'API key'             => [['api_key' => 'Another-KEY'], FALSE];
-		yield 'log level'           => [['log_level' => 'debug'], FALSE];
-		yield 'all interfaces'      => [['rules_all_interfaces' => ''], FALSE];
-		yield 'interfaces'          => [['rules_interfaces' => 'lan'], FALSE];
-		yield 'nothing'             => [[], FALSE];
-	}
-
-	#[DataProvider('markers')]
-	public function testTheSaveMarksPendingChangesOnlyWhenAPolicySettingChanged(array $change, bool $marked): void
-	{
-		config_set_path(self::SECTION, self::stored());
-		pfb_crowdsec_apply();
-		$this->assertFileDoesNotExist($this->marker, 'before-state: nothing is pending');
-
-		pfb_crowdsec_save(self::stored($change));
-
-		$this->assertSame($marked, is_file($this->marker), ($marked ? 'marked' : 'not marked') . ' after ' . json_encode($change));
-	}
-
-	public function testEverySettingHasItsOwnMarkerRowAndTheRowsFollowTheRegistrysSyncClass(): void
-	{
-		$single = array_filter(iterator_to_array(self::markers()), static fn (array $row): bool => count($row[0]) === 1);
-		$rowFields = array_map(static fn (array $row): string => 'crowdsec/' . array_key_first($row[0]), $single);
-		$registered = array_filter(pfb_cfg_registry(), static fn (string $key): bool => str_starts_with($key, 'crowdsec/'), ARRAY_FILTER_USE_KEY);
-
-		$this->assertEqualsCanonicalizing(array_keys($registered), array_values($rowFields), 'one single-setting row per registered setting');
-		foreach ($single as $row) {
-			$key = 'crowdsec/' . array_key_first($row[0]);
-			$this->assertSame($registered[$key]['sync'] === 'policy', $row[1], "{$key}: marked exactly when its sync class is policy");
-		}
 	}
 
 	public function testTheSaveRestartsTheBouncerWhenOnlyItsFileChanged(): void

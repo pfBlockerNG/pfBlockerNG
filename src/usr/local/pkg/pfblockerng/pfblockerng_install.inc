@@ -737,11 +737,10 @@ if ($ufound) {
 	}
 }
 
-// issue #4071: the CrowdSec bouncer runs only while it should (pfBlockerNG on, CrowdSec on, a key on this node). The update pass ends
-// early during an install, so the installer applies it itself; an upgrade's removal step stopped the package services, so this
-// starts it again on the new binary
+// issue #4071, #4139: the CrowdSec bouncer runs only while it should (pfBlockerNG on, CrowdSec on, a key on this node), and the update
+// pass never applies it: the installer does, and writes the rule hook's registration that pfSense's own install loses
 update_status("Applying the CrowdSec bouncer service...");
-pfb_crowdsec_apply();
+pfb_crowdsec_resync();
 update_status(" done.\n");
 
 // Upgrade EasyList to new Format

@@ -247,36 +247,37 @@ function pfb_crowdsec_rule_state(): array {
 	return array_intersect_key(pfb_crowdsec_settings(), array_flip(PFB_CROWDSEC_RULE_FIELDS));
 }
 
-/** The settings the peers receive, as read now: the section's registry entries of sync class `policy`. */
-function pfb_crowdsec_policy_state(): array {
-	$state = [];
-	foreach (pfb_cfg_registry() as $key => $entry) {
-		if (str_starts_with($key, 'crowdsec/') && $entry['sync'] === 'policy') {
-			$state[$key] = PfbConfig::read($key);
-		}
-	}
-	return $state;
-}
-
 /**
- * The Settings subtab's save (D4): store $values (pfb_crowdsec_validate()'s, over the section's other keys), apply the decision at
- * once, reload the filter when the enable or a rule setting changed, or the bouncer was turned on or off, and mark pending changes
- * when a setting of sync class `policy` changed.
+ * The Settings subtab's save (D4): store $values (pfb_crowdsec_validate()'s, over the section's other keys), write the rule hook's
+ * registration when it is missing, apply the decision at once, and reload the filter when the enable or a rule setting changed, the
+ * bouncer was turned on or off, or the hook was registered while it should run. The page then runs the save-mode pass, which sends the
+ * change to the peers as the General save does.
  *
  * @param array<string, string> $values
  */
 function pfb_crowdsec_save(array $values): void {
 	$section = PfbConfig::readSection(PFB_SECTIONS['crowdsec']);
 	$before = pfb_crowdsec_rule_state();
-	$policy = pfb_crowdsec_policy_state();
 	PfbConfig::writeSection(PFB_SECTIONS['crowdsec'], array_replace(is_array($section) ? $section : [], $values));
 	write_config('pfBlockerNG: save the CrowdSec settings');
+	$registered = pfb_crowdsec_register_rule_hook();
 	$turned = pfb_crowdsec_apply();
-	if ($turned || $before !== pfb_crowdsec_rule_state()) {
+	if ($turned || $before !== pfb_crowdsec_rule_state() || ($registered && pfb_crowdsec_should_run())) {
 		filter_configure();
 	}
-	if ($policy !== pfb_crowdsec_policy_state()) {
-		pfb_mark_pending_changes();	// applied here already; the peers receive it on the next Update
+}
+
+/**
+ * Apply the bouncer for a trigger outside its Settings (D4): the master enable's save, the wizard, an XMLRPC receive that changed
+ * the master enable or the CrowdSec section, and the installer. Writes the rule hook's registration when it is missing, applies the
+ * decision, and reloads the filter when the rules changed: the bouncer was turned on or off, or the hook was registered while it
+ * should run.
+ */
+function pfb_crowdsec_resync(): void {
+	$registered = pfb_crowdsec_register_rule_hook();
+	$turned = pfb_crowdsec_apply();
+	if ($turned || ($registered && pfb_crowdsec_should_run())) {
+		filter_configure();
 	}
 }
 

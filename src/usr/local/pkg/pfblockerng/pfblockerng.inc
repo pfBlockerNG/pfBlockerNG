@@ -30650,6 +30650,22 @@ function pfb_sync_receive_changed(?bool $set = NULL): bool {
 	return $changed;
 }
 
+// Request-local: set by a receive that changed the master enable's section or the CrowdSec section, consumed by plugin_xmlrpc_recv_done.
+function pfb_crowdsec_received(?bool $set = NULL): bool {
+	static $changed = FALSE;
+	if ($set !== NULL) {
+		$changed = $set;
+	}
+	return $changed;
+}
+
+// A receive's changed paths: does the bouncer's "should run" decision have to be applied again (issue #4139)?
+function pfb_crowdsec_receive_note(array $paths): void {
+	if (array_intersect(array_keys($paths), array('installedpackages/pfblockerng', 'installedpackages/pfblockerngcrowdsec')) !== array()) {
+		pfb_crowdsec_received(TRUE);
+	}
+}
+
 // The stored scope of this node's sync ('policy', 'all' or 'lists'); NULL for anything else, so the registry default never sends.
 function pfb_sync_stored_scope(): ?string {
 	$scope = PfbConfig::readSection(PFB_SECTIONS['sync'])['syncscope'] ?? NULL;
@@ -30822,6 +30838,7 @@ function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
 	if ($changed !== array()) {
 		pfb_sync_receive_changed(TRUE);
 	}
+	pfb_crowdsec_receive_note($changed);
 
 	return $changed;
 }
@@ -30830,6 +30847,11 @@ function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
 function pfblockerng_plugin_xmlrpc_recv_done($unused) {
 	global $pfb;
 
+	// issue #4139: the bouncer follows a received master enable or CrowdSec setting here, in the receive itself; the pass never applies it
+	if (pfb_crowdsec_received()) {
+		pfb_crowdsec_received(FALSE);
+		pfb_crowdsec_resync();
+	}
 	if (!pfb_sync_receive_changed()) {
 		return;
 	}
@@ -30886,6 +30908,7 @@ function pfblockerng_plugin_xmlrpc_recv($new_sections) {
 		$ret[$enable_path]         = $enable;
 		$ret['xmlrpc_recv_result'] = TRUE;
 	}
+	pfb_crowdsec_receive_note($ret);
 
 	return $ret;
 }

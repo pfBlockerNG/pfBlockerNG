@@ -1382,12 +1382,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		break;
 	}
 
-	// issue #4072: the CrowdSec rule hook's registration, which pfSense's own install loses. A running bouncer has no rules until
-	// the filter reloads with it: reload at once, as an install and an early-ending pass never reach the pass's own reload
-	if (pfb_crowdsec_register_rule_hook() && pfb_crowdsec_should_run()) {
-		filter_configure();
-	}
-
 	// Materialize/refresh the routing when the drop-in is missing — covers a fresh
 	// registration AND the #484 lifecycle gap (core runs system_syslogd_start only at
 	// install/resync, so a CLI reload / uninstall->redeploy could lose the drop-in).
@@ -5269,13 +5263,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// Before the reload (pfSense HA sync) and the XMLRPC sync below can see this pass's own writes.
 	if ($pfb_sync_absorb) {
 		pfb_sync_receive_legacy_absorb($pfb['dbdir']);
-	}
-
-	// issue #4071: the CrowdSec bouncer follows the master enable and its own settings here (the pass also runs after an XMLRPC
-	// receive, whose own filter reload already carries changed rule settings). Turned on or off, its rules change with the one
-	// filter reload below.
-	if (pfb_crowdsec_apply()) {
-		$pfb['filter_configure'] = TRUE;
 	}
 
 	#################################

@@ -9,13 +9,12 @@ use PHPUnit\Framework\TestCase;
  * Issue #4072 -- pfSense calls the CrowdSec rule hook only for a package whose installedpackages/package/<n> entry names it in
  * filter_rule_function. pfSense's install_package_xml() sets that from <filter_rules_needed> in memory only, then runs the
  * package's install command, whose pfb_global() re-reads config.xml and drops it (seen on pfSense CE 2.8.1: empty after
- * `pkg add`). So pfBlockerNG registers it itself, on every update pass (the install's resync included), as it does its
- * <logging> block.
+ * `pkg add`). So pfBlockerNG registers it itself, from each trigger that applies the bouncer (CrowdsecTriggersTest; issue #4139:
+ * never from the update pass).
  *
  * Intent pinned here:
- *   - the pass registers pfblockerng.xml's own filter_rules_needed on pfBlockerNG's entry, and writes config.xml once;
- *   - an entry that already names it is left alone (no write), and no other package's entry is touched;
- *   - the pass calls it before its install/boot early return, so an install and an upgrade register it too.
+ *   - it registers pfblockerng.xml's own filter_rules_needed on pfBlockerNG's entry, and writes config.xml once;
+ *   - an entry that already names it is left alone (no write), and no other package's entry is touched.
  */
 #[CoversFunction('pfb_crowdsec_register_rule_hook')]
 final class CrowdsecRuleHookRegistrationTest extends TestCase
@@ -90,28 +89,5 @@ final class CrowdsecRuleHookRegistrationTest extends TestCase
 		$this->assertFalse(pfb_crowdsec_register_rule_hook(), 'already there');
 		config_set_path('installedpackages/package', [self::OTHER]);
 		$this->assertFalse(pfb_crowdsec_register_rule_hook(), 'no pfBlockerNG entry');
-	}
-
-	public function testAFreshRegistrationReloadsTheFilterAtOnceWhileTheBouncerShouldRun(): void
-	{
-		$apply = file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
-		$this->assertIsString($apply);
-		$pass = substr($apply, (int) strpos($apply, 'function sync_package_pfblockerng('));
-		// At once, not through the pass's own reload: an install or upgrade, and a pass that stops early, never reach that
-		$this->assertSame(1, preg_match('~if \(pfb_crowdsec_register_rule_hook\(\) && pfb_crowdsec_should_run\(\)\) \{\s*filter_configure\(\);\s*\}~', $pass),
-			'a running bouncer has no rules until the filter reloads with the hook registered');
-	}
-
-	public function testTheUpdatePassRegistersItBeforeItsInstallAndBootEarlyReturn(): void
-	{
-		$apply = file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
-		$this->assertIsString($apply);
-		$pass = substr($apply, (int) strpos($apply, 'function sync_package_pfblockerng('));
-		$call = strpos($pass, 'pfb_crowdsec_register_rule_hook()');
-		$boot = strpos($pass, "if (is_platform_booting() || \$g['pfblockerng_install'])");
-		$this->assertNotFalse($call, 'the pass registers the hook');
-		$this->assertNotFalse($boot);
-		$this->assertLessThan($boot, $call, 'before the install and boot early return');
-		$this->assertSame(1, substr_count($apply, 'pfb_crowdsec_register_rule_hook('), 'once per pass');
 	}
 }

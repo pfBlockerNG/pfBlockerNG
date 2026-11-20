@@ -329,6 +329,8 @@ ZXRnYXRlLmNvbQ0K
 	}
 	pfb_clear_contents();
 	pfb_global();
+	// issue #4139: the reset removed the CrowdSec settings and turned pfBlockerNG on: the bouncer follows at once
+	pfb_crowdsec_resync();
 
 	// Restart Unbound - Code from services_unbound.php 'apply'
 	pfb_unbound_dnsbl('disabled');

@@ -10,9 +10,6 @@ use PHPUnit\Framework\TestCase;
  * Issue #4071 -- where the bouncer service is declared, applied and removed (docs/specs/crowdsec-integration.md, D4).
  *
  *   - pfblockerng.xml declares the service pfb_crowdsec, whose status is the bouncer's own pidfile;
- *   - pfBlockerNG's update pass applies the "should run" decision before its filter reload, and asks for that reload when the
- *     bouncer started or stopped, so that its rules follow: the pass runs after a master enable change, an XMLRPC receive (the
- *     receive marks pending changes and runs a tick) and an install or upgrade (the resync);
  *   - the installer applies it once the package's services are registered (start_service() acts only on a registered one);
  *   - removal stops the service and leaves no rc file, config file, status file or pidfile (the binaries are package files);
  *   - the Settings page is covered by the package's page privilege;
@@ -65,28 +62,11 @@ final class CrowdsecWiringTest extends TestCase
 		$this->assertSame([['pfb_crowdsec.sh', "isvalidpid('/var/run/pfb_crowdsec.pid')", 'pfBlockerNG CrowdSec bouncer']], $found);
 	}
 
-	public function testTheUpdatePassAppliesTheDecisionBeforeItsFilterReloadAndReloadsWhenTheBouncerStartedOrStopped(): void
-	{
-		$apply = self::source('pfblockerng/pfblockerng_apply.inc');
-		$pass = substr($apply, (int) strpos($apply, 'function sync_package_pfblockerng('));
-		$boot = strpos($pass, "if (is_platform_booting() || \$g['pfblockerng_install'])");
-		$call = strpos($pass, 'if (pfb_crowdsec_apply()) {');
-		$reload = strpos($pass, "if (\$pfb['filter_configure']) {");
-		$this->assertNotFalse($boot);
-		$this->assertNotFalse($call, 'the pass applies the decision');
-		$this->assertNotFalse($reload);
-		$this->assertGreaterThan($boot, $call, 'after the boot and install early return: the rc script and the installer own those');
-		$this->assertLessThan($reload, $call, 'before the one filter reload of the pass');
-		$this->assertSame(1, preg_match("~if \\(pfb_crowdsec_apply\\(\\)\\) \\{\\s*\\\$pfb\\['filter_configure'\\] = TRUE;\\s*\\}~", $pass),
-			'a started or stopped bouncer reloads the filter');
-		$this->assertSame(1, substr_count($apply, 'pfb_crowdsec_apply('), 'once per pass');
-	}
-
 	public function testTheInstallerAppliesTheDecisionOnceTheServicesAreRegistered(): void
 	{
 		$install = self::source('pfblockerng/pfblockerng_install.inc');
 		$register = strpos($install, 'pfb_package_services_register(');
-		$call = strpos($install, 'pfb_crowdsec_apply();');
+		$call = strpos($install, 'pfb_crowdsec_resync();');
 		$this->assertNotFalse($register);
 		$this->assertNotFalse($call, 'install and upgrade apply the decision');
 		$this->assertGreaterThan($register, $call);
