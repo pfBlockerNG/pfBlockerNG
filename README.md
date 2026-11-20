@@ -246,6 +246,8 @@ channel recipe you want, e.g. `net/pfSense-pkg-pfBlockerNG-nightly` (the line th
   [official user documentation](https://pfblockerng.com/).
 - **pfB-DNS encrypted DNS discovery:**
   [Kea DNR, Android DoT, certificates, and public-address DDR](docs/user/pfb-dns/encrypted-dns-discovery.md).
+- **CrowdSec bouncer:**
+  [setup, rules, status, metrics, HA sync, and migration from the CrowdSec package](docs/user/crowdsec/bouncer.md).
 - **Installing project builds:**
   [package repository](https://pkg.pfblockerng.com).
 - **Developing, testing, and releasing this package:**
