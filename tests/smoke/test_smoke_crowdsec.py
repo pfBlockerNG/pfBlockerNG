@@ -89,6 +89,7 @@ SALVAGE = 120.0  # a cap on waiting for an asynchronous event that has no bound 
 
 SIGNALLED = "SIGUSR1: checking the tables"
 PROGRAM = re.compile(r"\bpfb_crowdsec(\[\d+\])?: |\bpfb_crowdsec (\d+|-) \S+ ")
+# syslog can join two of the bouncer's messages on one line: read every match on a line
 RESTORED = re.compile(r"(crowdsec_v[46]): restored \d+ values \(table was missing\)")
 
 # The engine's decisions for the whole module: what the tables must hold whenever no test has added its own. Plus three
@@ -695,7 +696,7 @@ def test_a_filter_reload_leaves_both_tables_full_within_2_s(
         f"inconclusive: a pull came before the tables were seen full, it may have restored them: {between}"
     )
     log = _await(lambda: _bouncer_log(vm, mark), lambda lines: any(SIGNALLED in line for line in lines), "the signal")
-    restored = {m.group(1) for line in log if (m := RESTORED.search(line))}
+    restored = {table for line in log for table in RESTORED.findall(line)}
     assert restored == set(TABLES.values()), (
         "the reload killed both tables and the signal restored them:\n" + "\n".join(log)
     )
@@ -715,7 +716,7 @@ def test_a_filter_reload_without_the_signal_is_repaired_by_the_next_pull(bouncer
         log = _within(
             2 * UPDATE_FREQUENCY,
             lambda: _bouncer_log(vm, mark),
-            lambda lines: {m.group(1) for line in lines if (m := RESTORED.search(line))} == set(TABLES.values()),
+            lambda lines: {table for line in lines for table in RESTORED.findall(line)} == set(TABLES.values()),
             "both tables restored after the reload killed them",
         )
     finally:
