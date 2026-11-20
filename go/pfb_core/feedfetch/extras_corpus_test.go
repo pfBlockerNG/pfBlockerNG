@@ -510,7 +510,10 @@ func TestObserveTellsADirectoryFromNothing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "f"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for path, want := range map[string]any{"asn.update": "<not a regular file>", "missing": nil, "f": "x"} {
+	if err := os.Symlink("f", filepath.Join(root, "foreign")); err != nil {
+		t.Fatal(err) // a link that is no share entry link reads as what it is, not as its target
+	}
+	for path, want := range map[string]any{"asn.update": "<not a regular file>", "missing": nil, "f": "x", "foreign": "<not a regular file>"} {
 		if got := observe(t, filepath.Join(root, path)); got != want {
 			t.Errorf("observe(%s) = %#v, want %#v", path, got, want)
 		}

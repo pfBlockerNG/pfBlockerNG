@@ -13,10 +13,10 @@ import (
 	"strings"
 )
 
-// publishGeoIP is the geoip branch of pfb_download(). A tar (gzipped or not) is extracted with its top folder stripped
-// into a directory staged inside the share, and each member then replaces its live copy (pfb_geoip_extract_tar_to_share);
-// a zip of more than one member does the same inside target (pfb_stage_publish_dir_merge), which only the CSV row, whose
-// target is the share, accepts. A zip of one member is published whole over target. Every member name is checked before
+// publishGeoIP is the geoip branch of pfb_download(). A tar (gzipped or not) is extracted with its top folder stripped,
+// and its members are published into the share by mergeIntoDir (pfb_geoip_extract_tar_to_share); a zip of more than one
+// member does the same inside target (pfb_stage_publish_dir_merge), which only the CSV row, whose target is the share,
+// accepts. A zip of one member is published whole over target. Every member name is checked before
 // anything is written (ADR-46). Any other accepted body is renamed over target. On a database row a body, or the
 // archive's member of that name, must be a MaxMind DB (owner, #4058).
 func (f *Fetcher) publishGeoIP(ctx context.Context, mime, raw, share, target string) Result {
@@ -333,6 +333,9 @@ func copyZipMember(ctx context.Context, zf *zip.File, w io.Writer) error {
 // refuses the whole publication before anything changes. An entry relink that fails after the archive link switched
 // reports a failed publication, and the next one finishes the switch.
 func mergeIntoDir(target, archive string, extract func(dir string) error) bool {
+	if archive == "" || archive == "." || archive == ".." || strings.Contains(archive, "/") || strings.HasSuffix(archive, ".entry") {
+		return false // it would name no link of its own beside the entries
+	}
 	if info, err := os.Lstat(target); err != nil || !info.IsDir() {
 		return false
 	}

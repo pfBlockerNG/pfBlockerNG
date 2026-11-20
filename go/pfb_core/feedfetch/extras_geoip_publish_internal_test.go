@@ -137,14 +137,15 @@ func TestARefusedArchivePublicationChangesNothing(t *testing.T) {
 		entries map[string]string
 		extract func(string) error
 	}{
-		"a dot member":                  {entries: map[string]string{"GeoLite2-Country.mmdb": "new", ".cc.lock": "x"}},
-		"the country folder":            {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "cc": "x"}, prepare: linkedCC},
-		"a live folder":                 {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: liveDir("LICENSE.txt")},
-		"a folder over a file":          {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "sub/notes.txt": "x"}, prepare: liveFile("sub")},
-		"a dot-folder link to a folder": {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: dotFolderLink("LICENSE.txt")},
-		"a foreign link":                {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: foreignLink("LICENSE.txt")},
-		"a failed extraction":           {extract: func(string) error { return os.ErrInvalid }},
-		"a failed link rename":          {entries: map[string]string{"GeoLite2-Country.mmdb": "new"}, prepare: failRenames},
+		"a dot member":                      {entries: map[string]string{"GeoLite2-Country.mmdb": "new", ".cc.lock": "x"}},
+		"the country folder":                {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "cc": "x"}, prepare: linkedCC},
+		"a live folder":                     {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: liveDir("LICENSE.txt")},
+		"a folder over a file":              {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "sub/notes.txt": "x"}, prepare: liveFile("sub")},
+		"a dot-folder link to a folder":     {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: dotFolderLink("LICENSE.txt")},
+		"a link to a folder of the archive": {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: ownFolderLink("LICENSE.txt")},
+		"a foreign link":                    {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: foreignLink("LICENSE.txt")},
+		"a failed extraction":               {extract: func(string) error { return os.ErrInvalid }},
+		"a failed link rename":              {entries: map[string]string{"GeoLite2-Country.mmdb": "new"}, prepare: failRenames},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -212,6 +213,18 @@ func dotFolderLink(name string) func(*testing.T, string) {
 		}
 		if err := os.Symlink(".local/"+name, filepath.Join(share, name)); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func ownFolderLink(name string) func(*testing.T, string) {
+	return func(t *testing.T, share string) {
+		gens := generations(t, share, "GeoLite2-Country.tar.gz")
+		if err := os.Mkdir(filepath.Join(share, gens[0], "sub"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(".GeoLite2-Country.tar.gz/sub", filepath.Join(share, name)); err != nil {
+			t.Fatal(err) // through the archive's own link, but to another entry: a folder
 		}
 	}
 }
@@ -284,6 +297,9 @@ func TestAFailedEntryRelinkIsReportedAndFinishedNextTime(t *testing.T) {
 	if mergeIntoDir(share, "GeoLite2-Country-CSV.zip", entries) || !failed {
 		t.Fatal("a failed entry relink was not reported")
 	}
+	if _, err := os.Lstat(filepath.Join(share, ".GeoLite2-Country-CSV.zip.entry")); err == nil {
+		t.Error("the temp entry link was left behind")
+	}
 	if !mergeIntoDir(share, "GeoLite2-Country-CSV.zip", entries) {
 		t.Fatal("the next publication failed")
 	}
@@ -300,4 +316,38 @@ func TestAFolderEntryRepublishesOverItsOwnLink(t *testing.T) {
 		}
 	}
 	assertEntry(t, share, "extra/notes.txt", "v2")
+}
+
+// The archive's link is named for its download, .<download>, without the transfer's .raw suffix.
+func TestTheArchiveLinkIsNamedForTheDownload(t *testing.T) {
+	share := t.TempDir()
+	merge := archiveMerge(filepath.Join(share, "GeoLite2-Country.tar.gz.raw"))
+	if !merge(share, writeEntries(map[string]string{"GeoLite2-Country.mmdb": "v1"})) {
+		t.Fatal("the publication failed")
+	}
+	if to, err := os.Readlink(filepath.Join(share, "GeoLite2-Country.mmdb")); err != nil || to != ".GeoLite2-Country.tar.gz/GeoLite2-Country.mmdb" {
+		t.Errorf("the entry links to %q, %v", to, err)
+	}
+}
+
+// An archive name that would not name a link of its own beside the entries (empty, ".", "..", one with a slash, or one
+// whose link would be another archive's temp entry link) refuses the publication and touches nothing.
+func TestAnArchiveNameThatNamesNoLinkIsRefused(t *testing.T) {
+	for _, archive := range []string{"", ".", "..", "a/b", "GeoLite2-Country.tar.gz.entry"} {
+		t.Run(archive, func(t *testing.T) {
+			parent := t.TempDir()
+			share := filepath.Join(parent, "share")
+			if err := os.Mkdir(share, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if mergeIntoDir(share, archive, writeEntries(map[string]string{"x.csv": "x"})) {
+				t.Fatal("published")
+			}
+			for _, dir := range []string{parent, share} {
+				if entries, _ := os.ReadDir(dir); len(entries) != map[string]int{parent: 1, share: 0}[dir] {
+					t.Errorf("%s holds %d entries after the refusal", dir, len(entries))
+				}
+			}
+		})
+	}
 }
