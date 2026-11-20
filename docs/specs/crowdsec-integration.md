@@ -194,7 +194,8 @@ firewall-bouncer part of the official package and live in a new `PFB_SECTIONS` a
 - **Should run** = pfBlockerNG master enable on, `crowdsec/enable` on, and a stored key.
   - The Settings subtab's save writes the config file and applies at once: start, restart
     when the file changed, or stop. It reloads the filter when the enable or any rule
-    setting changed.
+    setting changed, and marks pending changes when a policy setting changed, like the
+    other settings pages.
   - pfBlockerNG's sync pass (master enable changes, XMLRPC receive, install and upgrade)
     applies the same "should run" decision, so turning pfBlockerNG off stops the bouncer
     and removes its rules.

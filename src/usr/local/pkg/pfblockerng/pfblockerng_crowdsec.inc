@@ -245,20 +245,36 @@ function pfb_crowdsec_rule_state(): array {
 	return array_intersect_key(pfb_crowdsec_settings(), array_flip(PFB_CROWDSEC_RULE_FIELDS));
 }
 
+/** The settings the peers receive, as read now: the section's registry entries of sync class `policy`. */
+function pfb_crowdsec_policy_state(): array {
+	$state = [];
+	foreach (pfb_cfg_registry() as $key => $entry) {
+		if (str_starts_with($key, 'crowdsec/') && $entry['sync'] === 'policy') {
+			$state[$key] = PfbConfig::read($key);
+		}
+	}
+	return $state;
+}
+
 /**
  * The Settings subtab's save (D4): store $values (pfb_crowdsec_validate()'s, over the section's other keys), apply the decision at
- * once, and reload the filter when the enable or a rule setting changed, or the bouncer was turned on or off.
+ * once, reload the filter when the enable or a rule setting changed, or the bouncer was turned on or off, and mark pending changes
+ * when a setting of sync class `policy` changed.
  *
  * @param array<string, string> $values
  */
 function pfb_crowdsec_save(array $values): void {
 	$section = PfbConfig::readSection(PFB_SECTIONS['crowdsec']);
 	$before = pfb_crowdsec_rule_state();
+	$policy = pfb_crowdsec_policy_state();
 	PfbConfig::writeSection(PFB_SECTIONS['crowdsec'], array_replace(is_array($section) ? $section : [], $values));
 	write_config('pfBlockerNG: save the CrowdSec settings');
 	$turned = pfb_crowdsec_apply();
 	if ($turned || $before !== pfb_crowdsec_rule_state()) {
 		filter_configure();
+	}
+	if ($policy !== pfb_crowdsec_policy_state()) {
+		pfb_mark_pending_changes();	// applies on the next Update, not on save
 	}
 }
 
