@@ -1,0 +1,32 @@
+{
+	"schema": 1,
+	"description": "A proxy or satellite network located by one of MaxMind's continent-only ids (6255147 Asia, 6255148 Europe) goes to A1_<id> or A2_<id> under Proxy and Satellite, as a network located there without a flag goes to <id> (#4126). Today's PHP stages it as A1_A1 or A2_A2 and drops it (old_expect).",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n",
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n1.0.1.0/24,1814991,1814991,,0,0,\n31.0.0.0/8,6255148,6255148,,1,0,\n32.0.0.0/8,6255147,6255147,,0,1,\n33.0.0.0/8,6255148,6255148,,0,0,\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"expect": {
+		"ok": true,
+		"files": {
+			"cc/A1_6255148_v4.txt": "31.0.0.0/8\n",
+			"cc/A2_6255147_v4.txt": "32.0.0.0/8\n",
+			"cc/6255148_v4.txt": "33.0.0.0/8\n",
+			"cc/A1_A1_v4.txt": null,
+			"cc/A2_A2_v4.txt": null
+		},
+		"tree": "7a6f6f29ab75083fc4fe5833b20d6b5b075d135ef356c6b69f79f301ac1a47af"
+	},
+	"old_expect": {
+		"ok": true,
+		"files": {
+			"cc/A1_6255148_v4.txt": null,
+			"cc/A2_6255147_v4.txt": null,
+			"cc/6255148_v4.txt": "33.0.0.0/8\n",
+			"cc/A1_A1_v4.txt": null,
+			"cc/A2_A2_v4.txt": null
+		},
+		"tree": "18f1c042ad421ed2675d22277e253ec38cd5bde822d7c8740dae1c351cef52e7"
+	}
+}

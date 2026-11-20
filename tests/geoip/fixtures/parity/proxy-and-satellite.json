@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "Proxy and satellite networks: one registered elsewhere goes to A1_<registered>_rep or A2_<registered>_rep, one with neither id to A1 or A2, and one with a country of its own is dropped: it is staged as A1_A1 or A2_A2, which no continent file lists.",
+	"description": "Proxy and satellite networks: one registered elsewhere goes to A1_<registered>_rep or A2_<registered>_rep, one with neither id to A1 or A2, and one with a country of its own to A1_<country> or A2_<country>, listed under Proxy and Satellite (#4126). Today's PHP stages that one as A1_A1 or A2_A2, which no continent file lists, and drops it (old_expect).",
 	"share_mtime": "2026-11-17T08:30:00Z",
 	"share": {
 		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n",
@@ -8,6 +8,20 @@
 		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
 	},
 	"expect": {
+		"ok": true,
+		"files": {
+			"cc/A1_v4.txt": "13.0.0.0/8\n",
+			"cc/A1_A1_v4.txt": null,
+			"cc/A1_DE_rep_v4.txt": "12.0.0.0/8\n",
+			"cc/A2_v4.txt": "16.0.0.0/8\n",
+			"cc/A2_US_rep_v4.txt": "15.0.0.0/8\n",
+			"cc/A1_US_rep_v4.txt": "",
+			"cc/A1_US_v4.txt": "11.0.0.0/8\n12.0.0.0/8\n",
+			"cc/A2_DE_v4.txt": "14.0.0.0/8\n"
+		},
+		"tree": "11e0b1648f0280db2f9dbf8087c706ac32798a8e4eb0357d501f73e9e66f1402"
+	},
+	"old_expect": {
 		"ok": true,
 		"files": {
 			"cc/A1_v4.txt": "13.0.0.0/8\n",

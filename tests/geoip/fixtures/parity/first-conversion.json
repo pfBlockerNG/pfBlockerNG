@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "A first conversion: each country's networks land in its list and its continent file, a network registered elsewhere in the registered country's _rep list, a proxy or satellite network in the A1_ or A2_ lists.",
+	"description": "A first conversion: each country's networks land in its list and its continent file, a network registered elsewhere in the registered country's _rep list, a proxy or satellite network in the A1_ or A2_ lists. A satellite network with a country of its own goes to A2_<country> (#4126); today's PHP drops it (old_expect).",
 	"locale": "en",
 	"share_mtime": "2026-11-17T08:30:00Z",
 	"share": {
@@ -9,6 +9,17 @@
 		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2001:200::/23,1814991,1814991,,0,0,\n2600::/12,6252001,6252001,,0,0,\n"
 	},
 	"expect": {
+		"ok": true,
+		"files": {
+			"cc/US_v4.txt": "3.0.0.0/15\n",
+			"cc/US_rep_v4.txt": "5.1.0.0/21\n",
+			"cc/CN_v6.txt": "2001:200::/23\n",
+			"log/maxmind_ver": "MaxMind GeoLite2 Date/Time Stamp\nLast-Modified: 2026-11-17 08:30:00\nDuplicate Represented IP4 Networks: 2\n",
+			"cc/A2_DE_v4.txt": "9.9.9.0/24\n"
+		},
+		"tree": "8ff32639e5c9e7c7be741e429691cf645d54620d47078c757026061d41f30ac8"
+	},
+	"old_expect": {
 		"ok": true,
 		"files": {
 			"cc/US_v4.txt": "3.0.0.0/15\n",
