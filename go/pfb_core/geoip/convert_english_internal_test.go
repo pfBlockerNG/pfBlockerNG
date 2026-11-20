@@ -38,7 +38,7 @@ func writeShare(t *testing.T, c Conversion, name, content string) {
 	}
 }
 
-const noContinent = " [ MAXMIND UPDATE FAIL, no MaxMind country has a continent, using previous Country code database ]\n"
+const noContinent = " [ MAXMIND UPDATE FAIL, no MaxMind country has a continent file, using previous Country code database ]\n"
 
 // assertNoContinent checks the run failed for want of a continent and kept the previous generation.
 func assertNoContinent(t *testing.T, c Conversion, log *bytes.Buffer) {
@@ -59,19 +59,34 @@ func TestAConversionThatPlacesNoMaxMindCountryKeepsThePreviousGeneration(t *test
 	assertNoContinent(t, c, log)
 }
 
-// A continent name that is not a word names no continent file.
-func TestAContinentNameThatIsNotAWordPlacesNoCountry(t *testing.T) {
-	c, log := conversionRoot(t, testBlocks)
-	writeShare(t, c, "GeoLite2-Country-Locations-en.csv", locationsHeader+"6252001,en,NA,North-America,US,\"United States\",0\n")
-	assertNoContinent(t, c, log)
+// A country is placed only when its list lands in a continent file the split reads.
+func TestACountryWhoseListReachesNoContinentFileIsNotPlaced(t *testing.T) {
+	for name, rows := range map[string]string{
+		"continent not a word":    "6252001,en,NA,North-America,US,\"United States\",0\n",
+		"continent of no file":    "6252001,en,NA,NorthAmerica,US,\"United States\",0\n",
+		"ISO not a word":          "6252001,en,NA,\"North America\",\"U S\",\"United States\",0\n",
+		"Top Spammers key":        "9A0001,en,EU,Europe,QQ,Q,0\n",
+		"a later row unplaces it": "6252001,en,NA,\"North America\",US,\"United States\",0\n6252001,en,NA,North-America,US,\"United States\",0\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, log := conversionRoot(t, testBlocks)
+			writeShare(t, c, "GeoLite2-Country-Locations-en.csv", locationsHeader+rows)
+			assertNoContinent(t, c, log)
+		})
+	}
 }
 
-// A country's last row is the one converted: an earlier row of the same country with a continent places nothing.
-func TestALaterRowOfTheSameCountryDecidesItsContinent(t *testing.T) {
+// A country's last row is the one converted: a later row with a continent places it.
+func TestALaterRowOfTheSameCountryPlacesIt(t *testing.T) {
 	c, log := conversionRoot(t, testBlocks)
 	writeShare(t, c, "GeoLite2-Country-Locations-en.csv", locationsHeader+
-		"6252001,en,NA,\"North America\",US,\"United States\",0\n6252001,en,NA,North-America,US,\"United States\",0\n")
-	assertNoContinent(t, c, log)
+		"6252001,en,NA,North-America,US,\"United States\",0\n6252001,en,NA,\"North America\",US,\"United States\",0\n")
+	if !c.Run(context.Background()) {
+		t.Fatalf("conversion failed:\n%s", log)
+	}
+	if b, _ := os.ReadFile(filepath.Join(c.CCDir, "US_v4.txt")); string(b) != "3.0.0.0/15\n" {
+		t.Errorf("US_v4.txt = %q", b)
+	}
 }
 
 // A Locations file that lists no country leaves every country to the built-in table, which places them all.
