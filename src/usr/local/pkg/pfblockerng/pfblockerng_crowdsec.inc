@@ -207,9 +207,9 @@ function pfb_crowdsec_config_write(string $content, string $path): bool {
 }
 
 /**
- * Apply the "should run" decision (D4). Called by the Settings save and by pfb_crowdsec_resync(), never by the update pass. While the
- * bouncer should run: write the config file and start the service, or restart it when the file or the installed binary changed
- * (pfb_crowdsec_binary_changed()). Otherwise: stop it and remove the file, which also keeps the rc script's
+ * Apply the "should run" decision (D4). Called by pfb_crowdsec_resync() (every trigger, the Settings save included), never by
+ * the update pass. While the bouncer should run: write the config file and start the service, or restart it when the file or the
+ * installed binary changed (pfb_crowdsec_binary_changed()). Otherwise: stop it and remove the file, which also keeps the rc script's
  * own start (at boot) from starting it. The rc script is (re)generated on every call.
  *
  * @return bool TRUE when the bouncer was turned on or off (the config file appeared or went): its rules change, so the caller
@@ -277,23 +277,19 @@ function pfb_crowdsec_save(array $values): void {
 	$before = pfb_crowdsec_rule_state();
 	PfbConfig::writeSection(PFB_SECTIONS['crowdsec'], array_replace(is_array($section) ? $section : [], $values));
 	write_config('pfBlockerNG: save the CrowdSec settings');
-	$registered = pfb_crowdsec_register_rule_hook();
-	$turned = pfb_crowdsec_apply();
-	if ($turned || $before !== pfb_crowdsec_rule_state() || ($registered && pfb_crowdsec_should_run())) {
-		filter_configure();
-	}
+	pfb_crowdsec_resync($before !== pfb_crowdsec_rule_state());
 }
 
 /**
  * Apply the bouncer for a trigger outside its Settings (D4): the master enable's save, the wizard, an XMLRPC receive that changed
  * the master enable or the CrowdSec section, and the installer. Writes the rule hook's registration when it is missing, applies the
  * decision, and reloads the filter when the rules changed: the bouncer was turned on or off, or the hook was registered while it
- * should run.
+ * should run, or the caller says a rule setting changed ($rulesChanged, the Settings save).
  */
-function pfb_crowdsec_resync(): void {
+function pfb_crowdsec_resync(bool $rulesChanged = FALSE): void {
 	$registered = pfb_crowdsec_register_rule_hook();
 	$turned = pfb_crowdsec_apply();
-	if ($turned || ($registered && pfb_crowdsec_should_run())) {
+	if ($turned || $rulesChanged || ($registered && pfb_crowdsec_should_run())) {
 		filter_configure();
 	}
 }
@@ -499,7 +495,7 @@ function pfb_crowdsec_lapi_get(string $url, string $key): array {
 /**
  * (Re)generate /usr/local/etc/rc.d/pfb_crowdsec.sh, the bouncer's service (D4), in the shape of Core's (pfb_core_service()).
  *
- * Start and stop run under one lock (PFB_CROWDSEC_LOCKFILE, waited for at most 20 s; a start or stop that cannot get it does nothing
+ * Start and stop each run under one lock (PFB_CROWDSEC_LOCKFILE, waited for at most 20 s; a start or stop that cannot get it does nothing
  * and exits 75), so two starts run one after the other and the second keeps the first one's bouncer. Start: only while the config file
  * exists (pfb_crowdsec_apply() keeps it exactly while the bouncer should run, so the boot start follows the settings too); a
  * supervisor its pidfile names keeps running. Otherwise it stops what is left (a survivor fails the start) and runs this machine's
@@ -640,19 +636,11 @@ EOF;
 		/bin/sleep 1
 		waited="\$((waited + 1))"
 	done
-	/bin/rm -f {$daemonpid} {$childpid} {$record}
+	/bin/rm -f {$daemonpid} {$childpid}
 
 EOF;
 	// A survivor must fail the restart: the start would otherwise report success over it. The argument keeps the upgrade check out
-	$rc['restart']	= <<<EOF
-	if [ -z "\${PFB_CROWDSEC_LOCKED:-}" ]; then
-		PFB_CROWDSEC_LOCKED=1 /usr/bin/lockf -k -t 20 {$lockfile} /bin/sh "\$0" restart
-		return "\$?"
-	fi
-	rc_stop restart || return 1
-	rc_start
-
-EOF;
+	$rc['restart']	= "\trc_stop restart || return 1\n\trc_start\n";
 	write_rcfile($rc);
 }
 

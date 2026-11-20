@@ -505,8 +505,8 @@ amendment's start, stop and pidfile rules.
   sync_package_pfblockerng();`, whose `pfblockerng_sync_on_changes()` sends the change to the manual targets at once. In the automatic
   mode, every `write_config()` ends in pfSense's `carp_sync_client()`, which sends `filter sync`, so `rc.filter_synchronize` carries
   the change with no filter reload.
-- **Start and stop.** The rc script has Core's shape (`pfb_core_service()`): start, stop and restart run under one lock
-  (`lockf -k -t 20 /var/run/pfb_crowdsec.lock`), so two starts run one after the other, and the second keeps the bouncer the first one
+- **Start and stop.** The rc script has Core's shape (`pfb_core_service()`): start and stop each run under one lock
+  (`lockf -k -t 20 /var/run/pfb_crowdsec.lock`; restart is stop then start, each locked), so two starts run one after the other, and the second keeps the bouncer the first one
   started. Start keeps a supervisor its pidfile names; otherwise it stops what is left and launches. Stop signals a pid only while a
   pidfile names it and its command line is the bouncer's or the supervisor's, and removes the pidfiles once nothing runs. The #4123
   stop by command line alone, the start's handling of daemon(8)'s status 3 and the `lockf -s -n -t 0` pidfile removal are gone: under
@@ -518,4 +518,8 @@ amendment's start, stop and pidfile rules.
   `pkg delete` stops it and removes everything.
 - **Differences from pfB-DNS and Core**, each kept for a reason: the start runs only while the config file exists (D4's gate, and the
   boot gate); the restart after an upgrade is the installer's, not the next update's (the update pass never touches the bouncer), and it
-  compares the binary's recorded hash, as the bouncer publishes no hash of its own.
+  compares the binary's recorded hash, as the bouncer publishes no hash of its own; the stop kept across an upgrade makes no copy of the
+  rc script as pfB-DNS's does (that copy serves pfB-DNS's next update, which compares rc scripts; the installer regenerates this one).
+- **Known limit.** A full config.xml restore marks the packages for reinstall (`/conf/needs_package_sync`), so the next boot's
+  reinstall runs the installer's apply. A restore of one area (`installedpackages` alone) reloads the filter, whose rules follow the
+  restored settings, but the bouncer process and its config file follow only at the next trigger.

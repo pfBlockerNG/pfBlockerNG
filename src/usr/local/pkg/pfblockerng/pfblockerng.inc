@@ -30671,10 +30671,13 @@ function pfb_crowdsec_received(?bool $set = NULL): bool {
 	return $changed;
 }
 
-// A receive's changed paths: does the bouncer's "should run" decision have to be applied again (issue #4139)?
+// A receive's paths, before core writes them: does the bouncer's "should run" decision have to be applied again (issue #4139)? A path
+// whose value equals the stored one is no change (the legacy merge returns a section the payload never carried).
 function pfb_crowdsec_receive_note(array $paths): void {
-	if (array_intersect(array_keys($paths), array('installedpackages/pfblockerng', 'installedpackages/pfblockerngcrowdsec')) !== array()) {
-		pfb_crowdsec_received(TRUE);
+	foreach (array('installedpackages/pfblockerng', 'installedpackages/pfblockerngcrowdsec') as $path) {
+		if (array_key_exists($path, $paths) && $paths[$path] !== config_get_path($path, array())) {
+			pfb_crowdsec_received(TRUE);
+		}
 	}
 }
 

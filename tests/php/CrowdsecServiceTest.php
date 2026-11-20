@@ -67,12 +67,6 @@ final class CrowdsecServiceTest extends TestCase
 				true > "$S/locks"
 			fi
 		}
-		# all PATTERN: every process whose command line matches
-		all() {
-			while IFS='|' read -r pid args due; do
-				if [ -n "$pid" ] && printf '%s\n' "$args" | grep -Eq -- "$1"; then echo "$pid"; fi
-			done < "$S/procs"
-		}
 		match() {
 			[ -r "$1" ] || return 1
 			read -r want < "$1" || return 1
@@ -81,18 +75,13 @@ final class CrowdsecServiceTest extends TestCase
 			done < "$S/procs"
 			return 1
 		}
-		# kill PID SIG: TERM ends it (and, for the supervisor, its child: daemon(8) passes TERM on) TERM_AFTER ticks later; KILL at once
+		# kill PID SIG: TERM ends it TERM_AFTER ticks later; KILL at once
 		signal() {
-			kid=
-			while IFS='|' read -r p args due; do
-				case "$p|$args" in "$1|daemon: pfb_crowdsec["*) kid="${args#*[}"; kid="${kid%%]*}" ;; esac
-			done < "$S/procs"
 			true > "$S/procs.new"
 			while IFS='|' read -r p args due; do
 				[ -n "$p" ] || continue
 				hit=
 				if [ "$p" = "$1" ]; then hit=1; fi
-				if [ -n "$kid" ] && [ "$p" = "$kid" ] && [ "$2" = TERM ]; then hit=1; fi
 				if [ -n "$hit" ]; then
 					if [ "$2" = KILL ]; then
 						case " $KILL_IGNORED " in *" $p "*) ;; *) gone "$p" killed; continue ;; esac
@@ -112,8 +101,6 @@ final class CrowdsecServiceTest extends TestCase
 			fi
 			if [ "$1" = -F ] && [ "$3" = -f ] && [ "$#" -eq 4 ]; then
 				pids="$(match "$2" "$4")" || exit 1
-			elif [ "$1" = -f ] && [ "$#" -eq 2 ]; then
-				pids="$(all "$2")"; [ -n "$pids" ] || exit 1
 			else
 				ev "bad-${0##*/}"; exit 2
 			fi
@@ -172,8 +159,7 @@ final class CrowdsecServiceTest extends TestCase
 			done
 			echo "${attached:-none}" > "$S/fds"
 			ev launch
-			# 3: another start's daemon(8) took the pidfiles' lock first, and its pair is the one that runs
-			case "$DAEMON_EXIT" in 0|3) ;; *) exit "$DAEMON_EXIT" ;; esac
+			[ "$DAEMON_EXIT" = 0 ] || exit "$DAEMON_EXIT"
 			printf '%s\n%s\n' "$DAEMONPID" "$CHILDPID" > "$S/locks"
 			true > "$DAEMONPID"; true > "$CHILDPID"
 			shift 14
@@ -182,7 +168,7 @@ final class CrowdsecServiceTest extends TestCase
 			if [ "$SUPERVISOR_AT" = 0 ]; then
 				echo "$SUPERVISOR" > "$DAEMONPID"; echo "$CHILD" > "$CHILDPID"
 			fi
-			exit "$DAEMON_EXIT"
+			exit 0
 			;;
 		*)
 			ev "unexpected ${0##*/}"
@@ -686,6 +672,23 @@ final class CrowdsecServiceTest extends TestCase
 		$this->assertSame(0, $status, $out);
 		$this->assertSame('TERM ' . self::SUPERVISOR . ' @0', $this->lines('events')[0] ?? NULL);
 		$this->assertTrue($this->launched());
+	}
+
+	public function testAPairNoPidfileNamesIsNeverSignalledByStopOrStart(): void
+	{
+		// Given a supervisor and a bouncer that no pidfile names (Core's rule: only what a pidfile names is signalled)
+		$this->install();
+		$this->arrange();
+		file_put_contents("{$this->dir}/state/procs", "3001|daemon: pfb_crowdsec[3002] (daemon)|\n3002|{$this->binary()} -c {$GLOBALS['pfb']['crowdsec_config']}|\n");
+
+		[$stop] = $this->rc('stop');
+		[$start] = $this->rc('start');
+
+		$this->assertSame(0, $stop);
+		$this->assertSame(0, $start);
+		$this->assertSame(['check ' . $GLOBALS['pfb']['crowdsec_config'], 'launch'], $this->lines('events'), 'no signal to the unnamed pair');
+		$this->assertContains('3001', $this->livePids());
+		$this->assertContains('3002', $this->livePids());
 	}
 
 	public function testRestartOverASurvivorLaunchesNothing(): void

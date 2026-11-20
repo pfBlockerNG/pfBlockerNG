@@ -140,6 +140,7 @@ final class CrowdsecTriggersTest extends TestCase
 
 	// ---- the update pass never touches the bouncer ------------------------------------------------
 
+	/** Read from source: the pass cannot run off-appliance. It covers pfblockerng_apply.inc, not every function the pass calls. */
 	public function testTheUpdatePassNeverStartsStopsOrRestartsTheBouncerNorWritesItsRuleHook(): void
 	{
 		$pass = self::source('pkg/pfblockerng/pfblockerng_apply.inc');
@@ -182,11 +183,7 @@ final class CrowdsecTriggersTest extends TestCase
 	/** @return iterable<string, array{array<string,string>}> */
 	public static function policyChanges(): iterable
 	{
-		yield 'enable'              => [['enable' => '']];
-		yield 'LAPI URL'            => [['lapi_url' => 'http://192.0.2.7:8080']];
-		yield 'log blocked packets' => [['rules_log' => 'on']];
-		yield 'tag'                 => [['rules_tag' => 'cs']];
-		yield 'IPv4 rules'          => [['rule_v4' => '']];
+		yield 'LAPI URL' => [['lapi_url' => 'http://192.0.2.7:8080']];
 	}
 
 	#[DataProvider('policyChanges')]
@@ -252,6 +249,19 @@ final class CrowdsecTriggersTest extends TestCase
 		$this->assertSame([], $GLOBALS['pfb_test_service_calls']);
 	}
 
+	public function testALegacyListsReceiveThatCarriesNoMasterEnableLeavesTheBouncerAlone(): void
+	{
+		// Given a receiver whose bouncer should run but was never applied, in scope `lists` (whose payload has no pfblockerng section)
+		$GLOBALS['config'] = self::node('on', 'on', 'lists');
+		$this->assertFalse($this->bouncerApplied(), 'before-state: not applied');
+
+		// When a lists-scope receive arrives
+		$this->receive(self::node('on', 'on', 'lists'), self::node('on', 'on', 'lists'), 'lists');
+
+		// Then the section the payload never carried is not taken for a changed master enable
+		$this->assertFalse($this->bouncerApplied(), 'only a received change of the master enable or the CrowdSec section applies it');
+	}
+
 	// ---- pfb_crowdsec_resync(): what each trigger outside the Settings runs ---------------------------
 
 	public function testTheResyncRegistersTheRuleHookAndReloadsTheFilterWhileTheBouncerShouldRun(): void
@@ -278,5 +288,48 @@ final class CrowdsecTriggersTest extends TestCase
 
 		$this->assertSame(0, $GLOBALS['pfb_test_filter_configure_calls']);
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+	}
+
+	/** A node whose pfBlockerNG package entry lost the hook's registration (pfSense's install drops it). */
+	private static function unregistered(string $master, string $crowdsec): array
+	{
+		$config = self::node($master, $crowdsec);
+		$config['installedpackages']['package'] = [['configurationfile' => 'pfblockerng.xml']];
+		return $config;
+	}
+
+	public function testTheResyncOfAnAppliedBouncerReloadsTheFilterWhenItHadToWriteTheRegistration(): void
+	{
+		// Given a bouncer already applied (so nothing turns on or off), whose registration is missing
+		$this->settle(self::unregistered('on', 'on'));
+		$this->assertTrue($this->bouncerApplied(), 'before-state: applied');
+		$this->assertNull(config_get_path('installedpackages/package/0/filter_rule_function'), 'before-state: not registered');
+
+		pfb_crowdsec_resync();
+
+		$this->assertSame('pfb_crowdsec_rules', config_get_path('installedpackages/package/0/filter_rule_function'));
+		$this->assertSame(1, $GLOBALS['pfb_test_filter_configure_calls'], 'its rules need a reload with the hook registered');
+	}
+
+	public function testTheResyncOfABouncerThatShouldNotRunWritesTheRegistrationAndReloadsNothing(): void
+	{
+		$this->settle(self::unregistered('on', ''));
+		$this->assertFalse($this->bouncerApplied(), 'before-state: off');
+
+		pfb_crowdsec_resync();
+
+		$this->assertSame('pfb_crowdsec_rules', config_get_path('installedpackages/package/0/filter_rule_function'));
+		$this->assertSame(0, $GLOBALS['pfb_test_filter_configure_calls'], 'no rules to load');
+	}
+
+	public function testTheSaveWritesAMissingRegistrationAndReloadsWhileTheBouncerShouldRun(): void
+	{
+		// Given an applied bouncer whose registration is missing, and a save that changes no rule setting
+		$this->settle(self::unregistered('on', 'on'));
+
+		pfb_crowdsec_save(array_replace(self::crowdsec('on'), ['log_level' => 'debug']));
+
+		$this->assertSame('pfb_crowdsec_rules', config_get_path('installedpackages/package/0/filter_rule_function'));
+		$this->assertSame(1, $GLOBALS['pfb_test_filter_configure_calls']);
 	}
 }
