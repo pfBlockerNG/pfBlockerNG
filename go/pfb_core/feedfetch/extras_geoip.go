@@ -333,8 +333,8 @@ func copyZipMember(ctx context.Context, zf *zip.File, w io.Writer) error {
 // refuses the whole publication before anything changes. An entry relink that fails after the archive link switched
 // reports a failed publication, and the next one finishes the switch.
 func mergeIntoDir(target, archive string, extract func(dir string) error) bool {
-	if archive == "" || archive == "." || archive == ".." || strings.Contains(archive, "/") || strings.HasSuffix(archive, ".entry") {
-		return false // it would name no link of its own beside the entries
+	if archive == "" || strings.HasPrefix(archive, ".") || strings.Contains(archive, "/") || strings.HasSuffix(archive, ".entry") {
+		return false // it would name no link of its own beside the entries, or another archive's lock or temp link
 	}
 	if info, err := os.Lstat(target); err != nil || !info.IsDir() {
 		return false
@@ -378,7 +378,8 @@ func mergeIntoDir(target, archive string, extract func(dir string) error) bool {
 var errLiveEntry = errors.New("member may not replace its live entry")
 
 // mergeable reports whether the staged entry e may take its name in target: not a dot name, and either nothing there, an
-// entry link (.<archive>/<name>), or a file a member file replaces.
+// entry link of this code (entryLink), or, for a member file, a file or a link that names no folder. A link to a folder
+// refuses, where PHP's merge replaces any link: the country folder is one.
 func mergeable(target string, e os.DirEntry) bool {
 	if strings.HasPrefix(e.Name(), ".") {
 		return false

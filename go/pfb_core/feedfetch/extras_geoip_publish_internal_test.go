@@ -143,6 +143,7 @@ func TestARefusedArchivePublicationChangesNothing(t *testing.T) {
 		"a folder over a file":              {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "sub/notes.txt": "x"}, prepare: liveFile("sub")},
 		"a dot-folder link to a folder":     {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: dotFolderLink("LICENSE.txt")},
 		"a link to a folder of the archive": {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: ownFolderLink("LICENSE.txt")},
+		"a folder over a dangling link":     {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "sub/notes.txt": "x"}, prepare: danglingLink("sub")},
 		"a foreign link":                    {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: foreignLink("LICENSE.txt")},
 		"a failed extraction":               {extract: func(string) error { return os.ErrInvalid }},
 		"a failed link rename":              {entries: map[string]string{"GeoLite2-Country.mmdb": "new"}, prepare: failRenames},
@@ -225,6 +226,14 @@ func ownFolderLink(name string) func(*testing.T, string) {
 		}
 		if err := os.Symlink(".GeoLite2-Country.tar.gz/sub", filepath.Join(share, name)); err != nil {
 			t.Fatal(err) // through the archive's own link, but to another entry: a folder
+		}
+	}
+}
+
+func danglingLink(name string) func(*testing.T, string) {
+	return func(t *testing.T, share string) {
+		if err := os.Symlink(filepath.Join(share, "gone"), filepath.Join(share, name)); err != nil {
+			t.Fatal(err)
 		}
 	}
 }
@@ -333,7 +342,7 @@ func TestTheArchiveLinkIsNamedForTheDownload(t *testing.T) {
 // An archive name that would not name a link of its own beside the entries (empty, ".", "..", one with a slash, or one
 // whose link would be another archive's temp entry link) refuses the publication and touches nothing.
 func TestAnArchiveNameThatNamesNoLinkIsRefused(t *testing.T) {
-	for _, archive := range []string{"", ".", "..", "a/b", "GeoLite2-Country.tar.gz.entry"} {
+	for _, archive := range []string{"", ".", "..", "a/b", "GeoLite2-Country.tar.gz.entry", ".GeoLite2-Country.tar.gz.lock"} {
 		t.Run(archive, func(t *testing.T) {
 			parent := t.TempDir()
 			share := filepath.Join(parent, "share")
