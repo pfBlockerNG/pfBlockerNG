@@ -42,7 +42,7 @@ final class CrowdsecWiringTest extends TestCase
 	{
 		rmdir_recursive($this->dir);
 		$GLOBALS['pfb'] = $this->savedPfb;
-		unset($GLOBALS['pfb_test_service_calls'], $GLOBALS['pfb_test_top_tabs'], $GLOBALS['pfb_test_info_boxes']);
+		unset($GLOBALS['pfb_test_service_calls'], $GLOBALS['pfb_test_top_tabs'], $GLOBALS['pfb_test_info_boxes'], $GLOBALS['pfb_test_allowed_pages']);
 	}
 
 	private static function source(string $path): string
