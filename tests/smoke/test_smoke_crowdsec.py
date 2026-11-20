@@ -21,8 +21,8 @@ Criteria and their tests:
 * 9  nothing listens for the bouncer — ``test_the_bouncer_listens_on_no_port``.
 * 11 the D6 families with ``source_up 1``, ``source_up 0`` with the other sources intact when stale or stopped —
      ``test_the_metrics_source_*``, ``test_stopping_the_service_*``.
-* 12 the LAPI receives usage metrics — ``test_the_lapi_receives_usage_metrics``. The bouncer posts every 15 minutes
-     from its start; the tests before it run on the same bouncer process, so its wait is what is left of that.
+* 12 the LAPI receives usage metrics — ``test_the_lapi_receives_usage_metrics``. The bouncer posts right after its
+     first answered pull (#4117 amendment), so the post of the running process is there, or seconds away.
 * 15 deinstall leaves nothing behind — ``test_deinstall_leaves_nothing_behind`` (last: it reinstalls the package).
 
 Run::
@@ -62,6 +62,7 @@ Net = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 PAGE = "/pfblockerng/pfblockerng_crowdsec.php"
 STATUS_PAGE = "/pfblockerng/pfblockerng_crowdsec_status.php"
+GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
 SECTION = "installedpackages/pfblockerngcrowdsec/config/0"
 SYNC_SECTION = "installedpackages/pfblockerngsync/config/0"
 MASTER = f"{h.CFG_GLOBAL}/enable_cb"
@@ -81,7 +82,7 @@ PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 
 UPDATE_FREQUENCY = 10  # D3: the bouncer pulls every 10 s
-USAGE_INTERVAL = 15 * 60  # D1: usage metrics every 15 minutes from the start
+USAGE_WINDOW = 15 * 60  # D1: every usage post reports the 15-minute window
 BAN_BOUND = 20.0  # criterion 1
 RELOAD_BOUND = 2.0  # criterion 4
 SALVAGE = 120.0  # a cap on waiting for an asynchronous event that has no bound of its own; never an expected wait
@@ -764,7 +765,8 @@ def test_while_the_lapi_is_unreachable_the_tables_hold_and_pulls_resume_after(
     _within(BAN_BOUND, lambda: _tables(vm), _holds(fresh), f"{fresh} banned once the LAPI answers")
     first = next(r for r in engine.requests()[resumed:] if r.path == STREAM)
     assert first.startup and first.status == 200, f"the first pull after the outage is a full pull: {first}"
-    assert _status(vm)["last_pull"] >= failed["last_error_time"], "pulls succeed again"
+    # The status file follows the pull that applied the ban, or the bouncer's next status write
+    _await(lambda: _status(vm), lambda s: s["last_pull"] >= failed["last_error_time"], "pulls succeeding again")
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -822,16 +824,14 @@ def test_the_metrics_source_is_up_while_running_and_down_while_stale(
     )
 
 
-@pytest.mark.timeout(USAGE_INTERVAL + 300)
 def test_the_lapi_receives_usage_metrics(bouncer: SmokeVM, engine: StubLapi) -> None:
     """Given the bouncer running with the module's seed bans,
-    When its 15-minute usage window closes,
-    Then the LAPI receives, with the bouncer key, one remediation component of type pfb_crowdsec with its version and
-    start time, a 900 s window, dropped packets and bytes per address family, and the active decisions per origin and
-    family."""
+    When the LAPI answers its first pull,
+    Then the very next request is a usage post with the bouncer key: one remediation component of type pfb_crowdsec
+    with its version and start time, a 900 s window, dropped packets and bytes per address family, and the active
+    decisions per origin and family."""
     vm = bouncer
     status = _status(vm)
-    due = status["start_time"] + USAGE_INTERVAL - _guest_now(vm)
 
     def this_process(r: LapiRequest) -> bool:
         if r.method != "POST" or r.path != USAGE:
@@ -839,10 +839,13 @@ def test_the_lapi_receives_usage_metrics(bouncer: SmokeVM, engine: StubLapi) -> 
         components = json.loads(r.body).get("remediation_components") or [{}]
         return bool(components[0].get("utc_startup_timestamp") == status["start_time"])
 
-    post = engine.wait_for(
-        this_process, timeout=max(due, 0) + SALVAGE, what="usage metrics post of this bouncer process"
-    )
+    # Recorded already unless the bouncer has just started
+    post = engine.wait_for(this_process, timeout=SALVAGE, what="usage metrics post of this bouncer process")
 
+    before = engine.requests()[post.seq - 1] if post.seq else None
+    assert before is not None and before.is_stream and before.startup, (
+        f"the first post follows the first answered pull at once: {before} then {post}"
+    )
     assert post.status == 201, f"the post carried the bouncer key: {post}"
     body = json.loads(post.body)
     (component,) = body["remediation_components"]
@@ -852,7 +855,7 @@ def test_the_lapi_receives_usage_metrics(bouncer: SmokeVM, engine: StubLapi) -> 
         status["start_time"],
     )
     (window,) = component["metrics"]
-    assert window["meta"]["window_size_seconds"] == USAGE_INTERVAL
+    assert window["meta"]["window_size_seconds"] == USAGE_WINDOW
     items = {(i["name"], i["unit"], tuple(sorted(i["labels"].items()))): i["value"] for i in window["items"]}
     for ip_type in ("ipv4", "ipv6"):
         for unit in ("packet", "byte"):
@@ -923,18 +926,20 @@ def test_turning_pfblockerng_off_removes_the_bouncers_rules_config_and_process(
     bouncer: SmokeVM, engine: StubLapi, gui: WebUI
 ) -> None:
     """Given the bouncer on, with its config file, process and four rules,
-    When pfBlockerNG's master enable goes off and its update pass runs,
-    Then the config file is gone, no process is left and the rules are removed, though the CrowdSec settings stay on."""
+    When the operator saves pfBlockerNG's master enable off on the General page,
+    Then the config file is gone and no process is left when the save returns, and the filter reload it starts removes
+    the rules, though the CrowdSec settings stay on (#4139: the General save applies the bouncer, no update pass)."""
     vm = bouncer
     assert _config_file(vm) is not None and _child(vm) is not None and len(_rules(vm)) == 4, "before-state"
 
     try:
-        h.set_package_enabled(vm, False)
-        h.reload(vm, "update", wait_unbound=False)
+        response = gui.post(GENERAL_PAGE, {"enable_cb": ""}, timeout=300.0)
+        assert response.status_code == 200, f"the General save answered HTTP {response.status_code}"
+        assert h.config_get(vm, MASTER) == "", "vacuity guard: pfBlockerNG is off"
 
         assert _config_file(vm) is None, "pfBlockerNG off removes the config file"
         assert _processes(vm) == "", "pfBlockerNG off stops the bouncer"
-        _await(lambda: _rules(vm), lambda rules: rules == [], "the rules removed by the pass's reload")
+        _await(lambda: _rules(vm), lambda rules: rules == [], "the rules removed by the save's reload")
         assert h.config_get(vm, f"{SECTION}/enable") == "on", "the CrowdSec settings are untouched"
     finally:
         _turn_on(vm, gui, engine)
