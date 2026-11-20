@@ -315,3 +315,13 @@ func TestAPreviousGenerationLinkedByPathIsKept(t *testing.T) {
 		})
 	}
 }
+
+// A generation that cannot be written whole is removed: the previous generation stays live and nothing is left beside
+// it.
+func TestAGenerationThatCannotBeWrittenIsRemoved(t *testing.T) {
+	c, _ := conversionRoot(t, testBlocks)
+	if c.publish(context.Background(), stage{"US_v4.txt": []byte("3.0.0.0/15\n"), "missing/US_v6.txt": nil}) {
+		t.Fatal("published a generation that could not be written")
+	}
+	assertPrevious(t, c)
+}
