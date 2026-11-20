@@ -3,12 +3,16 @@ package feedfetch
 import (
 	"archive/tar"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 // The Blacklist category archives (#3978): the blacklist branches of pfb_download(). A row's tar (gzipped or not) is
@@ -81,7 +85,11 @@ func (f *Fetcher) blacklist(ctx context.Context, cfg ExtrasConfig, x Extra, req 
 	}
 	whole := func(target string, extract func(string) error) (bool, string) { return replaceDir(target, extract), "" }
 	if r := published(whole, filepath.Join(cfg.DBDir, name), "blacklist", filepath.Base(base), func(dir string) error {
-		return f.extractCategories(ctx, mime, base, name, dir)
+		if err := f.extractCategories(ctx, mime, base, name, dir); err != nil {
+			return err
+		}
+		touch(filepath.Join(dir, name+".update"))
+		return nil
 	}); !r.OK {
 		return r
 	}
@@ -89,7 +97,6 @@ func (f *Fetcher) blacklist(ctx context.Context, cfg ExtrasConfig, x Extra, req 
 	for _, sfx := range []string{".orig", ".xxhash128", ".md5"} {
 		os.Remove(base + sfx)
 	}
-	touch(filepath.Join(cfg.DBDir, name, name+".update"))
 	return accepted
 }
 
@@ -205,43 +212,87 @@ func categoryName(member, name string) string {
 	return member
 }
 
-// stageBackup prefixes the live folder replaceDir moves aside while it swaps.
+// stageBackup prefixes the live folder an interrupted publication of today's PHP (pfb_stage_publish_dir()) left aside.
 const stageBackup = ".pfbstagebak2_"
 
-// replaceDir is pfb_stage_publish_dir(): extract fills a directory staged beside target, which then replaces target
-// whole. The live folder is moved aside first and put back if the swap fails; one an interrupted swap left aside is put
-// back before anything else.
+// replaceDir publishes a folder whole in one step (#4141): extract fills a new generation beside target,
+// .<name>.<pid>.<8 hex>, and a link to it is renamed over target, so target is never absent and a run killed at any
+// point leaves the previous generation or the new one. The publication holds .<name>.lock beside target throughout and
+// is refused while another holds it, so its cleanup (every generation but this one and the previous) never meets one
+// being written. A target that is still a real folder is set aside once as the previous generation, and put back if
+// the link cannot replace it; a missing target leaves no previous generation to tell apart, so none is removed. A
+// folder an interrupted PHP publication left aside is put back first.
 func replaceDir(target string, extract func(dir string) error) bool {
-	parent := filepath.Dir(target)
+	parent, base := filepath.Dir(target), filepath.Base(target)
 	if !recoverDirs(parent) {
 		return false
 	}
-	staged, err := os.MkdirTemp(parent, ".pfbstagedir_")
+	lock, err := os.OpenFile(filepath.Join(parent, "."+base+".lock"), os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return false
 	}
-	defer os.RemoveAll(staged)
-	if os.Chmod(staged, 0o755) != nil || extract(staged) != nil {
+	defer lock.Close() // closing the file releases the lock
+	if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
 		return false
 	}
-	backup := ""
-	if info, err := os.Lstat(target); err == nil {
+	gen := generationDir(target)
+	if os.Mkdir(gen, 0o755) != nil {
+		return false
+	}
+	if os.Chmod(gen, 0o755) != nil || extract(gen) != nil {
+		os.RemoveAll(gen)
+		return false
+	}
+	previous, _ := os.Readlink(target)
+	if previous != "" {
+		previous = filepath.Base(previous)
+	}
+	aside := ""
+	if info, err := os.Lstat(target); err == nil && info.Mode()&os.ModeSymlink == 0 {
 		if !info.IsDir() {
+			os.RemoveAll(gen)
 			return false
 		}
-		backup = filepath.Join(parent, stageBackup+filepath.Base(target))
-		if _, err := os.Lstat(backup); err == nil || rename(target, backup) != nil {
+		aside = generationDir(target)
+		if os.Rename(target, aside) != nil {
+			os.RemoveAll(gen)
 			return false
 		}
+		previous = filepath.Base(aside)
 	}
-	if rename(staged, target) != nil {
-		if backup != "" {
-			recoverDirs(parent)
+	link := gen + ".link"
+	if os.Symlink(filepath.Base(gen), link) != nil || rename(link, target) != nil {
+		os.Remove(link)
+		if aside != "" {
+			os.Rename(aside, target)
 		}
+		os.RemoveAll(gen)
 		return false
 	}
-	return backup == "" || os.RemoveAll(backup) == nil
+	if previous == "" {
+		return true
+	}
+	entries, _ := os.ReadDir(parent)
+	for _, e := range entries {
+		name := e.Name()
+		if rest, ok := strings.CutPrefix(name, "."+base+"."); ok && name != filepath.Base(gen) && name != previous &&
+			generationID(strings.TrimSuffix(rest, ".link")) {
+			os.RemoveAll(filepath.Join(parent, name))
+		}
+	}
+	return true
 }
+
+// generationDir is a new generation's folder beside target: .<name>.<pid>.<8 hex>.
+func generationDir(target string) string {
+	var id [4]byte
+	rand.Read(id[:])
+	return filepath.Join(filepath.Dir(target),
+		fmt.Sprintf(".%s.%d.%s", filepath.Base(target), os.Getpid(), hex.EncodeToString(id[:])))
+}
+
+// generationID reports whether s is a generation's <pid>.<8 hex>.
+var generationID = regexp.MustCompile(`^[0-9]+\.[0-9a-f]{8}$`).MatchString
 
 // recoverDirs is pfb_stage_publish_dir_recover(): every folder an interrupted swap left aside in dir goes back to its
 // name, or is dropped when a folder stands there again. It reports false when one could not be settled.

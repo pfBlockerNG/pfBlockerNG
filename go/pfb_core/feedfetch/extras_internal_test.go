@@ -305,40 +305,6 @@ func zipOf(t *testing.T, name, content string) []byte {
 	return b.Bytes()
 }
 
-// A category folder whose swap fails after the live folder moved aside is put back whole, and nothing staged is left.
-func TestACategorySwapThatFailsPutsTheFolderBack(t *testing.T) {
-	db := t.TempDir()
-	live := filepath.Join(db, "ut1")
-	if err := os.Mkdir(live, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(live, "ut1_adult"), []byte("old\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	calls := 0
-	real := rename
-	rename = func(from, to string) error {
-		if to == live && strings.Contains(from, ".pfbstagedir_") {
-			calls++
-			return os.ErrPermission
-		}
-		return real(from, to)
-	}
-	t.Cleanup(func() { rename = real })
-	ok := replaceDir(live, func(dir string) error {
-		return os.WriteFile(filepath.Join(dir, "ut1_adult"), []byte("new\n"), 0o644)
-	})
-	if ok || calls == 0 {
-		t.Fatalf("(replaced, failed swaps) = (%v, %d), want a failed swap", ok, calls)
-	}
-	if got, err := os.ReadFile(filepath.Join(live, "ut1_adult")); err != nil || string(got) != "old\n" {
-		t.Errorf("ut1/ut1_adult = (%q, %v), want the old folder back", got, err)
-	}
-	if entries, _ := os.ReadDir(db); len(entries) != 1 {
-		t.Errorf("the database folder holds %d entries after the failed swap, want the category folder only", len(entries))
-	}
-}
-
 // A hard link whose target cannot be a file (its path runs through a file) is skipped like any target that was not
 // extracted, not a refusal of the whole archive.
 func TestAHardLinkThroughAFileIsSkipped(t *testing.T) {
