@@ -30,6 +30,10 @@ const PFB_CROWDSEC_CONFIG = '/usr/local/etc/pfb_crowdsec.json';
 const PFB_CROWDSEC_STATUS = '/var/run/pfb_crowdsec.json';
 // The status file's address families (go/pfb_crowdsec ipTypes) and their tables (D3); a larger status file is not the bouncer's
 const PFB_CROWDSEC_TABLES = ['ipv4' => 'crowdsec_v4', 'ipv6' => 'crowdsec_v6'];
+// Each family's inbound and outbound rule's tracker (ridentifier, #4159), fixed so filterlog names the rule across reloads and upgrades.
+// Nine digits: above pfSense's fixed (10000-13999) and negated-rule (10000000 + n) trackers, below its own rules' (1000000000 + n),
+// every GUI rule's (its creation time) and pfBlockerNG's own (ten digits, 176/177).
+const PFB_CROWDSEC_TRACKERS = ['ipv4' => ['in' => 177400401, 'out' => 177400402], 'ipv6' => ['in' => 177400601, 'out' => 177400602]];
 const PFB_CROWDSEC_STATUS_MAX = 1048576;
 // The Status subtab's lookup (D7): the whole request's time limit, and the largest answer read
 const PFB_CROWDSEC_LOOKUP_TIMEOUT = 5;
@@ -674,7 +678,7 @@ function pfb_crowdsec_child_pattern(string $dir = PFB_CROWDSEC_DIR): string {
  * pfSense's filter_rule_function (pfblockerng.xml filter_rules_needed), called for each rule type on every filter reload (D5).
  * Only `pfearly`, and only while the bouncer should run: per enabled family an inbound rule (the bouncer's counter parser reads its
  * shape) and an outbound one, `on` the selected interfaces' real names for that family unless "all interfaces" is on (a family with
- * none left gets no rules), `log` and `tag` when set. A stored tag the Settings would refuse is left out: it reaches the ruleset verbatim.
+ * none left gets no rules), each with its fixed tracker, `log` and `tag` when set. A stored tag the Settings would refuse is left out: it reaches the ruleset verbatim.
  * The tables are never declared: the bouncer creates them. The reload kills them (#4070), so the first call that returns rules
  * registers pfb_crowdsec_signal() to run when this process ends, after the kill.
  */
@@ -705,8 +709,9 @@ function pfb_crowdsec_rules(string $type): string {
 			$on = ' on { ' . implode(' ', $real) . ' }';
 		}
 		$table = PFB_CROWDSEC_TABLES["ipv{$n}"];
-		$rules .= "block drop in{$log} quick{$on} {$af} from <{$table}> to any label \"CrowdSec IPv{$n}\"{$tag}\n"
-		    . "block drop out{$log} quick{$on} {$af} from any to <{$table}> label \"CrowdSec IPv{$n} out\"{$tag}\n";
+		$id = PFB_CROWDSEC_TRACKERS["ipv{$n}"];
+		$rules .= "block drop in{$log} quick{$on} {$af} from <{$table}> to any label \"CrowdSec IPv{$n}\" ridentifier {$id['in']}{$tag}\n"
+		    . "block drop out{$log} quick{$on} {$af} from any to <{$table}> label \"CrowdSec IPv{$n} out\" ridentifier {$id['out']}{$tag}\n";
 	}
 	if ($rules !== '' && !$registered) {
 		register_shutdown_function('pfb_crowdsec_signal');
