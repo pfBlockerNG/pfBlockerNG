@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "The ISO list cannot replace its live path (a folder stands there) after every country file moved: they are all put back, and the folder is left as it was.",
+	"description": "A folder stands at the ISO list's path. Core keeps the ISO list inside the generation it publishes by one link rename (#4140), so the folder blocks nothing and the conversion succeeds; today's PHP moves the ISO list last, fails on the folder, puts every country file back and keeps the previous generation (old_expect).",
 	"share_mtime": "2026-11-17T08:30:00Z",
 	"share": {
 		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1835841,en,AS,Asia,KR,\"Korea, Republic of\",0\n",
@@ -13,6 +13,16 @@
 		"db/geoip.txt/inside": "a folder\n"
 	},
 	"expect": {
+		"ok": true,
+		"files": {
+			"cc/US_v4.txt": "3.0.0.0/15\n",
+			"cc/ZZ_v4.txt": null,
+			"cc/KR_v4.txt": "",
+			"cc/.pfb_generation_swapping": null
+		},
+		"tree": "16d9798a768962752fe79ecf541dc0a47f0a33b5cf6e456ece13756c66cbbbdd"
+	},
+	"old_expect": {
 		"ok": false,
 		"files": {
 			"cc/US_v4.txt": "192.0.2.0/24\n",

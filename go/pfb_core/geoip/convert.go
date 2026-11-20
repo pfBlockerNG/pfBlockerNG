@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -23,8 +24,7 @@ import (
 // Conversion is pfblockerng_uc_countries() as the dcc verb runs it, without the pages.
 type Conversion struct {
 	Share  string    // the MaxMind CSVs ($pfb['geoipshare'])
-	CCDir  string    // the country folder ($pfb['ccdir'])
-	ISOs   string    // the GeoIP ISO list ($pfb['geoip_isos'])
+	CCDir  string    // the country folder ($pfb['ccdir']): a link to the generation published last
 	LogDir string    // where maxmind_ver goes ($pfb['logdir'])
 	Locale string    // the MaxMind locale (extras.maxmindLocale)
 	Now    time.Time // the continent files' "Generated" stamp
@@ -161,10 +161,10 @@ func field(rec []string, i int) string {
 }
 
 // Run converts the CSVs and publishes the new generation whole: the continent files, the per-country lists, Top
-// Spammers and the ISO list. False leaves the previous generation in place; maxmind_ver is written as the conversion
-// goes, as today.
+// Spammers and the ISO list (.geoip_isos). False leaves the previous generation in place; maxmind_ver is written as the
+// conversion goes, as today.
 func (c Conversion) Run(ctx context.Context) bool {
-	for _, dir := range []string{filepath.Dir(c.ISOs), c.LogDir, c.CCDir} {
+	for _, dir := range []string{c.LogDir, filepath.Dir(c.CCDir)} {
 		os.MkdirAll(dir, 0o755)
 	}
 	c.log("Country code update Start\n")
@@ -174,15 +174,9 @@ func (c Conversion) Run(ctx context.Context) bool {
 		c.log(" [ MAXMIND UPDATE FAIL, Language File Missing, using previous Country code database ]\n")
 		return false
 	}
-	var id [4]byte
-	rand.Read(id[:])
-	generation := fmt.Sprintf("%d.%s", os.Getpid(), hex.EncodeToString(id[:]))
-	stageDir, stageISOs := c.CCDir+".new."+generation, c.ISOs+".new."+generation
-	discard := func() {
-		os.RemoveAll(stageDir)
-		unlink(stageISOs)
-	}
-	mkErr := os.MkdirAll(stageDir, 0o755)
+	genDir := c.generationDir()
+	discard := func() { os.RemoveAll(genDir) }
+	mkErr := os.Mkdir(genDir, 0o755)
 	maxmindVer := filepath.Join(c.LogDir, "maxmind_ver")
 	os.WriteFile(maxmindVer, []byte("MaxMind GeoLite2 Date/Time Stamp\nLast-Modified: "+
 		info.ModTime().UTC().Format(time.DateTime)+"\n"), 0o644)
@@ -196,17 +190,22 @@ func (c Conversion) Run(ctx context.Context) bool {
 		discard()
 		return false
 	}
+	built[".geoip_isos"] = isoList
 	for name, b := range built {
-		if err := os.WriteFile(filepath.Join(stageDir, name), b, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(genDir, name), b, 0o644); err != nil {
 			discard()
 			return false
 		}
 	}
-	if err := os.WriteFile(stageISOs, isoList, 0o644); err != nil {
-		discard()
-		return false
-	}
-	return c.publish(ctx, generation, stageDir, stageISOs, discard)
+	return c.publish(ctx, genDir, discard)
+}
+
+// generationDir is a new generation's folder beside the country folder: .<name>.<pid>.<8 hex>, as staleSibling knows it.
+func (c Conversion) generationDir() string {
+	var id [4]byte
+	rand.Read(id[:])
+	return filepath.Join(filepath.Dir(c.CCDir),
+		fmt.Sprintf(".%s.%d.%s", filepath.Base(c.CCDir), os.Getpid(), hex.EncodeToString(id[:])))
 }
 
 // continentFile is the str_replace() that makes a continent name a file name.
@@ -533,73 +532,78 @@ func appendFile(path, s string) {
 	f.Close()
 }
 
-// publish replaces the live generation with the staged one under the publication lock readers share
-// (.pfb_generation.lock), with the swap marker readers refuse (.pfb_generation_swapping) standing while files move: every
-// live file is copied aside first, and a rename that fails puts them all back. The ISO list moves last, in one rename:
-// when that fails, the live list was never touched.
-func (c Conversion) publish(ctx context.Context, generation, stageDir, stageISOs string, discard func()) bool {
-	lock, ok := publicationLock(ctx, c.CCDir)
+// publish makes genDir live in one step (#4140): a link to it is renamed over the country folder, so a reader sees the
+// previous generation or this one whole, and a run killed at any point leaves one of them. It runs under the publication
+// lock beside the link (.<name>.lock), which readers share, and then removes every generation but this one and the
+// previous, and what interrupted publications left (staleSibling). A country folder that is still a real folder (an
+// install from before #4140) is first set aside as the previous generation; a failed rename puts it back.
+func (c Conversion) publish(ctx context.Context, genDir string, discard func()) bool {
+	parent, base := filepath.Dir(c.CCDir), filepath.Base(c.CCDir)
+	lock, ok := publicationLock(ctx, filepath.Join(parent, "."+base+".lock"))
 	if !ok {
 		discard()
 		return false
 	}
 	defer lock.Close() // closing the file releases the lock
-	backupRoot := c.CCDir + ".old." + generation
-	backup := filepath.Join(backupRoot, "countries")
-	marker := filepath.Join(c.CCDir, ".pfb_generation_swapping")
-	os.MkdirAll(backup, 0o755)
-	fail := func() bool {
+	if info, err := os.Stat(genDir); err != nil || !info.IsDir() {
+		discard() // a publication that held the lock before this one removed it
+		return false
+	}
+	previous, _ := os.Readlink(c.CCDir)
+	aside := ""
+	if info, err := os.Lstat(c.CCDir); err == nil && info.Mode()&fs.ModeSymlink == 0 {
+		aside = c.generationDir()
+		if os.Rename(c.CCDir, aside) != nil {
+			discard()
+			return false
+		}
+		previous = filepath.Base(aside)
+	}
+	link := genDir + ".link"
+	if os.Symlink(filepath.Base(genDir), link) != nil || rename(link, c.CCDir) != nil {
+		os.Remove(link)
+		if aside != "" {
+			os.Rename(aside, c.CCDir)
+		}
 		discard()
-		os.RemoveAll(backupRoot)
 		return false
 	}
-	originals := listed(c.CCDir)
-	for _, name := range originals {
-		if copyFile(filepath.Join(c.CCDir, name), filepath.Join(backup, name)) != nil {
-			return fail()
+	entries, _ := os.ReadDir(parent)
+	for _, e := range entries {
+		if name := e.Name(); name != filepath.Base(genDir) && name != previous && staleSibling(base, name) {
+			os.RemoveAll(filepath.Join(parent, name))
 		}
 	}
-	if os.WriteFile(marker, []byte(generation), 0o644) != nil {
-		return fail()
-	}
-	published := map[string]bool{}
-	ok = true
-	for _, name := range listed(stageDir) {
-		published[name] = true
-		if rename(filepath.Join(stageDir, name), filepath.Join(c.CCDir, name)) != nil {
-			ok = false
-			break
-		}
-	}
-	if ok && rename(stageISOs, c.ISOs) != nil {
-		ok = false
-	}
-	if !ok {
-		for name := range published {
-			unlink(filepath.Join(c.CCDir, name))
-		}
-		for _, name := range listed(backup) {
-			os.Rename(filepath.Join(backup, name), filepath.Join(c.CCDir, name))
-		}
-		fail()
-		unlink(marker)
-		return false
-	}
-	for _, name := range originals {
-		if !published[name] {
-			unlink(filepath.Join(c.CCDir, name))
-		}
-	}
-	discard()
-	os.RemoveAll(backupRoot)
-	unlink(marker)
 	return true
 }
 
-// publicationLock is pfb_geoip_generation_publication_lock(): the folder's lock file held exclusively, tried every 20 ms
-// for up to 60 s as pfb_flock_bounded() does, or until ctx ends.
-func publicationLock(ctx context.Context, dir string) (*os.File, bool) {
-	f, err := os.OpenFile(filepath.Join(dir, ".pfb_generation.lock"), os.O_RDWR|os.O_CREATE, 0o644)
+// staleSibling reports whether name, beside the country folder base, is what a publication leaves: a generation
+// (.<base>.<pid>.<8 hex>) or its link (.link), or today's PHP staged and set-aside folders (<base>.new.*, <base>.old.*).
+func staleSibling(base, name string) bool {
+	if rest, ok := strings.CutPrefix(name, "."+base+"."); ok {
+		return generationID(strings.TrimSuffix(rest, ".link"))
+	}
+	for _, prefix := range []string{base + ".new.", base + ".old."} {
+		if rest, ok := strings.CutPrefix(name, prefix); ok {
+			return generationID(rest)
+		}
+	}
+	return false
+}
+
+// generationID reports whether s is getmypid() . '.' . bin2hex(random_bytes(4)).
+func generationID(s string) bool {
+	pid, hexID, ok := strings.Cut(s, ".")
+	if !ok || pid == "" || len(hexID) != 8 || strings.Trim(pid, "0123456789") != "" {
+		return false
+	}
+	return strings.Trim(hexID, "0123456789abcdef") == ""
+}
+
+// publicationLock is pfb_geoip_generation_publication_lock(): the lock file held exclusively, tried every 20 ms for up
+// to 60 s as pfb_flock_bounded() does, or until ctx ends.
+func publicationLock(ctx context.Context, path string) (*os.File, bool) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return nil, false
 	}
@@ -625,42 +629,5 @@ func publicationLock(ctx context.Context, dir string) (*os.File, bool) {
 	}
 }
 
-// listed is glob("<dir>/*") kept to regular files (is_file follows a link): no dot file, in name order.
-func listed(dir string) []string {
-	entries, _ := os.ReadDir(dir)
-	var names []string
-	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), ".") && isFile(filepath.Join(dir, e.Name())) {
-			names = append(names, e.Name())
-		}
-	}
-	return names
-}
-
-// rename moves a staged file into place; a test watches it.
+// rename moves the link over the country folder; a test watches it.
 var rename = os.Rename
-
-// unlink is PHP's unlink(): a file, never a directory, which os.Remove would also remove.
-func unlink(path string) { syscall.Unlink(path) }
-
-func isFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
-}
-
-func copyFile(from, to string) error {
-	in, err := os.Open(from)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
-}
