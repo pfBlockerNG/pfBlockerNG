@@ -698,11 +698,13 @@ def test_a_filter_reload_leaves_both_tables_full_within_2_s(
     mark = _log_mark(vm)
     pulled = engine.wait_for(lambda r: r.path == STREAM, after=engine.mark(), timeout=SALVAGE, what="the next pull")
 
+    sent = time.monotonic()
     _reload(vm, gui, path)
     ended = time.monotonic()  # rc.filter_configure_sync returns at the reload's end
     if path != "rc.filter_configure_sync":
-        # The page's reload ends with the signal, which came after the last poll that did not see it began
-        cap = ended + SALVAGE
+        # The page's reload ends with the signal, which came after the page was asked (it can end before the page
+        # answers) and after the last poll that did not see it began
+        ended, cap = sent, ended + SALVAGE
         while True:
             polled = time.monotonic()
             if _signals(vm, mark) > 0:
