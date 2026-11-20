@@ -94,7 +94,7 @@ final class CrowdsecWidgetRulesTest extends TestCase
 		self::store();
 		$generated = [];
 		foreach (explode("\n", trim(pfb_crowdsec_rules('pfearly'))) as $line) {
-			$this->assertSame(1, preg_match('/label "([^"]+)" ridentifier (\d+)/', $line, $m), $line);
+			$this->assertSame(1, preg_match('/label "([^"]+)" label "descr=\1" ridentifier (\d+)/', $line, $m), $line);
 			$generated[$m[1]] = (int) $m[2];
 		}
 		$this->assertSame($generated, array_column(pfb_crowdsec_widget_rules(), 'tracker', 'descr'));
