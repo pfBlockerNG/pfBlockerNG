@@ -138,7 +138,7 @@ trait CoreRcSandboxTrait
 				case "$1" in
 				-P) supervisor="$2"; shift 2 ;;
 				-p) child="$2"; shift 2 ;;
-				-o|-R|-t|-l|-T) shift 2 ;;
+				-o|-R|-t|-l|-s|-T) shift 2 ;;
 				-r|-S) shift ;;
 				-*) ev "bad-daemon $1"; exit 2 ;;
 				*) break ;;
