@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "A French locale without the English Locations file: no continent has an English name, so MaxMind's countries have no continent file.",
+	"description": "A French locale without the English Locations file: no continent has an English name, so no MaxMind country has a continent file. Core refuses such a generation and keeps the previous one (#4125); today's PHP publishes it without MaxMind's countries (old_expect).",
 	"locale": "fr",
 	"share_mtime": "2026-11-17T08:30:00Z",
 	"share": {
@@ -14,6 +14,16 @@
 		"db/geoip.txt": "previous\n"
 	},
 	"expect": {
+		"ok": false,
+		"files": {
+			"cc/US_v4.txt": "192.0.2.0/24\n",
+			"cc/North_America_v4.txt": "# previous\n",
+			"db/geoip.txt": "previous\n",
+			"log/maxmind_ver": "MaxMind GeoLite2 Date/Time Stamp\nLast-Modified: 2026-11-17 08:30:00\n"
+		},
+		"tree": "d3c265b70b087b999fd433353bf66fed48b962ef104e8045926da85c2596fd53"
+	},
+	"old_expect": {
 		"ok": true,
 		"files": {
 			"cc/US_v4.txt": null,
