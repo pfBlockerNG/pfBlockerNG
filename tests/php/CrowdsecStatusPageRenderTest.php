@@ -106,6 +106,8 @@ final class CrowdsecStatusPageRenderTest extends TestCase
 			['IPv6 (rows 1)', 'Total', '0'],
 		], self::bannedRows($html), 'the hostile origin escaped, the integer origin, and one family cell spanning its origins and total: ' . $html);
 		$this->assertStringContainsString('<td rowspan="3" style="vertical-align: middle">IPv4</td>', $html, 'the family cell is centred');
+		$this->assertSame(2, substr_count($html, '<div class="table-responsive"><table class="table table-condensed table-striped">'),
+		    'the Decisions and Dropped tables each scroll sideways on a narrow screen: ' . $html);
 		$this->assertStringNotContainsString('<script>', $html);
 	}
 
@@ -147,6 +149,8 @@ final class CrowdsecStatusPageRenderTest extends TestCase
 		$this->assertSame(1, preg_match('~<tr class="cs-decision">(.*?)</tr>~s', $html, $row), 'the decision is a row: ' . $html);
 		preg_match_all('~<td>(.*?)</td>~s', $row[1], $cells);
 		$this->assertSame($expected, $cells[1], "the {$field} cell, escaped");
+		$this->assertSame(1, preg_match('~<div class="table-responsive"><table class="table table-condensed table-striped">.*?class="cs-decision".*?</table></div>~s', $html),
+		    'the lookup table scrolls sideways on a narrow screen: ' . $html);
 		$this->assertStringNotContainsString('<img', $html);
 	}
 
