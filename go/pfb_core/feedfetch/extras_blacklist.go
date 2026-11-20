@@ -236,10 +236,10 @@ func replaceDir(target string, extract func(dir string) error) bool {
 	if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
 		return false
 	}
-	previous, _ := os.Readlink(target)
-	if previous != "" {
-		previous = filepath.Base(previous)
-		if !isGeneration(base, previous) {
+	previous := ""
+	if to, err := os.Readlink(target); err == nil {
+		var ours bool
+		if previous, ours = generationOf(target, to); !ours {
 			return false // a link this code did not make is the administrator's layout
 		}
 	}
@@ -300,6 +300,17 @@ func generationDir(target string) string {
 // generationID reports whether s is a generation's <pid>.<8 hex>.
 var generationID = regexp.MustCompile(`^[0-9]+\.[0-9a-f]{8}$`).MatchString
 
+// generationOf is the name of the folder a link at target points to (to, as Readlink spells it), and whether that is a
+// generation of target beside it: one this code made.
+func generationOf(target, to string) (string, bool) {
+	if !filepath.IsAbs(to) {
+		to = filepath.Join(filepath.Dir(target), to)
+	}
+	to = filepath.Clean(to)
+	return filepath.Base(to), filepath.Dir(to) == filepath.Clean(filepath.Dir(target)) &&
+		isGeneration(filepath.Base(target), filepath.Base(to))
+}
+
 // isGeneration reports whether name is a generation of the folder base: .<base>.<pid>.<8 hex>.
 func isGeneration(base, name string) bool {
 	rest, ok := strings.CutPrefix(name, "."+base+".")
@@ -307,8 +318,9 @@ func isGeneration(base, name string) bool {
 }
 
 // recoverDirs is pfb_stage_publish_dir_recover(): every folder an interrupted swap left aside in dir goes back to its
-// name, or is dropped when a folder, or a link to one, stands there again; a link naming no folder gives way to it. It
-// reports false when one could not be settled.
+// name, or is dropped when a folder, or a link to a generation, stands there again; a link to a generation that names
+// no folder gives way to it, and a link this code did not make is left alone. It reports false when one could not be
+// settled.
 func recoverDirs(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -323,11 +335,19 @@ func recoverDirs(dir string) bool {
 		backup, live := filepath.Join(dir, e.Name()), filepath.Join(dir, live)
 		if info, err := os.Lstat(live); err == nil {
 			if info.Mode()&os.ModeSymlink != 0 {
-				if to, err := os.Stat(live); err != nil || !to.IsDir() {
+				to, _ := os.Readlink(live)
+				if _, ours := generationOf(live, to); !ours {
+					ok = false // a link this code did not make is left as it is
+					continue
+				}
+				if gen, err := os.Stat(live); os.IsNotExist(err) || err == nil && !gen.IsDir() {
 					// a link naming no folder: the folder set aside is the only copy
 					if os.Remove(live) != nil || rename(backup, live) != nil {
 						ok = false
 					}
+					continue
+				} else if err != nil {
+					ok = false
 					continue
 				}
 			} else if !info.IsDir() {

@@ -440,3 +440,68 @@ func TestAForeignCategoryLinkIsRefused(t *testing.T) {
 	assertAdult(t, live, "theirs\n")
 	assertDB(t, db)
 }
+
+// A link counts as one this code made only when it names a generation beside the category: a generation-like name in
+// another folder is still the administrator's layout, refused by the publication and left alone by recoverDirs.
+func TestAGenerationNamedLinkElsewhereIsForeign(t *testing.T) {
+	db := t.TempDir()
+	elsewhere := filepath.Join(t.TempDir(), ".ut1.1.0000abcd")
+	if err := os.Mkdir(elsewhere, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAdult("theirs\n")(elsewhere); err != nil {
+		t.Fatal(err)
+	}
+	live := filepath.Join(db, "ut1")
+	if err := os.Symlink(elsewhere, live); err != nil {
+		t.Fatal(err)
+	}
+	if replaceDir(live, writeAdult("new\n")) {
+		t.Fatal("replaced a link to the administrator's folder")
+	}
+	if to, err := os.Readlink(live); err != nil || to != elsewhere {
+		t.Errorf("ut1 links to %q, %v; want %s", to, err, elsewhere)
+	}
+	assertDB(t, db)
+
+	// beside a stale backup, recoverDirs leaves both the foreign link and the backup
+	backup := filepath.Join(db, stageBackup+"ut1")
+	if err := os.Mkdir(backup, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(elsewhere); err != nil {
+		t.Fatal(err) // now dangling
+	}
+	if recoverDirs(db) {
+		t.Error("settled a backup beside a foreign link")
+	}
+	if to, err := os.Readlink(live); err != nil || to != elsewhere {
+		t.Errorf("ut1 links to %q, %v; want the foreign link kept", to, err)
+	}
+	if _, err := os.Stat(backup); err != nil {
+		t.Errorf("the backup is gone: %v", err)
+	}
+}
+
+// A link to a generation that cannot be resolved for another reason than its absence (here a loop) is not taken for a
+// broken one: the folder set aside stays.
+func TestABackupBesideAnUnresolvableLinkStays(t *testing.T) {
+	db, _ := categoryDB(t)
+	gen := filepath.Join(db, ".ut1.1.00000000")
+	if err := os.RemoveAll(gen); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("ut1", gen); err != nil {
+		t.Fatal(err) // ut1 -> .ut1.1.00000000 -> ut1
+	}
+	backup := filepath.Join(db, stageBackup+"ut1")
+	if err := os.Mkdir(backup, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if recoverDirs(db) {
+		t.Error("settled a backup beside a link that loops")
+	}
+	if _, err := os.Stat(backup); err != nil {
+		t.Errorf("the backup is gone: %v", err)
+	}
+}
