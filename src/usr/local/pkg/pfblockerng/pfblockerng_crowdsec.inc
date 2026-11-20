@@ -618,15 +618,14 @@ EOF;
  */
 function pfb_crowdsec_register_rule_hook(): bool {
 	foreach (config_get_path('installedpackages/package', []) as $idx => $pkg) {
-		if (($pkg['configurationfile'] ?? '') !== 'pfblockerng.xml') {
-			continue;
-		}
-		if (($pkg['filter_rule_function'] ?? '') !== 'pfb_crowdsec_rules') {
+		if (($pkg['configurationfile'] ?? '') === 'pfblockerng.xml') {
+			if (($pkg['filter_rule_function'] ?? '') === 'pfb_crowdsec_rules') {
+				break;
+			}
 			config_set_path("installedpackages/package/{$idx}/filter_rule_function", 'pfb_crowdsec_rules');
 			write_config('[pfBlockerNG] register the CrowdSec rule hook');
 			return TRUE;
 		}
-		return FALSE;
 	}
 	return FALSE;
 }
