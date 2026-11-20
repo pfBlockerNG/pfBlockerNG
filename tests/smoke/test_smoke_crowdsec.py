@@ -12,6 +12,8 @@ Criteria and their tests:
      metrics file or sync payload — ``test_the_config_file_*``, ``test_the_key_appears_nowhere``, the off tests.
 * 4  after either filter reload both tables are full again within 2 s; with the signal suppressed, by the next pull —
      ``test_a_filter_reload_*``.
+* #4161 the dashboard widget lists both tables while the bouncer runs, none while it is off —
+     ``test_the_widget_shows_each_table_*``, ``test_turning_the_bouncer_off_*``.
 * #4159 a drop by the bouncer's rule is logged with that rule's own tracker —
      ``test_a_drop_by_the_bouncers_rule_is_logged_with_its_tracker``.
 * 5  a first enable starts it on the first try — ``test_a_first_enable_starts_the_bouncer_on_the_first_try``.
@@ -69,6 +71,7 @@ Net = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 PAGE = "/pfblockerng/pfblockerng_crowdsec.php"
 STATUS_PAGE = "/pfblockerng/pfblockerng_crowdsec_status.php"
+WIDGET = "/widgets/widgets/pfblockerng.widget.php"
 GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
 SECTION = "installedpackages/pfblockerngcrowdsec/config/0"
 SYNC_SECTION = "installedpackages/pfblockerngsync/config/0"
@@ -883,6 +886,48 @@ def test_a_drop_by_the_bouncers_rule_is_logged_with_its_tracker(bouncer: SmokeVM
 
 
 # --------------------------------------------------------------------------------------------------------------------
+# #4161: the dashboard widget's rows
+# --------------------------------------------------------------------------------------------------------------------
+
+
+def _widget_rows(gui: WebUI) -> dict[str, list[str]]:
+    """The widget's table rows as its AJAX refresh gets them (alias, count, packets, updated, rule icon, group), keyed
+    by the alias cell's text."""
+    response = gui.get(f"{WIDGET}?getNewWidget=1")
+    assert response.status_code == 200, f"the widget answered HTTP {response.status_code}"
+    rows = [line.split("||") for line in response.text.splitlines()]
+    return {re.sub(r"<[^>]+>", "", cols[0]): cols for cols in rows if len(cols) == 6}
+
+
+def test_the_widget_shows_each_table_with_its_entries_rules_and_dropped_packets(
+    bouncer: SmokeVM, engine: StubLapi, gui: WebUI
+) -> None:
+    """Given the bouncer on with both tables full,
+    Then the widget lists each table as an IP row linked to the Status subtab, with the table's entry count and the
+    bouncer's two rules on it;
+    When the firewall sends a packet to a banned IPv4 address,
+    Then the IPv4 row's packets grow by what the bouncer's rule dropped."""
+    vm = bouncer
+    tables = _converged(vm, engine)
+    rows = _widget_rows(gui)
+    for table in TABLES.values():
+        assert table in rows, f"a row for {table}: {sorted(rows)}"
+        alias, count, _packets, _updated, img, group = rows[table]
+        assert group == "ip", rows[table]
+        assert f'href="{STATUS_PAGE}"' in alias, f"linked to the Status subtab: {alias}"
+        entries = len(tables[table] or set())
+        assert count.replace(",", "") == str(entries), f"{table}: count {count}, table {tables[table]}"
+        assert "(2)" in img, f"{table}: the bouncer's two rules: {img}"
+
+    banned = "192.0.2.10"
+    before = int(re.sub(r"<[^>]+>|,", "", rows["crowdsec_v4"][2]))
+    # pf drops it on the way out; ping reports the refusal, which is the point
+    vm.ssh(f"ping -c 1 -t 2 {banned}", timeout=30)
+    after = int(re.sub(r"<[^>]+>|,", "", _widget_rows(gui)["crowdsec_v4"][2]))
+    assert after > before, f"crowdsec_v4 packets: {before} before the drop, {after} after"
+
+
+# --------------------------------------------------------------------------------------------------------------------
 # Criterion 8: the LAPI unreachable
 # --------------------------------------------------------------------------------------------------------------------
 
@@ -1089,6 +1134,8 @@ def test_turning_the_bouncer_off_removes_its_rules_config_and_process(
         assert _config_file(vm) is None, "off removes the config file"
         assert _processes(vm) == "", "off stops the bouncer"
         _await(lambda: _rules(vm), lambda rules: rules == [], "the rules removed by the reload")
+        rows = _widget_rows(gui)
+        assert not set(TABLES.values()) & set(rows), f"off: the widget shows no CrowdSec rows: {sorted(rows)}"
     finally:
         _turn_on(vm, gui, engine)
 

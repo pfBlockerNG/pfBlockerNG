@@ -196,7 +196,12 @@ function pfBlockerNG_update_table() {
 	// Update stays file mtime. Packets stay pfSense_get_pf_rules() below.
 	$ip_ph = pfb_ip_placeholder();
 	$pfb_saw = FALSE;
+	$crowdsec_count = array();
 	foreach (pfb_pfctl_tables_parse(pfb_pfctl_tables_raw()) as $pfb_alias => $info) {
+		if (in_array($pfb_alias, PFB_CROWDSEC_TABLES, TRUE)) {
+			$crowdsec_count[$pfb_alias] = $info['addresses'];
+			continue;
+		}
 		if (!str_starts_with($pfb_alias, 'pfB_')) {
 			continue;
 		}
@@ -224,9 +229,19 @@ function pfBlockerNG_update_table() {
 		$pfb['pfctlerr'] = TRUE;
 	}
 
+	// #4161: both CrowdSec bouncer tables after the aliases, while it should run; a table it has not created yet holds nothing.
+	// No alias file, so no update time.
+	$crowdsec_rules = array();
+	if (pfb_crowdsec_should_run()) {
+		$crowdsec_rules = pfb_crowdsec_widget_rules();
+		foreach (PFB_CROWDSEC_TABLES as $table) {
+			$pfb_table[$table] = array('count' => $crowdsec_count[$table] ?? 0, 'img' => $pfb['down'], 'update' => '', 'rule' => 0, 'packets' => 0);
+		}
+	}
+
 	// Determine if firewall rules are defined
 	// foreign section: filter/rule is a pfSense core section, not in registry
-	$pfb_filter_rules = config_get_path('filter/rule', []);
+	$pfb_filter_rules = array_merge(config_get_path('filter/rule', []), $crowdsec_rules);
 
 	if (!empty($pfb_filter_rules)) {
 		// A failed pf read can return a non-array; the helper's array type would TypeError.
@@ -891,13 +906,17 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 					$values['img'] .= "&nbsp;&nbsp;<small>({$values['rule']})</small>";
 				}
 
+				// A CrowdSec table (#4161) links to the CrowdSec Status subtab; it has no alias to pop up, and the Alerts tab
+				// does not report its drops. The "no pfB_ tables" error is not about it.
+				$crowdsec = in_array($pfb_alias, PFB_CROWDSEC_TABLES, TRUE);
+
 				// If packet fence errors found, display error.
-				if ($pfb['pfctlerr']) {
+				if ($pfb['pfctlerr'] && !$crowdsec) {
 					$values['img'] = $pfb['err'];
 				}
 
 				// Packet column pivot to Alerts Tab
-				if ($values['packets'] > 0) {
+				if (!$crowdsec && $values['packets'] > 0) {
 					$packets  = "<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"/pfblockerng/pfblockerng_alerts.php?filterip={$pfb_alias}\" ";
 					$packets .= "title=\"Open &quot;Reports&quot; &gt; &quot;Alerts&quot;\" >{$values['packets']}</a>";
 				}
@@ -905,8 +924,12 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 					$packets = $values['packets'] ?: 0;
 				}
 
+				if ($crowdsec) {
+					$alias_html = '<a target="_blank" rel="noopener noreferrer" href="' . PFB_CROWDSEC_STATUS_PAGE
+						. '" title="Open &quot;CrowdSec&quot; &gt; &quot;Status&quot;">' . $alias_html . '</a>';
+				}
 				// Alias table popup
-				if ($values['count'] > 0 && $pfb['popup'] == 'on') {
+				elseif ($values['count'] > 0 && $pfb['popup'] == 'on') {
 					$alias_html = "<a href=\"/firewall_aliases_edit.php?id={$values['id']}\" data-popover=\"true\" "
 						. " data-trigger=\"hover focus\" title=\"pfBlockerNG Alias details\" data-content=\""
 						. alias_info_popup($values['id']) . "\" data-html=\"true\">" . htmlspecialchars($pfb_alias) . "</a>";
