@@ -245,6 +245,19 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 	cs.set("6255147", &country{continent: "Asia", name: "AA ASIA UNDEFINED", iso: []string{"6255147"}, continentEn: "Asia"})
 	cs.set("6255148", &country{continent: "Europe", name: "AA EUROPE UNDEFINED", iso: []string{"6255148"}, continentEn: "Europe"})
 
+	// A MaxMind country is one the Locations file still holds (no built-in entry replaced it) that continents() takes
+	// for a country, not for a Top Spammers entry. It is placed when its list lands in a continent file split() reads.
+	maxmind := func(key string) bool { return cs.byKey[key].id == key && !strings.Contains(key, "A000") }
+	placed := func(key string) bool {
+		g := cs.byKey[key]
+		return maxmind(key) && slices.Contains(continentStems, g.continentEn) && len(g.iso) > 0 && word(g.iso[0])
+	}
+	if slices.ContainsFunc(cs.keys, maxmind) && !slices.ContainsFunc(cs.keys, placed) {
+		// Today's PHP publishes the generation without MaxMind's countries, deleting their previous lists (#4125).
+		c.log(" [ MAXMIND UPDATE FAIL, no MaxMind country has a continent file, using previous Country code database ]\n")
+		return nil, false, nil
+	}
+
 	s := stage{}
 	var isoList strings.Builder
 	unlisted := map[string]bool{} // $pfb_geoip_all's countries MaxMind has not listed in IPv4 yet
