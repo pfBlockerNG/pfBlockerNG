@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"log/syslog"
 	"strings"
 	"sync"
 )
@@ -20,6 +21,11 @@ const minRedacted = 8
 
 var levelNames = [...]string{"debug", "info", "warning", "error"}
 
+// toSeverity sends a line at each level's syslog severity: debug, info, warning, err.
+var toSeverity = [...]func(*syslog.Writer, string) error{
+	(*syslog.Writer).Debug, (*syslog.Writer).Info, (*syslog.Writer).Warning, (*syslog.Writer).Err,
+}
+
 // parseLogLevel accepts exactly the values the settings page writes.
 func parseLogLevel(s string) (logLevel, error) {
 	for i, name := range levelNames {
@@ -32,14 +38,25 @@ func parseLogLevel(s string) (logLevel, error) {
 
 // logger writes `level=<lvl> msg=<text>` lines. Control characters in the text are escaped so that values from the
 // LAPI cannot start a second line, and the API key, once set, is replaced wherever it appears.
+//
+// With toSyslog, each line goes to syslog at its level's severity instead; a line syslog does not take (not up yet at
+// boot, or restarting) goes to out, and the next line dials again.
 type logger struct {
 	mu     sync.Mutex
 	out    io.Writer
 	min    logLevel
 	secret string
+	dial   func() (*syslog.Writer, error)
+	sys    *syslog.Writer
 }
 
 func newLogger(out io.Writer, min logLevel) *logger { return &logger{out: out, min: min} }
+
+func (l *logger) toSyslog(dial func() (*syslog.Writer, error)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.dial = dial
+}
 
 func (l *logger) setSecret(s string) {
 	l.mu.Lock()
@@ -53,8 +70,15 @@ func (l *logger) logf(lvl logLevel, format string, args ...any) {
 	if lvl < l.min {
 		return
 	}
-	msg := redact(fmt.Sprintf(format, args...), l.secret)
-	_, _ = fmt.Fprintf(l.out, "level=%s msg=%s\n", levelNames[lvl], escapeControls(msg))
+	line := "level=" + levelNames[lvl] + " msg=" + escapeControls(redact(fmt.Sprintf(format, args...), l.secret))
+	if l.dial != nil && l.sys == nil {
+		l.sys, _ = l.dial()
+	}
+	// The writer redials by itself after a failed write; an error means this line did not reach syslog
+	if l.sys != nil && toSeverity[lvl](l.sys, line) == nil {
+		return
+	}
+	_, _ = fmt.Fprintln(l.out, line)
 }
 
 func (l *logger) debugf(format string, args ...any) { l.logf(levelDebug, format, args...) }

@@ -504,7 +504,8 @@ function pfb_crowdsec_lapi_get(string $url, string $key): array {
  * exists (pfb_crowdsec_apply() keeps it exactly while the bouncer should run, so the boot start follows the settings too); a
  * supervisor its pidfile names keeps running. Otherwise it stops what is left (a survivor fails the start) and runs this machine's
  * pfb_crowdsec ($dir/bin/freebsd-amd64 or freebsd-arm64, by `uname -p`) once `pfb_crowdsec -t` accepts the file, under daemon(8):
- * restarted 5 s after it exits, std fds detached, output to syslog (daemon facility, tag pfb_crowdsec), the supervisor's pid in
+ * restarted 5 s after it exits, std fds detached, logging to syslog itself (`-syslog`: daemon facility, tag pfb_crowdsec, each line at its
+ * level's severity) and its stdout and stderr to syslog at daemon.err under the same tag, the supervisor's pid in
  * PFB_CROWDSEC_DAEMON_PIDFILE and the bouncer's in PFB_CROWDSEC_PIDFILE, and the sha256 of the binary it runs in
  * PFB_CROWDSEC_BINARY_RECORD; the start returns once the supervisor's pidfile names it (5 s). No binary for this machine starts nothing
  * and is not a failure; an unknown machine, a refused file, a failed daemon(8) or no supervisor are.
@@ -581,7 +582,9 @@ function pfb_crowdsec_service(string $dir = PFB_CROWDSEC_DIR): void {
 	# What it runs, for the installer to compare with the binary it installs
 	/sbin/sha256 -r "\${binary}" > {$record}
 	# Detach std fds (#662): the caller's pipe must not stay open in the daemon
-	/usr/sbin/daemon -r -R 5 -S -l daemon -T pfb_crowdsec -t pfb_crowdsec -P {$daemonpid} -p {$childpid} "\${binary}" -c {$config} </dev/null >/dev/null 2>&1
+	# The bouncer logs to syslog itself, each line at its level's severity (#4158); daemon(8) sends what it writes to stdout or
+	# stderr (a line syslog did not take, a crash trace) to syslog at err, under the same tag
+	/usr/sbin/daemon -r -R 5 -S -l daemon -s err -T pfb_crowdsec -t pfb_crowdsec -P {$daemonpid} -p {$childpid} "\${binary}" -c {$config} -syslog </dev/null >/dev/null 2>&1
 	daemonstatus="\$?"
 	if [ "\${daemonstatus}" -ne 0 ]; then
 		/usr/bin/logger -p daemon.err -t pfb_crowdsec "ERROR [{$prefix}] CrowdSec bouncer: daemon(8) failed with status \${daemonstatus} - not started"

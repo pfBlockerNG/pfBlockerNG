@@ -122,8 +122,8 @@ counters of the inbound rule for each table. It finds them the way upstream does
 - banned values per family and per origin;
 - dropped packets and bytes per family.
 
-**Logging.** Plain lines on stdout, `level=<lvl> msg=<text>`, filtered by `log_level`. The
-service sends them to syslog (D4).
+**Logging.** Plain lines, `level=<lvl> msg=<text>`, filtered by `log_level`, on stdout, or with
+`-syslog` (the service's, D4) to syslog at each level's severity (#4158 amendment).
 
 **Left out on purpose.** Everything the official bouncer carries that pf mode on pfSense
 does not need:
@@ -190,8 +190,9 @@ firewall-bouncer part of the official package and live in a new `PFB_SECTIONS` a
   `/usr/local/etc/rc.d/pfb_crowdsec.sh`, status `isvalidpid('/var/run/pfb_crowdsec.pid')`.
 - The rc script is generated with `write_rcfile()` the way `pfb_core_service()` generates
   Core's. It picks this machine's binary by `uname -p`, and runs it under daemon(8) with
-  restart on exit (`-r -R 5`), supervisor and child pidfiles, std fds detached, and output
-  to syslog (`-S -l daemon -T pfb_crowdsec`). With no binary for this machine it logs and
+  restart on exit (`-r -R 5`), supervisor and child pidfiles, std fds detached, the daemon
+  logging to syslog itself (`-syslog`), and its output to syslog at `err`
+  (`-S -l daemon -s err -T pfb_crowdsec`; #4158 amendment). With no binary for this machine it logs and
   starts nothing. Stop sends TERM, and KILL after 5 s.
 - **Should run** = pfBlockerNG master enable on, `crowdsec/enable` on, and a stored key.
   - The Settings subtab's save writes the config file and applies at once: start, restart
@@ -577,3 +578,28 @@ widget does (#4161); the Alerts and Reports pipeline, which lists only rules on 
   again as `descr=<name>`, for example `label "CrowdSec IPv4" label "descr=CrowdSec IPv4"`.
 - **Counters.** The daemon's counter parser (D1 "Counters") is unchanged: `pfctl` prints the second label and `ridentifier`
   after the first label, which its pattern allows.
+
+## Amendment 2026-11-20 — each log line at its level's severity (#4158)
+
+daemon(8) sent every line the daemon wrote to syslog at one severity (`-S` defaults to `notice`), so on a live install
+(nightly `20261120174303.d007148`) `level=error` lines arrived as `<29>` (daemon.notice), the same as `level=info` ones.
+Remote syslog targets and log pipelines that select on severity could not tell them apart. daemon(8)'s `-s` sets one
+severity for the whole stream, so the mapping is the daemon's. This changes D1's "Logging" and D4's "output to syslog".
+
+- **Daemon.** With `-syslog`, the logger sends each line to the local syslog (the standard library's `log/syslog`,
+  `/var/run/log`) as facility `daemon`, tag `pfb_crowdsec`, at its level's severity: `debug` → debug, `info` → info,
+  `warning` → warning, `error` → err. The text is unchanged (`level=<lvl> msg=<text>`), and the tag too, so D7's log
+  tail and existing filters keep matching. Without `-syslog` (a run by hand) the lines stay on stdout.
+- **Syslog down.** A line syslog does not take (no syslogd yet, or one restarting) goes to stdout, and the next line
+  dials again, so syslog gets the lines once it is back. A write that fails on an open connection redials once
+  (`log/syslog`'s own retry) before the line falls back.
+- **Service.** The rc script runs the daemon with `-syslog` and keeps daemon(8)'s `-S -l daemon -T pfb_crowdsec`, now
+  with `-s err`. With the lines in syslog already, the daemon's stdout carries only lines syslog refused, and its
+  stderr only what the Go runtime writes when the daemon crashes (a panic or fatal error trace): both are faults, so
+  they reach the system log at `err` under the same tag, where the Status subtab's tail shows them. daemon(8) cannot
+  split stdout from stderr by severity, so a refused `info` line arrives at `err` too, its text still saying
+  `level=info`. When syslogd itself is down, daemon(8)'s own syslog(3) calls fail as the daemon's do, and lines written
+  then are lost, as they were before. A file (`daemon -o`, as Core and pfB-DNS log) would keep them, but D6 sends the
+  daemon's log to syslog only, and pfSense starts syslogd before the packages, so the window is a syslogd restart.
+- **Command line.** `-syslog` follows `-c <config>`, so `pfb_crowdsec_child_pattern()`, which matches the command line
+  up to `-c` and the space after it, still finds the bouncer, including one an earlier version's rc script started and a package upgrade left running.
