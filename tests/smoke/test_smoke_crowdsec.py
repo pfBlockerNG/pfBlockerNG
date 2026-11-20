@@ -12,6 +12,8 @@ Criteria and their tests:
      metrics file or sync payload — ``test_the_config_file_*``, ``test_the_key_appears_nowhere``, the off tests.
 * 4  after either filter reload both tables are full again within 2 s; with the signal suppressed, by the next pull —
      ``test_a_filter_reload_*``.
+* #4159 a drop by the bouncer's rule is logged with that rule's own tracker —
+     ``test_a_drop_by_the_bouncers_rule_is_logged_with_its_tracker``.
 * 5  a first enable starts it on the first try — ``test_a_first_enable_starts_the_bouncer_on_the_first_try``.
 * 6  stopping empties both tables; the bouncer off, or pfBlockerNG off, removes the rules and the config file and
      stops the process — ``test_stopping_the_service_*``, ``test_turning_*_off_*``.
@@ -77,6 +79,7 @@ CHILD = rf"^{CROWDSEC_DIR}/bin/freebsd-[a-z0-9]+/pfb_crowdsec -c "
 SUPERVISOR = r"^(daemon: pfb_crowdsec\[|/usr/sbin/daemon .*-t pfb_crowdsec )"
 TABLES = {4: "crowdsec_v4", 6: "crowdsec_v6"}
 SYSLOG = "/var/log/system.log"
+FILTER_LOG = "/var/log/filter.log"
 PROM = "/var/tmp/node_exporter/pfblockerng.prom"
 PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
@@ -206,15 +209,20 @@ def _rules(vm: SmokeVM) -> list[str]:
     return [line for line in _sh(vm, "pfctl -sr").splitlines() if 'label "CrowdSec IPv' in line]
 
 
-def _log_mark(vm: SmokeVM) -> int:
-    return int(_sh(vm, f"wc -l < {SYSLOG}").strip())
+def _log_mark(vm: SmokeVM, log: str = SYSLOG) -> int:
+    return int(_sh(vm, f"wc -l < {log}").strip())
+
+
+def _log_since(vm: SmokeVM, log: str, since: int) -> list[str]:
+    """The log's lines after line ``since`` (all of them after a rotation)."""
+    script = f'n=$(wc -l < {log}); s={since}; [ "$n" -lt "$s" ] && s=0; tail -n "+$((s + 1))" {log}'
+    return _sh(vm, script).splitlines()
 
 
 def _bouncer_log(vm: SmokeVM, since: int = 0) -> list[str]:
     """The system log's lines whose program is pfb_crowdsec, in the BSD or the RFC 5424 format, after line ``since``
     (all of them after a rotation)."""
-    script = f'n=$(wc -l < {SYSLOG}); s={since}; [ "$n" -lt "$s" ] && s=0; tail -n "+$((s + 1))" {SYSLOG}'
-    return [line for line in _sh(vm, script).splitlines() if PROGRAM.search(line)]
+    return [line for line in _log_since(vm, SYSLOG, since) if PROGRAM.search(line)]
 
 
 def _status(vm: SmokeVM) -> dict[str, Any]:
@@ -747,6 +755,52 @@ def test_a_filter_reload_without_the_signal_is_repaired_by_the_next_pull(bouncer
         _sh(vm, f"mv {PIDFILE}.aside {PIDFILE}")
     assert _tables(vm) == want
     assert not any(SIGNALLED in line for line in log), "\n".join(log)
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# #4159: the rules' trackers
+# --------------------------------------------------------------------------------------------------------------------
+
+
+def test_a_drop_by_the_bouncers_rule_is_logged_with_its_tracker(bouncer: SmokeVM, engine: StubLapi, gui: WebUI) -> None:
+    """Given the bouncer on with logging on, so each of its four loaded rules carries its own tracker and its name again
+    as a descr= label,
+    When the firewall sends a packet to a banned IPv4 address (a seed decision),
+    Then filterlog logs the drop with the outbound IPv4 rule's tracker, not 0."""
+    vm = bouncer
+    banned = "192.0.2.10"
+    assert _holds(banned)(_tables(vm)), f"before-state: {banned} is banned"
+    _save(gui, {**_on_fields(engine), "rules_log": "on"})
+    try:
+        rules = _await(
+            lambda: _rules(vm), lambda r: len(r) == 4 and all(" log " in line for line in r), "the four logged rules"
+        )
+        named = r'label "(CrowdSec [^"]+)"(?: label "[^"]*")*(?: ridentifier (\d+))?'
+        trackers = dict(re.findall(named, "\n".join(rules)))
+        assert all(trackers.values()) and len(set(trackers.values())) == 4, (
+            "every rule carries its own tracker:\n" + "\n".join(rules)
+        )
+        assert all(f'label "{name}" label "descr={name}"' in "\n".join(rules) for name in trackers), (
+            "every rule repeats its name as a descr= label:\n" + "\n".join(rules)
+        )
+        tracker = trackers["CrowdSec IPv4 out"]
+        # The save's filter reload killed the tables; the bouncer refills them on the reload's signal
+        _await(lambda: _tables(vm), _holds(banned), f"{banned} banned again after the reload")
+
+        mark = _log_mark(vm, FILTER_LOG)
+        # pf drops it on the way out; ping reports the refusal, which is the point
+        vm.ssh(f"ping -c 1 -t 2 {banned}", timeout=30)
+        lines = _await(
+            lambda: [line for line in _log_since(vm, FILTER_LOG, mark) if f",{banned}," in line],
+            bool,
+            f"a filter.log line for {banned}",
+            cap=30.0,
+        )
+        # filterlog's CSV, the line's last word: rule number, sub-rule, anchor, tracker, interface, reason, action, ...
+        logged = {line.rsplit(" ", 1)[-1].split(",")[3] for line in lines}
+        assert logged == {tracker}, f"the drop logged with tracker {tracker}, got {logged}:\n" + "\n".join(lines)
+    finally:
+        _save(gui, _on_fields(engine))
 
 
 # --------------------------------------------------------------------------------------------------------------------
