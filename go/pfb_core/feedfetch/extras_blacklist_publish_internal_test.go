@@ -505,3 +505,34 @@ func TestABackupBesideAnUnresolvableLinkStays(t *testing.T) {
 		t.Errorf("the backup is gone: %v", err)
 	}
 }
+
+// A link whose path climbs out through ".." names another folder than it spells when a component on the way is itself
+// a link: it is foreign, however its text reads once cleaned.
+func TestALinkThroughDotDotIsForeign(t *testing.T) {
+	db := t.TempDir()
+	outer := t.TempDir()
+	other := filepath.Join(outer, "sub")
+	theirs := filepath.Join(outer, ".ut1.1.0000abcd")
+	for _, dir := range []string{other, theirs} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeAdult("theirs\n")(theirs); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, filepath.Join(db, "jump")); err != nil {
+		t.Fatal(err)
+	}
+	live := filepath.Join(db, "ut1")
+	if err := os.Symlink("jump/../.ut1.1.0000abcd", live); err != nil {
+		t.Fatal(err)
+	}
+	assertAdult(t, live, "theirs\n") // the link resolves into the other folder
+	if replaceDir(live, writeAdult("new\n")) {
+		t.Fatal("replaced a link that resolves outside the database folder")
+	}
+	if to, err := os.Readlink(live); err != nil || to != "jump/../.ut1.1.0000abcd" {
+		t.Errorf("ut1 links to %q, %v; want the link kept", to, err)
+	}
+}

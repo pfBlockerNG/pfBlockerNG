@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 )
@@ -301,8 +302,12 @@ func generationDir(target string) string {
 var generationID = regexp.MustCompile(`^[0-9]+\.[0-9a-f]{8}$`).MatchString
 
 // generationOf is the name of the folder a link at target points to (to, as Readlink spells it), and whether that is a
-// generation of target beside it: one this code made.
+// generation of target beside it: one this code made. A ".." in the link is never ours: through a component that is
+// itself a link it climbs into another folder than its cleaned text names.
 func generationOf(target, to string) (string, bool) {
+	if slices.Contains(strings.Split(to, "/"), "..") {
+		return filepath.Base(to), false
+	}
 	if !filepath.IsAbs(to) {
 		to = filepath.Join(filepath.Dir(target), to)
 	}
