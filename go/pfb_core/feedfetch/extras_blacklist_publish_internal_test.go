@@ -339,3 +339,46 @@ func TestABackupBesideALinkedCategoryIsDropped(t *testing.T) {
 	assertAdult(t, live, "new\n")
 	assertDB(t, db, ".ut1.1.00000000", linked(t, live))
 }
+
+// A publication refused before its link rename (a target that is a file, or a real folder that cannot be set aside)
+// leaves no generation behind.
+func TestARefusedCategoryPublicationLeavesNoGeneration(t *testing.T) {
+	t.Run("target is a file", func(t *testing.T) {
+		db := t.TempDir()
+		live := filepath.Join(db, "ut1")
+		if err := os.WriteFile(live, []byte("a file\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if replaceDir(live, writeAdult("new\n")) {
+			t.Fatal("published over a file")
+		}
+		assertDB(t, db)
+	})
+	t.Run("set-aside fails", func(t *testing.T) {
+		db := t.TempDir()
+		live := filepath.Join(db, "ut1")
+		if err := os.Mkdir(live, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(db, stageBackup+"ut1"), nil, 0o644); err != nil {
+			t.Fatal(err) // a file at the set-aside name: renaming the folder onto it fails
+		}
+		if replaceDir(live, writeAdult("new\n")) {
+			t.Fatal("published without setting the folder aside")
+		}
+		assertDB(t, db, stageBackup+"ut1")
+	})
+}
+
+// A generation is readable by the unprivileged readers of a published category whatever the umask.
+func TestACategoryGenerationIsWorldReadable(t *testing.T) {
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+	_, live := categoryDB(t)
+	if !replaceDir(live, writeAdult("new\n")) {
+		t.Fatal("the category was not published")
+	}
+	if info, err := os.Stat(live); err != nil || info.Mode().Perm() != 0o755 {
+		t.Errorf("the generation's mode = %v, %v; want 0755", info.Mode().Perm(), err)
+	}
+}
