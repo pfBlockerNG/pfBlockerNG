@@ -763,7 +763,8 @@ def test_a_filter_reload_without_the_signal_is_repaired_by_the_next_pull(bouncer
 
 
 def test_a_drop_by_the_bouncers_rule_is_logged_with_its_tracker(bouncer: SmokeVM, engine: StubLapi, gui: WebUI) -> None:
-    """Given the bouncer on with logging on, so each of its four loaded rules carries its own tracker,
+    """Given the bouncer on with logging on, so each of its four loaded rules carries its own tracker and its name again
+    as a descr= label,
     When the firewall sends a packet to a banned IPv4 address (a seed decision),
     Then filterlog logs the drop with the outbound IPv4 rule's tracker, not 0."""
     vm = bouncer
@@ -779,7 +780,12 @@ def test_a_drop_by_the_bouncers_rule_is_logged_with_its_tracker(bouncer: SmokeVM
         assert all(trackers.values()) and len(set(trackers.values())) == 4, (
             "every rule carries its own tracker:\n" + "\n".join(rules)
         )
+        assert all(f'label "{name}" label "descr={name}"' in "\n".join(rules) for name in trackers), (
+            "every rule repeats its name as a descr= label:\n" + "\n".join(rules)
+        )
         tracker = trackers["CrowdSec IPv4 out"]
+        # The save's filter reload killed the tables; the bouncer refills them on the reload's signal
+        _await(lambda: _tables(vm), _holds(banned), f"{banned} banned again after the reload")
 
         mark = _log_mark(vm, FILTER_LOG)
         # pf drops it on the way out; ping reports the refusal, which is the point

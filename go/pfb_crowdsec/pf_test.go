@@ -70,11 +70,12 @@ func TestParseStatesCollectsEveryAddress(t *testing.T) {
 	}
 }
 
-// pfctl -v -s rules: the inbound rule of each table, one per interface when the rule names several.
+// pfctl -v -s rules: the inbound rule of each table, one per interface when the rule names several, with one label or with
+// pfBlockerNG's second, descr= label (#4159).
 const rulesSample = `block drop in quick on em0 inet from <crowdsec_v4> to any label "CrowdSec IPv4" ridentifier 1000
   [ Evaluations: 1519      Packets: 16        Bytes: 4096        States: 0     ]
   [ Inserted: uid 0 pid 14219 State Creations: 0     ]
-block drop in quick on em1 inet from <crowdsec_v4> to any label "CrowdSec IPv4" ridentifier 1000
+block drop in quick on em1 inet from <crowdsec_v4> to any label "CrowdSec IPv4" label "descr=CrowdSec IPv4" ridentifier 177400401
   [ Evaluations: 20        Packets: 4         Bytes: 240         States: 0     ]
   [ Inserted: uid 0 pid 14219 State Creations: 0     ]
 block drop out quick on em0 inet from any to <crowdsec_v4> label "CrowdSec IPv4 out"
