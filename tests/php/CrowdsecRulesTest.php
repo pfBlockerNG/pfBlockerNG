@@ -16,6 +16,8 @@ use PHPUnit\Framework\TestCase;
  *   - it returns rules only for `pfearly`, and only while the bouncer should run (D4); otherwise nothing, and it signals nothing;
  *   - per enabled family, the inbound and outbound rule in D5's exact text: `on { <real interfaces> }` only with "all interfaces"
  *     off, `log` and `tag <tag>` only when set, and never a `table <...>` declaration;
+ *   - #4159: each rule names itself twice, as its first label (what pfSense CE's firewall log shows) and as a `descr=` label (what
+ *     pfSense versions with keyed labels show), and carries its own fixed tracker (`ridentifier`), which filterlog logs;
  *   - pfSense's filter reload never loads pfBlockerNG's globals, so "should run" reads the stored master enable there;
  *   - a filter reload kills both tables, so when it returns rules it registers a shutdown function, which runs after the kill and
  *     sends SIGUSR1 to the bouncer's own pid (/var/run/pfb_crowdsec.pid, never daemon(8)'s supervisor, #4069), only when
@@ -77,10 +79,10 @@ final class CrowdsecRulesTest extends TestCase
 	{
 		self::store(['rules_all_interfaces' => '', 'rules_interfaces' => 'wan,opt1', 'rules_log' => 'on', 'rules_tag' => 'cs_ban-1']);
 		$this->assertSame(
-			"block drop in log quick on { vtnet0 vtnet2.10 } inet from <crowdsec_v4> to any label \"CrowdSec IPv4\" ridentifier 177400401 tag \"cs_ban-1\"\n"
-			. "block drop out log quick on { vtnet0 vtnet2.10 } inet from any to <crowdsec_v4> label \"CrowdSec IPv4 out\" ridentifier 177400402 tag \"cs_ban-1\"\n"
-			. "block drop in log quick on { vtnet0 vtnet2.10 } inet6 from <crowdsec_v6> to any label \"CrowdSec IPv6\" ridentifier 177400601 tag \"cs_ban-1\"\n"
-			. "block drop out log quick on { vtnet0 vtnet2.10 } inet6 from any to <crowdsec_v6> label \"CrowdSec IPv6 out\" ridentifier 177400602 tag \"cs_ban-1\"\n",
+			"block drop in log quick on { vtnet0 vtnet2.10 } inet from <crowdsec_v4> to any label \"CrowdSec IPv4\" label \"descr=CrowdSec IPv4\" ridentifier 177400401 tag \"cs_ban-1\"\n"
+			. "block drop out log quick on { vtnet0 vtnet2.10 } inet from any to <crowdsec_v4> label \"CrowdSec IPv4 out\" label \"descr=CrowdSec IPv4 out\" ridentifier 177400402 tag \"cs_ban-1\"\n"
+			. "block drop in log quick on { vtnet0 vtnet2.10 } inet6 from <crowdsec_v6> to any label \"CrowdSec IPv6\" label \"descr=CrowdSec IPv6\" ridentifier 177400601 tag \"cs_ban-1\"\n"
+			. "block drop out log quick on { vtnet0 vtnet2.10 } inet6 from any to <crowdsec_v6> label \"CrowdSec IPv6 out\" label \"descr=CrowdSec IPv6 out\" ridentifier 177400602 tag \"cs_ban-1\"\n",
 			pfb_crowdsec_rules('pfearly'));
 	}
 
@@ -88,10 +90,10 @@ final class CrowdsecRulesTest extends TestCase
 	{
 		self::store();
 		$this->assertSame(
-			"block drop in quick inet from <crowdsec_v4> to any label \"CrowdSec IPv4\" ridentifier 177400401\n"
-			. "block drop out quick inet from any to <crowdsec_v4> label \"CrowdSec IPv4 out\" ridentifier 177400402\n"
-			. "block drop in quick inet6 from <crowdsec_v6> to any label \"CrowdSec IPv6\" ridentifier 177400601\n"
-			. "block drop out quick inet6 from any to <crowdsec_v6> label \"CrowdSec IPv6 out\" ridentifier 177400602\n",
+			"block drop in quick inet from <crowdsec_v4> to any label \"CrowdSec IPv4\" label \"descr=CrowdSec IPv4\" ridentifier 177400401\n"
+			. "block drop out quick inet from any to <crowdsec_v4> label \"CrowdSec IPv4 out\" label \"descr=CrowdSec IPv4 out\" ridentifier 177400402\n"
+			. "block drop in quick inet6 from <crowdsec_v6> to any label \"CrowdSec IPv6\" label \"descr=CrowdSec IPv6\" ridentifier 177400601\n"
+			. "block drop out quick inet6 from any to <crowdsec_v6> label \"CrowdSec IPv6 out\" label \"descr=CrowdSec IPv6 out\" ridentifier 177400602\n",
 			pfb_crowdsec_rules('pfearly'));
 	}
 
@@ -137,8 +139,8 @@ final class CrowdsecRulesTest extends TestCase
 		$expected = '';
 		foreach (['4' => [$v4, 'inet'], '6' => [$v6, 'inet6']] as $n => [$enabled, $af]) {
 			if ($enabled) {
-				$expected .= "block drop in{$opt} {$af} from <crowdsec_v{$n}> to any label \"CrowdSec IPv{$n}\" ridentifier 177400{$n}01{$end}\n"
-					. "block drop out{$opt} {$af} from any to <crowdsec_v{$n}> label \"CrowdSec IPv{$n} out\" ridentifier 177400{$n}02{$end}\n";
+				$expected .= "block drop in{$opt} {$af} from <crowdsec_v{$n}> to any label \"CrowdSec IPv{$n}\" label \"descr=CrowdSec IPv{$n}\" ridentifier 177400{$n}01{$end}\n"
+					. "block drop out{$opt} {$af} from any to <crowdsec_v{$n}> label \"CrowdSec IPv{$n} out\" label \"descr=CrowdSec IPv{$n} out\" ridentifier 177400{$n}02{$end}\n";
 			}
 		}
 
@@ -166,10 +168,10 @@ final class CrowdsecRulesTest extends TestCase
 		self::store(['rules_all_interfaces' => '', 'rules_interfaces' => 'wan,lan']);
 		$GLOBALS['pfb_test_real_interface_inet6'] = ['wan' => 'wan_stf'];
 		$this->assertSame(
-			"block drop in quick on { vtnet0 vtnet1 } inet from <crowdsec_v4> to any label \"CrowdSec IPv4\" ridentifier 177400401\n"
-			. "block drop out quick on { vtnet0 vtnet1 } inet from any to <crowdsec_v4> label \"CrowdSec IPv4 out\" ridentifier 177400402\n"
-			. "block drop in quick on { wan_stf vtnet1 } inet6 from <crowdsec_v6> to any label \"CrowdSec IPv6\" ridentifier 177400601\n"
-			. "block drop out quick on { wan_stf vtnet1 } inet6 from any to <crowdsec_v6> label \"CrowdSec IPv6 out\" ridentifier 177400602\n",
+			"block drop in quick on { vtnet0 vtnet1 } inet from <crowdsec_v4> to any label \"CrowdSec IPv4\" label \"descr=CrowdSec IPv4\" ridentifier 177400401\n"
+			. "block drop out quick on { vtnet0 vtnet1 } inet from any to <crowdsec_v4> label \"CrowdSec IPv4 out\" label \"descr=CrowdSec IPv4 out\" ridentifier 177400402\n"
+			. "block drop in quick on { wan_stf vtnet1 } inet6 from <crowdsec_v6> to any label \"CrowdSec IPv6\" label \"descr=CrowdSec IPv6\" ridentifier 177400601\n"
+			. "block drop out quick on { wan_stf vtnet1 } inet6 from any to <crowdsec_v6> label \"CrowdSec IPv6 out\" label \"descr=CrowdSec IPv6 out\" ridentifier 177400602\n",
 			pfb_crowdsec_rules('pfearly'));
 	}
 
@@ -178,8 +180,8 @@ final class CrowdsecRulesTest extends TestCase
 		self::store(['rules_all_interfaces' => '', 'rules_interfaces' => 'opt1']);
 		$GLOBALS['pfb_test_real_interface_inet6'] = ['opt1' => NULL];
 		$this->assertSame(
-			"block drop in quick on { vtnet2.10 } inet from <crowdsec_v4> to any label \"CrowdSec IPv4\" ridentifier 177400401\n"
-			. "block drop out quick on { vtnet2.10 } inet from any to <crowdsec_v4> label \"CrowdSec IPv4 out\" ridentifier 177400402\n",
+			"block drop in quick on { vtnet2.10 } inet from <crowdsec_v4> to any label \"CrowdSec IPv4\" label \"descr=CrowdSec IPv4\" ridentifier 177400401\n"
+			. "block drop out quick on { vtnet2.10 } inet from any to <crowdsec_v4> label \"CrowdSec IPv4 out\" label \"descr=CrowdSec IPv4 out\" ridentifier 177400402\n",
 			pfb_crowdsec_rules('pfearly'));
 	}
 

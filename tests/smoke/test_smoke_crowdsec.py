@@ -209,15 +209,20 @@ def _rules(vm: SmokeVM) -> list[str]:
     return [line for line in _sh(vm, "pfctl -sr").splitlines() if 'label "CrowdSec IPv' in line]
 
 
-def _log_mark(vm: SmokeVM) -> int:
-    return int(_sh(vm, f"wc -l < {SYSLOG}").strip())
+def _log_mark(vm: SmokeVM, log: str = SYSLOG) -> int:
+    return int(_sh(vm, f"wc -l < {log}").strip())
+
+
+def _log_since(vm: SmokeVM, log: str, since: int) -> list[str]:
+    """The log's lines after line ``since`` (all of them after a rotation)."""
+    script = f'n=$(wc -l < {log}); s={since}; [ "$n" -lt "$s" ] && s=0; tail -n "+$((s + 1))" {log}'
+    return _sh(vm, script).splitlines()
 
 
 def _bouncer_log(vm: SmokeVM, since: int = 0) -> list[str]:
     """The system log's lines whose program is pfb_crowdsec, in the BSD or the RFC 5424 format, after line ``since``
     (all of them after a rotation)."""
-    script = f'n=$(wc -l < {SYSLOG}); s={since}; [ "$n" -lt "$s" ] && s=0; tail -n "+$((s + 1))" {SYSLOG}'
-    return [line for line in _sh(vm, script).splitlines() if PROGRAM.search(line)]
+    return [line for line in _log_since(vm, SYSLOG, since) if PROGRAM.search(line)]
 
 
 def _status(vm: SmokeVM) -> dict[str, Any]:
@@ -769,17 +774,18 @@ def test_a_drop_by_the_bouncers_rule_is_logged_with_its_tracker(bouncer: SmokeVM
         rules = _await(
             lambda: _rules(vm), lambda r: len(r) == 4 and all(" log " in line for line in r), "the four logged rules"
         )
-        trackers = dict(re.findall(r'label "([^"]+)"(?: ridentifier (\d+))?', "\n".join(rules)))
+        named = r'label "(CrowdSec [^"]+)"(?: label "[^"]*")*(?: ridentifier (\d+))?'
+        trackers = dict(re.findall(named, "\n".join(rules)))
         assert all(trackers.values()) and len(set(trackers.values())) == 4, (
             "every rule carries its own tracker:\n" + "\n".join(rules)
         )
         tracker = trackers["CrowdSec IPv4 out"]
 
-        mark = int(_sh(vm, f"wc -l < {FILTER_LOG}").strip())
+        mark = _log_mark(vm, FILTER_LOG)
         # pf drops it on the way out; ping reports the refusal, which is the point
         vm.ssh(f"ping -c 1 -t 2 {banned}", timeout=30)
         lines = _await(
-            lambda: [line for line in _sh(vm, f"tail -n +{mark + 1} {FILTER_LOG}").splitlines() if banned in line],
+            lambda: [line for line in _log_since(vm, FILTER_LOG, mark) if f",{banned}," in line],
             bool,
             f"a filter.log line for {banned}",
             cap=30.0,
