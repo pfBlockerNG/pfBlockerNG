@@ -21,7 +21,7 @@ func categoryDB(t *testing.T) (db, live string) {
 	if err := os.Mkdir(prev, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(prev, "ut1_adult"), []byte("old\n"), 0o644); err != nil {
+	if err := writeAdult("old\n")(prev); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(".ut1.1.00000000", live); err != nil {
@@ -149,7 +149,7 @@ func TestARealCategoryFolderIsSetAsideOnce(t *testing.T) {
 		if err := os.Mkdir(live, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(live, "ut1_adult"), []byte("old\n"), 0o644); err != nil {
+		if err := writeAdult("old\n")(live); err != nil {
 			t.Fatal(err)
 		}
 		return db, live
@@ -194,9 +194,9 @@ func TestARealCategoryFolderIsSetAsideOnce(t *testing.T) {
 // name stays, and a missing category (a run killed while setting a real folder aside) removes no generation.
 func TestStaleCategoryGenerationsAreRemovedByName(t *testing.T) {
 	db, live := categoryDB(t)
-	stale := []string{".ut1.7.0badcafe"}
+	stale := ".ut1.7.0badcafe"
 	kept := []string{".ut1.notes", ".ut1.7.0BADCAFE", ".ut1.x.0badcafe", ".ut1.7.0badcafe0", ".ut2.7.0badcafe", "ut1.old"}
-	for _, name := range append(append([]string{}, stale...), kept...) {
+	for _, name := range append([]string{stale}, kept...) {
 		if err := os.MkdirAll(filepath.Join(db, name, "inside"), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -272,4 +272,70 @@ func TestAPreviousCategoryLinkedByPathIsKept(t *testing.T) {
 			assertDB(t, db, ".ut1.1.00000000", linked(t, live))
 		})
 	}
+}
+
+// While a real category folder gives way to the link, it waits under the name recoverDirs puts back
+// (.pfbstagebak2_<name>), so a run killed before the link lands leaves it to be restored by the next run, failed
+// download or not; once the link is in place it becomes the previous generation.
+func TestARealCategoryFolderWaitsUnderTheRecoverableName(t *testing.T) {
+	db := t.TempDir()
+	live := filepath.Join(db, "ut1")
+	if err := os.Mkdir(live, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAdult("old\n")(live); err != nil {
+		t.Fatal(err)
+	}
+	waiting := false
+	real := rename
+	rename = func(from, to string) error {
+		if to == live {
+			b, err := os.ReadFile(filepath.Join(db, stageBackup+"ut1", "ut1_adult"))
+			waiting = err == nil && string(b) == "old\n"
+		}
+		return real(from, to)
+	}
+	t.Cleanup(func() { rename = real })
+	if !replaceDir(live, writeAdult("new\n")) {
+		t.Fatal("the category was not published")
+	}
+	if !waiting {
+		t.Errorf("the real folder was not under %sut1 when the link replaced it", stageBackup)
+	}
+	gen := linked(t, live)
+	entries, _ := filepath.Glob(filepath.Join(db, ".ut1.*.*"))
+	var aside string
+	for _, e := range entries {
+		if filepath.Base(e) != gen {
+			aside = filepath.Base(e)
+		}
+	}
+	assertAdult(t, filepath.Join(db, aside), "old\n")
+	assertDB(t, db, aside, gen)
+
+	// killed before the link landed: the next run, even a failed one, puts the folder back
+	if err := os.Remove(live); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(db, aside), filepath.Join(db, stageBackup+"ut1")); err != nil {
+		t.Fatal(err)
+	}
+	if replaceDir(live, func(string) error { return os.ErrInvalid }) {
+		t.Fatal("published a failed extraction")
+	}
+	assertAdult(t, live, "old\n")
+}
+
+// A folder an interrupted PHP publication left aside beside a category that is a link is dropped: the link stands, and
+// every publication in the folder goes on.
+func TestABackupBesideALinkedCategoryIsDropped(t *testing.T) {
+	db, live := categoryDB(t)
+	if err := os.MkdirAll(filepath.Join(db, stageBackup+"ut1", "inside"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if !replaceDir(live, writeAdult("new\n")) {
+		t.Fatal("the category was not published")
+	}
+	assertAdult(t, live, "new\n")
+	assertDB(t, db, ".ut1.1.00000000", linked(t, live))
 }

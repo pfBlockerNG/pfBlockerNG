@@ -85,11 +85,11 @@ func (f *Fetcher) blacklist(ctx context.Context, cfg ExtrasConfig, x Extra, req 
 	}
 	whole := func(target string, extract func(string) error) (bool, string) { return replaceDir(target, extract), "" }
 	if r := published(whole, filepath.Join(cfg.DBDir, name), "blacklist", filepath.Base(base), func(dir string) error {
-		if err := f.extractCategories(ctx, mime, base, name, dir); err != nil {
-			return err
+		err := f.extractCategories(ctx, mime, base, name, dir)
+		if err == nil {
+			touch(filepath.Join(dir, name+".update"))
 		}
-		touch(filepath.Join(dir, name+".update"))
-		return nil
+		return err
 	}); !r.OK {
 		return r
 	}
@@ -219,9 +219,10 @@ const stageBackup = ".pfbstagebak2_"
 // .<name>.<pid>.<8 hex>, and a link to it is renamed over target, so target is never absent and a run killed at any
 // point leaves the previous generation or the new one. The publication holds .<name>.lock beside target throughout and
 // is refused while another holds it, so its cleanup (every generation but this one and the previous) never meets one
-// being written. A target that is still a real folder is set aside once as the previous generation, and put back if
-// the link cannot replace it; a missing target leaves no previous generation to tell apart, so none is removed. A
-// folder an interrupted PHP publication left aside is put back first.
+// being written. A target that is still a real folder waits under .pfbstagebak2_<name> while the link replaces it (so
+// recoverDirs puts it back after a run killed in between, or a failed restore) and then becomes the previous
+// generation; a missing target leaves no previous generation to tell apart, so none is removed. A folder an interrupted
+// publication left aside is put back first.
 func replaceDir(target string, extract func(dir string) error) bool {
 	parent, base := filepath.Dir(target), filepath.Base(target)
 	if !recoverDirs(parent) {
@@ -249,16 +250,12 @@ func replaceDir(target string, extract func(dir string) error) bool {
 	}
 	aside := ""
 	if info, err := os.Lstat(target); err == nil && info.Mode()&os.ModeSymlink == 0 {
-		if !info.IsDir() {
+		// a real folder waits under the name recoverDirs puts back, until the link stands in its place
+		aside = filepath.Join(parent, stageBackup+base)
+		if !info.IsDir() || os.Rename(target, aside) != nil {
 			os.RemoveAll(gen)
 			return false
 		}
-		aside = generationDir(target)
-		if os.Rename(target, aside) != nil {
-			os.RemoveAll(gen)
-			return false
-		}
-		previous = filepath.Base(aside)
 	}
 	link := gen + ".link"
 	if os.Symlink(filepath.Base(gen), link) != nil || rename(link, target) != nil {
@@ -268,6 +265,13 @@ func replaceDir(target string, extract func(dir string) error) bool {
 		}
 		os.RemoveAll(gen)
 		return false
+	}
+	if aside != "" {
+		previous = generationDir(target)
+		if os.Rename(aside, previous) != nil {
+			return true // recoverDirs drops it beside the link
+		}
+		previous = filepath.Base(previous)
 	}
 	if previous == "" {
 		return true
@@ -295,7 +299,8 @@ func generationDir(target string) string {
 var generationID = regexp.MustCompile(`^[0-9]+\.[0-9a-f]{8}$`).MatchString
 
 // recoverDirs is pfb_stage_publish_dir_recover(): every folder an interrupted swap left aside in dir goes back to its
-// name, or is dropped when a folder stands there again. It reports false when one could not be settled.
+// name, or is dropped when a folder, or a link to a generation, stands there again. It reports false when one could not
+// be settled.
 func recoverDirs(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -309,7 +314,7 @@ func recoverDirs(dir string) bool {
 		}
 		backup, live := filepath.Join(dir, e.Name()), filepath.Join(dir, live)
 		if info, err := os.Lstat(live); err == nil {
-			if !info.IsDir() || os.RemoveAll(backup) != nil {
+			if !info.IsDir() && info.Mode()&os.ModeSymlink == 0 || os.RemoveAll(backup) != nil {
 				ok = false
 			}
 			continue
