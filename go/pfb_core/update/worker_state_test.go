@@ -10,7 +10,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 )
 
 func validWorkerJSON(t *testing.T) string {
@@ -94,29 +93,13 @@ func TestWorkerFilesRejectHostilePathsWithoutTouchingTargets(t *testing.T) {
 
 func awaitWorkerCompletion(t *testing.T, logPath string) workerState {
 	t.Helper()
-	deadline := time.NewTimer(stuck)
-	defer deadline.Stop()
-	tick := time.NewTicker(5 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		lock, err := operationLock(logPath)
-		if err == nil {
-			state, err := readWorkerState(logPath + ".status")
-			lock.Close()
-			if err != nil || state.FinishedAt == nil {
-				t.Fatalf("worker released ownership without terminal publication: %+v, %v", state, err)
-			}
-			return state
-		}
-		if !errors.Is(err, ErrRunning) {
-			t.Fatal(err)
-		}
-		select {
-		case <-tick.C:
-		case <-deadline.C:
-			t.Fatal("STUCK: worker never released ownership after transaction completion")
-		}
+	lock := awaitUnlocked(t, logPath)
+	state, err := readWorkerState(logPath + ".status")
+	lock.Close()
+	if err != nil || state.FinishedAt == nil {
+		t.Fatalf("worker released ownership without terminal publication: %+v, %v", state, err)
 	}
+	return state
 }
 
 func TestWorkerPublishesActualResultBeforeReleasingOwnershipAfterObserverLeaves(t *testing.T) {
