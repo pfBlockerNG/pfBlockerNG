@@ -17,6 +17,10 @@ func TestAMalformedRowKeepsThePreviousGeneration(t *testing.T) {
 		"IPv6 network with a CR":    {"GeoLite2-Country-Blocks-IPv6.csv", blocksHeader + "\"2600::/12\r9.9.9.9/32\",6252001,6252001,,0,0,\n"},
 		// MaxMind ships no BOM: a header row that does not read "network" is a share edited by hand.
 		"header row after a BOM": {"GeoLite2-Country-Blocks-IPv4.csv", "\ufeff" + testBlocks},
+		// PHP's empty() is true for "0", which would skip the check and drop the row.
+		"network 0": {"GeoLite2-Country-Blocks-IPv4.csv", testBlocks + "0,6252001,6252001,,0,0,\n"},
+		// Only the first record is the header: a second one is a share put together from two files.
+		"header row repeated": {"GeoLite2-Country-Blocks-IPv4.csv", testBlocks + blocksHeader},
 		"country name with a LF": {"GeoLite2-Country-Locations-en.csv", locationsHeader +
 			"6252001,en,NA,\"North America\",US,\"United\nStates\",0\n"},
 		"continent name with a CR": {"GeoLite2-Country-Locations-en.csv", locationsHeader +
