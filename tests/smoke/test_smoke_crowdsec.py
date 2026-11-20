@@ -362,10 +362,10 @@ def deployed_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
     h.deploy(vm)
     master = h.config_get_state(vm, MASTER)
     level = h.config_get_state(vm, SYSLOG_LEVEL)
-    h.config_set(vm, SYSLOG_LEVEL, "info")
-    _syslogd_apply(vm)
-    h.set_package_enabled(vm, True)
     try:
+        h.config_set(vm, SYSLOG_LEVEL, "info")
+        _syslogd_apply(vm)
+        h.set_package_enabled(vm, True)
         yield vm
     finally:
         try:
@@ -714,6 +714,13 @@ def by_severity(deployed_vm: SmokeVM) -> Iterator[Callable[[], dict[str, list[st
     dropin = "!pfb_crowdsec\n" + "".join(f"daemon.={sev}\t{path}\n" for sev, path in files.items())
     _sh(vm, f"touch {' '.join(files.values())} && printf %s {shlex.quote(dropin)} > {SEVERITY_DROPIN}")
     _sh(vm, "pkill -HUP -F /var/run/syslog.pid syslogd")
+    # syslogd reads the drop-in on the HUP, at a moment of its own: a probe line in the info file shows it has
+    probe = "level=info msg=smoke probe"
+    _await(
+        lambda: _sh(vm, f"logger -p daemon.info -t pfb_crowdsec {shlex.quote(probe)}; cat {files['info']}"),
+        lambda text: probe in text,
+        "syslogd writing the drop-in's files",
+    )
 
     def read() -> dict[str, list[str]]:
         return {
@@ -746,10 +753,8 @@ def test_each_log_line_reaches_syslog_at_its_levels_severity(
         )
     assert any(SIGNALLED in line for line in lines["info"]), f"the signal's line at info: {lines}"
     assert any(FAILED in line for line in lines["err"]), f"the failed pull's line at err: {lines}"
-    assert all("level=info msg=" in line for line in lines["info"]), f"info: {lines['info']}"
-    assert all("level=error msg=" in line for line in lines["err"]), f"err: {lines['err']}"
-    assert all("level=warning msg=" in line for line in lines["warning"]), f"warning: {lines['warning']}"
-    assert all("level=debug msg=" in line for line in lines["debug"]), f"debug: {lines['debug']}"
+    for severity, level in (("debug", "debug"), ("info", "info"), ("warning", "warning"), ("err", "error")):
+        assert all(f"level={level} msg=" in line for line in lines[severity]), f"{severity}: {lines[severity]}"
     assert lines["notice"] == [], f"no bouncer line at notice: {lines['notice']}"
 
 

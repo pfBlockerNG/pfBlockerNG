@@ -78,17 +78,23 @@ func TestLoggerRedactsTheSecret(t *testing.T) {
 	}
 }
 
-// fakeSyslogd stands in for syslogd's /var/run/log: a datagram socket in a temporary directory. It returns the socket's
-// path and the listener; the logger reaches it through dialSyslogAt(path).
+// fakeSyslogd stands in for syslogd's /var/run/log: a datagram socket at syslogPath(t). It returns the socket's path and
+// the listener; the logger reaches it through dialSyslogAt(path).
 func fakeSyslogd(t *testing.T) (string, *net.UnixConn) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "pfbcs") // short: a socket path has a length limit
+	path := syslogPath(t)
+	return path, listenSyslog(t, path)
+}
+
+// syslogPath is a socket path in a temporary directory, short because a socket path has a length limit.
+func syslogPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "pfbcs")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	path := filepath.Join(dir, "log")
-	return path, listenSyslog(t, path)
+	return filepath.Join(dir, "log")
 }
 
 func listenSyslog(t *testing.T, path string) *net.UnixConn {
@@ -159,12 +165,7 @@ func TestSyslogGetsNothingBelowTheConfiguredLevel(t *testing.T) {
 // Syslog not up yet (pfSense's boot order) or gone (syslogd restarting): the line goes to stdout as before, and the
 // logger dials again on the next line, so syslog takes the lines once it is back.
 func TestSyslogUnavailableFallsBackToStdoutUntilItIsBack(t *testing.T) {
-	dir, err := os.MkdirTemp("", "pfbcs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	path := filepath.Join(dir, "log")
+	path := syslogPath(t)
 	var out bytes.Buffer
 	l := newLogger(&out, levelDebug)
 	l.toSyslog(dialSyslogAt(path))
