@@ -2,11 +2,13 @@ package geoip
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 )
@@ -119,12 +121,7 @@ func TestARealCountryFolderIsSetAsideOnce(t *testing.T) {
 	})
 	t.Run("rename fails", func(t *testing.T) {
 		c := realFolder(t)
-		rename = func(from, to string) error {
-			if to == c.CCDir {
-				return syscall.EIO
-			}
-			return os.Rename(from, to)
-		}
+		rename = func(string, string) error { return syscall.EIO }
 		defer func() { rename = os.Rename }()
 		if c.Run(context.Background()) {
 			t.Fatal("published without its rename")
@@ -145,7 +142,8 @@ func TestStaleSiblingsAreRemovedByName(t *testing.T) {
 	c, log := conversionRoot(t, testBlocks)
 	parent := filepath.Dir(c.CCDir)
 	stale := []string{".cc.7.0badcafe", "cc.new.7.0badcafe", "cc.old.7.0badcafe"}
-	kept := []string{"cc.backup", ".cc.notes", "cc.new.x", ".cc.7.0BADCAFE", "cc.old.7.0badcafe.d"}
+	kept := []string{"cc.backup", ".cc.notes", "cc.new.x", ".cc.7.0BADCAFE", "cc.old.7.0badcafe.d", "cc.old.x.0badcafe",
+		".cc.7.0badcafe0"}
 	for _, name := range append(append([]string{}, stale...), kept...) {
 		if err := os.MkdirAll(filepath.Join(parent, name, "inside"), 0o700); err != nil {
 			t.Fatal(err)
@@ -195,24 +193,10 @@ func TestADirectoryForACSVConvertsNothing(t *testing.T) {
 	}
 }
 
-// A generation that is gone by the time it holds the lock (an earlier publication removed it) is not linked.
-func TestAGenerationGoneBeforeTheLockIsNotLinked(t *testing.T) {
+// A generation is created and filled only under the publication lock beside the link, so another publication's cleanup
+// never meets one half written: held there, a publication creates nothing and gives up when its context ends.
+func TestAGenerationIsWrittenUnderTheLockBesideTheLink(t *testing.T) {
 	c, _ := conversionRoot(t, testBlocks)
-	gone := filepath.Join(filepath.Dir(c.CCDir), ".cc.9.0000beef")
-	if c.publish(context.Background(), gone, func() {}) {
-		t.Fatal("linked a generation that is not there")
-	}
-	assertPrevious(t, c)
-}
-
-// The publication lock lives beside the link, not in a generation: held there, a publication waits and gives up when
-// its context ends.
-func TestThePublicationLockIsBesideTheLink(t *testing.T) {
-	c, _ := conversionRoot(t, testBlocks)
-	gen := filepath.Join(filepath.Dir(c.CCDir), ".cc.9.0000beef")
-	if err := os.Mkdir(gen, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	held, err := os.OpenFile(filepath.Join(filepath.Dir(c.CCDir), ".cc.lock"), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		t.Fatal(err)
@@ -223,8 +207,81 @@ func TestThePublicationLockIsBesideTheLink(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if c.publish(ctx, gen, func() { os.RemoveAll(gen) }) {
+	if c.publish(ctx, stage{"US_v4.txt": []byte("3.0.0.0/15\n")}) {
 		t.Fatal("published under a reader's lock")
 	}
 	assertPrevious(t, c)
+}
+
+// A country folder that is missing (a run killed while setting a real folder aside) leaves no previous generation to
+// tell apart, so a publication removes no generation: the folder set aside may hold the only copy of the old lists.
+func TestAMissingCountryFolderKeepsEveryGeneration(t *testing.T) {
+	c, log := conversionRoot(t, testBlocks)
+	if err := os.Remove(c.CCDir); err != nil {
+		t.Fatal(err)
+	}
+	if !c.Run(context.Background()) {
+		t.Fatalf("conversion failed:\n%s", log)
+	}
+	assertBeside(t, c, previousGeneration, current(t, c))
+}
+
+// Concurrent conversions each link a whole generation: one publication's cleanup never removes part of another's
+// generation while it is being written.
+func TestConcurrentConversionsLinkWholeGenerations(t *testing.T) {
+	c, log := conversionRoot(t, testBlocks)
+	if !c.Run(context.Background()) {
+		t.Fatalf("conversion failed:\n%s", log)
+	}
+	entries, err := os.ReadDir(c.CCDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	whole := len(entries)
+	var mu sync.Mutex
+	var partial []int
+	rename = func(from, to string) error {
+		to2, _ := os.Readlink(from)
+		if got, _ := os.ReadDir(filepath.Join(filepath.Dir(from), to2)); len(got) != whole {
+			mu.Lock()
+			partial = append(partial, len(got))
+			mu.Unlock()
+		}
+		return os.Rename(from, to)
+	}
+	defer func() { rename = os.Rename }()
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		run := c
+		run.Log = io.Discard // each run its own writer
+		go func() {
+			defer wg.Done()
+			for range 8 {
+				run.Run(context.Background())
+			}
+		}()
+	}
+	wg.Wait()
+	if len(partial) != 0 {
+		t.Errorf("%d generations linked with fewer than %d files: %v", len(partial), whole, partial)
+	}
+	if got, _ := os.ReadDir(c.CCDir); len(got) != whole {
+		t.Errorf("the live generation holds %d files, want %d", len(got), whole)
+	}
+}
+
+// A country folder named with a trailing slash is the same folder: the generations and the lock go beside it, not into
+// the live generation.
+func TestATrailingSlashOnTheCountryFolderPublishesBesideIt(t *testing.T) {
+	c, log := conversionRoot(t, testBlocks)
+	c.CCDir += "/"
+	if !c.Run(context.Background()) {
+		t.Fatalf("conversion failed:\n%s", log)
+	}
+	c.CCDir = filepath.Clean(c.CCDir)
+	assertBeside(t, c, previousGeneration, current(t, c))
+	if _, err := os.Stat(filepath.Join(filepath.Dir(c.CCDir), previousGeneration, ".cc.lock")); err == nil {
+		t.Error("a lock inside the previous generation")
+	}
 }

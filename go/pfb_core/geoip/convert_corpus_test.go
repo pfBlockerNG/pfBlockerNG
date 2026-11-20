@@ -274,6 +274,12 @@ func todays(t *testing.T, root string) map[string][]byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	generations, _ := filepath.Glob(filepath.Join(root, ".cc.*.*"))
+	for _, g := range generations {
+		if name := filepath.Base(g); name != gen && name != seededGeneration {
+			t.Errorf("left beside cc: %s", name) // a leaked or extra generation, which the digest no longer sees
+		}
+	}
 	return files
 }
 

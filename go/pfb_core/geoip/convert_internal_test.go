@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -193,32 +192,6 @@ func TestTheLogIsTodays(t *testing.T) {
 	if want := " Processing ISO IPv6 Continent/Country Data\n\n Failed to load file: " + filepath.Join(c.Share, "GeoLite2-Country-Blocks-IPv6.csv") + "\n"; !strings.HasSuffix(log.String(), want) {
 		t.Errorf("log = %q, want it to end %q", log, want)
 	}
-}
-
-// The publication lock is exclusive: held elsewhere, a publication waits for it and gives up when its context ends.
-func TestAHeldPublicationLockEndsWithTheContext(t *testing.T) {
-	dir := t.TempDir()
-	lockPath := filepath.Join(dir, ".cc.lock")
-	held, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer held.Close()
-	if err := syscall.Flock(int(held.Fd()), syscall.LOCK_SH); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if f, ok := publicationLock(ctx, lockPath); ok {
-		f.Close()
-		t.Fatal("took the lock a reader holds")
-	}
-	syscall.Flock(int(held.Fd()), syscall.LOCK_UN)
-	f, ok := publicationLock(context.Background(), lockPath)
-	if !ok {
-		t.Fatal("a free lock was not taken")
-	}
-	f.Close()
 }
 
 // Under a locale other than English, PHP passes the continent code to escapeshellarg(), which throws on a NUL: the

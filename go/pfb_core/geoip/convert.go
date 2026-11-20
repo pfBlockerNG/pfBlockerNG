@@ -12,9 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -164,6 +164,7 @@ func field(rec []string, i int) string {
 // Spammers and the ISO list (.geoip_isos). False leaves the previous generation in place; maxmind_ver is written as the
 // conversion goes, as today.
 func (c Conversion) Run(ctx context.Context) bool {
+	c.CCDir = filepath.Clean(c.CCDir) // a trailing slash would put the generations inside the live one
 	for _, dir := range []string{c.LogDir, filepath.Dir(c.CCDir)} {
 		os.MkdirAll(dir, 0o755)
 	}
@@ -174,30 +175,14 @@ func (c Conversion) Run(ctx context.Context) bool {
 		c.log(" [ MAXMIND UPDATE FAIL, Language File Missing, using previous Country code database ]\n")
 		return false
 	}
-	genDir := c.generationDir()
-	discard := func() { os.RemoveAll(genDir) }
-	mkErr := os.Mkdir(genDir, 0o755)
 	maxmindVer := filepath.Join(c.LogDir, "maxmind_ver")
 	os.WriteFile(maxmindVer, []byte("MaxMind GeoLite2 Date/Time Stamp\nLast-Modified: "+
 		info.ModTime().UTC().Format(time.DateTime)+"\n"), 0o644)
-	if mkErr != nil {
-		discard()
-		return false
-	}
-
-	built, isoList, ok, err := c.build(ctx, locations, maxmindVer)
+	built, ok, err := c.build(ctx, locations, maxmindVer)
 	if err != nil || !ok || ctx.Err() != nil {
-		discard()
 		return false
 	}
-	built[".geoip_isos"] = isoList
-	for name, b := range built {
-		if err := os.WriteFile(filepath.Join(genDir, name), b, 0o644); err != nil {
-			discard()
-			return false
-		}
-	}
-	return c.publish(ctx, genDir, discard)
+	return c.publish(ctx, built)
 }
 
 // generationDir is a new generation's folder beside the country folder: .<name>.<pid>.<8 hex>, as staleSibling knows it.
@@ -211,8 +196,9 @@ func (c Conversion) generationDir() string {
 // continentFile is the str_replace() that makes a continent name a file name.
 var continentFile = strings.NewReplacer(" ", "_", `"`, "")
 
-// build is the conversion in memory: the staged folder's files, the ISO list, and whether every required file is there.
-func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (stage, []byte, bool, error) {
+// build is the conversion in memory: the generation's files (the ISO list as .geoip_isos), and whether every required
+// file is there.
+func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (stage, bool, error) {
 	cs := &countries{byKey: map[string]*country{}}
 	english := map[string]string{}
 	read, err := eachRow(ctx, locations, func(cc []string) error {
@@ -250,7 +236,7 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 		return nil
 	})
 	if err != nil {
-		return nil, nil, false, err
+		return nil, false, err
 	}
 	generationOK := read
 
@@ -344,7 +330,7 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 			return nil
 		})
 		if err != nil {
-			return nil, nil, false, err
+			return nil, false, err
 		}
 		if !read {
 			c.log("\n Failed to load file: %s\n", blocks)
@@ -366,7 +352,7 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 	}
 
 	if ctx.Err() != nil {
-		return nil, nil, false, ctx.Err()
+		return nil, false, ctx.Err()
 	}
 	for _, family := range []string{"4", "6"} {
 		for _, stem := range continentStems {
@@ -376,10 +362,11 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 		}
 	}
 	if !generationOK {
-		return nil, nil, false, nil
+		return nil, false, nil
 	}
 	c.split(s)
-	return s, []byte(isoList.String()), true, nil
+	s[".geoip_isos"] = []byte(isoList.String())
+	return s, true, nil
 }
 
 // continents writes one family's continent files and Top Spammers from the countries, in their order.
@@ -532,29 +519,36 @@ func appendFile(path, s string) {
 	f.Close()
 }
 
-// publish makes genDir live in one step (#4140): a link to it is renamed over the country folder, so a reader sees the
-// previous generation or this one whole, and a run killed at any point leaves one of them. It runs under the publication
-// lock beside the link (.<name>.lock), which readers share, and then removes every generation but this one and the
-// previous, and what interrupted publications left (staleSibling). A country folder that is still a real folder (an
-// install from before #4140) is first set aside as the previous generation; a failed rename puts it back.
-func (c Conversion) publish(ctx context.Context, genDir string, discard func()) bool {
+// publish writes the generation into a folder of its own and makes it live in one step (#4140): a link to it is renamed
+// over the country folder, so a reader sees the previous generation or this one whole, and a run killed at any point
+// leaves one of them. All of it runs under the publication lock beside the link (.<name>.lock), which readers share, so
+// the cleanup that follows (every generation but this one and the previous, and what interrupted publications left)
+// never meets a generation still being written. A country folder that is still a real folder (an install from before
+// #4140) is first set aside as the previous generation, and put back if the link cannot replace it. A missing country
+// folder leaves no previous generation to tell apart, so no generation is removed.
+func (c Conversion) publish(ctx context.Context, s stage) bool {
 	parent, base := filepath.Dir(c.CCDir), filepath.Base(c.CCDir)
 	lock, ok := publicationLock(ctx, filepath.Join(parent, "."+base+".lock"))
 	if !ok {
-		discard()
 		return false
 	}
 	defer lock.Close() // closing the file releases the lock
-	if info, err := os.Stat(genDir); err != nil || !info.IsDir() {
-		discard() // a publication that held the lock before this one removed it
+	genDir := c.generationDir()
+	if os.Mkdir(genDir, 0o755) != nil {
 		return false
+	}
+	for name, b := range s {
+		if os.WriteFile(filepath.Join(genDir, name), b, 0o644) != nil {
+			os.RemoveAll(genDir)
+			return false
+		}
 	}
 	previous, _ := os.Readlink(c.CCDir)
 	aside := ""
-	if info, err := os.Lstat(c.CCDir); err == nil && info.Mode()&fs.ModeSymlink == 0 {
+	if info, err := os.Lstat(c.CCDir); err == nil && info.Mode()&os.ModeSymlink == 0 {
 		aside = c.generationDir()
 		if os.Rename(c.CCDir, aside) != nil {
-			discard()
+			os.RemoveAll(genDir)
 			return false
 		}
 		previous = filepath.Base(aside)
@@ -562,11 +556,14 @@ func (c Conversion) publish(ctx context.Context, genDir string, discard func()) 
 	link := genDir + ".link"
 	if os.Symlink(filepath.Base(genDir), link) != nil || rename(link, c.CCDir) != nil {
 		os.Remove(link)
-		if aside != "" {
-			os.Rename(aside, c.CCDir)
+		if aside != "" && os.Rename(aside, c.CCDir) != nil {
+			c.log(" [ GeoIP publication failed, previous Country code database left at %s ]\n", aside)
 		}
-		discard()
+		os.RemoveAll(genDir)
 		return false
+	}
+	if previous == "" {
+		return true
 	}
 	entries, _ := os.ReadDir(parent)
 	for _, e := range entries {
@@ -592,13 +589,7 @@ func staleSibling(base, name string) bool {
 }
 
 // generationID reports whether s is getmypid() . '.' . bin2hex(random_bytes(4)).
-func generationID(s string) bool {
-	pid, hexID, ok := strings.Cut(s, ".")
-	if !ok || pid == "" || len(hexID) != 8 || strings.Trim(pid, "0123456789") != "" {
-		return false
-	}
-	return strings.Trim(hexID, "0123456789abcdef") == ""
-}
+var generationID = regexp.MustCompile(`^[0-9]+\.[0-9a-f]{8}$`).MatchString
 
 // publicationLock is pfb_geoip_generation_publication_lock(): the lock file held exclusively, tried every 20 ms for up
 // to 60 s as pfb_flock_bounded() does, or until ctx ends.
