@@ -473,7 +473,7 @@ func contentBytes(t *testing.T, content any, expand func(string) string) []byte 
 func observe(t *testing.T, path string) any {
 	t.Helper()
 	info, err := os.Lstat(path)
-	if to, lerr := os.Readlink(path); lerr == nil && shareEntryLink(path, to) {
+	if to, lerr := os.Readlink(path); lerr == nil && feedfetch.EntryLink(filepath.Dir(path), to, filepath.Base(path)) {
 		info, err = os.Stat(path)
 	}
 	if os.IsNotExist(err) {
@@ -490,12 +490,6 @@ func observe(t *testing.T, path string) any {
 		t.Fatal(err)
 	}
 	return string(b)
-}
-
-// shareEntryLink reports whether to, the text of the link at path, is a share entry's link: .<archive>/<entry>.
-func shareEntryLink(path, to string) bool {
-	archive, entry, ok := strings.Cut(to, "/")
-	return ok && strings.HasPrefix(archive, ".") && archive != ".." && entry == filepath.Base(path)
 }
 
 // inode is the file's inode number, 0 when nothing is there: a publication by rename gives the path a new one.

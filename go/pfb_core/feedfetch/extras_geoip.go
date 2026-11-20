@@ -83,7 +83,7 @@ func memberRefused(names []string, listed bool) *Result {
 	return &r
 }
 
-// published is a folder publisher (mergeIntoDir, replaceDir) as a row's outcome: what stopped the extraction of what from
+// published is a folder publisher (archiveMerge, replaceDir) as a row's outcome: what stopped the extraction of what from
 // the archive named detail, else a publication that could not complete.
 func published(publish func(string, func(string) error) bool, target, what, detail string,
 	extract func(dir string) error) Result {
@@ -327,10 +327,11 @@ func copyZipMember(ctx context.Context, zf *zip.File, w io.Writer) error {
 // mergeIntoDir publishes an archive's entries into target, the share (#4142). extract fills a generation reached through
 // one hidden link per archive, target/.<archive>, which replaceDir swaps in one step, and each entry is a fixed link
 // through it (<entry> -> .<archive>/<entry>), so every entry of the archive switches with that one rename and a reader
-// never sees two generations of it. An entry that is still a real file becomes its link by one rename; one that a
-// newer generation no longer holds reads as missing. A member named with a leading dot, a live directory, a live link
-// this code did not make (the country folder among them) or a member directory over a live file refuses the whole
-// publication before anything changes.
+// never sees two generations of it. An entry that is still a real file, or a link this code did not make, becomes its
+// link by one rename; one that a newer generation no longer holds reads as missing. A member named with a leading dot,
+// a live directory, a live link to a folder (the country folder among them) or a member directory over a live file
+// refuses the whole publication before anything changes. An entry relink that fails after the archive link switched
+// reports a failed publication, and the next one finishes the switch.
 func mergeIntoDir(target, archive string, extract func(dir string) error) bool {
 	if info, err := os.Lstat(target); err != nil || !info.IsDir() {
 		return false
@@ -356,12 +357,12 @@ func mergeIntoDir(target, archive string, extract func(dir string) error) bool {
 		return false
 	}
 	tmp := filepath.Join(target, hidden+".entry")
+	os.Remove(tmp) // a killed run's
 	for _, name := range names {
 		live, want := filepath.Join(target, name), hidden+"/"+name
 		if to, err := os.Readlink(live); err == nil && to == want {
 			continue
 		}
-		os.Remove(tmp)
 		if os.Symlink(want, tmp) != nil || rename(tmp, live) != nil {
 			os.Remove(tmp)
 			return false
@@ -387,11 +388,30 @@ func mergeable(target string, e os.DirEntry) bool {
 	case err != nil || info.IsDir():
 		return false
 	case info.Mode()&os.ModeSymlink != 0:
-		to, _ := os.Readlink(live)
-		archive, entry, ok := strings.Cut(to, "/")
-		return ok && strings.HasPrefix(archive, ".") && archive != ".." && entry == e.Name()
+		if to, _ := os.Readlink(live); entryLink(target, to, e.Name()) {
+			return true
+		}
+		if to, err := os.Stat(live); err == nil && to.IsDir() {
+			return false // a link to a folder: the country folder, or an administrator's
+		}
 	}
 	return !e.IsDir()
+}
+
+// entryLink reports whether to, the text of the link at target/name, is an entry link of this code:
+// .<archive>/<name>, where target/.<archive> is an archive link to one of its generations.
+func entryLink(target, to, name string) bool {
+	archive, entry, ok := strings.Cut(to, "/")
+	if !ok || entry != name || !strings.HasPrefix(archive, ".") || archive == "." || archive == ".." {
+		return false
+	}
+	link := filepath.Join(target, archive)
+	gen, err := os.Readlink(link)
+	if err != nil {
+		return false
+	}
+	_, ours := generationOf(link, gen)
+	return ours
 }
 
 // checkedDatabases refuses an extraction (err already nil) that holds a database file without the MaxMind DB marker, or,

@@ -137,13 +137,14 @@ func TestARefusedArchivePublicationChangesNothing(t *testing.T) {
 		entries map[string]string
 		extract func(string) error
 	}{
-		"a dot member":         {entries: map[string]string{"GeoLite2-Country.mmdb": "new", ".cc.lock": "x"}},
-		"the country folder":   {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "cc": "x"}, prepare: linkedCC},
-		"a live folder":        {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: liveDir("LICENSE.txt")},
-		"a folder over a file": {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "sub/notes.txt": "x"}, prepare: liveFile("sub")},
-		"a foreign link":       {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: foreignLink("LICENSE.txt")},
-		"a failed extraction":  {extract: func(string) error { return os.ErrInvalid }},
-		"a failed link rename": {entries: map[string]string{"GeoLite2-Country.mmdb": "new"}, prepare: failRenames},
+		"a dot member":                  {entries: map[string]string{"GeoLite2-Country.mmdb": "new", ".cc.lock": "x"}},
+		"the country folder":            {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "cc": "x"}, prepare: linkedCC},
+		"a live folder":                 {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: liveDir("LICENSE.txt")},
+		"a folder over a file":          {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "sub/notes.txt": "x"}, prepare: liveFile("sub")},
+		"a dot-folder link to a folder": {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: dotFolderLink("LICENSE.txt")},
+		"a foreign link":                {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: foreignLink("LICENSE.txt")},
+		"a failed extraction":           {extract: func(string) error { return os.ErrInvalid }},
+		"a failed link rename":          {entries: map[string]string{"GeoLite2-Country.mmdb": "new"}, prepare: failRenames},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -200,8 +201,103 @@ func foreignLink(name string) func(*testing.T, string) {
 	}
 }
 
+func dotFolderLink(name string) func(*testing.T, string) {
+	return func(t *testing.T, share string) {
+		theirs := t.TempDir() // .local is a link, but to no generation of this code
+		if err := os.Mkdir(filepath.Join(theirs, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(theirs, filepath.Join(share, ".local")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(".local/"+name, filepath.Join(share, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func failRenames(t *testing.T, _ string) {
 	real := rename
 	rename = func(string, string) error { return syscall.EIO }
 	t.Cleanup(func() { rename = real })
+}
+
+// A link at an entry name that this code did not make is replaced like the file it stands for, as the merge did before
+// #4142, unless it names a folder (the country folder, an administrator's directory): dangling, to a file, or through a
+// dot folder that is no archive link of this code.
+func TestALinkAtAnEntryNameIsReplacedUnlessItNamesAFolder(t *testing.T) {
+	for name, prepare := range map[string]func(t *testing.T, share string) string{
+		"dangling": func(t *testing.T, share string) string { return filepath.Join(share, "gone", "LICENSE.txt") },
+		"to a file": func(t *testing.T, share string) string {
+			path := filepath.Join(t.TempDir(), "LICENSE.txt")
+			if err := os.WriteFile(path, []byte("theirs"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return path
+		},
+		"through a dot folder": func(t *testing.T, share string) string {
+			if err := os.Mkdir(filepath.Join(share, ".local"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(share, ".local", "LICENSE.txt"), []byte("theirs"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return ".local/LICENSE.txt"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			share := t.TempDir()
+			if err := os.Symlink(prepare(t, share), filepath.Join(share, "LICENSE.txt")); err != nil {
+				t.Fatal(err)
+			}
+			if !mergeIntoDir(share, "GeoLite2-Country.tar.gz", writeEntries(map[string]string{"LICENSE.txt": "new"})) {
+				t.Fatal("the publication failed")
+			}
+			assertEntry(t, share, "LICENSE.txt", "new")
+			if to, _ := os.Readlink(filepath.Join(share, "LICENSE.txt")); to != ".GeoLite2-Country.tar.gz/LICENSE.txt" {
+				t.Errorf("LICENSE.txt links to %q, want the archive's entry link", to)
+			}
+		})
+	}
+}
+
+// An entry relink that fails after the archive link switched is reported as a failed publication (the conversion then
+// waits), and the next publication finishes the switch.
+func TestAFailedEntryRelinkIsReportedAndFinishedNextTime(t *testing.T) {
+	share := t.TempDir()
+	for _, name := range []string{"a.csv", "b.csv"} {
+		if err := os.WriteFile(filepath.Join(share, name), []byte("old"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	real := rename
+	failed := false
+	rename = func(from, to string) error {
+		if strings.HasSuffix(from, ".entry") && filepath.Base(to) == "b.csv" && !failed {
+			failed = true
+			return syscall.EIO
+		}
+		return real(from, to)
+	}
+	t.Cleanup(func() { rename = real })
+	entries := writeEntries(map[string]string{"a.csv": "new", "b.csv": "new"})
+	if mergeIntoDir(share, "GeoLite2-Country-CSV.zip", entries) || !failed {
+		t.Fatal("a failed entry relink was not reported")
+	}
+	if !mergeIntoDir(share, "GeoLite2-Country-CSV.zip", entries) {
+		t.Fatal("the next publication failed")
+	}
+	assertEntry(t, share, "a.csv", "new")
+	assertEntry(t, share, "b.csv", "new")
+}
+
+// An archive whose entry is a folder republishes over its own link to that folder.
+func TestAFolderEntryRepublishesOverItsOwnLink(t *testing.T) {
+	share := t.TempDir()
+	for _, content := range []string{"v1", "v2"} {
+		if !mergeIntoDir(share, "GeoLite2-Country.tar.gz", writeEntries(map[string]string{"extra/notes.txt": content})) {
+			t.Fatalf("publishing %s failed", content)
+		}
+	}
+	assertEntry(t, share, "extra/notes.txt", "v2")
 }
