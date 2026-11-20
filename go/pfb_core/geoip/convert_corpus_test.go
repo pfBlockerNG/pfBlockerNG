@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -209,7 +210,6 @@ func TestConversionCorpus(t *testing.T) {
 
 // tree is the corpus digest of every file under root outside share/, and its listing for a failure message.
 func tree(t *testing.T, root string) (string, string) {
-	var rels []string
 	sums := map[string]string{}
 	err := filepath.WalkDir(root, func(path string, e fs.DirEntry, err error) error {
 		if err != nil {
@@ -232,15 +232,13 @@ func tree(t *testing.T, root string) (string, string) {
 		}
 		sum := sha256.Sum256(normalized(b))
 		sums[rel] = hex.EncodeToString(sum[:])
-		rels = append(rels, rel)
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	slices.Sort(rels)
 	var lines, listing strings.Builder
-	for _, rel := range rels {
+	for _, rel := range slices.Sorted(maps.Keys(sums)) {
 		lines.WriteString(rel + "\x00" + sums[rel] + "\n")
 		listing.WriteString(sums[rel] + "  " + rel + "\n")
 	}

@@ -1,0 +1,23 @@
+{
+	"schema": 1,
+	"description": "A Locations file that moves every Antarctic country to another continent: no Antarctica file is built, so the generation is incomplete and the previous one stays.",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1835841,en,AS,Asia,KR,\"Korea, Republic of\",0\n6697173,en,XX,Elsewhere,AQ,\"Antarctica\",0\n3371123,en,XX,Elsewhere,BV,\"Bouvet Island\",0\n3474415,en,XX,Elsewhere,GS,\"South Georgia and the South Sandwich Islands\",0\n1547314,en,XX,Elsewhere,HM,\"Heard Island and McDonald Islands\",0\n1546748,en,XX,Elsewhere,TF,\"French Southern Territories\",0\n",
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"seed": {
+		"cc/US_v4.txt": "192.0.2.0/24\n",
+		"db/geoip.txt": "previous\n"
+	},
+	"expect": {
+		"ok": false,
+		"files": {
+			"cc/US_v4.txt": "192.0.2.0/24\n",
+			"cc/Antarctica_v4.txt": null,
+			"db/geoip.txt": "previous\n"
+		},
+		"tree": "9bafba42e64271f9d33e0df4f3a0769ace2bce93b28930bfdc32f24b424235ce"
+	}
+}

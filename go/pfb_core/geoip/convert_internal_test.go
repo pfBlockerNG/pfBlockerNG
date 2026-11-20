@@ -189,3 +189,55 @@ func TestAHeldPublicationLockEndsWithTheContext(t *testing.T) {
 	}
 	f.Close()
 }
+
+// A rollback removes only the files it published: a directory standing at a published name stays, as PHP's unlink()
+// leaves it.
+func TestARollbackLeavesADirectoryAtAPublishedName(t *testing.T) {
+	c, _ := conversionRoot(t, testBlocks)
+	dir := filepath.Join(c.CCDir, "CN_v4.txt")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if c.Run(context.Background()) {
+		t.Fatal("published over a directory")
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Errorf("the directory at CN_v4.txt is gone: %v", err)
+	}
+	assertPrevious(t, c)
+}
+
+// Under a locale other than English, PHP passes the continent code to escapeshellarg(), which throws on a NUL: the
+// conversion dies and publishes nothing.
+func TestANULInTheContinentCodeStopsTheConversion(t *testing.T) {
+	c, _ := conversionRoot(t, testBlocks)
+	c.Locale = "fr"
+	fr := "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n" +
+		"6252001,fr,\"N\x00A\",\"Amérique du Nord\",US,\"États-Unis\",0\n"
+	if err := os.WriteFile(filepath.Join(c.Share, "GeoLite2-Country-Locations-fr.csv"), []byte(fr), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c.Run(context.Background()) {
+		t.Fatal("the conversion went on past PHP's fatal error")
+	}
+	assertPrevious(t, c)
+}
+
+// "Continent data [ X ] not found" is logged as pfblockerng_get_countries() logs it: once the continent's name has been
+// read from either family's file, a missing file of the other family is not reported.
+func TestAMissingContinentFileIsLoggedAsToday(t *testing.T) {
+	c, log := conversionRoot(t, testBlocks)
+	locations := testLocations + "953987,en,AF,Africa,ZA,\"South Africa\",0\n"
+	v6 := testBlocks + "\"2c0f::/32\n# ISO Code: Asia\",953987,953987,,0,0,\n" // removes Asia_v6.txt before its pass
+	for name, content := range map[string]string{"GeoLite2-Country-Locations-en.csv": locations, "GeoLite2-Country-Blocks-IPv6.csv": v6} {
+		if err := os.WriteFile(filepath.Join(c.Share, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !c.Run(context.Background()) {
+		t.Fatalf("conversion failed:\n%s", log)
+	}
+	if strings.Contains(log.String(), "Continent data") {
+		t.Errorf("log = %q, want no missing-continent line", log)
+	}
+}

@@ -1,0 +1,26 @@
+{
+	"schema": 1,
+	"description": "The ISO list cannot replace its live path (a folder stands there) after every country file moved: they are all put back, and the folder is left as it was.",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1835841,en,AS,Asia,KR,\"Korea, Republic of\",0\n",
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"seed": {
+		"cc/US_v4.txt": "192.0.2.0/24\n",
+		"cc/ZZ_v4.txt": "198.51.100.0/24\n",
+		"db/geoip.txt/inside": "a folder\n"
+	},
+	"expect": {
+		"ok": false,
+		"files": {
+			"cc/US_v4.txt": "192.0.2.0/24\n",
+			"cc/ZZ_v4.txt": "198.51.100.0/24\n",
+			"cc/KR_v4.txt": null,
+			"db/geoip.txt/inside": "a folder\n",
+			"cc/.pfb_generation_swapping": null
+		},
+		"tree": "c67b80de5eaf717df79bfc513cc4f6082ea46cc6dffc906f6de9ccd09784c452"
+	}
+}

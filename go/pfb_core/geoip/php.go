@@ -82,14 +82,8 @@ func word(s string) bool {
 // trim is PHP's trim() with its default characters.
 func trim(s string) string { return strings.Trim(s, " \t\n\r\x00\x0b") }
 
-// countLines is pfb_count_lines() on content: its line feeds, plus one for a last line without one.
-func countLines(b []byte) int {
-	n := bytes.Count(b, []byte{'\n'})
-	if len(b) > 0 && b[len(b)-1] != '\n' {
-		n++
-	}
-	return n
-}
+// countLines is pfb_count_lines() on an ISO's networks, each of which ends in a line feed.
+func countLines(b []byte) int { return bytes.Count(b, []byte{'\n'}) }
 
 // natCompare is PHP's strnatcmp_ex() (ext/standard/strnatcmp.c), case-sensitive: the comparison ksort(SORT_NATURAL)
 // sorts the countries with.

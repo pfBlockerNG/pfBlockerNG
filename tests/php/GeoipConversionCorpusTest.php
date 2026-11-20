@@ -158,6 +158,29 @@ final class GeoipConversionCorpusTest extends TestCase
 		}
 	}
 
+	/**
+	 * What fgetcsv() reads from each input of go/pfb_core/geoip/testdata/fgetcsv.json, the table the Go CSV reader is
+	 * held to (base64 throughout; a blank line's field is null).
+	 */
+	public function testFgetcsvTableIsPhps(): void
+	{
+		$table = json_decode((string) file_get_contents(dirname(__DIR__, 2) . '/go/pfb_core/geoip/testdata/fgetcsv.json'),
+			TRUE, 512, JSON_THROW_ON_ERROR);
+		$this->assertNotEmpty($table);
+		foreach ($table as $case) {
+			$h = fopen('php://memory', 'w+');
+			$this->assertNotFalse($h);
+			fwrite($h, (string) base64_decode($case['in'], TRUE));
+			rewind($h);
+			$records = [];
+			while (($r = fgetcsv($h, NULL, ',', '"', '\\')) !== FALSE) {
+				$records[] = array_map(static fn (?string $f): ?string => $f === NULL ? NULL : base64_encode($f), $r);
+			}
+			fclose($h);
+			$this->assertSame($case['records'], $records, var_export(base64_decode($case['in'], TRUE), TRUE));
+		}
+	}
+
 	/** @param string|array<string,mixed> $content */
 	private function write(string $rel, string|array $content): void
 	{
