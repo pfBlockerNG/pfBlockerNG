@@ -429,30 +429,22 @@ function pfb_crowdsec_lookup(string $ip, string $url, string $key, ?callable $ge
 }
 
 /**
- * The lookup's request: curl options for a GET carrying the bouncer key, PFB_CROWDSEC_LOOKUP_TIMEOUT seconds for the whole request,
- * no redirect (it would carry the key elsewhere).
- */
-function pfb_crowdsec_lapi_curl_options(string $key): array {
-	return array(
-		CURLOPT_HTTPGET        => TRUE,
-		CURLOPT_HTTPHEADER     => array("X-Api-Key: {$key}", 'Accept: application/json', 'User-Agent: pfBlockerNG'),
-		CURLOPT_TIMEOUT        => PFB_CROWDSEC_LOOKUP_TIMEOUT,
-		CURLOPT_CONNECTTIMEOUT => PFB_CROWDSEC_LOOKUP_TIMEOUT,
-		CURLOPT_FOLLOWLOCATION => FALSE,
-		CURLOPT_NOSIGNAL       => TRUE,
-	);
-}
-
-/**
- * GET $url with the bouncer key (pfb_crowdsec_lapi_curl_options()). An answer larger than PFB_CROWDSEC_LOOKUP_MAX is a failed request.
+ * GET $url with the bouncer key, PFB_CROWDSEC_LOOKUP_TIMEOUT seconds for the whole request and no redirect (it would carry the key
+ * elsewhere). An answer larger than PFB_CROWDSEC_LOOKUP_MAX is a failed request.
  *
  * @return array{status: int, body: string, error: string} error is '' on success; it never carries the key
  */
 function pfb_crowdsec_lapi_get(string $url, string $key): array {
 	$body = '';
 	$ch = curl_init($url);
-	curl_setopt_array($ch, pfb_crowdsec_lapi_curl_options($key) + array(
-		CURLOPT_WRITEFUNCTION => static function ($ch, string $chunk) use (&$body): int {
+	curl_setopt_array($ch, array(
+		CURLOPT_HTTPGET        => TRUE,
+		CURLOPT_HTTPHEADER     => array("X-Api-Key: {$key}", 'Accept: application/json', 'User-Agent: pfBlockerNG'),
+		CURLOPT_TIMEOUT        => PFB_CROWDSEC_LOOKUP_TIMEOUT,
+		CURLOPT_CONNECTTIMEOUT => PFB_CROWDSEC_LOOKUP_TIMEOUT,
+		CURLOPT_FOLLOWLOCATION => FALSE,
+		CURLOPT_NOSIGNAL       => TRUE,
+		CURLOPT_WRITEFUNCTION  => static function ($ch, string $chunk) use (&$body): int {
 			if (strlen($body) + strlen($chunk) > PFB_CROWDSEC_LOOKUP_MAX) {
 				return 0;
 			}

@@ -12,15 +12,14 @@ use PHPUnit\Framework\TestCase;
  * Pinned here:
  *   - why the bouncer does not run, one reason each, and none while it should;
  *   - the lookup (pfb_crowdsec_lookup()): an address that is not an IP sends nothing; the request is GET /v1/decisions?ip=<addr>
- *     with the key in X-Api-Key, 5 s for the whole request and no redirect; the LAPI's answers (decisions, null, a refusal, a
- *     transport error, garbage) each read as specified, and no result ever carries the key;
+ *     with the key (its header, time limit and refusal to follow a redirect: CrowdsecLapiRequestTest); the LAPI's answers
+ *     (decisions, null, a refusal, a transport error, garbage) each read as specified, and no result ever carries the key;
  *   - the status file as the page reads it, including an origin JSON decodes to an integer key;
  *   - the last 50 system log lines tagged pfb_crowdsec, in both pfSense log formats, and nothing from other programs;
  *   - a table's contents from pfctl, and NULL when pfctl fails.
  */
 #[CoversFunction('pfb_crowdsec_off_reason')]
 #[CoversFunction('pfb_crowdsec_lookup')]
-#[CoversFunction('pfb_crowdsec_lapi_curl_options')]
 #[CoversFunction('pfb_crowdsec_status_read')]
 #[CoversFunction('pfb_crowdsec_log_tail')]
 #[CoversFunction('pfb_crowdsec_table_entries')]
@@ -197,17 +196,6 @@ final class CrowdsecStatusTest extends TestCase
 
 		$this->assertSame([], $this->requests);
 		$this->assertSame('Store the Remote LAPI URL and the Bouncer API key on the Settings subtab first.', $result['error']);
-	}
-
-	public function testTheRequestCarriesTheKeyHasFiveSecondsAndFollowsNoRedirect(): void
-	{
-		$options = pfb_crowdsec_lapi_curl_options(self::KEY);
-
-		$this->assertContains('X-Api-Key: ' . self::KEY, $options[CURLOPT_HTTPHEADER]);
-		$this->assertSame(5, $options[CURLOPT_TIMEOUT], 'D7: a 5 s timeout');
-		$this->assertSame(5, $options[CURLOPT_CONNECTTIMEOUT]);
-		$this->assertFalse($options[CURLOPT_FOLLOWLOCATION], 'a redirect would carry the key elsewhere');
-		$this->assertTrue($options[CURLOPT_HTTPGET]);
 	}
 
 	// ---- the status file, as the page reads it ------------------------------------------------
