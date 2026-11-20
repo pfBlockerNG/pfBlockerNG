@@ -29,12 +29,10 @@ type daemon struct {
 	errors    uint64     // of which failed
 	dropped   [2]counter // the inbound rules' counters at the last read
 	window    [2]counter // drops counted since the last usage post, across counter resets
-	windowAt  time.Time  // when that window opened: start-up or the last usage post
 }
 
 func newDaemon(cfg *config, log *logger, pf *pfctl, api *lapiClient, now func() time.Time) *daemon {
-	start := now()
-	return &daemon{cfg: cfg, log: log, pf: pf, api: api, bans: newBanSet(), now: now, started: start, windowAt: start}
+	return &daemon{cfg: cfg, log: log, pf: pf, api: api, bans: newBanSet(), now: now, started: now()}
 }
 
 func (d *daemon) tables() [2]string { return [2]string{d.cfg.TableV4, d.cfg.TableV6} }
@@ -267,12 +265,11 @@ func unixOrZero(t time.Time) int64 {
 // usageBody closes the usage window: reads the counters and renders the window, which starts again from zero.
 func (d *daemon) usageBody(ctx context.Context) ([]byte, error) {
 	d.readCounters(ctx)
-	now := d.now()
-	in := usageInput{start: d.started, now: now, window: now.Sub(d.windowAt), dropped: d.window}
+	in := usageInput{start: d.started, now: d.now(), window: usageInterval, dropped: d.window}
 	for f := range 2 {
 		in.origins[f] = d.origins(family(f))
 	}
-	d.window, d.windowAt = [2]counter{}, now
+	d.window = [2]counter{}
 	return usagePayload(in)
 }
 
@@ -323,22 +320,24 @@ func (d *daemon) run(ctx context.Context, ticks, usage, status <-chan time.Time,
 	finished := make(chan func(), 1) // an ended request's handling, run here
 	busy, pullDue, usageDue := false, true, false
 	next := func() {
-		switch {
-		case busy:
-		case usageDue:
+		if busy {
+			return
+		}
+		if usageDue {
 			usageDue = false
 			body, err := d.usageBody(ctx)
-			if err != nil {
-				d.log.warnf("usage metrics not sent: %v", err)
-				notify("usage")
+			if err == nil {
+				busy = true
+				go func() {
+					err := d.api.postUsage(ctx, body)
+					finished <- func() { d.finishUsage(err); notify("usage") }
+				}()
 				return
 			}
-			busy = true
-			go func() {
-				err := d.api.postUsage(ctx, body)
-				finished <- func() { d.finishUsage(err); notify("usage") }
-			}()
-		case pullDue:
+			d.log.warnf("usage metrics not sent: %v", err)
+			notify("usage")
+		}
+		if pullDue {
 			pullDue, busy = false, true
 			full := !d.synced
 			go func() {

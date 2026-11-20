@@ -547,7 +547,8 @@ the bouncer ran, and D6's `3 × update_frequency` check reported `source_up 0` f
   is due at most once per interval, so it cannot hold pulls back, while a pull is due again every `update_frequency`
   and, with requests as slow as that, a pull-first order never posted usage. Ticks that come during a request wait for
   it to end, and several pull ticks make one pull.
-- **Usage timing.** The first usage post is made right after the first successful pull has been applied, as the next
-  LAPI request. After it, posts follow the 15-minute ticker started with the daemon, at 15, 30, 45 … minutes after
-  start, each waiting for a request in flight. A later successful pull is followed by no post of its own. A post's
-  window is the time since the previous post, or since start for the first one, rather than a fixed 15 minutes.
+- **Usage timing.** The first pull the LAPI answers (a pfctl failure while applying it does not matter) is followed
+  at once by a usage post, as the next LAPI request. Apart from that one post, posts follow the 15-minute ticker
+  started with the daemon, at 15, 30, 45 … minutes after start, each waiting for a request in flight; a tick that comes
+  before any pull has succeeded posts too. A later successful pull is followed by no post of its own. Every post
+  reports the 15-minute window, as go-cs-bouncer's and CrowdSec's own start-up posts do.

@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -111,13 +110,11 @@ func TestADueUsagePostRunsBeforeADuePull(t *testing.T) {
 }
 
 // Scenario: the first usage post follows the first successful pull (owner decision on #4074, 2026-11-20). Given a
-// daemon whose start-up pull fails, when the next pull succeeds 20 s after start, then a usage post follows it with
-// no usage tick, and its window is those 20 s; a later successful pull is followed by no post of its own.
+// daemon whose start-up pull fails, when the next pull succeeds, then a usage post follows it with no usage tick, its
+// window the nominal 15 minutes as upstream's start-up posts report it; a later successful pull is followed by no post
+// of its own.
 func TestTheFirstSuccessfulPullIsFollowedByAUsagePost(t *testing.T) {
 	h := newHarness(t, lapiReply{http.StatusBadGateway, `{}`}, ok(startupBody), ok(emptyDelta))
-	var clock atomic.Int64
-	clock.Store(testEpoch.Unix())
-	h.d.now = func() time.Time { return time.Unix(clock.Load(), 0) }
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := h.d.setup(ctx); err != nil {
@@ -131,7 +128,6 @@ func TestTheFirstSuccessfulPullIsFollowedByAUsagePost(t *testing.T) {
 		t.Fatalf("first event = %q; want the failed start-up pull", e)
 	}
 
-	clock.Store(testEpoch.Unix() + 20)
 	send(t, ticks, "pull", result)
 	if e := nextEvent(t, events, result); e != "pull" {
 		t.Fatalf("event after the tick = %q; want the pull", e)
@@ -163,7 +159,7 @@ func TestTheFirstSuccessfulPullIsFollowedByAUsagePost(t *testing.T) {
 	if err := json.Unmarshal([]byte(bodies[2]), &top); err != nil {
 		t.Fatal(err)
 	}
-	if meta := top.RemediationComponents[0].Metrics[0].Meta; meta.WindowSizeSeconds != 20 {
-		t.Fatalf("first post's window = %d s; want 20, the time since start", meta.WindowSizeSeconds)
+	if meta := top.RemediationComponents[0].Metrics[0].Meta; meta.WindowSizeSeconds != 900 {
+		t.Fatalf("first post's window = %d s; want 900, the usage interval", meta.WindowSizeSeconds)
 	}
 }

@@ -337,6 +337,26 @@ func TestEveryPullReconcilesEvenWhenItFails(t *testing.T) {
 	assertTable(t, h.pf, "crowdsec_v6", startupV6...)
 }
 
+// Every way a pull can fail counts as a LAPI error in the status file: an error status, a body over the cap, bad JSON.
+func TestEveryFailedPullCountsAsALAPIError(t *testing.T) {
+	for name, reply := range map[string]lapiReply{
+		"error status": {http.StatusForbidden, `{"message":"access forbidden"}`},
+		"oversized":    ok(startupBody),
+		"bad JSON":     ok(`{"new":[`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, reply)
+			h.d.api.maxBody = int64(len(startupBody)) - 1
+			if err := h.d.pull(context.Background()); err == nil {
+				t.Fatal("pull = nil; want an error")
+			}
+			if st := readStatus(t, h); st["lapi_requests"] != float64(1) || st["lapi_errors"] != float64(1) {
+				t.Fatalf("lapi_requests, lapi_errors = %v, %v; want 1, 1", st["lapi_requests"], st["lapi_errors"])
+			}
+		})
+	}
+}
+
 // A failed pfctl add leaves pf short of the set; the same pull's reconcile replaces the table.
 func TestAFailedAddIsRepairedByReplace(t *testing.T) {
 	h := synced(t, ok(`{"new":[{"id":40,"origin":"crowdsec","type":"ban","scope":"Ip","value":"198.51.100.40","duration":"4h","scenario":"s"}],"deleted":[]}`))
