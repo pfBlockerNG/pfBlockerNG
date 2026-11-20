@@ -13,7 +13,8 @@ package geoip_test
 //	expect       ok (the conversion's answer), files ({path: content, or null when absent}: only the paths named) and
 //	             tree (sha256 over every file the run leaves at the root outside share/, as sorted "<path>\0<sha256>\n"
 //	             lines).
-//	old_expect   today's PHP answer where Core deliberately differs (an owner decision); only the PHP runner reads it.
+//	old_expect   today's PHP answer where Core deliberately differs (an owner decision): the PHP runner asserts it, this
+//	             runner asserts expect and refuses an old_expect equal to it.
 //
 // Content is a string, {"b64": bytes}, or {"prefix", "repeat", "times", "suffix"} for a long line; a file that is not
 // UTF-8 reads as {"b64": bytes}. The root holds share/, cc/ (the country folder), db/geoip.txt (the ISO list) and log/
