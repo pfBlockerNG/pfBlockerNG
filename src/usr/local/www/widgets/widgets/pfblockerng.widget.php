@@ -915,13 +915,8 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 					$values['img'] = $pfb['err'];
 				}
 
-				if ($crowdsec) {
-					$alias_html = '<a target="_blank" rel="noopener noreferrer" href="' . PFB_CROWDSEC_STATUS_PAGE
-						. '" title="Open &quot;CrowdSec&quot; &gt; &quot;Status&quot;">' . $alias_html . '</a>';
-					$packets = $values['packets'] ?: 0;
-				}
 				// Packet column pivot to Alerts Tab
-				elseif ($values['packets'] > 0) {
+				if (!$crowdsec && $values['packets'] > 0) {
 					$packets  = "<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"/pfblockerng/pfblockerng_alerts.php?filterip={$pfb_alias}\" ";
 					$packets .= "title=\"Open &quot;Reports&quot; &gt; &quot;Alerts&quot;\" >{$values['packets']}</a>";
 				}
@@ -929,8 +924,12 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 					$packets = $values['packets'] ?: 0;
 				}
 
+				if ($crowdsec) {
+					$alias_html = '<a target="_blank" rel="noopener noreferrer" href="' . PFB_CROWDSEC_STATUS_PAGE
+						. '" title="Open &quot;CrowdSec&quot; &gt; &quot;Status&quot;">' . $alias_html . '</a>';
+				}
 				// Alias table popup
-				if (!$crowdsec && $values['count'] > 0 && $pfb['popup'] == 'on') {
+				elseif ($values['count'] > 0 && $pfb['popup'] == 'on') {
 					$alias_html = "<a href=\"/firewall_aliases_edit.php?id={$values['id']}\" data-popover=\"true\" "
 						. " data-trigger=\"hover focus\" title=\"pfBlockerNG Alias details\" data-content=\""
 						. alias_info_popup($values['id']) . "\" data-html=\"true\">" . htmlspecialchars($pfb_alias) . "</a>";

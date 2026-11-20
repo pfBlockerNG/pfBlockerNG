@@ -675,6 +675,34 @@ function pfb_crowdsec_child_pattern(string $dir = PFB_CROWDSEC_DIR): string {
 }
 
 /**
+ * The families the bouncer's rules cover (D5), as `family number => the rules' `on` clause`: each enabled family, `on` the selected
+ * interfaces' real names for that family unless "all interfaces" is on, and a family with none of them left is not covered.
+ *
+ * @param array<string, PfbToggle|string> $s pfb_crowdsec_settings()
+ * @return array<int, string> 4 / 6 => '' (every interface) or ' on { <real names> }'
+ */
+function pfb_crowdsec_rule_families(array $s): array {
+	$selected = $s['rules_all_interfaces'] === PfbToggle::On ? NULL : explode(',', (string) $s['rules_interfaces']);
+	$families = [];
+	foreach (['4' => ['rule_v4', 'inet'], '6' => ['rule_v6', 'inet6']] as $n => [$field, $af]) {
+		if ($s[$field] !== PfbToggle::On) {
+			continue;
+		}
+		$on = '';
+		if ($selected !== NULL) {
+			// Per family: a 6rd or 6to4 WAN carries its IPv6 on <name>_stf
+			$real = array_filter(array_map(static fn (string $i): ?string => get_real_interface($i, $af), $selected));
+			if ($real === []) {
+				continue;
+			}
+			$on = ' on { ' . implode(' ', $real) . ' }';
+		}
+		$families[$n] = $on;
+	}
+	return $families;
+}
+
+/**
  * pfSense's filter_rule_function (pfblockerng.xml filter_rules_needed), called for each rule type on every filter reload (D5).
  * Only `pfearly`, and only while the bouncer should run: per enabled family an inbound rule (the bouncer's counter parser reads its
  * shape) and an outbound one, `on` the selected interfaces' real names for that family unless "all interfaces" is on (a family with
@@ -691,25 +719,13 @@ function pfb_crowdsec_rules(string $type): string {
 		return '';
 	}
 	$s = pfb_crowdsec_settings();
-	$selected = $s['rules_all_interfaces'] === PfbToggle::On ? NULL : explode(',', (string) $s['rules_interfaces']);
 	$log = $s['rules_log'] === PfbToggle::On ? ' log' : '';
 	// Quoted: unquoted, pf reads a tag such as `123` or `quick` as a number or a keyword, and pfSense then drops every rule here
 	$tag = is_string($s['rules_tag']) && preg_match(PFB_CROWDSEC_TAG_PATTERN, $s['rules_tag']) ? " tag \"{$s['rules_tag']}\"" : '';
 
 	$rules = '';
-	foreach (['4' => ['rule_v4', 'inet'], '6' => ['rule_v6', 'inet6']] as $n => [$field, $af]) {
-		if ($s[$field] !== PfbToggle::On) {
-			continue;
-		}
-		$on = '';
-		if ($selected !== NULL) {
-			// Per family: a 6rd or 6to4 WAN carries its IPv6 on <name>_stf
-			$real = array_filter(array_map(static fn (string $i): ?string => get_real_interface($i, $af), $selected));
-			if ($real === []) {
-				continue;
-			}
-			$on = ' on { ' . implode(' ', $real) . ' }';
-		}
+	foreach (pfb_crowdsec_rule_families($s) as $n => $on) {
+		$af = $n === 4 ? 'inet' : 'inet6';
 		$table = PFB_CROWDSEC_TABLES["ipv{$n}"];
 		$id = PFB_CROWDSEC_TRACKERS["ipv{$n}"];
 		$in = "CrowdSec IPv{$n}";
@@ -725,7 +741,7 @@ function pfb_crowdsec_rules(string $type): string {
 }
 
 /**
- * The bouncer's rules as filter/rule rows (#4161), while it should run: per enabled family the inbound and the outbound rule, each
+ * The bouncer's rules as filter/rule rows (#4161), while it should run: per family it covers the inbound and the outbound rule, each
  * naming its table on the side it matches and carrying its tracker, so the dashboard widget counts them and their packets with
  * pfBlockerNG's own rules (pfb_rule_alias_packets()).
  *
@@ -735,12 +751,8 @@ function pfb_crowdsec_widget_rules(): array {
 	if (!pfb_crowdsec_should_run()) {
 		return [];
 	}
-	$s = pfb_crowdsec_settings();
 	$rows = [];
-	foreach (['4' => 'rule_v4', '6' => 'rule_v6'] as $n => $field) {
-		if ($s[$field] !== PfbToggle::On) {
-			continue;
-		}
+	foreach (array_keys(pfb_crowdsec_rule_families(pfb_crowdsec_settings())) as $n) {
 		$table = PFB_CROWDSEC_TABLES["ipv{$n}"];
 		$id = PFB_CROWDSEC_TRACKERS["ipv{$n}"];
 		$rows[] = ['descr' => "CrowdSec IPv{$n}", 'tracker' => $id['in'], 'type' => 'block', 'source' => ['address' => $table],

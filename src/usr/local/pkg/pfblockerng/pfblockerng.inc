@@ -13525,10 +13525,11 @@ function pfb_widget_alias_hidden($pfb_alias, $show_agg = FALSE) {
 
 // Per-alias rule and packet totals for the widget. Entries are created in the order the
 // widget always used (enabled rule matches, then tracker packets), so row order is unchanged.
-// The CrowdSec bouncer's tables count like pfB aliases (#4161, pfb_crowdsec_widget_rules()).
+// The CrowdSec bouncer's tables count like pfB aliases, through its own rules alone (#4161, pfb_crowdsec_widget_rules()).
 function pfb_rule_alias_packets(array $filter_rules, array $pf_rules): array {
 	$agg = array();
 	$tracked_rules = array();
+	$crowdsec_trackers = array_merge(...array_values(array_map('array_values', PFB_CROWDSEC_TRACKERS)));
 
 	foreach ($filter_rules as $rule) {
 		if (strpos($rule['descr'], 'pfB_DNSBL_Ping') !== FALSE || strpos($rule['descr'], 'pfB_DNSBL_Permit') !== FALSE) {
@@ -13539,7 +13540,8 @@ function pfb_rule_alias_packets(array $filter_rules, array $pf_rules): array {
 
 		foreach (array('source', 'destination') as $side) {
 			if (isset($rule[$side]['address']) && (stripos($rule[$side]['address'], 'pfb_') !== FALSE
-			    || in_array($rule[$side]['address'], PFB_CROWDSEC_TABLES, TRUE))) {
+			    || (in_array($rule[$side]['address'], PFB_CROWDSEC_TABLES, TRUE)
+			    && in_array((int) $rule['tracker'], $crowdsec_trackers, TRUE)))) {
 				$alias = $rule[$side]['address'];
 				$tracked_rules[$rule['tracker']][$side] = $alias;
 				if (!isset($rule['disabled'])) {
