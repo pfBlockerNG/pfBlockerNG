@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,6 +54,16 @@ var continentStems = []string{"Africa", "Antarctica", "Asia", "Europe", "North_A
 // errFatal is where today's PHP dies with an Error: a list operation on a Top Spammers entry (whose ISO is a string), or
 // escapeshellarg() refusing a continent code. The conversion stops and publishes nothing.
 var errFatal = errors.New("today's conversion dies here with a PHP Error")
+
+// malformed refuses a row the continent files could not carry: split() reads them line by line, so a field written into
+// them that spans lines forges headers, and a network that is not one breaks the list it lands in (#4127). The
+// conversion stops and the previous generation stays; today's PHP writes the row as it was read.
+func (c Conversion) malformed(path string) error {
+	c.log(" [ MAXMIND UPDATE FAIL, malformed row in %s, using previous Country code database ]\n", filepath.Base(path))
+	return errMalformed
+}
+
+var errMalformed = errors.New("malformed row")
 
 // country is an entry of $pfb_geoip['country']. A field PHP leaves unset reads as "".
 type country struct {
@@ -210,6 +221,9 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 				return nil
 			}
 		}
+		if slices.ContainsFunc(cc[:6], func(f string) bool { return strings.ContainsAny(f, "\r\n") }) {
+			return c.malformed(locations)
+		}
 		entry := &country{id: cc[0], continent: cc[3], name: cc[5], iso: []string{cc[4]}}
 		continentEn := cc[3]
 		if cc[1] != "en" {
@@ -288,6 +302,9 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 				return nil
 			}
 			network, gid, reg := field(cc, 0), field(cc, 1), field(cc, 2)
+			if _, err := netip.ParsePrefix(network); !empty(network) && err != nil {
+				return c.malformed(blocks)
+			}
 			iso, isoRep := "", ""
 			if family == "4" {
 				delete(unlisted, gid)
