@@ -1,0 +1,20 @@
+{
+	"schema": 1,
+	"description": "ISO codes that are not two ASCII letters never become a path outside the country folder.",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n1000001,en,EU,Europe,../x,Up,0\n1000002,en,EU,Europe,A/B,Slash,0\n1000003,en,EU,Europe,X Y,Space,0\n1000004,en,EU,Europe,ÄÖ,Umlaut,0\n1000005,en,EU,Europe,ABC,Three,0\n1000006,en,EU,Europe,a1,Lower,0\n",
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n1.0.1.0/24,1814991,1814991,,0,0,\n10.1.0.0/16,1000001,1000001,,0,0,\n10.2.0.0/16,1000002,1000002,,0,0,\n10.3.0.0/16,1000003,1000003,,0,0,\n10.4.0.0/16,1000004,1000004,,0,0,\n10.5.0.0/16,1000005,1000005,,0,0,\n10.6.0.0/16,1000006,1000006,,0,0,\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"expect": {
+		"ok": true,
+		"files": {
+			"cc/ABC_v4.txt": "10.5.0.0/16\n",
+			"cc/a1_v4.txt": "10.6.0.0/16\n",
+			"x_v4.txt": null,
+			"cc/A/B_v4.txt": null
+		},
+		"tree": "693182518112eb40f5efc6cae8e25743f446c9482f2592aae40aa29df53d0c0b"
+	}
+}

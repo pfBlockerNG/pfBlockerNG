@@ -1,0 +1,23 @@
+{
+	"schema": 1,
+	"description": "Invalid UTF-8 in a country name and in a network is carried as bytes.",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": {
+			"b64": "Z2VvbmFtZV9pZCxsb2NhbGVfY29kZSxjb250aW5lbnRfY29kZSxjb250aW5lbnRfbmFtZSxjb3VudHJ5X2lzb19jb2RlLGNvdW50cnlfbmFtZSxpc19pbl9ldXJvcGVhbl91bmlvbgo2MjUyMDAxLGVuLE5BLCJOb3J0aCBBbWVyaWNhIixVUywiVW5pdGVkIFN0YXRlcyIsMAoxODE0OTkxLGVuLEFTLEFzaWEsQ04sQ2hpbmEsMAoyOTIxMDQ0LGVuLEVVLEV1cm9wZSxERSxHZXJtYW55LDEKMTgzNTg0MSxlbixBUyxBc2lhLEtSLEtvcv9lYSwwCg=="
+		},
+		"GeoLite2-Country-Blocks-IPv4.csv": {
+			"b64": "bmV0d29yayxnZW9uYW1lX2lkLHJlZ2lzdGVyZWRfY291bnRyeV9nZW9uYW1lX2lkLHJlcHJlc2VudGVkX2NvdW50cnlfZ2VvbmFtZV9pZCxpc19hbm9ueW1vdXNfcHJveHksaXNfc2F0ZWxsaXRlX3Byb3ZpZGVyLGlzX2FueWNhc3QKMy4wLjAuMC8xNSw2MjUyMDAxLDYyNTIwMDEsLDAsMCwKMS4wLjEuMC8yNCwxODE0OTkxLDE4MTQ5OTEsLDAsMCwKNy4wLjAuMC84/iwxODM1ODQxLDE4MzU4NDEsLDAsMCwK"
+		},
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"expect": {
+		"ok": true,
+		"files": {
+			"cc/KR_v4.txt": {
+				"b64": "Ny4wLjAuMC84/go="
+			}
+		},
+		"tree": "2a16103686de8838b754d8d8bfea19bf0dd7f875eb27ad5632a5dbb53483c737"
+	}
+}

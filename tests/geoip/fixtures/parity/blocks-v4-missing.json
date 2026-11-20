@@ -1,0 +1,23 @@
+{
+	"schema": 1,
+	"description": "The IPv4 Blocks file is missing: the generation fails and the previous one stays.",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"seed": {
+		"cc/US_v4.txt": "192.0.2.0/24\n",
+		"cc/North_America_v4.txt": "# previous\n",
+		"db/geoip.txt": "previous\n"
+	},
+	"expect": {
+		"ok": false,
+		"files": {
+			"cc/US_v4.txt": "192.0.2.0/24\n",
+			"cc/North_America_v4.txt": "# previous\n",
+			"db/geoip.txt": "previous\n"
+		},
+		"tree": "d3c265b70b087b999fd433353bf66fed48b962ef104e8045926da85c2596fd53"
+	}
+}

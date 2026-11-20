@@ -1,0 +1,19 @@
+{
+	"schema": 1,
+	"description": "A Blocks row whose geoname_id and registered geoname_id are not in the Locations file.",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n",
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n1.0.1.0/24,1814991,1814991,,0,0,\n4.0.0.0/9,999999,888888,,0,0,\n4.128.0.0/9,999999,999999,,1,0,\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"expect": {
+		"ok": true,
+		"files": {
+			"cc/_rep_v4.txt": null,
+			"cc/A1__rep_v4.txt": null,
+			"cc/A1_v4.txt": ""
+		},
+		"tree": "f1999f1cb34f377c3688519d473ac37c228562800431a3dd9522d99e8bbcf0b5"
+	}
+}
