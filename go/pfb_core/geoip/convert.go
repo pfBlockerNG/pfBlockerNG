@@ -521,11 +521,11 @@ func appendFile(path, s string) {
 
 // publish writes the generation into a folder of its own and makes it live in one step (#4140): a link to it is renamed
 // over the country folder, so a reader sees the previous generation or this one whole, and a run killed at any point
-// leaves one of them. All of it runs under the publication lock beside the link (.<name>.lock), which readers share, so
-// the cleanup that follows (every generation but this one and the previous, and what interrupted publications left)
-// never meets a generation still being written. A country folder that is still a real folder (an install from before
-// #4140) is first set aside as the previous generation, and put back if the link cannot replace it. A missing country
-// folder leaves no previous generation to tell apart, so no generation is removed.
+// leaves one of them. All of it runs under the publication lock beside the link (.<name>.lock), which readers share
+// from the cutover (#4038), so the cleanup that follows (every generation but this one and the previous, and what
+// interrupted publications left) never meets a generation still being written. A country folder that is still a real
+// folder (an install from before #4140) is first set aside as the previous generation, and put back if the link cannot
+// replace it. A missing country folder leaves no previous generation to tell apart, so no generation is removed.
 func (c Conversion) publish(ctx context.Context, s stage) bool {
 	parent, base := filepath.Dir(c.CCDir), filepath.Base(c.CCDir)
 	lock, ok := publicationLock(ctx, filepath.Join(parent, "."+base+".lock"))
@@ -544,6 +544,9 @@ func (c Conversion) publish(ctx context.Context, s stage) bool {
 		}
 	}
 	previous, _ := os.Readlink(c.CCDir)
+	if previous != "" {
+		previous = filepath.Base(previous) // the generation's name, however the link spells its path
+	}
 	aside := ""
 	if info, err := os.Lstat(c.CCDir); err == nil && info.Mode()&os.ModeSymlink == 0 {
 		aside = c.generationDir()

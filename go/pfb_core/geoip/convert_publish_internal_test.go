@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 )
@@ -251,6 +252,7 @@ func TestConcurrentConversionsLinkWholeGenerations(t *testing.T) {
 	}
 	defer func() { rename = os.Rename }()
 	var wg sync.WaitGroup
+	var published atomic.Int32
 	for range 4 {
 		wg.Add(1)
 		run := c
@@ -258,11 +260,16 @@ func TestConcurrentConversionsLinkWholeGenerations(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range 8 {
-				run.Run(context.Background())
+				if run.Run(context.Background()) {
+					published.Add(1)
+				}
 			}
 		}()
 	}
 	wg.Wait()
+	if n := published.Load(); n != 32 {
+		t.Errorf("%d of 32 concurrent conversions published", n)
+	}
 	if len(partial) != 0 {
 		t.Errorf("%d generations linked with fewer than %d files: %v", len(partial), whole, partial)
 	}
@@ -283,5 +290,28 @@ func TestATrailingSlashOnTheCountryFolderPublishesBesideIt(t *testing.T) {
 	assertBeside(t, c, previousGeneration, current(t, c))
 	if _, err := os.Stat(filepath.Join(filepath.Dir(c.CCDir), previousGeneration, ".cc.lock")); err == nil {
 		t.Error("a lock inside the previous generation")
+	}
+}
+
+// A link to the previous generation spelt as a path (absolute, or with a ./ prefix) still names it: the cleanup keeps it.
+func TestAPreviousGenerationLinkedByPathIsKept(t *testing.T) {
+	for _, spelling := range []string{"abs", "./"} {
+		t.Run(spelling, func(t *testing.T) {
+			c, log := conversionRoot(t, testBlocks)
+			to := "./" + previousGeneration
+			if spelling == "abs" {
+				to = filepath.Join(filepath.Dir(c.CCDir), previousGeneration)
+			}
+			if err := os.Remove(c.CCDir); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(to, c.CCDir); err != nil {
+				t.Fatal(err)
+			}
+			if !c.Run(context.Background()) {
+				t.Fatalf("conversion failed:\n%s", log)
+			}
+			assertBeside(t, c, previousGeneration, current(t, c))
+		})
 	}
 }
