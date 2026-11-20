@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -831,7 +830,6 @@ func TestReadersNeverSeeATornPublish(t *testing.T) {
 	publish(t, w, id, 1, nil, x...)
 	done := make(chan struct{})
 	var wg sync.WaitGroup
-	var served atomic.Int64
 	first := make(chan struct{}) // closed at the first body served: publishing starts only then
 	var once sync.Once
 	for range 4 {
@@ -869,7 +867,6 @@ func TestReadersNeverSeeATornPublish(t *testing.T) {
 					t.Errorf("body read %d bytes whose digest is not the reply's %s: %v", len(b), r.Digest, err)
 					return
 				}
-				served.Add(1)
 				once.Do(func() { close(first) })
 			}
 		}()
@@ -879,6 +876,7 @@ func TestReadersNeverSeeATornPublish(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("no reader was served a body before publishing")
 	}
+	t.Cleanup(func() { close(done); wg.Wait() }) // runs before the store's directory is removed, also after a t.Fatal
 	for i := range 300 {
 		next := y
 		if i%2 == 1 {
@@ -888,6 +886,4 @@ func TestReadersNeverSeeATornPublish(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	close(done)
-	wg.Wait()
 }
