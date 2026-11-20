@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,18 +18,24 @@ import (
 const maxResourcesPerCall = 16
 
 // resourceItem is one resource's answer: a kind with its keys, or an error. A key foreign to the kind stays nil or empty and
-// is omitted; omitzero keeps a non-nil empty slice, so add, remove and members of an empty set are still sent as [].
+// is omitted. It carries no members: GetResourceBody streams them.
 type resourceItem struct {
-	Kind       string          `json:"kind,omitempty"`
-	Generation string          `json:"generation,omitempty"`
-	From       string          `json:"from,omitempty"`
-	Add        []string        `json:"add,omitzero"`
-	Remove     []string        `json:"remove,omitzero"`
-	Members    []string        `json:"members,omitzero"`
-	Digest     string          `json:"digest,omitempty"`
-	Entries    *int            `json:"entries,omitempty"`
-	Metadata   json.RawMessage `json:"metadata,omitzero"`
-	Error      *apiError       `json:"error,omitempty"`
+	Kind          string          `json:"kind,omitempty"`
+	Generation    string          `json:"generation,omitempty"`
+	From          string          `json:"from,omitempty"`
+	AddEntries    *int            `json:"addEntries,omitempty"`
+	RemoveEntries *int            `json:"removeEntries,omitempty"`
+	Digest        string          `json:"digest,omitempty"`
+	Entries       *int            `json:"entries,omitempty"`
+	Metadata      json.RawMessage `json:"metadata,omitzero"`
+	Error         *apiError       `json:"error,omitempty"`
+}
+
+// bodyStream is a reply that is not JSON: a store file already checked against the index, sent as plain text and closed
+// once written.
+type bodyStream struct {
+	f    *os.File
+	size int64
 }
 
 type resourceCursor struct {
@@ -36,9 +43,15 @@ type resourceCursor struct {
 	Digest     *string `json:"digest"`
 }
 
-// resourceMethods is GetResources over store, read-only. Without a store (no --resource-dir) it answers unavailable.
+// resourceMethods is GetResources and GetResourceBody over store, read-only. Without a store (no --resource-dir) they answer
+// unavailable.
 func resourceMethods(store *resources.Store) map[string]method {
-	return map[string]method{"GetResources": {call: func(_ context.Context, params []byte) (any, error) {
+	return map[string]method{"GetResourceBody": {call: func(_ context.Context, params []byte) (any, error) {
+		if store == nil {
+			return nil, newError(codeUnavailable, "Core runs no resource store: start it with --resource-dir")
+		}
+		return resourceBody(store, params)
+	}}, "GetResources": {call: func(_ context.Context, params []byte) (any, error) {
 		if store == nil {
 			return nil, newError(codeUnavailable, "Core runs no resource store: start it with --resource-dir")
 		}
@@ -95,11 +108,72 @@ func resourceItemOf(r resources.Reply) resourceItem {
 	}
 	it.Digest, it.Entries, it.Metadata = r.Digest, &r.Entries, r.Metadata
 	if r.Kind == resources.KindDelta {
-		it.From, it.Add, it.Remove = strconv.FormatUint(r.From, 10), r.Add, r.Remove
-	} else {
-		it.Members = r.Members
+		it.From, it.AddEntries, it.RemoveEntries = strconv.FormatUint(r.From, 10), &r.Adds, &r.Removes
 	}
 	return it
+}
+
+// resourceBody answers GetResourceBody: the part of one resource the store holds, streamed from its file.
+func resourceBody(store *resources.Store, params []byte) (any, error) {
+	var p struct {
+		ID         *string `json:"id"`
+		Generation *string `json:"generation"`
+		Part       *string `json:"part"`
+		From       *string `json:"from"`
+	}
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	var bad []fieldError
+	number := func(name string, s *string) uint64 {
+		g, err := strconv.ParseUint(*s, 10, 64)
+		if err != nil {
+			bad = append(bad, fieldError{Field: name, Message: "must be a string of decimal digits that fits 64 bits"})
+		}
+		return g
+	}
+	var g, from uint64
+	switch {
+	case p.ID == nil:
+		bad = append(bad, fieldError{Field: "id", Message: "required"})
+	case !resources.ValidID(*p.ID):
+		bad = append(bad, fieldError{Field: "id", Message: fmt.Sprintf("%q is not a resource id", *p.ID)})
+	}
+	if p.Generation == nil {
+		bad = append(bad, fieldError{Field: "generation", Message: "required"})
+	} else {
+		g = number("generation", p.Generation)
+	}
+	delta := false
+	switch {
+	case p.Part == nil:
+		bad = append(bad, fieldError{Field: "part", Message: "required"})
+	case *p.Part == resources.PartAdd || *p.Part == resources.PartRemove:
+		delta = true
+	case *p.Part != resources.PartMembers:
+		bad = append(bad, fieldError{Field: "part", Message: `must be "members", "add" or "remove"`})
+	}
+	switch {
+	case delta && p.From == nil:
+		bad = append(bad, fieldError{Field: "from", Message: "required with add or remove"})
+	case p.Part != nil && *p.Part == resources.PartMembers && p.From != nil:
+		bad = append(bad, fieldError{Field: "from", Message: "only with add or remove"})
+	case p.From != nil:
+		from = number("from", p.From)
+	}
+	if bad != nil {
+		return nil, newError(codeInvalidArgument, "the body request is not valid; nothing was read", bad...)
+	}
+	f, size, err := store.Body(*p.ID, g, *p.Part, from)
+	switch {
+	case errors.Is(err, resources.ErrNotFound):
+		return nil, newError(codeNotFound, "the store holds no such body")
+	case errors.Is(err, resources.ErrUnavailable):
+		return nil, newError(codeUnavailable, "the store cannot serve this body now")
+	case err != nil:
+		return nil, err
+	}
+	return &bodyStream{f: f, size: size}, nil
 }
 
 // parseResourceCursor is id's cursor (nil: none) or the field errors of the id or the cursor. A null field is absent. A field

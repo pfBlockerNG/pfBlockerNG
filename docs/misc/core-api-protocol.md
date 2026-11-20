@@ -2,7 +2,7 @@
 
 Scope: the HTTP+JSON API of the pfBlockerNG Core daemon (`go/pfb_core`, binary `pfb-core`, issue #3841; map #3813), the
 conventions every Core method follows, the settings methods and backends (issues #3842, #3913, #3924), the singleton Update,
-its scheduler and `--update-cmd` (issue #3941), the resource store and `GetResources` (issue #4032), who may call it, and how the package runs it. Load when: adding a Core
+its scheduler and `--update-cmd` (issue #3941), the resource store, `GetResources` and `GetResourceBody` (issues #4032, #4049), who may call it, and how the package runs it. Load when: adding a Core
 method or settings projection, calling Core from PHP or another local process, or changing `go/pfb_core`,
 `pfb_core_service()` or `pfb_core_call()`.
 
@@ -18,7 +18,10 @@ pfB-DNS is enabled or not.
   second value after the object included, is `invalid_argument`. An unknown parameter is `invalid_argument` with a field
   error naming it.
 - Every reply to a request that reached a method's routing is one JSON object, `Content-Type: application/json`,
-  `Cache-Control: no-store`. A client ignores reply fields it does not know. A request that is not valid HTTP (a malformed
+  `Cache-Control: no-store`, with one exception: a successful `GetResourceBody` is plain text ([Resources](#resources)). A
+  client ignores reply fields it does not know.
+  *Amendment 2026-11-20 (issue #4049): `GetResourceBody` is the protocol's first reply that is not JSON. Its errors keep
+  the JSON envelope.* A request that is not valid HTTP (a malformed
   or oversized header) gets Go's own plain-text `400` or `431` before any routing.
 - Any HTTP method but `POST` is `method_not_allowed` (`Allow: POST`). A path that is not `/v1/<a method Core has>` is
   `not_found`, an unknown version included.
@@ -39,7 +42,8 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 | `StartUpdate` | `requestId`, `trigger`: `manual` (`scope`, `force`), `apply` or `retry` | `{}` once the Update is admitted; `conflict` while one runs |
 | `GetUpdate` | `after` (optional cursor, a decimal string; default: the start) | `{"running", "update", "log", "next"}`: the current or last Update and a chunk of its log; `next` is a string |
 | `GetSchedule` | none | `{"scheduled", "feeds", "extras", "lastSuccessfulCheck"}`: when the scheduled Updates last ran and are next due, and each item's last successful check |
-| `GetResources` | `resources` (optional; none: nothing is read): resource id to cursor | `{"resources": {id: item}}`: per resource unchanged, a delta from the cursor, or the full body; read-only |
+| `GetResources` | `resources` (optional; none: nothing is read): resource id to cursor | `{"resources": {id: item}}`: per resource unchanged, a delta from the cursor, or the full body, described without its members; read-only |
+| `GetResourceBody` | `id`, `generation`, `part` (`members`, `add` or `remove`), `from` (with `add` and `remove`) | the part's lines as `text/plain`, streamed from the store; read-only |
 
 `GetVersion` is also the health check: a `200` with `status` `serving` means Core takes requests.
 
@@ -747,20 +751,27 @@ answered as a `delta` with empty `add` and `remove`.
 absent. A missing or empty `resources` answers `{"resources": {}}`. A caller never does arithmetic on a generation: it keeps the
 strings it was given and sends them back. A generation is a string because it can exceed 2^53.
 
-**Reply.** HTTP `200` and `{"resources": {"<id>": <item>, ...}}`, one item per requested id. An item is exactly one of:
+**Reply.** HTTP `200` and `{"resources": {"<id>": <item>, ...}}`, one item per requested id. An item carries no members:
+`GetResourceBody` streams them. It is exactly one of:
 
 | Item | When | Keys |
 |---|---|---|
 | `{"kind": "unchanged"}` | the cursor's generation is the current one and its digest matches | `kind`, `generation` |
-| `{"kind": "delta"}` | the store holds the cursor's generation with that digest: it is the applied baseline, the only generation kept besides the current one | `kind`, `generation`, `from` (the cursor's generation), `add`, `remove`, `digest`, `entries`, `metadata` |
-| `{"kind": "full"}` | there is no cursor, the store does not hold the cursor's generation (it is neither the current one nor the applied baseline), the digest differs, or the applied baseline's body cannot be read | `kind`, `generation`, `members`, `digest`, `entries`, `metadata` |
+| `{"kind": "delta"}` | the store holds the cursor's generation with that digest: it is the applied baseline, the only generation kept besides the current one, and the delta from it is held | `kind`, `generation`, `from` (the cursor's generation), `addEntries`, `removeEntries`, `digest`, `entries`, `metadata` |
+| `{"kind": "full"}` | there is no cursor, the store does not hold the cursor's generation (it is neither the current one nor the applied baseline), the digest differs, or the applied baseline's body or a part of the delta from it fails verification | `kind`, `generation`, `digest`, `entries`, `metadata` |
 | `{"error": {"code": "not_found", ...}}` | the store has no such resource: never published, removed, or the store directory or its index does not exist | `error` |
 | `{"error": {"code": "unavailable", ...}}` | the store cannot serve it: its index cannot be read, or its body is missing, not a regular file, or fails verification | `error` |
 
-`add`, `remove` and `members` are always arrays, `[]` when empty. A key that does not belong to the kind is absent.
-`generation`, `digest`, `entries` and `metadata` describe the current body; `add` and `remove` are what turns the body of the
-cursor's generation into it, computed at the call. A resource's error does not change the HTTP status, so one unreadable
-resource does not hide the others. A caller treats `not_found` as a resource that left the configuration.
+A key that does not belong to the kind is absent. `generation`, `digest`, `entries` and `metadata` describe the current body;
+the delta's `add` part is what turns the body of the cursor's generation into it with its `remove` part, and
+`addEntries` and `removeEntries` are their line counts. A resource's error does not change the HTTP status, so one
+unreadable resource does not hide the others. A caller treats `not_found` as a resource that left the configuration.
+
+*Amendment 2026-11-20 (issue #4049): the reply no longer carries `members`, `add` and `remove`; `GetResourceBody` streams
+them from disk, and a delta carries `addEntries` and `removeEntries` instead. The Core Updater writes the delta from the
+applied baseline when it publishes a generation, by one merge pass over the two sorted bodies, so a read only streams
+files. Every file a reply relies on is verified whole against the index at the call, a chunk at a time: neither side holds
+a body in memory.*
 
 Fetching never advances a cursor and never changes the store. The digest in the cursor is what makes the fallback safe: a store
 that was lost and rebuilt, edited by hand, or that reuses a generation number answers `full`.
@@ -770,11 +781,32 @@ a cursor holds an unknown key, an id is not a valid resource id (field `resource
 only one of `generation` and `digest`, a `generation` is not a string of ASCII decimal digits that fits 64 bits (`"007"` is
 valid, `"-1"`, `"1.5"` and `""` are not), or a `digest` is not 32 lower-case hexadecimal characters. The field of a fault in a
 cursor is `resources.<id>.generation` or `resources.<id>.digest`. More than 16 resources in one call are refused too, with the
-field `resources`. A caller that fetches large bodies asks for one resource per call: a body is in the reply whole, and the
-reply is not limited as the request is.
+field `resources`. The reply's size does not grow with the bodies: it carries none.
 
 Without `--resource-dir` the call is `unavailable` (`503`), whatever it asks. A `--resource-dir` that does not exist is not an
 error at start: every resource is `not_found` until the Core Updater creates it.
+
+### GetResourceBody
+
+`{"id": "<id>", "generation": "<decimal string>", "part": "members"}` asks for the body of a generation the store holds: the
+current one or the applied baseline. `{"id": "<id>", "generation": "<g>", "part": "add" | "remove", "from": "<f>"}` asks for
+a part of the delta from generation `f` to the current generation `g`; a `delta` item names both. The generations are the
+strings `GetResources` gave, sent back as they are.
+
+**Reply.** HTTP `200`, `Content-Type: text/plain; charset=utf-8`, `Cache-Control: no-store` and a `Content-Length`: the
+part's lines, one per line, each ending in a newline, in canonical order (byte order, unique). A `members` body is exactly
+the bytes whose xxh128 is the item's `digest`; its line count is `entries`. An `add` or `remove` part's line count is
+`addEntries` or `removeEntries`. Core reads the file whole against its index before it sends the first byte, so a damaged
+file is never served; the body comes from disk a chunk at a time. A caller writes it to a file (curl's `CURLOPT_FILE`),
+checks the digest over those bytes, and hands the file on (`pfctl -T replace|add|delete -f`) without parsing it into an
+array.
+
+**Errors**, in the JSON envelope: `not_found` (`404`) when the store does not hold that part (the resource is unknown or
+removed, the generation is neither the current one nor the applied baseline, or the delta is not the one from that
+generation to the current one: it was pruned when another generation was published or applied; ask `GetResources` again);
+`unavailable` (`503`) when the file fails verification, or without `--resource-dir`; `invalid_argument` (`400`) when `id` is
+missing or not a resource id, `generation` or `from` is not a string of decimal digits that fits 64 bits, `part` is not one
+of the three, `from` is missing with `add` or `remove`, or present with `members`. The field error names the parameter.
 
 ## Errors
 
@@ -789,9 +821,9 @@ Every error is the same envelope, with the HTTP status its code maps to:
 
 | `code` | HTTP | When |
 |---|---|---|
-| `invalid_argument` | 400 | Body not one JSON object, unknown or mistyped parameter, bad or missing `requestId`, a `GetResources` request that names a bad id or cursor or more than 16 resources ([Resources](#resources)) |
+| `invalid_argument` | 400 | Body not one JSON object, unknown or mistyped parameter, bad or missing `requestId`, a `GetResources` request that names a bad id or cursor or more than 16 resources, a `GetResourceBody` request with a bad `id`, `generation`, `part` or `from` ([Resources](#resources)) |
 | `unauthenticated` | 401 | The caller is not an admitted local process (see [Local authentication](#local-authentication)) |
-| `not_found` | 404 | No such method, or no such API version |
+| `not_found` | 404 | No such method, or no such API version; a `GetResourceBody` part the store does not hold |
 | `method_not_allowed` | 405 | Not `POST` |
 | `conflict` | 409 | A `requestId` reused with a different body; a settings call the store's state refuses ([Settings](#settings)); `StartUpdate` while an Update runs ([Update and schedule](#update-and-schedule)) |
 | `payload_too_large` | 413 | Body over the limit |

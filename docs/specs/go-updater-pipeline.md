@@ -315,6 +315,14 @@ A resource without a cursor is `{}`. The reply, per resource, is one of:
 | `full` | no cursor; the store does not hold the cursor's generation; the digest differs | `generation`, `members`, `digest`, metadata |
 
 - `add` and `remove` are computed at request time by one merge pass over the two sorted bodies.
+
+  *Amendment 2026-11-20 (issue #4049): members, `add` and `remove` leave the reply. The Core Updater writes the delta from
+  the applied baseline when it publishes, by one streaming merge of the two sorted bodies, and prunes it with them. The
+  reply describes a `full` body (`generation`, `digest`, `entries`, metadata) or a `delta` (adding `from`, `addEntries`,
+  `removeEntries`), and the new `GetResourceBody` streams each part as plain text, one member per line, from disk
+  (`docs/misc/core-api-protocol.md`, "GetResourceBody"); it is the protocol's first reply that is not JSON. The Outpost
+  apply writes each part to a file with curl, checks the digest over the bytes, and hands the file to `pfctl -f`, never
+  decoding members into a PHP array. Neither Core nor the Outpost holds a body in memory.*
 - Fetching never advances a cursor.
 - The digest in the cursor is what makes the fallback safe: a store that was lost and rebuilt, a mirror edited by hand, or a
   generation number reused after a loss all answer `full`.
@@ -327,6 +335,8 @@ The Outpost apply keeps one mirror per table, the alias file pfSense rebuilds th
 digest.
 
 1. **Patch the mirror:** new mirror = (old mirror minus `remove`) plus `add`, sorted, written by temporary file and rename.
+   *Amendment 2026-11-20 (issue #4049): `add` and `remove` are the files `GetResourceBody` streamed; the patch is a merge
+   of the three sorted files, line by line.*
 2. **Verify:** the new mirror's digest must equal the reply's `digest`. A mismatch discards the patch, asks again without a
    cursor and applies the `full` body.
 3. **Apply to pf**, with the mode the operator configured (`gen/pfb_alias_delta_mode`, `apply.inc:5286-5287`):
