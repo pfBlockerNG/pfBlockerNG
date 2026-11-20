@@ -302,8 +302,8 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 				return nil
 			}
 			network, gid, reg := field(cc, 0), field(cc, 1), field(cc, 2)
-			if !empty(network) {
-				if _, err := netip.ParsePrefix(trim(network)); err != nil { // split() trims every line
+			if n := trim(network); !empty(n) { // split() trims every line
+				if _, err := netip.ParsePrefix(n); err != nil {
 					return c.malformed(blocks)
 				}
 			}
