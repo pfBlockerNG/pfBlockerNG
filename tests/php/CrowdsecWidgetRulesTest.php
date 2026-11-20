@@ -10,8 +10,9 @@ use PHPUnit\Framework\TestCase;
  * tracker matching (pfb_rule_alias_packets()), so pfb_crowdsec_widget_rules() gives those rules as filter/rule rows.
  *
  * Intent pinned here:
- *   - while the bouncer should run, one inbound and one outbound row per enabled family, each naming its table on the side
- *     the rule matches it and carrying the tracker the generated rule carries;
+ *   - while the bouncer should run, one inbound and one outbound row per family the hook generates rules for (enabled, and with
+ *     a selected interface left unless "all interfaces" is on), each naming its table on the side the rule matches it and
+ *     carrying the tracker the generated rule carries;
  *   - nothing while it should not run, so the widget shows no CrowdSec rows then;
  *   - fed to pfb_rule_alias_packets() with the loaded rules' counters, each table gets its rule count and packets.
  */
@@ -29,15 +30,14 @@ final class CrowdsecWidgetRulesTest extends TestCase
 		$this->savedPfb = $GLOBALS['pfb'] ?? NULL;
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb']['enable'] = PfbToggle::On;
-		$GLOBALS['pfb_test_mwexec'] = [];
-		$GLOBALS['pfb_test_valid_pids'] = [];
+		$GLOBALS['pfb_test_real_interface'] = ['wan' => 'vtnet0', 'lan' => 'vtnet1'];
 	}
 
 	protected function tearDown(): void
 	{
 		$GLOBALS['config'] = $this->savedConfig;
 		$GLOBALS['pfb'] = $this->savedPfb;
-		unset($GLOBALS['pfb_test_mwexec'], $GLOBALS['pfb_test_valid_pids']);
+		unset($GLOBALS['pfb_test_real_interface'], $GLOBALS['pfb_test_real_interface_inet6']);
 	}
 
 	private static function store(array $over = []): void
@@ -67,6 +67,16 @@ final class CrowdsecWidgetRulesTest extends TestCase
 	public function testAFamilyTurnedOffGivesNoRules(): void
 	{
 		self::store(['rule_v6' => '']);
+		$this->assertSame([
+			self::row('CrowdSec IPv4', 177400401, 'crowdsec_v4', 'any'),
+			self::row('CrowdSec IPv4 out', 177400402, 'any', 'crowdsec_v4'),
+		], pfb_crowdsec_widget_rules());
+	}
+
+	public function testAFamilyWithNoSelectedInterfaceLeftGivesNoRulesAsTheHookGivesNone(): void
+	{
+		self::store(['rules_all_interfaces' => '', 'rules_interfaces' => 'lan']);
+		$GLOBALS['pfb_test_real_interface_inet6'] = ['lan' => NULL];
 		$this->assertSame([
 			self::row('CrowdSec IPv4', 177400401, 'crowdsec_v4', 'any'),
 			self::row('CrowdSec IPv4 out', 177400402, 'any', 'crowdsec_v4'),

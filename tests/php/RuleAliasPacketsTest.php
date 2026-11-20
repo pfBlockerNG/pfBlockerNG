@@ -113,4 +113,17 @@ final class RuleAliasPacketsTest extends TestCase
 			pfb_rule_alias_packets($filter_rules, $pf_rules)
 		);
 	}
+
+	public function testOnlyTheBouncersOwnRulesCountOnACrowdsecTable(): void
+	{
+		// #4161: a CrowdSec table counts through the bouncer's rules (their #4159 trackers), never through another rule that
+		// names it, so a stray rule cannot make a half-filled widget row or a metrics series while the bouncer is off
+		$filter_rules = [
+			['descr' => 'hand-made', 'tracker' => 601, 'type' => 'block',
+				'source' => ['address' => 'crowdsec_v4'], 'destination' => ['address' => 'any']],
+		];
+		$pf_rules = [['tracker' => 601, 'packets' => 8]];
+
+		$this->assertSame([], pfb_rule_alias_packets($filter_rules, $pf_rules));
+	}
 }
