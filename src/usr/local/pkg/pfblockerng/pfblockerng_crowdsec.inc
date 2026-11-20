@@ -459,10 +459,13 @@ function pfb_crowdsec_lapi_get(string $url, string $key): array {
  * restarted 5 s after it exits, std fds detached, output to syslog (daemon facility, tag pfb_crowdsec), the supervisor's pid in
  * PFB_CROWDSEC_DAEMON_PIDFILE and the bouncer's in PFB_CROWDSEC_PIDFILE; the start returns once the supervisor's pidfile names it
  * (5 s). No binary for this machine starts nothing and is not a failure; an unknown machine, a refused file, a failed daemon(8) or
- * no supervisor are. Two starts at once cannot both launch: daemon(8) locks its pidfiles.
- * Stop: TERM to the supervisor (daemon(8) passes it on, and the bouncer empties its tables), to the bouncer only when no supervisor
- * is left, KILL to both at 5 s; still running at 7 s fails the stop and keeps the pidfiles. A pid is signalled only while its
- * command line is the supervisor's or the bouncer's: a stale pidfile may name a reused pid. Nothing here touches PF.
+ * no supervisor are. Two starts at once leave one bouncer (#4123): daemon(8) locks its pidfiles, the second daemon(8) finds them
+ * locked (status 3), and that start waits for the first one's supervisor like its own.
+ * Stop: TERM to every supervisor (daemon(8) passes it on, and the bouncer empties its tables), to the bouncers only when no
+ * supervisor is left, KILL to all at 5 s; still running at 7 s fails the stop and keeps the pidfiles. Every process is found by
+ * its command line, never by a pidfile alone, so a pair no pidfile names stops too and a reused pid is never signalled. daemon(8)
+ * removes its pidfiles as it exits; the stop removes the ones a KILL left, but never one a running daemon(8) holds locked: a
+ * start racing the stop would lose the lock and run a second bouncer. Nothing here touches PF.
  *
  * @param string $dir the package's crowdsec directory (a test points it at a temp directory)
  */
@@ -517,7 +520,8 @@ function pfb_crowdsec_service(string $dir = PFB_CROWDSEC_DIR): void {
 	# Detach std fds (#662): the caller's pipe must not stay open in the daemon
 	/usr/sbin/daemon -r -R 5 -S -l daemon -T pfb_crowdsec -t pfb_crowdsec -P {$daemonpid} -p {$childpid} "\${binary}" -c {$config} </dev/null >/dev/null 2>&1
 	daemonstatus="\$?"
-	if [ "\${daemonstatus}" -ne 0 ]; then
+	# 3: a concurrent start's daemon(8) holds the pidfiles locked and runs the bouncer; wait for its supervisor as for this one's
+	if [ "\${daemonstatus}" -ne 0 ] && [ "\${daemonstatus}" -ne 3 ]; then
 		/usr/bin/logger -p daemon.err -t pfb_crowdsec "ERROR [{$prefix}] CrowdSec bouncer: daemon(8) failed with status \${daemonstatus} - not started"
 		exit 1
 	fi
@@ -536,16 +540,17 @@ function pfb_crowdsec_service(string $dir = PFB_CROWDSEC_DIR): void {
 EOF;
 	$rc['stop']	= <<<EOF
 
-	# TERM to the supervisor, which passes it on (a TERM to the bouncer as well would be a second one); to the bouncer itself only
-	# when no supervisor is left. KILL to both at 5 s, give up at 7 s keeping the pidfiles (they still name the survivor)
-	/bin/pkill -TERM -F {$daemonpid} -f {$supervisor} 2>/dev/null || /bin/pkill -TERM -F {$childpid} -f {$child} 2>/dev/null
+	# TERM to every supervisor, which passes it on (a TERM to the bouncer as well would be a second one); to the bouncers only
+	# when no supervisor is left. By command line, so a pair no pidfile names stops too (#4123). KILL to all at 5 s, give up at
+	# 7 s keeping the pidfiles (they still name the survivor)
+	/bin/pkill -TERM -f {$supervisor} 2>/dev/null || /bin/pkill -TERM -f {$child} 2>/dev/null
 	waited=0
 	killed=0
-	while /bin/pgrep -F {$daemonpid} -f {$supervisor} >/dev/null 2>&1 || /bin/pgrep -F {$childpid} -f {$child} >/dev/null 2>&1; do
+	while /bin/pgrep -f {$supervisor} >/dev/null 2>&1 || /bin/pgrep -f {$child} >/dev/null 2>&1; do
 		if [ "\${waited}" -ge 5 ] && [ "\${killed}" -eq 0 ]; then
 			/usr/bin/logger -p daemon.warning -t pfb_crowdsec "WARNING [{$prefix}] CrowdSec bouncer ignored TERM for 5 s, sending KILL"
-			/bin/pkill -KILL -F {$daemonpid} -f {$supervisor} 2>/dev/null
-			/bin/pkill -KILL -F {$childpid} -f {$child} 2>/dev/null
+			/bin/pkill -KILL -f {$supervisor} 2>/dev/null
+			/bin/pkill -KILL -f {$child} 2>/dev/null
 			killed=1
 			continue
 		fi
@@ -556,7 +561,11 @@ EOF;
 		/bin/sleep 1
 		waited="\$((waited + 1))"
 	done
-	/bin/rm -f {$daemonpid} {$childpid}
+	# What a KILL left: lockf(1) removes a pidfile only while no daemon(8) holds it locked. Removing a locked one would let a
+	# concurrent start's daemon(8) lock a fresh file and run a second bouncer (#4123)
+	/usr/bin/lockf -s -n -t 0 {$daemonpid} /usr/bin/true
+	/usr/bin/lockf -s -n -t 0 {$childpid} /usr/bin/true
+	return 0
 
 EOF;
 	// A survivor must fail the restart: the start would otherwise report success over it

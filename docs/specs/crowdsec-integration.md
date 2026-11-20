@@ -464,3 +464,19 @@ stay banned and a missed ban would stay missing until the next restart.
 - **Log.** The page reads the last 1 MiB of `/var/log/system.log` and keeps the lines whose program is
   `pfb_crowdsec`, in either the BSD or the RFC 5424 log format. It drops the partial line where that window
   starts.
+
+## Amendment 2026-11-20 — two starts at once leave one bouncer (#4123)
+
+At boot pfSense CE 2.8.1 runs two starts of the rc script in the same second: `rc.start_packages`' service start and
+pfBlockerNG's own update pass (`sync_package`, which applies D4's "should run" decision). Both found no supervisor in its
+pidfile. The start then ran the stop, whose last step removed both pidfiles, and one start's removal landed after the
+other's daemon(8) had locked them. daemon(8)'s lock no longer protected an unlinked file, so both launched, the pidfiles
+named one pair, and the service's stop left the other running (2 of 3 reboots on the smoke pool).
+
+- **Start.** A daemon(8) that finds the pidfiles locked (exit status 3, "already running") is not a failure: the start
+  waits for the running supervisor in its pidfile, as for its own, and fails only if none appears within 5 s.
+- **Stop.** TERM, the wait and KILL find the supervisors and bouncers by command line alone, not by pidfile, so every
+  bouncer stops, including a pair no pidfile names. A reused pid still never matches.
+- **Pidfiles.** daemon(8) removes its own pidfiles when it exits. The stop removes the ones a KILL left with
+  `lockf -s -n -t 0 <pidfile> /usr/bin/true`, which removes a file only while no daemon(8) holds it locked. A
+  concurrent start's daemon(8) therefore keeps its lock, and the second daemon(8) cannot launch.
