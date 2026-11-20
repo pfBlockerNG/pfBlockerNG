@@ -467,3 +467,25 @@ func TestAFailedDeltaLeavesNoFileOfTheNewGeneration(t *testing.T) {
 		t.Fatalf("delta add %v remove %v", add, remove)
 	}
 }
+
+// A publish whose index cannot be written fails before its rename: it leaves no file of the new generation either.
+func TestAFailedIndexWriteLeavesNoFileOfTheNewGeneration(t *testing.T) {
+	s, dir := newStore(t)
+	publish(t, s, id, 1, nil, "10", "20")
+	applied(t, s, id, 1)
+	before := names(t, dir)
+	block := filepath.Join(dir, "index.json.tmp") // a directory that is not empty: the index cannot be staged
+	if err := os.MkdirAll(filepath.Join(block, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Publish(id, []string{"20", "30"}, nil); err == nil {
+		t.Fatal("Publish succeeded with the index blocked")
+	}
+	if err := os.RemoveAll(block); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(t, dir); !slices.Equal(got, before) {
+		t.Fatalf("files after the failed publish = %q; want %q", got, before)
+	}
+	publish(t, s, id, 2, nil, "20", "30")
+}
