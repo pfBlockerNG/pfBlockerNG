@@ -9,8 +9,6 @@ included, are ``test_smoke_crowdsec.py``'s.
 
 from __future__ import annotations
 
-import base64
-import json
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -55,10 +53,9 @@ def _widget_rows(webui: WebUI) -> dict[str, list[str]]:
     return {re.sub(r"<[^>]+>", "", cols[0]): cols for cols in rows if len(cols) == 6}
 
 
-def _php_ok(vm: SmokeVM, snippet: str) -> str:
+def _php_ok(vm: SmokeVM, snippet: str) -> None:
     result = helpers.php_eval(vm, snippet + "\necho 'PFB_' . 'OK';")
     assert "PFB_OK" in result.stdout, f"{snippet!r}: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
-    return result.stdout
 
 
 @contextmanager
@@ -68,10 +65,7 @@ def _bouncer_should_run(vm: SmokeVM) -> Iterator[None]:
     for table in TABLES:
         absent = vm.ssh(f"pfctl -t {table} -T show", timeout=30).returncode != 0
         assert absent, f"precondition: no {table} table on the session VM (it would be killed afterwards)"
-    saved = _php_ok(vm, f"echo 'PFB_SAVED[' . base64_encode(json_encode(config_get_path('{SECTION}'))) . ']';")
-    found = re.search(r"PFB_SAVED\[([A-Za-z0-9+/=]*)\]", saved)
-    assert found, f"could not read {SECTION}: {saved!r}"
-    section = json.loads(base64.b64decode(found.group(1)))
+    saved = helpers._php_read_scalar(vm, "", f"json_encode(config_get_path({helpers._php_str(SECTION)}))")
     master = helpers.config_get_state(vm, MASTER)
     settings = {
         "enable": "on",
@@ -87,8 +81,8 @@ def _bouncer_should_run(vm: SmokeVM) -> Iterator[None]:
     }
     _php_ok(
         vm,
-        f"config_set_path('{MASTER}', 'on');\n"
-        f"config_set_path('{SECTION}', json_decode('{json.dumps(settings)}', TRUE));\n"
+        f"config_set_path({helpers._php_str(MASTER)}, 'on');\n"
+        f"config_set_path({helpers._php_str(SECTION)}, {helpers._php_kv_array(settings)});\n"
         "write_config('pfBlockerNG smoke: CrowdSec settings for a widget render check');",
     )
     try:
@@ -98,9 +92,9 @@ def _bouncer_should_run(vm: SmokeVM) -> Iterator[None]:
     finally:
         vm.ssh(f"pfctl -t {TABLES[0]} -T kill; pfctl -t {TABLES[1]} -T kill; true", timeout=30)
         restore = (
-            f"config_del_path('{SECTION}');"
-            if section is None
-            else f"config_set_path('{SECTION}', json_decode(base64_decode('{found.group(1)}'), TRUE));"
+            f"config_del_path({helpers._php_str(SECTION)});"
+            if saved in ("", "null")
+            else f"config_set_path({helpers._php_str(SECTION)}, json_decode({helpers._php_str(saved)}, TRUE));"
         )
         _php_ok(vm, restore + "\nwrite_config('pfBlockerNG smoke: restore the CrowdSec settings');")
         helpers.config_restore_state(vm, MASTER, master)

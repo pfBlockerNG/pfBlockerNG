@@ -836,7 +836,8 @@ def test_the_widget_shows_each_table_with_its_entries_rules_and_dropped_packets(
         alias, count, _packets, _updated, img, group = rows[table]
         assert group == "ip", rows[table]
         assert f'href="{STATUS_PAGE}"' in alias, f"linked to the Status subtab: {alias}"
-        assert count == str(len(tables[table] or set())), f"{table}: count {count}, table {tables[table]}"
+        entries = len(tables[table] or set())
+        assert count.replace(",", "") == str(entries), f"{table}: count {count}, table {tables[table]}"
         assert "(2)" in img, f"{table}: the bouncer's two rules: {img}"
 
     banned = "192.0.2.10"
