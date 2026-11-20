@@ -179,8 +179,8 @@ function pfb_crowdsec_config_json(array $settings): string {
 		'api_url'          => (string) $settings['lapi_url'],
 		'api_key'          => (string) $settings['api_key'],
 		'update_frequency' => '10s',
-		'table_v4'         => 'crowdsec_v4',
-		'table_v6'         => 'crowdsec_v6',
+		'table_v4'         => PFB_CROWDSEC_TABLES['ipv4'],
+		'table_v6'         => PFB_CROWDSEC_TABLES['ipv6'],
 		'log_level'        => (string) $settings['log_level'],
 		'status_file'      => PFB_CROWDSEC_STATUS,
 	], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
@@ -633,7 +633,7 @@ function pfb_crowdsec_rules(string $type): string {
 	$tag = is_string($s['rules_tag']) && preg_match(PFB_CROWDSEC_TAG_PATTERN, $s['rules_tag']) ? " tag \"{$s['rules_tag']}\"" : '';
 
 	$rules = '';
-	foreach (['4' => ['rule_v4', 'inet'], '6' => ['rule_v6', 'inet6']] as $n => [$field, $af]) {
+	foreach (['ipv4' => ['rule_v4', 'inet', '4'], 'ipv6' => ['rule_v6', 'inet6', '6']] as $family => [$field, $af, $n]) {
 		if ($s[$field] !== PfbToggle::On) {
 			continue;
 		}
@@ -646,8 +646,9 @@ function pfb_crowdsec_rules(string $type): string {
 			}
 			$on = ' on { ' . implode(' ', $real) . ' }';
 		}
-		$rules .= "block drop in{$log} quick{$on} {$af} from <crowdsec_v{$n}> to any label \"CrowdSec IPv{$n}\"{$tag}\n"
-		    . "block drop out{$log} quick{$on} {$af} from any to <crowdsec_v{$n}> label \"CrowdSec IPv{$n} out\"{$tag}\n";
+		$table = PFB_CROWDSEC_TABLES[$family];
+		$rules .= "block drop in{$log} quick{$on} {$af} from <{$table}> to any label \"CrowdSec IPv{$n}\"{$tag}\n"
+		    . "block drop out{$log} quick{$on} {$af} from any to <{$table}> label \"CrowdSec IPv{$n} out\"{$tag}\n";
 	}
 	if ($rules !== '' && !$registered) {
 		register_shutdown_function('pfb_crowdsec_signal');
