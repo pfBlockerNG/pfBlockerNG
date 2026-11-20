@@ -15,7 +15,8 @@ func TestAMalformedRowKeepsThePreviousGeneration(t *testing.T) {
 		"network with a line break": {"GeoLite2-Country-Blocks-IPv4.csv", testBlocks + "\"7.0.0.0/8\n# ISO Code: CN\",6252001,6252001,,0,0,\n"},
 		"network that is not one":   {"GeoLite2-Country-Blocks-IPv4.csv", testBlocks + "banana,6252001,6252001,,0,0,\n"},
 		"IPv6 network with a CR":    {"GeoLite2-Country-Blocks-IPv6.csv", blocksHeader + "\"2600::/12\r9.9.9.9/32\",6252001,6252001,,0,0,\n"},
-		"header row after a BOM":    {"GeoLite2-Country-Blocks-IPv4.csv", "\ufeff" + testBlocks},
+		// MaxMind ships no BOM: a header row that does not read "network" is a share edited by hand.
+		"header row after a BOM": {"GeoLite2-Country-Blocks-IPv4.csv", "\ufeff" + testBlocks},
 		"country name with a LF": {"GeoLite2-Country-Locations-en.csv", locationsHeader +
 			"6252001,en,NA,\"North America\",US,\"United\nStates\",0\n"},
 		"continent name with a CR": {"GeoLite2-Country-Locations-en.csv", locationsHeader +
@@ -38,9 +39,10 @@ func TestAMalformedRowKeepsThePreviousGeneration(t *testing.T) {
 	}
 }
 
-// White space around a network is not part of it: the split trims every line, so the list holds the network alone.
+// White space around a network is not part of it: the split trims every line, so the list holds the network alone,
+// and a network of white space alone is no network, skipped as an empty one is.
 func TestANetworkWithSurroundingSpaceIsListed(t *testing.T) {
-	c, log := conversionRoot(t, testBlocks+" 4.0.0.0/8\t,6252001,6252001,,0,0,\n")
+	c, log := conversionRoot(t, testBlocks+" 4.0.0.0/8\t,6252001,6252001,,0,0,\n\" \t\",6252001,6252001,,0,0,\n")
 	if !c.Run(context.Background()) {
 		t.Fatalf("conversion failed:\n%s", log)
 	}
