@@ -62,11 +62,11 @@ func TestAConversionThatPlacesNoMaxMindCountryKeepsThePreviousGeneration(t *test
 // A country is placed only when its list lands in a continent file the split reads.
 func TestACountryWhoseListReachesNoContinentFileIsNotPlaced(t *testing.T) {
 	for name, rows := range map[string]string{
-		"continent not a word":    "6252001,en,NA,North-America,US,\"United States\",0\n",
-		"continent of no file":    "6252001,en,NA,NorthAmerica,US,\"United States\",0\n",
-		"ISO not a word":          "6252001,en,NA,\"North America\",\"U S\",\"United States\",0\n",
-		"Top Spammers key":        "9A0001,en,EU,Europe,QQ,Q,0\n",
-		"a later row unplaces it": "6252001,en,NA,\"North America\",US,\"United States\",0\n6252001,en,NA,North-America,US,\"United States\",0\n",
+		"continent not a word":      "6252001,en,NA,North-America,US,\"United States\",0\n",
+		"continent of no file":      "6252001,en,NA,NorthAmerica,US,\"United States\",0\n",
+		"ISO not a word":            "6252001,en,NA,\"North America\",\"U S\",\"United States\",0\n",
+		"beside a Top Spammers key": "6252001,en,NA,North-America,US,\"United States\",0\n9A0001,en,EU,Europe,QQ,Q,0\n",
+		"a later row unplaces it":   "6252001,en,NA,\"North America\",US,\"United States\",0\n6252001,en,NA,North-America,US,\"United States\",0\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, log := conversionRoot(t, testBlocks)
@@ -81,7 +81,7 @@ func TestALaterRowOfTheSameCountryPlacesIt(t *testing.T) {
 	c, log := conversionRoot(t, testBlocks)
 	writeShare(t, c, "GeoLite2-Country-Locations-en.csv", locationsHeader+
 		"6252001,en,NA,North-America,US,\"United States\",0\n6252001,en,NA,\"North America\",US,\"United States\",0\n")
-	if !c.Run(context.Background()) {
+	if !c.Run(context.Background()) || strings.Contains(log.String(), noContinent) {
 		t.Fatalf("conversion failed:\n%s", log)
 	}
 	if b, _ := os.ReadFile(filepath.Join(c.CCDir, "US_v4.txt")); string(b) != "3.0.0.0/15\n" {
@@ -89,15 +89,24 @@ func TestALaterRowOfTheSameCountryPlacesIt(t *testing.T) {
 	}
 }
 
-// A Locations file that lists no country leaves every country to the built-in table, which places them all.
+// A Locations file that lists no MaxMind country leaves every country to the built-in table, which places them all: a
+// file without rows, or whose only row is a Top Spammers key or a key a built-in entry replaces.
 func TestALocationsFileWithoutCountriesPublishes(t *testing.T) {
-	c, log := conversionRoot(t, testBlocks)
-	writeShare(t, c, "GeoLite2-Country-Locations-en.csv", locationsHeader)
-	if !c.Run(context.Background()) {
-		t.Fatalf("conversion failed:\n%s", log)
-	}
-	if b, _ := os.ReadFile(filepath.Join(c.CCDir, "US_v4.txt")); string(b) != "3.0.0.0/15\n" {
-		t.Errorf("US_v4.txt = %q", b)
+	for name, rows := range map[string]string{
+		"no rows":          "",
+		"Top Spammers key": "9A0001,en,EU,Europe,QQ,Q,0\n",
+		"built-in key":     "6255147,en,AS,Asia,XX,Forged,0\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, log := conversionRoot(t, testBlocks)
+			writeShare(t, c, "GeoLite2-Country-Locations-en.csv", locationsHeader+rows)
+			if !c.Run(context.Background()) {
+				t.Fatalf("conversion failed:\n%s", log)
+			}
+			if b, _ := os.ReadFile(filepath.Join(c.CCDir, "US_v4.txt")); string(b) != "3.0.0.0/15\n" {
+				t.Errorf("US_v4.txt = %q", b)
+			}
+		})
 	}
 }
 
