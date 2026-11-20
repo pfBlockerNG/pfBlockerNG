@@ -517,6 +517,5 @@ amendment's start, stop and pidfile rules.
   when no record exists (a start by an earlier version's rc script), or when its config file changed, and otherwise leaves it alone. A
   `pkg delete` stops it and removes everything.
 - **Differences from pfB-DNS and Core**, each kept for a reason: the start runs only while the config file exists (D4's gate, and the
-  boot gate); stop sends TERM to the supervisor alone while one runs (the bouncer empties its tables on TERM, and daemon(8) passes it
-  on); the restart after an upgrade is the installer's, not the next update's (the update pass never touches the bouncer), and it
+  boot gate); the restart after an upgrade is the installer's, not the next update's (the update pass never touches the bouncer), and it
   compares the binary's recorded hash, as the bouncer publishes no hash of its own.

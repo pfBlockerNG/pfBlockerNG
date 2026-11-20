@@ -20,8 +20,8 @@ use PHPUnit\Framework\TestCase;
  *   - it starts only while its config file exists (pfb_crowdsec_apply() writes it exactly while the bouncer should run), and only
  *     a config the binary accepts (`-t`); no binary for this machine starts nothing and is not a failure, an unknown
  *     machine is; a start over a running bouncer keeps it;
- *   - stop sends TERM to the supervisor (daemon(8) passes it on, and the bouncer empties its tables), or to the bouncer when no
- *     supervisor is left, KILL to both at 5 s, and fails at 7 s keeping the pidfiles;
+ *   - stop sends TERM to the supervisor and to the bouncer (which empties its tables; it keeps handling TERM until it exits), KILL
+ *     to both at 5 s, and fails at 7 s keeping the pidfiles;
  *   - the script does nothing to PF itself (the bouncer creates its own tables);
  *   - start, stop and restart run under one lock, as Core's do (#4139): the script runs itself once more under `lockf -k -t 20`, and
  *     that run takes no second lock; a lock not had within 20 s does nothing and fails (lockf's 75). Two starts at once therefore
@@ -549,7 +549,7 @@ final class CrowdsecServiceTest extends TestCase
 
 	// ---- stop -----------------------------------------------------------------------------
 
-	public function testStopSendsTermToTheSupervisorOnlyAndRemovesThePidfiles(): void
+	public function testStopSendsTermToTheSupervisorAndTheBouncerAndRemovesThePidfiles(): void
 	{
 		$this->install();
 		$this->arrange(running: TRUE);
@@ -557,7 +557,7 @@ final class CrowdsecServiceTest extends TestCase
 		[$status, $out] = $this->rc('stop');
 
 		$this->assertSame(0, $status, $out);
-		$this->assertSame(['TERM ' . self::SUPERVISOR . ' @0'], $this->lines('events'), 'daemon(8) passes TERM on: the bouncer is not signalled twice');
+		$this->assertSame(['TERM ' . self::SUPERVISOR . ' @0', 'TERM ' . self::CHILD . ' @0'], $this->lines('events'), 'TERM to both, as Core');
 		$this->assertSame([], $this->livePids());
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['crowdsec_daemon_pidfile']);
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['crowdsec_pidfile']);
@@ -584,7 +584,8 @@ final class CrowdsecServiceTest extends TestCase
 		[$status] = $this->rc('stop');
 
 		$this->assertSame(0, $status);
-		$this->assertSame(['TERM ' . self::SUPERVISOR . ' @0', 'KILL ' . self::SUPERVISOR . ' @5', 'KILL ' . self::CHILD . ' @5'], $this->lines('events'));
+		$this->assertSame(['TERM ' . self::SUPERVISOR . ' @0', 'TERM ' . self::CHILD . ' @0', 'KILL ' . self::SUPERVISOR . ' @5', 'KILL ' . self::CHILD . ' @5'],
+			$this->lines('events'));
 		$this->assertSame([], $this->livePids());
 	}
 

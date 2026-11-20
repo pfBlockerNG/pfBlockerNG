@@ -508,8 +508,8 @@ function pfb_crowdsec_lapi_get(string $url, string $key): array {
  * PFB_CROWDSEC_DAEMON_PIDFILE and the bouncer's in PFB_CROWDSEC_PIDFILE, and the sha256 of the binary it runs in
  * PFB_CROWDSEC_BINARY_RECORD; the start returns once the supervisor's pidfile names it (5 s). No binary for this machine starts nothing
  * and is not a failure; an unknown machine, a refused file, a failed daemon(8) or no supervisor are.
- * Stop: TERM to the supervisor (daemon(8) passes it on, and the bouncer empties its tables), or to the bouncer when no supervisor is
- * left, KILL to both at 5 s; still running at 7 s fails the stop and keeps the pidfiles. A pid is signalled only while a pidfile names
+ * Stop: TERM to the supervisor and the bouncer (which empties its tables), KILL to both at 5 s; still running at 7 s fails the stop
+ * and keeps the pidfiles. A pid is signalled only while a pidfile names
  * it and its command line is the bouncer's or the supervisor's. pfSense's own stop under a package upgrade or reinstall leaves the
  * bouncer running (pfb_rc_package_upgrade_keep(), as pfB-DNS's); the installer then restarts it only when its binary or its file
  * changed. Nothing here touches PF.
@@ -620,9 +620,9 @@ EOF;
 		return "\${lockstatus}"
 	fi
 
-	# TERM to the supervisor, which passes it on (a TERM to the bouncer as well would be a second one); to the bouncer only when
-	# no supervisor is left. KILL to both at 5 s, give up at 7 s keeping the pidfiles (they still name the survivor)
-	/bin/pkill -TERM -F {$daemonpid} -f {$supervisor} 2>/dev/null || /bin/pkill -TERM -F {$childpid} -f {$child} 2>/dev/null
+	# TERM at 0 s, KILL at 5 s, give up at 7 s keeping the pidfiles (they still name the survivor)
+	/bin/pkill -TERM -F {$daemonpid} -f {$supervisor} 2>/dev/null
+	/bin/pkill -TERM -F {$childpid} -f {$child} 2>/dev/null
 	waited=0
 	killed=0
 	while /bin/pgrep -F {$daemonpid} -f {$supervisor} >/dev/null 2>&1 || /bin/pgrep -F {$childpid} -f {$child} >/dev/null 2>&1; do
