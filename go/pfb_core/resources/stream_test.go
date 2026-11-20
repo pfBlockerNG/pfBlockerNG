@@ -490,3 +490,23 @@ func TestAFailedIndexWriteLeavesNoFileOfTheNewGeneration(t *testing.T) {
 	}
 	publish(t, s, id, 2, nil, "20", "30")
 }
+
+// The first publish into an empty store, whose index cannot be written, leaves no body either: no index names it.
+func TestAFailedFirstIndexWriteLeavesNoBody(t *testing.T) {
+	s, dir := newStore(t)
+	before := names(t, dir)
+	block := filepath.Join(dir, "index.json.tmp")
+	if err := os.MkdirAll(filepath.Join(block, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Publish(id, []string{"10"}, nil); err == nil {
+		t.Fatal("Publish succeeded with the index blocked")
+	}
+	if err := os.RemoveAll(block); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(t, dir); !slices.Equal(got, before) {
+		t.Fatalf("files after the failed publish = %q; want %q", got, before)
+	}
+	publish(t, s, id, 1, nil, "10")
+}
