@@ -55,6 +55,34 @@ func TestANetworkWithSurroundingSpaceIsListed(t *testing.T) {
 	}
 }
 
+// A network of white space alone is skipped as an empty one is: a country it was the only network of keeps an empty
+// list, and its continent file counts no network.
+func TestANetworkOfWhiteSpaceAloneIsAnEmptyOne(t *testing.T) {
+	c, log := conversionRoot(t, testBlocks+"\" \t\",6300000,6300000,,0,0,\n")
+	writeShare(t, c, "GeoLite2-Country-Locations-en.csv", testLocations+"6300000,en,NA,\"North America\",CA,Canada,0\n")
+	if !c.Run(context.Background()) {
+		t.Fatalf("conversion failed:\n%s", log)
+	}
+	if b, err := os.ReadFile(filepath.Join(c.CCDir, "CA_v4.txt")); err != nil || len(b) != 0 {
+		t.Errorf("CA_v4.txt = %q, %v; want an empty list", b, err)
+	}
+	b, _ := os.ReadFile(filepath.Join(c.CCDir, "North_America_v4.txt"))
+	if want := "# ISO Code: CA\n# Total Networks: NA\n"; !strings.Contains(string(b), want) {
+		t.Errorf("North_America_v4.txt holds no %q:\n%s", want, b)
+	}
+}
+
+// A blank line before a Blocks file's header is not its first record: the header after it is still the header.
+func TestABlankLineBeforeTheHeaderIsNoRecord(t *testing.T) {
+	c, log := conversionRoot(t, "\n"+testBlocks)
+	if !c.Run(context.Background()) {
+		t.Fatalf("conversion failed:\n%s", log)
+	}
+	if b, _ := os.ReadFile(filepath.Join(c.CCDir, "US_v4.txt")); string(b) != "3.0.0.0/15\n" {
+		t.Errorf("US_v4.txt = %q", b)
+	}
+}
+
 // A country name that holds header text on one line forges no header: the split matches a header only at the start of
 // its line, so no list is emptied (#4127). Today's PHP matches it anywhere in a '#' line.
 func TestACountryNameHoldingHeaderTextEmptiesNoList(t *testing.T) {
