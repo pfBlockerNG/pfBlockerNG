@@ -13,7 +13,9 @@ use PHPUnit\Framework\TestCase;
  *   - the ten settings are registered in their own section (alias `crowdsec`), with the spec's defaults and sync classes: the key,
  *     the interfaces and the log level are local, everything else is policy;
  *   - the save's validation (pfb_crowdsec_validate()): every rule of the D2 table, with hostile values for the URL, key, tag and
- *     interfaces; an empty key field keeps the stored key, and no message ever carries the key;
+ *     interfaces; an empty key field keeps the stored key, and no message ever carries the key; the URL is sanitized once at
+ *     ingestion, while a key or tag holding a control or format character or outer whitespace is refused, never cleaned into a
+ *     different value;
  *   - "should run" (pfb_crowdsec_should_run()): pfBlockerNG's master enable, the CrowdSec enable and a stored key, all three.
  */
 #[CoversFunction('pfb_crowdsec_validate')]
@@ -130,10 +132,10 @@ final class CrowdsecSettingsTest extends TestCase
 
 	public function testAPastedKeyReplacesTheStoredOneAndAbsentCheckboxesStoreOff(): void
 	{
-		$out = self::validate(['lapi_url' => 'http://10.0.0.5:8080', 'api_key' => " new-KEY_1 \n", 'log_level' => 'error', 'rules_interfaces' => ['wan']]);
+		$out = self::validate(['lapi_url' => 'http://10.0.0.5:8080', 'api_key' => 'new-KEY_1', 'log_level' => 'error', 'rules_interfaces' => ['wan']]);
 		$this->assertSame([], $out['errors']);
 		$this->assertSame('wan', $out['values']['rules_interfaces']);
-		$this->assertSame('new-KEY_1', $out['values']['api_key'], 'surrounding whitespace of a paste is dropped');
+		$this->assertSame('new-KEY_1', $out['values']['api_key']);
 		foreach (['enable', 'rules_all_interfaces', 'rules_log', 'rule_v4', 'rule_v6'] as $toggle) {
 			$this->assertSame('', $out['values'][$toggle], "{$toggle} unchecked");
 		}
@@ -204,15 +206,78 @@ final class CrowdsecSettingsTest extends TestCase
 	}
 
 	/**
-	 * Every text field is sanitized once, at ingestion (issue #1723): a control character pasted into the URL or the key is
-	 * dropped before validation, as on every other pfBlockerNG page; a space is printable, so it stays and is refused.
+	 * The URL is sanitized once, at ingestion (issue #1723): a control character or outer whitespace pasted into it is dropped before
+	 * validation, as on every other pfBlockerNG page. The key and the tag are not: see the refusal tests below.
 	 */
-	public function testControlCharactersArePasteNoiseDroppedAtIngestion(): void
+	public function testControlCharactersInTheUrlArePasteNoiseDroppedAtIngestion(): void
 	{
-		$out = self::validate(self::post(['lapi_url' => "https://lapi.exa\tmple.net/\r\n", 'api_key' => "ab\tc\nd\x01e\x7ff"]));
+		$out = self::validate(self::post(['lapi_url' => " https://lapi.exa\tmple.net/\r\n"]));
 		$this->assertSame([], $out['errors']);
 		$this->assertSame('https://lapi.example.net/', $out['values']['lapi_url']);
-		$this->assertSame('abcdef', $out['values']['api_key']);
+	}
+
+	/** @return iterable<string, array{string}> */
+	public static function noisyKeys(): iterable
+	{
+		yield 'leading tab'        => ["\tabc"];
+		yield 'trailing space'     => ['abc '];
+		yield 'leading space'      => [' abc'];
+		yield 'control character'  => ["ab\x01c"];
+		yield 'DEL'                => ["abc\x7f"];
+		yield 'zero-width space'   => ["ab\u{200B}c"];
+		yield 'byte order mark'    => ["\u{FEFF}abc"];
+		yield 'bidi override'      => ["ab\u{202E}c"];
+		yield 'trailing line break' => ["abc\r\n"];
+		yield 'only a space'       => [' '];
+		yield 'no-break space'     => ["\u{00A0}abc"];
+	}
+
+	/**
+	 * The key travels in a request header, and a stripped credential is a different value than the one typed: D2 refuses a key holding
+	 * anything but printable ASCII, outer whitespace and control or format characters included.
+	 */
+	#[DataProvider('noisyKeys')]
+	public function testAKeyHoldingControlOrFormatCharactersOrOuterWhitespaceIsRefusedNotCleaned(string $key): void
+	{
+		$out = self::validate(self::post(['api_key' => $key]));
+
+		$this->assertCount(1, $out['errors'], json_encode($key));
+		$this->assertStringContainsString('API key', $out['errors'][0]);
+		$visible = preg_replace('/[^\x21-\x7e]/', '', $key);
+		if ($visible !== '') {
+			$this->assertStringNotContainsString($visible, $out['errors'][0], 'the message never carries the key');
+		}
+		$this->assertSame(self::KEY, $out['values']['api_key'], 'a refused key leaves the stored one');
+	}
+
+	/** @return iterable<string, array{string}> */
+	public static function noisyTags(): iterable
+	{
+		yield 'leading space'     => [' cs'];
+		yield 'trailing space'    => ['cs '];
+		yield 'inner tab'         => ["c\ts"];
+		yield 'NUL'               => ["cs\x00"];
+		yield 'zero-width joiner' => ["c\u{200D}s"];
+		yield 'trailing newline'  => ["cs\n"];
+	}
+
+	#[DataProvider('noisyTags')]
+	public function testATagHoldingControlOrFormatCharactersOrOuterWhitespaceIsRefusedNotCleaned(string $tag): void
+	{
+		$out = self::validate(self::post(['rules_tag' => $tag]));
+
+		$this->assertCount(1, $out['errors'], json_encode($tag));
+		$this->assertStringContainsString('Tag', $out['errors'][0]);
+		$this->assertSame('', $out['values']['rules_tag'], 'a refused tag is not stored');
+	}
+
+	public function testAnEmptyTagAndAnEmptyKeyFieldAreAcceptedAndTheStoredKeyIsKept(): void
+	{
+		$out = self::validate(self::post(['rules_tag' => '', 'api_key' => '']));
+
+		$this->assertSame([], $out['errors']);
+		$this->assertSame('', $out['values']['rules_tag']);
+		$this->assertSame(self::KEY, $out['values']['api_key']);
 	}
 
 	public function testA256CharacterKeyOfEveryPrintableCharacterIsAccepted(): void

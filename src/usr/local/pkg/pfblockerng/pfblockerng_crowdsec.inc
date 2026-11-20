@@ -102,8 +102,9 @@ function pfb_crowdsec_url_valid(string $url): bool {
 }
 
 /**
- * Validate a Settings save (D2). Text fields are sanitized once, here (pfb_sanitize_text(), issue #1723); a checkbox is on only
- * when posted as 'on'. An empty key field keeps $storedKey. No message names the key.
+ * Validate a Settings save (D2). The URL is sanitized once, here (pfb_sanitize_text(), issue #1723); the key and the tag are
+ * checked as posted, so a control or format character or outer whitespace in either is refused, not stripped. A checkbox is on
+ * only when posted as 'on'. An empty key field keeps $storedKey. No message names the key.
  *
  * @param array<string, mixed> $post the posted form
  * @param list<string> $interfaces this node's configured interfaces (get_configured_interface_with_descr() keys)
@@ -113,6 +114,8 @@ function pfb_crowdsec_url_valid(string $url): bool {
 function pfb_crowdsec_validate(array $post, string $storedKey, array $interfaces): array {
 	$errors = [];
 	$text = static fn (string $field): ?string => is_string($post[$field] ?? '') ? pfb_sanitize_text($post[$field] ?? '') : NULL;
+	// Narrower than the sanitize-at-ingestion rule: a stripped key or tag is a different value than the one typed, which D2 refuses
+	$raw = static fn (string $field): ?string => is_string($post[$field] ?? '') ? ($post[$field] ?? '') : NULL;
 	$toggle = static fn (string $field): string => (($post[$field] ?? '') === 'on') ? 'on' : '';
 	$values = ['enable' => $toggle('enable')];
 	$enabled = $values['enable'] === 'on';
@@ -125,7 +128,7 @@ function pfb_crowdsec_validate(array $post, string $storedKey, array $interfaces
 	}
 	$values['lapi_url'] = $url ?? '';
 
-	$key = $text('api_key');
+	$key = $raw('api_key');
 	$values['api_key'] = $storedKey;
 	if ($key === NULL || ($key !== '' && !preg_match(PFB_CROWDSEC_KEY_PATTERN, $key))) {
 		$errors[] = gettext('The Bouncer API key must be 1 to 256 printable ASCII characters, without spaces.');
@@ -153,7 +156,7 @@ function pfb_crowdsec_validate(array $post, string $storedKey, array $interfaces
 	$values['rules_interfaces'] = implode(',', array_unique($chosen));
 
 	$values['rules_log'] = $toggle('rules_log');
-	$tag = $text('rules_tag');
+	$tag = $raw('rules_tag');
 	if ($tag === NULL || ($tag !== '' && !preg_match(PFB_CROWDSEC_TAG_PATTERN, $tag))) {
 		$errors[] = gettext('The Tag must be empty, or 1 to 63 letters, digits, _ or -.');
 		$tag = '';
