@@ -89,4 +89,28 @@ final class RuleAliasPacketsTest extends TestCase
 			pfb_rule_alias_packets($filter_rules, $pf_rules)
 		);
 	}
+
+	public function testTheCrowdsecBouncersTablesAreTrackedLikePfbAliases(): void
+	{
+		// #4161: the bouncer's rules, as pfb_crowdsec_widget_rules() gives them, count on their tables like any pfB rule
+		$filter_rules = [
+			['descr' => 'CrowdSec IPv4', 'tracker' => 177400401, 'type' => 'block',
+				'source' => ['address' => 'crowdsec_v4'], 'destination' => ['address' => 'any']],
+			['descr' => 'CrowdSec IPv4 out', 'tracker' => 177400402, 'type' => 'block',
+				'source' => ['address' => 'any'], 'destination' => ['address' => 'crowdsec_v4']],
+			// a GUI rule on an alias whose name merely ends like the bouncer's table stays untracked
+			['descr' => 'LAN out', 'tracker' => 501, 'type' => 'pass',
+				'source' => ['address' => 'my_crowdsec_v4'], 'destination' => ['address' => 'any']],
+		];
+		$pf_rules = [
+			['tracker' => 177400401, 'packets' => 9],
+			['tracker' => 177400402, 'packets' => 4],
+			['tracker' => 501, 'packets' => 70],
+		];
+
+		$this->assertSame(
+			['crowdsec_v4' => ['rule' => 2, 'packets' => 13, 'type' => 'Block']],
+			pfb_rule_alias_packets($filter_rules, $pf_rules)
+		);
+	}
 }
