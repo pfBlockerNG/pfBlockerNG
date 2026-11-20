@@ -328,6 +328,26 @@ func TestAnUnchangedPublishRestoresTheDelta(t *testing.T) {
 	}
 }
 
+// A delta that is damaged when its baseline is damaged too cannot be written back: the index stops naming it, so a body
+// read answers not_found, never unavailable.
+func TestADeltaThatCannotBeRestoredLeavesTheIndex(t *testing.T) {
+	s, dir := newStore(t)
+	publish(t, s, id, 1, nil, "10", "20")
+	applied(t, s, id, 1)
+	publish(t, s, id, 2, nil, "20", "30")
+	for _, name := range []string{dn(id, 2, 1, "add"), bn(id, 1)} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("99\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publish(t, s, id, 2, nil, "20", "30")
+	_, _, err := s.Body(id, 2, resources.PartAdd, 1)
+	wantErr(t, "Body of a delta that could not be restored", err, resources.ErrNotFound)
+	if r := mustGet(t, s, id, &resources.Cursor{1, dg("10", "20")}); r.Kind != resources.KindFull {
+		t.Fatalf("reply = %+v; want full", r)
+	}
+}
+
 // A member of MaxMemberLength bytes is taken; one byte more is refused, by Canonical as by PublishFrom.
 func TestTheMemberLengthLimit(t *testing.T) {
 	s, _ := newStore(t)
@@ -339,7 +359,8 @@ func TestTheMemberLengthLimit(t *testing.T) {
 	if _, err := resources.Canonical([]string{over}); err == nil || !strings.Contains(err.Error(), "invalid member") {
 		t.Fatalf("Canonical of a member of %d bytes = %v; want an invalid member", len(over), err)
 	}
-	for _, in := range []string{over, over + "\n"} {
+	far := strings.Repeat("a", 2*resources.MaxMemberLength) // longer than the reader holds a line
+	for _, in := range []string{over, over + "\n", far, far + "\n"} {
 		if _, err := s.PublishFrom(id, strings.NewReader(in), nil); err == nil || !strings.Contains(err.Error(), "invalid member") {
 			t.Fatalf("PublishFrom of a member of %d bytes = %v; want an invalid member", len(over), err)
 		}

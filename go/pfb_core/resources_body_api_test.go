@@ -143,16 +143,30 @@ func TestGetResourceBodyClosesItsFile(t *testing.T) {
 		members[j] = fmt.Sprintf("10.0.%d.%d", j/256, j%256)
 	}
 	r.pub("dnsbl/main", nil, members...)
+	dir, err := filepath.EvalSymlinks(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	open := func() int {
 		ents, _ := os.ReadDir("/proc/self/fd")
 		n := 0
 		for _, e := range ents {
-			if to, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name())); err == nil && strings.HasPrefix(to, r.dir) {
+			if to, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name())); err == nil && strings.HasPrefix(to, dir+"/") {
 				n++
 			}
 		}
 		return n
 	}
+	// The count sees a body while it streams: 700 kB fill the socket, so the server still holds the file.
+	held, err := r.core.client.Post("http://pfb-core/v1/GetResourceBody", "application/json",
+		strings.NewReader(bodyParams("dnsbl/main", "1", "members", "")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := open(); n == 0 {
+		t.Fatal("no store file open while a body streams: the count cannot see one")
+	}
+	held.Body.Close()
 	for range 5 {
 		r.body("dnsbl/main", "1", "members", "")
 		resp, err := r.core.client.Post("http://pfb-core/v1/GetResourceBody", "application/json",
