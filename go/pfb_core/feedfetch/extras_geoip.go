@@ -378,8 +378,9 @@ func mergeIntoDir(target, archive string, extract func(dir string) error) bool {
 var errLiveEntry = errors.New("member may not replace its live entry")
 
 // mergeable reports whether the staged entry e may take its name in target: not a dot name, and either nothing there, an
-// entry link of this code (entryLink), or, for a member file, a file or a link that names no folder. A link to a folder
-// refuses, where PHP's merge replaces any link: the country folder is one.
+// entry link of this code (entryLink), or, for a member file, a file or a link that names no folder (dangling, or to a
+// file). A link to a folder, or one whose target cannot be told, refuses, where PHP's merge replaces any link: the
+// country folder is one.
 func mergeable(target string, e os.DirEntry) bool {
 	if strings.HasPrefix(e.Name(), ".") {
 		return false
@@ -395,8 +396,8 @@ func mergeable(target string, e os.DirEntry) bool {
 		if to, _ := os.Readlink(live); entryLink(target, to, e.Name()) {
 			return true
 		}
-		if to, err := os.Stat(live); err == nil && to.IsDir() {
-			return false // a link to a folder: the country folder, or an administrator's
+		if to, err := os.Stat(live); err == nil && to.IsDir() || err != nil && !os.IsNotExist(err) {
+			return false // a link to a folder (the country folder, or an administrator's), or one that cannot be told
 		}
 	}
 	return !e.IsDir()

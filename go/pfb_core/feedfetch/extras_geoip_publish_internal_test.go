@@ -144,6 +144,7 @@ func TestARefusedArchivePublicationChangesNothing(t *testing.T) {
 		"a dot-folder link to a folder":     {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: dotFolderLink("LICENSE.txt")},
 		"a link to a folder of the archive": {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: ownFolderLink("LICENSE.txt")},
 		"a folder over a dangling link":     {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "sub/notes.txt": "x"}, prepare: danglingLink("sub")},
+		"an unresolvable link":              {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: loopLink("LICENSE.txt")},
 		"a foreign link":                    {entries: map[string]string{"GeoLite2-Country.mmdb": "new", "LICENSE.txt": "x"}, prepare: foreignLink("LICENSE.txt")},
 		"a failed extraction":               {extract: func(string) error { return os.ErrInvalid }},
 		"a failed link rename":              {entries: map[string]string{"GeoLite2-Country.mmdb": "new"}, prepare: failRenames},
@@ -234,6 +235,14 @@ func danglingLink(name string) func(*testing.T, string) {
 	return func(t *testing.T, share string) {
 		if err := os.Symlink(filepath.Join(share, "gone"), filepath.Join(share, name)); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func loopLink(name string) func(*testing.T, string) {
+	return func(t *testing.T, share string) {
+		if err := os.Symlink(name, filepath.Join(share, name)); err != nil {
+			t.Fatal(err) // resolves to itself: whether it names a folder cannot be told
 		}
 	}
 }
