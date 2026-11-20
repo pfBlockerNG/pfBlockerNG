@@ -77,9 +77,9 @@ func (c corpusContent) bytes(t *testing.T) []byte {
 }
 
 type conversionExpect struct {
-	OK    bool                       `json:"ok"`
+	OK    bool                      `json:"ok"`
 	Files map[string]*corpusContent `json:"files"`
-	Tree  string                     `json:"tree"`
+	Tree  string                    `json:"tree"`
 }
 
 type conversionCase struct {
