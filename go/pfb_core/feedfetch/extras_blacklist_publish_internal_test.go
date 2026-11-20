@@ -326,8 +326,8 @@ func TestARealCategoryFolderWaitsUnderTheRecoverableName(t *testing.T) {
 	assertAdult(t, live, "old\n")
 }
 
-// A folder an interrupted PHP publication left aside beside a category that is a link is dropped: the link stands, and
-// every publication in the folder goes on.
+// A folder set aside beside a category that is a link to a generation (a run killed after its link landed) is dropped:
+// the link stands, and every publication in the folder goes on.
 func TestABackupBesideALinkedCategoryIsDropped(t *testing.T) {
 	db, live := categoryDB(t)
 	if err := os.MkdirAll(filepath.Join(db, stageBackup+"ut1", "inside"), 0o700); err != nil {
@@ -378,7 +378,65 @@ func TestACategoryGenerationIsWorldReadable(t *testing.T) {
 	if !replaceDir(live, writeAdult("new\n")) {
 		t.Fatal("the category was not published")
 	}
-	if info, err := os.Stat(live); err != nil || info.Mode().Perm() != 0o755 {
-		t.Errorf("the generation's mode = %v, %v; want 0755", info.Mode().Perm(), err)
+	info, err := os.Stat(live)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if info.Mode().Perm() != 0o755 {
+		t.Errorf("the generation's mode = %v, want 0755", info.Mode().Perm())
+	}
+}
+
+// A folder set aside beside a link that names no folder (dangling, or a link to a file) holds the only copy of the
+// category: it is put back in the link's place, not dropped.
+func TestABackupBesideABrokenLinkIsPutBack(t *testing.T) {
+	for _, broken := range []string{"dangling", "file"} {
+		t.Run(broken, func(t *testing.T) {
+			db, live := categoryDB(t)
+			if err := os.RemoveAll(filepath.Join(db, ".ut1.1.00000000")); err != nil {
+				t.Fatal(err)
+			}
+			if broken == "file" {
+				if err := os.WriteFile(filepath.Join(db, ".ut1.1.00000000"), nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			backup := filepath.Join(db, stageBackup+"ut1")
+			if err := os.Mkdir(backup, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeAdult("kept\n")(backup); err != nil {
+				t.Fatal(err)
+			}
+			if !recoverDirs(db) {
+				t.Fatal("the backup was not settled")
+			}
+			if info, err := os.Lstat(live); err != nil || !info.IsDir() {
+				t.Fatalf("the backup is not back in the link's place: %v", err)
+			}
+			assertAdult(t, live, "kept\n")
+		})
+	}
+}
+
+// A category that is a link this code did not make (it names no generation beside it) is the administrator's layout:
+// the publication refuses it and leaves the link as it is, as before #4141.
+func TestAForeignCategoryLinkIsRefused(t *testing.T) {
+	db := t.TempDir()
+	elsewhere := t.TempDir()
+	if err := writeAdult("theirs\n")(elsewhere); err != nil {
+		t.Fatal(err)
+	}
+	live := filepath.Join(db, "ut1")
+	if err := os.Symlink(elsewhere, live); err != nil {
+		t.Fatal(err)
+	}
+	if replaceDir(live, writeAdult("new\n")) {
+		t.Fatal("replaced a link to the administrator's folder")
+	}
+	if to, err := os.Readlink(live); err != nil || to != elsewhere {
+		t.Errorf("ut1 links to %q, %v; want %s", to, err, elsewhere)
+	}
+	assertAdult(t, live, "theirs\n")
+	assertDB(t, db)
 }

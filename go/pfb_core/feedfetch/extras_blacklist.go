@@ -220,9 +220,9 @@ const stageBackup = ".pfbstagebak2_"
 // point leaves the previous generation or the new one. The publication holds .<name>.lock beside target throughout and
 // is refused while another holds it, so its cleanup (every generation but this one and the previous) never meets one
 // being written. A target that is still a real folder waits under .pfbstagebak2_<name> while the link replaces it (so
-// recoverDirs puts it back after a run killed in between, or a failed restore) and then becomes the previous
-// generation; a missing target leaves no previous generation to tell apart, so none is removed. A folder an interrupted
-// publication left aside is put back first.
+// recoverDirs puts it back after a run killed in between, or a failed restore) and then becomes the previous generation
+// (a run killed after the link landed leaves it to be dropped beside the link); a missing target leaves no previous
+// generation to tell apart, so none is removed. A folder an interrupted publication left aside is put back first.
 func replaceDir(target string, extract func(dir string) error) bool {
 	parent, base := filepath.Dir(target), filepath.Base(target)
 	if !recoverDirs(parent) {
@@ -236,6 +236,13 @@ func replaceDir(target string, extract func(dir string) error) bool {
 	if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
 		return false
 	}
+	previous, _ := os.Readlink(target)
+	if previous != "" {
+		previous = filepath.Base(previous)
+		if !isGeneration(base, previous) {
+			return false // a link this code did not make is the administrator's layout
+		}
+	}
 	gen := generationDir(target)
 	if os.Mkdir(gen, 0o755) != nil {
 		return false
@@ -243,10 +250,6 @@ func replaceDir(target string, extract func(dir string) error) bool {
 	if os.Chmod(gen, 0o755) != nil || extract(gen) != nil {
 		os.RemoveAll(gen)
 		return false
-	}
-	previous, _ := os.Readlink(target)
-	if previous != "" {
-		previous = filepath.Base(previous)
 	}
 	aside := ""
 	if info, err := os.Lstat(target); err == nil && info.Mode()&os.ModeSymlink == 0 {
@@ -279,8 +282,7 @@ func replaceDir(target string, extract func(dir string) error) bool {
 	entries, _ := os.ReadDir(parent)
 	for _, e := range entries {
 		name := e.Name()
-		if rest, ok := strings.CutPrefix(name, "."+base+"."); ok && name != filepath.Base(gen) && name != previous &&
-			generationID(strings.TrimSuffix(rest, ".link")) {
+		if name != filepath.Base(gen) && name != previous && isGeneration(base, strings.TrimSuffix(name, ".link")) {
 			os.RemoveAll(filepath.Join(parent, name))
 		}
 	}
@@ -298,9 +300,15 @@ func generationDir(target string) string {
 // generationID reports whether s is a generation's <pid>.<8 hex>.
 var generationID = regexp.MustCompile(`^[0-9]+\.[0-9a-f]{8}$`).MatchString
 
+// isGeneration reports whether name is a generation of the folder base: .<base>.<pid>.<8 hex>.
+func isGeneration(base, name string) bool {
+	rest, ok := strings.CutPrefix(name, "."+base+".")
+	return ok && generationID(rest)
+}
+
 // recoverDirs is pfb_stage_publish_dir_recover(): every folder an interrupted swap left aside in dir goes back to its
-// name, or is dropped when a folder, or a link to a generation, stands there again. It reports false when one could not
-// be settled.
+// name, or is dropped when a folder, or a link to one, stands there again; a link naming no folder gives way to it. It
+// reports false when one could not be settled.
 func recoverDirs(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -314,7 +322,19 @@ func recoverDirs(dir string) bool {
 		}
 		backup, live := filepath.Join(dir, e.Name()), filepath.Join(dir, live)
 		if info, err := os.Lstat(live); err == nil {
-			if !info.IsDir() && info.Mode()&os.ModeSymlink == 0 || os.RemoveAll(backup) != nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				if to, err := os.Stat(live); err != nil || !to.IsDir() {
+					// a link naming no folder: the folder set aside is the only copy
+					if os.Remove(live) != nil || rename(backup, live) != nil {
+						ok = false
+					}
+					continue
+				}
+			} else if !info.IsDir() {
+				ok = false
+				continue
+			}
+			if os.RemoveAll(backup) != nil {
 				ok = false
 			}
 			continue
