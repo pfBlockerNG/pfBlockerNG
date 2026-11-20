@@ -317,7 +317,8 @@ def test_the_lookup_shows_each_decision_the_lapi_holds_for_the_address(
         [BANNED, "Ip", "crowdsec", "crowdsecurity/ssh-bf", "ban", "3h59m58s"],
         [BANNED, "Ip", "cscli", "manual 'ban' from 'smoke'", "ban", "23h0m1s"],
     ]
-    lookup_table = r'<div class="table-responsive"><table[^>]*>.*?class="cs-decision".*?</table></div>'
+    in_table = r"(?:(?!</table>).)*"  # within one table: never crosses a closing tag into the next
+    lookup_table = rf'<div class="table-responsive"><table[^>]*>{in_table}class="cs-decision"{in_table}</table></div>'
     assert re.search(lookup_table, page, re.S), "the lookup table scrolls sideways on a phone"
     assert KEY not in page
 
