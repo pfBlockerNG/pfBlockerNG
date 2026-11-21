@@ -451,10 +451,10 @@ final class FilterlogTrackerResolveTest extends TestCase
 	/**
 	 * The CrowdSec bouncer's trackers are fixed (#4159): a drop line read while its rules are not loaded (one read just
 	 * after the reload that removed them) must not make the tracker a miss for the daemon's life, or the bouncer's drops
-	 * would stay out of Alerts once it is turned on again (#4164). Such lines only come while the rules exist or just after,
-	 * so a reparse each costs at most a handful.
+	 * would stay out of Alerts once it is turned on again (#4164). The miss lasts 60 seconds instead, so a backlog of such
+	 * lines costs one reparse a minute, not one per line.
 	 */
-	public function testABouncerTrackerAbsentFromTheRulesetIsNotCachedAsAMiss(): void
+	public function testABouncerTrackerAbsentFromTheRulesetIsAMissForAMinuteOnly(): void
 	{
 		$ruleList = $this->emptyRuleList();
 		$missCache = [];
@@ -465,11 +465,12 @@ final class FilterlogTrackerResolveTest extends TestCase
 			return $loaded ? $this->ruleListWithPfb('177400402', 'block') : $this->emptyRuleList();
 		};
 
-		$this->assertFalse(pfb_resolve_tracker($ruleList, $missCache, '177400402', 'block', $reparse), 'rules not loaded');
-		$this->assertSame([], $missCache, 'the bouncer tracker is not cached as a miss');
+		$this->assertFalse(pfb_resolve_tracker($ruleList, $missCache, '177400402', 'block', $reparse, NULL, 1000), 'rules not loaded');
+		$this->assertFalse(pfb_resolve_tracker($ruleList, $missCache, '177400402', 'block', $reparse, NULL, 1059), 'a backlog line');
+		$this->assertSame(1, $reparseCount, 'within the minute, the miss holds');
 
 		$loaded = TRUE;
-		$this->assertTrue(pfb_resolve_tracker($ruleList, $missCache, '177400402', 'block', $reparse), 'the bouncer is on again');
-		$this->assertSame(2, $reparseCount, 'one reparse per unresolved line');
+		$this->assertTrue(pfb_resolve_tracker($ruleList, $missCache, '177400402', 'block', $reparse, NULL, 1061), 'the bouncer is on again');
+		$this->assertSame(2, $reparseCount, 'after the minute, one reparse resolves it');
 	}
 }

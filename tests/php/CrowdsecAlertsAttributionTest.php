@@ -15,7 +15,8 @@ use PHPUnit\Framework\TestCase;
  *     another table, stays someone else's; the bouncer's rules add no interface to Kill States' list;
  *   - the filterlog daemon writes such a drop to ip_block.log and unified.log under the table, the action, family and
  *     direction, with CrowdSec as the feed and the matched entry Unknown: the log does not say which decision matched, and a
- *     pfB feed that also lists the address did not drop it. A later drop of that address by a pfB rule keeps its own feed.
+ *     pfB feed that also lists the address did not drop it. A later drop of that address by a pfB rule keeps its own feed;
+ *     the banned side (host and direction) is the one the rule matches on its table, not a guess from the local addresses.
  */
 #[CoversFunction('pfb_filterrules')]
 #[CoversFunction('pfb_crowdsec_rule_table')]
@@ -179,6 +180,8 @@ final class CrowdsecAlertsAttributionTest extends TestCase
 			self::filterlog('3,,,177400401,vtnet0,match,block,in,4,0x0,,64,12345,0,DF,6,tcp,60,192.0.2.10,10.0.0.5,51234,22,0,S,1,,64240,,mss'),
 			// Outbound IPv6 UDP to a banned address, by the outbound IPv6 rule
 			self::filterlog('6,,,177400602,vtnet0,match,block,out,6,0x00,0x00000,64,udp,17,40,2001:db8:1::5,2001:db8:4074::1,5353,53,40'),
+			// An inbound drop toward a routed subnet on no local interface: the inbound rule's banned side is the source
+			self::filterlog('3,,,177400401,vtnet0,match,block,in,4,0x0,,64,12345,0,DF,6,tcp,60,192.0.2.10,198.18.10.20,51234,22,0,S,1,,64240,,mss'),
 			// The same IPv4 address later dropped by the pfB rule
 			self::filterlog('7,,,1770000001,vtnet0,match,block,in,4,0x0,,64,12346,0,DF,6,tcp,60,192.0.2.10,10.0.0.5,51235,23,0,S,1,,64240,,mss'),
 		]);
@@ -188,13 +191,15 @@ final class CrowdsecAlertsAttributionTest extends TestCase
 		$this->assertSame([
 			['177400401', 'block', '4', '192.0.2.10', '10.0.0.5', 'in', 'crowdsec_v4', 'Unknown', 'CrowdSec'],
 			['177400602', 'block', '6', '2001:db8:1::5', '2001:db8:4074::1', 'out', 'crowdsec_v6', 'Unknown', 'CrowdSec'],
+			['177400401', 'block', '4', '192.0.2.10', '198.18.10.20', 'in', 'crowdsec_v4', 'Unknown', 'CrowdSec'],
 			['1770000001', 'block', '4', '192.0.2.10', '10.0.0.5', 'in', 'pfB_Test_v4', '192.0.2.10', 'Test_Feed'],
 		], array_map($pick, $block));
 		// The Alerts page reads a row after popping its duplicate marker
 		$this->assertTrue(pfb_ip_log_row_schema_ok(array_slice($block[0], 0, -1), 'non_unified'), 'the CrowdSec row has the current schema');
 
 		// unified.log: the event type first, then the ip_block.log row
-		$this->assertSame([['Block', 'crowdsec_v4', 'CrowdSec'], ['Block', 'crowdsec_v6', 'CrowdSec'], ['Block', 'pfB_Test_v4', 'Test_Feed']],
+		$this->assertSame([['Block', 'crowdsec_v4', 'CrowdSec'], ['Block', 'crowdsec_v6', 'CrowdSec'], ['Block', 'crowdsec_v4', 'CrowdSec'],
+			['Block', 'pfB_Test_v4', 'Test_Feed']],
 			array_map(static fn (array $r): array => [$r[0], $r[15], $r[17]], $unified));
 	}
 }

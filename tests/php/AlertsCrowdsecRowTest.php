@@ -12,6 +12,7 @@ use PHPUnit\Framework\TestCase;
  * Intent pinned here:
  *   - the row shows as logged: the bouncer's tables are no feed and no pfB alias table, so the render-time re-check against
  *     the feed lists and alias tables does not apply, and a pfB feed that lists the address now is no drift;
+ *   - the Rule cell's tooltip names the bouncer's rule its tracker identifies ("CrowdSec IPv4", "CrowdSec IPv6 out");
  *   - pfBlockerNG's suppress, unlock and whitelist actions do not apply (the decisions live on the CrowdSec engine, and the
  *     bouncer's rules come before every pfB rule), so the row offers none; it links the external host to the CrowdSec Status
  *     subtab's lookup, beside the Threat Source lookup every row has.
@@ -104,7 +105,8 @@ final class AlertsCrowdsecRowTest extends TestCase
 	{
 		$html = $this->render(self::row('177400401', 4, '192.0.2.10', '10.0.0.5', 'in', 'crowdsec_v4'));
 
-		$this->assertStringContainsString('<td>crowdsec_v4<br /><small>(177400401)</small></td>', $html, 'the table and the rule tracker');
+		$this->assertStringContainsString('<td><span title="CrowdSec IPv4">crowdsec_v4<br /><small>(177400401)</small></span></td>', $html,
+			'the table and the rule tracker, the rule named in the tooltip');
 		$this->assertStringContainsString('>CrowdSec<br /><small>Unknown</small></td>', $html, 'the feed and matched entry as logged');
 		$this->assertStringNotContainsString('<s>', $html, 'no drift against pfB feeds or alias tables');
 		$this->assertStringNotContainsString('Not listed', $html);
@@ -122,6 +124,7 @@ final class AlertsCrowdsecRowTest extends TestCase
 		$html = $this->render($fields, 'Unified');
 
 		$this->assertStringContainsString('href="/pfblockerng/pfblockerng_crowdsec_status.php?lookup=2001:db8:4074::1"', $html);
+		$this->assertStringContainsString('<span title="CrowdSec IPv6 out">crowdsec_v6<br /><small>(177400602)</small></span>', $html);
 		$this->assertStringNotContainsString('lookup=2001:db8:1::5', $html, 'the local host is not looked up');
 		$this->assertStringContainsString('>CrowdSec<br /><small>Unknown</small></td>', $html);
 		$this->assertStringNotContainsString('<s>', $html);
@@ -140,5 +143,6 @@ final class AlertsCrowdsecRowTest extends TestCase
 		$this->assertStringContainsString('IPULCK|192.0.2.10|pfB_Other_v4', $html);
 		$this->assertStringContainsString('PFBIPSUP|add|192.0.2.10|pfB_Other_v4', $html);
 		$this->assertStringNotContainsString('pfblockerng_crowdsec_status.php', $html);
+		$this->assertStringNotContainsString('<span title=', $html, 'no rule-name tooltip on a pfB row');
 	}
 }
