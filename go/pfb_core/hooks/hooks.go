@@ -119,7 +119,7 @@ func (r Runner) Run(ctx context.Context, when string, rows []Hook, c Context) {
 		if left == 1 {
 			plural = ""
 		}
-		r.line(true, "[ pfB Hook ] %s run cancelled; %d enabled hook%s did not run\n", when, left, plural)
+		r.sinks().Line(true, "[ pfB Hook ] %s run cancelled; %d enabled hook%s did not run\n", when, left, plural)
 		return
 	}
 }
@@ -138,7 +138,7 @@ func (r Runner) run(ctx context.Context, when string, index int, h Hook, env []s
 		if h.Script != "" {
 			missing = "'" + h.Script + "' "
 		}
-		r.line(true, "[ pfB Hook ] %s %s script %snot a valid file in %s; skipping\n", when, label, missing, r.Dir)
+		r.sinks().Line(true, "[ pfB Hook ] %s %s script %snot a valid file in %s; skipping\n", when, label, missing, r.Dir)
 		return ran
 	}
 	argv := []string{path}
@@ -148,7 +148,7 @@ func (r Runner) run(ctx context.Context, when string, index int, h Hook, env []s
 			return cancelled
 		}
 		if !ok {
-			r.line(true, "[ pfB Hook ] %s %s script '%s' has no usable launcher; skipping\n", when, label, h.Script)
+			r.sinks().Line(true, "[ pfB Hook ] %s %s script '%s' has no usable launcher; skipping\n", when, label, h.Script)
 			return ran
 		}
 		argv = []string{r.Python, path}
@@ -157,17 +157,17 @@ func (r Runner) run(ctx context.Context, when string, index int, h Hook, env []s
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	r.line(false, "\n[ pfB Hook ] %s %s (%s, timeout %ds)\n", when, label, h.Script, timeout)
+	r.sinks().Line(false, "\n[ pfB Hook ] %s %s (%s, timeout %ds)\n", when, label, h.Script, timeout)
 	status, e := r.exec(ctx, argv, env, time.Duration(min(timeout, math.MaxInt64/int64(time.Second)))*time.Second)
 	switch {
 	case e == timedOut:
-		r.line(true, "[ pfB Hook ] %s %s TIMED OUT after %ds (killed); continuing\n", when, label, timeout)
+		r.sinks().Line(true, "[ pfB Hook ] %s %s TIMED OUT after %ds (killed); continuing\n", when, label, timeout)
 	case e != ran:
 		return e
 	case status != 0:
-		r.line(true, "[ pfB Hook ] %s %s exited non-zero [ %d ]; continuing\n", when, label, status)
+		r.sinks().Line(true, "[ pfB Hook ] %s %s exited non-zero [ %d ]; continuing\n", when, label, status)
 	default:
-		r.line(false, "[ pfB Hook ] %s %s completed\n", when, label)
+		r.sinks().Line(false, "[ pfB Hook ] %s %s completed\n", when, label)
 	}
 	return ran
 }
@@ -227,7 +227,7 @@ func (r Runner) exec(ctx context.Context, argv, env []string, timeout time.Durat
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errTimedOut)
 	defer cancel()
 	var out process.Outcome
-	captured := output.Capture("pfb-hook-output-", output.Sinks{Log: r.Log, Transcript: r.Transcript, Errors: r.Errors},
+	captured := output.Capture("pfb-hook-output-", r.sinks(),
 		func(hook *os.File) {
 			start := func(argv []string) process.Outcome {
 				cmd := exec.Command(argv[0], argv[1:]...)
@@ -264,17 +264,8 @@ func (r Runner) exec(ctx context.Context, argv, env []string, timeout time.Durat
 	return 126, ran
 }
 
-// line writes one runner line to the main log and the transcript, and a failure's to the error log too.
-func (r Runner) line(failure bool, format string, args ...any) {
-	text := fmt.Sprintf(format, args...)
-	for _, w := range []io.Writer{r.Log, r.Transcript} {
-		if w != nil {
-			io.WriteString(w, text)
-		}
-	}
-	if failure && r.Errors != nil {
-		io.WriteString(r.Errors, text)
-	}
+func (r Runner) sinks() output.Sinks {
+	return output.Sinks{Log: r.Log, Transcript: r.Transcript, Errors: r.Errors}
 }
 
 // environ is the hooks' environment: the runner's own, then PFB_<NAME> for each context value whose upper-cased name is

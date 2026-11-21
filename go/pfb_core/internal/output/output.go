@@ -33,6 +33,16 @@ type Sinks struct {
 	Errors     io.Writer // one line for each of the two that fails a write
 }
 
+// Line writes one runner line to Log and Transcript, and a failure's to Errors too.
+func (s Sinks) Line(failure bool, format string, args ...any) {
+	text := fmt.Sprintf(format, args...)
+	io.WriteString(orDiscard(s.Log), text)
+	io.WriteString(orDiscard(s.Transcript), text)
+	if failure {
+		io.WriteString(orDiscard(s.Errors), text)
+	}
+}
+
 // Capture makes a fresh file in the temporary folder, its name starting with prefix, and calls run with a descriptor of
 // it opened write-only in append mode, as PHP's 'a', for the program's stdout and stderr. run starts the program and
 // returns when its caller's lifetime policy says it has exited. While run runs, Capture sanitizes the file into s, and
