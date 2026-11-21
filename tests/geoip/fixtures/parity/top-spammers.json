@@ -13,6 +13,7 @@
 			"cc/Top_Spammers_v4.info": "# Generated from MaxMind Inc. on: {now}\n# Continent IPv4: Top_Spammers\n# Continent en: Top_Spammers\n# Country: China (1814991)\n# ISO Code: CN\n# Total Networks: Top20\nTop20\n# Country: China (1814991)\n# ISO Code: CN_rep\n# Total Networks: Top20\nTop20\n# Country: Germany (2921044)\n# ISO Code: DE\n# Total Networks: Top20\nTop20\n",
 			"cc/Top_Spammers_v6.info": "# Generated from MaxMind Inc. on: {now}\n# Continent IPv6: Top_Spammers\n# Continent en: Top_Spammers\n# Country: China (1814991)\n# ISO Code: CN\n# Total Networks: Top20\nTop20\n# Country: Germany (2921044)\n# ISO Code: DE\n# Total Networks: Top20\nTop20\n"
 		},
-		"tree": "32fb5ca3d5157458b0d1ddb490b83a53629c14a6de1bda5311c8e6696bff0997"
+		"tree": "32fb5ca3d5157458b0d1ddb490b83a53629c14a6de1bda5311c8e6696bff0997",
+		"catalog": "ff6e24f6035c2b45430aea3b413b174e8300b8dd53f0952e54af6bc071c4f39c"
 	}
 }

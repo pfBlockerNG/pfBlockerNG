@@ -21,6 +21,7 @@
 			"db/geoip.txt": "previous\n",
 			"log/maxmind_ver": null
 		},
-		"tree": "09c43ee5157f7be4bf4c03b73a79cc530c54c3becc79774b5eb03527805f0801"
+		"tree": "09c43ee5157f7be4bf4c03b73a79cc530c54c3becc79774b5eb03527805f0801",
+		"catalog": null
 	}
 }

@@ -18,6 +18,7 @@
 			"cc/Antarctica_v4.txt": null,
 			"db/geoip.txt": "previous\n"
 		},
-		"tree": "9bafba42e64271f9d33e0df4f3a0769ace2bce93b28930bfdc32f24b424235ce"
+		"tree": "9bafba42e64271f9d33e0df4f3a0769ace2bce93b28930bfdc32f24b424235ce",
+		"catalog": null
 	}
 }

@@ -14,7 +14,8 @@
 			"cc/US_v4.txt": "3.0.0.0/15\n24.0.0.0/8\n25.0.0.0/8\n",
 			"cc/A1_US_v4.txt": "20.0.0.0/8\n21.0.0.0/8\n22.0.0.0/8\n23.0.0.0/8\n26.0.0.0/8\n"
 		},
-		"tree": "8d9b1b7e33cde9e7d1fba0c26c16b1bbe3eb18c559a60ac3ad26a0cc27feb5e3"
+		"tree": "8d9b1b7e33cde9e7d1fba0c26c16b1bbe3eb18c559a60ac3ad26a0cc27feb5e3",
+		"catalog": "e490b7eba8b8a3158a51d9951705ac7048c7f9838a74fb3d57814b19ec4271dd"
 	},
 	"old_expect": {
 		"ok": true,
@@ -22,6 +23,7 @@
 			"cc/A1_A1_v4.txt": null,
 			"cc/US_v4.txt": "3.0.0.0/15\n24.0.0.0/8\n25.0.0.0/8\n"
 		},
-		"tree": "a25bae6f7082b15b60c19aa8a393a0e552659285b4d050b988bab0f3c7eb1009"
+		"tree": "a25bae6f7082b15b60c19aa8a393a0e552659285b4d050b988bab0f3c7eb1009",
+		"catalog": "ce6ceebaada148eff2fdb09000fd995622853f3559805cfd61a37541f81cef52"
 	}
 }

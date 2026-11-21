@@ -13,6 +13,7 @@
 			"cc/US_v4.txt": "",
 			"log/maxmind_ver": "MaxMind GeoLite2 Date/Time Stamp\nLast-Modified: 2026-11-17 08:30:00\n"
 		},
-		"tree": "7866e5eaa8412037f5dd7bd3843c514d11e2a91e4c9704921963c57ae55df6c9"
+		"tree": "7866e5eaa8412037f5dd7bd3843c514d11e2a91e4c9704921963c57ae55df6c9",
+		"catalog": "7d7949a16af571f79dfae5b06d46cab5c28a813dde575ebf318fefb75ac76962"
 	}
 }

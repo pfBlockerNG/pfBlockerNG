@@ -1,0 +1,18 @@
+{
+	"schema": 1,
+	"description": "A localized continent name that is empty once trimmed and its colons removed (\":\"): today's PHP logs the continent as not found and lists its countries in the next continent's page (Oceania), and so does the geo-catalog (#4034 slice 5b).",
+	"locale": "fr",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-fr.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n100,fr,NA,\":\",XA,Foo,0\n6252001,fr,NA,\"Amérique du Nord\",US,États-Unis,0\n1814991,fr,AS,Asie,CN,Chine,0\n2921044,fr,EU,Europe,DE,Allemagne,1\n2077456,fr,OC,Océanie,AU,Australie,0\n",
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n100,en,NA,\"North America\",XA,Foo,0\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n2077456,en,OC,Oceania,AU,Australia,0\n",
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n1.0.1.0/24,1814991,1814991,,0,0,\n2.16.0.0/13,2921044,2921044,,0,0,\n1.1.1.0/24,100,100,,0,0,\n1.0.0.0/24,2077456,2077456,,0,0,\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"expect": {
+		"ok": true,
+		"files": {},
+		"tree": "f473e288b7e644eb34beb5f31e2f8e6437a09f88aa4c496d78f2273fba7886d3",
+		"catalog": "1cb4a8dc6c95b1122616f9636d0c315404fff0605ff8822b24a15d1c35350ff7"
+	}
+}

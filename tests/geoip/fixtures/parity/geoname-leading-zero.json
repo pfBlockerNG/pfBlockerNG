@@ -13,6 +13,7 @@
 			"cc/US_v4.txt": "3.0.0.0/15\n",
 			"cc/US_rep_v4.txt": ""
 		},
-		"tree": "17e4bfa40fe69841fffc76935a53e4ce6bfb0fa078a448c1f4a1deecca11724b"
+		"tree": "17e4bfa40fe69841fffc76935a53e4ce6bfb0fa078a448c1f4a1deecca11724b",
+		"catalog": "d371d22114a98cf752619b54b2f7cbbd2de3c2e98e2bd98eae96726663a8ec61"
 	}
 }

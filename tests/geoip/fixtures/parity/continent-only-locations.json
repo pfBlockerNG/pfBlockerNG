@@ -13,6 +13,7 @@
 			"cc/6255147_v4.txt": "20.0.0.0/8\n",
 			"cc/6255148_v4.txt": "21.0.0.0/8\n"
 		},
-		"tree": "a3308f4cd3b2eece8a8de07327aa06daedcf7ad60250661c8cb703de21a49f57"
+		"tree": "a3308f4cd3b2eece8a8de07327aa06daedcf7ad60250661c8cb703de21a49f57",
+		"catalog": "e1d0b1b231111365ed098a319f3f1bd781dd96039e995cba362857655da0d2b8"
 	}
 }

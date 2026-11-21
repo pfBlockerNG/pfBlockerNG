@@ -13,6 +13,7 @@
 			"cc/Top_Spammers_v4.info": "# Generated from MaxMind Inc. on: {now}\n# Continent IPv4: Top_Spammers\n# Continent en: Top_Spammers\n# Country: Queer (9A0001)\n# ISO Code: Array\n# Total Networks: Top20\nTop20\n# Country: China (1814991)\n# ISO Code: CN\n# Total Networks: Top20\nTop20\n# Country: Germany (2921044)\n# ISO Code: DE\n# Total Networks: Top20\nTop20\n",
 			"cc/QQ_v4.txt": null
 		},
-		"tree": "a06cc24fca8095d8630939ad4183ffb213c7fd568295ea386612b7b643655690"
+		"tree": "a06cc24fca8095d8630939ad4183ffb213c7fd568295ea386612b7b643655690",
+		"catalog": "c626002f95d96d60bb786bb5e1027a4fccc6dd95339f5cf0a1fd61a9d96b8d47"
 	}
 }

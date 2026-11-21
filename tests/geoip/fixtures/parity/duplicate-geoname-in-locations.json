@@ -13,6 +13,7 @@
 			"cc/US_v4.txt": null,
 			"cc/CA_v4.txt": "3.0.0.0/15\n"
 		},
-		"tree": "c7929b9df3b842252bbedcc0c89470b276e1e8542a89ad5cae37c28d1e8d0ea8"
+		"tree": "c7929b9df3b842252bbedcc0c89470b276e1e8542a89ad5cae37c28d1e8d0ea8",
+		"catalog": "b4a3d54554c0343e356e476c6291daac59e330dac6b91709cf5a8175e93b7576"
 	}
 }
