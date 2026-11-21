@@ -746,6 +746,54 @@ func TestOneShotCancelledBySignalEndsTheHookAndExitsOne(t *testing.T) {
 	}
 }
 
+// WHEN TERM or INT reaches the one-shot's whole process group (a terminal's Ctrl-C, a hangup, kill -TERM -<pgid>) while
+// its only hook runs THEN that hook, which the signal ends itself, counts as cut short: the log says the run was
+// cancelled and the exit status is 1. A hook that exits 130 on its own, with no signal, is a failed hook: the status is 0.
+func TestOneShotGroupSignalDuringTheLastHookExitsOne(t *testing.T) {
+	cancelled := "[ pfB Hook ] pre run cancelled; 0 enabled hooks did not run\n"
+	for _, tc := range []struct {
+		name   string
+		sig    syscall.Signal // 0: none; the hook exits by itself
+		body   string
+		status int
+		want   string
+	}{
+		{"SIGINT", syscall.SIGINT, sleeper, 1, cancelled},
+		{"SIGTERM", syscall.SIGTERM, sleeper, 1, cancelled},
+		{"exit 130 without a signal", 0, "#!/bin/sh\nexit 130\n", 0,
+			"[ pfB Hook ] pre #0 exited non-zero [ 130 ]; continuing\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, flags := hookRoot(t, [2]string{"hook_pre_a.sh", tc.body})
+			pidfile := killLeftover(t, root)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // only salvages a hung run
+			defer cancel()
+			cmd := oneShotCmd(t, ctx, `{"trigger":"cron"}`, nil, append([]string{"--run-hooks", "pre"}, flags...)...)
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // its own group, as a terminal's foreground job
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			if tc.sig != 0 {
+				await(t, "the hook to start", func() bool { return exists(pidfile) })
+				if err := syscall.Kill(-cmd.Process.Pid, tc.sig); err != nil {
+					t.Fatal(err)
+				}
+			}
+			status := exitStatus(t, cmd.Wait())
+			if ctx.Err() != nil {
+				t.Fatal("STUCK: pfb-core did not return")
+			}
+			logged := strings.Contains(stderr.String(), "run cancelled")
+			if status != tc.status || !strings.Contains(stderr.String(), tc.want) || logged != (tc.sig != 0) {
+				t.Errorf("exit status %d and stderr %s, want %d and %q only", status, clip(stderr.String()), tc.status,
+					tc.want)
+			}
+		})
+	}
+}
+
 // sleeper is a hook that leaves its pid in {root}/a.pid and sleeps until it is ended.
 const sleeper = "#!/bin/sh\necho $$ > '{root}/a.tmp'\nmv '{root}/a.tmp' '{root}/a.pid'\nexec sleep 600\n"
 
@@ -871,55 +919,68 @@ func TestOneShotSignalledDuringTheSettingsReadExitsOneOnlyWithAHookLeft(t *testi
 	}
 }
 
-// WHEN the one-shot starts with SIGHUP ignored (nohup) THEN it leaves it ignored: a HUP while a hook runs changes
-// nothing, the hook runs to its end and the exit status is 0.
-func TestOneShotLeavesAnIgnoredSIGHUPIgnored(t *testing.T) {
+// WHEN the one-shot starts with SIGHUP ignored (nohup), or SIGINT ignored (a job started in the background by a shell
+// without job control) THEN it leaves that signal ignored: the signal while a hook runs changes nothing, the hook runs to
+// its end and the exit status is 0.
+func TestOneShotLeavesAnIgnoredHangupOrInterruptIgnored(t *testing.T) {
 	masked := procStatus(t)
-	root, flags := hookRoot(t,
-		[2]string{"hook_pre_a.sh", "#!/bin/sh\n: > '{root}/started'\nread _ < '{root}/go'\n{record}\n"})
-	gate := fifo(t, filepath.Join(root, "go"))
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // only salvages a hung run
-	defer cancel()
-	cmd := oneShotCmd(t, ctx, `{"trigger":"cron"}`, nil, append([]string{"--run-hooks", "pre"}, flags...)...)
-	cmd.Path, cmd.Args = "/bin/sh", append([]string{"/bin/sh", "-c", `trap "" HUP; exec "$0" "$@"`}, cmd.Args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	await(t, "the hook to start", func() bool { return exists(filepath.Join(root, "started")) })
-	if !masked(cmd.Process.Pid, "SigIgn", syscall.SIGHUP) {
-		t.Error("pfb-core no longer ignores SIGHUP")
-	}
-	if err := cmd.Process.Signal(syscall.SIGHUP); err != nil {
-		t.Fatal(err)
-	}
-	release(t, gate)
-	status := exitStatus(t, cmd.Wait())
-	if ctx.Err() != nil {
-		t.Fatal("STUCK: pfb-core did not return")
-	}
-	if runs := recordedRuns(t, root); status != 0 || len(runs) != 1 {
-		t.Errorf("exit status %d and runs %+v, want 0 and the hook run to its end; stderr %s", status, runs,
-			clip(stderr.String()))
+	for _, tc := range []struct {
+		sig  syscall.Signal
+		name string // the signal's name for trap(1)
+	}{{syscall.SIGHUP, "HUP"}, {syscall.SIGINT, "INT"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, flags := hookRoot(t,
+				[2]string{"hook_pre_a.sh", "#!/bin/sh\n: > '{root}/started'\nread _ < '{root}/go'\n{record}\n"})
+			gate := fifo(t, filepath.Join(root, "go"))
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // only salvages a hung run
+			defer cancel()
+			cmd := oneShotCmd(t, ctx, `{"trigger":"cron"}`, nil, append([]string{"--run-hooks", "pre"}, flags...)...)
+			cmd.Path = "/bin/sh"
+			cmd.Args = append([]string{"/bin/sh", "-c", `trap "" ` + tc.name + `; exec "$0" "$@"`}, cmd.Args...)
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			await(t, "the hook to start", func() bool { return exists(filepath.Join(root, "started")) })
+			if !masked(cmd.Process.Pid, "SigIgn", tc.sig) {
+				t.Errorf("pfb-core no longer ignores %s", tc.name)
+			}
+			if err := cmd.Process.Signal(tc.sig); err != nil {
+				t.Fatal(err)
+			}
+			release(t, gate)
+			status := exitStatus(t, cmd.Wait())
+			if ctx.Err() != nil {
+				t.Fatal("STUCK: pfb-core did not return")
+			}
+			if runs := recordedRuns(t, root); status != 0 || len(runs) != 1 {
+				t.Errorf("exit status %d and runs %+v, want 0 and the hook run to its end; stderr %s", status, runs,
+					clip(stderr.String()))
+			}
+		})
 	}
 }
 
-// WHEN --state-dir names a directory that does not exist, or a file THEN the one-shot logs one line, runs nothing and
-// exits 1; an existing directory without settings.json is an uninitialized Core
-// (TestOneShotOnAnUninitializedCoreRunsNothingAndExitsZero).
+// WHEN --state-dir names a directory that does not exist, or a file THEN the one-shot logs one line, which quotes the
+// path (a line break in it included) and gives why it cannot be used, runs nothing and exits 1; an existing directory
+// without settings.json is an uninitialized Core (TestOneShotOnAnUninitializedCoreRunsNothingAndExitsZero).
 func TestOneShotRefusesAStateDirectoryThatIsNoDirectory(t *testing.T) {
-	for _, name := range []string{"missing", "a file"} {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct{ name, dir, reason string }{
+		{"missing", "missing", "no such file or directory"},
+		{"a line break", "miss\ning", "no such file or directory"},
+		{"a file", "state/settings.json", "not a directory"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			root, flags := oneShotRoot(t)
-			state := filepath.Join(root, "missing")
-			if name == "a file" {
-				state = filepath.Join(root, "state", "settings.json")
-			}
+			state := filepath.Join(root, tc.dir)
 			got := oneShot(t, `{"trigger":"cron"}`,
 				append([]string{"--run-hooks", "pre", "--state-dir", state}, flags[2:]...)...)
 			if got.status != 1 || strings.Count(got.stderr, "\n") != 1 {
 				t.Errorf("exit status %d and stderr %s, want 1 and one line", got.status, clip(got.stderr))
+			}
+			if !strings.Contains(got.stderr, strconv.Quote(state)) || !strings.Contains(got.stderr, tc.reason) {
+				t.Errorf("stderr %s, want the path quoted as %s and %q", clip(got.stderr), strconv.Quote(state), tc.reason)
 			}
 			if runs := recordedRuns(t, root); runs != nil {
 				t.Errorf("hooks ran without a state directory: %+v", runs)
