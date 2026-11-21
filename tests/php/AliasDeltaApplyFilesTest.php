@@ -34,7 +34,7 @@ final class AliasDeltaApplyFilesTest extends TestCase
 		$this->assertTrue(mkdir($this->dir, 0700));
 		$this->batchdir = "{$this->dir}/batch";
 		$this->assertTrue(mkdir($this->batchdir, 0700));
-		// A pfctl double: records each call's arguments (one per line) and the file it got with -f, and fails the calls
+		// A pfctl double: records each call's arguments (one per line), the file it got with -f and that file's mode, and fails the calls
 		// whose numbers the file "fail" lists, as pfctl does: a message on its output and a non-zero status.
 		file_put_contents("{$this->dir}/pfctl", <<<'SH'
 #!/bin/sh
@@ -52,7 +52,7 @@ while [ "$#" -gt 0 ]; do
 		*) shift ;;
 	esac
 done
-[ -n "$infile" ] && cp "$infile" "$dir/call$n"
+[ -n "$infile" ] && cp "$infile" "$dir/call$n" && stat -c %a "$infile" > "$dir/mode$n"
 printf '%s\t%s\t%s\n' "$action" "$table" "$infile" >> "$dir/log"
 if [ -f "$dir/fail" ] && grep -qx "$n" "$dir/fail"; then
 	echo "pfctl: Cannot $action table: Operation not permitted"
@@ -125,6 +125,22 @@ SH
 		return pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
 			$this->members('add', $add), count($add), $this->members('remove', $remove), count($remove),
 			$entries, $previous, $mode, $batch, $force, $this->batchdir);
+	}
+
+	/** The length of the pfBlockerNG log now, for loggedSince(). */
+	private static function logOffset(): int
+	{
+		global $pfb;
+		clearstatcache();
+		return is_file($pfb['log']) ? (int) filesize($pfb['log']) : 0;
+	}
+
+	/** @return list<string> the lines logged about the table since $offset */
+	private static function loggedSince(int $offset): array
+	{
+		global $pfb;
+		$tail = (string) @file_get_contents($pfb['log'], FALSE, NULL, $offset);
+		return array_values(array_filter(explode("\n", $tail), static fn (string $l): bool => str_contains($l, self::TABLE)));
 	}
 
 	// ---------------------------------------------------------------------------------------------------------------
@@ -244,6 +260,41 @@ SH
 		$this->assertSame([], $this->calls());
 	}
 
+	public function testZeroAndZeroReadNoFileEvenWhenTheFilesHoldLines(): void
+	{
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+			$this->members('add', ['10.1.0.1']), 0, $this->members('remove', ['10.2.0.1']), 0, 100, 100, 'delta', 64, FALSE,
+			$this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => TRUE], $result, 'counts of zero are nothing to do: the files are not read');
+		$this->assertSame([], $this->calls());
+	}
+
+	/** @return array<string, array{0: int, 1: int, 2: string}> the add and remove counts, and the mode */
+	public static function negativeCounts(): array
+	{
+		return [
+			'-1 and +1 do not cancel out'  => [-1, 1, 'delta'],
+			'+1 and -1 do not cancel out'  => [1, -1, 'delta'],
+			'a negative add alone'         => [-5, 0, 'delta'],
+			'a negative count in replace'  => [0, -1, 'replace'],
+		];
+	}
+
+	#[DataProvider('negativeCounts')]
+	public function testANegativeCountFailsTheResultWithNoCall(int $addCount, int $removeCount, string $mode): void
+	{
+		$offset = self::logOffset();
+
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+			$this->members('add', ['10.1.0.1']), $addCount, $this->members('remove', ['10.2.0.1']), $removeCount, 100, 100, $mode,
+			64, FALSE, $this->batchdir);
+
+		$this->assertFalse($result['ok'], 'a negative count is refused, never applied as nothing to do');
+		$this->assertSame([], $this->calls());
+		$this->assertCount(1, self::loggedSince($offset), 'one line says why: ' . implode(' | ', self::loggedSince($offset)));
+	}
+
 	public function testALastLineWithoutANewlineIsSentAsAMember(): void
 	{
 		$add = "{$this->dir}/add";
@@ -264,6 +315,45 @@ SH
 		$this->assertCount(3, $this->calls());
 		$this->assertSame([], array_values(array_diff(scandir($this->batchdir), ['.', '..'])));
 		$this->assertStringStartsWith("{$this->batchdir}/", $this->calls()[0]['file'], 'the batch file is written where the caller said');
+	}
+
+	/** @return array<string, array{int}> */
+	public static function umasks(): array
+	{
+		return ['umask 022' => [0022], 'umask 000' => [0000]];
+	}
+
+	#[DataProvider('umasks')]
+	public function testABatchFileIsReadableByItsOwnerOnlyWhateverTheUmask(int $umask): void
+	{
+		$old = umask($umask);
+		try {
+			$this->apply(['10.1.0.1'], ['10.2.0.1'], 10000, 10000, 'delta');
+		} finally {
+			umask($old);
+		}
+
+		$this->assertSame([['add', 1], ['delete', 1]], $this->shape());
+		$this->assertSame(['600', '600'], [trim((string) file_get_contents("{$this->dir}/mode1")),
+			trim((string) file_get_contents("{$this->dir}/mode2"))], 'pfctl was handed a batch file others could read');
+	}
+
+	public function testABatchFileIsRemovedWhenThePfctlStepThrows(): void
+	{
+		global $pfb;
+		$dbdir = $pfb['dbdir'];
+		// the ledger write after the pfctl call takes a string: a NULL makes the pfctl step throw once pfctl has run
+		$pfb['dbdir'] = NULL;
+		try {
+			$this->apply(['10.1.0.1'], [], 10000, 10000, 'delta');
+			$this->fail('the pfctl step did not throw, so this test proves nothing');
+		} catch (TypeError) {
+		} finally {
+			$pfb['dbdir'] = $dbdir;
+		}
+
+		$this->assertSame([['add', 1]], $this->shape(), 'pfctl ran before the step threw');
+		$this->assertSame([], array_values(array_diff(scandir($this->batchdir), ['.', '..'])), 'the batch file was left behind');
 	}
 
 	// ---------------------------------------------------------------------------------------------------------------
@@ -312,7 +402,7 @@ SH
 		$this->assertSame([['replace', 1]], $this->shape());
 	}
 
-	public function testABatchFileThatCannotBeCreatedFailsTheResultBeforeAnyCall(): void
+	public function testABatchFileThatCannotBeCreatedIsSentNowhereAndFailsTheResult(): void
 	{
 		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
 			$this->members('add', ['10.1.0.1']), 1, $this->members('remove', []), 0, 100, 100, 'delta', 64, FALSE,
@@ -349,14 +439,68 @@ SH
 		$this->assertSame([], $this->calls(), 'neither side is sent when one cannot be read: no half-applied delta');
 	}
 
-	public function testAFileShorterThanItsCountFailsTheResult(): void
+	/** @return array<string, array{0: string, 1: int, 2: int}> the side, the lines its file holds, and the count it is given */
+	public static function miscounted(): array
+	{
+		return [
+			'an add file longer than its count'     => ['add', 3, 2],
+			'an add file shorter than its count'    => ['add', 2, 3],
+			'a remove file longer than its count'   => ['remove', 3, 2],
+			'a remove file shorter than its count'  => ['remove', 2, 3],
+		];
+	}
+
+	/** Both files are counted before anything is sent: a file that is not its count sends nothing, from either side. */
+	#[DataProvider('miscounted')]
+	public function testAFileThatIsNotItsCountSendsNothing(string $side, int $lines, int $count): void
+	{
+		$members = ['add' => self::addresses(70, 1), 'remove' => self::addresses(70, 2)];
+		$counts = ['add' => 70, 'remove' => 70];
+		$members[$side] = self::addresses($lines, 3);
+		$counts[$side] = $count;
+		$offset = self::logOffset();
+
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+			$this->members('add', $members['add']), $counts['add'], $this->members('remove', $members['remove']), $counts['remove'],
+			10000, 10000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result, 'a file that is not its count is a failure, not another delta');
+		$this->assertSame([], $this->calls(), 'nothing is sent from a file its count contradicts');
+		$named = array_values(array_filter(self::loggedSince($offset),
+			static fn (string $l): bool => str_contains($l, $side) && str_contains($l, (string) $lines) && str_contains($l, (string) $count)));
+		$this->assertCount(1, $named, 'one line names the side and both numbers: ' . implode(' | ', self::loggedSince($offset)));
+	}
+
+	/** The counts 1 of 100 choose a delta; the add file holds 50 members, a churn that would have been a replace: nothing is sent. */
+	public function testADeltaChosenFromACountTheFileContradictsSendsNothing(): void
 	{
 		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
-			$this->members('add', ['10.1.0.1', '10.1.0.2']), 3, $this->members('remove', []), 0, 1000, 1000, 'delta', 64, FALSE,
+			$this->members('add', self::addresses(50, 1)), 1, $this->members('remove', []), 0, 100, 100, 'auto', 64, FALSE,
 			$this->batchdir);
 
-		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result, 'a read that ends early is a failure, not a smaller delta');
-		$this->assertSame([['add', 2]], $this->shape());
+		$this->assertFalse($result['ok']);
+		$this->assertSame([], $this->calls());
+	}
+
+	/**
+	 * A line longer than an IP set member (64 bytes and its newline) fails its file before anything is sent, and is never
+	 * read whole: a 1 MiB line with no newline costs no more memory than a member.
+	 */
+	public function testALineLongerThanAMemberSendsNothingAndIsNeverReadWhole(): void
+	{
+		$add = "{$this->dir}/add";
+		file_put_contents($add, str_repeat('1', 1 << 20));
+		gc_collect_cycles();
+		memory_reset_peak_usage();
+		$base = memory_get_usage();
+
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+			$add, 1, $this->members('remove', []), 0, 10000, 10000, 'delta', 64, FALSE, $this->batchdir);
+		$peak = memory_get_peak_usage() - $base;
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertSame([], $this->calls());
+		$this->assertLessThan(256 << 10, $peak, 'the long line was read whole');
 	}
 
 	// ---------------------------------------------------------------------------------------------------------------
@@ -424,11 +568,10 @@ SH
 			var_export($add, TRUE), '200000', var_export($remove, TRUE), '1', '200000', '1', "'delta'", '4096', 'FALSE',
 			var_export($this->batchdir, TRUE)]);
 		$run = $this->underMemoryCap('$r = pfb_apply_alias_delta_files(' . $args . ");\n"
-			. 'echo json_encode($r + ["peak" => memory_get_peak_usage() - $base]);' . "\n", $headroom);
+			. 'echo json_encode($r);' . "\n", $headroom);
 		$this->assertSame(0, $run['exit'], "the apply did not finish under the cap: {$run['stderr']}");
 		$this->assertSame('', $run['stderr']);
 		$got = json_decode($run['stdout'], TRUE, 4, JSON_THROW_ON_ERROR);
-		fwrite(STDERR, sprintf("\n200,000-member delta apply: peak %d bytes above the loaded package\n", $got['peak']));
 		$this->assertSame(['delta' => TRUE, 'ok' => TRUE], ['delta' => $got['delta'], 'ok' => $got['ok']]);
 		$shape = $this->shape();
 		$this->assertCount(50, $shape, 'ceil(200000 / 4096) = 49 add calls and one delete');
