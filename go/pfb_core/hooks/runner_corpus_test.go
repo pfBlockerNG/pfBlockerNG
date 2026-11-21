@@ -217,6 +217,52 @@ func alive(t *testing.T, pidfile string) bool {
 	return syscall.Kill(pid, 0) == nil
 }
 
+// scenario decodes the corpus file into sc, refusing unknown keys, checks that it has old_expect exactly when it names
+// its departure, and returns a fresh scenario root with the expansion of {record} and {root} in it.
+func scenario(t *testing.T, file string, sc any) (root string, expand func(string) string) {
+	t.Helper()
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(sc); err != nil {
+		t.Fatal(err)
+	}
+	var d struct {
+		Departure string          `json:"departure"`
+		OldExpect json.RawMessage `json:"old_expect"`
+	}
+	if err := json.Unmarshal(raw, &d); err != nil || (d.OldExpect != nil) != (d.Departure != "") {
+		t.Fatalf("a scenario has old_expect exactly when it names its departure (%v)", err)
+	}
+	root = t.TempDir()
+	return root, strings.NewReplacer("{record}", ". '"+root+"/record.sh'", "{root}", root).Replace
+}
+
+// checkRuns compares the invocations recorded under root with expect, {record} and {root} expanded in each value.
+func checkRuns(t *testing.T, root string, expect []corpusRun, expand func(string) string) {
+	t.Helper()
+	want := []corpusRun{}
+	for _, run := range expect {
+		env := map[string]string{}
+		for k, v := range run.Env {
+			env[k] = expand(v)
+		}
+		want = append(want, corpusRun{Script: run.Script, Wrapped: run.Wrapped, Args: run.Args, Env: env})
+	}
+	got := recordedRuns(t, root)
+	if got == nil {
+		got = []corpusRun{}
+	}
+	wantJSON, _ := json.MarshalIndent(want, "", " ")
+	gotJSON, _ := json.MarshalIndent(got, "", " ")
+	if !bytes.Equal(wantJSON, gotJSON) {
+		t.Errorf("recorded invocations (order, launcher, arguments, PFB_* environment):\n got %s\nwant %s", gotJSON, wantJSON)
+	}
+}
+
 func TestHookRunnerCorpus(t *testing.T) {
 	files, _ := filepath.Glob("../../../tests/hooks/fixtures/runner/*.json")
 	if len(files) == 0 {
@@ -231,23 +277,8 @@ func TestHookRunnerCorpus(t *testing.T) {
 	}
 	for _, file := range files {
 		t.Run(strings.TrimSuffix(filepath.Base(file), ".json"), func(t *testing.T) {
-			raw, err := os.ReadFile(file)
-			if err != nil {
-				t.Fatal(err)
-			}
 			var sc corpusCase
-			dec := json.NewDecoder(bytes.NewReader(raw))
-			dec.DisallowUnknownFields()
-			if err := dec.Decode(&sc); err != nil {
-				t.Fatal(err)
-			}
-			if (sc.OldExpect != nil) != (sc.Departure != "") {
-				t.Fatal("a scenario has old_expect exactly when it names its departure")
-			}
-			root := t.TempDir()
-			expand := func(s string) string {
-				return strings.NewReplacer("{record}", ". '"+root+"/record.sh'", "{root}", root).Replace(s)
-			}
+			root, expand := scenario(t, file, &sc)
 			t.Cleanup(func() {
 				pidfiles, _ := filepath.Glob(filepath.Join(root, "*.pid"))
 				for _, p := range pidfiles {
@@ -273,23 +304,7 @@ func TestHookRunnerCorpus(t *testing.T) {
 				t.Fatal("STUCK: the run did not return")
 			}
 
-			want := []corpusRun{}
-			for _, run := range sc.Expect.Runs {
-				env := map[string]string{}
-				for k, v := range run.Env {
-					env[k] = expand(v)
-				}
-				want = append(want, corpusRun{Script: run.Script, Wrapped: run.Wrapped, Args: run.Args, Env: env})
-			}
-			got := recordedRuns(t, root)
-			if got == nil {
-				got = []corpusRun{}
-			}
-			wantJSON, _ := json.MarshalIndent(want, "", " ")
-			gotJSON, _ := json.MarshalIndent(got, "", " ")
-			if !bytes.Equal(wantJSON, gotJSON) {
-				t.Errorf("recorded invocations (order, launcher, arguments, PFB_* environment):\n got %s\nwant %s", gotJSON, wantJSON)
-			}
+			checkRuns(t, root, sc.Expect.Runs, expand)
 			for name, pair := range map[string]struct {
 				got  string
 				want content

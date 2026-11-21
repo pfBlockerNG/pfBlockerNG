@@ -293,6 +293,24 @@ func TestRunnerHookInheritsTheRunnersEnvironment(t *testing.T) {
 	}
 }
 
+// A PFB_* entry of the runner's own environment never reaches a hook: the hook's PFB_* are the context's and the
+// runner's alone, so an omitted context value is unset rather than inherited. Departure: today's pfb_run_hooks() passes
+// an inherited PFB_* entry through unless a context name replaces it (the corpora clear PFB_* before they run).
+func TestRunnerDropsInheritedPFBEntries(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"PFB_TRIGGER", "PFB_STATUS", "PFB_ANYTHING", "PFB_WHEN"} {
+		t.Setenv(name, "evil")
+	}
+	writeFile(t, filepath.Join(dir, "hook_pre_a.sh"),
+		"#!/bin/sh\nenv | grep '^PFB_' | LC_ALL=C sort > '"+dir+"/env'\n", 0o755)
+	hooks.Runner{Dir: dir, Grace: time.Second}.Run(context.Background(), "pre", pre("hook_pre_a.sh"),
+		hooks.Context{Vars: map[string]string{"IP_CHANGED": "0"}})
+	want := "PFB_IP_CHANGED=0\nPFB_PKG_OP=\nPFB_POST_INSTALL=0\nPFB_PRE_UNINSTALL=0\nPFB_WHEN=pre\n"
+	if got, err := os.ReadFile(filepath.Join(dir, "env")); err != nil || string(got) != want {
+		t.Errorf("PFB_* entries in the hook:\n got %q (%v)\nwant %q", got, err, want)
+	}
+}
+
 // Output is read up to the size the file had when the hook's own process exited: a descendant that writes after that
 // is not read, even while the runner is still reading. The runner removes the capture file once that size is fixed;
 // the test holds the runner inside a log write until the descendant has written.

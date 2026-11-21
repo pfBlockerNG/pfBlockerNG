@@ -3,69 +3,39 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
-	"time"
-
-	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/hooks"
 )
 
-// hookEnv runs one recording hook at when with c and returns the PFB_* lifecycle entries it saw.
-func hookEnv(t *testing.T, when string, c hooks.Context) map[string]string {
-	t.Helper()
-	dir := t.TempDir()
-	record, script := filepath.Join(dir, "record"), "hook_"+when+"_r.sh"
-	body := "#!/bin/sh\nprintf '%s\\n' \"$PFB_POST_INSTALL\" \"$PFB_PRE_UNINSTALL\" \"$PFB_PKG_OP\" > '" + record + "'\n"
-	if err := os.WriteFile(filepath.Join(dir, script), []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // only salvages a hung run
-	defer cancel()
-	hooks.Runner{Dir: dir}.Run(ctx, when, []hooks.Hook{{When: when, Script: script, Enabled: true}}, c)
-	got, err := os.ReadFile(record)
-	if err != nil {
-		t.Fatalf("the hook did not run: %v", err)
-	}
-	lines := strings.Split(strings.TrimSuffix(string(got), "\n"), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("the hook recorded %q", got)
-	}
-	return map[string]string{"PFB_POST_INSTALL": lines[0], "PFB_PRE_UNINSTALL": lines[1], "PFB_PKG_OP": lines[2]}
-}
-
-// WHEN StartUpdate carries lifecycle install and a pkgOp THEN the worker's request carries both, and the hooks of that
-// Update, given a Context built from that request, see PFB_POST_INSTALL=1 and that PFB_PKG_OP. WHEN it carries neither
-// (or an empty pkgOp) THEN the request has neither, both lifecycle flags are 0 and PFB_PKG_OP is empty.
+// WHEN StartUpdate carries lifecycle install and a pkgOp THEN the worker's request carries both, which the Update's
+// hooks get as PFB_POST_INSTALL and PFB_PKG_OP (the runner's mapping is pinned by tests/hooks/fixtures/runner). WHEN it
+// carries neither (or an empty pkgOp) THEN the request has neither.
 func TestStartUpdateCarriesTheLifecycleAndThePkgOpToTheUpdatesHooks(t *testing.T) {
 	for _, tc := range []struct {
 		trigger, params, request string
-		post, op                 string
+		lifecycle, op            string
 	}{
-		{"manual", ``, `{"version":1,"trigger":"manual","scope":"both","force":"none"}`, "0", ""},
-		{"manual", `,"pkgOp":""`, `{"version":1,"trigger":"manual","scope":"both","force":"none"}`, "0", ""},
+		{"manual", ``, `{"version":1,"trigger":"manual","scope":"both","force":"none"}`, "", ""},
+		{"manual", `,"pkgOp":""`, `{"version":1,"trigger":"manual","scope":"both","force":"none"}`, "", ""},
 		{"manual", `,"lifecycle":"install"`,
-			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install"}`, "1", ""},
+			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install"}`, "install", ""},
 		{"manual", `,"lifecycle":"install","pkgOp":"install"`,
-			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"install"}`, "1",
-			"install"},
+			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"install"}`,
+			"install", "install"},
 		{"manual", `,"lifecycle":"install","pkgOp":"upgrade"`,
-			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"upgrade"}`, "1",
-			"upgrade"},
+			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"upgrade"}`,
+			"install", "upgrade"},
 		{"manual", `,"lifecycle":"install","pkgOp":"reinstall"`,
-			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"reinstall"}`, "1",
-			"reinstall"},
+			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"reinstall"}`,
+			"install", "reinstall"},
 		{"manual", `,"pkgOp":"delete"`,
-			`{"version":1,"trigger":"manual","scope":"both","force":"none","pkgOp":"delete"}`, "0", "delete"},
+			`{"version":1,"trigger":"manual","scope":"both","force":"none","pkgOp":"delete"}`, "", "delete"},
 		{"apply", `,"lifecycle":"install","pkgOp":"upgrade"`,
-			`{"version":1,"trigger":"apply","scope":"both","force":"none","lifecycle":"install","pkgOp":"upgrade"}`, "1",
-			"upgrade"},
-		{"retry", `,"lifecycle":"install","pkgOp":"install"`, "", "1", "install"}, // the Extras due vary with the clock
+			`{"version":1,"trigger":"apply","scope":"both","force":"none","lifecycle":"install","pkgOp":"upgrade"}`,
+			"install", "upgrade"},
+		{"retry", `,"lifecycle":"install","pkgOp":"install"`, "", "install", "install"}, // the Extras due vary with the clock
 	} {
 		t.Run(tc.trigger+tc.params, func(t *testing.T) {
 			c, f := startUpdateCore(t)
@@ -87,12 +57,9 @@ func TestStartUpdateCarriesTheLifecycleAndThePkgOpToTheUpdatesHooks(t *testing.T
 			if err := json.Unmarshal([]byte(f.request()), &req); err != nil {
 				t.Fatal(err)
 			}
-			want := map[string]string{"PFB_POST_INSTALL": tc.post, "PFB_PRE_UNINSTALL": "0", "PFB_PKG_OP": tc.op}
-			for _, when := range []string{"pre", "post"} {
-				got := hookEnv(t, when, hooks.Context{Lifecycle: req.Lifecycle, PkgOp: req.PkgOp})
-				if fmt.Sprint(got) != fmt.Sprint(want) {
-					t.Errorf("%s hook of the Update saw %v, want %v", when, got, want)
-				}
+			if req.Lifecycle != tc.lifecycle || req.PkgOp != tc.op {
+				t.Errorf("the worker's request has lifecycle %q and pkgOp %q, want %q and %q", req.Lifecycle, req.PkgOp,
+					tc.lifecycle, tc.op)
 			}
 		})
 	}

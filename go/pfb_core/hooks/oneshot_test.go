@@ -23,6 +23,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
 )
 
 var coreBinary struct {
@@ -63,29 +65,49 @@ type oneShotResult struct {
 	stdout, stderr string
 }
 
-// oneShot runs pfb-core with args and stdin, its environment without any PFB_* entry, and returns how it ended. A run
-// still going after two minutes is killed and fails the test as stuck.
+// oneShotCmd is pfb-core with args and stdin, its environment without any PFB_* entry but env.
+func oneShotCmd(t *testing.T, ctx context.Context, stdin string, env []string, args ...string) *exec.Cmd {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, pfbCore(t), args...)
+	inherited := slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "PFB_") })
+	cmd.Env = append(inherited, env...)
+	cmd.Stdin = strings.NewReader(stdin)
+	return cmd
+}
+
+// exitStatus is the exit status of a pfb-core run that ended with err: -1 when a signal ended it.
+func exitStatus(t *testing.T, err error) int {
+	t.Helper()
+	var exit *exec.ExitError
+	switch {
+	case errors.As(err, &exit):
+		return exit.ExitCode()
+	case err != nil:
+		t.Fatal(err)
+	}
+	return 0
+}
+
+// oneShot runs pfb-core with args and stdin, its environment without any PFB_* entry, and returns how it ended.
 func oneShot(t *testing.T, stdin string, args ...string) oneShotResult {
+	t.Helper()
+	return oneShotEnv(t, nil, stdin, args...)
+}
+
+// oneShotEnv is oneShot with env added to the environment. A run still going after two minutes is killed and fails the
+// test as stuck.
+func oneShotEnv(t *testing.T, env []string, stdin string, args ...string) oneShotResult {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // only salvages a hung run
 	defer cancel()
-	cmd := exec.CommandContext(ctx, pfbCore(t), args...)
-	cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "PFB_") })
+	cmd := oneShotCmd(t, ctx, stdin, env, args...)
 	var stdout, stderr bytes.Buffer
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = strings.NewReader(stdin), &stdout, &stderr
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
 	if ctx.Err() != nil {
 		t.Fatalf("STUCK: pfb-core %v did not return", args)
 	}
-	var exit *exec.ExitError
-	status := 0
-	switch {
-	case errors.As(err, &exit):
-		status = exit.ExitCode()
-	case err != nil:
-		t.Fatal(err)
-	}
-	return oneShotResult{status, stdout.String(), stderr.String()}
+	return oneShotResult{exitStatus(t, err), stdout.String(), stderr.String()}
 }
 
 // projected is a stored row as the hooks projection lists it (docs/misc/core-api-protocol.md "Projection hooks").
@@ -107,7 +129,13 @@ func projected(rows []map[string]any, expand func(string) string) []map[string]a
 // returns its path.
 func adapter(t *testing.T, root string, rows []map[string]any) string {
 	t.Helper()
-	stored := map[string]any{"hooks": map[string]any{"rows": rows}}
+	return adapterOf(t, root, map[string]any{"hooks": map[string]any{"rows": rows}})
+}
+
+// adapterOf writes a settings backend program under root that answers a read with stored (projection id: values) and
+// leaves root/backend-called behind, and returns its path.
+func adapterOf(t *testing.T, root string, stored map[string]any) string {
+	t.Helper()
 	reply, err := json.Marshal(map[string]any{"version": 1, "revision": 1, "settings": stored})
 	if err != nil {
 		t.Fatal(err)
@@ -116,10 +144,27 @@ func adapter(t *testing.T, root string, rows []map[string]any) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "adapter.sh")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\ncat > /dev/null\ncat '"+root+"/settings.json'\n"), 0o755); err != nil {
+	program := "#!/bin/sh\ncat > /dev/null\n: > '" + root + "/backend-called'\ncat '" + root + "/settings.json'\n"
+	if err := os.WriteFile(path, []byte(program), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// fileStore writes dir/settings.json, the file backend's store (--state-dir), holding rows as the hooks projection.
+func fileStore(t *testing.T, dir string, rows []map[string]any) {
+	t.Helper()
+	doc, err := json.Marshal(map[string]any{"format": 1, "revision": 1,
+		"projections": map[string]any{"hooks": map[string]any{"values": map[string]any{"rows": rows}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type oneShotCase struct {
@@ -150,23 +195,8 @@ func TestOneShotCorpus(t *testing.T) {
 	}
 	for _, file := range files {
 		t.Run(strings.TrimSuffix(filepath.Base(file), ".json"), func(t *testing.T) {
-			raw, err := os.ReadFile(file)
-			if err != nil {
-				t.Fatal(err)
-			}
 			var sc oneShotCase
-			dec := json.NewDecoder(bytes.NewReader(raw))
-			dec.DisallowUnknownFields()
-			if err := dec.Decode(&sc); err != nil {
-				t.Fatal(err)
-			}
-			if (sc.OldExpect != nil) != (sc.Departure != "") {
-				t.Fatal("a scenario has old_expect exactly when it names its departure")
-			}
-			root := t.TempDir()
-			expand := func(s string) string {
-				return strings.NewReplacer("{record}", ". '"+root+"/record.sh'", "{root}", root).Replace(s)
-			}
+			root, expand := scenario(t, file, &sc)
 			stage(t, root, corpusCase{Python: sc.Python, Files: sc.Files}, expand)
 			got := oneShot(t, sc.Stdin.bytes(expand), "--run-hooks", sc.When,
 				"--settings-backend-cmd", adapter(t, root, projected(sc.Rows, expand)),
@@ -174,24 +204,7 @@ func TestOneShotCorpus(t *testing.T) {
 			if got.status != 0 {
 				t.Fatalf("exit status %d, want 0; stderr %s", got.status, clip(got.stderr))
 			}
-			want := []corpusRun{}
-			for _, run := range sc.Expect.Runs {
-				env := map[string]string{}
-				for k, v := range run.Env {
-					env[k] = expand(v)
-				}
-				want = append(want, corpusRun{Script: run.Script, Wrapped: run.Wrapped, Args: run.Args, Env: env})
-			}
-			runs := recordedRuns(t, root)
-			if runs == nil {
-				runs = []corpusRun{}
-			}
-			wantJSON, _ := json.MarshalIndent(want, "", " ")
-			gotJSON, _ := json.MarshalIndent(runs, "", " ")
-			if !bytes.Equal(wantJSON, gotJSON) {
-				t.Errorf("recorded invocations (order, launcher, arguments, PFB_* environment):\n got %s\nwant %s", gotJSON,
-					wantJSON)
-			}
+			checkRuns(t, root, sc.Expect.Runs, expand)
 			if want := sc.Expect.Log.bytes(expand); got.stderr != want {
 				t.Errorf("main log (stderr):\n got %s\nwant %s", clip(got.stderr), clip(want))
 			}
@@ -207,19 +220,29 @@ func TestOneShotCorpus(t *testing.T) {
 	}
 }
 
-// oneShotRoot stages a hook directory whose hooks record their runs, one pre and one post, and a settings backend
-// listing both enabled.
-func oneShotRoot(t *testing.T) (root string, flags []string) {
+// hookRoot stages each hook file of scripts (file name, body with {record} and {root} expanded) and lists them enabled,
+// in that order, both through a settings backend program and in root/state/settings.json. It returns root and the flags
+// of a one-shot run through the program; flags[2:] are the hook folder and the Python wrapper.
+func hookRoot(t *testing.T, scripts ...[2]string) (root string, flags []string) {
 	t.Helper()
 	root = t.TempDir()
-	expand := func(s string) string { return strings.ReplaceAll(s, "{record}", ". '"+root+"/record.sh'") }
-	body := &content{text: "#!/bin/sh\n{record}\n"}
-	stage(t, root, corpusCase{Files: map[string]corpusFile{"hooks/hook_pre_a.sh": {Body: body},
-		"hooks/hook_post_a.sh": {Body: body}}}, expand)
-	rows := projected([]map[string]any{{"script": "hook_pre_a.sh", "when": "pre", "enabled": "on"},
-		{"script": "hook_post_a.sh", "when": "post", "enabled": "on"}}, expand)
-	return root, []string{"--settings-backend-cmd", adapter(t, root, rows), "--hook-dir", filepath.Join(root, "hooks"),
-		"--python-wrapper", filepath.Join(root, "wrapper.sh")}
+	expand := strings.NewReplacer("{record}", ". '"+root+"/record.sh'", "{root}", root).Replace
+	files, rows := map[string]corpusFile{}, []map[string]any{}
+	for _, s := range scripts {
+		files["hooks/"+s[0]] = corpusFile{Body: &content{text: s[1]}}
+		rows = append(rows, map[string]any{"script": s[0], "when": strings.Split(s[0], "_")[1], "enabled": "on"})
+	}
+	stage(t, root, corpusCase{Files: files}, expand)
+	fileStore(t, filepath.Join(root, "state"), projected(rows, expand))
+	return root, []string{"--settings-backend-cmd", adapter(t, root, projected(rows, expand)), "--hook-dir",
+		filepath.Join(root, "hooks"), "--python-wrapper", filepath.Join(root, "wrapper.sh")}
+}
+
+// oneShotRoot stages one recording pre hook and one recording post hook, both enabled (hookRoot).
+func oneShotRoot(t *testing.T) (root string, flags []string) {
+	t.Helper()
+	return hookRoot(t, [2]string{"hook_pre_a.sh", "#!/bin/sh\n{record}\n"},
+		[2]string{"hook_post_a.sh", "#!/bin/sh\n{record}\n"})
 }
 
 // WHEN pfb-core --run-hooks pre runs with no Core running THEN the configured pre hooks run once, in list order, with
@@ -266,10 +289,15 @@ func runsOnce(t *testing.T, args ...string) {
 		t.Fatalf("control: exit status %d and runs %+v, want 0 and hook_pre_a.sh once; stderr %s", got.status, runs,
 			clip(got.stderr))
 	}
+	if !exists(filepath.Join(root, "backend-called")) {
+		t.Fatal("control: the settings backend was not called")
+	}
 }
 
-// WHEN the context is not one JSON object of the fixed vocabulary THEN nothing runs and the exit status is 2. A context
-// name that is not [A-Z0-9_]+ cannot be given: every name outside the vocabulary is refused.
+// WHEN the context is not one JSON object of the fixed vocabulary THEN nothing runs, the settings backend is not called
+// and the exit status is 2. A context name that is not [A-Z0-9_]+ cannot be given: every name outside the vocabulary is
+// refused. A member given twice is refused whichever value is valid, and so is input that is not UTF-8 or a lone
+// surrogate escape, which decoding would otherwise turn into U+FFFD.
 func TestOneShotRefusesAContextOutsideItsVocabulary(t *testing.T) {
 	runsOnce(t)
 	for _, tc := range []struct{ name, when, stdin string }{
@@ -293,6 +321,13 @@ func TestOneShotRefusesAContextOutsideItsVocabulary(t *testing.T) {
 		{"null", "pre", `null`},
 		{"an array", "pre", `[{"trigger":"cron"}]`},
 		{"a string", "post", `"cron"`},
+		{"a member twice, the valid value last", "pre", `{"lifecycle":"bogus","lifecycle":"uninstall"}`},
+		{"a member twice, the valid value first", "pre", `{"lifecycle":"uninstall","lifecycle":"bogus"}`},
+		{"a trigger twice", "pre", `{"trigger":"a","trigger":"b"}`},
+		{"a trigger twice, once escaped", "post", `{"trigger":"a","tr\u0069gger":"a"}`},
+		{"input that is not UTF-8", "pre", "{\"trigger\":\"a\xffb\"}"},
+		{"a lone high surrogate", "pre", `{"trigger":"\ud800x"}`},
+		{"a lone low surrogate", "post", `{"trigger":"x\uDC00"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, flags := oneShotRoot(t)
@@ -306,7 +341,46 @@ func TestOneShotRefusesAContextOutsideItsVocabulary(t *testing.T) {
 			if got.stdout != "" || got.stderr == "" {
 				t.Errorf("stdout %s, stderr %s: want only a refusal on stderr", clip(got.stdout), clip(got.stderr))
 			}
+			if exists(filepath.Join(root, "backend-called")) {
+				t.Error("the settings backend was called for a refused context")
+			}
 		})
+	}
+}
+
+// WHEN the context is 16 MiB long THEN it is read and the hooks run; one byte more is refused before the settings
+// backend is called, with exit status 2.
+func TestOneShotReadsAContextOfAtMost16MiB(t *testing.T) {
+	const valid = `{"trigger":"cron"}`
+	for _, tc := range []struct {
+		name         string
+		size, status int
+		ran          bool
+	}{{"16 MiB", 16 << 20, 0, true}, {"one byte more", 16<<20 + 1, 2, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, flags := oneShotRoot(t)
+			got := oneShot(t, valid+strings.Repeat(" ", tc.size-len(valid)), append([]string{"--run-hooks", "pre"}, flags...)...)
+			if got.status != tc.status {
+				t.Errorf("exit status %d, want %d; stderr %s", got.status, tc.status, clip(got.stderr))
+			}
+			called := exists(filepath.Join(root, "backend-called"))
+			if runs := recordedRuns(t, root); (len(runs) == 1) != tc.ran || called != tc.ran {
+				t.Errorf("runs %+v, backend called %v: want the hook run and the backend called = %v", runs, called, tc.ran)
+			}
+		})
+	}
+}
+
+// WHEN a string holds U+FFFD itself, as UTF-8 or as an escape in either case THEN the hook gets it: only a lone
+// surrogate, which decoding turns into U+FFFD, is refused.
+func TestOneShotPassesAReplacementCharacterThrough(t *testing.T) {
+	for _, stdin := range []string{"{\"trigger\":\"a\uFFFDb\"}", `{"trigger":"a\ufffdb"}`, `{"trigger":"a\uFFFDb"}`} {
+		root, flags := oneShotRoot(t)
+		got := oneShot(t, stdin, append([]string{"--run-hooks", "pre"}, flags...)...)
+		if runs := recordedRuns(t, root); got.status != 0 || len(runs) != 1 || runs[0].Env["PFB_TRIGGER"] != "a\uFFFDb" {
+			t.Errorf("%s: exit status %d and runs %+v, want 0 and PFB_TRIGGER=a\uFFFDb; stderr %s", stdin, got.status, runs,
+				clip(got.stderr))
+		}
 	}
 }
 
@@ -376,15 +450,12 @@ func TestOneShotUsageErrors(t *testing.T) {
 	}
 }
 
-// WHEN --run-hooks runs while another process holds the Update lock and Core's own lock in the state directory THEN it
-// neither waits for them nor fails, runs its hooks, and leaves both locks held and the directory as it was. A wait
-// would hang the run until the watchdog kills it.
+// WHEN --run-hooks reads its settings from the state directory while another process holds the Update lock and Core's
+// own lock there THEN it neither waits for them nor fails, runs its hooks, and leaves both locks held and the directory
+// as it was. A wait would hang the run until the watchdog kills it.
 func TestOneShotTakesNoUpdateLock(t *testing.T) {
 	root, flags := oneShotRoot(t)
 	state := filepath.Join(root, "state")
-	if err := os.Mkdir(state, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	var held []*os.File
 	for _, name := range []string{"update.log.lock", "core.lock"} {
 		f, err := os.OpenFile(filepath.Join(state, name), os.O_RDWR|os.O_CREATE, 0o600)
@@ -398,7 +469,7 @@ func TestOneShotTakesNoUpdateLock(t *testing.T) {
 		held = append(held, f)
 	}
 	before, _ := os.ReadDir(state)
-	got := oneShot(t, `{"trigger":"cron"}`, append([]string{"--run-hooks", "pre", "--state-dir", state}, flags...)...)
+	got := oneShot(t, `{"trigger":"cron"}`, append([]string{"--run-hooks", "pre", "--state-dir", state}, flags[2:]...)...)
 	if got.status != 0 {
 		t.Errorf("exit status %d, want 0; stderr %s", got.status, clip(got.stderr))
 	}
@@ -425,5 +496,167 @@ func TestOneShotTakesNoUpdateLock(t *testing.T) {
 	}
 	if !slices.Equal(names(before), names(after)) {
 		t.Errorf("the state directory changed: %v, then %v", names(before), names(after))
+	}
+}
+
+// WHEN --state-dir alone names the settings THEN the hook rows of its settings.json run.
+func TestOneShotReadsTheHooksFromTheStateDirectory(t *testing.T) {
+	root, flags := oneShotRoot(t)
+	got := oneShot(t, `{"trigger":"cron"}`,
+		append([]string{"--run-hooks", "post", "--state-dir", filepath.Join(root, "state")}, flags[2:]...)...)
+	if runs := recordedRuns(t, root); got.status != 0 || len(runs) != 1 || runs[0].Script != "hook_post_a.sh" {
+		t.Errorf("exit status %d and runs %+v, want 0 and hook_post_a.sh once; stderr %s", got.status, runs, clip(got.stderr))
+	}
+}
+
+// WHEN --state-dir alone names the settings and holds no settings.json (an uninitialized Core, which the daemon serves)
+// THEN the one-shot logs one line, runs nothing, leaves the directory empty and exits 0.
+func TestOneShotOnAnUninitializedCoreRunsNothingAndExitsZero(t *testing.T) {
+	root, flags := oneShotRoot(t)
+	state := t.TempDir()
+	got := oneShot(t, `{"trigger":"cron"}`, append([]string{"--run-hooks", "pre", "--state-dir", state}, flags[2:]...)...)
+	if got.status != 0 || strings.Count(got.stderr, "\n") != 1 {
+		t.Errorf("exit status %d and stderr %s, want 0 and one line", got.status, clip(got.stderr))
+	}
+	if runs := recordedRuns(t, root); runs != nil {
+		t.Errorf("hooks ran without settings: %+v", runs)
+	}
+	if entries, _ := os.ReadDir(state); len(entries) != 0 {
+		t.Errorf("the state directory holds %v, want nothing", entries)
+	}
+}
+
+// WHEN another projection of the stored settings holds a value Core refuses, or one Core does not know THEN the hooks
+// still run: the one-shot reads the hooks projection alone, as pfb_run_hooks() reads only the hook rows. A refused hook
+// row still runs nothing (TestOneShotWithoutUsableSettingsRunsNothing).
+func TestOneShotReadsTheHooksProjectionAlone(t *testing.T) {
+	for name, other := range map[string]map[string]any{
+		"a refused dns value":   {"dns": map[string]any{"decisionCacheMax": -1}},
+		"an unknown projection": {"future": map[string]any{"x": 1}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root, flags := oneShotRoot(t)
+			rows := projected([]map[string]any{{"script": "hook_pre_a.sh", "when": "pre", "enabled": "on"}},
+				func(s string) string { return s })
+			other["hooks"] = map[string]any{"rows": rows}
+			flags[1] = adapterOf(t, root, other)
+			if _, err := settings.Load(&settings.AdapterBackend{Path: flags[1]}, settings.Production()); err == nil {
+				t.Fatal("control: the daemon's schema reads these settings, want it to refuse them")
+			}
+			got := oneShot(t, `{"trigger":"cron"}`, append([]string{"--run-hooks", "pre"}, flags...)...)
+			if runs := recordedRuns(t, root); got.status != 0 || len(runs) != 1 || runs[0].Script != "hook_pre_a.sh" {
+				t.Errorf("exit status %d and runs %+v, want 0 and hook_pre_a.sh once; stderr %s", got.status, runs,
+					clip(got.stderr))
+			}
+		})
+	}
+}
+
+// WHEN the caller's environment holds PFB_* entries THEN no hook sees them: a member the context leaves out sets no
+// variable, never an inherited one. Departure: today's pfb_run_hooks() passes them through.
+func TestOneShotHookNeverInheritsACallersPFBEntry(t *testing.T) {
+	root, flags := oneShotRoot(t)
+	got := oneShotEnv(t, []string{"PFB_TRIGGER=evil", "PFB_STATUS=evil", "PFB_CHANGED_IP_ALIASES=evil"}, `{}`,
+		append([]string{"--run-hooks", "pre"}, flags...)...)
+	want := map[string]string{"PFB_WHEN": "pre", "PFB_POST_INSTALL": "0", "PFB_PRE_UNINSTALL": "0", "PFB_PKG_OP": ""}
+	if runs := recordedRuns(t, root); got.status != 0 || len(runs) != 1 || !maps.Equal(runs[0].Env, want) {
+		t.Errorf("exit status %d and runs %+v, want 0 and one run with %v; stderr %s", got.status, runs, want,
+			clip(got.stderr))
+	}
+}
+
+// WHEN the uninstall's console is a pipe whose reader has gone THEN the one-shot is not killed by SIGPIPE at its first
+// console write: every hook runs, the exit status is 0 and stderr holds the whole main log.
+func TestOneShotOutlivesAClosedConsole(t *testing.T) {
+	root, flags := hookRoot(t, [2]string{"hook_pre_a.sh", "#!/bin/sh\n{record}\necho a\n"},
+		[2]string{"hook_pre_b.sh", "#!/bin/sh\n{record}\necho b\n"})
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	defer w.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // only salvages a hung run
+	defer cancel()
+	cmd := oneShotCmd(t, ctx, `{"lifecycle":"uninstall"}`, nil, append([]string{"--run-hooks", "pre"}, flags...)...)
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = w, &stderr
+	status := exitStatus(t, cmd.Run())
+	if ctx.Err() != nil {
+		t.Fatal("STUCK: pfb-core did not return")
+	}
+	if status != 0 {
+		t.Errorf("exit status %d, want 0; stderr %s", status, clip(stderr.String()))
+	}
+	runs := recordedRuns(t, root)
+	if len(runs) != 2 || runs[0].Script != "hook_pre_a.sh" || runs[1].Script != "hook_pre_b.sh" {
+		t.Errorf("runs = %+v, want hook_pre_a.sh, then hook_pre_b.sh", runs)
+	}
+	want := "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\na\n[ pfB Hook ] pre #0 completed\n" +
+		"\n[ pfB Hook ] pre #1 (hook_pre_b.sh, timeout 60s)\nb\n[ pfB Hook ] pre #1 completed\n"
+	if stderr.String() != want {
+		t.Errorf("main log (stderr):\n got %s\nwant %s", clip(stderr.String()), clip(want))
+	}
+}
+
+// WHEN the one-shot runs a hook THEN the hook has SIGPIPE's default action, not an ignore inherited from pfb-core: a
+// hook that sends itself SIGPIPE dies of it (128+13) before it writes its marker.
+func TestOneShotHookKeepsTheDefaultSIGPIPE(t *testing.T) {
+	root, flags := hookRoot(t, [2]string{"hook_pre_a.sh", "#!/bin/sh\nkill -PIPE $$\n: > '{root}/survived'\n"})
+	got := oneShot(t, `{"lifecycle":"uninstall"}`, append([]string{"--run-hooks", "pre"}, flags...)...)
+	if got.status != 0 || !strings.Contains(got.stderr, "[ pfB Hook ] pre #0 exited non-zero [ 141 ]; continuing\n") {
+		t.Errorf("exit status %d and stderr %s, want 0 and the hook killed by SIGPIPE", got.status, clip(got.stderr))
+	}
+	if exists(filepath.Join(root, "survived")) {
+		t.Error("the hook survived SIGPIPE: it was started with SIGPIPE ignored")
+	}
+}
+
+// WHEN TERM, INT or HUP reaches the one-shot while a hook runs THEN that hook is ended, the next one never starts, the
+// log says the run was cancelled, and the exit status is 1: the hooks did not all run.
+func TestOneShotCancelledBySignalEndsTheHookAndExitsOne(t *testing.T) {
+	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP} {
+		t.Run(sig.String(), func(t *testing.T) {
+			root, flags := hookRoot(t,
+				[2]string{"hook_pre_a.sh",
+					"#!/bin/sh\necho $$ > '{root}/a.tmp'\nmv '{root}/a.tmp' '{root}/a.pid'\nexec sleep 600\n"},
+				[2]string{"hook_pre_b.sh", "#!/bin/sh\n{record}\n"})
+			pidfile := filepath.Join(root, "a.pid")
+			t.Cleanup(func() { // a hook the run left behind
+				if b, err := os.ReadFile(pidfile); err == nil {
+					if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && pid > 1 {
+						syscall.Kill(pid, syscall.SIGKILL)
+					}
+				}
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // only salvages a hung run
+			defer cancel()
+			cmd := oneShotCmd(t, ctx, `{"trigger":"cron"}`, nil, append([]string{"--run-hooks", "pre"}, flags...)...)
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			await(t, "the first hook to start", func() bool { return exists(pidfile) })
+			if err := cmd.Process.Signal(sig); err != nil {
+				t.Fatal(err)
+			}
+			status := exitStatus(t, cmd.Wait())
+			if ctx.Err() != nil {
+				t.Fatal("STUCK: pfb-core did not return")
+			}
+			if status != 1 {
+				t.Errorf("exit status %d, want 1; stderr %s", status, clip(stderr.String()))
+			}
+			if !strings.Contains(stderr.String(), "[ pfB Hook ] pre run cancelled; 1 enabled hook did not run\n") {
+				t.Errorf("stderr %s does not say the run was cancelled", clip(stderr.String()))
+			}
+			if alive(t, pidfile) {
+				t.Error("the hook outlived the run")
+			}
+			if runs := recordedRuns(t, root); runs != nil {
+				t.Errorf("a hook started after the signal: %+v", runs)
+			}
+		})
 	}
 }
