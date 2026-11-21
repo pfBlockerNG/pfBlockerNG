@@ -66,8 +66,15 @@ func resourceMethods(store *resources.Store) map[string]method {
 			return nil, newError(codeInvalidArgument, "too many resources; nothing was read",
 				fieldError{Field: "resources", Message: fmt.Sprintf("at most %d resources per call", maxResourcesPerCall)})
 		}
-		cursors, bad := map[string]*resources.Cursor{}, []fieldError(nil)
+		cursors, bad, badKey := map[string]*resources.Cursor{}, []fieldError(nil), false
 		for _, id := range ids {
+			if !resources.ValidID(id) { // one field error per request, however many keys fail
+				if !badKey {
+					_, errs := parseResourceCursor(id, nil)
+					bad, badKey = append(bad, errs...), true
+				}
+				continue
+			}
 			c, errs := parseResourceCursor(id, p.Resources[id])
 			cursors[id], bad = c, append(bad, errs...)
 		}
@@ -191,7 +198,7 @@ func resourceBody(store *resources.Store, params []byte, client bool) (any, erro
 }
 
 // parseResourceCursor is id's cursor (nil: none) or the field errors of the id or the cursor. A null field is absent. A field
-// name carries the id as given: it passed resources.ValidID, a bad id never reaches a field name.
+// name carries the id as given, which passed resources.ValidID or was reported as "a key is not a resource id" alone.
 func parseResourceCursor(id string, c *resourceCursor) (*resources.Cursor, []fieldError) {
 	field := "resources." + id + "."
 	switch {

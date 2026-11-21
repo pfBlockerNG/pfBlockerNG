@@ -860,7 +860,9 @@ Every error is the same envelope, with the HTTP status its code maps to:
 
 `fieldErrors` is present only when a named parameter is at fault. `message` is for people; a client decides on `code`.
 
-A refusal never quotes an id that is not a resource id (longer than 128 bytes, or of another shape). A refusal to a
+A refusal's `message` never quotes an id that is not a resource id (longer than 128 bytes, or of another shape). A
+`field` name may carry the key as sent: a mistyped entry is reported under `resources.<key>` before the key is
+validated, and for a client the 4 KiB cap below bounds that. A refusal to a
 further local client (`--client-uid`) is under 4 KiB, its newline included: one that would be longer keeps its `code`
 and is sent with a short fixed `message` and no `fieldErrors`. However much a client sends, Core echoes little of it,
 and the answers its replay memory keeps stay small.
@@ -894,7 +896,8 @@ again, with the byte-identical body, to resolve an unknown outcome such as a tim
   whether its request ran before a restart reads the state it changed instead of repeating it.
 - The privileged uid's requests and the further local clients' (`--client-uid`) are remembered apart, 4096 each, so
   nothing a client sends makes Core forget a privileged `requestId`. The clients share one memory of 4096, but each
-  client uid's `requestId`s are its own: one client uid can neither answer nor conflict with another's.
+  client uid's `requestId`s are its own: one client uid can neither answer nor conflict with another's. The memory itself is shared, so one client can still
+  make Core forget another client's `requestId`s, and a repeat of a forgotten one runs again.
 
 A read-only method takes no `requestId` and is never replayed.
 
@@ -938,8 +941,10 @@ Two fences, each enough on its own against an unprivileged user:
    that does not exist (`invalid_argument`, `no such projection`, field `projectionIds[<i>]`). `GetResources` answers
    an id outside `dnsbl/*` `not_found` for that id, and `GetResourceBody` answers its body `not_found`, as for a
    resource the store does not hold. A uid that is both `--allow-uid` and a `--client-uid` is the privileged caller
-   and is served everything. Each request Core serves carries which of the two it is, and a method call that carries
-   neither is limited as a client's: only a request checked as the privileged uid's lifts the limits.
+   and is served everything. Each request Core serves carries which of the two it is. The mark decides what
+   `GetSettings`, `GetResources` and `GetResourceBody` serve and whether a refusal is shortened, and a call that carries
+   no mark is limited as a client's: only a request checked as the privileged uid's lifts those limits. Which methods
+   a caller may call at all is decided where the request is admitted, not by the mark.
 
 Flags: `--allow-uid UID` is the privileged caller (default 0, root: PHP on pfSense). Each `--client-uid UID` admits one more
 local client, limited to the methods above.

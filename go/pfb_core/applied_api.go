@@ -64,11 +64,13 @@ func parseApplied(entries map[string]*resourceCursor) (map[string]resources.Curs
 	case len(entries) > maxAppliedResources:
 		return nil, []fieldError{{Field: "resources", Message: fmt.Sprintf("at most %d resources per report", maxAppliedResources)}}
 	}
-	report, bad := make(map[string]resources.Cursor, len(entries)), []fieldError(nil)
+	report, bad, badKey := make(map[string]resources.Cursor, len(entries)), []fieldError(nil), false
 	for _, id := range slices.Sorted(maps.Keys(entries)) {
 		switch {
 		case !resources.ValidID(id): // never quoted: a key may be as long as the body
-			bad = append(bad, fieldError{Field: "resources", Message: "a key is not a resource id"})
+			if !badKey { // once per request, however many keys fail
+				bad, badKey = append(bad, fieldError{Field: "resources", Message: "a key is not a resource id"}), true
+			}
 			continue
 		case !strings.HasPrefix(id, dnsblPrefix):
 			bad = append(bad, fieldError{Field: "resources", Message: fmt.Sprintf("%q is not a dnsbl/* resource id", id)})
@@ -135,9 +137,9 @@ func readApplied(stateDir string) (map[string]resources.Cursor, error) {
 // one temporary name.
 var appliedMu sync.Mutex
 
-// writeApplied replaces appliedFile in stateDir with report: written whole and synced under one temporary name (a file a
-// crash left there is taken over, never a symlink followed), renamed over the old file (a symlink there is replaced, never
-// followed), then the directory synced.
+// writeApplied replaces appliedFile in stateDir with report: written whole and synced under one temporary name (whatever
+// sits there is removed first and the name is created exclusively, never a symlink followed), renamed over the old file
+// (a symlink there is replaced, never followed), then the directory synced.
 func writeApplied(stateDir string, report map[string]resources.Cursor) error {
 	rec := appliedRecord{Format: 1, Resources: make(map[string]*resourceCursor, len(report))}
 	for id, c := range report {
@@ -151,14 +153,12 @@ func writeApplied(stateDir string, report map[string]resources.Cursor) error {
 	path := filepath.Join(stateDir, appliedFile)
 	appliedMu.Lock()
 	defer appliedMu.Unlock()
-	tmp, err := os.OpenFile(path+".tmp", os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
+	_ = os.Remove(path + ".tmp") // whatever a crash or another user left there: a file, a link, a FIFO, an empty directory
+	tmp, err := os.OpenFile(path+".tmp", os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return err
 	}
-	err = tmp.Chmod(0o600) // a file a crash left keeps its own mode through O_TRUNC
-	if err == nil {
-		_, err = tmp.Write(raw)
-	}
+	_, err = tmp.Write(raw)
 	if err == nil {
 		err = tmp.Sync()
 	}
