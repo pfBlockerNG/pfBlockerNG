@@ -810,7 +810,9 @@ writes no result and exits 2. A field that is `null` is absent; an unknown field
 
 `resources` and `removed` hold at most 2,048 ids together, so that the report of every request accepted fits one result line
 (below). `scope` does not constrain what the request lists (`scope: "dnsbl"` with an `ip-set` is accepted): the validator
-checks the request's shape, and the apply honours `scope` when it acts.
+checks the request's shape, and the apply honours `scope` when it acts. Each of `resources`, `removed`, `applied`,
+`removed` (report) and `failed` is still refused over 4,096 entries with `<list> holds more than 4096 entries`, a check
+that runs on each list before the combined bound of 2,048 ids.
 
 - **A resource** is `{"id", "generation", "action", "direction", "entries"}`. The `id` is a [resource id](#resources) the
   apply handles: an `ip-set`, an `ip-aggregate` or the `geo-catalog`, never a `dnsbl/*` id (pfB-DNS fetches those). Each
@@ -828,10 +830,9 @@ checks the request's shape, and the apply honours `scope` when it acts.
   whose alias would be one of them (`ip-set/Deny_Aggregated/ipv4`) maps to no alias. An id that maps to no alias (another
   class, a group with `-`, a group too long, a reserved name) refuses the request. Distinct ids therefore never share an
   alias. The id is never used as a path or a table name; the alias is.
-- **An issue's** `resource` and `code` are strings of 1 to 256 bytes of plain text: no control (`\p{Cc}`), format
-  (`\p{Cf}`), private-use (`\p{Co}`) or surrogate (`\p{Cs}`) character and no line or paragraph separator (`\p{Zl}`,
-  `\p{Zp}`). An unassigned code point is accepted: which code points are unassigned depends on the Unicode version of each
-  side's regular expression library, so neither side refuses them. Its `stage` is one of the sync-status ledger's:
+- **An issue's** `resource` and `code` are strings of 1 to 256 printable ASCII characters (bytes 0x20 to 0x7E): any other
+  byte, a non-ASCII character included, refuses the request, so no Unicode version can make the two sides disagree.
+  Its `stage` is one of the sync-status ledger's:
   `download`, `script`, `parse`, `dedup` or `apply`. Its `message` is any string, kept as bounded text: invalid UTF-8 is
   replaced, each run of control characters and line or paragraph separators becomes one space (so the lines of a tool's
   error output stay apart as words), every other `\p{C}` character is removed, the surrounding white space is trimmed, the

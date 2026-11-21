@@ -6899,10 +6899,9 @@ function pfb_core_update_v2_request(string $stdin): array
 	}
 
 	$issues = [];
-	// named classes, not \p{C}: PCRE's holds the unassigned code points of its Unicode version, Go's does not
-	$text = ['a string of 1 to 256 bytes without control, format, private-use or surrogate characters or line or paragraph separators',
-		static fn (mixed $value): bool => is_string($value) && $value !== '' && strlen($value) <= 256
-			&& preg_match('/[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/u', $value) === 0];
+	// printable ASCII only: Unicode classes such as \p{Cf} differ by version between PCRE and Go
+	$text = ['a string of 1 to 256 printable ASCII characters',
+		static fn (mixed $value): bool => is_string($value) && preg_match('/^[\x20-\x7E]{1,256}$/D', $value) === 1];
 	$stages = ['download', 'script', 'parse', 'dedup', 'apply'];
 	foreach (pfb_core_update_v2_list('issues', $request['issues'] ?? []) as $i => $issue) {
 		$issue = pfb_core_update_v2_object("issues[{$i}]", $issue, [
