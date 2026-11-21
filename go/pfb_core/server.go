@@ -34,6 +34,7 @@ const (
 	defaultIdleTimeout       = 60 * time.Second
 	defaultMethodTimeout     = 25 * time.Second
 	maxRequestIDLength       = 128
+	maxClientRefusal         = 4 << 10 // a refusal to a further local client, newline included, is under this
 )
 
 // The error codes and their HTTP statuses: the closed set the protocol note documents.
@@ -78,15 +79,17 @@ func newError(code, message string, fields ...fieldError) *apiError {
 }
 
 // method is one API method. params is the request body, a JSON object; mutating methods carry a requestId in it and
-// run at most once per requestId (replay.go).
+// run at most once per requestId (replay.go). A further local client (--client-uid) is served only the methods marked
+// client, and such a method narrows what it serves to the client (fromClient); the privileged uid is served every method.
 type method struct {
 	mutating bool
+	client   bool
 	call     func(ctx context.Context, params []byte) (any, error)
 }
 
 func productionMethods() map[string]method {
 	return map[string]method{
-		"GetVersion": {call: func(_ context.Context, params []byte) (any, error) {
+		"GetVersion": {client: true, call: func(_ context.Context, params []byte) (any, error) {
 			if err := decodeParams(params, &struct{}{}); err != nil {
 				return nil, err
 			}
@@ -133,13 +136,24 @@ type options struct {
 }
 
 type server struct {
-	o      options
-	ln     *net.UnixListener
-	http   *http.Server
-	replay *replayCache
+	o            options
+	ln           *net.UnixListener
+	http         *http.Server
+	replay       *replayCache // the privileged uid's
+	clientReplay *replayCache // the further local clients': nothing a client sends evicts a privileged entry
 }
 
 type peerKey struct{}
+
+// clientKey marks a request's context: true for a further local client's (--client-uid), false for the privileged uid's.
+type clientKey struct{}
+
+// fromClient reports whether ctx is a further local client's request. A context without the mark is one: only the mark
+// handle sets on a privileged request lifts a client's limits.
+func fromClient(ctx context.Context) bool {
+	c, marked := ctx.Value(clientKey{}).(bool)
+	return c || !marked
+}
 
 type peer struct {
 	uid uint32
@@ -204,7 +218,7 @@ func listen(o options) (*server, error) {
 		_ = ln.Close()
 		return nil, fmt.Errorf("cannot set the socket's owner and mode: %w", err)
 	}
-	s := &server{o: o, ln: ln, replay: newReplayCache(replayEntries)}
+	s := &server{o: o, ln: ln, replay: newReplayCache(replayEntries), clientReplay: newReplayCache(replayEntries)}
 	s.http = &http.Server{
 		Handler:           http.HandlerFunc(s.handle),
 		ReadHeaderTimeout: o.readHeaderTimeout,
@@ -287,6 +301,16 @@ func errorResponse(e *apiError) response {
 	return response{status: status, body: body}
 }
 
+// refusal is e's response. To a client one of maxClientRefusal or more keeps its code and leaves its details out: however
+// much a client sends, an answer echoes little of it, and the client replay memory's answers stay small.
+func refusal(ctx context.Context, e *apiError) response {
+	r := errorResponse(e)
+	if fromClient(ctx) && len(r.body)+1 >= maxClientRefusal { // write adds a newline
+		r = errorResponse(newError(e.Code, "the request is refused; its reasons are too long to list"))
+	}
+	return r
+}
+
 func (s *server) write(w http.ResponseWriter, r response) {
 	if b := r.stream; b != nil {
 		defer b.f.Close()
@@ -306,7 +330,8 @@ func (s *server) write(w http.ResponseWriter, r response) {
 
 func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 	p, _ := r.Context().Value(peerKey{}).(peer)
-	if p.err != nil || (p.uid != s.o.allowUID && !slices.Contains(s.o.clientUIDs, p.uid)) {
+	client := p.err == nil && p.uid != s.o.allowUID && slices.Contains(s.o.clientUIDs, p.uid)
+	if p.err != nil || (p.uid != s.o.allowUID && !client) {
 		if p.err != nil {
 			s.o.logf("refused a caller whose credential cannot be read: %v", p.err)
 		} else {
@@ -317,9 +342,19 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	name, ok := strings.CutPrefix(r.URL.Path, "/"+apiVersion+"/")
 	m, known := s.o.methods[name]
+	if client && !m.client { // an unknown method's zero value is refused alike: a client learns nothing of the others
+		s.o.logf("refused a client of uid %d calling %q: a client is served only the methods marked for it", p.uid, r.URL.Path)
+		s.write(w, errorResponse(newError(codeUnauthenticated, "a further local client may not call this method")))
+		return
+	}
 	if !ok || !known {
 		s.write(w, errorResponse(newError(codeNotFound, "no such method: "+r.URL.Path)))
 		return
+	}
+	r = r.WithContext(context.WithValue(r.Context(), clientKey{}, client))
+	replay, key := s.replay, name
+	if client { // a client's requestIds are its own: another client uid can neither answer nor conflict with them
+		replay, key = s.clientReplay, strconv.FormatUint(uint64(p.uid), 10)+"\x00"+name
 	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -360,7 +395,7 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		return s.call(ctx, name, m, body)
 	}
-	s.write(w, s.replay.do(r.Context(), name, id, sha256.Sum256(body), run))
+	s.write(w, replay.do(r.Context(), key, id, sha256.Sum256(body), run))
 }
 
 // checkObject accepts exactly one JSON object and nothing after it.
@@ -423,7 +458,7 @@ func (s *server) call(ctx context.Context, name string, m method, params []byte)
 	var e *apiError
 	switch {
 	case errors.As(err, &e):
-		return errorResponse(e)
+		return refusal(ctx, e)
 	case err != nil:
 		s.o.logf("%s failed: %v", name, err)
 		return errorResponse(newError(codeInternal, "the method failed"))

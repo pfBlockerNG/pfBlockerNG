@@ -4,7 +4,8 @@
 //	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
 //
 //	--socket PATH       the API's Unix socket: its directory is made 0700 and the socket 0600, the server's user's alone
-//	--state-dir DIR     Core's own storage: core.lock and, without --settings-backend-cmd, settings.json; --update-cmd adds
+//	--state-dir DIR     Core's own storage: core.lock, applied.json (the last ReportApplied) and, without
+//	                    --settings-backend-cmd, settings.json; --update-cmd adds
 //	                    schedule_state.json, update.log and Update receipts; --maintenance-cmd adds maintenance.log and its
 //	                    private receipts. The directory is made 0700 and is the server user's alone.
 //	--settings-backend-cmd PATH
@@ -69,7 +70,9 @@ import (
 	"unicode"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/scheduler"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update"
 )
 
 const shutdownGrace = 3 * time.Second // below the rc script's 5 s before KILL
@@ -137,6 +140,12 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		return 1
 	}
 	defer lock.Close()
+	switch report, err := readApplied(*stateDir); {
+	case err != nil:
+		logger.Printf("ignored %s: %v", appliedFile, err)
+	case report != nil:
+		logger.Printf("applied report: %d resources", len(report))
+	}
 	var backend settings.Backend = settings.NewFileBackend(*stateDir)
 	kind := "file"
 	if *backendCmd != "" {
@@ -150,16 +159,13 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	snap, _ := store.Get(nil) // no ids to refuse: it cannot fail
 	logger.Printf("settings: %s revision %d", kind, snap.Revision)
 	logger.Printf("feed phase: %d local folders, %d script folders, rsync %q, user agent set %t", len(feed.LocalDirs), len(feed.ScriptDirs), feed.RsyncBin, feed.UserAgent != "")
-	methods := productionMethods()
-	maps.Copy(methods, settingsMethods(store))
 	var resourceStore *resources.Store // nil without --resource-dir
 	if resourceDir != "" {
 		resourceStore = resources.Open(resourceDir)
 	}
-	maps.Copy(methods, resourceMethods(resourceStore))
 	lanes := newLaneSettings(store, logger.Printf)
 	sched, gate := newUpdates(*updateCmd, maintenanceCmd, *zoneinfo, *stateDir, store, lanes, logger.Printf) // nil without --update-cmd
-	maps.Copy(methods, updateMethods(sched, gate))
+	methods := coreMethods(*stateDir, store, resourceStore, sched, gate)
 	srv, err := listen(options{socket: *socket, allowUID: allowUID, clientUIDs: clients, socketGroup: group, groupSet: groupSet,
 		methods: methods, logf: logger.Printf})
 	if err != nil {
@@ -195,6 +201,18 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	<-served
 	logger.Printf("stopped")
 	return 0
+}
+
+// coreMethods is every method Core serves, over Core's state directory, its settings, its resource store (nil: none) and
+// its Updates (nil: none).
+func coreMethods(stateDir string, store *settings.Store, resourceStore *resources.Store, sched *scheduler.Scheduler,
+	gate *update.Gate) map[string]method {
+	methods := productionMethods()
+	maps.Copy(methods, settingsMethods(store))
+	maps.Copy(methods, resourceMethods(resourceStore))
+	maps.Copy(methods, updateMethods(sched, gate))
+	maps.Copy(methods, appliedMethods(stateDir))
+	return methods
 }
 
 // programFlag is the flag.Func setter of an optional program path (empty: off) that may hold no control character.

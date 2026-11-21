@@ -44,30 +44,21 @@ type resourceCursor struct {
 }
 
 // resourceMethods is GetResources and GetResourceBody over store, read-only. Without a store (no --resource-dir) they answer
-// unavailable.
+// unavailable. A further local client (pfb-dns) reads only the dnsbl/* resources: to it no other resource exists.
 func resourceMethods(store *resources.Store) map[string]method {
-	return map[string]method{"GetResourceBody": {call: func(_ context.Context, params []byte) (any, error) {
+	return map[string]method{"GetResourceBody": {client: true, call: func(ctx context.Context, params []byte) (any, error) {
 		if store == nil {
 			return nil, newError(codeUnavailable, "Core runs no resource store: start it with --resource-dir")
 		}
-		return resourceBody(store, params)
-	}}, "GetResources": {call: func(_ context.Context, params []byte) (any, error) {
+		return resourceBody(store, params, fromClient(ctx))
+	}}, "GetResources": {client: true, call: func(ctx context.Context, params []byte) (any, error) {
 		if store == nil {
 			return nil, newError(codeUnavailable, "Core runs no resource store: start it with --resource-dir")
 		}
 		var p struct {
 			Resources map[string]*resourceCursor `json:"resources"`
 		}
-		if err := decodeParams(params, &p); err != nil {
-			var ae *apiError
-			if errors.As(err, &ae) {
-				for i := range ae.FieldErrors {
-					// A path from the decoder writes "/" as "~1" and "~" as "~0"; an unknown name is verbatim
-					if f := &ae.FieldErrors[i]; f.Message != "unknown parameter" {
-						f.Field = strings.ReplaceAll(strings.ReplaceAll(f.Field, "~1", "/"), "~0", "~")
-					}
-				}
-			}
+		if err := decodeResourceParams(params, &p); err != nil {
 			return nil, err
 		}
 		ids := slices.Sorted(maps.Keys(p.Resources))
@@ -75,8 +66,15 @@ func resourceMethods(store *resources.Store) map[string]method {
 			return nil, newError(codeInvalidArgument, "too many resources; nothing was read",
 				fieldError{Field: "resources", Message: fmt.Sprintf("at most %d resources per call", maxResourcesPerCall)})
 		}
-		cursors, bad := map[string]*resources.Cursor{}, []fieldError(nil)
+		cursors, bad, badKey := map[string]*resources.Cursor{}, []fieldError(nil), false
 		for _, id := range ids {
+			if !resources.ValidID(id) { // one field error per request, however many keys fail
+				if !badKey {
+					_, errs := parseResourceCursor(id, nil)
+					bad, badKey = append(bad, errs...), true
+				}
+				continue
+			}
 			c, errs := parseResourceCursor(id, p.Resources[id])
 			cursors[id], bad = c, append(bad, errs...)
 		}
@@ -85,6 +83,10 @@ func resourceMethods(store *resources.Store) map[string]method {
 		}
 		items := make(map[string]resourceItem, len(ids))
 		for _, id := range ids {
+			if fromClient(ctx) && !strings.HasPrefix(id, dnsblPrefix) {
+				items[id] = resourceItem{Error: newError(codeNotFound, "the store has no such resource")}
+				continue
+			}
 			r, err := store.Get(id, cursors[id])
 			switch {
 			case errors.Is(err, resources.ErrNotFound):
@@ -101,6 +103,21 @@ func resourceMethods(store *resources.Store) map[string]method {
 	}}}
 }
 
+// decodeResourceParams is decodeParams for parameters keyed by resource id: a field error names the id as given.
+func decodeResourceParams(params []byte, v any) error {
+	err := decodeParams(params, v)
+	var ae *apiError
+	if errors.As(err, &ae) {
+		for i := range ae.FieldErrors {
+			// A path from the decoder writes "/" as "~1" and "~" as "~0"; an unknown name is verbatim
+			if f := &ae.FieldErrors[i]; f.Message != "unknown parameter" {
+				f.Field = strings.ReplaceAll(strings.ReplaceAll(f.Field, "~1", "/"), "~0", "~")
+			}
+		}
+	}
+	return err
+}
+
 func resourceItemOf(r resources.Reply) resourceItem {
 	it := resourceItem{Kind: r.Kind, Generation: strconv.FormatUint(r.Generation, 10)}
 	if r.Kind == resources.KindUnchanged {
@@ -113,8 +130,9 @@ func resourceItemOf(r resources.Reply) resourceItem {
 	return it
 }
 
-// resourceBody answers GetResourceBody: the part of one resource the store holds, streamed from its file.
-func resourceBody(store *resources.Store, params []byte) (any, error) {
+// resourceBody answers GetResourceBody: the part of one resource the store holds, streamed from its file. To a further
+// local client (client) a resource outside dnsbl/* is one the store does not hold.
+func resourceBody(store *resources.Store, params []byte, client bool) (any, error) {
 	var p struct {
 		ID         *string `json:"id"`
 		Generation *string `json:"generation"`
@@ -137,7 +155,7 @@ func resourceBody(store *resources.Store, params []byte) (any, error) {
 	case p.ID == nil:
 		bad = append(bad, fieldError{Field: "id", Message: "required"})
 	case !resources.ValidID(*p.ID):
-		bad = append(bad, fieldError{Field: "id", Message: fmt.Sprintf("%q is not a resource id", *p.ID)})
+		bad = append(bad, fieldError{Field: "id", Message: "not a resource id"}) // never quoted: it may be as long as the body
 	}
 	if p.Generation == nil {
 		bad = append(bad, fieldError{Field: "generation", Message: "required"})
@@ -164,6 +182,9 @@ func resourceBody(store *resources.Store, params []byte) (any, error) {
 	if bad != nil {
 		return nil, newError(codeInvalidArgument, "the body request is not valid; nothing was read", bad...)
 	}
+	if client && !strings.HasPrefix(*p.ID, dnsblPrefix) {
+		return nil, newError(codeNotFound, "the store holds no such body")
+	}
 	f, size, err := store.Body(*p.ID, g, *p.Part, from)
 	switch {
 	case errors.Is(err, resources.ErrNotFound):
@@ -177,12 +198,12 @@ func resourceBody(store *resources.Store, params []byte) (any, error) {
 }
 
 // parseResourceCursor is id's cursor (nil: none) or the field errors of the id or the cursor. A null field is absent. A field
-// name carries the id as given: it passed resources.ValidID, a bad id never reaches a field name.
+// name carries the id as given, which passed resources.ValidID or was reported as "a key is not a resource id" alone.
 func parseResourceCursor(id string, c *resourceCursor) (*resources.Cursor, []fieldError) {
 	field := "resources." + id + "."
 	switch {
-	case !resources.ValidID(id):
-		return nil, []fieldError{{Field: "resources", Message: fmt.Sprintf("%q is not a resource id", id)}}
+	case !resources.ValidID(id): // never quoted: a key may be as long as the body
+		return nil, []fieldError{{Field: "resources", Message: "a key is not a resource id"}}
 	case c == nil:
 		return nil, []fieldError{{Field: "resources", Message: fmt.Sprintf("the cursor of %q must be a JSON object", id)}}
 	case c.Generation == nil && c.Digest == nil:

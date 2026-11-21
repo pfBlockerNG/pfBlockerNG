@@ -2,7 +2,7 @@
 
 Scope: the HTTP+JSON API of the pfBlockerNG Core daemon (`go/pfb_core`, binary `pfb-core`, issue #3841; map #3813), the
 conventions every Core method follows, the settings methods and backends (issues #3842, #3913, #3924), the singleton Update,
-its scheduler and `--update-cmd` (issue #3941), the resource store, `GetResources` and `GetResourceBody` (issues #4032, #4049), who may call it, and how the package runs it. Load when: adding a Core
+its scheduler and `--update-cmd` (issue #3941), the resource store, `GetResources` and `GetResourceBody` (issues #4032, #4049), `ReportApplied` (issue #4036), who may call it, and how the package runs it. Load when: adding a Core
 method or settings projection, calling Core from PHP or another local process, or changing `go/pfb_core`,
 `pfb_core_service()` or `pfb_core_call()`.
 
@@ -44,8 +44,13 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 | `GetSchedule` | none | `{"scheduled", "feeds", "extras", "lastSuccessfulCheck"}`: when the scheduled Updates last ran and are next due, and each item's last successful check |
 | `GetResources` | `resources` (optional; none: nothing is read): resource id to cursor | `{"resources": {id: item}}`: per resource unchanged, a delta from the cursor, or the full body, described without its members; read-only |
 | `GetResourceBody` | `id`, `generation`, `part` (`members`, `add` or `remove`), `from` (with `add` and `remove`) | the part's lines as `text/plain`, streamed from the store; read-only |
+| `ReportApplied` | `requestId`, `resources`: `dnsbl/*` resource id to the generation and digest the caller serves | `{}` once the report is recorded in the state directory |
 
 `GetVersion` is also the health check: a `200` with `status` `serving` means Core takes requests.
+
+The privileged uid is served every method. A further local client (`--client-uid`) is served only `GetVersion`,
+`GetSettings`, `GetResources`, `GetResourceBody` and `ReportApplied`, and reads through them only the `dns` and
+`policy/dnsbl` settings projections and the `dnsbl/*` resources ([Local authentication](#local-authentication)).
 
 ## Settings
 
@@ -734,8 +739,8 @@ The resource store is a directory (`--resource-dir`) that holds the bodies the C
 pfB-DNS to fetch: IP sets, IP aggregates, the geo catalog and DNSBL scopes (issue #4032; spec `docs/specs/go-updater-pipeline.md`
 section 8.2). Only the Core Updater writes it. The Core API reads it and never writes it, never creates its directory, and
 never follows a symlink out of it. It holds data and caches, never settings or secrets. Per resource it keeps the current
-generation, the applied baseline (the generation the Outpost apply last reported applied) and the delta between them, and
-nothing else.
+generation, the applied baseline (the generation its consumer last reported applied: the Outpost apply, or pfb-dns
+through [`ReportApplied`](#reportapplied) for `dnsbl/*`) and the delta between them, and nothing else.
 
 **Resource ids.** `ip-set/<group>/<family>`, `ip-aggregate/<class>/<family>`, `geo-catalog` and `dnsbl/<scope>`. A
 `<group>`, `<class>` or `<scope>` is one segment of `[A-Za-z0-9_-]+`, a `<family>` is `ipv4` or `ipv6`, and an id is at most
@@ -812,6 +817,39 @@ generation to the current one: it was pruned when another generation was publish
 missing or not a resource id, `generation` or `from` is not a string of decimal digits that fits 64 bits, `part` is not one
 of the three, `from` is missing with `add` or `remove`, or present with `members`. The field error names the parameter.
 
+### ReportApplied
+
+Issue #4036: pfb-dns reports the generation of each `dnsbl/*` resource it serves, after each swap and once after it
+starts. This report is what makes a generation the applied baseline of `dnsbl/*` (spec
+`docs/specs/go-updater-pipeline.md` sections 7 and 9).
+
+**Request.** `{"requestId": "<id>", "resources": {"<id>": {"generation": "<decimal string>", "digest": "<32 hex>"},
+...}}`: every `dnsbl/*` resource the caller serves, with the generation and digest of the body it applied, the strings
+`GetResources` gave. A report replaces the previous one whole: a resource it does not list is one the caller no longer
+serves. `{"resources": {}}` reports that it serves none.
+
+**Reply.** `{}` once the report is written to `applied.json` in Core's state directory (written to `applied.json.tmp` by
+one report at a time, synced, then renamed over the old one; a temporary file a crash left is taken over by the next
+report; an empty directory at the record's name is replaced, and a non-empty one fails the report),
+where it survives a restart. Core never writes the resource store for it: the Core Updater,
+the store's only writer, folds the recorded report into the store (`resources.Store.FoldApplied`). A listed resource
+whose generation and digest the store holds as its current body gets that generation as its applied baseline; a removed
+resource the report no longer lists is deleted. A resource or generation the store does not hold changes nothing, so a
+report naming one is recorded: the store can change between the report and the fold. The Core Updater does not fold
+reports yet.
+
+**Refusals.** `invalid_argument`, with nothing recorded, when `resources` is missing or `null`, lists more than 4096
+resources, names an id that is not a `dnsbl/*` resource id, or holds a `null` entry (field `resources`; an id that is
+not a resource id at all is not quoted in the message); when an entry
+is a string, a number or another value that is not an object (field `resources.<id>`); or when an entry lacks its
+`generation` or `digest`, or one of them has the shape a `GetResources` cursor refuses (field
+`resources.<id>.generation` or `resources.<id>.digest`). It is a mutating method: a repeat of its `requestId` with the
+same body gets the first answer, and with another body `conflict` ([requestId and replay](#requestid-and-replay)).
+
+**The record at start.** Core reads `applied.json` when it starts and logs how many resources it holds. A record that is
+not a regular file (a symbolic link is not followed), is larger than 1 MiB, or is not a report `ReportApplied` would
+accept is logged as ignored and never used; the next report replaces it.
+
 ## Errors
 
 Every error is the same envelope, with the HTTP status its code maps to:
@@ -823,10 +861,17 @@ Every error is the same envelope, with the HTTP status its code maps to:
 
 `fieldErrors` is present only when a named parameter is at fault. `message` is for people; a client decides on `code`.
 
+A refusal's `message` never quotes an id that is not a resource id (longer than 128 bytes, or of another shape). A
+`field` name may carry the key as sent: a mistyped entry is reported under `resources.<key>` before the key is
+validated, and for a client the 4 KiB cap below bounds that. A refusal to a
+further local client (`--client-uid`) is under 4 KiB, its newline included: one that would be longer keeps its `code`
+and is sent with a short fixed `message` and no `fieldErrors`. However much a client sends, Core echoes little of it,
+and the answers its replay memory keeps stay small.
+
 | `code` | HTTP | When |
 |---|---|---|
-| `invalid_argument` | 400 | Body not one JSON object, unknown or mistyped parameter, bad or missing `requestId`, a `GetResources` request that names a bad id or cursor or more than 16 resources, a `GetResourceBody` request with a bad `id`, `generation`, `part` or `from` ([Resources](#resources)) |
-| `unauthenticated` | 401 | The caller is not an admitted local process (see [Local authentication](#local-authentication)) |
+| `invalid_argument` | 400 | Body not one JSON object, unknown or mistyped parameter, bad or missing `requestId`, a `GetResources` request that names a bad id or cursor or more than 16 resources, a `GetResourceBody` request with a bad `id`, `generation`, `part` or `from` ([Resources](#resources)), a `ReportApplied` request with a bad id or entry or more than 4096 resources ([ReportApplied](#reportapplied)) |
+| `unauthenticated` | 401 | The caller is not an admitted local process, or is a further local client calling a method it is not served (see [Local authentication](#local-authentication)) |
 | `not_found` | 404 | No such method, or no such API version; a `GetResourceBody` part the store does not hold |
 | `method_not_allowed` | 405 | Not `POST` |
 | `conflict` | 409 | A `requestId` reused with a different body; a settings call the store's state refuses ([Settings](#settings)); `StartUpdate` while an Update runs ([Update and schedule](#update-and-schedule)) |
@@ -836,8 +881,9 @@ Every error is the same envelope, with the HTTP status its code maps to:
 
 ## requestId and replay
 
-A mutating method (`InitializeSettings`, `SaveSettings`, `StartUpdate`) takes a `requestId` in its parameters: a string of 1 to
-128 printable ASCII characters without spaces. The method declares `requestId` in its own parameters, since unknown
+A mutating method (`InitializeSettings`, `SaveSettings`, `StartUpdate`, `ReportApplied`) takes a `requestId` in its
+parameters: a string of 1 to 128 printable ASCII characters without spaces.
+The method declares `requestId` in its own parameters, since unknown
 parameters are refused. The client makes one per logical operation (a UUID will do) and sends it
 again, with the byte-identical body, to resolve an unknown outcome such as a timeout.
 
@@ -849,6 +895,11 @@ again, with the byte-identical body, to resolve an unknown outcome such as a tim
 - Core remembers the last 4096 finished `requestId`s (one still running is never forgotten), in memory only: a
   restarted Core remembers none. A client that cannot tell
   whether its request ran before a restart reads the state it changed instead of repeating it.
+- The privileged uid's requests and the further local clients' (`--client-uid`) are remembered apart, 4096 each, so
+  nothing a client sends makes Core forget a privileged `requestId`. The clients share one memory of 4096, but each
+  client uid's `requestId`s are its own: one client uid can neither answer nor conflict with another's. The memory
+  itself is shared, so one client can still make Core forget another client's `requestId`s, and a repeat of a
+  forgotten one runs again.
 
 A read-only method takes no `requestId` and is never replayed.
 
@@ -858,6 +909,9 @@ A read-only method takes no `requestId` and is never replayed.
 |---|---|
 | Request body | 1 MiB (`payload_too_large` above) |
 | Resources per `GetResources` call | 16 (`invalid_argument` above) |
+| Resources per `ReportApplied` call | 4096 (`invalid_argument` above) |
+| A refusal to a further local client | under 4 KiB ([Errors](#errors)) |
+| `applied.json` read at start | 1 MiB (ignored above) |
 | Request header | 16 KiB |
 | Reading the header | 5 s; a client that has not sent it by then is disconnected |
 | Reading the whole request | 10 s |
@@ -881,17 +935,33 @@ Two fences, each enough on its own against an unprivileged user:
    anything else, a shared directory such as `/tmp` included, stops the start instead of being changed. Another
    user cannot even connect (`EACCES`).
 2. **Caller uid.** Every request is checked against the admitted uids. Any other caller gets `unauthenticated` and no
-   method runs.
+   method runs. A further local client is then checked against the method it calls: it is served only `GetVersion`,
+   `GetSettings`, `GetResources`, `GetResourceBody` and `ReportApplied`. Any other method, an unknown one included,
+   answers it `unauthenticated` and does not run, so a client learns nothing of the methods it may not call.
+   Within those methods a client reads only what pfb-dns builds from: `GetSettings` serves it the `dns` and
+   `policy/dnsbl` projections (with no `projectionIds`, those two), and refuses any other id as it refuses a projection
+   that does not exist (`invalid_argument`, `no such projection`, field `projectionIds[<i>]`). `GetResources` answers
+   an id outside `dnsbl/*` `not_found` for that id, and `GetResourceBody` answers its body `not_found`, as for a
+   resource the store does not hold. A uid that is both `--allow-uid` and a `--client-uid` is the privileged caller
+   and is served everything. Each request Core serves carries which of the two it is. The mark decides what
+   `GetSettings`, `GetResources` and `GetResourceBody` serve and whether a refusal is shortened, and a call that carries
+   no mark is limited as a client's: only a request checked as the privileged uid's lifts those limits. Which methods
+   a caller may call at all is decided where the request is admitted, not by the mark.
 
 Flags: `--allow-uid UID` is the privileged caller (default 0, root: PHP on pfSense). Each `--client-uid UID` admits one more
-local client. `--socket-group GID` opens the socket's directory (0750) and the socket (0660) to that group, so a client that
+local client, limited to the methods above.
+`--socket-group GID` opens the socket's directory (0750) and the socket (0660) to that group, so a client that
 is not root can connect. Even then, the uid check decides who is served: group membership alone is not enough.
 
 **A second local client: pfb-dns.** pfb-dns will fetch `dnsbl/*` and its settings from Core over this API (map #3813). It
 drops privileges to its own user after start. The pfb-dns ticket admits it by adding `--client-uid <that user's uid>` and
-`--socket-group <a group of that user>` to Core's rc line; Core needs no new code. pfb-dns runs as `unbound` today, so
-admitting that uid admits every process of that user, Unbound included. A dedicated pfb-dns user narrows that, and the
-pfb-dns ticket decides it.
+`--socket-group <a group of that user>` to Core's rc line. pfb-dns runs as `unbound` today, so admitting that uid admits
+every process of that user, Unbound included. A dedicated pfb-dns user narrows that, and the pfb-dns ticket decides it.
+
+*Amendment 2026-11-21 (issue #4036): a further local client was served every method, so admitting pfb-dns's user would
+have let any process of that user call `SaveSettings` or `StartUpdate`. It is now served the read methods pfb-dns needs
+and `ReportApplied` only, reads only the `dns` and `policy/dnsbl` projections and the `dnsbl/*` resources, and has
+a replay memory of its own.*
 
 ## On pfSense
 
