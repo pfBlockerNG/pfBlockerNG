@@ -261,6 +261,48 @@ final class OutpostMirrorMergeTest extends TestCase
 		$this->assertGreaterThan(800, count($rows), 'the corpus walk found fewer set lines than the corpus holds');
 	}
 
+	/** @return array<string, array{?string, string}> */
+	public static function partsOutOfOrder(): array
+	{
+		return [
+			'not sorted'                     => ['ipv4', "5.6.7.8\n1.2.3.4\n"],
+			'a duplicate'                    => ['ipv4', "1.2.3.4\n1.2.3.4\n"],
+			'unsorted lines of another kind' => [NULL, "b\na\n"],
+		];
+	}
+
+	/** A part of members that breaks only the canonical order is told apart from one holding a line that is not a member. */
+	#[DataProvider('partsOutOfOrder')]
+	public function testAPartOfMembersOutOfByteOrderIsRefusedAsOutOfOrder(?string $family, string $body): void
+	{
+		$checked = pfb_outpost_part_check($this->file('part', $body), $family);
+
+		$this->assertIsString($checked['error'], 'the part was accepted: ' . json_encode($checked));
+		$this->assertTrue($checked['order'] ?? FALSE, 'the part was not refused as out of order: ' . json_encode($checked));
+	}
+
+	/** @return array<string, array{?string, string}> */
+	public static function partsWithALineThatIsNotAMember(): array
+	{
+		return [
+			'a range'                         => ['ipv4', "1.2.3.4-1.2.3.9\n"],
+			'a blank line after a member'     => ['ipv4', "1.2.3.4\n\n"],
+			'a last line with no newline'     => ['ipv4', "1.2.3.4\n5.6.7.8"],
+			'a line longer than any member'   => ['ipv4', str_repeat('1', 4096) . "\n"],
+			'a range below a higher member'   => ['ipv4', "5.6.7.8\n1.2.3.4-1.2.3.9\n"],
+			'a # line of another kind'        => [NULL, "#x\n"],
+		];
+	}
+
+	#[DataProvider('partsWithALineThatIsNotAMember')]
+	public function testAPartWithALineThatIsNotAMemberIsNotReportedAsOutOfOrder(?string $family, string $body): void
+	{
+		$checked = pfb_outpost_part_check($this->file('part', $body), $family);
+
+		$this->assertIsString($checked['error'], 'the part was accepted: ' . json_encode($checked));
+		$this->assertArrayNotHasKey('order', $checked, 'a line that is not a member was reported as out of order');
+	}
+
 	public function testAMissingPartIsRefused(): void
 	{
 		$this->assertIsString(pfb_outpost_part_check("{$this->dir}/none", 'ipv4')['error']);
@@ -284,7 +326,6 @@ final class OutpostMirrorMergeTest extends TestCase
 			'every member removed'           => ["1.1.1.1\n2.2.2.2\n", "1.1.1.1\n2.2.2.2\n", '', ''],
 			'nothing changes'                => ["1.1.1.1\n", '', '', "1.1.1.1\n"],
 			'adds after the last member'     => ["1.1.1.1\n", '', "8.8.8.8\n9.9.9.9\n", "1.1.1.1\n8.8.8.8\n9.9.9.9\n"],
-			'a member removed and added back' => ["1.1.1.1\n", "1.1.1.1\n", "1.1.1.1\n", "1.1.1.1\n"],
 		];
 	}
 
@@ -320,6 +361,43 @@ final class OutpostMirrorMergeTest extends TestCase
 		$this->assertIsString($merged['error'], 'the merge went through: ' . json_encode($merged));
 		$this->assertFileDoesNotExist($out, 'a stopped merge left its result behind');
 		$this->assertSame($mirror, file_get_contents("{$this->dir}/mirror"), 'the merge changed its input mirror');
+	}
+
+	/** @return array<string, array{string, string, string}> */
+	public static function overlappingParts(): array
+	{
+		return [
+			'the mirror holds it'                      => ["1.1.1.1\n", "1.1.1.1\n", "1.1.1.1\n"],
+			'the mirror holds it, a lower add first'   => ["1.1.1.1\n9.9.9.9\n", "1.1.1.1\n", "0.0.0.1\n1.1.1.1\n"],
+			'the mirror lacks it'                      => ["1.1.1.1\n", "2.2.2.2\n", "2.2.2.2\n"],
+			'it is the last line of the mirror and of each part' => ["1.1.1.1\n5.5.5.5\n", "1.1.1.1\n5.5.5.5\n", "2.2.2.2\n5.5.5.5\n"],
+		];
+	}
+
+	/**
+	 * Core never names a member in both parts of a delta: applied to a pf table, such parts read as the member absent whatever
+	 * the merged mirror holds. The merge stops on one, as a delta that is not what the reply described.
+	 */
+	#[DataProvider('overlappingParts')]
+	public function testAMemberNamedInBothPartsStopsTheMergeWhateverTheMirrorHolds(string $mirror, string $remove, string $add): void
+	{
+		$out = "{$this->dir}/out";
+		$merged = pfb_outpost_mirror_merge($this->file('mirror', $mirror), $this->file('remove', $remove), $this->file('add', $add), $out);
+
+		$this->assertStringContainsString('both the remove part and the add part', (string) $merged['error'], json_encode($merged));
+		$this->assertArrayNotHasKey('local', $merged, 'parts that overlap are not a failure of this host');
+		$this->assertFileDoesNotExist($out, 'a stopped merge left its result behind');
+	}
+
+	/** A result this host cannot create is a local failure, never a merge that differs from the reply. */
+	public function testAMergeWhoseResultCannotBeCreatedIsALocalFailure(): void
+	{
+		$out = "{$this->dir}/missing/out";
+		$merged = pfb_outpost_mirror_merge($this->file('mirror', "1.1.1.1\n"), $this->file('remove', ''), $this->file('add', "2.2.2.2\n"), $out);
+
+		$this->assertIsString($merged['error'], json_encode($merged));
+		$this->assertTrue($merged['local'] ?? FALSE, 'the failure to create the result was not reported as local: ' . json_encode($merged));
+		$this->assertFileDoesNotExist($out);
 	}
 
 	public function testAMergeWhoseInputIsMissingStops(): void

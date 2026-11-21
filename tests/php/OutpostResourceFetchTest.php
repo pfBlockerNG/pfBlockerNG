@@ -516,6 +516,85 @@ final class OutpostResourceFetchTest extends TestCase
 		$this->assertMirror(self::OLD);
 	}
 
+	/**
+	 * Core never names a member in both parts of a delta. One that does reads, applied to a pf table, as that member absent,
+	 * whatever the merged mirror holds: it is not what the reply described, so it is discarded and the full body fetched.
+	 */
+	public function testADeltaThatAddsAndRemovesTheSameMemberFallsBackToTheFullBody(): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$both = "1.1.1.1\n";
+		$full = "4.4.4.4\n";
+		[$result, $requests] = $this->fetch([self::delta('9', '7', $both, $both, self::OLD), self::text($both), self::text($both),
+			self::full('9', $full), self::text($full)], self::cursor('7', self::OLD));
+
+		$this->assertCount(5, $requests);
+		$this->assertSame(['resources' => [self::ID => []]], $requests[3]['params'], 'the fallback must ask with the empty cursor');
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame(['full', TRUE, NULL, NULL], [$result['kind'], $result['fellBack'], $result['add'], $result['remove']]);
+		$this->assertMirror($full);
+	}
+
+	/** @return array<string, array{string, string}> */
+	public static function deltaPartsOutOfOrder(): array
+	{
+		return [
+			'an add part out of byte order'    => ["3.3.3.3\n2.2.2.2\n", ''],
+			'an add part with a repeated line' => ["2.2.2.2\n2.2.2.2\n", ''],
+			'a remove part out of byte order'  => ['', "192.0.2.7\n1.1.1.1\n"],
+		];
+	}
+
+	/** A delta part of valid members that is not in canonical order did not arrive as described: it falls back. */
+	#[DataProvider('deltaPartsOutOfOrder')]
+	public function testADeltaPartOutOfByteOrderFallsBackToTheFullBody(string $add, string $remove): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$full = "4.4.4.4\n";
+		[$result, $requests] = $this->fetch([self::delta('9', '7', $add, $remove, "9.9.9.9\n"), self::text($add), self::text($remove),
+			self::full('9', $full), self::text($full)], self::cursor('7', self::OLD));
+
+		$this->assertCount(5, $requests);
+		$this->assertSame(['resources' => [self::ID => []]], $requests[3]['params'], 'the fallback must ask with the empty cursor');
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame(['full', TRUE], [$result['kind'], $result['fellBack']]);
+		$this->assertMirror($full);
+	}
+
+	/** A line that is not a member refuses the resource even when the other part only came out of order. */
+	public function testADeltaPartWithALineThatIsNotAMemberBesideOneOutOfOrderDoesNotFallBack(): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$add = "3.3.3.3\n2.2.2.2\n";
+		$remove = "1.2.3.4-1.2.3.9\n";
+		[$result, $requests] = $this->fetch([self::delta('9', '7', $add, $remove, self::OLD), self::text($add), self::text($remove)],
+			self::cursor('7', self::OLD));
+
+		$this->assertCount(3, $requests, 'a part that fails the member check must not be retried as a full body');
+		$this->assertFailed($result, 'members');
+		$this->assertFalse($result['fellBack']);
+		$this->assertMirror(self::OLD);
+	}
+
+	/**
+	 * The merge stages the new mirror beside the old one. When this host cannot create it, the failure is the mirror's: a full
+	 * body would be staged in the same place, so none is asked for.
+	 */
+	public function testADeltaWhoseNewMirrorCannotBeStagedFailsAsTheMirrorWithoutAFallback(): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$this->assertTrue(mkdir("{$this->mirror}.new"));
+		$add = "2.2.2.2\n";
+		[$result, $requests] = $this->fetch([self::delta('9', '7', $add, '', "1.1.1.1\n10.0.0.0/8\n192.0.2.7\n2.2.2.2\n"), self::text($add),
+			self::text('')], self::cursor('7', self::OLD));
+
+		$this->assertSame(['/v1/GetResources', '/v1/GetResourceBody', '/v1/GetResourceBody'], array_column($requests, 'path'));
+		$this->assertFailed($result, 'mirror');
+		$this->assertFalse($result['fellBack']);
+		$this->assertSame(self::OLD, file_get_contents($this->mirror));
+		$this->assertDirectoryExists("{$this->mirror}.new");
+	}
+
 	public function testAFullBodyWithALineThatIsNotAMemberIsRefusedWhole(): void
 	{
 		file_put_contents($this->mirror, self::OLD);
@@ -947,18 +1026,36 @@ final class OutpostResourceFetchTest extends TestCase
 		$this->assertMirror($body);
 	}
 
-	public function testAMirrorEditedOnDiskIsSentWithItsOwnDigestSoCoreAnswersFull(): void
+	public function testAMirrorEditedOnDiskSendsNoCursorSoCoreAnswersFull(): void
 	{
 		file_put_contents($this->mirror, "1.1.1.1\n6.6.6.6\n");
 		$body = "8.8.8.8\n";
 		[$result, $requests] = $this->fetch([self::full('7', $body), self::text($body)], self::cursor('7', self::OLD));
 
-		$sent = $requests[0]['params']['resources'][self::ID];
-		$this->assertSame(['generation' => '7', 'digest' => hash('xxh128', "1.1.1.1\n6.6.6.6\n")], $sent,
-			'the cursor must carry the digest of the mirror as it is on disk, not the stored one');
-		$this->assertNotSame(self::cursor('7', self::OLD)['digest'], $sent['digest']);
+		$this->assertSame(['resources' => [self::ID => []]], $requests[0]['params'],
+			'a mirror that is not the body the cursor records must be sent as no cursor');
 		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame('full', $result['kind']);
 		$this->assertMirror($body);
+	}
+
+	/**
+	 * Scenario: generation 1 with body A was applied; a later fetch left body B in the mirror, but the apply failed before the
+	 * cursor advanced; the store is rebuilt and publishes B as generation 1. Sent generation 1 with B's digest, Core answers
+	 * unchanged and the apply keeps what it applied from A. The cursor records A, so no cursor is sent and B comes in full.
+	 */
+	public function testAMirrorTheCursorDoesNotRecordIsNeverPairedWithTheCursorsGeneration(): void
+	{
+		$b = "8.8.8.8\n";
+		file_put_contents($this->mirror, $b);
+		$paired = ['if' => ['resources' => [self::ID => ['generation' => '1', 'digest' => hash('xxh128', $b)]]],
+			'then' => self::items(['kind' => 'unchanged', 'generation' => '1'])];
+		[$result, $requests] = $this->fetch([$paired + self::full('1', $b), self::text($b)], self::cursor('1', self::OLD));
+
+		$this->assertSame(['resources' => [self::ID => []]], $requests[0]['params'], 'the cursor generation was sent with another body');
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame(['full', '1', hash('xxh128', $b)], [$result['kind'], $result['generation'], $result['digest']]);
+		$this->assertMirror($b);
 	}
 
 	public function testAMissingMirrorSendsNoCursor(): void

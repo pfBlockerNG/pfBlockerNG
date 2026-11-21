@@ -18,7 +18,8 @@ declare(strict_types=1);
  *     connection until the client closes it; and "stall": TRUE, which sends the reply and then holds the connection until the
  *     client closes it (with a "length" over the body: a reply that goes silent part way); "interim": TRUE, which sends an
  *     HTTP 103 block with a Content-Length of 100000 before the reply; and "lengthFirst": TRUE, which sends the
- *     Content-Length before the Content-Type. Each request is appended to the record file as one JSON line
+ *     Content-Length before the Content-Type. An entry may also carry "if", the decoded request body it is matched against,
+ *     and "then", another entry answered in its place when the request body is exactly "if". Each request is appended to the record file as one JSON line
  *     {"path": "<request path>", "params": <the decoded request body>}.
  */
 [, $socket, $record, $status, $body] = $argv + [NULL, NULL, NULL, '200', ''];
@@ -67,7 +68,11 @@ if ($status === 'script') {
 			exit(4);
 		}
 		$path = explode(' ', strtok($request[0], "\r\n") ?: '')[1] ?? '';
-		file_put_contents($record, json_encode(['path' => $path, 'params' => json_decode($request[1], TRUE)]) . "\n", FILE_APPEND);
+		$params = json_decode($request[1], TRUE);
+		file_put_contents($record, json_encode(['path' => $path, 'params' => $params]) . "\n", FILE_APPEND);
+		if (array_key_exists('if', $reply) && $params === $reply['if']) {
+			$reply = $reply['then'];
+		}
 		if (empty($reply['hang'])) {
 			$text = (string) $reply['body'];
 			$length = empty($reply['close']) ? 'Content-Length: ' . ($reply['length'] ?? strlen($text)) : '';
