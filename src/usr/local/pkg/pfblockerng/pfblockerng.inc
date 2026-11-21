@@ -4538,6 +4538,436 @@ function pfb_core_call(string $method, array $params = [], ?string $socket = NUL
 	return ['status' => $status, 'body' => $body, 'error' => NULL];
 }
 
+/** The Outpost apply's cursor file in the database folder (issue #4037), and the largest one that is read. */
+const PFB_OUTPOST_CURSOR_FILE = 'pfb_apply_cursors.json';
+const PFB_OUTPOST_CURSOR_MAX = 1048576;
+/** The longest member of an IP set, its newline excluded; any other resource's member may be as long as Core's. */
+const PFB_OUTPOST_IP_MEMBER_MAX = 64;
+const PFB_OUTPOST_MEMBER_MAX = 1048576;
+
+/**
+ * Fetch one part of a resource with GetResourceBody (docs/misc/core-api-protocol.md "GetResourceBody") into $file, a handle
+ * open for reading and writing at its start, without holding the body in memory. On a failure the file holds no body: the
+ * caller discards it.
+ *
+ * @param array<string, string> $params id, generation, part, and from with add and remove
+ * @param resource $file
+ * @return array{status: int, code: ?string, error: ?string} error NULL once the whole body is in $file; status 0 when no HTTP
+ *   reply came; code the error envelope's code when there is one
+ */
+function pfb_core_fetch_body(array $params, $file, ?string $socket = NULL, int $timeout = 30): array {
+	global $pfb;
+	$ch = curl_init('http://localhost/' . PFB_CORE_API_VERSION . '/GetResourceBody');
+	curl_setopt_array($ch, [
+		CURLOPT_UNIX_SOCKET_PATH => $socket ?? $pfb['core_socket'],
+		CURLOPT_POST             => TRUE,
+		CURLOPT_POSTFIELDS       => (string) json_encode((object) $params),
+		CURLOPT_HTTPHEADER       => ['Content-Type: application/json', 'Expect:'],
+		CURLOPT_FILE             => $file,
+		CURLOPT_CONNECTTIMEOUT   => 5,
+		CURLOPT_TIMEOUT          => $timeout,
+	]);
+	$done = curl_exec($ch);
+	$status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+	$type = strtolower((string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE));
+	$curlError = curl_error($ch);
+	if ($done !== TRUE) {
+		return ['status' => $status, 'code' => NULL, 'error' => "the body did not arrive whole: {$curlError}"];
+	}
+	if ($status === 200 && str_starts_with($type, 'text/plain')) {
+		return ['status' => 200, 'code' => NULL, 'error' => NULL];
+	}
+	rewind($file);
+	$reply = json_decode((string) stream_get_contents($file, 65536), TRUE);
+	$code = is_array($reply) && is_string($reply['error']['code'] ?? NULL) ? $reply['error']['code'] : NULL;
+	return ['status' => $status, 'code' => $code, 'error' => "GetResourceBody answered HTTP {$status}" . ($code === NULL ? " ({$type})" : " ({$code})")];
+}
+
+/** Whether $id has the shape of a Core resource id (go/pfb_core/resources ValidID). */
+function pfb_outpost_resource_id_valid(string $id): bool {
+	return strlen($id) <= 128 && preg_match('~^(?:ip-(?:set|aggregate)/[A-Za-z0-9_-]+/ipv[46]|geo-catalog|dnsbl/[A-Za-z0-9_-]+)$~D', $id) === 1;
+}
+
+/** Whether $generation is a generation as Core writes one: a string of decimal digits that fits 64 bits. */
+function pfb_outpost_generation_valid(mixed $generation): bool {
+	if (!is_string($generation) || !ctype_digit($generation)) {
+		return FALSE;
+	}
+	$digits = ltrim($generation, '0');
+	return strlen($digits) < 20 || (strlen($digits) === 20 && strcmp($digits, '18446744073709551615') <= 0);
+}
+
+/** Order two valid generations by value without arithmetic: a generation can exceed what a PHP integer holds. */
+function pfb_outpost_generation_cmp(string $a, string $b): int {
+	$a = ltrim($a, '0');
+	$b = ltrim($b, '0');
+	return strlen($a) <=> strlen($b) ?: strcmp($a, $b) <=> 0;
+}
+
+function pfb_outpost_digest_valid(mixed $digest): bool {
+	return is_string($digest) && strlen($digest) === 32 && strspn($digest, '0123456789abcdef') === 32;
+}
+
+/**
+ * Whether $member is a member of an IP set of $family ('ipv4' or 'ipv6') in canonical form: an address exactly as
+ * inet_ntop() writes it (no leading zero, lower case, IPv6 compressed, no zone), optionally followed by '/' and a prefix
+ * length of the family in decimal without a sign or a leading zero.
+ */
+function pfb_outpost_ip_member_valid(string $member, string $family): bool {
+	if (strspn($member, '0123456789abcdef.:/') !== strlen($member)) {
+		return FALSE;
+	}
+	[$address, $prefix] = explode('/', $member, 2) + [1 => NULL];
+	$bits = $family === 'ipv4' ? 32 : 128;
+	$packed = @inet_pton($address);
+	if (!is_string($packed) || strlen($packed) * 8 !== $bits || inet_ntop($packed) !== $address) {
+		return FALSE;
+	}
+	return $prefix === NULL || (ctype_digit($prefix) && ($prefix === '0' || $prefix[0] !== '0') && (int) $prefix <= $bits);
+}
+
+/**
+ * Check a fetched part line by line, a line at a time: every line ends in a newline, is a member of the resource (an IP
+ * member of $family, or with $family NULL Core's rule: not empty, valid UTF-8, no control character, no leading '#'), and
+ * comes strictly after the one before it in byte order (sorted and unique).
+ *
+ * @param ?string $family 'ipv4' or 'ipv6' for an IP set or aggregate, NULL for any other resource
+ * @return array{entries: int, error: ?string} the line count, or why the part is refused whole
+ */
+function pfb_outpost_part_check(string $path, ?string $family): array {
+	$fh = @fopen($path, 'rb');
+	if ($fh === FALSE) {
+		return ['entries' => 0, 'error' => "{$path} cannot be read"];
+	}
+	$max = $family === NULL ? PFB_OUTPOST_MEMBER_MAX : PFB_OUTPOST_IP_MEMBER_MAX;
+	$entries = 0;
+	$prev = NULL;
+	$error = NULL;
+	while ($error === NULL && ($line = fgets($fh, $max + 2)) !== FALSE) {
+		$entries++;
+		$member = substr($line, 0, -1);
+		if (!str_ends_with($line, "\n")) {
+			$error = "line {$entries} is longer than a member or ends without a newline";
+		} elseif (!($family === NULL ? $member !== '' && $member[0] !== '#' && preg_match('/^\P{Cc}+$/Du', $member) === 1
+			: pfb_outpost_ip_member_valid($member, $family))) {
+			$error = "line {$entries} is not a member";
+		} elseif ($prev !== NULL && strcmp($prev, $member) >= 0) {
+			$error = "line {$entries} does not come after the line before it in byte order";
+		}
+		$prev = $member;
+	}
+	fclose($fh);
+	return $error === NULL ? ['entries' => $entries, 'error' => NULL] : ['entries' => 0, 'error' => "{$path}: {$error}"];
+}
+
+/**
+ * Write to $out the mirror with the members of $remove taken out and those of $add put in, by one pass over the three sorted
+ * files, a line at a time: no member list is held in memory. A remove line the mirror lacks, an add line it already holds,
+ * or an input out of byte order stops the merge, and $out is removed.
+ *
+ * @return array{entries: int, error: ?string} the members written, or why the merge stopped
+ */
+function pfb_outpost_mirror_merge(string $mirror, string $remove, string $add, string $out): array {
+	$names = ['the mirror', 'the remove part', 'the add part'];
+	$in = [@fopen($mirror, 'rb'), @fopen($remove, 'rb'), @fopen($add, 'rb')];
+	@unlink($out);
+	$w = in_array(FALSE, $in, TRUE) ? FALSE : @fopen($out, 'xb');
+	$error = $w === FALSE ? 'an input cannot be read or the result cannot be created' : NULL;
+	$prev = [NULL, NULL, NULL];
+	$next = static function (int $i) use (&$in, &$prev, &$error, $names): ?string {
+		$line = $error === NULL ? fgets($in[$i]) : FALSE;
+		if ($line === FALSE) {
+			return NULL;
+		}
+		$member = substr($line, 0, -1);
+		if (!str_ends_with($line, "\n") || ($prev[$i] !== NULL && strcmp($prev[$i], $member) >= 0)) {
+			$error = "{$names[$i]} is not in canonical form";
+			return NULL;
+		}
+		return $prev[$i] = $member;
+	};
+	$entries = 0;
+	[$m, $r, $a] = [$next(0), $next(1), $next(2)];
+	while ($error === NULL && ($m !== NULL || $a !== NULL || $r !== NULL)) {
+		if ($r !== NULL && ($m === NULL || strcmp($r, $m) < 0)) {
+			$error = 'the remove part names a member the mirror does not hold';
+		} elseif ($r !== NULL && $r === $m) {
+			[$m, $r] = [$next(0), $next(1)];
+		} elseif ($a !== NULL && $a === $m) {
+			$error = 'the add part names a member the mirror already holds';
+		} else {
+			$take = $a !== NULL && ($m === NULL || strcmp($a, $m) < 0);
+			if (fwrite($w, ($take ? $a : $m) . "\n") === FALSE) {
+				$error = "{$out} cannot be written";
+			}
+			$entries++;
+			if ($take) {
+				$a = $next(2);
+			} else {
+				$m = $next(0);
+			}
+		}
+	}
+	foreach ($in as $fh) {
+		if ($fh !== FALSE) {
+			fclose($fh);
+		}
+	}
+	if ($w !== FALSE && !fclose($w)) {
+		$error ??= "{$out} cannot be written";
+	}
+	if ($error !== NULL) {
+		@unlink($out);
+		return ['entries' => 0, 'error' => $error];
+	}
+	return ['entries' => $entries, 'error' => NULL];
+}
+
+/**
+ * Fetch one resource from the Core API for the Outpost apply (docs/misc/core-api-protocol.md "Resources", spec section 8.2)
+ * and bring its mirror to the generation Core serves. The cursor sent is the stored generation with the digest of the mirror
+ * as it is on disk now, so an edited mirror is answered full; a missing mirror, or one that is not a regular file, sends none.
+ * A delta's parts are fetched to $workdir/add and $workdir/remove and merged into the mirror; a merge that is not the
+ * reply's digest is discarded and the full body fetched instead. Every part is checked by pfb_outpost_part_check() and the
+ * new mirror verified before it replaces the old one by rename: any failure leaves the old mirror in place.
+ *
+ * failure, when ok is FALSE: unreachable (no HTTP reply), core_unavailable (the call answered unavailable), refused (any
+ * other error answered to the call; code names it), unavailable (the resource or its body), reply (an answer of the wrong
+ * shape, a generation going backwards in a delta included), body (a body that did not arrive whole, is not plain text, or
+ * was pruned twice), members (a line that is not a canonical member), verify (a body or part that is not the line count or
+ * digest the reply named), mirror (a file beside the mirror, a part, or the rename could not be written).
+ *
+ * @param ?array{generation: string, digest: string, entries: int} $cursor what the cursor file holds for $id, NULL for none
+ * @param string $workdir a directory of this resource's own for the delta parts
+ * @return array{ok: bool, kind: ?string, failure: ?string, code: ?string, error: ?string, fellBack: bool, generation: ?string,
+ *   digest: ?string, entries: ?int, metadata: ?array<mixed>, addEntries: int, removeEntries: int, add: ?string, remove: ?string,
+ *   mirror: string} kind unchanged, delta, full, or not_found (the resource left the configuration)
+ */
+function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $workdir, ?string $socket = NULL, int $timeout = 30): array {
+	$result = ['ok' => FALSE, 'kind' => NULL, 'failure' => NULL, 'code' => NULL, 'error' => NULL, 'fellBack' => FALSE,
+		'generation' => NULL, 'digest' => NULL, 'entries' => NULL, 'metadata' => NULL, 'addEntries' => 0, 'removeEntries' => 0,
+		'add' => NULL, 'remove' => NULL, 'mirror' => $mirror];
+	$fail = static function (string $failure, string $error, ?string $code = NULL) use (&$result): array {
+		return ['failure' => $failure, 'error' => "{$result['mirror']}: {$error}", 'code' => $code] + $result;
+	};
+	$family = preg_match('~^ip-(?:set|aggregate)/[^/]+/(ipv[46])$~D', $id, $m) === 1 ? $m[1] : NULL;
+	$sent = [];
+	clearstatcache(TRUE, $mirror);
+	$digest = $cursor !== NULL && !is_link($mirror) && is_file($mirror) ? pfb_content_hash($mirror) : FALSE;
+	if (is_string($digest)) {
+		$sent = ['generation' => (string) $cursor['generation'], 'digest' => $digest];
+	}
+	$staged = "{$mirror}.new";
+	// a body pruned by a publish that raced the read: ask again once (protocol "GetResourceBody")
+	$raced = 0;
+	while (TRUE) {
+		$asked = pfb_core_call('GetResources', ['resources' => [$id => (object) $sent]], $socket, $timeout);
+		$code = $asked['body']['error']['code'] ?? NULL;
+		if ($asked['status'] === 0) {
+			return $fail('unreachable', (string) $asked['error']);
+		}
+		if ($asked['status'] !== 200) {
+			return $fail($code === 'unavailable' ? 'core_unavailable' : 'refused', "GetResources answered HTTP {$asked['status']}",
+				is_string($code) ? $code : NULL);
+		}
+		$items = $asked['body']['resources'] ?? NULL;
+		$item = is_array($items) && array_keys($items) === [$id] ? $items[$id] : NULL;
+		if (!is_array($item)) {
+			return $fail('reply', 'GetResources did not answer one item for the resource');
+		}
+		if (isset($item['error'])) {
+			$code = $item['error']['code'] ?? NULL;
+			if ($code === 'not_found') {
+				return ['ok' => TRUE, 'kind' => 'not_found'] + $result;
+			}
+			return $code === 'unavailable' ? $fail('unavailable', 'the store cannot serve the resource', 'unavailable')
+				: $fail('reply', 'the item holds an unknown error');
+		}
+		$kind = $item['kind'] ?? NULL;
+		$generation = $item['generation'] ?? NULL;
+		$described = pfb_outpost_digest_valid($item['digest'] ?? NULL) && is_int($item['entries'] ?? NULL) && $item['entries'] >= 0
+			&& is_array($item['metadata'] ?? NULL);
+		$isDelta = $kind === 'delta' && $sent !== [] && $described && ($item['from'] ?? NULL) === $sent['generation']
+			&& is_int($item['addEntries'] ?? NULL) && $item['addEntries'] >= 0 && is_int($item['removeEntries'] ?? NULL)
+			&& $item['removeEntries'] >= 0;
+		if (!pfb_outpost_generation_valid($generation)) {
+			return $fail('reply', 'the item has no valid generation');
+		}
+		if ($kind === 'unchanged' && $sent !== [] && $generation === $sent['generation']) {
+			return ['ok' => TRUE, 'kind' => 'unchanged', 'generation' => $generation] + $result;
+		}
+		if (!($kind === 'full' && $described) && !($isDelta && pfb_outpost_generation_cmp($generation, $sent['generation']) > 0)) {
+			return $fail('reply', 'the item is not an answer to the cursor sent');
+		}
+		$result = ['generation' => $generation, 'digest' => $item['digest'], 'entries' => $item['entries'],
+			'metadata' => $item['metadata']] + $result;
+		$parts = $kind === 'full' ? ['members' => [$staged, $item['entries']]]
+			: ['add' => ["{$workdir}/add", $item['addEntries']], 'remove' => ["{$workdir}/remove", $item['removeEntries']]];
+		$failed = NULL;
+		foreach ($parts as $part => [$path]) {
+			@unlink($path);
+			$fh = @fopen($path, 'x+b');
+			if ($fh === FALSE) {
+				$failed = $fail('mirror', "{$path} cannot be created");
+				break;
+			}
+			$got = pfb_core_fetch_body(['id' => $id, 'generation' => $generation, 'part' => $part]
+				+ ($part === 'members' ? [] : ['from' => $sent['generation']]), $fh, $socket, $timeout);
+			fclose($fh);
+			if ($got['error'] !== NULL) {
+				$failed = match (TRUE) {
+					$got['code'] === 'not_found' && ++$raced === 1 => 'again',
+					$got['status'] === 0                             => $fail('unreachable', $got['error']),
+					$got['code'] === 'unavailable'                   => $fail('unavailable', $got['error'], 'unavailable'),
+					default                                          => $fail('body', $got['error'], $got['code']),
+				};
+				break;
+			}
+		}
+		// every part is fetched before any is checked: a part refused here is never asked for again
+		foreach ($failed === NULL ? $parts : [] as $part => [$path, $lines]) {
+			$checked = pfb_outpost_part_check($path, $family);
+			if ($checked['error'] !== NULL) {
+				$failed = $fail('members', $checked['error']);
+				break;
+			}
+			if ($checked['entries'] !== $lines) {
+				$failed = $fail('verify', "the {$part} part holds {$checked['entries']} lines, not {$lines}");
+				break;
+			}
+		}
+		if ($failed !== NULL) {
+			foreach ($parts as [$path]) {
+				@unlink($path);
+			}
+			if ($failed === 'again') {
+				continue;
+			}
+			return $failed;
+		}
+		if ($kind === 'delta') {
+			$merged = pfb_outpost_mirror_merge($mirror, "{$workdir}/remove", "{$workdir}/add", $staged);
+			if ($merged['error'] !== NULL || $merged['entries'] !== $item['entries'] || pfb_content_hash($staged) !== $item['digest']) {
+				// the patch is discarded and the full body applied (spec section 8.3)
+				foreach ([$staged, "{$workdir}/add", "{$workdir}/remove"] as $path) {
+					@unlink($path);
+				}
+				$result['fellBack'] = TRUE;
+				$sent = [];
+				continue;
+			}
+		} elseif (pfb_content_hash($staged) !== $item['digest']) {
+			@unlink($staged);
+			return $fail('verify', 'the body is not the digest the reply named');
+		}
+		if (!@rename($staged, $mirror)) {
+			foreach ([$staged, "{$workdir}/add", "{$workdir}/remove"] as $path) {
+				@unlink($path);
+			}
+			return $fail('mirror', 'the new mirror cannot replace the old one');
+		}
+		return ['ok' => TRUE, 'kind' => $kind] + ($kind === 'full' ? [] : ['addEntries' => $item['addEntries'],
+			'removeEntries' => $item['removeEntries'], 'add' => "{$workdir}/add", 'remove' => "{$workdir}/remove"]) + $result;
+	}
+}
+
+/**
+ * Read the Outpost's cursor file: per resource id, the generation, digest and entries it applied. A file that is missing,
+ * not a regular file (a symbolic link is not followed), larger than PFB_OUTPOST_CURSOR_MAX, not JSON or not of schema 1, or
+ * that holds one invalid entry, is "no cursors" and the error says why: every resource is then answered full.
+ *
+ * @param ?string $path NULL for {$pfb['dbdir']}/pfb_apply_cursors.json
+ * @return array{cursors: array<string, array{generation: string, digest: string, entries: int}>, error: ?string}
+ */
+function pfb_outpost_cursors_read(?string $path = NULL): array {
+	global $pfb;
+	$path ??= "{$pfb['dbdir']}/" . PFB_OUTPOST_CURSOR_FILE;
+	$none = static fn (string $why): array => ['cursors' => [], 'error' => "the cursor file {$path} {$why}: no cursor is trusted"];
+	clearstatcache(TRUE, $path);
+	$stat = @lstat($path);
+	if ($stat === FALSE) {
+		return $none('does not exist');
+	}
+	if (($stat['mode'] & 0170000) !== 0100000 || $stat['size'] > PFB_OUTPOST_CURSOR_MAX) {
+		return $none('is not a regular file of at most 1 MiB');
+	}
+	$doc = json_decode((string) @file_get_contents($path, FALSE, NULL, 0, PFB_OUTPOST_CURSOR_MAX), TRUE, 8);
+	$entries = is_array($doc) && ($doc['schema'] ?? NULL) === 1 ? $doc['resources'] ?? NULL : NULL;
+	if (!is_array($entries) || ($entries !== [] && array_is_list($entries))) {
+		return $none('is not of schema 1');
+	}
+	$cursors = [];
+	foreach ($entries as $id => $c) {
+		if (!is_array($c) || !pfb_outpost_cursor_valid((string) $id, $c['generation'] ?? NULL, $c['digest'] ?? NULL, $c['entries'] ?? NULL)) {
+			return $none('holds an entry that is not a cursor');
+		}
+		$cursors[(string) $id] = ['generation' => $c['generation'], 'digest' => $c['digest'], 'entries' => $c['entries']];
+	}
+	return ['cursors' => $cursors, 'error' => NULL];
+}
+
+function pfb_outpost_cursor_valid(string $id, mixed $generation, mixed $digest, mixed $entries): bool {
+	return pfb_outpost_resource_id_valid($id) && pfb_outpost_generation_valid($generation) && pfb_outpost_digest_valid($digest)
+		&& is_int($entries) && $entries >= 0;
+}
+
+/**
+ * Write the cursor file whole, mode 0600: a new temporary file beside it, synced, then renamed over it (a symbolic link
+ * there is replaced, never followed). Only while this process holds the apply lock (the feed-pass lock).
+ *
+ * @param array<string, array{generation: string, digest: string, entries: int}> $cursors
+ * @return ?string NULL once written, else why not
+ */
+function pfb_outpost_cursors_write(array $cursors, string $path): ?string {
+	if (!isset($GLOBALS['pfb_feed_pass_lock']) || !is_resource($GLOBALS['pfb_feed_pass_lock'])) {
+		return "the cursor file {$path} is written only under the apply lock";
+	}
+	ksort($cursors, SORT_STRING);
+	$json = json_encode(['schema' => 1, 'resources' => (object) $cursors], JSON_UNESCAPED_SLASHES) . "\n";
+	$tmp = "{$path}.tmp";
+	@unlink($tmp);
+	$fh = @fopen($tmp, 'xb');
+	$written = $fh !== FALSE && @chmod($tmp, 0600) && fwrite($fh, $json) === strlen($json) && fflush($fh) && fsync($fh);
+	if ($fh !== FALSE) {
+		fclose($fh);
+	}
+	if (!$written || !@rename($tmp, $path)) {
+		@unlink($tmp);
+		return "the cursor file {$path} cannot be written";
+	}
+	return NULL;
+}
+
+/**
+ * Record that the Outpost applied $generation of resource $id, whose body has $digest and $entries members. An untrusted
+ * cursor file is replaced whole: losing the other cursors is safe, their resources are answered full.
+ *
+ * @return ?string NULL once recorded, else why not
+ */
+function pfb_outpost_cursor_advance(string $id, string $generation, string $digest, int $entries, ?string $path = NULL): ?string {
+	global $pfb;
+	$path ??= "{$pfb['dbdir']}/" . PFB_OUTPOST_CURSOR_FILE;
+	if (!pfb_outpost_cursor_valid($id, $generation, $digest, $entries)) {
+		return 'refusing to record a cursor that is not one';
+	}
+	$cursors = pfb_outpost_cursors_read($path)['cursors'];
+	$cursors[$id] = ['generation' => $generation, 'digest' => $digest, 'entries' => $entries];
+	return pfb_outpost_cursors_write($cursors, $path);
+}
+
+/**
+ * Forget the cursor of resource $id, a resource that left the configuration.
+ *
+ * @return ?string NULL once written, else why not
+ */
+function pfb_outpost_cursor_drop(string $id, ?string $path = NULL): ?string {
+	global $pfb;
+	$path ??= "{$pfb['dbdir']}/" . PFB_OUTPOST_CURSOR_FILE;
+	$cursors = pfb_outpost_cursors_read($path)['cursors'];
+	unset($cursors[$id]);
+	return pfb_outpost_cursors_write($cursors, $path);
+}
+
 /**
  * Core's native `settings/dns` fields (docs/misc/core-api-protocol.md, issue #3913), from config.xml: each value is what
  * pfb_unbound_python_ini() writes for it, so the in-memory config of a page that has not saved yet answers too. The noAAAA and
