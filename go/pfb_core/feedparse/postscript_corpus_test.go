@@ -13,7 +13,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 )
 
 // Replays testdata/postscript.json (schema: testdata/README.md): a list's post-script through PostScript, DNSBL on a staged
@@ -22,8 +21,8 @@ import (
 // the case holds today's answer in old_expect, which only that runner asserts.
 //
 // A script that blocks reports through a fifo that it is running, and the runner then ends the context as the 300-second
-// limit does (limitOnEvent): the kill is driven by that event. A child the case expects gone holds a fifo open, and its
-// end is the fifo's end of file.
+// limit does (limitOnEvent): the kill is driven by that event. A child the case expects gone holds a fifo open, and the
+// fifo's end of file, read once the run has returned, says it is gone.
 
 type psDoc struct {
 	Schema *int            `json:"schema"`
@@ -276,13 +275,25 @@ func replayPostScript(t *testing.T, doc psDoc, c psPostCaseRaw) {
 	var log, errs, transcript bytes.Buffer
 	p := PostScript{Name: expand(*c.Name), Dirs: []string{filepath.Join(root, "list"), filepath.Join(root, "pkg")},
 		Header: *doc.Header, Log: &log, Errors: &errs, Transcript: &transcript}
+	var wantAlive *bool
+	if err := json.Unmarshal(c.Expect.Alive, &wantAlive); err != nil {
+		t.Fatalf("alive: a bool or null: %v", err)
+	}
+	var alive bool
+	returned := func() { // the child's state at the moment the run returned
+		if wantAlive != nil {
+			alive = childAlive(t, test)
+		}
+	}
 	orig := filepath.Join(feed, "feed.orig")
 	var got PostScriptResult
 	var between map[string]string
 	if *c.ListType == "dnsbl" {
 		got = p.RunDNSBL(ctx, orig, filepath.Join(feed, "feed.post"))
+		returned()
 	} else {
 		got = p.RunIP(ctx, orig, filepath.Join(feed, "feed.orig.post"), *c.ListType)
+		returned()
 		between = listFeed(t, feed) // what the caller's empty-feed check reads
 		got.Restore()
 	}
@@ -333,37 +344,26 @@ func replayPostScript(t *testing.T, doc psDoc, c psPostCaseRaw) {
 		t.Errorf("Skipped, Reason, Status = %v, %q, %d; want %q, %d, skipped exactly when nothing is executed",
 			got.Skipped, got.Reason, got.Status, *e.Reason, *e.Status)
 	}
-	var wantAlive *bool
-	if err := json.Unmarshal(e.Alive, &wantAlive); err != nil {
-		t.Fatalf("alive: a bool or null: %v", err)
-	}
-	if wantAlive != nil {
-		if alive := childAlive(t, test, *wantAlive); alive != *wantAlive {
-			t.Errorf("the script's child alive after the run = %v; want %v", alive, *wantAlive)
-		}
+	if wantAlive != nil && alive != *wantAlive {
+		t.Errorf("the script's child alive when the run returned = %v; want %v", alive, *wantAlive)
 	}
 }
 
-// childAlive reports whether the child the script started still holds the alive fifo, which it opened before it reported
-// ready: a child expected gone is given until the watchdog to close it, one expected alive must hold it now. A child left
-// alive is killed when the test ends.
-func childAlive(t *testing.T, test string, want bool) bool {
+// childAlive reports whether the child the script started holds the alive fifo, which it opened before it reported ready,
+// now: one non-blocking read, where end of file means every writer has gone and "would block" means one remains. A child
+// left alive is killed when the test ends.
+func childAlive(t *testing.T, test string) bool {
 	t.Helper()
-	f, err := os.OpenFile(filepath.Join(test, "alive"), os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	fd, err := syscall.Open(filepath.Join(test, "alive"), syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	deadline := time.Now()
-	if !want {
-		deadline = deadline.Add(watchdog)
-	}
-	if err := f.SetReadDeadline(deadline); err != nil {
-		t.Fatal(err)
-	}
-	_, err = f.Read(make([]byte, 1))
-	if !errors.Is(err, os.ErrDeadlineExceeded) {
+	defer syscall.Close(fd)
+	switch n, err := syscall.Read(fd, make([]byte, 1)); {
+	case n == 0 && err == nil:
 		return false
+	case !errors.Is(err, syscall.EAGAIN):
+		t.Fatalf("reading the alive fifo: %d, %v", n, err)
 	}
 	if b, err := os.ReadFile(filepath.Join(test, "pid")); err == nil {
 		if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && pid > 0 {

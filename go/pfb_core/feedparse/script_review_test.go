@@ -56,7 +56,8 @@ func TestPostScriptRunsTheVettedFileNotOneOnPath(t *testing.T) {
 }
 
 // A post-script whose caller cancels the run while it runs is reported as cancelled, with its own line and no TIMED OUT;
-// the IP download is put back as after any failure.
+// the IP download, which the script changed before it reported, is put back by RunIP itself as after any failure, and no
+// staged copy or restore point is left.
 func TestPostScriptCancelledWhileRunningIsNotATimeout(t *testing.T) {
 	for _, kind := range []string{"dnsbl", "_v4"} {
 		t.Run(kind, func(t *testing.T) {
@@ -65,14 +66,16 @@ func TestPostScriptCancelledWhileRunningIsNotATimeout(t *testing.T) {
 			defer cancel()
 			reported, release := blockOnFifo(t, dir, cancel)
 			defer release()
-			orig := writeScript(t, dir, "post.sh", blockingScript)
+			orig := writeScript(t, dir, "post.sh", "#!/bin/sh\necho changed > \"$1\"\n"+blockingScript[len("#!/bin/sh\n"):])
 			var log, errs, transcript bytes.Buffer
 			p := PostScript{Name: "post.sh", Dirs: []string{dir}, Header: "hdr", Log: &log, Errors: &errs, Transcript: &transcript}
 			var r PostScriptResult
+			staged := filepath.Join(dir, "feed.post")
 			if kind == "dnsbl" {
-				r = p.RunDNSBL(ctx, orig, filepath.Join(dir, "feed.post"))
+				r = p.RunDNSBL(ctx, orig, staged)
 			} else {
-				r = p.RunIP(ctx, orig, filepath.Join(dir, "feed.orig.post"), kind)
+				staged = filepath.Join(dir, "feed.orig.post")
+				r = p.RunIP(ctx, orig, staged, kind)
 			}
 			select {
 			case <-reported:
@@ -89,7 +92,10 @@ func TestPostScriptCancelledWhileRunningIsNotATimeout(t *testing.T) {
 				t.Errorf("result %+v; want a cancellation", r)
 			}
 			if b, err := os.ReadFile(orig); err != nil || string(b) != "a.example\n" {
-				t.Errorf("download %q, %v; want it untouched", b, err)
+				t.Errorf("download %q, %v; want the original", b, err)
+			}
+			if _, err := os.Lstat(staged); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("%s after the run: %v; want it gone", filepath.Base(staged), err)
 			}
 		})
 	}

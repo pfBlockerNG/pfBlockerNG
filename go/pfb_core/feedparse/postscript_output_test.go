@@ -65,14 +65,16 @@ func postScriptWhileBlocked(t *testing.T, body string, p PostScript, watched *wa
 		t.Fatal(err)
 	}
 	p.Name, p.Dirs, p.Header = "post.sh", []string{dir}, "hdr"
+	// Read-write, so that opening it waits for no one; held until the run has returned, so that a line written before the
+	// script opened the fifo is still queued when it does.
+	w, err := os.OpenFile(block, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
 	result := make(chan PostScriptResult, 1)
 	go func() { result <- p.RunDNSBL(context.Background(), orig, filepath.Join(dir, "feed.post")) }()
 	unblock := func() {
-		w, err := os.OpenFile(block, os.O_RDWR, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer w.Close()
 		if _, err := w.WriteString("go\n"); err != nil {
 			t.Fatal(err)
 		}
