@@ -64,7 +64,7 @@ func runHooks(ctx context.Context, when, stateDir, backendCmd string, runner hoo
 		return 2
 	}
 	backend, kind := settingsBackend(stateDir, backendCmd)
-	if info, err := os.Stat(stateDir); kind == "file" && (err != nil || !info.IsDir()) {
+	if info, err := statStateDir(stateDir); kind == "file" && (err != nil || !info.IsDir()) {
 		reason := "is not a directory"
 		var pathErr *fs.PathError
 		if errors.As(err, &pathErr) { // its Err alone: the error text holds the path unquoted
@@ -92,6 +92,9 @@ func runHooks(ctx context.Context, when, stateDir, backendCmd string, runner hoo
 	}
 	return 0
 }
+
+// statStateDir is os.Stat of the --state-dir. A variable for the tests alone.
+var statStateDir = os.Stat
 
 // hookInput is the read of a --run-hooks context from stdin.
 type hookInput struct {
