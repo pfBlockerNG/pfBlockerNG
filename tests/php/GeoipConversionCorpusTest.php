@@ -135,13 +135,24 @@ final class GeoipConversionCorpusTest extends TestCase
 		$pages = json_decode((string) file_get_contents(__DIR__ . '/../geoip/fixtures/parity_pages.json'), TRUE, 512,
 			JSON_THROW_ON_ERROR);
 		$this->assertSame($pages[basename($file, '.json')], $this->pages(), basename($file) . ': the pages written');
+
+		// The same pages from the geo-catalog (#4037): where the rows read back are the catalog Core publishes in this
+		// scenario, the renderer given them as Core writes them (JSON Lines in byte order) writes today's pages.
+		if ($rows !== NULL && ($case['expect']['catalog'] ?? NULL) === $actual['catalog']) {
+			$lines = array_map(static fn (array $row): string => json_encode($row, JSON_THROW_ON_ERROR), $rows);
+			sort($lines, SORT_STRING);
+			$this->assertNotFalse(file_put_contents("{$this->root}/tools/geo_catalog", implode("\n", $lines) . "\n"));
+			$this->assertTrue(mkdir("{$this->root}/www_catalog", 0700));
+			$this->assertNull(pfb_geoip_render_catalog("{$this->root}/tools/geo_catalog", "{$this->root}/www_catalog"));
+			$this->assertSame($this->pages(), $this->pages('www_catalog'), basename($file) . ': the pages rendered from the catalog');
+		}
 	}
 
-	/** @return array<string,string> every page under www/, file name => sha256 of its bytes */
-	private function pages(): array
+	/** @return array<string,string> every page under $dir (under the root), file name => sha256 of its bytes */
+	private function pages(string $dir = 'www'): array
 	{
 		$out = [];
-		foreach (glob("{$this->root}/www/*") ?: [] as $page) {
+		foreach (glob("{$this->root}/{$dir}/*") ?: [] as $page) {
 			$out[basename($page)] = hash_file('sha256', $page);
 		}
 		ksort($out, SORT_STRING);
