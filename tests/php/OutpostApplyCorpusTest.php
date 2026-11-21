@@ -16,11 +16,18 @@ require_once __DIR__ . '/support/ProcessRunner.php';
  * Each scenario runs in a child process (support/OutpostApplyCorpusWorker.php) as one or more passes over the PHPUnit
  * doubles. A pass's record is everything a reader of pfSense could observe: the pfctl calls in order with the lines of
  * each -f file, the kernel tables and the mirrors after it, aliases/alias, filter/rule, nat/rule, the write_config()
- * descriptions in order, the service calls, the `post` hook's PFB_* environment, the pending mark and due-ledger flag,
- * the apply record, the ADR-61 ledger, the unlock and IP cache files, the main log, and what the pass returned. Each
- * step's `expect` is that record as today's code wrote it.
+ * descriptions in order, the service calls, the `post` hook's PFB_* environment and whether a change was still pending
+ * when it ran, the pending mark and due-ledger flag, the apply record, the ADR-61 ledger, the unlock and IP cache files,
+ * the main log, the DNS listener's VIPs and advertisements, the locks left held and the named locks taken in order, the
+ * XMLRPC sends, the received payload's absorb, the metrics sentinel, and what the pass returned. Each step's `expect` is
+ * that record as the code before the cut wrote it, compacted: a member list longer than 8 lines is its count, digest
+ * and ends, a kernel table appears only where it differs from its mirror, and a section equal to the previous step's
+ * reads "same".
  */
 #[CoversFunction('sync_package_pfblockerng')]
+#[CoversFunction('pfb_apply_enter')]
+#[CoversFunction('pfb_apply_objects')]
+#[CoversFunction('pfb_apply_settle')]
 final class OutpostApplyCorpusTest extends TestCase
 {
 	private const FIXTURES = __DIR__ . '/../outpost/fixtures/apply';
@@ -47,7 +54,11 @@ final class OutpostApplyCorpusTest extends TestCase
 
 	public function testTheCorpusHoldsItsScenarios(): void
 	{
-		$this->assertGreaterThanOrEqual(18, count(self::corpus()), 'a scenario file went missing from ' . self::FIXTURES);
+		$this->assertSame(['actions-and-directions', 'aggregate-deny', 'delta-auto-high-churn', 'delta-auto-low-churn',
+			'delta-mode-batched', 'dns-config-lock-held', 'dns-listener-vips', 'empty-kernel-forced-replace', 'first-load-rule-change',
+			'ip-unlock-reblock', 'kill-states', 'mode-replace-low-churn', 'nat-alias-suffix', 'package-disabled', 'pfctl-failure',
+			'received-policy-absorbed', 'refetch-same-set', 'reload-launch-missing', 'reuse-flag-cleared',
+			'rule-change-presync-and-kill', 'unchanged'], array_keys(self::corpus()), 'a scenario file went missing from ' . self::FIXTURES);
 	}
 
 	#[DataProvider('corpus')]
@@ -66,16 +77,16 @@ final class OutpostApplyCorpusTest extends TestCase
 		$records = json_decode((string) file_get_contents($result), TRUE, 64, JSON_THROW_ON_ERROR);
 		$this->assertCount(count($sc['steps']), $records, 'one record per pass');
 
+		$kernel = $mirrors = [];
 		foreach ($sc['steps'] as $i => $step) {
 			$this->assertSame($step['expect'], $records[$i], "pass {$i} of " . basename($file) . " no longer does what it recorded");
-			// ADR-40 end state: a kernel table the pass left equals its mirror, unless the scenario makes pfctl fail.
+			// ADR-40 end state: a kernel table the pass left equals its mirror, unless the scenario makes pfctl fail. The record
+			// holds a kernel table only where it differs from its sorted mirror.
+			$kernel  = $records[$i]['kernel'] === 'same' ? $kernel : $records[$i]['kernel'];
+			$mirrors = $records[$i]['mirrors'] === 'same' ? $mirrors : $records[$i]['mirrors'];
 			if (empty($step['pfctlFail'])) {
-				foreach ($records[$i]['kernel'] as $table => $members) {
-					if (isset($records[$i]['mirrors']["{$table}.txt"])) {
-						$mirror = $records[$i]['mirrors']["{$table}.txt"];
-						sort($mirror, SORT_STRING);
-						$this->assertSame($mirror, $members, "pass {$i}: kernel table {$table} differs from its mirror");
-					}
+				foreach (array_keys($kernel) as $table) {
+					$this->assertArrayNotHasKey("{$table}.txt", $mirrors, "pass {$i}: kernel table {$table} differs from its mirror");
 				}
 			}
 		}

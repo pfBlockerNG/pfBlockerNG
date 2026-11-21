@@ -456,7 +456,35 @@
         },
         "ipUnlock": false,
         "ipCache": false,
-        "log": "<d> <t>  UPDATE PROCESS START [ v?? ]\n\n<d> <t> ===[  DNSBL Process  ]================================================\n\n\n<d> <t> *** [ Unbound.conf file missing. Exiting! ] ***\n\n<d> <t> Stop Service DNSBL\n\n\n<d> <t> ===[  GeoIP Process  ]============================================\n\n\n<d> <t> ===[  IPv4 Process  ]=================================================\n\n<d> <t> [ Abuse_custom_v4 ]              Downloading update . completed ..\n<d> <t> \n<d> <t> [ Out_custom_v4 ]                Downloading update . completed ..\n<d> <t> \n<d> <t> [ Both_custom_v4 ]               Downloading update . completed ..\n<d> <t> \n<d> <t> [ Allow_custom_v4 ]              Downloading update . completed ..\n<d> <t> \n<d> <t> [ Watch_custom_v4 ]              Downloading update . completed ..\n<d> <t> \n<d> <t> [ Quiet_custom_v4 ]              Downloading update . completed ..\n<d> <t> \n\n<d> <t> ===[  IPv6 Process  ]=================================================\n\n<d> <t> [ Six_custom_v6 ]                Downloading update . completed ..\n<d> <t> \n<d> <t> ===[  Aliastables / Rules  ]================================\n\n<d> <t> Firewall rule changes found, applying Filter Reload\n<d> <t>  Created: pfB_Watch_v4 auto rule\n<d> <t>  Created: pfB_Allow_v4 auto rule\n<d> <t>  Created: pfB_Abuse_v4 auto rule\n<d> <t>  Created: pfB_Both_v4 auto rule\n<d> <t>  Created: pfB_Six_v6 auto rule\n<d> <t>  Created: pfB_Out_v4 auto rule\n<d> <t> Alias tables: skipped (Filter Reload rebuilds them from the alias files)\n\n\n<d> <t> ** Restarting firewall filter daemon **\n\n<d> <t> [ pfB Hook ] post corpus (hook_post_ctx.sh, timeout 30s)\n<d> <t> [ pfB Hook ] post corpus completed\n\n<d> <t>  UPDATE PROCESS ENDED\n"
+        "log": "<d> <t>  UPDATE PROCESS START [ v?? ]\n\n<d> <t> ===[  DNSBL Process  ]================================================\n\n\n<d> <t> *** [ Unbound.conf file missing. Exiting! ] ***\n\n<d> <t> Stop Service DNSBL\n\n\n<d> <t> ===[  GeoIP Process  ]============================================\n\n\n<d> <t> ===[  IPv4 Process  ]=================================================\n\n<d> <t> [ Abuse_custom_v4 ]              Downloading update . completed ..\n<d> <t> \n<d> <t> [ Out_custom_v4 ]                Downloading update . completed ..\n<d> <t> \n<d> <t> [ Both_custom_v4 ]               Downloading update . completed ..\n<d> <t> \n<d> <t> [ Allow_custom_v4 ]              Downloading update . completed ..\n<d> <t> \n<d> <t> [ Watch_custom_v4 ]              Downloading update . completed ..\n<d> <t> \n<d> <t> [ Quiet_custom_v4 ]              Downloading update . completed ..\n<d> <t> \n\n<d> <t> ===[  IPv6 Process  ]=================================================\n\n<d> <t> [ Six_custom_v6 ]                Downloading update . completed ..\n<d> <t> \n<d> <t> ===[  Aliastables / Rules  ]================================\n\n<d> <t> Firewall rule changes found, applying Filter Reload\n<d> <t>  Created: pfB_Watch_v4 auto rule\n<d> <t>  Created: pfB_Allow_v4 auto rule\n<d> <t>  Created: pfB_Abuse_v4 auto rule\n<d> <t>  Created: pfB_Both_v4 auto rule\n<d> <t>  Created: pfB_Six_v6 auto rule\n<d> <t>  Created: pfB_Out_v4 auto rule\n<d> <t> Alias tables: skipped (Filter Reload rebuilds them from the alias files)\n\n\n<d> <t> ** Restarting firewall filter daemon **\n\n<d> <t> [ pfB Hook ] post corpus (hook_post_ctx.sh, timeout 30s)\n<d> <t> [ pfB Hook ] post corpus completed\n\n<d> <t>  UPDATE PROCESS ENDED\n",
+        "pendingAtHook": true,
+        "virtualip": [],
+        "dnsListen": {
+          "dhcpd": [],
+          "dhcpdv6": [],
+          "activeInterface": null,
+          "added": ""
+        },
+        "unboundConfigure": [],
+        "locks": {
+          "feedPass": false,
+          "dispatch": false,
+          "dnsConfig": false,
+          "holders": [],
+          "events": [
+            [
+              "try_lock",
+              "pfb_dns_config",
+              10
+            ],
+            [
+              "unlock"
+            ]
+          ]
+        },
+        "xmlrpc": [],
+        "receivedCurrent": null,
+        "metricsSentinel": false
       }
     }
   ]

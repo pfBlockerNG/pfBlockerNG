@@ -1,0 +1,243 @@
+{
+  "description": "An XMLRPC sync target and the metrics export are configured. The first pass sends its changes to the target and enables the export. The second starts suppressed (the node accepted the legacy payload it holds): its own write (the reuse flag it clears) is absorbed into the accepted payload, so the sync stays silent.",
+  "steps": [
+    {
+      "pending": true,
+      "config": {
+        "installedpackages/pfblockernglistsv4/config": [
+          {
+            "aliasname": "Abuse",
+            "action": "Deny_Inbound",
+            "cron": "EveryDay",
+            "aliaslog": "enabled",
+            "autoproto_in": "",
+            "autoproto_out": "",
+            "agateway_in": "default",
+            "agateway_out": "default",
+            "srcint": "",
+            "whois_convert": "",
+            "custom": [
+              {
+                "seq": "10.1.0.%d",
+                "from": 1,
+                "to": 50
+              }
+            ],
+            "row": []
+          }
+        ],
+        "installedpackages/pfblockerngsync/config/0": {
+          "varsynconchanges": "manual",
+          "varsynctimeout": "150",
+          "syncscope": "all",
+          "row": [
+            {
+              "varsyncdestinenable": "on",
+              "varsyncipaddress": "192.0.2.10",
+              "varsyncport": "443",
+              "varsyncpassword": "secret",
+              "varsyncprotocol": "https",
+              "varsyncusername": "admin"
+            }
+          ]
+        },
+        "installedpackages/pfblockerng/config/0/pfb_metrics_export": "on"
+      },
+      "expect": {
+        "returned": true,
+        "pfctl": [
+          {
+            "call": "-t pfB_Abuse_v4 -T show",
+            "lines": []
+          },
+          {
+            "call": "-s Tables",
+            "lines": []
+          }
+        ],
+        "kernel": [],
+        "mirrors": {
+          "pfB_Abuse_v4.txt": {
+            "count": 50,
+            "sha1": "8fb3465d1f8905a9e5892c816acbe3f08c8daed5",
+            "first": "10.1.0.1",
+            "last": "10.1.0.9"
+          }
+        },
+        "aliases": [
+          {
+            "name": "pfB_Abuse_v4",
+            "url": "http://127.0.0.1:443/pfblockerng/pfblockerng.php?pfb=pfB_Abuse_v4",
+            "updatefreq": "32",
+            "address": "",
+            "descr": "pfBlockerNG  Auto  Alias [ Abuse_custom_v4, ]",
+            "type": "urltable",
+            "detail": "DO NOT EDIT THIS ALIAS"
+          }
+        ],
+        "rules": [
+          {
+            "ipprotocol": "inet",
+            "type": "block",
+            "descr": "pfB_Abuse_v4 auto rule",
+            "source": {
+              "address": "pfB_Abuse_v4"
+            },
+            "destination": {
+              "any": ""
+            },
+            "log": "",
+            "interface": "wan",
+            "tracker": 1770003867
+          }
+        ],
+        "nat": [],
+        "reuse": "",
+        "writeConfig": [
+          "pfBlockerNG: migrated DNSBL global logging policy to Default/Override (issue #3288)",
+          "pfBlockerNG: save max Firewall table entries limit",
+          "pfBlockerNG: removed the DNSBL web server, its firewall objects and VIP (issue #4053)",
+          "pfBlockerNG: saving Aliases",
+          "pfBlockerNG: saving Firewall rules"
+        ],
+        "services": [
+          [
+            "stop_service",
+            "pfb_dnsbl"
+          ],
+          [
+            "restart_service",
+            "pfb_filter"
+          ]
+        ],
+        "hook": {
+          "PFB_CHANGED_DNSBL_GROUPS": "",
+          "PFB_CHANGED_IP_ALIASES": "pfB_Abuse_v4",
+          "PFB_DNSBL_CHANGED": "1",
+          "PFB_IP_CHANGED": "1",
+          "PFB_IP_PLACEHOLDER": "127.1.7.7",
+          "PFB_PKG_OP": "",
+          "PFB_POST_INSTALL": "0",
+          "PFB_PRE_UNINSTALL": "0",
+          "PFB_REENTRY_TIMEOUT": "1800",
+          "PFB_STATUS": "ok",
+          "PFB_TRIGGER": "update",
+          "PFB_USE_MFS_TMPVAR": "0",
+          "PFB_WHEN": "post"
+        },
+        "pending": false,
+        "ledgerPending": false,
+        "applyRecord": null,
+        "syncStatus": {
+          "pfb_sync_status.json.lock": ""
+        },
+        "ipUnlock": false,
+        "ipCache": false,
+        "log": "<d> <t>  UPDATE PROCESS START [ v?? ]\n\n<d> <t> ===[  DNSBL Process  ]================================================\n\n\n<d> <t> *** [ Unbound.conf file missing. Exiting! ] ***\n\n<d> <t> Stop Service DNSBL\n\n\n<d> <t> ===[  GeoIP Process  ]============================================\n\n\n<d> <t> ===[  IPv4 Process  ]=================================================\n\n<d> <t> [ Abuse_custom_v4 ]              Downloading update . completed ..\n<d> <t> \n<d> <t> ===[  Aliastables / Rules  ]================================\n\n<d> <t> Firewall rule changes found, applying Filter Reload\n<d> <t>  Created: pfB_Abuse_v4 auto rule\n<d> <t> Alias tables: skipped (Filter Reload rebuilds them from the alias files)\n\n\n<d> <t> ** Restarting firewall filter daemon **\n\n<d> <t> ===[  XMLRPC Sync ]===================================================\n\n<d> <t>  Sync with [ https://192.0.2.10:443 ] ... done.\n\n<d> <t> ======================================================================\n\n<d> <t> [ pfB Hook ] post corpus (hook_post_ctx.sh, timeout 30s)\n<d> <t> [ pfB Hook ] post corpus completed\n\n<d> <t>  UPDATE PROCESS ENDED\n",
+        "pendingAtHook": true,
+        "virtualip": [],
+        "dnsListen": {
+          "dhcpd": [],
+          "dhcpdv6": [],
+          "activeInterface": null,
+          "added": ""
+        },
+        "unboundConfigure": [],
+        "locks": {
+          "feedPass": false,
+          "dispatch": false,
+          "dnsConfig": false,
+          "holders": [],
+          "events": [
+            [
+              "try_lock",
+              "pfb_dns_config",
+              10
+            ],
+            [
+              "unlock"
+            ]
+          ]
+        },
+        "xmlrpc": [
+          [
+            "merge_installedpackages_section",
+            "192.0.2.10"
+          ]
+        ],
+        "receivedCurrent": null,
+        "metricsSentinel": true
+      }
+    },
+    {
+      "pending": true,
+      "received": true,
+      "config": {
+        "installedpackages/pfblockerng/config/0/pfb_reuse": "on"
+      },
+      "expect": {
+        "returned": true,
+        "pfctl": [
+          {
+            "call": "-t pfB_Abuse_v4 -T show",
+            "lines": []
+          },
+          {
+            "call": "-t pfB_Abuse_v4 -T replace -f <sandbox>/db/aliastables/pfB_Abuse_v4.txt",
+            "lines": {
+              "count": 50,
+              "sha1": "8fb3465d1f8905a9e5892c816acbe3f08c8daed5",
+              "first": "10.1.0.1",
+              "last": "10.1.0.9"
+            }
+          }
+        ],
+        "kernel": "same",
+        "mirrors": "same",
+        "aliases": "same",
+        "rules": "same",
+        "nat": "same",
+        "reuse": "same",
+        "writeConfig": [
+          "pfBlockerNG: save settings"
+        ],
+        "services": [
+          [
+            "stop_service",
+            "pfb_dnsbl"
+          ]
+        ],
+        "hook": {
+          "PFB_CHANGED_DNSBL_GROUPS": "",
+          "PFB_CHANGED_IP_ALIASES": "pfB_Abuse_v4",
+          "PFB_DNSBL_CHANGED": "1",
+          "PFB_IP_CHANGED": "0",
+          "PFB_IP_PLACEHOLDER": "127.1.7.7",
+          "PFB_PKG_OP": "",
+          "PFB_POST_INSTALL": "0",
+          "PFB_PRE_UNINSTALL": "0",
+          "PFB_REENTRY_TIMEOUT": "1800",
+          "PFB_STATUS": "ok",
+          "PFB_TRIGGER": "update",
+          "PFB_USE_MFS_TMPVAR": "0",
+          "PFB_WHEN": "post"
+        },
+        "pending": false,
+        "ledgerPending": false,
+        "applyRecord": null,
+        "syncStatus": "same",
+        "ipUnlock": false,
+        "ipCache": false,
+        "log": "<d> <t>  UPDATE PROCESS START [ v?? ]\n\n<d> <t> ===[  DNSBL Process  ]================================================\n\n\n<d> <t> *** [ Unbound.conf file missing. Exiting! ] ***\n\n<d> <t> Stop Service DNSBL\n\n\n<d> <t> ===[  GeoIP Process  ]============================================\n\n\n<d> <t> ===[  IPv4 Process  ]=================================================\n\n<d> <t> [ Abuse_custom_v4 ]              Reload . completed ..\n<d> <t> \n\n<d> <t> ===[  Aliastables / Rules  ]==========================================\n\n<d> <t> No changes to Firewall rules, skipping Filter Reload\n<d> <t> Alias table changes detected, updating:\n<d> <t>  Updating [ pfB_Abuse_v4 ]: replace\n\n<d> <t> \n<d> <t> Saving config changes... completed\n<d> <t> [ pfB Hook ] post corpus (hook_post_ctx.sh, timeout 30s)\n<d> <t> [ pfB Hook ] post corpus completed\n\n<d> <t>  UPDATE PROCESS ENDED\n",
+        "pendingAtHook": true,
+        "virtualip": "same",
+        "dnsListen": "same",
+        "unboundConfigure": "same",
+        "locks": "same",
+        "xmlrpc": [],
+        "receivedCurrent": true,
+        "metricsSentinel": true
+      }
+    }
+  ]
+}
