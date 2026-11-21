@@ -16230,7 +16230,6 @@ function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $t
 			$fh = is_file($path) ? @fopen($path, 'rb') : FALSE;
 			if ($fh === FALSE) {
 				pfb_logger(" Updating [ {$table} ]: cannot read {$path}\n", 1);
-				array_map('fclose', $sides);
 				return NULL;
 			}
 			$sides[] = $fh;
@@ -16244,7 +16243,6 @@ function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $t
 				pfb_logger(" Updating [ {$table} ]: the {$side} file holds {$read} members, not {$count}\n", 1);
 			}
 			if ($line !== FALSE || $read !== $count || !rewind($fh)) {
-				array_map('fclose', $sides);
 				return NULL;
 			}
 		}
