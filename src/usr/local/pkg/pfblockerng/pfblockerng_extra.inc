@@ -6640,6 +6640,7 @@ function pfb_core_update_request(string $stdin): array
 // issue #4037: version 2 of the update command (docs/misc/core-api-protocol.md, "Update command, version 2"), the Outpost
 // apply's contract. Nothing serves it yet: Core's worker writes version 1 until #4038. Contract: CoreUpdateV2ContractTest.
 const PFB_CORE_UPDATE_V2_MAX_ENTRIES = 4096;	// per list: two tables per group, nine continents, eight aggregates fit many times over
+const PFB_CORE_UPDATE_V2_MAX_IDS = 2048;	// ids across a request's resources and removed, a report's applied, removed and failed: each report fits a line
 const PFB_CORE_UPDATE_V2_MESSAGE_BYTES = 1024;	// an issue's message as filed, a failure's as escaped on the result line
 const PFB_CORE_UPDATE_V2_LINE_BYTES = 524288;	// a result line, its newline included: half of the 1 MiB Core reads back in all
 const PFB_CORE_UPDATE_V2_SHORTENED = 'left out to fit the result line';	// every failure message, when the line is too long
@@ -6688,14 +6689,16 @@ function pfb_core_update_v2_message(string $message, bool $escaped = FALSE): str
 	$text = mb_strcut(pfb_sanitize_text(preg_replace('/[\p{Cc}\p{Zl}\p{Zp}]+/u', ' ', $text) ?? $text), 0, PFB_CORE_UPDATE_V2_MESSAGE_BYTES, 'UTF-8');
 	$json = static fn (string $s): int => strlen(json_encode($s, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)) - 2;
 	if ($escaped && $json($text) > PFB_CORE_UPDATE_V2_MESSAGE_BYTES) {
+		$cut = '';
 		$bytes = 0;
-		foreach (mb_str_split($text, 1, 'UTF-8') as $k => $char) {
+		foreach (mb_str_split($text, 1, 'UTF-8') as $char) {
 			$bytes += $json($char);
 			if ($bytes > PFB_CORE_UPDATE_V2_MESSAGE_BYTES) {
-				$text = mb_substr($text, 0, $k, 'UTF-8');
 				break;
 			}
+			$cut .= $char;
 		}
+		$text = $cut;
 	}
 	return pfb_sanitize_text($text);
 }
@@ -6741,19 +6744,19 @@ function pfb_core_update_v2_object(string $at, mixed $item, array $checks): arra
 }
 
 /**
- * $value as an array of at most PFB_CORE_UPDATE_V2_MAX_ENTRIES entries, the bound checked before any entry. A JSON list, in a
- * request: json_decode() gives an object as stdClass.
+ * $value as an array of at most $max entries, the bound checked before any entry. A JSON list, in a request: json_decode()
+ * gives an object as stdClass.
  *
  * @return array<array-key, mixed>
  * @throws InvalidArgumentException when it is not
  */
-function pfb_core_update_v2_list(string $field, mixed $value): array
+function pfb_core_update_v2_list(string $field, mixed $value, int $max = PFB_CORE_UPDATE_V2_MAX_ENTRIES): array
 {
 	if (!is_array($value)) {
 		throw new InvalidArgumentException("{$field} is not a list");
 	}
-	if (count($value) > PFB_CORE_UPDATE_V2_MAX_ENTRIES) {
-		throw new InvalidArgumentException("{$field} holds more than " . PFB_CORE_UPDATE_V2_MAX_ENTRIES . ' entries');
+	if (count($value) > $max) {
+		throw new InvalidArgumentException("{$field} holds more than {$max} entries");
 	}
 	return $value;
 }
@@ -6761,9 +6764,10 @@ function pfb_core_update_v2_list(string $field, mixed $value): array
 /**
  * The version 2 request Core sends the update command on stdin, validated whole: anything it does not understand refuses it,
  * with the reason, before anything runs. A field that is null is absent; trigger is required, scope defaults to both. Each id
- * is a resource id the apply handles (no dnsbl/*: pfB-DNS fetches those), once across resources and removed, and maps to an
- * alias (the geo-catalog has none). The normal form gives each ip-set and ip-aggregate its alias, and each issue's message as
- * bounded text (pfb_core_update_v2_message()); generations stay the strings Core sent.
+ * is a resource id the apply handles (no dnsbl/*: pfB-DNS fetches those), once across resources and removed, which hold at
+ * most PFB_CORE_UPDATE_V2_MAX_IDS ids together, and maps to an alias (the geo-catalog has none). scope does not constrain
+ * what the lists hold: the apply honours it when it acts. The normal form gives each ip-set and ip-aggregate its alias, and
+ * each issue's message as bounded text (pfb_core_update_v2_message()); generations stay the strings Core sent.
  *
  * @return array{trigger: string, scope: string, pendingToken: ?string, pendingOutsideWindow: bool,
  *   resources: list<array{id: string, alias?: string, generation: string, action?: string, direction?: list<string>, entries?: int}>,
@@ -6811,8 +6815,14 @@ function pfb_core_update_v2_request(string $stdin): array
 		return $alias;
 	};
 
+	$resourceList = pfb_core_update_v2_list('resources', $request['resources'] ?? []);
+	$removedList = pfb_core_update_v2_list('removed', $request['removed'] ?? []);
+	if (count($resourceList) + count($removedList) > PFB_CORE_UPDATE_V2_MAX_IDS) {
+		throw new InvalidArgumentException('resources and removed hold more than ' . PFB_CORE_UPDATE_V2_MAX_IDS . ' ids together');
+	}
+
 	$resources = [];
-	foreach (pfb_core_update_v2_list('resources', $request['resources'] ?? []) as $i => $item) {
+	foreach ($resourceList as $i => $item) {
 		$at = "resources[{$i}]";
 		if (!$item instanceof stdClass) {
 			throw new InvalidArgumentException("{$at} is not an object");
@@ -6863,7 +6873,7 @@ function pfb_core_update_v2_request(string $stdin): array
 	}
 
 	$removed = [];
-	foreach (pfb_core_update_v2_list('removed', $request['removed'] ?? []) as $i => $id) {
+	foreach ($removedList as $i => $id) {
 		$alias = $claim("removed[{$i}]", $id);
 		$removed[] = $alias === NULL ? ['id' => $id] : ['id' => $id, 'alias' => $alias];
 	}
@@ -6889,8 +6899,10 @@ function pfb_core_update_v2_request(string $stdin): array
 	}
 
 	$issues = [];
-	$text = ['a string of 1 to 256 bytes without control characters', static fn (mixed $value): bool =>
-		is_string($value) && $value !== '' && strlen($value) <= 256 && preg_match('/[\p{C}\p{Zl}\p{Zp}]/u', $value) === 0];
+	// named classes, not \p{C}: PCRE's holds the unassigned code points of its Unicode version, Go's does not
+	$text = ['a string of 1 to 256 bytes without control, format, private-use or surrogate characters or line or paragraph separators',
+		static fn (mixed $value): bool => is_string($value) && $value !== '' && strlen($value) <= 256
+			&& preg_match('/[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/u', $value) === 0];
 	$stages = ['download', 'script', 'parse', 'dedup', 'apply'];
 	foreach (pfb_core_update_v2_list('issues', $request['issues'] ?? []) as $i => $issue) {
 		$issue = pfb_core_update_v2_object("issues[{$i}]", $issue, [
@@ -6917,8 +6929,10 @@ function pfb_core_update_v2_request(string $stdin): array
  *   ipChanged, dnsblChanged  the post hook's PFB_IP_CHANGED and PFB_DNSBL_CHANGED
  *   reloadLaunched  whether the filter reload was launched
  *   failed          a list of {id, stage: fetch|apply, message}, each message as bounded text (pfb_core_update_v2_message())
- * Each list holds at most PFB_CORE_UPDATE_V2_MAX_ENTRIES entries, and the line at most PFB_CORE_UPDATE_V2_LINE_BYTES: when it
- * would be longer, every failure message is PFB_CORE_UPDATE_V2_SHORTENED; nothing else is ever shortened or left out.
+ * applied, removed and failed name at most PFB_CORE_UPDATE_V2_MAX_IDS ids together, each once, and changedAliases as many
+ * aliases, each once: so the report of every request accepted fits the line, of at most PFB_CORE_UPDATE_V2_LINE_BYTES
+ * (CoreUpdateV2ContractTest). When the line would be longer, every failure message longer than PFB_CORE_UPDATE_V2_SHORTENED
+ * as written becomes it; nothing else is ever shortened or left out.
  *
  * @param array<string, mixed> $report
  * @throws InvalidArgumentException the reason, when $report is not one of these or cannot fit: such a line is never written
@@ -6948,20 +6962,22 @@ function pfb_core_update_v2_result(array $report): string
 				break;
 			case 'removed':
 			case 'changedAliases':
-				[$what, $valid] = $field === 'removed' ? ['resource ids', $handled] : ['alias names',
-					static fn (mixed $alias): bool => is_string($alias) && preg_match('/^pfB_[A-Za-z0-9_]{1,27}\z/', $alias) === 1];
+				[$what, $valid, $max] = $field === 'removed' ? ['resource ids', $handled, PFB_CORE_UPDATE_V2_MAX_ENTRIES] : ['alias names',
+					static fn (mixed $alias): bool => is_string($alias) && preg_match('/^pfB_[A-Za-z0-9_]{1,27}\z/', $alias) === 1,
+					PFB_CORE_UPDATE_V2_MAX_IDS];
 				$refuse(is_array($value) && array_is_list($value), "{$field} is not a list of {$what}");
-				$refuse(array_filter(pfb_core_update_v2_list($field, $value), $valid) === $value, "{$field} is not a list of {$what}");
+				$refuse(array_filter(pfb_core_update_v2_list($field, $value, $max), $valid) === $value, "{$field} is not a list of {$what}");
 				break;
 			case 'failed':
 				$refuse(is_array($value) && array_is_list($value), 'failed is not a list');
 				foreach (pfb_core_update_v2_list($field, $value) as $i => $failure) {
-					$value[$i] = pfb_core_update_v2_object("failed[{$i}]", is_array($failure) ? (object) $failure : NULL, [
+					$entry = pfb_core_update_v2_object("failed[{$i}]", is_array($failure) ? (object) $failure : NULL, [
 						'id'      => ['a resource id', $handled],
 						'stage'   => ['one of fetch, apply', static fn (mixed $stage): bool => in_array($stage, ['fetch', 'apply'], TRUE)],
 						'message' => ['a string', 'is_string'],
 					]);
-					$value[$i]['message'] = pfb_core_update_v2_message($value[$i]['message'], TRUE);
+					$entry['message'] = pfb_core_update_v2_message($entry['message'], TRUE);
+					$value[$i] = $entry;
 				}
 				break;
 			default:
@@ -6971,12 +6987,20 @@ function pfb_core_update_v2_result(array $report): string
 			$line[$field] = $value;
 		}
 	}
+	$ids = [...array_keys($line['applied'] ?? []), ...($line['removed'] ?? []), ...array_column($line['failed'] ?? [], 'id')];
+	$refuse(count($ids) <= PFB_CORE_UPDATE_V2_MAX_IDS, 'applied, removed and failed hold more than ' . PFB_CORE_UPDATE_V2_MAX_IDS . ' ids together');
+	$refuse(count(array_unique($ids)) === count($ids), 'an id appears more than once in applied, removed and failed');
+	$aliases = $line['changedAliases'] ?? [];
+	$refuse(count(array_unique($aliases)) === count($aliases), 'changedAliases holds an alias more than once');
 	$written = json_encode($line, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
 	if (strlen($written) > PFB_CORE_UPDATE_V2_LINE_BYTES && isset($line['failed'])) {
-		$line['failed'] = array_map(static fn (array $failure): array => array_replace($failure, ['message' => PFB_CORE_UPDATE_V2_SHORTENED]),
-			$line['failed']);
+		$short = strlen(json_encode(PFB_CORE_UPDATE_V2_SHORTENED, JSON_THROW_ON_ERROR));
+		$line['failed'] = array_map(static fn (array $failure): array =>
+			strlen(json_encode($failure['message'], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)) > $short
+				? array_replace($failure, ['message' => PFB_CORE_UPDATE_V2_SHORTENED]) : $failure, $line['failed']);
 		$written = json_encode($line, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
 	}
+	// a defence only: a report within the bounds above always fits
 	$refuse(strlen($written) <= PFB_CORE_UPDATE_V2_LINE_BYTES,
 		'the report does not fit one result line of ' . PFB_CORE_UPDATE_V2_LINE_BYTES . ' bytes, even with its failure messages shortened');
 	return $written;
