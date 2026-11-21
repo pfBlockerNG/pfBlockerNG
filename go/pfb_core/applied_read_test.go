@@ -63,31 +63,64 @@ func TestAnUnusableRecordIsRefused(t *testing.T) {
 // A crash between a report's write and its rename leaves the temporary file: the next report takes it over, so no crash
 // leaves a file in the state directory for ever, and the record is private whatever mode the leftover had.
 func TestTheNextReportTakesOverALeftTemporaryFile(t *testing.T) {
-	state := t.TempDir()
-	tmp := filepath.Join(state, "applied.json.tmp")
-	if err := os.WriteFile(tmp, []byte(`{"format":1,"resources":{"dnsbl/stale"`), 0o644); err != nil {
-		t.Fatal(err)
+	cases := map[string]func(t *testing.T, state, tmp string){
+		"a partial file of another mode": func(t *testing.T, _, tmp string) {
+			if err := os.WriteFile(tmp, []byte(`{"format":1,"resources":{"dnsbl/stale"`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a symbolic link to a file that must stay untouched": func(t *testing.T, state, tmp string) {
+			target := filepath.Join(t.TempDir(), "target")
+			if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, tmp); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if raw, err := os.ReadFile(target); err != nil || string(raw) != "keep" {
+					t.Errorf("the link's target = %q, %v; want it untouched", raw, err)
+				}
+			})
+		},
+		"a FIFO": func(t *testing.T, _, tmp string) {
+			if err := syscall.Mkfifo(tmp, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"an empty directory": func(t *testing.T, _, tmp string) {
+			if err := os.Mkdir(tmp, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		},
 	}
-	want := map[string]resources.Cursor{"dnsbl/manifest": {Generation: 7, Digest: digestA}}
-	if err := writeApplied(state, want); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(tmp); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("the left temporary file is still there after a report: %v", err)
-	}
-	entries, err := os.ReadDir(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		if e.Name() != "applied.json" {
-			t.Errorf("the state directory holds %s after a report, want applied.json alone", e.Name())
-		}
-	}
-	if info, err := os.Stat(filepath.Join(state, "applied.json")); err != nil || info.Mode().Perm() != 0o600 {
-		t.Errorf("applied.json = %v, %v; want mode 0600", info, err)
-	}
-	if report, err := readApplied(state); err != nil || len(report) != 1 || report["dnsbl/manifest"] != want["dnsbl/manifest"] {
-		t.Errorf("readApplied = %v, %v; want %v", report, err, want)
+	for name, leave := range cases {
+		t.Run(name, func(t *testing.T) {
+			state := t.TempDir()
+			tmp := filepath.Join(state, "applied.json.tmp")
+			leave(t, state, tmp)
+			want := map[string]resources.Cursor{"dnsbl/manifest": {Generation: 7, Digest: digestA}}
+			if err := writeApplied(state, want); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Lstat(tmp); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("the left temporary file is still there after a report: %v", err)
+			}
+			entries, err := os.ReadDir(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range entries {
+				if e.Name() != "applied.json" {
+					t.Errorf("the state directory holds %s after a report, want applied.json alone", e.Name())
+				}
+			}
+			if info, err := os.Stat(filepath.Join(state, "applied.json")); err != nil || info.Mode().Perm() != 0o600 {
+				t.Errorf("applied.json = %v, %v; want mode 0600", info, err)
+			}
+			if report, err := readApplied(state); err != nil || len(report) != 1 || report["dnsbl/manifest"] != want["dnsbl/manifest"] {
+				t.Errorf("readApplied = %v, %v; want %v", report, err, want)
+			}
+		})
 	}
 }

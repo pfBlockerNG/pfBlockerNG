@@ -403,3 +403,35 @@ func TestAMethodCalledWithoutACallersMarkServesOnlyWhatAClientMayRead(t *testing
 		t.Errorf("GetResourceBody without a mark = %v, %v; want not_found", body, err)
 	}
 }
+
+// A key that is not a resource id is one field error however many such keys a request holds.
+func TestBadKeysGetOneFieldError(t *testing.T) {
+	h := startClientWithStore(t)
+	wantError(t, h.post("/v1/ReportApplied", `{"requestId":"b1","resources":{"x1":{},"x2":{},"x3":{}}}`),
+		http.StatusBadRequest, codeInvalidArgument, "resources")
+	wantError(t, h.post("/v1/GetResources", `{"resources":{"x1":{},"x2":{},"x3":{}}}`),
+		http.StatusBadRequest, codeInvalidArgument, "resources")
+}
+
+// The 4 KiB cap on a refusal is the client's only: the privileged caller keeps every field error.
+func TestAPrivilegedRefusalKeepsItsFieldErrorsAboveTheClientCap(t *testing.T) {
+	var entries []string
+	for i := range 200 {
+		entries = append(entries, appliedEntry(fmt.Sprintf("dnsbl/r%d", i), "z", digestA))
+	}
+	got := startAs(t, privilegedUID, t.TempDir()).post("/v1/ReportApplied", appliedReport("p1", entries...))
+	if code := errorCode(t, got); code != codeInvalidArgument {
+		t.Fatalf("answered %d %.200s, want invalid_argument", got.status, got.body)
+	}
+	if len(got.body) < refusalBound {
+		t.Fatalf("the refusal is %d bytes, want %d or more to cross the client cap", len(got.body), refusalBound)
+	}
+	var env struct {
+		Error struct {
+			FieldErrors []json.RawMessage `json:"fieldErrors"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(got.body, &env); err != nil || len(env.Error.FieldErrors) != len(entries) {
+		t.Errorf("fieldErrors = %d, %v; want %d", len(env.Error.FieldErrors), err, len(entries))
+	}
+}
