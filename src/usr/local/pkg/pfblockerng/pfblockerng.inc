@@ -16338,7 +16338,8 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 		global $pfb;
 		$data = implode("\n", $chunk) . "\n";
 		// 'x': a fresh file of this run's own, never one that is already there
-		$path = "{$tmpdir}/pfb_{$op}_" . bin2hex(random_bytes(8));
+		// the names tempnam() gave these files before: pfb_add_* and pfb_del_*
+		$path = "{$tmpdir}/pfb_" . ($op === 'delete' ? 'del' : $op) . '_' . bin2hex(random_bytes(8));
 		$umask = umask(0077);
 		try {
 			$fh = @fopen($path, 'xb');
