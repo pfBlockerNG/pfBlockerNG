@@ -2,7 +2,9 @@ package feedparse
 
 import (
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -32,7 +34,14 @@ type PostScriptResult struct {
 	Reason string
 	Status int // when Reason is PreScriptExit: as PreScriptResult.Status, or -1 when no output file could be made
 
-	orig, restore string // RunIP's, for Restore
+	restore *restorePoint // RunIP's, shared by every copy of the result, for Restore
+}
+
+// restorePoint is one RunIP run's restore point; done once it is back over the download or gone, so that no later Restore
+// acts on what another run staged at that name.
+type restorePoint struct {
+	orig, path string
+	done       bool
 }
 
 // RunDNSBL is the DNSBL post-script: orig is copied to staged, the script runs on staged with the argument dnsbl, and
@@ -72,27 +81,30 @@ func (p PostScript) RunIP(ctx context.Context, orig, restore, vtype string) Post
 		return PostScriptResult{Reason: PreScriptStage}
 	}
 	r := p.run(ctx, script, orig, vtype)
-	r.orig, r.restore = orig, restore
+	r.restore = &restorePoint{orig: orig, path: restore}
 	if r.Reason != "" {
 		r.Restore()
 	}
 	return r
 }
 
-// Restore renames RunIP's restore point back over the download; it does nothing for another result or once done. A restore
-// point the script replaced with anything but a regular file is removed instead, so that no symlink or FIFO takes the
-// download's place. A rename that fails (the script left a folder at orig) leaves both as they are.
+// Restore renames RunIP's restore point back over the download; it does nothing for another result, and nothing once the
+// restore point is back or gone, on this result or any copy of it. A restore point the script replaced with anything but a
+// regular file is removed instead, so that no symlink or FIFO takes the download's place. A rename that fails (the script
+// left a folder at orig) leaves both as they are, and a later Restore tries again.
 func (r PostScriptResult) Restore() {
-	if r.restore == "" {
+	rp := r.restore
+	if rp == nil || rp.done {
 		return
 	}
-	info, err := os.Lstat(r.restore)
+	info, err := os.Lstat(rp.path)
 	switch {
 	case err != nil:
+		rp.done = errors.Is(err, fs.ErrNotExist)
 	case info.Mode().IsRegular():
-		os.Rename(r.restore, r.orig)
+		rp.done = os.Rename(rp.path, rp.orig) == nil
 	default:
-		os.Remove(r.restore)
+		rp.done = os.Remove(rp.path) == nil
 	}
 }
 

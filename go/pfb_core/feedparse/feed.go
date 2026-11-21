@@ -115,8 +115,12 @@ func ParseIPFeed(r io.Reader, cfg IPConfig, ph string, content int, out io.Write
 
 // CountContent is the empty-feed probe, pfb_ip_feed_content_count() behind the old path's file_exists() and filesize() > 0 gate:
 // the number of content lines (see isContentLine) of the file at path, or NoProbe when it is missing, empty or cannot be read to
-// its end, which is no placeholder.
+// its end, which is no placeholder. A path that is no regular file is no content either: it is not opened, so that a FIFO
+// there cannot block the open.
 func CountContent(path string) int {
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		return NoProbe
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return NoProbe
