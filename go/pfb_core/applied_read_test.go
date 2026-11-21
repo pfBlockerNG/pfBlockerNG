@@ -124,3 +124,65 @@ func TestTheNextReportTakesOverALeftTemporaryFile(t *testing.T) {
 		})
 	}
 }
+
+// Rename cannot replace a directory, so what sits at the record's own name decides whether a report can land: a link is
+// replaced itself, an empty directory is removed first, and a directory with content is never deleted by Core.
+func TestAReportOverADirectoryOrALinkAtTheRecord(t *testing.T) {
+	want := map[string]resources.Cursor{"dnsbl/manifest": {Generation: 7, Digest: digestA}}
+	t.Run("an empty directory", func(t *testing.T) {
+		state := t.TempDir()
+		path := filepath.Join(state, "applied.json")
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeApplied(state, want); err != nil {
+			t.Fatal(err)
+		}
+		if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+			t.Errorf("applied.json = %v, %v; want a regular file of mode 0600", info, err)
+		}
+		if report, err := readApplied(state); err != nil || len(report) != 1 || report["dnsbl/manifest"] != want["dnsbl/manifest"] {
+			t.Errorf("readApplied = %v, %v; want %v", report, err, want)
+		}
+	})
+	t.Run("a symbolic link to another file", func(t *testing.T) {
+		state := t.TempDir()
+		path := filepath.Join(state, "applied.json")
+		target := filepath.Join(t.TempDir(), "target")
+		if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeApplied(state, want); err != nil {
+			t.Fatal(err)
+		}
+		if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
+			t.Errorf("applied.json = %v, %v; want a regular file", info, err)
+		}
+		if raw, err := os.ReadFile(target); err != nil || string(raw) != "keep" {
+			t.Errorf("the link's target = %q, %v; want it untouched", raw, err)
+		}
+	})
+	t.Run("a directory with content", func(t *testing.T) {
+		state := t.TempDir()
+		path := filepath.Join(state, "applied.json")
+		inner := filepath.Join(path, "inner")
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(inner, []byte("keep"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeApplied(state, want); err == nil {
+			t.Error("the report succeeded over a directory with content, want an error")
+		}
+		if info, err := os.Lstat(path); err != nil || !info.IsDir() {
+			t.Errorf("applied.json = %v, %v; want the directory untouched", info, err)
+		}
+		if raw, err := os.ReadFile(inner); err != nil || string(raw) != "keep" {
+			t.Errorf("the directory's content = %q, %v; want it untouched", raw, err)
+		}
+	})
+}
