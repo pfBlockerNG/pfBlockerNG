@@ -613,3 +613,30 @@ severity for the whole stream, so the mapping is the daemon's. This changes D1's
   log level help says so and points at the System Logs log level.
 - **Command line.** `-syslog` follows `-c <config>`, so `pfb_crowdsec_child_pattern()`, which matches the command line
   up to `-c` and the space after it, still finds the bouncer, including one an earlier version's rc script started and a package upgrade left running.
+
+## Amendment 2026-11-21 — the bouncer's drops in Alerts and Reports (#4164)
+
+[#4164](https://github.com/pfBlockerNG/pfBlockerNG/issues/4164): with the trackers of the #4159 amendment, pfBlockerNG's
+Alerts and Reports pipeline attributes drops by the bouncer's rules as it attributes its own rules' drops. It still
+listed only rules on `<pfB_…>` tables, so the filterlog daemon skipped every line the bouncer's rules logged.
+
+- **Attribution.** `pfb_filterrules()`, which reads the loaded ruleset (`pfctl -vvsr`), lists a rule whose line carries
+  one of `PFB_CROWDSEC_TRACKERS` and names that family's table (`pfb_crowdsec_rule_table()`) under the table's name,
+  as it lists a pfB rule under its alias. A user's rule on the tables, or another rule carrying one of the trackers,
+  stays someone else's. The filterlog daemon's tracker resolution then writes the drop to `ip_block.log`, the unified
+  log and the syslog export, with the action, family and direction of any IP block row. Kill States does not take the
+  bouncer's interfaces.
+- **When.** The ruleset carries the rules only while the bouncer should run (D5), so its drops are attributed then.
+  A row already written stays a CrowdSec row: the Alerts page recognizes it by the table it names. A `filter.log` line
+  the daemon reads after the rules are gone (its first-run parse of the whole log) is skipped, as a removed pfB rule's
+  lines are.
+- **Row.** The alias is the table (`crowdsec_v4`, `crowdsec_v6`), as the dashboard widget names it (#4161); the rule
+  number is the rule's tracker, which names the rule and its direction. The feed is `CrowdSec`. The matched entry is
+  `Unknown`: the log does not say which decision matched (an address or a range), and the decision's origin and
+  scenario are not in it either. A pfB feed that lists the address too did not drop it, so it is not consulted; the
+  host's IP cache entry keeps its pfB attribution for pfB rules' drops.
+- **Alerts page.** The row renders as logged: the bouncer's tables are no feed or alias table, so the render-time
+  re-check does not apply. pfBlockerNG's suppress, unlock and whitelist actions are not offered, because the decisions
+  live on the CrowdSec engine and the bouncer's rules come before every pfB rule. Beside the Threat Source lookup, the
+  external address links to the Status subtab's lookup (D7, `?lookup=<address>`), which shows the matching decisions
+  with their origin, scenario and expiry.

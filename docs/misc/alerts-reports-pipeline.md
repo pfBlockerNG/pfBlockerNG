@@ -26,6 +26,8 @@ IP logs self-sufficient for rendering complete table; render-time pass is freshn
 | `ip_block/permit/match.log` | filterlog daemon (`pfb_daemon_filterlog`, `pfblockerng.inc`) | pf tracker → pfB rule/alias, matching feed + IP/CIDR entry (`find_reported_header()`), GeoIP (`mmdblookup`), rDNS, ASN (3 CSV columns, issue #1369 — see below) |
 | `unified.log` | filterlog daemon (sole writer, ADR-38 Amendments 1/4) | reformatted IP rows; byte-identical RFC4180 DNSBL and DNS-reply rows |
 
+The CrowdSec bouncer's rules (#4164) resolve too: `pfb_filterrules()` lists them under their table (`crowdsec_v4`/`crowdsec_v6`), and the daemon logs their drops with feed `CrowdSec` and IP evaluated `Unknown` (no feed file holds the bouncer's decisions, and the log does not say which one matched). `pfb_ip_render_attribution()` renders such a row as logged, with no re-check, and `convert_ip_log()` offers the CrowdSec Status lookup instead of the suppress/unlock/whitelist actions. Spec: `docs/specs/crowdsec-integration.md`, #4164 amendment.
+
 Daemon reconstructs bare pf event into fully attributed record **once**, at event time, caches its lookups in `ipcache` SQLite table so repeated offenders cheap on write path.
 
 Issue #4053 removed the block-page webserver, its hit attributor (`pfb_log_event()`) and the read-only query channel (`pfb_dnsbl_query()`) it used; Alerts still reads older `DNSBL-Full`/`DNSBL-1x1`/`DNSBL-HTTPS` lines until the log rotates. Issue #1349 retired unconsumed reports-cache SQLite writer/table; event log is sole durable per-block record.
