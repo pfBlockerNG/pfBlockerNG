@@ -23,7 +23,15 @@
 				"control": false,
 				"controlLegacy": false,
 				"regexCap": false,
-				"metricsClientIp": false
+				"metricsClientIp": false,
+				"noAaaa": false,
+				"noAaaaList": [],
+				"groupPolicy": false,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": null
 			}
 		},
 		{
@@ -1120,6 +1128,1208 @@
 				"decisionCacheMax": 1.5
 			},
 			"valid": false
+		},
+		{
+			"id": "lists-noaaaa-on",
+			"description": "noAAAA on with a list: a plain domain is held as it is, a leading dot (the wildcard marker, ini flag 1) is kept, a comment or blank line is no entry, and an entry is lower-cased with its comment cut, as the ini writes it.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "on",
+				"dnsbl/pfb_noaaaa_list": "ZXhhbXBsZS5jb20KLmFkcy5leGFtcGxlLm5ldAojIGEgY29tbWVudCBsaW5lCgpXV1cuVXBwZXIuT1JHICMgbWl4ZWQgY2FzZSwgd2l0aCBhIGNvbW1lbnQK"
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": true,
+				"noAaaaList": [
+					{
+						"domain": "example.com"
+					},
+					{
+						"domain": ".ads.example.net"
+					},
+					{
+						"domain": "www.upper.org"
+					}
+				],
+				"groupPolicy": false,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": "0 = example.com,0\n1 = ads.example.net,1\n2 = www.upper.org,0\n",
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-noaaaa-off-list-kept",
+			"description": "noAAAA off with a list stored: the ini has no [noAAAA] section, yet Core holds the stored list, so turning the switch on needs no other change.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "",
+				"dnsbl/pfb_noaaaa_list": "ZXhhbXBsZS5jb20KLmFkcy5leGFtcGxlLm5ldA=="
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": false,
+				"noAaaaList": [
+					{
+						"domain": "example.com"
+					},
+					{
+						"domain": ".ads.example.net"
+					}
+				],
+				"groupPolicy": false,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-noaaaa-on-empty",
+			"description": "noAAAA on with an empty list: the ini has no [noAAAA] section and Core holds the switch on and no entry.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "on",
+				"dnsbl/pfb_noaaaa_list": ""
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": true,
+				"noAaaaList": [],
+				"groupPolicy": false,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-noaaaa-on-only-comments",
+			"description": "noAAAA on with a list of comment and blank lines only: no section, no entry.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "on",
+				"dnsbl/pfb_noaaaa_list": "IyBub3RoaW5nCiAgIAo="
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": true,
+				"noAaaaList": [],
+				"groupPolicy": false,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-noaaaa-line-breaks",
+			"description": "A stored CR or CRLF line break separates entries, as LF does: three entries, none holding a line break.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "on",
+				"dnsbl/pfb_noaaaa_list": "YS5leGFtcGxlDWIuZXhhbXBsZQ0KYy5leGFtcGxl"
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": true,
+				"noAaaaList": [
+					{
+						"domain": "a.example"
+					},
+					{
+						"domain": "b.example"
+					},
+					{
+						"domain": "c.example"
+					}
+				],
+				"groupPolicy": false,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": "0 = a.example,0\n1 = b.example,0\n2 = c.example,0\n",
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-noaaaa-repeated",
+			"description": "Repeated entries: pfB-DNS keeps one flag per domain, the last row's, so Core holds each domain once in the form of its last row (dup.example plain, x.example and y.example wildcard), in the order of those last rows.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "on",
+				"dnsbl/pfb_noaaaa_list": "ZHVwLmV4YW1wbGUKZHVwLmV4YW1wbGUKLmR1cC5leGFtcGxlCmR1cC5leGFtcGxlCnguZXhhbXBsZQoueC5leGFtcGxlCi55LmV4YW1wbGUKLnkuZXhhbXBsZQ=="
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": true,
+				"noAaaaList": [
+					{
+						"domain": "dup.example"
+					},
+					{
+						"domain": ".x.example"
+					},
+					{
+						"domain": ".y.example"
+					}
+				],
+				"groupPolicy": false,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": "0 = dup.example,0\n1 = dup.example,0\n2 = dup.example,1\n3 = dup.example,0\n4 = x.example,0\n5 = x.example,1\n6 = y.example,1\n7 = y.example,1\n",
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-noaaaa-not-domains",
+			"description": "Rows pfB-DNS does not take or can never match: '..double' and '.' (the ini writer skips them), 'bad,comma' (three fields: pfB-DNS skips the row) and 'space inside' (a name with white space matches no query). Only ok.example is held.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "on",
+				"dnsbl/pfb_noaaaa_list": "Li5kb3VibGUuZXhhbXBsZQouCmJhZCxjb21tYS5leGFtcGxlCnNwYWNlIGluc2lkZS5leGFtcGxlCm9rLmV4YW1wbGU="
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": true,
+				"noAaaaList": [
+					{
+						"domain": "ok.example"
+					}
+				],
+				"groupPolicy": false,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": "2 = bad,comma.example,0\n3 = space inside.example,0\n4 = ok.example,0\n",
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-noaaaa-percent",
+			"description": "A '%' in a noAAAA entry makes pfB-DNS refuse the whole ini today (configparser interpolation, an error out of init_standard). Core does not hold the entry.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "on",
+				"dnsbl/pfb_noaaaa_list": "cGN0JS5leGFtcGxl"
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": true,
+				"noAaaaList": [],
+				"groupPolicy": false,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": "0 = pct%.example,0\n",
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-noaaaa-idn",
+			"description": "An internationalized entry is held as the ini writes it, in punycode, its wildcard marker kept.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "on",
+				"dnsbl/pfb_noaaaa_list": "YsO8Y2hlci5leGFtcGxlCi5tw7xuY2hlbi5leGFtcGxlICMgd2lsZGNhcmQ="
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": true,
+				"noAaaaList": [
+					{
+						"domain": "xn--bcher-kva.example"
+					},
+					{
+						"domain": ".xn--mnchen-3ya.example"
+					}
+				],
+				"groupPolicy": false,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": "0 = xn--bcher-kva.example,0\n1 = xn--mnchen-3ya.example,1\n",
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-noaaaa-order",
+			"description": "A list is held whole, in its stored order. The code has no cap and no size-dependent path, so a few entries stand for a long list.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "on",
+				"dnsbl/pfb_noaaaa_list": "Yy5leGFtcGxlCi5hLmV4YW1wbGUKYi5leGFtcGxlCi5lLmV4YW1wbGUKZC5leGFtcGxl"
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": true,
+				"noAaaaList": [
+					{
+						"domain": "c.example"
+					},
+					{
+						"domain": ".a.example"
+					},
+					{
+						"domain": "b.example"
+					},
+					{
+						"domain": ".e.example"
+					},
+					{
+						"domain": "d.example"
+					}
+				],
+				"groupPolicy": false,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": "0 = c.example,0\n1 = a.example,1\n2 = b.example,0\n3 = e.example,1\n4 = d.example,0\n",
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-gp-on",
+			"description": "Group Policy on with a list: an address or CIDR is held as the ini writes it (lower case, comment cut); a comment line is no entry.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_gp": "on",
+				"dnsbl/pfb_gp_bypass_list": "MTkyLjAuMi43CjEwLjAuMC4wLzI0CjIwMDE6REI4OjovMzIKIyBhIGNvbW1lbnQgbGluZQoxOTguNTEuMTAwLjEgIyBwcmludGVyCg=="
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": false,
+				"noAaaaList": [],
+				"groupPolicy": true,
+				"groupPolicyBypassList": [
+					{
+						"cidr": "192.0.2.7"
+					},
+					{
+						"cidr": "10.0.0.0/24"
+					},
+					{
+						"cidr": "2001:db8::/32"
+					},
+					{
+						"cidr": "198.51.100.1"
+					}
+				]
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": "0 = 192.0.2.7\n1 = 10.0.0.0/24\n2 = 2001:db8::/32\n3 = 198.51.100.1\n"
+			}
+		},
+		{
+			"id": "lists-gp-off-list-kept",
+			"description": "Group Policy off with a list stored: no [GP_Bypass_List] section, yet Core holds the stored list.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_gp": "",
+				"dnsbl/pfb_gp_bypass_list": "MTkyLjAuMi43CjEwLjAuMC4wLzI0"
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": false,
+				"noAaaaList": [],
+				"groupPolicy": false,
+				"groupPolicyBypassList": [
+					{
+						"cidr": "192.0.2.7"
+					},
+					{
+						"cidr": "10.0.0.0/24"
+					}
+				]
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-gp-on-empty",
+			"description": "Group Policy on with an empty list: no section, no entry.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_gp": "on",
+				"dnsbl/pfb_gp_bypass_list": ""
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": false,
+				"noAaaaList": [],
+				"groupPolicy": true,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-gp-line-breaks",
+			"description": "A stored CR or CRLF line break separates entries, as LF does.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_gp": "on",
+				"dnsbl/pfb_gp_bypass_list": "MTkyLjAuMi4xDTE5Mi4wLjIuMg0KMTkyLjAuMi4z"
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": false,
+				"noAaaaList": [],
+				"groupPolicy": true,
+				"groupPolicyBypassList": [
+					{
+						"cidr": "192.0.2.1"
+					},
+					{
+						"cidr": "192.0.2.2"
+					},
+					{
+						"cidr": "192.0.2.3"
+					}
+				]
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": "0 = 192.0.2.1\n1 = 192.0.2.2\n2 = 192.0.2.3\n"
+			}
+		},
+		{
+			"id": "lists-gp-repeated",
+			"description": "A repeated entry, with or without a comment, is held once, at its first place.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_gp": "on",
+				"dnsbl/pfb_gp_bypass_list": "MTkyLjAuMi4xCjE5Mi4wLjIuMQoxOTIuMC4yLjEgIyBhZ2FpbgoxMC4wLjAuMC84CjEwLjAuMC4wLzg="
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": false,
+				"noAaaaList": [],
+				"groupPolicy": true,
+				"groupPolicyBypassList": [
+					{
+						"cidr": "192.0.2.1"
+					},
+					{
+						"cidr": "10.0.0.0/8"
+					}
+				]
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": "0 = 192.0.2.1\n1 = 192.0.2.1\n2 = 192.0.2.1\n3 = 10.0.0.0/8\n4 = 10.0.0.0/8\n"
+			}
+		},
+		{
+			"id": "lists-gp-not-addresses",
+			"description": "Entries that are no address or CIDR pfB-DNS takes are not held: a name, a prefix length past the family's, an IPv4 address with a leading zero, a prefix length that is not digits.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_gp": "on",
+				"dnsbl/pfb_gp_bypass_list": "bm90LWFuLWlwCjEwLjAuMC4wLzMzCjIwMDE6ZGI4OjovMTI5CjAxMC4wLjAuMQoxMC4wLjAuMC8yNC4wCjEwLjAuMC4wLy0xCjE5Mi4wLjIuOQ=="
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": false,
+				"noAaaaList": [],
+				"groupPolicy": true,
+				"groupPolicyBypassList": [
+					{
+						"cidr": "192.0.2.9"
+					}
+				]
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": "0 = not-an-ip\n1 = 10.0.0.0/33\n2 = 2001:db8::/129\n3 = 010.0.0.1\n4 = 10.0.0.0/24.0\n5 = 10.0.0.0/-1\n6 = 192.0.2.9\n"
+			}
+		},
+		{
+			"id": "lists-gp-forms",
+			"description": "Forms pfB-DNS takes and Core holds as written: host bits under the prefix, a prefix length with a leading zero, /0, an IPv4-mapped IPv6 address, an IPv6 address with leading zeros in a group.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_gp": "on",
+				"dnsbl/pfb_gp_bypass_list": "MTAuMS4yLjMvOAoxMC4wLjAuMC8wMjQKMC4wLjAuMC8wCjo6ZmZmZjoxOTIuMC4yLjEKMjAwMTowZGI4OjoxCjo6LzA="
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": false,
+				"noAaaaList": [],
+				"groupPolicy": true,
+				"groupPolicyBypassList": [
+					{
+						"cidr": "10.1.2.3/8"
+					},
+					{
+						"cidr": "10.0.0.0/024"
+					},
+					{
+						"cidr": "0.0.0.0/0"
+					},
+					{
+						"cidr": "::ffff:192.0.2.1"
+					},
+					{
+						"cidr": "2001:0db8::1"
+					},
+					{
+						"cidr": "::/0"
+					}
+				]
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": "0 = 10.1.2.3/8\n1 = 10.0.0.0/024\n2 = 0.0.0.0/0\n3 = ::ffff:192.0.2.1\n4 = 2001:0db8::1\n5 = ::/0\n"
+			}
+		},
+		{
+			"id": "lists-gp-forms-not-held",
+			"description": "Departure: pfB-DNS also takes a netmask prefix (10.0.0.0/255.255.255.0) and an IPv6 zone (fe80::1%em0), which the DNSBL page never saves; Core holds neither. Only 192.0.2.10 is held.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_gp": "on",
+				"dnsbl/pfb_gp_bypass_list": "MTAuMC4wLjAvMjU1LjI1NS4yNTUuMApmZTgwOjoxJWVtMAoxOTIuMC4yLjEw"
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": false,
+				"noAaaaList": [],
+				"groupPolicy": true,
+				"groupPolicyBypassList": [
+					{
+						"cidr": "192.0.2.10"
+					}
+				]
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": "0 = 10.0.0.0/255.255.255.0\n1 = fe80::1%em0\n2 = 192.0.2.10\n"
+			}
+		},
+		{
+			"id": "lists-gp-order",
+			"description": "A list is held whole, in its stored order. The code has no cap and no size-dependent path, so a few entries stand for a long list.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_gp": "on",
+				"dnsbl/pfb_gp_bypass_list": "MTk4LjUxLjEwMC45CjEwLjAuMC4wLzgKMjAwMTpkYjg6Oi80OAoxOTIuMC4yLjE="
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": false,
+				"noAaaaList": [],
+				"groupPolicy": true,
+				"groupPolicyBypassList": [
+					{
+						"cidr": "198.51.100.9"
+					},
+					{
+						"cidr": "10.0.0.0/8"
+					},
+					{
+						"cidr": "2001:db8::/48"
+					},
+					{
+						"cidr": "192.0.2.1"
+					}
+				]
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": "0 = 198.51.100.9\n1 = 10.0.0.0/8\n2 = 2001:db8::/48\n3 = 192.0.2.1\n"
+			}
+		},
+		{
+			"id": "lists-both-on",
+			"description": "Both switches on, one entry each: both sections in the ini, both lists in Core.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "on",
+				"dnsbl/pfb_noaaaa_list": "LmV4YW1wbGUub3Jn",
+				"dnsbl/pfb_gp": "on",
+				"dnsbl/pfb_gp_bypass_list": "MTkyLjAuMi4wLzI0"
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": true,
+				"noAaaaList": [
+					{
+						"domain": ".example.org"
+					}
+				],
+				"groupPolicy": true,
+				"groupPolicyBypassList": [
+					{
+						"cidr": "192.0.2.0/24"
+					}
+				]
+			},
+			"ini": {
+				"noAAAA": "0 = example.org,1\n\n",
+				"GP_Bypass_List": "0 = 192.0.2.0/24\n"
+			}
+		},
+		{
+			"id": "lists-toggle-case",
+			"description": "A switch stored 'ON' is on and one stored 'yes' is off (issue #1887), the lists held either way.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "ON",
+				"dnsbl/pfb_noaaaa_list": "YS5leGFtcGxl",
+				"dnsbl/pfb_gp": "yes",
+				"dnsbl/pfb_gp_bypass_list": "MTkyLjAuMi4x"
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": true,
+				"noAaaaList": [
+					{
+						"domain": "a.example"
+					}
+				],
+				"groupPolicy": false,
+				"groupPolicyBypassList": [
+					{
+						"cidr": "192.0.2.1"
+					}
+				]
+			},
+			"ini": {
+				"noAAAA": "0 = a.example,0\n",
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-noaaaa-page-refused-kept",
+			"description": "Entries the DNSBL page refuses ('*.example.com', 'x..y.com', 'a(b).example') that the ini carries are held as they are, so a client can write back what it read: only an entry a write adds is held to the page's rule.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "on",
+				"dnsbl/pfb_noaaaa_list": "Ki5leGFtcGxlLmNvbQp4Li55LmNvbQphKGIpLmV4YW1wbGUKb2suZXhhbXBsZQ=="
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": true,
+				"noAaaaList": [
+					{
+						"domain": "*.example.com"
+					},
+					{
+						"domain": "x..y.com"
+					},
+					{
+						"domain": "a(b).example"
+					},
+					{
+						"domain": "ok.example"
+					}
+				],
+				"groupPolicy": false,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": "0 = *.example.com,0\n1 = x..y.com,0\n2 = a(b).example,0\n3 = ok.example,0\n",
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-noaaaa-numeric",
+			"description": "A purely numeric name is held as the string it is, in the form and the place of its last line.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "on",
+				"dnsbl/pfb_noaaaa_list": "MTAKLjIwCjEw"
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": true,
+				"noAaaaList": [
+					{
+						"domain": ".20"
+					},
+					{
+						"domain": "10"
+					}
+				],
+				"groupPolicy": false,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": "0 = 10,0\n1 = 20,1\n2 = 10,0\n",
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-noaaaa-repeated-last-place",
+			"description": "A domain listed twice takes the form and the place of its last line: a.example comes after b.example, as a wildcard.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_noaaaa": "on",
+				"dnsbl/pfb_noaaaa_list": "YS5leGFtcGxlCmIuZXhhbXBsZQouYS5leGFtcGxl"
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": true,
+				"noAaaaList": [
+					{
+						"domain": "b.example"
+					},
+					{
+						"domain": ".a.example"
+					}
+				],
+				"groupPolicy": false,
+				"groupPolicyBypassList": []
+			},
+			"ini": {
+				"noAAAA": "0 = a.example,0\n1 = b.example,0\n2 = a.example,1\n",
+				"GP_Bypass_List": null
+			}
+		},
+		{
+			"id": "lists-gp-full-prefix",
+			"description": "A prefix length of the full width of the family (/32 for IPv4, /128 for IPv6) is held.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_gp": "on",
+				"dnsbl/pfb_gp_bypass_list": "MTAuMC4wLjEvMzIKMjAwMTpkYjg6OjEvMTI4"
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": false,
+				"noAaaaList": [],
+				"groupPolicy": true,
+				"groupPolicyBypassList": [
+					{
+						"cidr": "10.0.0.1/32"
+					},
+					{
+						"cidr": "2001:db8::1/128"
+					}
+				]
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": "0 = 10.0.0.1/32\n1 = 2001:db8::1/128\n"
+			}
+		},
+		{
+			"id": "lists-gp-unicode-space",
+			"description": "Unicode white space around a bypass entry (U+3000, U+00A0, U+2003) is stripped, as pfB-DNS strips an ini value.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_gp": "on",
+				"dnsbl/pfb_gp_bypass_list": "44CAMTkyLjAuMi41wqAK4oCDMTk4LjUxLjEwMC43"
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": false,
+				"noAaaaList": [],
+				"groupPolicy": true,
+				"groupPolicyBypassList": [
+					{
+						"cidr": "192.0.2.5"
+					},
+					{
+						"cidr": "198.51.100.7"
+					}
+				]
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": "0 = \u3000192.0.2.5\n1 = \u2003198.51.100.7\n"
+			}
+		},
+		{
+			"id": "lists-gp-signed-prefix",
+			"description": "A prefix length with a sign (/-1, /+8) is not digits: not held. Only 192.0.2.1 is held.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_gp": "on",
+				"dnsbl/pfb_gp_bypass_list": "MTAuMC4wLjEvLTEKMTAuMC4wLjEvKzgKMTkyLjAuMi4x"
+			},
+			"valid": true,
+			"native": {
+				"noAaaa": false,
+				"noAaaaList": [],
+				"groupPolicy": true,
+				"groupPolicyBypassList": [
+					{
+						"cidr": "192.0.2.1"
+					}
+				]
+			},
+			"ini": {
+				"noAAAA": null,
+				"GP_Bypass_List": "0 = 10.0.0.1/-1\n1 = 10.0.0.1/+8\n2 = 192.0.2.1\n"
+			}
+		}
+	],
+	"refused": [
+		{
+			"id": "noaaaa-line-break",
+			"description": "A noAAAA entry holding a line break would be stored as two entries.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "a.example\nb.example"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-upper",
+			"description": "An upper-case entry would be read back lower-cased.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "A.example"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-double-dot",
+			"description": "Two leading dots are no wildcard entry: the ini writer skips the row.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "..a.example"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-dot",
+			"description": "A lone dot holds no domain.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "."
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-empty",
+			"description": "An empty entry holds no domain.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": ""
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-comma",
+			"description": "A comma splits the ini row into three fields: pfB-DNS skips it.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "a,b.example"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-percent",
+			"description": "A '%' makes pfB-DNS refuse the whole ini.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "a%b.example"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-space",
+			"description": "A name with white space matches no query.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "a b.example"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-comment",
+			"description": "The reader cuts a line at '#': the entry would be read back as another.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "a.example#note"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-unicode",
+			"description": "A non-ASCII entry would be read back in punycode.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "b\u00fccher.example"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-repeated",
+			"description": "An entry listed twice.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "a.example"
+					},
+					{
+						"domain": "a.example"
+					}
+				]
+			},
+			"field": "noAaaaList[1].domain"
+		},
+		{
+			"id": "noaaaa-both-forms",
+			"description": "One domain both plain and wildcard: pfB-DNS keeps one flag per domain, so the list would not say which.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "a.example"
+					},
+					{
+						"domain": ".a.example"
+					}
+				]
+			},
+			"field": "noAaaaList[1].domain"
+		},
+		{
+			"id": "noaaaa-not-bool",
+			"description": "The switch is a bool, not the stored token.",
+			"input": {
+				"noAaaa": "on"
+			},
+			"field": "noAaaa"
+		},
+		{
+			"id": "noaaaa-page-star",
+			"description": "The DNSBL page refuses a '*': once stored, every later page save would fail until the line went.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "*.example.com"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-page-wildcard-star",
+			"description": "The page refuses a '*' after the wildcard dot too.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": ".*.example.com"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-page-parens",
+			"description": "The page refuses parentheses in a domain.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "a(b).example"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-page-bang",
+			"description": "The page refuses a '!' in a domain.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "a!b.example"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-page-brackets",
+			"description": "The page refuses brackets, and a name without a dot.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "[x]"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-page-slash",
+			"description": "The page refuses a '/', and a name without a dot.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "a/b"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-page-no-dot",
+			"description": "The page refuses a name without a dot.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "localhost"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-page-empty-label",
+			"description": "The page refuses an empty label inside a name.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "x..y.com"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-page-long-label",
+			"description": "The page refuses a label of more than 63 characters.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example"
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-page-long-name",
+			"description": "The page refuses a name of 255 characters or more.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa."
+					}
+				]
+			},
+			"field": "noAaaaList[0].domain"
+		},
+		{
+			"id": "noaaaa-both-forms-twice",
+			"description": "Two domains each listed both plain and as a wildcard: each is named, the second as the first.",
+			"input": {
+				"noAaaaList": [
+					{
+						"domain": "a.example"
+					},
+					{
+						"domain": ".a.example"
+					},
+					{
+						"domain": "b.example"
+					},
+					{
+						"domain": ".b.example"
+					}
+				]
+			},
+			"field": "noAaaaList[3].domain"
+		},
+		{
+			"id": "gp-name",
+			"description": "A name is no address or CIDR.",
+			"input": {
+				"groupPolicyBypassList": [
+					{
+						"cidr": "not-an-ip"
+					}
+				]
+			},
+			"field": "groupPolicyBypassList[0].cidr"
+		},
+		{
+			"id": "gp-prefix-too-long",
+			"description": "A prefix length past the family's.",
+			"input": {
+				"groupPolicyBypassList": [
+					{
+						"cidr": "10.0.0.0/33"
+					}
+				]
+			},
+			"field": "groupPolicyBypassList[0].cidr"
+		},
+		{
+			"id": "gp-netmask",
+			"description": "A netmask prefix: the DNSBL page never saves one, and Core does not hold it.",
+			"input": {
+				"groupPolicyBypassList": [
+					{
+						"cidr": "10.0.0.0/255.255.255.0"
+					}
+				]
+			},
+			"field": "groupPolicyBypassList[0].cidr"
+		},
+		{
+			"id": "gp-zone",
+			"description": "An IPv6 zone: the DNSBL page never saves one, and Core does not hold it.",
+			"input": {
+				"groupPolicyBypassList": [
+					{
+						"cidr": "fe80::1%em0"
+					}
+				]
+			},
+			"field": "groupPolicyBypassList[0].cidr"
+		},
+		{
+			"id": "gp-leading-zero",
+			"description": "An IPv4 address with a leading zero: pfB-DNS refuses it.",
+			"input": {
+				"groupPolicyBypassList": [
+					{
+						"cidr": "010.0.0.1"
+					}
+				]
+			},
+			"field": "groupPolicyBypassList[0].cidr"
+		},
+		{
+			"id": "gp-upper",
+			"description": "An upper-case IPv6 address would be read back lower-cased.",
+			"input": {
+				"groupPolicyBypassList": [
+					{
+						"cidr": "2001:DB8::1"
+					}
+				]
+			},
+			"field": "groupPolicyBypassList[0].cidr"
+		},
+		{
+			"id": "gp-line-break",
+			"description": "An entry holding a line break would be stored as two entries.",
+			"input": {
+				"groupPolicyBypassList": [
+					{
+						"cidr": "192.0.2.1\n192.0.2.2"
+					}
+				]
+			},
+			"field": "groupPolicyBypassList[0].cidr"
+		},
+		{
+			"id": "gp-space",
+			"description": "An entry with white space around it would be read back trimmed.",
+			"input": {
+				"groupPolicyBypassList": [
+					{
+						"cidr": " 192.0.2.1"
+					}
+				]
+			},
+			"field": "groupPolicyBypassList[0].cidr"
+		},
+		{
+			"id": "gp-comment",
+			"description": "The reader cuts a line at '#'.",
+			"input": {
+				"groupPolicyBypassList": [
+					{
+						"cidr": "192.0.2.1#printer"
+					}
+				]
+			},
+			"field": "groupPolicyBypassList[0].cidr"
+		},
+		{
+			"id": "gp-repeated",
+			"description": "An entry listed twice.",
+			"input": {
+				"groupPolicyBypassList": [
+					{
+						"cidr": "192.0.2.1"
+					},
+					{
+						"cidr": "192.0.2.1"
+					}
+				]
+			},
+			"field": "groupPolicyBypassList[1].cidr"
+		},
+		{
+			"id": "gp-not-bool",
+			"description": "The switch is a bool.",
+			"input": {
+				"groupPolicy": 1
+			},
+			"field": "groupPolicy"
+		},
+		{
+			"id": "gp-prefix-negative",
+			"description": "A prefix length with a minus sign is not digits.",
+			"input": {
+				"groupPolicyBypassList": [
+					{
+						"cidr": "10.0.0.1/-1"
+					}
+				]
+			},
+			"field": "groupPolicyBypassList[0].cidr"
+		},
+		{
+			"id": "gp-prefix-plus",
+			"description": "A prefix length with a plus sign is not digits.",
+			"input": {
+				"groupPolicyBypassList": [
+					{
+						"cidr": "10.0.0.1/+8"
+					}
+				]
+			},
+			"field": "groupPolicyBypassList[0].cidr"
 		}
 	]
 }

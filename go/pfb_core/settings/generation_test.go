@@ -10,8 +10,8 @@ import (
 // The generations of Production's dns values: sha256 of their JSON with sorted keys, the first 8 bytes big-endian, shifted
 // right by 11 (53 bits). Computed outside Go, so that the formula cannot drift unseen.
 const (
-	defaultsGeneration  uint64 = 3523653220080400
-	controlOnGeneration uint64 = 8000625366323202
+	defaultsGeneration  uint64 = 5306169205272651
+	controlOnGeneration uint64 = 7528269453985022
 )
 
 // A generation comes from a projection's values alone: equal values give it in any store (a restarted Core, another

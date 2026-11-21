@@ -4540,11 +4540,14 @@ function pfb_core_call(string $method, array $params = [], ?string $socket = NUL
 
 /**
  * Core's native `settings/dns` fields (docs/misc/core-api-protocol.md, issue #3913), from config.xml: each value is what
- * pfb_unbound_python_ini() writes for it, so the in-memory config of a page that has not saved yet answers too.
+ * pfb_unbound_python_ini() writes for it, so the in-memory config of a page that has not saved yet answers too. The noAAAA and
+ * Group Policy switches and lists (issue #4036) are what pfB-DNS takes from the ini's [noAAAA] and [GP_Bypass_List] sections,
+ * which the ini carries while the switch is on: pfb_core_dns_list_fields() describes them.
  *
- * @return array<string, bool|int|string> the 15 fields, in the protocol's order
+ * @return array<string, mixed> the 19 fields, in the protocol's order
  */
 function pfb_core_dns_settings(): array {
+	$lists = pfb_core_dns_list_fields();
 	$on = static fn(string $key): bool => pfb_cfg_toggle_read(PfbConfig::read($key)) === PfbToggle::On;
 	$cap = (string) PfbConfig::read('dnsbl/pfb_py_cache_max');
 	$control = $on('dnsbl/pfb_control');
@@ -4564,7 +4567,74 @@ function pfb_core_dns_settings(): array {
 		'controlLegacy'         => $control && $on('dnsbl/pfb_control_legacy'),
 		'regexCap'              => $on('dnsbl/pfb_regex_cap'),
 		'metricsClientIp'       => $on('gen/pfb_metrics_client_ip'),
+	] + array_replace($lists, pfb_core_table_read(array_diff_key($lists, ['noAaaaList' => TRUE])),
+		['noAaaaList' => pfb_core_noaaaa_list(pfb_core_table_text($lists['noAaaaList'][0]))]);
+}
+
+/**
+ * The `settings/dns` fields of the noAAAA and Group Policy settings (issue #4036), a table as pfb_core_policy_ip_fields() describes one.
+ * A noAAAA entry is a domain as pfB-DNS keys its table, with a leading dot for the wildcard flag (pfb_core_noaaaa_entry()); a bypass
+ * entry is an address or CIDR as the ini writes it (pfb_core_gp_entry()). The noAAAA list holds one entry per domain (pfb_core_noaaaa_list()).
+ *
+ * @return array<string, array{0: string, 1: string, 2: mixed}>
+ */
+function pfb_core_dns_list_fields(): array {
+	return [
+		'noAaaa'                => ['dnsbl/pfb_noaaaa', 'toggle', NULL],
+		'noAaaaList'            => ['dnsbl/pfb_noaaaa_list', 'text', ['domain', static fn(string $v): bool => pfb_core_noaaaa_entry($v) === $v, 'pfb_core_noaaaa_entry']],
+		'groupPolicy'           => ['dnsbl/pfb_gp', 'toggle', NULL],
+		'groupPolicyBypassList' => ['dnsbl/pfb_gp_bypass_list', 'text', ['cidr', 'pfb_core_gp_entry_valid', 'pfb_core_gp_entry']],
 	];
+}
+
+/**
+ * The noAAAA entry of one text area line as pfB-DNS takes it from the ini: the row pfb_unbound_python_ini() writes (lower-cased, comment
+ * cut, IDN punycoded), its one leading dot kept as the wildcard flag. NULL for no entry, and for a row pfB-DNS skips or can never match:
+ * a second leading dot (the writer skips it), a comma (the row splits in three), a `%` (pfB-DNS refuses the whole ini), white space.
+ */
+function pfb_core_noaaaa_entry(string $line): ?string {
+	$row = (string) (pfb_text_area_decode(base64_encode($line), TRUE, TRUE, TRUE)[0][0] ?? '');
+	$wildcard = str_starts_with($row, '.') ? '.' : '';
+	$domain = substr($row, strlen($wildcard));
+	return preg_match('/^[\x21\x22\x24\x26-\x2b\x2d\x2f-\x40\x5b-\x7e][\x21\x22\x24\x26-\x2b\x2d-\x40\x5b-\x7e]*$/D', $domain) === 1 ? $wildcard . $domain : NULL;
+}
+
+/**
+ * The noAAAA list of the text area $stored64 (base64): one entry per domain, the form of its last line, as pfB-DNS keeps the last row's
+ * flag; listed in the order of those last lines.
+ *
+ * @return list<array{domain: string}>
+ */
+function pfb_core_noaaaa_list(string $stored64): array {
+	$entries = [];
+	foreach (pfb_core_table_text_lines($stored64) as $line) {
+		$entry = pfb_core_noaaaa_entry($line);
+		if ($entry !== NULL) {
+			$domain = ltrim($entry, '.');
+			unset($entries[$domain]);
+			$entries[$domain] = ['domain' => $entry];
+		}
+	}
+	return array_values($entries);
+}
+
+/**
+ * The Group Policy bypass entry of one text area line as pfB-DNS takes it from the ini: the row pfb_unbound_python_ini() writes, stripped
+ * as configparser strips a value, when pfb_core_gp_entry_valid() holds it; NULL otherwise.
+ */
+function pfb_core_gp_entry(string $line): ?string {
+	$entry = pfb_core_regex_entry((string) (pfb_text_area_decode(base64_encode($line), TRUE, TRUE, FALSE)[0][0] ?? ''));
+	return $entry !== NULL && pfb_core_gp_entry_valid($entry) ? $entry : NULL;
+}
+
+/**
+ * Whether $entry is a bypass entry Core holds: lower case, an IP address without a zone, or one with a prefix length of digits within
+ * its family (leading zeros included, as pfB-DNS reads them). pfB-DNS also takes a netmask prefix and a zone, which the DNSBL page never saves.
+ */
+function pfb_core_gp_entry_valid(string $entry): bool {
+	[$address, $bits] = [...explode('/', $entry, 2), NULL];
+	$packed = filter_var($address, FILTER_VALIDATE_IP) === FALSE ? FALSE : inet_pton($address);
+	return $packed !== FALSE && $entry === strtolower($entry) && ($bits === NULL || (ctype_digit($bits) && (int) $bits <= strlen($packed) * 8));
 }
 
 /**
@@ -5157,8 +5227,8 @@ function pfb_core_table_merge(array $wanted, array $current, array $fields, arra
 		if (is_array($value)) {
 			[$want, $was] = [array_column($value, $arg[0]), array_column($current[$name], $arg[0])];
 			if ($kind === 'text') {
-				sort($want);
-				sort($was);
+				sort($want, SORT_STRING);
+				sort($was, SORT_STRING);
 			}
 			if ($want === $was) {
 				continue;
@@ -6100,10 +6170,11 @@ function pfb_core_settings_refusal(string $code, string $message, array $fieldEr
 
 /**
  * The refusal for a malformed settings adapter request, NULL for a well-formed one: nothing is locked or written before it passes.
- * A request holds exactly the keys of its op, and a write's `settings` exactly `dns` (the 15 fields, each of its native type and
- * range), the feed projections (pfb_core_feed_projection_faults(), issue #3937), `schedule` (pfb_core_schedule_faults(), issue #3941) and
- * `ingest` (an object here; pfb_core_settings_backend() holds it to what config.xml and the platform project, issue #3975) and the
- * table-driven projections (pfb_core_table_faults(), issue #4031) and `feeds/geoip` (pfb_core_geoip_faults()).
+ * A request holds exactly the keys of its op, and a write's `settings` exactly `dns` (the 19 fields, each of its native type and
+ * range, the lists as pfb_core_table_faults() holds them, no noAAAA domain listed twice), the feed projections
+ * (pfb_core_feed_projection_faults(), issue #3937), `schedule` (pfb_core_schedule_faults(), issue #3941) and `ingest` (an object
+ * here; pfb_core_settings_backend() holds it to what config.xml and the platform project, issue #3975) and the table-driven
+ * projections (pfb_core_table_faults(), issue #4031) and `feeds/geoip` (pfb_core_geoip_faults()).
  *
  * @param array<mixed> $request
  * @param ?callable(): array<string, string> $interfaces realif => IPv4 address; pfb_core_interface_addresses() by default (a test seam)
@@ -6135,8 +6206,9 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
 	}
 	$dns = $settings['dns'];
 	$fields = pfb_core_dns_fields();
+	$lists = pfb_core_dns_list_fields();
 	$faults = [];
-	foreach (array_keys(array_diff_key($dns, $fields)) as $name) {
+	foreach (array_keys(array_diff_key($dns, $fields, $lists)) as $name) {
 		$faults[] = ['field' => "dns.{$name}", 'message' => 'no such field'];
 	}
 	foreach ($fields as $name => [, $type]) {
@@ -6158,6 +6230,18 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
 	if (($dns['controlLegacy'] ?? NULL) === TRUE && ($dns['control'] ?? NULL) !== TRUE) {
 		$faults[] = ['field' => 'dns.controlLegacy', 'message' => 'requires control'];
 	}
+	$listFaults = pfb_core_table_faults(array_intersect_key($dns, $lists), $lists, 'dns');
+	if ($listFaults === []) {
+		$domains = [];
+		foreach ($dns['noAaaaList'] as $i => $item) {
+			$domain = ltrim($item['domain'], '.');
+			if (isset($domains[$domain])) {
+				$listFaults[] = ['field' => "dns.noAaaaList[{$i}].domain", 'message' => 'names the domain of an earlier item'];
+			}
+			$domains[$domain] = TRUE;
+		}
+	}
+	$faults = array_merge($faults, $listFaults);
 	foreach (array_keys(PFB_CORE_FEED_SECTIONS) as $projection) {
 		$faults = array_merge($faults, pfb_core_feed_projection_faults($settings[$projection], $projection, $interfaces ?? 'pfb_core_interface_addresses'));
 	}
@@ -6207,6 +6291,7 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		return ['version' => 1, 'revision' => pfb_core_settings_revision($settings), 'settings' => $settings, 'platform' => ['pendingToken' => $token]];
 	}
 	$fields = pfb_core_dns_fields();
+	$dnsLists = pfb_core_dns_list_fields();
 	$wanted = $request['settings']['dns'];
 	$lock = pfb_dns_config_lock();
 	if ($lock === NULL) {
@@ -6243,7 +6328,15 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 			return pfb_core_settings_refusal('invalid_argument', "a Blacklist provider's title and feed are the package's", $fixed);
 		}
 		$current = pfb_core_dns_settings();
-		$changed = array_keys(array_filter($wanted, static fn(mixed $value, string $field): bool => $value !== $current[$field], ARRAY_FILTER_USE_BOTH));
+		// issue #4036: an entry a write adds to the noAAAA list passes the DNSBL page's rule, or the page's next save fails; a held one round-trips
+		$held = array_column($current['noAaaaList'], 'domain');
+		$added = array_filter(array_column($wanted['noAaaaList'], 'domain'), static fn(string $domain): bool => !in_array($domain, $held, TRUE)
+			&& empty(pfb_filter(rtrim($domain, '.'), PFB_FILTER_DOMAIN, 'pfb_core_settings')));
+		if ($added !== []) {
+			return pfb_core_settings_refusal('invalid_argument', 'a noAAAA entry the DNSBL page would refuse', array_map(static fn(int $i): array =>
+				['field' => "dns.noAaaaList[{$i}].domain", 'message' => 'must be a domain the DNSBL page accepts'], array_keys($added)));
+		}
+		$changed = array_keys(array_filter(array_intersect_key($wanted, $fields), static fn(mixed $value, string $field): bool => $value !== $current[$field], ARRAY_FILTER_USE_BOTH));
 		$sections = $lists = [];
 		foreach (PFB_CORE_FEED_SECTIONS as $projection => $section) {
 			$merged = pfb_core_feed_merge($projection, $request['settings'][$projection]['groups'], $interfaces);
@@ -6257,6 +6350,7 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 			$keys += pfb_core_table_merge($request['settings'][$id], $now[$id], $table, $sections);
 		}
 		pfb_core_geoip_merge($request['settings']['feeds/geoip'], $now['feeds/geoip'], $sections);
+		$keys += pfb_core_table_merge(array_intersect_key($wanted, $dnsLists), array_intersect_key($current, $dnsLists), $dnsLists, $sections);
 		if ($changed === [] && $sections === [] && $keys === []) {
 			return ['version' => 1, 'revision' => $request['expectedRevision']];
 		}

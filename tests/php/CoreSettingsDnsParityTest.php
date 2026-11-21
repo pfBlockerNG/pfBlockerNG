@@ -11,6 +11,16 @@ use PHPUnit\Framework\TestCase;
  * tests/core/fixtures/settings_dns_parity.json; go/pfb_core/settings passes the same file. A `stored` case is a config.xml
  * value: PHP never refuses it, and the value Core holds is what pfb_unbound.ini carries for it. A `posted` case is the
  * DNSBL page's input: its save validation decides `valid`, and an accepted value, stored as posted, gives the ini value.
+ *
+ * Issue #4036: the noAAAA and Group Policy fields. The ini has no key for either switch: it writes the [noAAAA] and
+ * [GP_Bypass_List] sections exactly while its switch is on, so a switch is the ini writer's own gate, and a list is what the
+ * section holds with its switch turned on, as pfB-DNS reads it (decider/pfb_unbound.go): a noAAAA row is `domain,flag`, one
+ * flag per domain (the last row's), the wildcard flag held as a leading dot; a bypass row is an address or CIDR, each once.
+ * Not held, as documented in docs/misc/core-api-protocol.md: a noAAAA row with a '%' (one that is no valid interpolation makes
+ * pfB-DNS refuse the whole ini) or a name with white space (it matches no query), and the netmask and zone forms of a bypass
+ * entry the DNSBL page never saves. A case's `ini` is the raw text of the two sections today's writer gives for its stored
+ * values (null: no section), so that pfB-DNS can be shown to build the same tables from either input. A `refused` row is a
+ * value of these fields the adapter's write refuses, naming the field (CoreSettingsBackendTest); Core refuses it too.
  */
 #[CoversFunction('pfb_unbound_python_ini')]
 #[CoversFunction('pfb_dnsbl_ini_inputs')]
@@ -35,6 +45,12 @@ final class CoreSettingsDnsParityTest extends TestCase
 		'controlLegacy'         => 'python_control_legacy',
 		'regexCap'              => 'regex_cap',
 		'metricsClientIp'       => 'metrics_client_ip',
+	];
+
+	/** The native switch => its list and the pfb_unbound.ini section that carries the list while the switch is on (issue #4036). */
+	private const SECTIONS = [
+		'noAaaa'      => ['noAaaaList', 'noAAAA'],
+		'groupPolicy' => ['groupPolicyBypassList', 'GP_Bypass_List'],
 	];
 
 	private array $priorConfig;
@@ -85,7 +101,20 @@ final class CoreSettingsDnsParityTest extends TestCase
 		$this->assertSame('dns', $doc['projection']);
 		$defaults = array_values(array_filter($doc['cases'], static fn(array $c): bool => $c['id'] === 'defaults'));
 		$this->assertCount(1, $defaults, 'one defaults case');
-		$this->assertSame(array_keys(self::INI_KEY), array_keys($defaults[0]['native']), 'the defaults case names every field');
+		$this->assertSame([...array_keys(self::INI_KEY), 'noAaaa', 'noAaaaList', 'groupPolicy', 'groupPolicyBypassList'], array_keys($defaults[0]['native']),
+			'the defaults case names every field');
+		$refused = array_column($doc['refused'], 'id');
+		$this->assertSame(array_values(array_unique($refused)), $refused, 'a refused row id appears once');
+		$keys = ['dnsbl/pfb_noaaaa', 'dnsbl/pfb_noaaaa_list', 'dnsbl/pfb_gp', 'dnsbl/pfb_gp_bypass_list'];
+		foreach ($doc['cases'] as $case) {
+			// A regenerated fixture that drops the raw ini of a case touching the four fields of issue #4036 fails here
+			$touches = array_intersect(array_keys($case['values']), $keys) !== []
+				|| array_intersect(array_keys($case['native'] ?? []), ['noAaaa', 'noAaaaList', 'groupPolicy', 'groupPolicyBypassList']) !== [];
+			$this->assertTrue(!$touches || array_key_exists('ini', $case), "{$case['id']}: a case touching the noAAAA or Group Policy fields carries its ini");
+			if (array_key_exists('ini', $case)) {
+				$this->assertSame(array_column(self::SECTIONS, 1), array_keys($case['ini']), "{$case['id']}: both sections, present or null");
+			}
+		}
 	}
 
 	/** @param array<string, mixed> $case */
@@ -111,8 +140,26 @@ final class CoreSettingsDnsParityTest extends TestCase
 		}
 		pfb_global();
 		pfb_dnsbl_ini_inputs();
+		$switches = ['noAaaa' => $GLOBALS['pfb']['dnsbl_noaaaa'] === PfbToggle::On, 'groupPolicy' => $GLOBALS['pfb']['dnsbl_gp'] === PfbToggle::On];
 		$ini = pfb_unbound_python_ini('enabled');
+		if (array_key_exists('ini', $case)) {
+			$sections = array_combine(array_column(self::SECTIONS, 1), array_map(static fn(array $s): ?string => self::sectionText($ini, $s[1]), array_values(self::SECTIONS)));
+			$this->assertSame($case['ini'], $sections, "{$case['id']}: the ini sections today's writer gives, from\n{$ini}");
+		}
+		$GLOBALS['pfb']['dnsbl_noaaaa'] = $GLOBALS['pfb']['dnsbl_gp'] = PfbToggle::On;
+		$on = pfb_unbound_python_ini('enabled');
+		$lists = [];
+		foreach (self::SECTIONS as $switch => [$list, $section]) {
+			$rows = self::sectionRows($on, $section);
+			$this->assertSame($switches[$switch] ? $rows : [], self::sectionRows($ini, $section), "{$case['id']}: [{$section}] is in the ini exactly while {$switch} is on");
+			$lists[$switch] = $switches[$switch];
+			$lists[$list] = $switch === 'noAaaa' ? self::noAaaaEntries($rows) : self::bypassEntries($rows);
+		}
 		foreach ($case['native'] as $field => $expected) {
+			if (array_key_exists($field, $lists)) {
+				$this->assertSame($expected, $lists[$field], "{$case['id']}: {$field} from the ini\n{$on}");
+				continue;
+			}
 			$this->assertArrayHasKey($field, self::INI_KEY, "{$case['id']}: {$field} is a projection field");
 			$key = self::INI_KEY[$field];
 			$this->assertSame(1, preg_match('/^' . $key . '\t= (.*)$/m', $ini, $m), "{$case['id']}: the ini has {$key}:\n{$ini}");
@@ -122,6 +169,63 @@ final class CoreSettingsDnsParityTest extends TestCase
 				$this->assertStringContainsString("\npython_idn\t= {$legacy}\n", $ini, "{$case['id']}: python_idn is on exactly for IDN mode on");
 			}
 		}
+	}
+
+	/** The raw text of the ini's $section, its header excluded; NULL when there is no section. */
+	private static function sectionText(string $ini, string $section): ?string
+	{
+		return preg_match('/\n\[' . $section . '\]\n((?:[^\[\n][^\n]*\n|\n)*)/', $ini, $m) === 1 ? $m[1] : NULL;
+	}
+
+	/** @return list<string> the values of the rows of the ini's $section, stripped as pfB-DNS strips them (Python's str.strip()); none when there is no section */
+	private static function sectionRows(string $ini, string $section): array
+	{
+		$space = '[\t-\r \x{1c}-\x{1f}\x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}]+';
+		$rows = [];
+		foreach (array_filter(explode("\n", self::sectionText($ini, $section) ?? ''), 'strlen') as $line) {
+			[, $value] = explode('=', $line, 2);
+			$rows[] = (string) preg_replace("/^{$space}|{$space}\$/Du", '', $value);
+		}
+		return $rows;
+	}
+
+	/**
+	 * pfB-DNS's noAAAA table from the rows: `domain,flag` (any other count of fields skipped), the last row's flag per domain,
+	 * listed in the order of those last rows with the wildcard flag as a leading dot. A row with a '%' (pfB-DNS refuses the whole
+	 * ini) and a name with white space (it matches no query) are not held.
+	 *
+	 * @param list<string> $rows
+	 * @return list<array{domain: string}>
+	 */
+	private static function noAaaaEntries(array $rows): array
+	{
+		$table = [];
+		foreach ($rows as $row) {
+			$data = explode(',', $row);
+			if (count($data) !== 2 || str_contains($row, '%') || preg_match('/[\s\p{Z}\p{C}]/u', $data[0]) === 1) {
+				continue;
+			}
+			unset($table[$data[0]]);
+			$table[$data[0]] = $data[1] === '1';
+		}
+		return array_map(static fn(string $domain, bool $wildcard): array => ['domain' => ($wildcard ? '.' : '') . $domain], array_keys($table), $table);
+	}
+
+	/**
+	 * The bypass entries pfB-DNS takes from the rows and Core holds, each once at its first place: an IP address, or one with a
+	 * prefix length of digits within its family. pfB-DNS also takes a netmask prefix and an IPv6 zone; Core does not hold them.
+	 *
+	 * @param list<string> $rows
+	 * @return list<array{cidr: string}>
+	 */
+	private static function bypassEntries(array $rows): array
+	{
+		$held = array_filter($rows, static function (string $row): bool {
+			[$address, $bits] = [...explode('/', $row, 2), NULL];
+			$packed = filter_var($address, FILTER_VALIDATE_IP) === FALSE ? FALSE : inet_pton($address);
+			return $packed !== FALSE && ($bits === NULL || (ctype_digit($bits) && (int) $bits <= strlen($packed) * 8));
+		});
+		return array_map(static fn(string $entry): array => ['cidr' => $entry], array_values(array_unique($held)));
 	}
 
 	/** The ini token as the native value: on/off is bool, the cap an int, idn_mode '' is off, a policy its token. */

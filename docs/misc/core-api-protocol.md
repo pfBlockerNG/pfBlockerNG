@@ -37,7 +37,7 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 | `GetSettings` | `projectionIds` (optional; none: all) | `{"initialized", "revision", "projections": [{"resourceId", "generation", "value"}]}` |
 | `InitializeSettings` | `requestId`, `settings` | `{"revision": 1, "projections": [...]}`: every projection |
 | `SaveSettings` | `requestId`, `expectedRevision`, `changes` | `{"revision", "projections": [...]}`: the projections whose value changed, and the revision, as Core read the backend again after the write (a failed read keeps what was written) |
-| `ValidateSettings` | `changes` | `{}`, or the errors `SaveSettings` would give; changes nothing |
+| `ValidateSettings` | `changes` | `{}`, or the errors `SaveSettings` would give (bar the rule for an added `noAaaaList` entry); changes nothing |
 | `SettingsChanged` | none | what `GetSettings` answers: Core read its backend again |
 | `StartUpdate` | `requestId`, `trigger`: `manual` (`scope`, `force`), `apply` or `retry` | `{}` once the Update is admitted; `conflict` while one runs |
 | `GetUpdate` | `after` (optional cursor, a decimal string; default: the start) | `{"running", "update", "log", "next"}`: the current or last Update and a chunk of its log; `next` is a string |
@@ -183,8 +183,9 @@ Validation: before the Outpost persists a change, it calls [`ValidateSettings`](
 A dry run of `SaveSettings`: `changes` is validated over the current settings (the defaults while Core is uninitialized)
 and the reply is `{}`. It takes no `requestId` and no `expectedRevision`, and it changes nothing: no write, no revision or
 generation change. A fault is the same `invalid_argument` with the same field errors `SaveSettings` gives for these
-`changes` (`changes.dns.decisionCacheMax`). A pass says the values are valid, not that a later `SaveSettings` finds the
-revision unchanged.
+`changes` (`changes.dns.decisionCacheMax`), except the rule for an entry a write adds to `noAaaaList`, which only
+`SaveSettings` applies: a page's dry run sends the projection as `config.xml` holds it, which may carry an entry Core has
+not loaded yet. A pass says the values are valid, not that a later `SaveSettings` finds the revision unchanged.
 
 ### Projection `dns`
 
@@ -199,9 +200,43 @@ The DNSBL resolver settings `pfb-dns` reads from `pfb_unbound.ini` today. `pfb-d
 | `pslFeedPrivatePolicy`, `pslFeedIcannPolicy` | enum `ignore` / `apex` / `honor`, `honor` |
 | `idnMode` | enum `off` / `confusable` / `on`, `off` |
 | `decisionCacheMax` | int 0 to 5000000 (0: unlimited), `10000` |
+| `noAaaa`, `groupPolicy` | bool, `false` |
+| `noAaaaList` | list keyed by `domain`, `[]`: a domain, with a leading `.` for a wildcard entry |
+| `groupPolicyBypassList` | list keyed by `cidr`, `[]`: an IP address or a CIDR |
+
+The noAAAA and Group Policy fields (issue #4036) are what `pfb-dns` takes from the `[noAAAA]` and `[GP_Bypass_List]`
+sections of `pfb_unbound.ini`. The ini carries a section only while its switch is on. Core holds the switch and the
+stored list separately, so a list survives while its switch is off.
+
+- A `noAaaaList` entry is a domain as `pfb-dns` keys its noAAAA table: printable ASCII except `,`, `%`, `#` and upper
+  case, and no second leading dot. A leading dot is the wildcard flag (the ini's `domain,1`). The table keeps one flag
+  per domain, the last row's, so the list names each domain once, plain or as a wildcard, never both.
+- A write may add only a noAAAA entry the DNSBL page saves: `pfb_filter()`'s domain rule once its trailing dots are off
+  (letters, digits, `_` and `-` in labels of at most 63 characters joined by dots, none empty). A stored entry outside
+  that rule would make every later save of the page fail. An entry the list already holds stays writable whatever it is,
+  so a client can write back what it read: Core's load takes the list the Outpost reads, and only an item a write adds is
+  held to the page's rule. The rule applies to a write (`SaveSettings`, and the adapter's write), not to the
+  `ValidateSettings` dry run.
+- A `groupPolicyBypassList` entry is an IP address without a zone, or an address with a prefix length of digits within
+  its family. Host bits under the prefix and a prefix length with leading zeros are allowed, as `pfb-dns` reads them. The
+  entry is lower case, as the Outpost stores it. Each entry is listed once. Entries are compared as written, so one network
+  under two spellings (`10.0.0.1`, `10.0.0.1/32`, `10.0.0.1/032`) is two entries.
+- The Outpost does not project an entry that `pfb-dns` skips (a row the ini writer drops, a row of three fields). Beyond
+  that, three departures from the ini are deliberate. A noAAAA row holding `%` is not held: today a `%` that is not a valid
+  interpolation makes `pfb-dns` refuse the whole ini, and a valid one (`a%%b.com`, `%(0)s`) is interpolated into another
+  name. A noAAAA name with white space is not held: it matches no query. A bypass entry in netmask form
+  (`10.0.0.0/255.255.255.0`) or with an IPv6 zone (`fe80::1%em0`) is not held: `pfb-dns` takes both from the ini, but the
+  DNSBL page never saves either.
+- On a write, the Outpost merges each list into its text area: a line whose entry stays is kept, a line holding no entry
+  Core can hold (a comment, a departure above) is kept, a line whose entry went is dropped, and a new entry is appended.
+  A list is compared as a set, so a write that only reorders it changes nothing.
 
 Parity fixture: `tests/core/fixtures/settings_dns_parity.json`. `CoreSettingsDnsParityTest` (PHPUnit) freezes it against
-today's PHP. `go/pfb_core/settings/parity_test.go` runs Core against it.
+today's PHP. `go/pfb_core/settings/parity_test.go` runs Core against it: a posted case is saved, and a stored case is loaded
+as the adapter's read brings it in, then written back. Its `refused` rows are values of the noAAAA and Group Policy fields
+that both the Outpost's write and Core refuse, naming the field. A case of those fields also holds, under `ini`, the raw
+text of the `[noAAAA]` and `[GP_Bypass_List]` sections today's writer gives for its stored values (null: no section), which
+`CoreSettingsDnsParityTest` freezes, so that `pfb-dns` can be shown to build the same tables from either input.
 
 ### Projections `feeds/ipv4`, `feeds/ipv6`, `feeds/dnsbl`
 

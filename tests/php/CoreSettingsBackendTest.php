@@ -12,7 +12,7 @@ use PHPUnit\Framework\TestCase;
  * Issue #3924: on pfSense Core keeps no settings store; it runs the settings adapter (pfb_core_settings.sh, the `core_settings`
  * verb of pfblockerng.inc) once per call, one JSON request on stdin and one JSON reply on stdout (docs/misc/core-api-protocol.md).
  * Pinned here, for the adapter that answers over config.xml:
- *   - read: the 15 native `settings/dns` fields as pfb_core_dns_settings() projects them, beside the feed projections (issue #3937,
+ *   - read: the 19 native `settings/dns` fields as pfb_core_dns_settings() projects them, beside the feed projections (issue #3937,
  *     CoreSettingsFeedsBackendTest; empty here: config.xml holds no group), with their revision;
  *   - write: every changed field reaches its registered config.xml key and only that key, under the config lock, with one
  *     write_config() and the pending-changes mark; the projection afterwards is what was asked for;
@@ -104,7 +104,7 @@ final class CoreSettingsBackendTest extends TestCase
 		rmdir_recursive($this->dir);
 	}
 
-	/** @return array<string, mixed> the parity fixture's `defaults` native values: all 15 fields in the protocol's order */
+	/** @return array<string, mixed> the parity fixture's `defaults` native values: all 19 fields in the protocol's order */
 	private static function defaults(): array
 	{
 		return self::fixture()['defaults'];
@@ -237,7 +237,7 @@ final class CoreSettingsBackendTest extends TestCase
 
 		$this->assertSame(['version', 'revision', 'settings', 'platform'], array_keys($reply), "{$case['id']}: the reply's keys");
 		$this->assertSame(1, $reply['version']);
-		$this->assertSame(self::settings($native), $reply['settings'], "{$case['id']}: the 15 native fields, in the protocol's order");
+		$this->assertSame(self::settings($native), $reply['settings'], "{$case['id']}: the 19 native fields, in the protocol's order");
 		$this->assertSame(pfb_core_settings_revision(self::settings($native)), $reply['revision'], "{$case['id']}: the projection's revision");
 		$this->assertGreaterThanOrEqual(1, $reply['revision']);
 		$this->assertSame([], $GLOBALS['pfb_test_lock_events'], 'a read takes no lock');
@@ -310,6 +310,117 @@ final class CoreSettingsBackendTest extends TestCase
 		// Then the projection is what Core asked for
 		$this->assertSame($wanted, pfb_core_dns_settings(), 'controlLegacy stays off');
 		$this->assertSame(pfb_core_settings_revision(self::settings($wanted)), $reply['revision']);
+	}
+
+	public function testWriteOfTheNoAaaaAndBypassFieldsStoresThemKeepingTheListsOtherLines(): void
+	{
+		// issue #4036: a list is merged into its text area: a comment or a line Core cannot hold stays, a dropped entry goes, a new one is appended
+		$this->arrange(['dnsbl/pfb_noaaaa_list' => base64_encode("# keep me\nold.example\n.keep.example\nspace inside.example"),
+			'dnsbl/pfb_gp_bypass_list' => base64_encode("# printers\n192.0.2.1\nfe80::1%em0")]);
+		$current = pfb_core_dns_settings();
+		$this->assertSame([['domain' => 'old.example'], ['domain' => '.keep.example']], $current['noAaaaList'], 'before-state');
+		$this->assertSame([['cidr' => '192.0.2.1']], $current['groupPolicyBypassList'], 'before-state');
+		$wanted = array_merge($current, ['noAaaa' => TRUE, 'noAaaaList' => [['domain' => '.keep.example'], ['domain' => 'new.example']],
+			'groupPolicy' => TRUE, 'groupPolicyBypassList' => [['cidr' => '192.0.2.1'], ['cidr' => '10.0.0.0/8']]]);
+		$before = $GLOBALS['config'];
+
+		$reply = $this->backend(self::writeRequest($current, $wanted));
+
+		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(self::settings($wanted))], $reply);
+		$this->assertSame($wanted, pfb_core_dns_settings(), 'the projection afterwards is what was asked for');
+		$section = PFB_SECTIONS['dnsbl'];
+		$this->assertSame('on', config_get_path("{$section}/pfb_noaaaa"));
+		$this->assertSame('on', config_get_path("{$section}/pfb_gp"));
+		$this->assertSame("# keep me\n.keep.example\nspace inside.example\nnew.example", base64_decode(config_get_path("{$section}/pfb_noaaaa_list")));
+		$this->assertSame("# printers\n192.0.2.1\nfe80::1%em0\n10.0.0.0/8", base64_decode(config_get_path("{$section}/pfb_gp_bypass_list")));
+		$this->assertEqualsCanonicalizing(["{$section}/pfb_noaaaa", "{$section}/pfb_noaaaa_list", "{$section}/pfb_gp", "{$section}/pfb_gp_bypass_list"],
+			self::changedLeaves($before, $GLOBALS['config']), 'no other config.xml key is touched');
+		$this->assertSame([self::MESSAGE], $GLOBALS['pfb_test_write_config_calls'], 'one write_config()');
+		$this->assertFileExists("{$this->dir}/pending", 'the change applies on the next Update');
+	}
+
+	public function testWriteOfTheSameListEntriesInAnotherOrderChangesNothing(): void
+	{
+		$this->arrange(['dnsbl/pfb_noaaaa_list' => base64_encode("a.example\n.b.example"), 'dnsbl/pfb_gp_bypass_list' => base64_encode("192.0.2.1\n10.0.0.0/8")]);
+		$current = pfb_core_dns_settings();
+		$wanted = array_merge($current, ['noAaaaList' => array_reverse($current['noAaaaList']), 'groupPolicyBypassList' => array_reverse($current['groupPolicyBypassList'])]);
+		$this->assertCount(2, $wanted['noAaaaList'], 'before-state');
+		$before = $GLOBALS['config'];
+
+		$reply = $this->backend(self::writeRequest($current, $wanted, pfb_core_settings_revision(self::settings($current))));
+
+		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(self::settings($current))], $reply, 'a list is a set: one domain is one flag');
+		$this->assertNothingWritten($before, 'only the order changed');
+	}
+
+	public function testWriteOfAnUnchangedListWhoseEntriesAreEqualAsNumbersWritesNothing(): void
+	{
+		// '1.0' and '1.00' are one number but two entries: a list is compared as a set of strings, so their order changes nothing
+		$this->arrange(['dnsbl/pfb_noaaaa_list' => base64_encode("1.0\n1.00")]);
+		$current = pfb_core_dns_settings();
+		$this->assertSame([['domain' => '1.0'], ['domain' => '1.00']], $current['noAaaaList'], 'before-state');
+		$wanted = array_merge($current, ['noAaaaList' => array_reverse($current['noAaaaList'])]);
+		$before = $GLOBALS['config'];
+
+		$reply = $this->backend(self::writeRequest($current, $wanted));
+
+		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(self::settings($current))], $reply);
+		$this->assertNothingWritten($before, 'only the order of the list changed');
+	}
+
+	/** @param array<string, mixed> $case */
+	#[DataProvider('storedCases')]
+	public function testAWriteOfWhatTheReadAnsweredIsAcceptedAndWritesNothing(array $case): void
+	{
+		// issue #4036: a client writes back what it read, a stored noAAAA entry the DNSBL page refuses included (lists-noaaaa-page-refused-kept)
+		$this->arrange($case['values']);
+		$read = $this->backend(['version' => 1, 'op' => 'read']);
+		$before = $GLOBALS['config'];
+
+		$reply = $this->backend(['version' => 1, 'op' => 'write', 'expectedRevision' => $read['revision'], 'settings' => $read['settings']]);
+
+		$this->assertSame(['version' => 1, 'revision' => $read['revision']], $reply, "{$case['id']}: " . json_encode($reply));
+		$this->assertNothingWritten($before, "{$case['id']}: nothing changed");
+	}
+
+	public function testAWriteMayAddANoAaaaEntryTheDnsblPageAccepts(): void
+	{
+		// issue #4036: the page's rule takes a name once its trailing dots are off (two here, which pfb_filter() alone refuses), a leading
+		// dot (the wildcard flag) and a numeric label
+		$this->arrange(['dnsbl/pfb_noaaaa_list' => base64_encode('*.example.com')]);
+		$current = pfb_core_dns_settings();
+		$this->assertSame([['domain' => '*.example.com']], $current['noAaaaList'], 'before-state: a held entry the page refuses');
+		$added = [['domain' => '*.example.com'], ['domain' => 'example.com.'], ['domain' => '.ads.example.net'], ['domain' => '1.0'], ['domain' => 'example.org..']];
+
+		$reply = $this->backend(self::writeRequest($current, array_merge($current, ['noAaaaList' => $added])));
+
+		$this->assertArrayNotHasKey('error', $reply, json_encode($reply));
+		$this->assertSame(['*.example.com', 'example.com.', '.ads.example.net', '1.0', 'example.org..'], array_column(pfb_core_dns_settings()['noAaaaList'], 'domain'),
+			'the held entry kept and the four the page accepts added');
+	}
+
+	/** @return array<string, array{0: array<string, mixed>}> the parity fixture's `refused` rows (issue #4036) */
+	public static function refusedRows(): array
+	{
+		$doc = json_decode((string) file_get_contents(self::FIXTURE), TRUE, 512, JSON_THROW_ON_ERROR);
+		return array_combine(array_column($doc['refused'], 'id'), array_map(static fn(array $row): array => [$row], $doc['refused']));
+	}
+
+	/** @param array<string, mixed> $row */
+	#[DataProvider('refusedRows')]
+	public function testAWriteOfTheFixturesRefusedValueIsInvalidArgumentNamingTheFieldAndWritesNothing(array $row): void
+	{
+		// issue #4036: a hostile value, or a noAAAA entry the DNSBL page refuses, which a write may not add; Core refuses the same rows
+		$this->arrange([]);
+		$current = pfb_core_dns_settings();
+		$before = $GLOBALS['config'];
+
+		$reply = $this->backend(self::writeRequest($current, array_replace($current, $row['input'])));
+
+		$this->assertSame('invalid_argument', $reply['error']['code'] ?? NULL, "{$row['id']}: " . json_encode($reply));
+		$faults = array_filter($reply['error']['fieldErrors'] ?? [], static fn(array $f): bool => !in_array($f['message'], ['no such field', 'required'], TRUE));
+		$this->assertContains("dns.{$row['field']}", array_column($faults, 'field'), "{$row['id']}: {$row['description']} " . json_encode($reply));
+		$this->assertNothingWritten($before, "{$row['id']}: refused");
 	}
 
 	public function testWriteOfWhatConfigXmlAlreadyHoldsChangesNothing(): void

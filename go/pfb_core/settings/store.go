@@ -97,7 +97,7 @@ func (s *Store) fetch(ctx context.Context) error {
 		// since dropping a stored setting needs a migration.
 		values = make(map[string]map[string]any, len(s.schema.Projections))
 		for _, p := range s.schema.Projections {
-			v, errs := apply(p, defaults(p), upgraded(p, stored.Projections[p.ID]), p.ID)
+			v, errs := applyAs(p, defaults(p), upgraded(p, stored.Projections[p.ID]), p.ID, false) // a load adds no item: it reads what is held
 			if errs != nil {
 				return fmt.Errorf("the stored settings are not valid: %s: %s", errs[0].Field, errs[0].Message)
 			}
@@ -388,7 +388,8 @@ func (s *Store) Reload(ctx context.Context) (Snapshot, error) {
 }
 
 // Validate is Save's validation without the write: changes are checked over the current settings (the defaults while
-// uninitialized), and the store, its revision and its generations stay as they are.
+// uninitialized), and the store, its revision and its generations stay as they are. A list field's Admit is left to the write:
+// a page's dry run sends the whole projection as the platform holds it, which may carry an item Core has not loaded.
 func (s *Store) Validate(changes map[string]map[string]json.RawMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -399,7 +400,7 @@ func (s *Store) Validate(changes map[string]map[string]json.RawMessage) error {
 			base = s.values[p.ID]
 		}
 		change, refused := changeFor(p, changes)
-		_, perr := apply(p, base, change, p.ID)
+		_, perr := applyAs(p, base, change, p.ID, false)
 		errs = append(errs, refused...)
 		errs = append(errs, perr...)
 	}
@@ -438,8 +439,14 @@ func defaults(p Projection) map[string]any {
 }
 
 // apply returns base with given over it, validated, and with each Requires rule enforced; base is not modified. A scalar field's
-// Check sees the decoded value as {name: value} and refuses it with errors naming the field.
+// Check sees the decoded value as {name: value} and refuses it with errors naming the field. An item a list gains (its key not in
+// base's list) must also pass the list field's Admit.
 func apply(p Projection, base map[string]any, given map[string]json.RawMessage, prefix string) (map[string]any, []FieldError) {
+	return applyAs(p, base, given, prefix, true)
+}
+
+// applyAs is apply, with admit saying whether an item a list gains is held to its field's Admit.
+func applyAs(p Projection, base map[string]any, given map[string]json.RawMessage, prefix string, admit bool) (map[string]any, []FieldError) {
 	values := maps.Clone(base)
 	var errs []FieldError
 	for _, name := range slices.Sorted(maps.Keys(given)) {
@@ -450,7 +457,7 @@ func apply(p Projection, base map[string]any, given map[string]json.RawMessage, 
 		}
 		f := p.Fields[i]
 		if f.Type == TypeList {
-			v, lerrs := decodeList(f, values[name].([]any), given[name], prefix+"."+name)
+			v, lerrs := decodeList(f, values[name].([]any), given[name], prefix+"."+name, admit)
 			errs = append(errs, lerrs...)
 			if lerrs == nil {
 				values[name] = v
@@ -482,8 +489,9 @@ func apply(p Projection, base map[string]any, given map[string]json.RawMessage, 
 
 // decodeList reads a list field over the current list: each item is the current item with the same key (else the item
 // fields' defaults) with the given fields over it, so a secret a client cannot read survives an edit that omits it. It is
-// validated, has a unique non-empty key and passes f.Check, and the whole list f.CheckList. JSON null is the default list.
-func decodeList(f Field, current []any, raw json.RawMessage, prefix string) ([]any, []FieldError) {
+// validated, has a unique non-empty key and passes f.Check, and the whole list f.CheckList; when admit is set, an item whose key
+// current does not hold passes f.Admit too. JSON null is the default list.
+func decodeList(f Field, current []any, raw json.RawMessage, prefix string, admit bool) ([]any, []FieldError) {
 	if string(bytes.TrimSpace(raw)) == "null" {
 		return f.Default.([]any), nil
 	}
@@ -503,15 +511,20 @@ func decodeList(f Field, current []any, raw json.RawMessage, prefix string) ([]a
 			errs = append(errs, FieldError{Field: at, Message: "must be an object"})
 			continue
 		}
-		base := defaults(items)
+		base, held := defaults(items), false
 		if key, err := decode(keyField, fields[f.Key]); err == nil && fields[f.Key] != nil {
 			if i := slices.IndexFunc(current, func(c any) bool { return c.(map[string]any)[f.Key] == key }); i >= 0 {
-				base = current[i].(map[string]any)
+				base, held = current[i].(map[string]any), true
 			}
 		}
-		item, ierrs := apply(items, base, fields, at)
+		item, ierrs := applyAs(items, base, fields, at, admit)
 		if ierrs == nil && f.Check != nil {
 			for _, e := range f.Check(item) {
+				ierrs = append(ierrs, FieldError{Field: at + "." + e.Field, Message: e.Message})
+			}
+		}
+		if ierrs == nil && admit && !held && f.Admit != nil {
+			for _, e := range f.Admit(item) {
 				ierrs = append(ierrs, FieldError{Field: at + "." + e.Field, Message: e.Message})
 			}
 		}
