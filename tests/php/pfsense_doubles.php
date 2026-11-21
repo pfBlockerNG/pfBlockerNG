@@ -2011,6 +2011,25 @@ function array_set_path(array &$arr, string $path, $value, $default = null) {
 }
 }
 
+// array_init_path(): pfSense util.inc (master), which the custom-list branch of the IP download loop calls.
+if (!function_exists('array_init_path')) {
+function array_init_path(mixed &$arr, ?string $path): void {
+	if (!is_array($arr)) {
+		$arr = [];
+	}
+	if ($path === null) {
+		return;
+	}
+	$tmp = &$arr;
+	foreach (explode('/', $path) as $key) {
+		if (!is_array($tmp[$key] ?? null)) {
+			$tmp[$key] = [];
+		}
+		$tmp = &$tmp[$key];
+	}
+}
+}
+
 // listtags(): verbatim pfsense/pfsense xmlparse.inc body at 9363ac5b
 // (src/etc/inc/xmlparse.inc:28-57), the tags write_config() treats as lists (issue #3452).
 if (!function_exists('listtags')) {
