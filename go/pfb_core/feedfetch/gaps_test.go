@@ -402,19 +402,14 @@ func TestANameThatResolvesToLoopbackV6IsSelfHosted(t *testing.T) {
 	if err != nil {
 		t.Skipf("::1 cannot listen here: %v", err)
 	}
-	// "localhost" may reach either loopback, so both answer.
-	ln4, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(ln6.Addr().(*net.TCPAddr).Port))
-	if err != nil {
-		ln6.Close()
-		t.Fatal(err)
-	}
+	// Only ::1 listens: the fetch dials the addresses the name resolved to, never the name, so nothing reaches 127.0.0.1
+	// (and a second listener at the same IPv4 port could lose a race for it, #4175).
 	var hits atomic.Int32
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
 		io.WriteString(w, "v6\n")
 	})}
 	go srv.Serve(ln6)
-	go srv.Serve(ln4)
 	t.Cleanup(func() { srv.Close() })
 
 	f, feed := quickFetcher(t)
