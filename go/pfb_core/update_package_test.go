@@ -52,16 +52,19 @@ func TestStartUpdateCarriesTheLifecycleAndThePkgOpToTheUpdatesHooks(t *testing.T
 		{"manual", `,"lifecycle":"install"`,
 			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install"}`, "1", ""},
 		{"manual", `,"lifecycle":"install","pkgOp":"install"`,
-			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"install"}`, "1", "install"},
+			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"install"}`, "1",
+			"install"},
 		{"manual", `,"lifecycle":"install","pkgOp":"upgrade"`,
-			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"upgrade"}`, "1", "upgrade"},
+			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"upgrade"}`, "1",
+			"upgrade"},
 		{"manual", `,"lifecycle":"install","pkgOp":"reinstall"`,
 			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"reinstall"}`, "1",
 			"reinstall"},
-		{"manual", `,"pkgOp":"delete"`, `{"version":1,"trigger":"manual","scope":"both","force":"none","pkgOp":"delete"}`, "0",
-			"delete"},
+		{"manual", `,"pkgOp":"delete"`,
+			`{"version":1,"trigger":"manual","scope":"both","force":"none","pkgOp":"delete"}`, "0", "delete"},
 		{"apply", `,"lifecycle":"install","pkgOp":"upgrade"`,
-			`{"version":1,"trigger":"apply","scope":"both","force":"none","lifecycle":"install","pkgOp":"upgrade"}`, "1", "upgrade"},
+			`{"version":1,"trigger":"apply","scope":"both","force":"none","lifecycle":"install","pkgOp":"upgrade"}`, "1",
+			"upgrade"},
 		{"retry", `,"lifecycle":"install","pkgOp":"install"`, "", "1", "install"}, // the Extras due vary with the clock
 	} {
 		t.Run(tc.trigger+tc.params, func(t *testing.T) {
@@ -95,8 +98,8 @@ func TestStartUpdateCarriesTheLifecycleAndThePkgOpToTheUpdatesHooks(t *testing.T
 	}
 }
 
-// WHEN StartUpdate carries a lifecycle or a pkgOp outside the vocabulary THEN it answers invalid_argument naming the field
-// and admits nothing.
+// WHEN StartUpdate carries a lifecycle or a pkgOp outside the vocabulary THEN it answers invalid_argument naming the
+// field and admits nothing.
 func TestStartUpdateRefusesALifecycleOrPkgOpOutsideTheVocabulary(t *testing.T) {
 	c, f := startUpdateCore(t)
 	for i, tc := range []struct{ params, field string }{
