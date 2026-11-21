@@ -26583,8 +26583,12 @@ function pfb_resolve_tracker(
 		return FALSE;
 	}
 
-	// Still unresolved for this tracker/type after a fresh parse — record in the negative cache.
-	$miss_cache[$miss_key] = TRUE;
+	// Still unresolved for this tracker/type after a fresh parse — record in the negative cache. Not the CrowdSec bouncer's
+	// fixed trackers (#4164): its rules come back with them when it is turned on again, and its lines come only while they
+	// are loaded or just after
+	if (!in_array((int) $tracker, array_merge(...array_values(array_map('array_values', PFB_CROWDSEC_TRACKERS))), TRUE)) {
+		$miss_cache[$miss_key] = TRUE;
+	}
 	return FALSE;
 }
 

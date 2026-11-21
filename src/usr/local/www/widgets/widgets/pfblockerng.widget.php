@@ -906,8 +906,8 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 					$values['img'] .= "&nbsp;&nbsp;<small>({$values['rule']})</small>";
 				}
 
-				// A CrowdSec table (#4161) links to the CrowdSec Status subtab; it has no alias to pop up, and the Alerts tab
-				// does not report its drops. The "no pfB_ tables" error is not about it.
+				// A CrowdSec table (#4161) links to the CrowdSec Status subtab; it has no alias to pop up. The "no pfB_ tables"
+				// error is not about it.
 				$crowdsec = in_array($pfb_alias, PFB_CROWDSEC_TABLES, TRUE);
 
 				// If packet fence errors found, display error.
@@ -916,7 +916,7 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 				}
 
 				// Packet column pivot to Alerts Tab
-				if (!$crowdsec && $values['packets'] > 0) {
+				if ($values['packets'] > 0) {
 					$packets  = "<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"/pfblockerng/pfblockerng_alerts.php?filterip={$pfb_alias}\" ";
 					$packets .= "title=\"Open &quot;Reports&quot; &gt; &quot;Alerts&quot;\" >{$values['packets']}</a>";
 				}
