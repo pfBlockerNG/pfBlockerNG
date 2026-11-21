@@ -3316,7 +3316,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	// (Block, non-GeoIP) never reach this branch any more; the
 	// !$mask_suppression leg preserves today's behaviour unchanged for the
 	// rest (Match rows, GeoIP rows, Permit-alias rows).
-	if (!($rtype == 'Block' && !$pfb_geoip) && !$mask_suppression && !$crowdsec) {
+	if (!($rtype == 'Block' && !$pfb_geoip) && !$mask_suppression) {
 		if ($clists['ipwhitelist' . $vtype]) {
 
 			$supp_ip_wl = pfb_whitelist_trash_icon($clists['ipwhitelist' . $vtype], $host, $vtype, $h_host, $h_eval_ip);
@@ -4745,6 +4745,10 @@ if (!$alert_summary):
 
 					$ip_copy = $ip_fields;
 					$ip_copy[99] = array_shift($ip_copy);
+					// The CrowdSec bouncer's rows render as logged (#4164): nothing to look up
+					if (in_array($ip_copy[13], PFB_CROWDSEC_TABLES, TRUE)) {
+						continue;
+					}
 					$ip_rq = pfb_ip_render_query($ip_copy);
 
 					$ip_prefetch_rows[] = array(
