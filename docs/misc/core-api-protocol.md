@@ -828,8 +828,9 @@ starts. This report is what makes a generation the applied baseline of `dnsbl/*`
 `GetResources` gave. A report replaces the previous one whole: a resource it does not list is one the caller no longer
 serves. `{"resources": {}}` reports that it serves none.
 
-**Reply.** `{}` once the report is written to `applied.json` in Core's state directory (a temporary file, synced, then
-renamed over the old one), where it survives a restart. Core never writes the resource store for it: the Core Updater,
+**Reply.** `{}` once the report is written to `applied.json` in Core's state directory (written to `applied.json.tmp` by
+one report at a time, synced, then renamed over the old one; a temporary file a crash left is taken over by the next
+report), where it survives a restart. Core never writes the resource store for it: the Core Updater,
 the store's only writer, folds the recorded report into the store (`resources.Store.FoldApplied`). A listed resource
 whose generation and digest the store holds as its current body gets that generation as its applied baseline; a removed
 resource the report no longer lists is deleted. A resource or generation the store does not hold changes nothing, so a
@@ -837,7 +838,8 @@ report naming one is recorded: the store can change between the report and the f
 reports yet.
 
 **Refusals.** `invalid_argument`, with nothing recorded, when `resources` is missing or `null`, lists more than 4096
-resources, names an id that is not a `dnsbl/*` resource id, or holds a `null` entry (field `resources`); when an entry
+resources, names an id that is not a `dnsbl/*` resource id, or holds a `null` entry (field `resources`; an id that is
+not a resource id at all is not quoted in the message); when an entry
 is a string, a number or another value that is not an object (field `resources.<id>`); or when an entry lacks its
 `generation` or `digest`, or one of them has the shape a `GetResources` cursor refuses (field
 `resources.<id>.generation` or `resources.<id>.digest`). It is a mutating method: a repeat of its `requestId` with the
@@ -857,6 +859,11 @@ Every error is the same envelope, with the HTTP status its code maps to:
 ```
 
 `fieldErrors` is present only when a named parameter is at fault. `message` is for people; a client decides on `code`.
+
+A refusal never quotes an id that is not a resource id (longer than 128 bytes, or of another shape). A refusal to a
+further local client (`--client-uid`) is under 4 KiB, its newline included: one that would be longer keeps its `code`
+and is sent with a short fixed `message` and no `fieldErrors`. However much a client sends, Core echoes little of it,
+and the answers its replay memory keeps stay small.
 
 | `code` | HTTP | When |
 |---|---|---|
@@ -886,7 +893,8 @@ again, with the byte-identical body, to resolve an unknown outcome such as a tim
   restarted Core remembers none. A client that cannot tell
   whether its request ran before a restart reads the state it changed instead of repeating it.
 - The privileged uid's requests and the further local clients' (`--client-uid`) are remembered apart, 4096 each, so
-  nothing a client sends makes Core forget a privileged `requestId`. The clients share one memory.
+  nothing a client sends makes Core forget a privileged `requestId`. The clients share one memory of 4096, but each
+  client uid's `requestId`s are its own: one client uid can neither answer nor conflict with another's.
 
 A read-only method takes no `requestId` and is never replayed.
 
@@ -897,6 +905,7 @@ A read-only method takes no `requestId` and is never replayed.
 | Request body | 1 MiB (`payload_too_large` above) |
 | Resources per `GetResources` call | 16 (`invalid_argument` above) |
 | Resources per `ReportApplied` call | 4096 (`invalid_argument` above) |
+| A refusal to a further local client | under 4 KiB ([Errors](#errors)) |
 | `applied.json` read at start | 1 MiB (ignored above) |
 | Request header | 16 KiB |
 | Reading the header | 5 s; a client that has not sent it by then is disconnected |
@@ -929,7 +938,8 @@ Two fences, each enough on its own against an unprivileged user:
    that does not exist (`invalid_argument`, `no such projection`, field `projectionIds[<i>]`). `GetResources` answers
    an id outside `dnsbl/*` `not_found` for that id, and `GetResourceBody` answers its body `not_found`, as for a
    resource the store does not hold. A uid that is both `--allow-uid` and a `--client-uid` is the privileged caller
-   and is served everything.
+   and is served everything. Each request Core serves carries which of the two it is, and a method call that carries
+   neither is limited as a client's: only a request checked as the privileged uid's lifts the limits.
 
 Flags: `--allow-uid UID` is the privileged caller (default 0, root: PHP on pfSense). Each `--client-uid UID` admits one more
 local client, limited to the methods above.
