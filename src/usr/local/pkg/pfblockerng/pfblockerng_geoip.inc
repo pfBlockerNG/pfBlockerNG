@@ -1304,4 +1304,90 @@ EOF;
 	unset($php_rep);
 	return $output_ok;
 }
+
+/**
+ * Write the continent pages and the Reputation page under $output_root from the geo-catalog file $catalog (JSON Lines,
+ * docs/specs/go-updater-pipeline.md §7), as pfblockerng_get_countries() writes them from the continent files. Every row is
+ * checked before a page is written: a row of another shape, a page that is not one of the nine continent pages, a page or
+ * a list position given twice, a gap in a list's positions, or a country row without its page row refuses the catalog
+ * whole. A continent page the catalog does not name stays as it is; a catalog without rows writes the Reputation page
+ * without countries, as today's function does from no data. An ISO listed twice is written twice, as today.
+ *
+ * @return ?string NULL when every page was written, else why the catalog was refused or which page was not written
+ */
+function pfb_geoip_render_catalog(string $catalog, string $output_root = '/usr/local/www/pfblockerng'): ?string {
+	$body = @file_get_contents($catalog);
+	if ($body === FALSE) {
+		return "{$catalog} cannot be read";
+	}
+	if ($body !== '' && !str_ends_with($body, "\n")) {
+		return "{$catalog} does not end in a newline";
+	}
+	$fields = [
+		'page' => ['continent', 'kind', 'page'],
+		'country' => ['country', 'family', 'iso', 'kind', 'networks', 'page', 'position'],
+		'reputation' => ['country', 'iso', 'kind', 'networks', 'position'],
+	];
+	$known = ['Top_Spammers', 'Africa', 'Antarctica', 'Asia', 'Europe', 'North_America', 'Oceania', 'South_America',
+		'Proxy_and_Satellite'];
+	// A name goes into a double-quoted PHP literal of the generated page: escaped, it is never code or interpolated.
+	$literal = static fn (string $text): string => strtr($text, ['\\' => '\\\\', '"' => '\\"', '$' => '\\$']);
+	$continents = [];
+	$lists = [];	// 'reputation' or '<page>|<family>' => position => option source
+	// Core writes a catalog without rows as one empty line.
+	foreach ($body === '' || $body === "\n" ? [] : explode("\n", substr($body, 0, -1)) as $i => $line) {
+		$at = "{$catalog} line " . ($i + 1);
+		$row = json_decode($line, TRUE, 2);
+		$kind = is_array($row) && is_string($row['kind'] ?? NULL) ? $row['kind'] : '';
+		$keys = is_array($row) ? array_keys($row) : [];
+		sort($keys);
+		if (!isset($fields[$kind]) || $keys !== $fields[$kind]) {
+			return "{$at} is not a page, country or reputation row";
+		}
+		if ($kind !== 'reputation' && !in_array($row['page'], $known, TRUE)) {
+			return "{$at} names no continent page";
+		}
+		if ($kind === 'page') {
+			if (!is_string($row['continent']) || isset($continents[$row['page']])) {
+				return "{$at} is a page row of another shape, or one given twice";
+			}
+			$continents[$row['page']] = $row['continent'];
+			continue;
+		}
+		['iso' => $iso, 'country' => $country, 'networks' => $networks, 'position' => $position] = $row;
+		$list = $kind === 'reputation' ? 'reputation' : "{$row['page']}|" . (in_array($row['family'], [4, 6], TRUE) ? $row['family'] : '');
+		if (str_ends_with($list, '|') || !is_int($position) || $position < 1 || isset($lists[$list][$position])
+			|| !is_string($iso) || preg_match('/^\w+$/D', $iso) !== 1 || !is_string($country) || !is_int($networks)
+			|| $networks < 0) {
+			return "{$at} is a {$kind} row of another shape, or one whose position is taken";
+		}
+		$lists[$list][$position] = "\"{$iso}\" => \"" . $literal("{$country} {$iso} ({$networks})") . '"';
+	}
+	$sources = [];
+	foreach ($lists as $list => $options) {
+		ksort($options);
+		if (array_keys($options) !== range(1, count($options))) {
+			return "{$catalog}: the positions of {$list} are not 1 to " . count($options);
+		}
+		if ($list !== 'reputation' && !isset($continents[explode('|', $list)[0]])) {
+			return "{$catalog}: {$list} has no page row";
+		}
+		$sources[$list] = pfb_geoip_options_literal(array_values($options));
+	}
+
+	if (!is_dir($output_root) && !@mkdir($output_root, 0755, TRUE)) {
+		return "{$output_root} cannot be created";
+	}
+	foreach ($continents as $page => $continent) {
+		$php_data = pfb_geoip_continent_page($literal($continent), $page, $sources["{$page}|4"] ?? '',
+			$sources["{$page}|6"] ?? '', count($lists["{$page}|4"] ?? []), count($lists["{$page}|6"] ?? []));
+		if (@file_put_contents("{$output_root}/pfblockerng_{$page}.php", $php_data, LOCK_EX) === FALSE) {
+			return "{$output_root}/pfblockerng_{$page}.php cannot be written";
+		}
+	}
+	if (!pfb_build_reputation_tab($sources['reputation'] ?? '', $output_root)) {
+		return "{$output_root}/pfblockerng_reputation.php cannot be written";
+	}
+	return NULL;
+}
 ?>
