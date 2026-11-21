@@ -15527,6 +15527,7 @@ function pfb_pfctl_op_failed(string $op, int $rc, string $stderr): bool {
 // On failure (non-zero rc or pfctl error output) logs one attributed line via pfb_logger().
 // $pfctl_bin defaults to $pfb['pfctl']; pass explicitly when the binary is a
 // per-call parameter (e.g. pfb_apply_alias_delta, which accepts a mock binary in tests).
+// Returns ['out' => lines, 'rc' => status, 'failed' => whether it was logged as a failure].
 function pfb_pfctl_table_op(string $table, string $op, string $args = '', string $pfctl_bin = ''): array {
 	global $pfb;
 	if ($pfctl_bin === '') {
@@ -15538,14 +15539,15 @@ function pfb_pfctl_table_op(string $table, string $op, string $args = '', string
 	$rc        = 0;
 	exec("{$pfctl_bin} -t {$table_esc} -T {$op}{$args_part} 2>&1", $out, $rc);
 	$stderr    = implode(' ', $out);
-	if (pfb_pfctl_op_failed($op, $rc, $stderr)) {
+	$failed    = pfb_pfctl_op_failed($op, $rc, $stderr);
+	if ($failed) {
 		pfb_logger(pfb_pfctl_error_message($table, $op, $rc, $stderr) . "\n", 2);
 		// ADR-61: sync-status ledger -- every $table here is a pfB_* IP alias table.
 		pfb_sync_status_open('ip', $table, 'apply', pfb_pfctl_error_message($table, $op, $rc, $stderr), $pfb['dbdir']);
 	} else {
 		pfb_sync_status_close('ip', $table, 'apply', $pfb['dbdir']);
 	}
-	return ['out' => $out, 'rc' => $rc];
+	return ['out' => $out, 'rc' => $rc, 'failed' => $failed];
 }
 
 
@@ -16189,71 +16191,140 @@ function pfb_apply_alias_delta(
 	int    $batch_size,
 	bool   $force_replace = FALSE
 ): bool {
-	$table_file_esc = escapeshellarg($table_file);
-	$batch_size     = pfb_alias_delta_batch_clamp($batch_size);
+	// the replace path needs no diff: the arrays are compared only when a delta is possible
+	$add_set = $del_set = [];
+	if (!$force_replace && $mode !== 'replace') {
+		// LC_ALL=C byte-order; arrays are already canonical
+		$add_set = array_diff($desired_set, $last_set);
+		$del_set = array_diff($last_set, $desired_set);
+	}
+	return pfb_apply_alias_delta_members($pfctl_bin, $table, $table_file, static fn (): array => [$add_set, $del_set],
+	    count($add_set), count($del_set), count($desired_set), count($last_set), $mode, $batch_size, $force_replace, '')['delta'];
+}
 
-	// Force replace: boot/enable-disable initial load path.
-	if ($force_replace || $mode === 'replace') {
+/**
+ * pfb_apply_alias_delta() for members held in files (the Outpost apply, issue #4037): the members to add and to remove are
+ * files of one member per line, as pfb_outpost_fetch() leaves a delta's parts, read a line at a time and never whole.
+ *
+ * The decision is pfb_apply_alias_delta()'s, from counts: replace when $force_replace, in mode 'replace', or in mode 'auto'
+ * when ($add_entries + $remove_entries) / max($entries, $previous_entries) reaches PFB_DELTA_CHURN_THRESHOLD; otherwise the
+ * adds and then the deletes go to pfctl in batches of $batch_size (clamped to [64, 4096]). A member reaches pfctl only inside
+ * the batch file it reads with -f, never as an argument.
+ *
+ * ok is FALSE when any pfctl call failed, a batch file could not be written, a member file could not be opened, or a file
+ * held another number of lines than its count. Both member files are opened before the first pfctl call, so one that
+ * cannot be opened sends nothing; any other failure leaves every remaining batch still sent.
+ *
+ * @param string $table_file the table's mirror, what a replace loads
+ * @param int    $entries          the members of the table after the change
+ * @param int    $previous_entries the members of the table before it
+ * @param string $tmpdir where each batch file is written; '' for the system's temporary directory
+ * @return array{delta: bool, ok: bool} delta TRUE when the delta path was taken, FALSE for a replace
+ */
+function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $table_file, string $add_file, int $add_entries,
+    string $remove_file, int $remove_entries, int $entries, int $previous_entries, string $mode, int $batch_size,
+    bool $force_replace = FALSE, string $tmpdir = ''): array {
+	$members = static function () use ($add_file, $remove_file, $table): ?array {
+		$lines = static function ($fh): Generator {
+			while (($line = fgets($fh)) !== FALSE) {
+				yield rtrim($line, "\n");
+			}
+			fclose($fh);
+		};
+		// is_file: a directory opens for reading but yields no line
+		$add    = is_file($add_file) ? @fopen($add_file, 'rb') : FALSE;
+		$remove = is_file($remove_file) ? @fopen($remove_file, 'rb') : FALSE;
+		if ($add === FALSE || $remove === FALSE) {
+			pfb_logger(" Updating [ {$table} ]: cannot read " . ($add === FALSE ? $add_file : $remove_file) . "\n", 1);
+			return NULL;
+		}
+		return [$lines($add), $lines($remove)];
+	};
+	return pfb_apply_alias_delta_members($pfctl_bin, $table, $table_file, $members, $add_entries, $remove_entries, $entries,
+	    $previous_entries, $mode, $batch_size, $force_replace, $tmpdir);
+}
+
+/**
+ * The apply pfb_apply_alias_delta() and pfb_apply_alias_delta_files() share. $members is called only on a delta path with
+ * something to apply, and returns the members to add and to remove as two iterables of lines, or NULL when they cannot be
+ * read. Contract: pfb_apply_alias_delta_files().
+ *
+ * @param callable(): ?array{0: iterable<string>, 1: iterable<string>} $members
+ * @return array{delta: bool, ok: bool}
+ */
+function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string $table_file, callable $members, int $add_entries,
+    int $remove_entries, int $entries, int $previous_entries, string $mode, int $batch_size, bool $force_replace,
+    string $tmpdir): array {
+	$batch_size = pfb_alias_delta_batch_clamp($batch_size);
+	$churn      = $add_entries + $remove_entries;
+	$table_size = max($entries, $previous_entries);
+
+	// Force replace (boot/enable-disable initial load path), mode replace, or the auto-mode large-churn escape hatch.
+	if ($force_replace || $mode === 'replace'
+	    || ($mode === 'auto' && $table_size > 0 && ($churn / $table_size) >= PFB_DELTA_CHURN_THRESHOLD)) {
 		// issue #722: nothing else on a live box distinguishes the delta path from a
 		// replace (pfb_pfctl_table_op logs only on error) — this line is the sole apply-path
 		// oracle the smoke suite (and a human reading the log) can grep for.
 		pfb_logger(" Updating [ {$table} ]: replace\n", 1);
-		pfb_pfctl_table_op($table, 'replace', "-f {$table_file_esc}", $pfctl_bin);
-		return FALSE;
-	}
-
-	// Compute add/del sets (LC_ALL=C byte-order; arrays are already canonical).
-	$add_set = array_values(array_diff($desired_set, $last_set));
-	$del_set = array_values(array_diff($last_set, $desired_set));
-
-	$churn      = count($add_set) + count($del_set);
-	$table_size = max(count($desired_set), count($last_set));
-
-	// Churn-ratio fallback: auto mode with large churn → replace.
-	if ($mode === 'auto' && $table_size > 0 && ($churn / $table_size) >= PFB_DELTA_CHURN_THRESHOLD) {
-		pfb_logger(" Updating [ {$table} ]: replace\n", 1);
-		pfb_pfctl_table_op($table, 'replace', "-f {$table_file_esc}", $pfctl_bin);
-		return FALSE;
+		$op = pfb_pfctl_table_op($table, 'replace', '-f ' . escapeshellarg($table_file), $pfctl_bin);
+		return ['delta' => FALSE, 'ok' => !$op['failed']];
 	}
 
 	// issue #722: log the delta decision (incl. the zero-churn idempotent no-op below) so the
 	// delta path is just as observable on a live box as the replace path logged above.
-	pfb_logger(" Updating [ {$table} ]: delta +" . count($add_set) . '/-' . count($del_set) . "\n", 1);
+	pfb_logger(" Updating [ {$table} ]: delta +{$add_entries}/-{$remove_entries}\n", 1);
 
 	// Idempotence: empty delta → zero pfctl calls.
-	if (empty($add_set) && empty($del_set)) {
-		return TRUE;
+	if ($churn === 0) {
+		return ['delta' => TRUE, 'ok' => TRUE];
+	}
+	$sides = $members();
+	if ($sides === NULL) {
+		return ['delta' => TRUE, 'ok' => FALSE];
 	}
 
-	// Apply adds in batches.
-	foreach (array_chunk($add_set, $batch_size) as $chunk) {
-		$entries = implode("\n", $chunk);
-		$tmp     = tempnam(sys_get_temp_dir(), 'pfb_add_');
-		if ($tmp === FALSE) {
-			pfb_logger(" pfb_apply_alias_delta: tempnam failed — dropped add chunk ({$table})\n", 1);
-			continue;
+	$tmpdir = $tmpdir === '' ? sys_get_temp_dir() : $tmpdir;
+	$push   = static function (string $op, array $chunk) use ($table, $pfctl_bin, $tmpdir): bool {
+		$data = implode("\n", $chunk) . "\n";
+		// 'x': a fresh file of this run's own, never one that is already there
+		$path = "{$tmpdir}/pfb_{$op}_" . bin2hex(random_bytes(8));
+		$fh   = @fopen($path, 'xb');
+		if ($fh === FALSE) {
+			pfb_logger(" pfb_apply_alias_delta: temporary file failed — dropped {$op} chunk ({$table})\n", 1);
+			return FALSE;
 		}
-		@file_put_contents($tmp, $entries . "\n");
-		$tmp_esc = escapeshellarg($tmp);
-		pfb_pfctl_table_op($table, 'add', "-f {$tmp_esc}", $pfctl_bin);
-		@unlink($tmp);
-	}
-
-	// Apply deletes in batches.
-	foreach (array_chunk($del_set, $batch_size) as $chunk) {
-		$entries = implode("\n", $chunk);
-		$tmp     = tempnam(sys_get_temp_dir(), 'pfb_del_');
-		if ($tmp === FALSE) {
-			pfb_logger(" pfb_apply_alias_delta: tempnam failed — dropped delete chunk ({$table})\n", 1);
-			continue;
+		$ok = fwrite($fh, $data) === strlen($data);
+		$ok = fclose($fh) && $ok;
+		if ($ok) {
+			$ok = !pfb_pfctl_table_op($table, $op, '-f ' . escapeshellarg($path), $pfctl_bin)['failed'];
+		} else {
+			pfb_logger(" pfb_apply_alias_delta: temporary file failed — dropped {$op} chunk ({$table})\n", 1);
 		}
-		@file_put_contents($tmp, $entries . "\n");
-		$tmp_esc = escapeshellarg($tmp);
-		pfb_pfctl_table_op($table, 'delete', "-f {$tmp_esc}", $pfctl_bin);
-		@unlink($tmp);
-	}
+		@unlink($path);
+		return $ok;
+	};
 
-	return TRUE;
+	$ok = TRUE;
+	foreach (['add' => [$sides[0], $add_entries], 'delete' => [$sides[1], $remove_entries]] as $op => [$lines, $count]) {
+		$chunk = [];
+		$read  = 0;
+		foreach ($lines as $line) {
+			$chunk[] = $line;
+			$read++;
+			if (count($chunk) === $batch_size) {
+				$ok    = $push($op, $chunk) && $ok;
+				$chunk = [];
+			}
+		}
+		if ($chunk !== []) {
+			$ok = $push($op, $chunk) && $ok;
+		}
+		if ($read !== $count) {
+			pfb_logger(" Updating [ {$table} ]: {$op} read {$read} members, not {$count}\n", 1);
+			$ok = FALSE;
+		}
+	}
+	return ['delta' => TRUE, 'ok' => $ok];
 }
 
 // ---------------------------------------------------------------------------
