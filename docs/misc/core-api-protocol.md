@@ -830,7 +830,8 @@ serves. `{"resources": {}}` reports that it serves none.
 
 **Reply.** `{}` once the report is written to `applied.json` in Core's state directory (written to `applied.json.tmp` by
 one report at a time, synced, then renamed over the old one; a temporary file a crash left is taken over by the next
-report), where it survives a restart. Core never writes the resource store for it: the Core Updater,
+report; an empty directory at the record's name is replaced, and a non-empty one fails the report),
+where it survives a restart. Core never writes the resource store for it: the Core Updater,
 the store's only writer, folds the recorded report into the store (`resources.Store.FoldApplied`). A listed resource
 whose generation and digest the store holds as its current body gets that generation as its applied baseline; a removed
 resource the report no longer lists is deleted. A resource or generation the store does not hold changes nothing, so a

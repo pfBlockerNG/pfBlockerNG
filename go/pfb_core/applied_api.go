@@ -166,6 +166,9 @@ func writeApplied(stateDir string, report map[string]resources.Cursor) error {
 		err = cerr
 	}
 	if err == nil {
+		if info, lerr := os.Lstat(path); lerr == nil && info.IsDir() {
+			_ = os.Remove(path) // rename cannot replace a directory; Remove takes an empty one only
+		}
 		err = os.Rename(path+".tmp", path)
 	}
 	if err != nil {
