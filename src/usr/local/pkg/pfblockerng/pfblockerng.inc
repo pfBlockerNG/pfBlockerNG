@@ -21765,6 +21765,11 @@ function pfb_ip_render_attribution(array $fields): array {
 	global $pfb;
 
 	$rq = pfb_ip_render_query($fields);
+	// A drop by the CrowdSec bouncer's rule (#4164) renders as logged: no feed list or alias table holds its tables' entries
+	if (in_array($fields[13], PFB_CROWDSEC_TABLES, TRUE)) {
+		return array('host' => $rq['host'], 'hostname' => $rq['hostname'], 'pfb_geoip' => FALSE, 'field15' => $rq['field15'],
+			'mask' => '', 'feed_new' => '', 'eval_new' => '', 'alias_new' => '', 'pfb_matchtitle' => '');
+	}
 	$geoip_lock = FALSE;
 	if ($rq['pfb_geoip']) {
 		$geoip_lock = pfb_geoip_generation_read_lock();
@@ -25940,19 +25945,20 @@ function pfb_filterrules() {
 						if ($type == 'match') {
 							$type = 'unkn(%u)';
 						}
-	
-						if (!is_array($rule_list[$id])) {
-							$rule_list[$id] = array();
-						}
-	
+
 						$rule_list['id'][]	= $id;
-						$rule_list[$id]['name']	= $descr;
-						$rule_list[$id]['type']	= $type;
-	
+						$rule_list[$id]		= array('name' => $descr, 'type' => $type);
+
 						$int = strstr(ltrim(strstr($result, ' on ', FALSE), ' on '), ' ', TRUE);
 						if (!empty($int)) {
 							 $rule_list['int'][$int] = '';
 						}
+					}
+					// The CrowdSec bouncer's rules (#4164), named by their table as a pfB rule by its alias; Kill States
+					// leaves their interfaces alone
+					elseif (($table = pfb_crowdsec_rule_table($id, $result)) !== NULL) {
+						$rule_list['id'][]	= $id;
+						$rule_list[$id]		= array('name' => $table, 'type' => $type);
 					}
 					else {
 						// All other non-pfBlockerNG Tracker IDs
@@ -27469,6 +27475,12 @@ function pfb_daemon_filterlog() {
 						$pfb_query[1]	= htmlspecialchars($ip_cache['q1'])		?: 'Unknown';
 						$geoip		= htmlspecialchars($ip_cache['geoip'])		?: 'Unknown';
 						$resolved_host	= htmlspecialchars($ip_cache['resolved_host'])	?: 'Unknown';
+					}
+
+					// A drop by the CrowdSec bouncer's rule (#4164): its tables are no feed, and the log does not say which
+					// decision matched. The host's cached feed attribution stays for pfB rules.
+					if (in_array($pfb_alias, PFB_CROWDSEC_TABLES, TRUE)) {
+						$pfb_query = array('CrowdSec', 'Unknown');
 					}
 
 					// Modify host for ASN query
