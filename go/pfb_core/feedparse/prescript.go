@@ -90,9 +90,11 @@ func runScript(ctx context.Context, out io.Writer, script string, args []string)
 		outcome = runProcessGroup(ctx, out, bourneShell, append([]string{script}, args...))
 	}
 	err := errors.Join(outcome.CommandErr, outcome.Interrupted, outcome.WatchdogErr)
-	// ctx ended the run when the runner interrupted the script for it, or never started it; else the script's status stands
+	// ctx ended the run when the runner interrupted the script for it, or never started it (the watchdog's start included);
+	// else the script's status stands
 	cause := context.Cause(ctx)
-	ended := cause != nil && (errors.Is(outcome.Interrupted, cause) || errors.Is(outcome.CommandErr, cause))
+	ended := cause != nil && (errors.Is(outcome.Interrupted, cause) || errors.Is(outcome.CommandErr, cause) ||
+		errors.Is(outcome.WatchdogErr, cause))
 	var exit *exec.ExitError
 	switch {
 	case outcome.Interrupted == nil && outcome.WatchdogErr == nil && (outcome.CommandErr == nil || errors.Is(outcome.CommandErr, exec.ErrWaitDelay)):
