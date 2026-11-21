@@ -1201,6 +1201,7 @@ function pfb_filter_reload_exec(): int {
 }
 
 // Main pfBlockerNG function
+// TEMPORARY SHIM (#4037): deleted by the cutover (#3977). It computes from files what the version 2 apply is handed.
 function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool {
 	global $g, $pfb, $pfbarr;
 	$deferred_by = NULL;
@@ -4887,6 +4888,122 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	#########################################################################
 	pfb_build_aggregate_aliases($new_aliases, $new_aliases_list, $pfb_alias_lists, $pfb_alias_prev_sets);
 
+	// TEMPORARY SHIM (#4037): deleted by the cutover (#3977).
+	['changedAliases' => $pfb_alias_lists, 'ipUnlockForced' => $pfb_ip_unlock_forced, 'reloadUnknown' => $pfb_filter_reload_unknown]
+		= pfb_apply_objects($new_aliases, $new_aliases_list, $pfb_alias_lists, $pfb_alias_lists_all, $pfb_alias_prev_sets,
+		$pfb_feed_changed, $pfb_sync_absorb);
+
+	#################################
+	#	FINAL REPORTING		#
+	#################################
+
+	// Only run with CRON or Force invoked process
+	if ((!$pfb['save'] && $pfb['repcheck'] && $pfb['enable'] === PfbToggle::On) || $pfb['summary']) {
+		// issue #1084 review: dedup off + recompute having run the v4 family (the
+		// dup-off+rep-on passthrough) still invokes 'closing off' so emptyfiles() refills
+		// any alias pMax/dMax collapsed to zero rows -- see pfb_ip_closing_pass_active().
+		[$pfb_closing_invoke, $pfb_closing_alias_arg] = pfb_ip_closing_pass_active($pfb['dup'] === PfbToggle::On, $pfb_recompute_ran_v4);
+		if ($pfb_closing_invoke) {
+			exec("{$pfb['script']} closing {$pfb_closing_alias_arg} {$elog}");
+		}
+		if ($pfb['dup'] === PfbToggle::On) {
+			pfb_sync_status_dedup_check($pfb['log'], $pfb['dbdir']);
+		} else {
+			// ADR-61: dedup disabled -- its sanity signal doesn't apply; clear any stale entry.
+			pfb_sync_status_close('ip', 'dedup', 'dedup', $pfb['dbdir']);
+		}
+	}
+
+	// ADR-12: post-update hooks. Fire at the closing tail -- AFTER the IP/DNSBL
+	// reloads, filter_configure(), and the FINAL REPORTING 'closing' step above --
+	// so the change flags are final. Context is derived ONLY from existing flags
+	// (no new tracking):
+	//   PFB_IP_CHANGED    = $pfb['filter_configure'] || $pfb_ip_unlock_forced -- set TRUE
+	//       when firewall rule/aliastable changes were found and a filter reload was
+	//       applied (the IP side), OR when a pending /tmp/ip_unlock file forced a
+	//       pfctl-replace re-block without a filter reload -- captured before the unlink,
+	//       issue #519 (mirrors $pfb_dnsbl_unlock_forced / issue #517 on the DNSBL side).
+	//   PFB_DNSBL_CHANGED = mirrors the gate that drives pfb_update_unbound above:
+	//       $pfb_data_changed (fingerprint-derived, or domain_update/domain_clear when
+	//       TLD mode / DNSBL inactive), || $pfbupdate || $pfbpython || $safesearch_update,
+	//       || $pfb_dnsbl_unlock_forced (a pending /tmp/dnsbl_unlock file forced the
+	//       reload — captured before pfb_update_unbound() unlinks it, issue #517).
+	//       Reports '1' only when a reload actually fired, so a skipped pass (unchanged
+	//       blocklist, fingerprints equal) correctly emits '0'. !empty() guards any flag
+	//       whose block did not run — no undefined-variable warning.
+	//   PFB_TRIGGER       = $pfb_hook_val (from pfb_req_to_hook_trigger / pfb_hook_trigger).
+	//   PFB_CHANGED_IP_ALIASES = the space-separated list of IP firewall aliases UPDATED
+	//       this pass (ADR-12) = $pfb_alias_lists (the content-diff set --
+	//       pfB_*_v4/_v6 whose canonical membership set actually changed this pass,
+	//       as determined by pfb_alias_set_different(); ADR-40).  Reputation/dedup
+	//       no longer inflate this to all active aliases -- only moved tables appear here.
+	//       The IP locals are in scope only at this tail, so they are merged into
+	//       $pfb['changed_ip_aliases'] here, then de-duped at emit.
+	//   PFB_CHANGED_DNSBL_GROUPS = the space-separated list of DNSBL groups UPDATED this
+	//       pass (ADR-12) = the DNSBL_<group> names appended in the per-group
+	//       feed loop under $pfb['aliasupdate'] (genuine feed (re)parse only -- file-reuse
+	//       and the always-rebuilt DNSBL_IDN/DNSBL_TLD_Allow/DNSBL_Regex specials are
+	//       excluded), de-duped at emit. DNSBL groups are NOT firewall aliases, so they
+	//       ride their own var. Both lists are empty on a no-op pass. Semantic =
+	//       "updated this pass", Reputation-mode-INDEPENDENT; a member-level diff stays a
+	//       future increment.
+	// PFB_STATUS has no clean pass-wide ok/partial/error signal today, so it is reported
+	// as 'ok' (a stable reserved placeholder; the ADR forbids inventing an accumulator
+	// for it -- do not branch a recipe on its value). No enabled 'post' hook =>
+	// pfb_run_hooks() returns immediately (byte-identical pass).
+	if (!empty($pfb_alias_lists) && is_array($pfb_alias_lists)) {
+		$pfb['changed_ip_aliases'] = array_merge($pfb['changed_ip_aliases'], $pfb_alias_lists);
+	}
+	pfb_run_hooks('post', array(
+		'TRIGGER'		=> $pfb_hook_val,
+		'IP_CHANGED'		=> (!empty($pfb['filter_configure']) || !empty($pfb_ip_unlock_forced)) ? '1' : '0',
+		'DNSBL_CHANGED'		=> pfb_dnsbl_reload_needed(!empty($pfb['dnsbl_publish_failed']),
+						!empty($pfb_data_changed), !empty($pfbupdate), !empty($pfbpython),
+						!empty($safesearch_update), !empty($pfb_dnsbl_unlock_forced)) ? '1' : '0',
+		'STATUS'		=> 'ok',
+		'CHANGED_IP_ALIASES'	=> implode(' ', array_unique($pfb['changed_ip_aliases'])),
+		'CHANGED_DNSBL_GROUPS'	=> implode(' ', array_unique($pfb['changed_dnsbl_groups'])),
+	));
+
+	// Terminal marker -- emitted AFTER the post-update hooks so it is genuinely the
+	// last line of the update log (the hooks' progressive output, e.g. a HAProxy reload
+	// running up to its timeout, must precede it). The Update-page live tail now stops on
+	// the dispatched process exiting (its pidfile), not on this marker, but keeping the
+	// marker last preserves a clean end-of-run boundary in the log.
+	// A real Update pass (NOT a settings-save sync, $pfb['save']) has rebuilt from the current
+	// config, so the deferred-settings changes it saw at its start are now applied: settle the GUI
+	// "pending changes" mark it saw (a later mark survives) unless this pass's filter reload expired
+	// or failed to launch (firewall state unknown; the pending mark must survive so the next tick re-applies).
+
+	// TEMPORARY SHIM (#4037): deleted by the cutover (#3977).
+	pfb_apply_settle($pfb_accounting_pending, $pfb_filter_reload_unknown, $pfb_pending_seen, $pfb_pass_started);
+
+	pfb_pass_status_record('last_end', time(), $pfb['save']);
+	if ($pfb['enable'] === PfbToggle::On && !$pfb['save'] || $pfb['summary']) {
+		pfb_logger("\n UPDATE PROCESS ENDED\n", 1);
+	}
+
+	// issue #1175: release only if this call transitioned the lock (see head of function).
+	if ($pfb_feed_pass_owner) {
+		pfb_feed_pass_release();
+	}
+	if ($pfb_dispatch_owner) {
+		pfb_schedule_dispatch_release();
+	}
+	return !$pfb_accounting_pending;
+}
+
+/**
+ * The pass's pfSense objects: alias and rule writes, the pfctl table updates, the saved settings, the filter
+ * reload, kill states, the XMLRPC sync and the metrics export. Returns what the `post` hook and the settle read:
+ * the aliases whose table changed, whether an IP unlock forced a re-block, and whether the reload launch failed.
+ *
+ * @return array{changedAliases:array,ipUnlockForced:bool,reloadUnknown:bool}
+ */
+function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $pfb_alias_lists, array $pfb_alias_lists_all,
+    array $pfb_alias_prev_sets, array $pfb_feed_changed, bool $pfb_sync_absorb): array {
+	global $g, $pfb;
+
 	#########################################
 	#	UPDATE pfSense ALIAS TABLES	#
 	#########################################
@@ -5350,87 +5467,13 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// Core runs every schedule; this pass only retires the crontab entries earlier versions installed, after the metrics lock is released.
 	pfblockerng_retire_cron_jobs();
 
-	#################################
-	#	FINAL REPORTING		#
-	#################################
+	return ['changedAliases' => $pfb_alias_lists, 'ipUnlockForced' => $pfb_ip_unlock_forced, 'reloadUnknown' => $pfb_filter_reload_unknown];
+}
 
-	// Only run with CRON or Force invoked process
-	if ((!$pfb['save'] && $pfb['repcheck'] && $pfb['enable'] === PfbToggle::On) || $pfb['summary']) {
-		// issue #1084 review: dedup off + recompute having run the v4 family (the
-		// dup-off+rep-on passthrough) still invokes 'closing off' so emptyfiles() refills
-		// any alias pMax/dMax collapsed to zero rows -- see pfb_ip_closing_pass_active().
-		[$pfb_closing_invoke, $pfb_closing_alias_arg] = pfb_ip_closing_pass_active($pfb['dup'] === PfbToggle::On, $pfb_recompute_ran_v4);
-		if ($pfb_closing_invoke) {
-			exec("{$pfb['script']} closing {$pfb_closing_alias_arg} {$elog}");
-		}
-		if ($pfb['dup'] === PfbToggle::On) {
-			pfb_sync_status_dedup_check($pfb['log'], $pfb['dbdir']);
-		} else {
-			// ADR-61: dedup disabled -- its sanity signal doesn't apply; clear any stale entry.
-			pfb_sync_status_close('ip', 'dedup', 'dedup', $pfb['dbdir']);
-		}
-	}
-
-	// ADR-12: post-update hooks. Fire at the closing tail -- AFTER the IP/DNSBL
-	// reloads, filter_configure(), and the FINAL REPORTING 'closing' step above --
-	// so the change flags are final. Context is derived ONLY from existing flags
-	// (no new tracking):
-	//   PFB_IP_CHANGED    = $pfb['filter_configure'] || $pfb_ip_unlock_forced -- set TRUE
-	//       when firewall rule/aliastable changes were found and a filter reload was
-	//       applied (the IP side), OR when a pending /tmp/ip_unlock file forced a
-	//       pfctl-replace re-block without a filter reload -- captured before the unlink,
-	//       issue #519 (mirrors $pfb_dnsbl_unlock_forced / issue #517 on the DNSBL side).
-	//   PFB_DNSBL_CHANGED = mirrors the gate that drives pfb_update_unbound above:
-	//       $pfb_data_changed (fingerprint-derived, or domain_update/domain_clear when
-	//       TLD mode / DNSBL inactive), || $pfbupdate || $pfbpython || $safesearch_update,
-	//       || $pfb_dnsbl_unlock_forced (a pending /tmp/dnsbl_unlock file forced the
-	//       reload — captured before pfb_update_unbound() unlinks it, issue #517).
-	//       Reports '1' only when a reload actually fired, so a skipped pass (unchanged
-	//       blocklist, fingerprints equal) correctly emits '0'. !empty() guards any flag
-	//       whose block did not run — no undefined-variable warning.
-	//   PFB_TRIGGER       = $pfb_hook_val (from pfb_req_to_hook_trigger / pfb_hook_trigger).
-	//   PFB_CHANGED_IP_ALIASES = the space-separated list of IP firewall aliases UPDATED
-	//       this pass (ADR-12) = $pfb_alias_lists (the content-diff set --
-	//       pfB_*_v4/_v6 whose canonical membership set actually changed this pass,
-	//       as determined by pfb_alias_set_different(); ADR-40).  Reputation/dedup
-	//       no longer inflate this to all active aliases -- only moved tables appear here.
-	//       The IP locals are in scope only at this tail, so they are merged into
-	//       $pfb['changed_ip_aliases'] here, then de-duped at emit.
-	//   PFB_CHANGED_DNSBL_GROUPS = the space-separated list of DNSBL groups UPDATED this
-	//       pass (ADR-12) = the DNSBL_<group> names appended in the per-group
-	//       feed loop under $pfb['aliasupdate'] (genuine feed (re)parse only -- file-reuse
-	//       and the always-rebuilt DNSBL_IDN/DNSBL_TLD_Allow/DNSBL_Regex specials are
-	//       excluded), de-duped at emit. DNSBL groups are NOT firewall aliases, so they
-	//       ride their own var. Both lists are empty on a no-op pass. Semantic =
-	//       "updated this pass", Reputation-mode-INDEPENDENT; a member-level diff stays a
-	//       future increment.
-	// PFB_STATUS has no clean pass-wide ok/partial/error signal today, so it is reported
-	// as 'ok' (a stable reserved placeholder; the ADR forbids inventing an accumulator
-	// for it -- do not branch a recipe on its value). No enabled 'post' hook =>
-	// pfb_run_hooks() returns immediately (byte-identical pass).
-	if (!empty($pfb_alias_lists) && is_array($pfb_alias_lists)) {
-		$pfb['changed_ip_aliases'] = array_merge($pfb['changed_ip_aliases'], $pfb_alias_lists);
-	}
-	pfb_run_hooks('post', array(
-		'TRIGGER'		=> $pfb_hook_val,
-		'IP_CHANGED'		=> (!empty($pfb['filter_configure']) || !empty($pfb_ip_unlock_forced)) ? '1' : '0',
-		'DNSBL_CHANGED'		=> pfb_dnsbl_reload_needed(!empty($pfb['dnsbl_publish_failed']),
-						!empty($pfb_data_changed), !empty($pfbupdate), !empty($pfbpython),
-						!empty($safesearch_update), !empty($pfb_dnsbl_unlock_forced)) ? '1' : '0',
-		'STATUS'		=> 'ok',
-		'CHANGED_IP_ALIASES'	=> implode(' ', array_unique($pfb['changed_ip_aliases'])),
-		'CHANGED_DNSBL_GROUPS'	=> implode(' ', array_unique($pfb['changed_dnsbl_groups'])),
-	));
-
-	// Terminal marker -- emitted AFTER the post-update hooks so it is genuinely the
-	// last line of the update log (the hooks' progressive output, e.g. a HAProxy reload
-	// running up to its timeout, must precede it). The Update-page live tail now stops on
-	// the dispatched process exiting (its pidfile), not on this marker, but keeping the
-	// marker last preserves a clean end-of-run boundary in the log.
-	// A real Update pass (NOT a settings-save sync, $pfb['save']) has rebuilt from the current
-	// config, so the deferred-settings changes it saw at its start are now applied: settle the GUI
-	// "pending changes" mark it saw (a later mark survives) unless this pass's filter reload expired
-	// or failed to launch (firewall state unknown; the pending mark must survive so the next tick re-applies).
+/** Settles a real Update pass: the pending mark it saw ($pfb_pending_seen), the due-ledger flag and the apply record. */
+function pfb_apply_settle(bool $pfb_accounting_pending, bool $pfb_filter_reload_unknown, ?string $pfb_pending_seen,
+    int $pfb_pass_started): void {
+	global $pfb;
 
 	if (!$pfb['save']) {
 		$pending_cleared = !$pfb_accounting_pending && (
@@ -5457,18 +5500,4 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			pfb_sync_apply_record('failed', $reason, $pfb['dbdir'], FALSE, $pfb_pass_started);
 		}
 	}
-
-	pfb_pass_status_record('last_end', time(), $pfb['save']);
-	if ($pfb['enable'] === PfbToggle::On && !$pfb['save'] || $pfb['summary']) {
-		pfb_logger("\n UPDATE PROCESS ENDED\n", 1);
-	}
-
-	// issue #1175: release only if this call transitioned the lock (see head of function).
-	if ($pfb_feed_pass_owner) {
-		pfb_feed_pass_release();
-	}
-	if ($pfb_dispatch_owner) {
-		pfb_schedule_dispatch_release();
-	}
-	return !$pfb_accounting_pending;
 }
