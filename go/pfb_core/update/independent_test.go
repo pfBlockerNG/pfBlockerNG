@@ -95,6 +95,7 @@ func TestIndependentWorkerSurvivesControllerDeath(t *testing.T) {
 			}
 			releaseIndependent(t, dir)
 			awaitFile(t, filepath.Join(dir, "completed"))
+			awaitWorkerCompletion(t, log.Name()) // the worker publishes .status after the program completes (#4166)
 			starts, err := os.ReadFile(filepath.Join(dir, "starts"))
 			if err != nil || strings.Count(string(starts), "started") != 1 {
 				t.Errorf("program starts = %q, %v; want exactly one", starts, err)
@@ -117,4 +118,5 @@ func TestIndependentWorkerContextEndsObservationNotTransaction(t *testing.T) {
 	}
 	releaseIndependent(t, dir)
 	awaitFile(t, filepath.Join(dir, "completed"))
+	awaitWorkerCompletion(t, log.Name()) // the worker publishes .status after the program completes (#4166)
 }
