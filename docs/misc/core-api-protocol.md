@@ -779,7 +779,9 @@ Core's worker writes version 1 until the Core Updater loop (#4038) and the cutov
 The invocation is the one above: the same `--update-cmd`, stdin and stdout as regular files, the result lines on fd 3, and the
 same meaning of the exit status (0 success, 75 deferred, 2 a refused request, anything else failure).
 
-**stdin:** one JSON object of at most 1,048,576 bytes and nothing after it but white space, nested at most seven levels deep:
+**stdin:** one JSON object of at most 1,048,576 bytes and nothing after it but white space, nested at most seven levels deep
+(the object itself is the first level). A request nested deeper is refused as "the request is not one JSON object". Of keys
+that appear twice in one object, the last is read:
 
 ```json
 {"version": 2, "trigger": "scheduled", "scope": "both", "pendingToken": "0123456789abcdef", "pendingOutsideWindow": false,
@@ -809,19 +811,26 @@ writes no result and exits 2. A field that is `null` is absent; an unknown field
 - **A resource** is `{"id", "generation", "action", "direction", "entries"}`. The `id` is a [resource id](#resources) the
   apply handles: an `ip-set`, an `ip-aggregate` or the `geo-catalog`, never a `dnsbl/*` id (pfB-DNS fetches those). Each
   id appears once across `resources` and `removed`. The `geo-catalog` takes only its `id` and `generation`.
-- **A generation** is a string of ASCII decimal digits that fits 64 bits, kept as the string it is (`"007"` stays `"007"`).
+- **A generation** is a string of 1 to 20 ASCII decimal digits, leading zeros included, whose value fits an unsigned 64-bit
+  integer; it is kept as the string it is (`"007"` stays `"007"`).
 - **`action`** is `deny`, `permit`, `match` or `alias_only`; every `ip-aggregate` is `alias_only`. **`direction`** is a
   non-empty list of `ingress` and `egress`, each once, for an `ip-set` whose action is not `alias_only`, and absent
-  otherwise. **`entries`** is a non-negative integer.
+  otherwise. **`entries`** is a non-negative integer of at most 9223372036854775807 (2^63-1); a larger number is refused, as
+  it is in a DNSBL group's `entries`.
 - **An alias.** Each `ip-set` and `ip-aggregate` id maps to the alias the apply loads: `ip-set/<group>/ipv4` (or `ipv6`) is
   `pfB_<group>_v4` (or `_v6`), and `ip-aggregate/<class>/<family>` is the ADR-11 alias `pfB_<Class>_Aggregated_v4|_v6` of
-  the class `deny`, `permit`, `match` or `native` (lower case in the id). An id that maps to no alias name (another class,
-  a group with `-`) refuses the request, and so do two ids that map to one alias (`ip-set/Deny_Aggregated/ipv4` and
-  `ip-aggregate/deny/ipv4`). The id is never used as a path or a table name; the alias is.
-- **An issue's** `resource` and `code` are strings of 1 to 256 bytes without control characters, and its `stage` is one of
-  the sync-status ledger's: `download`, `script`, `parse`, `dedup` or `apply`. Its `message` is any string: it is kept as
-  text, its control characters removed and its surrounding white space trimmed, and cut to at most 1,024 bytes, never inside
-  a character. Markup in it stays as it is, for the page that shows it to escape.
+  the class `deny`, `permit`, `match` or `native` (lower case in the id). An alias is at most 31 characters, the longest
+  name pf takes for a table (a group of at most 24 characters), and the eight aggregate aliases are reserved: an `ip-set`
+  whose alias would be one of them (`ip-set/Deny_Aggregated/ipv4`) maps to no alias. An id that maps to no alias (another
+  class, a group with `-`, a group too long, a reserved name) refuses the request. Distinct ids therefore never share an
+  alias. The id is never used as a path or a table name; the alias is.
+- **An issue's** `resource` and `code` are strings of 1 to 256 bytes of plain text: no character of the Unicode category
+  "other" (`\p{C}`: control, format, private-use, surrogate and unassigned characters) and no line or paragraph separator
+  (U+2028, U+2029). Its `stage` is one of the sync-status ledger's: `download`, `script`, `parse`, `dedup` or `apply`. Its
+  `message` is any string, kept as bounded text: invalid UTF-8 is replaced, each run of control characters and line or
+  paragraph separators becomes one space (so the lines of a tool's error output stay apart as words), every other `\p{C}`
+  character is removed, the surrounding white space is trimmed, the text is cut to at most 1,024 bytes, never inside a
+  character, and trimmed again. Markup in it stays as it is, for the page that shows it to escape.
 
 **fd 3:** result lines, each one JSON object and a newline, in printable ASCII, written as each step finishes. The fields
 appear in this order; a field is left out when the apply has nothing to say in it, and `version` is always present:
@@ -839,7 +848,16 @@ appear in this order; a field is left out when the apply has nothing to say in i
 | `changedAliases` | the alias of every table the apply pushed to pf: the `post` hook's `PFB_CHANGED_IP_ALIASES` |
 | `ipChanged`, `dnsblChanged` | the `post` hook's `PFB_IP_CHANGED` and `PFB_DNSBL_CHANGED` |
 | `reloadLaunched` | whether the filter reload was launched |
-| `failed` | `{"id", "stage", "message"}` per resource not applied, `stage` being `fetch` or `apply`, the message bounded as an issue's is |
+| `failed` | `{"id", "stage", "message"}` per resource not applied, `stage` being `fetch` or `apply`, the message bounded as an issue's is, except that its 1,024 bytes are counted as written on the line, JSON escapes included |
+
+Every id on a result line is one a request may hold: the `geo-catalog`, or an id that maps to an alias. A `changedAliases`
+entry is a pfBlockerNG alias name: `pfB_` and letters, digits and underscores, at most 31 characters. Each list holds at most
+4,096 entries.
+
+A result line is at most 524,288 bytes, its newline included: half of the 1 MiB Core reads back from fd 3 in all, so the
+lines of one Update leave room for each other. When a line would be longer, every `failed` message becomes
+`left out to fit the result line`; nothing else is ever shortened or left out. A report whose line is still too long is
+refused, and no line is written for it.
 
 With `pendingOutsideWindow` true the apply marks the changes pending and applies nothing, so its one line holds no `applied`.
 
