@@ -76,8 +76,12 @@ func TestTheDnsProjectionMatchesTodaysPhpOnEveryFixtureCase(t *testing.T) {
 			}
 			value := projection(t, get(t, st, "dns"), "dns").Value
 			for field, want := range c.Native {
-				if have := jsonOf(t, value[field]); have != string(want) {
-					t.Errorf("%s\n%s = %s, PHP gives %s", c.Description, field, have, want)
+				var compact bytes.Buffer
+				if err := json.Compact(&compact, want); err != nil {
+					t.Fatal(err)
+				}
+				if have := jsonOf(t, value[field]); have != compact.String() {
+					t.Errorf("%s\n%s = %s, PHP gives %s", c.Description, field, have, compact.String())
 				}
 			}
 		})
