@@ -94,10 +94,10 @@ type Runner struct {
 // next one runs: the caller never fails because of a hook. When ctx ends, a running hook gets TERM and KILL the same
 // way, no further hook starts, and one line says the run was cancelled and how many enabled hooks did not run. Output
 // goes to a fresh regular file, sanitized into the logs while the hook runs, and read up to its size sampled after the
-// hook exited (output.Capture).
-func (r Runner) Run(ctx context.Context, when string, rows []Hook, c Context) {
+// hook exited (output.Capture). cut is whether ctx ended the run with an enabled hook unrun or cut short.
+func (r Runner) Run(ctx context.Context, when string, rows []Hook, c Context) (cut bool) {
 	if when != "pre" && when != "post" {
-		return
+		return false
 	}
 	var selected []Hook
 	for _, h := range rows {
@@ -106,10 +106,10 @@ func (r Runner) Run(ctx context.Context, when string, rows []Hook, c Context) {
 		}
 	}
 	if len(selected) == 0 {
-		return
+		return false
 	}
 	env := environ(when, c)
-	python := sync.OnceValue(func() bool { return r.interpreter(ctx) })
+	python := sync.OnceValue(func() bool { return r.interpreter(ctx, env) })
 	for i, h := range selected {
 		e := r.run(ctx, when, i, h, env, python)
 		if e != cancelled && e != interrupted {
@@ -123,8 +123,9 @@ func (r Runner) Run(ctx context.Context, when string, rows []Hook, c Context) {
 			plural = ""
 		}
 		r.sinks().Line(true, "[ pfB Hook ] %s run cancelled; %d enabled hook%s did not run\n", when, left, plural)
-		return
+		return true
 	}
+	return false
 }
 
 func (r Runner) run(ctx context.Context, when string, index int, h Hook, env []string, python func() bool) end {
@@ -202,14 +203,16 @@ func (r Runner) vetted(script, when string) string {
 	return path
 }
 
-func (r Runner) interpreter(ctx context.Context) bool {
+// interpreter is whether the Python wrapper names an interpreter, asked with env, the environment the hook would get, so
+// that the wrapper's own PFB_* overrides reach neither the probe nor the launch.
+func (r Runner) interpreter(ctx context.Context, env []string) bool {
 	if !filepath.IsAbs(r.Python) { // a relative wrapper would be looked up in PATH
 		return false
 	}
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, r.Python, "--print-interpreter")
-	cmd.WaitDelay = r.grace()
+	cmd.Env, cmd.WaitDelay = env, r.grace()
 	out, err := cmd.Output()
 	first, _, _ := strings.Cut(string(out), "\n")
 	return err == nil && strings.TrimSpace(first) != ""

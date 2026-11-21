@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -33,22 +34,46 @@ var hookFields = map[string]struct {
 }
 
 // runHooks is `pfb-core --run-hooks <pre|post>` (docs/misc/core-api-protocol.md "Hooks outside an Update"): the hooks
-// of when, read through backend from the hooks projection alone, run once by runner with the context read from stdin.
-// It needs no Core API, takes no lock and publishes nothing. Every line and all hook output go to stderr, the main log;
-// under the uninstall lifecycle stdout gets a copy, the console of the package operation. The status is 0 once the
-// hooks ran, whatever they did, or when the settings are not initialized (no hooks); 2 for a context outside the
-// vocabulary and 1 for settings that cannot be read, when nothing runs; 1 when ctx ended the run.
-func runHooks(ctx context.Context, when string, backend settings.Backend, kind string, runner hooks.Runner,
-	stdin io.Reader, stdout, stderr io.Writer) int {
+// of when, read from the hooks projection alone through the adapter program backendCmd, else the file backend of
+// stateDir, run once by runner with the context read from stdin. It needs no Core API, takes no lock and publishes
+// nothing. Every line and all hook output go to stderr, the main log; under the uninstall lifecycle stdout gets a copy,
+// the console of the package operation. The status is 0 once the hooks ran, whatever they did, or when the settings are
+// not initialized (no hooks); 2 for a context outside the vocabulary and 1 for settings that cannot be read, when nothing
+// runs; 1 when ctx ended the run before or while reading the context, or with an enabled hook unrun or cut short.
+func runHooks(ctx context.Context, when, stateDir, backendCmd string, runner hooks.Runner, stdin io.Reader,
+	stdout, stderr io.Writer) int {
 	logger := log.New(stderr, "pfb_core: ", log.LstdFlags)
-	c, err := hookContext(when, stdin)
+	type read struct {
+		data []byte
+		err  error
+	}
+	got := make(chan read, 1)
+	go func() { // a stdin that stays open must not outlast a signal
+		data, err := io.ReadAll(io.LimitReader(stdin, maxHookContext+1))
+		got <- read{data, err}
+	}()
+	var in read
+	select {
+	case <-ctx.Done():
+		logger.Printf("no hooks run: cancelled while reading the hook context")
+		return 1
+	case in = <-got:
+	}
+	if in.err != nil {
+		logger.Printf("refused the hook context: %v", in.err)
+		return 2
+	}
+	c, err := hookContext(when, in.data)
 	if err != nil {
 		logger.Printf("refused the hook context: %v", err)
 		return 2
 	}
-	schema := settings.Production()
-	schema.Projections = slices.DeleteFunc(schema.Projections, func(p settings.Projection) bool { return p.ID != "hooks" })
-	store, err := settings.Load(hooksOnly{backend}, schema)
+	backend, kind := settingsBackend(stateDir, backendCmd)
+	if info, err := os.Stat(stateDir); kind == "file" && (err != nil || !info.IsDir()) {
+		logger.Printf("cannot read the hooks: the state directory %s does not exist or is not a directory", stateDir)
+		return 1
+	}
+	store, err := settings.Load(hooksOnly{backend}, settings.Production())
 	if err != nil {
 		logger.Printf("cannot read the hooks from the %s backend: %v", kind, err)
 		return 1
@@ -60,10 +85,9 @@ func runHooks(ctx context.Context, when string, backend settings.Backend, kind s
 	}
 	runner.Log = stderr
 	if c.Lifecycle == "uninstall" { // pfb_run_streams_to_stdout(): a package lifecycle's console sees the main log
-		runner.Log = io.MultiWriter(stderr, console{stdout})
+		runner.Log = io.MultiWriter(dropErrors{stderr}, dropErrors{stdout})
 	}
-	runner.Run(ctx, when, hooks.Rows(value), c)
-	if ctx.Err() != nil { // cancelled: the hooks did not all run
+	if runner.Run(ctx, when, hooks.Rows(value), c) {
 		return 1
 	}
 	return 0
@@ -78,29 +102,23 @@ func (b hooksOnly) Read(ctx context.Context) (settings.Stored, error) {
 	return s, err
 }
 
-// console is the stdout copy of the main log: a failed write is dropped, so that a closed console never stops the log.
-type console struct{ io.Writer }
+// dropErrors is one copy of the main log, stderr or the console: a failed write is dropped, so that one closed copy
+// never stops the other.
+type dropErrors struct{ io.Writer }
 
-func (c console) Write(p []byte) (int, error) {
-	c.Writer.Write(p)
+func (d dropErrors) Write(p []byte) (int, error) {
+	d.Writer.Write(p)
 	return len(p), nil
 }
 
-// hookContext reads the one JSON object of a --run-hooks context: trigger, lifecycle (uninstall), pkgOp (install,
+// hookContext parses data, the one JSON object of a --run-hooks context: trigger, lifecycle (uninstall), pkgOp (install,
 // upgrade, reinstall, delete or empty) and, for post only, ipChanged, dnsblChanged (bools), changedIpAliases and
 // changedDnsblGroups (strings). Any other name, a name given twice, a value of another type or outside the vocabulary,
-// a NUL or a lone surrogate escape in a string, or input that is not exactly one object in UTF-8 is an error. post also
-// gets PFB_STATUS, the reserved ok.
-func hookContext(when string, in io.Reader) (hooks.Context, error) {
-	data, err := io.ReadAll(io.LimitReader(in, maxHookContext+1))
-	if err != nil {
-		return hooks.Context{}, err
-	}
+// a string holding a NUL or U+FFFD (what invalid UTF-8 and a lone surrogate escape decode to), or input that is not
+// exactly one object is an error. post also gets PFB_STATUS, the reserved ok.
+func hookContext(when string, data []byte) (hooks.Context, error) {
 	if len(data) > maxHookContext {
 		return hooks.Context{}, errors.New("the input is over 16 MiB")
-	}
-	if !utf8.Valid(data) {
-		return hooks.Context{}, errors.New("the input is not UTF-8")
 	}
 	notObject := errors.New("the input is not one JSON object")
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -125,18 +143,16 @@ func hookContext(when string, in io.Reader) (hooks.Context, error) {
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return hooks.Context{}, errors.New("the input holds more than one JSON object")
 	}
-	// decoding turns a lone surrogate escape into U+FFFD: one the input does not hold itself came from such an escape
-	replacement := bytes.Contains(data, []byte("\uFFFD")) || bytes.Contains(bytes.ToLower(data), []byte(`\ufffd`))
 	c := hooks.Context{Vars: map[string]string{}}
 	for _, field := range slices.Sorted(maps.Keys(fields)) {
 		var v any
 		json.Unmarshal(fields[field], &v) // a whole object's member: valid JSON
 		s, isString := v.(string)
 		if isString && strings.Contains(s, "\x00") {
-			return hooks.Context{}, fmt.Errorf("%s holds a NUL", field)
+			return hooks.Context{}, fmt.Errorf("%q holds a NUL", field)
 		}
-		if isString && !replacement && strings.ContainsRune(s, utf8.RuneError) {
-			return hooks.Context{}, fmt.Errorf("%s holds a lone surrogate", field)
+		if isString && strings.ContainsRune(s, utf8.RuneError) {
+			return hooks.Context{}, fmt.Errorf("%q holds U+FFFD", field)
 		}
 		f, known := hookFields[field]
 		switch {
@@ -153,18 +169,18 @@ func hookContext(when string, in io.Reader) (hooks.Context, error) {
 		case !known:
 			return hooks.Context{}, fmt.Errorf("%q is not a context field", field)
 		case f.post && when != "post":
-			return hooks.Context{}, fmt.Errorf("%s is a post field", field)
+			return hooks.Context{}, fmt.Errorf("%q is a post field", field)
 		case f.flag:
 			b, ok := v.(bool)
 			if !ok {
-				return hooks.Context{}, fmt.Errorf("%s must be true or false", field)
+				return hooks.Context{}, fmt.Errorf("%q must be true or false", field)
 			}
 			c.Vars[f.name] = "0"
 			if b {
 				c.Vars[f.name] = "1"
 			}
 		case !isString:
-			return hooks.Context{}, fmt.Errorf("%s must be a string", field)
+			return hooks.Context{}, fmt.Errorf("%q must be a string", field)
 		default:
 			c.Vars[f.name] = s
 		}
