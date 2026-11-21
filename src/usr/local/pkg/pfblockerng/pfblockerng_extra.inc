@@ -6685,7 +6685,11 @@ function pfb_core_update_v2_alias(string $id): ?string
  */
 function pfb_core_update_v2_message(string $message, bool $escaped = FALSE): string
 {
+	// the contract replaces an invalid byte with "?"; mb_scrub() follows mbstring.substitute_character, which may say otherwise
+	$substitute = mb_substitute_character();
+	mb_substitute_character(0x3F);
 	$text = mb_scrub($message, 'UTF-8');
+	mb_substitute_character($substitute);
 	$text = mb_strcut(pfb_sanitize_text(preg_replace('/[\p{Cc}\p{Zl}\p{Zp}]+/u', ' ', $text) ?? $text), 0, PFB_CORE_UPDATE_V2_MESSAGE_BYTES, 'UTF-8');
 	$json = static fn (string $s): int => strlen(json_encode($s, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)) - 2;
 	if ($escaped && $json($text) > PFB_CORE_UPDATE_V2_MESSAGE_BYTES) {
