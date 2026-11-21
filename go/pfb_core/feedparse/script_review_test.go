@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -178,5 +180,137 @@ func TestPostScriptWithoutAnOutputFileHasStatusMinusOne(t *testing.T) {
 	want := "\nExecuting post-script: post.sh\n\n[ hdr ] post-script 'post.sh' exited non-zero [ -1 ]; discarding its output\n"
 	if r.Reason != PreScriptExit || r.Status != -1 || log.String() != want {
 		t.Errorf("result %+v, log %q; want status -1 and the log %q", r, log.String(), want)
+	}
+}
+
+// A FIFO at the download, which an earlier script can leave there, is refused before it is opened: the run reports a
+// staging failure at once instead of blocking in open(2). Not a corpus case: today's copy() opens the FIFO and blocks for
+// ever. guard only fails a hung run.
+func TestPostScriptFifoAtTheDownloadIsAStagingFailure(t *testing.T) {
+	for _, kind := range []string{"dnsbl", "_v4"} {
+		t.Run(kind, func(t *testing.T) {
+			dir, marks := t.TempDir(), t.TempDir()
+			marker := filepath.Join(marks, "ran")
+			body := "#!/bin/sh\n: > '" + marker + "'\n"
+			orig := writeScript(t, dir, "post.sh", body)
+			if err := os.Remove(orig); err != nil {
+				t.Fatal(err)
+			}
+			if err := syscall.Mkfifo(orig, 0o600); err != nil {
+				t.Skipf("no fifos on this host: %v", err)
+			}
+			t.Cleanup(func() { // a run blocked in open(2) is let go
+				if f, err := os.OpenFile(orig, os.O_RDWR|syscall.O_NONBLOCK, 0); err == nil {
+					f.Close()
+				}
+			})
+			p := PostScript{Name: "post.sh", Dirs: []string{dir}, Header: "hdr"}
+			done := make(chan PostScriptResult, 1)
+			go func() {
+				if kind == "dnsbl" {
+					done <- p.RunDNSBL(context.Background(), orig, filepath.Join(dir, "feed.post"))
+				} else {
+					done <- p.RunIP(context.Background(), orig, filepath.Join(dir, "feed.orig.post"), kind)
+				}
+			}()
+			var r PostScriptResult
+			select {
+			case r = <-done:
+			case <-time.After(guard):
+				t.Fatal("the run blocked on the FIFO at the download")
+			}
+			if r.Reason != PreScriptStage || r.Skipped {
+				t.Errorf("result %+v; want a staging failure", r)
+			}
+			if _, err := os.Stat(marker); err == nil {
+				t.Error("the script ran without a staged input")
+			}
+			if want, have := map[string]string{"feed.orig": "<fifo>", "post.sh": "=" + body}, listFeed(t, dir); !maps.Equal(want, have) {
+				t.Errorf("feed folder %q; want %q", have, want)
+			}
+		})
+	}
+}
+
+// An empty entry in Dirs (an unset flag) is no folder: it never makes the working folder a script folder.
+func TestPostScriptEmptyFolderIsNoFolder(t *testing.T) {
+	dir, marks := t.TempDir(), t.TempDir()
+	canary := filepath.Join(marks, "canary")
+	orig := writeScript(t, dir, "post.sh", "#!/bin/sh\n: > '"+canary+"'\n")
+	t.Chdir(dir)
+	r := PostScript{Name: "post.sh", Dirs: []string{""}, Header: "hdr"}.RunDNSBL(context.Background(), orig,
+		filepath.Join(dir, "feed.post"))
+	if _, err := os.Stat(canary); err == nil || !r.Skipped {
+		t.Errorf("script ran: %v, result %+v; want it never vetted nor run", err == nil, r)
+	}
+}
+
+// What sits at the restore point and is not a regular file (an empty folder a script left) is removed when it makes the
+// staging fail, so that the next run stages normally.
+func TestPostScriptFolderAtTheRestorePointDoesNotBlockLaterRuns(t *testing.T) {
+	dir := t.TempDir()
+	orig := writeScript(t, dir, "post.sh", "#!/bin/sh\necho changed > \"$1\"\n")
+	restore := filepath.Join(dir, "feed.orig.post")
+	if err := os.Mkdir(restore, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := PostScript{Name: "post.sh", Dirs: []string{dir}, Header: "hdr"}
+	if r := p.RunIP(context.Background(), orig, restore, "_v4"); r.Reason != PreScriptStage {
+		t.Errorf("first run %+v; want a staging failure", r)
+	}
+	if _, err := os.Lstat(restore); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("restore point after the failed run: %v; want it gone", err)
+	}
+	r := p.RunIP(context.Background(), orig, restore, "_v4")
+	if r.Reason != "" || r.Skipped {
+		t.Errorf("second run %+v; want a success", r)
+	}
+	if b, err := os.ReadFile(orig); err != nil || string(b) != "changed\n" {
+		t.Errorf("download after the second run %q, %v; want the script's output", b, err)
+	}
+	r.Restore()
+	if b, err := os.ReadFile(orig); err != nil || string(b) != "a.example\n" {
+		t.Errorf("download after the restore %q, %v; want it put back", b, err)
+	}
+}
+
+// copyFile has one temporary name per destination: a leftover there (a file, a symbolic link, an empty folder) is taken
+// over, a link's target is never written, and nothing but the destination is left.
+func TestCopyFileTakesOverALeftoverTemporaryFile(t *testing.T) {
+	for _, kind := range []string{"file", "symlink", "dir"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			target := filepath.Join(t.TempDir(), "target")
+			src, dst := filepath.Join(dir, "src"), filepath.Join(dir, "dst")
+			for path, text := range map[string]string{src: "data\n", target: "precious\n"} {
+				if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var err error
+			switch tmp := dst + ".tmp"; kind {
+			case "file":
+				err = os.WriteFile(tmp, []byte("stale\n"), 0o600)
+			case "symlink":
+				err = os.Symlink(target, tmp)
+			default:
+				err = os.Mkdir(tmp, 0o700)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := copyFile(src, dst); err != nil {
+				t.Fatalf("copyFile: %v", err)
+			}
+			if want, have := map[string]string{"src": "=data\n", "dst": "=data\n"}, listFeed(t, dir); !maps.Equal(want, have) {
+				t.Errorf("folder %q; want %q", have, want)
+			}
+			if b, err := os.ReadFile(target); err != nil || string(b) != "precious\n" {
+				t.Errorf("link target %q, %v; want it untouched", b, err)
+			}
+			if info, err := os.Stat(dst); err != nil || info.Mode().Perm() != 0o644 {
+				t.Errorf("destination %v, %v; want mode 0644", info, err)
+			}
+		})
 	}
 }
