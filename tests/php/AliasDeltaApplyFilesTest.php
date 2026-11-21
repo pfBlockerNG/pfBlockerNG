@@ -52,7 +52,7 @@ while [ "$#" -gt 0 ]; do
 		*) shift ;;
 	esac
 done
-[ -n "$infile" ] && cp "$infile" "$dir/call$n" && stat -c %a "$infile" > "$dir/mode$n"
+[ -n "$infile" ] && cp "$infile" "$dir/call$n" && { stat -c %a "$infile" 2>/dev/null || stat -f %Lp "$infile"; } > "$dir/mode$n"
 printf '%s\t%s\t%s\n' "$action" "$table" "$infile" >> "$dir/log"
 if [ -f "$dir/fail" ] && grep -qx "$n" "$dir/fail"; then
 	echo "pfctl: Cannot $action table: Operation not permitted"
@@ -277,7 +277,6 @@ SH
 			'-1 and +1 do not cancel out'  => [-1, 1, 'delta'],
 			'+1 and -1 do not cancel out'  => [1, -1, 'delta'],
 			'a negative add alone'         => [-5, 0, 'delta'],
-			'a negative count in replace'  => [0, -1, 'replace'],
 		];
 	}
 
@@ -293,6 +292,100 @@ SH
 		$this->assertFalse($result['ok'], 'a negative count is refused, never applied as nothing to do');
 		$this->assertSame([], $this->calls());
 		$this->assertCount(1, self::loggedSince($offset), 'one line says why: ' . implode(' | ', self::loggedSince($offset)));
+	}
+
+	/** A replace reloads the table from its file and never uses the add and remove counts: a negative one does not stop it. */
+	#[DataProvider('replacePaths')]
+	public function testANegativeCountDoesNotStopAReplace(string $mode, bool $force): void
+	{
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+			$this->members('add', ['10.1.0.1']), -1, $this->members('remove', ['10.2.0.1']), -7, 100, 100, $mode,
+			64, $force, $this->batchdir);
+
+		$this->assertSame(['delta' => FALSE, 'ok' => TRUE], $result);
+		$this->assertSame([['replace', 1]], $this->shape());
+	}
+
+	/** @return array<string, array{string, bool}> */
+	public static function replacePaths(): array
+	{
+		return ['mode replace' => ['replace', FALSE], 'a forced replace in delta mode' => ['delta', TRUE],
+			'a forced replace in auto mode' => ['auto', TRUE]];
+	}
+
+	/** @return array<string, array{int, int, string}> the entries after, the entries before, the mode */
+	public static function negativeTableSizes(): array
+	{
+		return [
+			'auto, negative entries'            => [-1, 100, 'auto'],
+			'auto, negative previous entries'   => [100, -1, 'auto'],
+			'delta, negative entries'           => [-1, 100, 'delta'],
+			'delta, negative previous entries'  => [100, -1, 'delta'],
+		];
+	}
+
+	#[DataProvider('negativeTableSizes')]
+	public function testANegativeTableSizeFailsTheDeltaWithNoCall(int $entries, int $previous, string $mode): void
+	{
+		$offset = self::logOffset();
+
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+			$this->members('add', ['10.1.0.1']), 1, $this->members('remove', []), 0, $entries, $previous, $mode, 64, FALSE,
+			$this->batchdir);
+
+		$this->assertSame(['delta' => FALSE, 'ok' => FALSE], $result);
+		$this->assertSame([], $this->calls());
+		$this->assertCount(1, self::loggedSince($offset), 'one line says why: ' . implode(' | ', self::loggedSince($offset)));
+	}
+
+	/** @return array<string, array{string, string, int, int}> the side, the file's bytes, its count, the line a refusal names */
+	public static function badLines(): array
+	{
+		return [
+			'an add file with CRLF endings'         => ['add', "10.1.0.1\r\n10.1.0.2\r\n", 2, 1],
+			'an add file with an empty line'        => ['add', "10.1.0.1\n\n10.1.0.2\n", 3, 2],
+			'a remove file with a leading minus'    => ['remove', "10.2.0.1\n10.2.0.2\n-d\n", 3, 3],
+			'a remove file with a space'            => ['remove', "10.2.0.1 10.2.0.2\n", 1, 1],
+		];
+	}
+
+	/** pf takes no line with a byte outside an address or a prefix: the files are checked before anything is sent. */
+	#[DataProvider('badLines')]
+	public function testALineThatIsNoMemberSendsNothingAndNamesItsSideAndLine(string $side, string $bytes, int $count, int $line): void
+	{
+		$paths = ['add' => $this->members('add', ['10.1.0.1']), 'remove' => $this->members('remove', ['10.2.0.1'])];
+		$counts = ['add' => 1, 'remove' => 1];
+		file_put_contents($paths[$side], $bytes);
+		$counts[$side] = $count;
+		$offset = self::logOffset();
+
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+			$paths['add'], $counts['add'], $paths['remove'], $counts['remove'], 10000, 10000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertSame([], $this->calls(), 'nothing is sent from a file pf would not read');
+		$named = array_values(array_filter(self::loggedSince($offset),
+			static fn (string $l): bool => str_contains($l, "the {$side} file") && str_contains($l, "line {$line} ")));
+		$this->assertCount(1, $named, 'one line names the side and the line: ' . implode(' | ', self::loggedSince($offset)));
+	}
+
+	/** The umask is the process's: a batch file that cannot be opened must not leave it at 0077. */
+	public function testAThrowingBatchFileOpenLeavesTheUmaskAsItWas(): void
+	{
+		$old = umask(0022);
+		try {
+			try {
+				pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+					$this->members('add', ['10.1.0.1']), 1, $this->members('remove', []), 0, 10000, 10000, 'delta', 64, FALSE,
+					"{$this->dir}/nul\0dir");
+				$this->fail('a temporary directory holding a NUL byte did not throw');
+			} catch (ValueError) {
+			}
+			$this->assertSame(0022, umask(), 'the umask is left changed');
+		} finally {
+			umask($old);
+		}
+		$this->assertSame([], $this->calls());
 	}
 
 	public function testALastLineWithoutANewlineIsSentAsAMember(): void
@@ -420,6 +513,8 @@ SH
 	{
 		return [
 			'a missing add file'           => ['add', 'missing'],
+			'a missing remove file'        => ['remove', 'missing'],
+			'an add path to a directory'   => ['add', 'directory'],
 			'a remove path to a directory' => ['remove', 'directory'],
 		];
 	}
