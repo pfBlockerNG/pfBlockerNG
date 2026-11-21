@@ -57,7 +57,9 @@ const (
 //
 // OK is true when the script succeeded and left its staged copy (an emptied copy is a valid transform); Path is then the copy
 // to parse, and Cleanup removes it afterwards. Any failure removes the staged copy and keeps the caller on norm, its last
-// known-good feed.
+// known-good feed. One run at a time per staged path: copyFile has one temporary name per destination, so two
+// concurrent runs on the same staged path can overwrite each other, and the caller holds that exclusion (the Update
+// runs one feed at a time under its lock).
 func RunPreScript(ctx context.Context, script, norm, staged string, log io.Writer, args ...string) PreScriptResult {
 	failed := func(reason string, status int) PreScriptResult {
 		os.Remove(staged)

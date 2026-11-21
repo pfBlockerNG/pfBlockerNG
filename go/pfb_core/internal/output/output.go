@@ -46,9 +46,9 @@ func (s Sinks) Line(failure bool, format string, args ...any) {
 // Capture makes a fresh file in the temporary folder, its name starting with prefix, and calls run with a descriptor of
 // it opened write-only in append mode, as PHP's 'a', for the program's stdout and stderr. run starts the program and
 // returns when its caller's lifetime policy says it has exited. While run runs, Capture sanitizes the file into s, and
-// then the rest of it up to the size it had when run returned: a descendant may keep writing to it, and is not waited
-// for. The file's name is removed once that size is fixed. Capture returns false, and does not call run, when no file
-// can be made.
+// then the rest of it up to its size sampled after run returned, not at the instant the program exited: what a process
+// the program left running writes in between is included, and what it writes later is not waited for. The file's name
+// is removed once that size is fixed. Capture returns false, and does not call run, when no file can be made.
 func Capture(prefix string, s Sinks, run func(out *os.File)) bool {
 	capture, err := os.CreateTemp("", prefix)
 	if err != nil {

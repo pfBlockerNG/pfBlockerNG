@@ -45,7 +45,8 @@ type restorePoint struct {
 }
 
 // RunDNSBL is the DNSBL post-script: orig is copied to staged, the script runs on staged with the argument dnsbl, and
-// staged is then removed, whatever the script left there. Nothing reads its output.
+// staged is then removed, whatever the script left there. Nothing reads its output. One run at a time per staged path,
+// as for RunPreScript: the caller holds that exclusion.
 func (p PostScript) RunDNSBL(ctx context.Context, orig, staged string) PostScriptResult {
 	script, ok := p.vet()
 	if !ok {
@@ -66,7 +67,8 @@ func (p PostScript) RunDNSBL(ctx context.Context, orig, staged string) PostScrip
 // failed script is undone at once, as Restore does. After a successful one orig holds its output, which the caller's
 // empty-feed check reads; Restore then puts the download back. A regular file at the restore point that cannot be written
 // is left as it was: one an earlier Restore could not rename back holds the only good copy. Anything else there (an empty
-// folder a script left) is removed, as Restore does, so that it does not fail every later run.
+// folder a script left) is removed, as Restore does, so that it does not fail every later run. One run at a time per
+// restore point, as for RunPreScript: the caller holds that exclusion.
 func (p PostScript) RunIP(ctx context.Context, orig, restore, vtype string) PostScriptResult {
 	script, ok := p.vet()
 	if !ok {

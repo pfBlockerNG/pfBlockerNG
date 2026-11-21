@@ -90,8 +90,8 @@ type Runner struct {
 // after the grace; what it started is left alone. A hook that is skipped, times out or exits non-zero is logged and the
 // next one runs: the caller never fails because of a hook. When ctx ends, a running hook gets TERM and KILL the same
 // way, no further hook starts, and one line says the run was cancelled and how many enabled hooks did not run. Output
-// goes to a fresh regular file, sanitized into the logs while the hook runs, and read up to its size when the hook
-// exited.
+// goes to a fresh regular file, sanitized into the logs while the hook runs, and read up to its size sampled after the
+// hook exited (output.Capture).
 func (r Runner) Run(ctx context.Context, when string, rows []Hook, c Context) {
 	if when != "pre" && when != "post" {
 		return
@@ -220,9 +220,10 @@ func (r Runner) grace() time.Duration {
 }
 
 // exec runs argv under the survivor policy with its output captured (output.Capture): sanitized into the logs while the
-// hook runs, and up to the size the file had when the hook's own process exited. status is the exit status: 128+n for
-// signal n; as timeout(1) reports a failure to start, 127 when the program does not exist and 126 when it exists but
-// cannot be started; and -1 when no output file can be made.
+// hook runs, and up to its size sampled once the hook's own process has exited and been reaped, so that what a service
+// the hook left running writes in between is included. status is the exit status: 128+n for signal n; as timeout(1)
+// reports a failure to start, 127 when the program does not exist and 126 when it exists but cannot be started; and -1
+// when no output file can be made.
 func (r Runner) exec(ctx context.Context, argv, env []string, timeout time.Duration) (status int, e end) {
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errTimedOut)
 	defer cancel()
