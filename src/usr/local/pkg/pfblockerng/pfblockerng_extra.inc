@@ -6597,16 +6597,17 @@ function pfb_core_update_choose(array $request, string $field, array $allowed, ?
 
 /**
  * The request Core sent (docs/misc/core-api-protocol.md, "Update command"), validated: version 1, a trigger, a scope and a force
- * of the protocol's vocabulary, feed ids by pfb_schedule_feed_id()'s rules and the two Extras, each id once. Anything else is
- * refused: a request is data from another process and decides what runs as root.
+ * of the protocol's vocabulary, feed ids by pfb_schedule_feed_id()'s rules and the two Extras, each id once, and the optional
+ * lifecycle (install) and pkgOp (install, upgrade, reinstall, delete) of a package install's Update, NULL when absent or null.
+ * Anything else is refused: a request is data from another process and decides what runs as root.
  *
- * @return array{trigger: string, scope: string, force: string, feeds: list<string>, extras: list<string>}
+ * @return array{trigger: string, scope: string, force: string, feeds: list<string>, extras: list<string>, lifecycle: ?string, pkgOp: ?string}
  * @throws InvalidArgumentException the reason, when the request is refused
  */
 function pfb_core_update_request(string $stdin): array
 {
 	$request = pfb_core_update_object($stdin);
-	$unknown = array_diff(array_keys($request), ['version', 'trigger', 'scope', 'force', 'feeds', 'extras']);
+	$unknown = array_diff(array_keys($request), ['version', 'trigger', 'scope', 'force', 'feeds', 'extras', 'lifecycle', 'pkgOp']);
 	if ($unknown !== []) {
 		throw new InvalidArgumentException('the request has the unknown field ' . json_encode(reset($unknown)));
 	}
@@ -6634,6 +6635,9 @@ function pfb_core_update_request(string $stdin): array
 			return pfb_schedule_feed_id($family, $header) === $id;
 		}),
 		'extras'  => $ids('extras', static fn (string $id): bool => in_array($id, ['extra:dcc', 'extra:bl'], TRUE)),
+		'lifecycle' => isset($request['lifecycle']) ? pfb_core_update_choose($request, 'lifecycle', ['install'], NULL) : NULL,
+		'pkgOp'   => isset($request['pkgOp'])
+			? pfb_core_update_choose($request, 'pkgOp', ['install', 'upgrade', 'reinstall', 'delete'], NULL) : NULL,
 	];
 }
 
@@ -7039,6 +7043,9 @@ function pfb_core_update_serve(string $stdin, string $resultPath = 'php://fd/3',
 			return 2;
 		}
 		$pfb['core_update_result'] = @fopen($resultPath, 'wb');
+		// The package context pfb_run_hooks() gives the Update's hooks (PFB_POST_INSTALL, PFB_PKG_OP)
+		$pfb['core_update_lifecycle'] = $request['lifecycle'];
+		$pfb['core_update_pkg_op'] = $request['pkgOp'];
 		if ($request['trigger'] === 'scheduled' && pfb_cron_disabled()) {
 			// The sentinel suppresses scheduled work only: an empty result leaves Core's feeds pending, and the exit is "try later"
 			pfb_logger("\nCore Update: the scheduled Update is skipped: " . pfb_cron_disable_path() . " disables scheduled work.\n", 1);
@@ -7061,7 +7068,7 @@ function pfb_core_update_serve(string $stdin, string $resultPath = 'php://fd/3',
 		if (is_resource($pfb['core_update_result'] ?? NULL)) {
 			fclose($pfb['core_update_result']);
 		}
-		unset($pfb['core_update'], $pfb['core_update_result']);
+		unset($pfb['core_update'], $pfb['core_update_result'], $pfb['core_update_lifecycle'], $pfb['core_update_pkg_op']);
 	}
 }
 
@@ -7079,7 +7086,7 @@ function pfb_core_update_report(array $result): bool
  * and apply hold the dispatcher and feed-pass locks through all of it, as the tick did: they serialize the entry points Core
  * does not start (a page save, an HA receive). A manual Update leaves them to the passes it calls.
  *
- * @param array{trigger: string, scope: string, force: string, feeds: list<string>, extras: list<string>} $request
+ * @param array{trigger: string, scope: string, force: string, feeds: list<string>, extras: list<string>, lifecycle: ?string, pkgOp: ?string} $request
  * @param array{attempted: list<string>, geoipReady: ?bool} $result
  */
 function pfb_core_update_run(array $request, array &$result, array $seams): int
