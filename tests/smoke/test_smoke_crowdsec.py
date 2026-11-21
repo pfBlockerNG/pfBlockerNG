@@ -16,6 +16,7 @@ Criteria and their tests:
      ``test_the_widget_shows_each_table_*``, ``test_turning_the_bouncer_off_*``.
 * #4159 a drop by the bouncer's rule is logged with that rule's own tracker —
      ``test_a_drop_by_the_bouncers_rule_is_logged_with_its_tracker``.
+* #4164 that drop shows in Alerts under the bouncer's table — ``test_a_drop_by_the_bouncers_rule_shows_in_alerts``.
 * 5  a first enable starts it on the first try — ``test_a_first_enable_starts_the_bouncer_on_the_first_try``.
 * 6  stopping empties both tables; the bouncer off, or pfBlockerNG off, removes the rules and the config file and
      stops the process — ``test_stopping_the_service_*``, ``test_turning_*_off_*``.
@@ -41,6 +42,7 @@ Run::
 
 from __future__ import annotations
 
+import csv
 import ipaddress
 import json
 import os
@@ -71,6 +73,8 @@ Net = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 PAGE = "/pfblockerng/pfblockerng_crowdsec.php"
 STATUS_PAGE = "/pfblockerng/pfblockerng_crowdsec_status.php"
+ALERTS_PAGE = "/pfblockerng/pfblockerng_alerts.php"
+UNIFIED_LOG = "/var/log/pfblockerng/unified.log"
 WIDGET = "/widgets/widgets/pfblockerng.widget.php"
 GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
 SECTION = "installedpackages/pfblockerngcrowdsec/config/0"
@@ -881,6 +885,51 @@ def test_a_drop_by_the_bouncers_rule_is_logged_with_its_tracker(bouncer: SmokeVM
         # filterlog's CSV, the line's last word: rule number, sub-rule, anchor, tracker, interface, reason, action, ...
         logged = {line.rsplit(" ", 1)[-1].split(",")[3] for line in lines}
         assert logged == {tracker}, f"the drop logged with tracker {tracker}, got {logged}:\n" + "\n".join(lines)
+    finally:
+        _save(gui, _on_fields(engine))
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# #4164: the bouncer's drops in Alerts and Reports
+# --------------------------------------------------------------------------------------------------------------------
+
+
+def test_a_drop_by_the_bouncers_rule_shows_in_alerts(bouncer: SmokeVM, engine: StubLapi, gui: WebUI) -> None:
+    """Given the bouncer on with logging on, and pfBlockerNG's filterlog daemon running,
+    When the firewall sends a packet to a banned IPv4 address (a seed decision),
+    Then ip_block.log gets an outbound block row under crowdsec_v4 with the outbound IPv4 rule's tracker, CrowdSec as
+    the feed and the matched entry Unknown,
+    And the Alerts page shows it, linking the address to the Status subtab's lookup."""
+    vm = bouncer
+    banned = "192.0.2.10"
+    lookup = f"{STATUS_PAGE}?lookup={banned}"
+    _save(gui, {**_on_fields(engine), "rules_log": "on"})
+    try:
+        _await(
+            lambda: _rules(vm), lambda r: len(r) == 4 and all(" log " in line for line in r), "the four logged rules"
+        )
+        _await(lambda: _tables(vm), _holds(banned), f"{banned} banned again after the reload")
+        # The filterlog daemon runs
+        _sh(vm, "/bin/ps -waxo command | /usr/bin/grep -q '[p]fblockerng.inc filterlog'")
+        # Earlier tests' drops of the address are in the logs already: start from empty ones
+        _sh(vm, f": > {h.IP_BLOCK_LOG} && : > {UNIFIED_LOG}")
+        assert lookup not in gui.get(ALERTS_PAGE).text, f"before-state: no Alerts row links {lookup}"
+
+        # pf drops it on the way out; ping reports the refusal, which is the point
+        vm.ssh(f"ping -c 1 -t 2 {banned}", timeout=30)
+        rows = _await(
+            lambda: [r for r in csv.reader(_log_since(vm, h.IP_BLOCK_LOG, 0)) if banned in r],
+            bool,
+            f"an ip_block.log row for {banned}",
+            cap=30.0,
+        )
+        # [1] tracker, [4] action, [5] family, [9] destination, [12] direction, [14] alias, [15] matched entry,
+        # [16] feed
+        got = {(r[1], r[4], r[5], r[9], r[12], r[14], r[15], r[16]) for r in rows}
+        assert got == {("177400402", "block", "4", banned, "out", "crowdsec_v4", "Unknown", "CrowdSec")}, rows
+
+        page = gui.get(ALERTS_PAGE).text
+        assert lookup in page, f"the Alerts page links {banned} to {lookup}"
     finally:
         _save(gui, _on_fields(engine))
 
