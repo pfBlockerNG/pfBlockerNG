@@ -557,3 +557,26 @@ func TestRunnerTranscriptCutsInsideAPrintableRun(t *testing.T) {
 		t.Errorf("transcript %s; want %s", clip(transcript.String()), clip(want))
 	}
 }
+
+// WHEN the runner's environment holds the Python wrapper's own overrides (PFB_PYTHON_DIR, PFB_PKG_BIN,
+// PFB_PYTHON_DEPENDENCIES) THEN neither the wrapper's --print-interpreter probe nor the launch of a .py hook sees them:
+// both get the same environment, so that the probe vouches for the launcher the hook runs through.
+func TestRunnerProbesThePythonWrapperWithTheHooksEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"PFB_PYTHON_DIR", "PFB_PKG_BIN", "PFB_PYTHON_DEPENDENCIES"} {
+		t.Setenv(name, "/inherited")
+	}
+	writeFile(t, filepath.Join(dir, "hook_pre_a.py"), "", 0o644)
+	wrapper := filepath.Join(dir, "wrapper.sh")
+	writeFile(t, wrapper, "#!/bin/sh\nseen=launch\nif [ \"$1\" = --print-interpreter ]; then\n\tseen=probe\n"+
+		"\techo /fixture/interpreter\nfi\nenv | grep '^PFB_' | sort > '"+dir+"/'$seen.env\n", 0o755)
+	var log bytes.Buffer
+	hooks.Runner{Dir: dir, Python: wrapper, Log: &log, Grace: time.Second}.Run(context.Background(), "pre",
+		pre("hook_pre_a.py"), hooks.Context{Vars: map[string]string{"TRIGGER": "cron"}})
+	probe, _ := os.ReadFile(filepath.Join(dir, "probe.env"))
+	launch, _ := os.ReadFile(filepath.Join(dir, "launch.env"))
+	if len(launch) == 0 || string(probe) != string(launch) || strings.Contains(string(probe)+string(launch), "/inherited") {
+		t.Errorf("the probe saw\n%s\nthe launch saw\n%s\nwant the same PFB_* entries, none inherited; log %q", probe,
+			launch, log.String())
+	}
+}
