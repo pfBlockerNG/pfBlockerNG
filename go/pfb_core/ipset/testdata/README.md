@@ -205,7 +205,8 @@ Each is today's result, pinned by the named case; none is a recommendation.
   `rec_dmax_pfB_excluded`); the legacy `pmax` verb skips `pfB*.txt` and `*_v6.txt` (`pmax_v6_files_untouched`).
 - The collapsed `/24` of a shared offender belongs to the highest-priority alias (`rec_pmax_window_owner`); a reputation
   collapse widens to addresses no feed listed (`rec_pmax_widen_not_exact`), unlike `cidr_aggregate` (`agg_exact_union_hosts`).
-- dMax country handling: the cc list is matched as a substring (`rec_dmax_cc_substring`); the consolidated exempt file is gated on
+- dMax country handling: the shell matches the cc list as a substring and Core matches whole entries on purpose (#4149);
+  `rec_dmax_cc_substring` (cc `CN,US`) holds under both. The consolidated exempt file is gated on
   `ccwhite=match` alone (`rec_dmax_exempt_match_ccblack_only`, `rec_dmax_exempt_match_both`); a missing GeoIP keeps the previous
   match artifacts (`rec_dmax_geoip_unavailable`) while a working GeoIP reconciles them away (`rec_dmax_stale_match_removed`).
   The per-feed `_rep` verb never writes `pfB_Match_Rep_<alias>.txt` for `ccblack=match` (its temp file is moved before it is
