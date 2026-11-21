@@ -104,6 +104,32 @@ function pfb_geoip_refresh_navigation(string $output_root = '/usr/local/www/pfbl
 	return $success;
 }
 
+/**
+ * The body of a generated PHP array literal holding $options ('"<iso>" => "<label>"' each, already PHP source) one a line, as
+ * the GeoIP pages write it; '' for none.
+ *
+ * @param list<string> $options
+ */
+function pfb_geoip_options_literal(array $options): string {
+	$eoa = count($options);
+	$literal = '';
+	$count = 1;
+	foreach ($options as $option) {
+		if ($count == 1) {
+			$literal .= "\t{$option},\n";
+			$count++;
+			continue;
+		}
+		if ($eoa == $count) {
+			$literal .= "\t\t{$option}\n\t";
+		} else {
+			$literal .= "\t\t{$option},\n";
+		}
+		$count++;
+	}
+	return $literal;
+}
+
 // Function to process Continent txt files and create Country ISO files and to Generate GUI PHP files.
 function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') {
 	global $g, $pfb;
@@ -274,26 +300,9 @@ function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') 
 					sort(${'coptions' . $type}, SORT_STRING);
 				}
 				${'ftotal' . $type} = count(${'coptions' . $type});
-				$count = 1;
-				${'options' . $type} = '';
-
-				foreach (${'coptions' . $type} as $option) {
-
-					// Remove prefixed Country string (Used to sort array)
-					$option = ltrim(strstr($option, '|', FALSE), '|');
-
-					if ($count == 1) {
-						${'options' . $type} .= "\t{$option},\n";
-						$count++;
-						continue;
-					}
-					if (${'ftotal' . $type} == $count) {
-						${'options' . $type} .= "\t\t{$option}\n\t";
-					} else {
-						${'options' . $type} .= "\t\t{$option},\n";
-					}
-					$count++;
-				}
+				// Remove prefixed Country string (Used to sort array)
+				${'options' . $type} = pfb_geoip_options_literal(array_map(
+					static fn (string $option): string => ltrim(strstr($option, '|', FALSE), '|'), ${'coptions' . $type}));
 			}
 			unset(${'coptions' . $type});
 		}
@@ -306,11 +315,50 @@ function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') 
 		$options4 ??= ''; // @phpstan-ignore nullCoalesce.variable (dynamic ${'options4'} unset at the previous continent's tail is invisible to PHPStan)
 		$options6 ??= ''; // @phpstan-ignore nullCoalesce.variable (dynamic ${'options6'} unset at the previous continent's tail is invisible to PHPStan)
 
-		// #3066: this body must start at the "/*" -- prepending ANY line to it
-		// (observed with tree-sitter-php 0.24.1, the grammar code-graph extraction
-		// parses with) makes the grammar emit ERROR nodes here and drop the rest of
-		// the file, so the "<?php" is concatenated on outside instead. Upstream
-		// cause not isolated; tests/test_issue3066_php_grammar_parse.py is the guard.
+		$php_data = pfb_geoip_continent_page($continent, $continent_en, $options4, $options6, $ftotal4, $ftotal6);
+
+		// Update each Continent PHP file.
+		if (!empty(pfb_filter($continent_en, PFB_FILTER_WORD, 'php'))) {
+			$output_ok = @file_put_contents(
+				"{$output_root}/pfblockerng_{$continent_en}.php", $php_data, LOCK_EX
+			) !== FALSE && $output_ok;
+		}
+
+		// Unset Arrays
+		unset(${'options4'}, ${'options6'}, $php_data);
+
+	}	// End foreach 'Six Continents and Proxy/Satellite' update PHP script builder process
+
+	// Sort Countries IPv4 alphabetically and build XML <option> data for Reputation tab (IPv6 not used by ET IQRisk)
+
+	sort($roptions4, SORT_STRING);
+	// Remove prefixed Country string (Used to sort array)
+	$et_options = pfb_geoip_options_literal(array_map(
+		static fn (string $option): string => ltrim(strstr($option, '|', FALSE), '|'), $roptions4));
+
+	//Build Reputation Tab
+	$output_ok = pfb_build_reputation_tab($et_options, $output_root) && $output_ok;
+
+	$log = "Country Code Update Ended\n\n";
+	pfb_logger("{$log}", 4);
+
+	// Unset arrays
+	unset($roptions4, $et_options);
+	return $output_ok;
+}
+
+/**
+ * The source of the continent page pfblockerng_<$continent_en>.php. $continent and $continent_en go into its PHP string
+ * literals as given; $options4 and $options6 are array literal bodies (pfb_geoip_options_literal()) of $ftotal4 and $ftotal6
+ * options.
+ */
+function pfb_geoip_continent_page(string $continent, string $continent_en, string $options4, string $options6, int $ftotal4,
+	int $ftotal6): string {
+	// #3066: this body must start at the "/*" -- prepending ANY line to it
+	// (observed with tree-sitter-php 0.24.1, the grammar code-graph extraction
+	// parses with) makes the grammar emit ERROR nodes here and drop the rest of
+	// the file, so the "<?php" is concatenated on outside instead. Upstream
+	// cause not isolated; tests/test_issue3066_php_grammar_parse.py is the guard.
 $php_data = "<?php\n" . <<<EOF
 /*
  * pfblockerng_{$continent_en}.php
@@ -816,52 +864,7 @@ events.push(function() {
 <?php include('foot.inc');?>
 
 EOF;
-		// Update each Continent PHP file.
-		if (!empty(pfb_filter($continent_en, PFB_FILTER_WORD, 'php'))) {
-			$output_ok = @file_put_contents(
-				"{$output_root}/pfblockerng_{$continent_en}.php", $php_data, LOCK_EX
-			) !== FALSE && $output_ok;
-		}
-
-		// Unset Arrays
-		unset(${'options4'}, ${'options6'}, $php_data);
-
-	}	// End foreach 'Six Continents and Proxy/Satellite' update PHP script builder process
-
-	// Sort Countries IPv4 alphabetically and build XML <option> data for Reputation tab (IPv6 not used by ET IQRisk)
-
-	sort($roptions4, SORT_STRING);
-	$eoa = count($roptions4);
-	$et_options = '';
-	$count = 1;
-
-	foreach ($roptions4 as $option4) {
-
-		// Remove prefixed Country string (Used to sort array)
-		$option4 = ltrim(strstr($option4, '|', FALSE), '|');
-
-		if ($count == 1) {
-			$et_options .= "\t{$option4},\n";
-			$count++;
-			continue;
-		}
-		if ($eoa == $count) {
-			$et_options .= "\t\t{$option4}\n\t";
-		} else {
-			$et_options .= "\t\t{$option4},\n";
-		}
-		$count++;
-	}
-
-	//Build Reputation Tab
-	$output_ok = pfb_build_reputation_tab($et_options, $output_root) && $output_ok;
-
-	$log = "Country Code Update Ended\n\n";
-	pfb_logger("{$log}", 4);
-
-	// Unset arrays
-	unset($roptions4, $et_options);
-	return $output_ok;
+	return $php_data;
 }
 
 
