@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"maps"
 	"os"
@@ -39,7 +40,7 @@ var hookFields = map[string]struct {
 // nothing. Every line and all hook output go to stderr, the main log; under the uninstall lifecycle stdout gets a copy,
 // the console of the package operation. The status is 0 once the hooks ran, whatever they did, or when the settings are
 // not initialized (no hooks); 2 for a context outside the vocabulary and 1 for settings that cannot be read, when nothing
-// runs; 1 when ctx ended the run before or while reading the context, or with an enabled hook unrun or cut short.
+// runs; 1 when ctx ended while the context was still being read, or with an enabled hook unrun or cut short.
 func runHooks(ctx context.Context, when, stateDir, backendCmd string, runner hooks.Runner, stdin io.Reader,
 	stdout, stderr io.Writer) int {
 	logger := log.New(stderr, "pfb_core: ", log.LstdFlags)
@@ -55,8 +56,12 @@ func runHooks(ctx context.Context, when, stateDir, backendCmd string, runner hoo
 	var in read
 	select {
 	case <-ctx.Done():
-		logger.Printf("no hooks run: cancelled while reading the hook context")
-		return 1
+		select {
+		case in = <-got: // the read ended as the signal came: go on with it, whichever select would pick
+		default:
+			logger.Printf("no hooks run: cancelled while reading the hook context")
+			return 1
+		}
 	case in = <-got:
 	}
 	if in.err != nil {
@@ -70,7 +75,12 @@ func runHooks(ctx context.Context, when, stateDir, backendCmd string, runner hoo
 	}
 	backend, kind := settingsBackend(stateDir, backendCmd)
 	if info, err := os.Stat(stateDir); kind == "file" && (err != nil || !info.IsDir()) {
-		logger.Printf("cannot read the hooks: the state directory %s does not exist or is not a directory", stateDir)
+		reason := "is not a directory"
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) { // its Err alone: the error text holds the path unquoted
+			reason = pathErr.Err.Error()
+		}
+		logger.Printf("cannot read the hooks: the state directory %q: %s", stateDir, reason)
 		return 1
 	}
 	store, err := settings.Load(hooksOnly{backend}, settings.Production())

@@ -906,7 +906,8 @@ pfb-core --run-hooks pre|post --hook-dir PATH (--settings-backend-cmd PATH | --s
   that projection is read, as `pfb_run_hooks()` reads only the hook rows: another projection holding a value Core refuses, or
   one Core does not know, does not stop the run, although the daemon refuses to start on it. A state directory without
   `settings.json` is an uninitialized Core, which the daemon serves: one line is logged, no hook runs, and the status is 0.
-  A `--state-dir` that does not exist or is not a directory is not one: one line is logged, no hook runs, and the status is 1.
+  A `--state-dir` that does not exist or is not a directory is not one: one line, which quotes the path and gives the reason,
+  is logged, no hook runs, and the status is 1.
   `--hook-dir` is the absolute folder the hook files are vetted in and run from; `--python-wrapper` is the absolute path of the
   program a `.py` hook runs through (without it a `.py` hook is logged and skipped). Other daemon flags are accepted and
   ignored. It opens no socket, takes neither `core.lock` nor the Update lock, waits for neither, and publishes nothing.
@@ -938,9 +939,15 @@ pfb-core --run-hooks pre|post --hook-dir PATH (--settings-backend-cmd PATH | --s
 - **The run.** The hook runner of the Core Updater runs the enabled rows of the fire point one after another in list order,
   with its vetting, launchers, per-hook timeouts and survivor lifetime. A hook that is skipped, fails or times out is logged
   and the next one runs. TERM, INT or HUP ends a running hook as an Update's cancellation does: no further hook starts, one
-  line says the run was cancelled, and the exit status is 1. One that comes while the one-shot waits for its context ends
-  the wait: one line is logged, nothing runs, and the status is 1. One that comes before the run leaves the status 0 when
-  the fire point has no enabled hook. A HUP that pfb-core inherited ignored (`nohup`) stays ignored.
+  line says the run was cancelled, and the exit status is 1. Every enabled row of the fire point not yet started counts as
+  not run, a row whose script vetting would have skipped included. A hook that the same signal ends first, as one sent to
+  the whole process group does (a terminal's Ctrl-C, a hangup, `kill -TERM -<pgid>`), counts as cut short: a hook that ends
+  by a signal or with a status above 128 while, or within 250 ms before, the run is cancelled. A hook that exits 130 on its
+  own, with no signal to the one-shot, is a failed hook. A signal that comes while the one-shot waits for its context ends
+  the wait: one line is logged, nothing runs, and the status is 1; when the context had been read in full by then, the
+  one-shot goes on with it as if the signal had come next. One that comes during the settings read is acted on once that
+  read ends (at most the adapter's 10 s read timeout); it leaves the status 0 when the fire point has no enabled hook. A
+  HUP or INT that pfb-core inherited ignored (`nohup`, a background job of a shell without job control) stays ignored.
 - **Output.** stderr is the main log: every runner line and all of each hook's sanitized output, without time stamps. The
   one-shot's own lines (a refused context, settings it cannot read, an uninitialized Core) carry the `pfb_core:` prefix and
   the date and time, as the daemon's do. With `"lifecycle": "uninstall"` stdout, the package operation's console, gets the
@@ -952,8 +959,8 @@ pfb-core --run-hooks pre|post --hook-dir PATH (--settings-backend-cmd PATH | --s
   nothing.
 - **Exit status.** 0 once the hooks ran, whatever they did, and for an uninitialized Core; 1 when the hooks did not all run:
   the settings cannot be read (a missing or failing backend, a `--state-dir` that is no directory, or hook rows Core refuses,
-  as for a Core that cannot read its settings at start), when nothing runs, or a signal left an enabled hook unrun or cut it
-  short, or came while the context was read; 2 for a usage error (`--run-hooks` without `pre` or
+  as for a Core that cannot read its settings at start), when nothing runs, a signal came while the context was read, or a
+  signal left an enabled hook unrun or cut one short; 2 for a usage error (`--run-hooks` without `pre` or
   `post`, an argument after the flags, no `--hook-dir`, neither backend flag, a relative `--hook-dir` or `--python-wrapper`)
   or a refused context, when nothing runs.
 

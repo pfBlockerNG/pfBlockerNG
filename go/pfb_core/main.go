@@ -58,8 +58,10 @@
 //
 // Exit status: 0 after a clean stop, 1 when it cannot serve (including settings it cannot read at start), 2 for a usage error.
 // With --run-hooks: 0 once the hooks ran, whatever they did, or when the settings are not initialized; 1 when the hooks
-// did not all run: the settings cannot be read (nothing runs), or TERM, INT or HUP cancelled the run; 2 for a usage
-// error or a context it refuses (nothing runs).
+// did not all run: the settings cannot be read (nothing runs), TERM, INT or HUP came while the context was read (nothing
+// runs), or such a signal left an enabled hook unrun or cut one short; 2 for a usage error or a context it refuses
+// (nothing runs). An INT or HUP inherited ignored stays ignored. A signal during the settings read is acted on once
+// that read ends (at most the adapter's 10 s read timeout).
 package main
 
 import (
@@ -88,6 +90,10 @@ import (
 )
 
 const shutdownGrace = 3 * time.Second // below the rc script's 5 s before KILL
+
+// interruptIgnored is whether pfb-core started with SIGINT ignored, read before main's Notify clears the ignore: the
+// one-shot keeps it, as it keeps an ignored SIGHUP.
+var interruptIgnored = signal.Ignored(os.Interrupt)
 
 func run(ctx context.Context, args []string, stderr io.Writer) int {
 	fl := flag.NewFlagSet("pfb-core", flag.ContinueOnError)
@@ -147,8 +153,12 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 			return 2
 		}
 		// SIGPIPE noticed, not ignored: a closed console fails its writes instead of ending the run, and hooks keep the
-		// default action. A hangup cancels the run, so that no hook outlives its timeout, unless it came in ignored (nohup).
+		// default action. A hangup or an interrupt cancels the run, so that no hook outlives its timeout, unless it came
+		// in ignored (nohup, a background job of a shell without job control).
 		signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+		if interruptIgnored { // main's Notify replaced the ignore
+			signal.Ignore(os.Interrupt)
+		}
 		if !signal.Ignored(syscall.SIGHUP) {
 			var stop context.CancelFunc
 			ctx, stop = signal.NotifyContext(ctx, syscall.SIGHUP)
