@@ -51,7 +51,7 @@ func TestAPullWritesEachOriginsValuesToItsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"crowdsec.txt": "198.51.100.10\n203.0.113.0/24\n2001:db8:beef::/48\n",
+		"crowdsec.txt": "198.51.100.10\n2001:db8:beef::/48\n203.0.113.0/24\n",
 		"cscli.txt":    "198.51.100.11\n",
 		"CAPI.txt":     "2001:db8:dead::1\n",
 	}
@@ -86,7 +86,7 @@ func TestADeltaRewritesOnlyChangedOriginsAndAFailedPullNone(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"crowdsec.txt":             "198.51.100.10\n203.0.113.0/24\n2001:db8:beef::/48\n",
+		"crowdsec.txt":             "198.51.100.10\n2001:db8:beef::/48\n203.0.113.0/24\n",
 		"CAPI.txt":                 "2001:db8:dead::1\n",
 		"lists:firehol_level1.txt": "192.0.2.0/24\n",
 	}
