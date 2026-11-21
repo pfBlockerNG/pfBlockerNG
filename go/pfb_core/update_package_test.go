@@ -9,33 +9,17 @@ import (
 	"testing"
 )
 
-// WHEN StartUpdate carries lifecycle install and a pkgOp THEN the worker's request carries both, which the Update's
-// hooks get as PFB_POST_INSTALL and PFB_PKG_OP (the runner's mapping is pinned by tests/hooks/fixtures/runner). WHEN it
-// carries neither (or an empty pkgOp) THEN the request has neither.
+// WHEN StartUpdate carries a lifecycle and a pkgOp THEN the worker's request carries both, which the Update's hooks get
+// as PFB_POST_INSTALL and PFB_PKG_OP (the runner's mapping is pinned by tests/hooks/fixtures/runner); an empty pkgOp is
+// none. tests/core/fixtures/update_request_v1.json pins every request Core writes for them.
 func TestStartUpdateCarriesTheLifecycleAndThePkgOpToTheUpdatesHooks(t *testing.T) {
-	for _, tc := range []struct {
-		trigger, params, request string
-		lifecycle, op            string
-	}{
-		{"manual", ``, `{"version":1,"trigger":"manual","scope":"both","force":"none"}`, "", ""},
-		{"manual", `,"pkgOp":""`, `{"version":1,"trigger":"manual","scope":"both","force":"none"}`, "", ""},
-		{"manual", `,"lifecycle":"install"`,
-			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install"}`, "install", ""},
-		{"manual", `,"lifecycle":"install","pkgOp":"install"`,
-			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"install"}`,
-			"install", "install"},
+	for _, tc := range []struct{ trigger, params, request string }{
+		{"manual", `,"pkgOp":""`, `{"version":1,"trigger":"manual","scope":"both","force":"none"}`},
 		{"manual", `,"lifecycle":"install","pkgOp":"upgrade"`,
-			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"upgrade"}`,
-			"install", "upgrade"},
-		{"manual", `,"lifecycle":"install","pkgOp":"reinstall"`,
-			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"reinstall"}`,
-			"install", "reinstall"},
-		{"manual", `,"pkgOp":"delete"`,
-			`{"version":1,"trigger":"manual","scope":"both","force":"none","pkgOp":"delete"}`, "", "delete"},
+			`{"version":1,"trigger":"manual","scope":"both","force":"none","lifecycle":"install","pkgOp":"upgrade"}`},
 		{"apply", `,"lifecycle":"install","pkgOp":"upgrade"`,
-			`{"version":1,"trigger":"apply","scope":"both","force":"none","lifecycle":"install","pkgOp":"upgrade"}`,
-			"install", "upgrade"},
-		{"retry", `,"lifecycle":"install","pkgOp":"install"`, "", "install", "install"}, // the Extras due vary with the clock
+			`{"version":1,"trigger":"apply","scope":"both","force":"none","lifecycle":"install","pkgOp":"upgrade"}`},
+		{"retry", `,"lifecycle":"install","pkgOp":"install"`, ""}, // the Extras due vary with the clock
 	} {
 		t.Run(tc.trigger+tc.params, func(t *testing.T) {
 			c, f := startUpdateCore(t)
@@ -48,8 +32,8 @@ func TestStartUpdateCarriesTheLifecycleAndThePkgOpToTheUpdatesHooks(t *testing.T
 			c.waitFinished(tc.trigger)
 			if tc.request != "" {
 				sameJSON(t, f.request(), tc.request)
+				return
 			}
-
 			var req struct {
 				Lifecycle string `json:"lifecycle"`
 				PkgOp     string `json:"pkgOp"`
@@ -57,9 +41,9 @@ func TestStartUpdateCarriesTheLifecycleAndThePkgOpToTheUpdatesHooks(t *testing.T
 			if err := json.Unmarshal([]byte(f.request()), &req); err != nil {
 				t.Fatal(err)
 			}
-			if req.Lifecycle != tc.lifecycle || req.PkgOp != tc.op {
-				t.Errorf("the worker's request has lifecycle %q and pkgOp %q, want %q and %q", req.Lifecycle, req.PkgOp,
-					tc.lifecycle, tc.op)
+			if req.Lifecycle != "install" || req.PkgOp != "install" {
+				t.Errorf("the worker's request has lifecycle %q and pkgOp %q, want install and install", req.Lifecycle,
+					req.PkgOp)
 			}
 		})
 	}

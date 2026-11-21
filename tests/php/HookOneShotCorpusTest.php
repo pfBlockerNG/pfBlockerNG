@@ -130,10 +130,13 @@ final class HookOneShotCorpusTest extends TestCase
 		file_put_contents("{$root}/scenario.json", json_encode(['caller' => $sc['caller'], 'when' => $sc['when'],
 			'argv' => $argv, 'vars' => $vars, 'rows' => $sc['rows']], JSON_THROW_ON_ERROR));
 		$repo = dirname(__DIR__, 2);
-		// the extract below starts inside the verb's block: its guard must be the one right before it
-		$guard = '/elseif \(\$argv\[1\] == \'runhooks\'\) \{\s*\$when = \(\$argv\[2\] \?\? \'\'\)/';
-		$this->assertMatchesRegularExpression($guard,
-			(string) file_get_contents("{$repo}/src/usr/local/www/pfblockerng/pfblockerng.php"), 'the runhooks verb guards it');
+		// the extract below starts at the first occurrence of its start string, inside the verb's block: the verb's guard must
+		// be right before that occurrence
+		$page = (string) file_get_contents("{$repo}/src/usr/local/www/pfblockerng/pfblockerng.php");
+		$start = strpos($page, "\$when = (\$argv[2] ?? '')");
+		$this->assertIsInt($start, 'the extract has its start string');
+		$this->assertMatchesRegularExpression('/elseif \(\$argv\[1\] == \'runhooks\'\) \{\s*\z/', substr($page, 0, $start),
+			'the runhooks verb guards the extract');
 		file_put_contents("{$root}/worker.php", <<<'PHP'
 <?php
 [, $root, $repo] = $argv;

@@ -274,6 +274,33 @@ final class CoreUpdateServeTest extends TestCase
 		$this->assertSame($sent['pkgOp'] ?? NULL, $request['pkgOp']);
 	}
 
+	/**
+	 * The members tests/core/fixtures/update_request_v1.json lists, which go/pfb_core/update holds against Core's Request, are exactly
+	 * the fields pfb_core_update_request() checks a request against, and none of them is refused as unknown (issue #4035).
+	 */
+	public function testTheWorkerAcceptsExactlyTheMembersCoreCanWrite(): void
+	{
+		$fixture = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/update_request_v1.json'), TRUE, 512, JSON_THROW_ON_ERROR);
+		$members = $fixture['members'];
+		$source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');
+		$this->assertSame(1, preg_match('/function pfb_core_update_request\(.*?array_diff\(array_keys\(\$request\), \[([^\]]*)\]\)/s', $source, $list),
+			'pfb_core_update_request() checks the fields against one list');
+		$accepted = array_map(static fn (string $field): string => trim($field, " '"), explode(',', $list[1]));
+		sort($members);
+		sort($accepted);
+		$this->assertSame($members, $accepted);
+
+		foreach (array_merge($members, ['unlisted']) as $member) {
+			try {
+				pfb_core_update_request((string) json_encode(array_merge(self::req('manual'), [$member => NULL])));
+				$message = '';
+			} catch (InvalidArgumentException $e) {
+				$message = $e->getMessage();
+			}
+			$this->assertSame($member === 'unlisted', str_contains($message, 'unknown field'), "{$member}: {$message}");
+		}
+	}
+
 	public function testANullLifecycleAndPkgOpAreNone(): void
 	{
 		$request = pfb_core_update_request((string) json_encode(self::req('manual', ['lifecycle' => NULL, 'pkgOp' => NULL])));
