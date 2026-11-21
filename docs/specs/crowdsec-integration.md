@@ -632,12 +632,32 @@ listed only rules on `<pfB_…>` tables, so the filterlog daemon skipped every l
   is not kept in the daemon's cache of unresolvable trackers: the rules come back with the same trackers when the
   bouncer is turned on again, and the filterlog daemon is not restarted then.
 - **Row.** The alias is the table (`crowdsec_v4`, `crowdsec_v6`), as the dashboard widget names it (#4161); the rule
-  number is the rule's tracker, which names the rule and its direction. The feed is `CrowdSec`. The matched entry is
-  `Unknown`: the log does not say which decision matched (an address or a range), and the decision's origin and
-  scenario are not in it either. A pfB feed that lists the address too did not drop it, so it is not consulted; the
-  host's IP cache entry keeps its pfB attribution for pfB rules' drops.
+  number is the rule's tracker, and the Rule cell's tooltip names the rule (`CrowdSec IPv4`, `CrowdSec IPv4 out`, and the
+  IPv6 pair). The feed is the origin of the decision that bans the address (`crowdsec`, `cscli`, `CAPI`,
+  `lists:<blocklist>`, …) and the matched entry is the banned value: the address, or the range that holds it. Both are
+  `Unknown` when no decision file names the address. A pfB feed that lists the address too did not drop it, so it is not
+  consulted; the host's IP cache entry keeps its pfB attribution for pfB rules' drops. The scenario is not shown (below).
+- **Decision files (owner decision 2026-11-21).** The bouncer writes, per origin, `<decisions_dir>/<origin>.txt`
+  (`decisions_dir` `/var/run/pfb_crowdsec`, a new D3 value): the values whose lowest-numbered decision has that origin
+  (the origin the status file counts), one per line, sorted, mode `0644`. A file is replaced atomically after a pull
+  that changed it; an origin with no values left loses its file; the first write after a start removes files an earlier
+  run left; shutdown removes them all, and so does the teardown (with the folder). The origin becomes a file name of
+  `A-Z a-z 0-9 _ : @ + -` only (no dot, so no name holds `.txt:`; no comma or slash), `hidden` when it holds the key,
+  `unknown` when empty, at most 200 bytes. The filterlog daemon reads them with `find_reported_header()`, the lookup that
+  names a pfB row's feed from the feed files (exact address first, then the range that holds it), accepts only a name of
+  that alphabet and an address or range as the entry, and answers each address once until the folder's mtime changes (the
+  bouncer renames every file it writes), at most 10,000 addresses at a time.
+  - *Why not ask the LAPI (`pfb_crowdsec_lookup()`, the Status subtab's `GET /v1/decisions?ip=`).* The daemon handles one
+    line at a time, so every lookup would hold up the log: with the LAPI down or slow, each new address would wait for
+    the timeout, and a scan of many banned addresses would back up the whole IP log. It would also put the key in the
+    daemon. The bouncer already holds every decision from the stream, ranges included, so its files are exact as of its
+    last pull, cost no network, and reuse the feed-file lookup instead of a second path.
+  - *Why not the scenario.* One file per origin keeps the lookup the feed lookup. A scenario per value would need one file
+    per origin and scenario pair, with every scenario's slash escaped in its file name, and the manual ones (`cscli`'s
+    `manual 'ban' from '<machine>'`) are free text that the CSV row and the syslog event would have to quote. The Status
+    subtab's lookup, linked from the row, shows the scenario.
 - **Alerts page.** The row renders as logged: the bouncer's tables are no feed or alias table, so the render-time
-  re-check does not apply. pfBlockerNG's suppress, unlock and whitelist actions are not offered, because the decisions
+  re-check does not apply, and an origin's colon is not read as a Proofpoint ET category. pfBlockerNG's suppress, unlock and whitelist actions are not offered, because the decisions
   live on the CrowdSec engine and the bouncer's rules come before every pfB rule. Beside the Threat Source lookup, the
   external address links to the Status subtab's lookup (D7, `?lookup=<address>`), which shows the matching decisions
   with their origin, scenario and expiry.
