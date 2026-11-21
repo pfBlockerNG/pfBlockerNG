@@ -450,11 +450,10 @@ final class FilterlogTrackerResolveTest extends TestCase
 
 	/**
 	 * The CrowdSec bouncer's trackers are fixed (#4159): a drop line read while its rules are not loaded (one read just
-	 * after the reload that removed them) must not make the tracker a miss for the daemon's life, or the bouncer's drops
-	 * would stay out of Alerts once it is turned on again (#4164). The miss lasts 60 seconds instead, so a backlog of such
-	 * lines costs one reparse a minute, not one per line.
+	 * after the reload that removed them) must not make the tracker a miss at all, or the bouncer's drops would stay out
+	 * of Alerts once it is turned on again (#4164), even a few seconds later.
 	 */
-	public function testABouncerTrackerAbsentFromTheRulesetIsAMissForAMinuteOnly(): void
+	public function testABouncerTrackerAbsentFromTheRulesetIsNotCachedAsAMiss(): void
 	{
 		$ruleList = $this->emptyRuleList();
 		$missCache = [];
@@ -465,12 +464,11 @@ final class FilterlogTrackerResolveTest extends TestCase
 			return $loaded ? $this->ruleListWithPfb('177400402', 'block') : $this->emptyRuleList();
 		};
 
-		$this->assertFalse(pfb_resolve_tracker($ruleList, $missCache, '177400402', 'block', $reparse, NULL, 1000), 'rules not loaded');
-		$this->assertFalse(pfb_resolve_tracker($ruleList, $missCache, '177400402', 'block', $reparse, NULL, 1059), 'a backlog line');
-		$this->assertSame(1, $reparseCount, 'within the minute, the miss holds');
+		$this->assertFalse(pfb_resolve_tracker($ruleList, $missCache, '177400402', 'block', $reparse), 'rules not loaded');
+		$this->assertSame([], $missCache, 'the bouncer tracker is not cached as a miss');
 
 		$loaded = TRUE;
-		$this->assertTrue(pfb_resolve_tracker($ruleList, $missCache, '177400402', 'block', $reparse, NULL, 1061), 'the bouncer is on again');
-		$this->assertSame(2, $reparseCount, 'after the minute, one reparse resolves it');
+		$this->assertTrue(pfb_resolve_tracker($ruleList, $missCache, '177400402', 'block', $reparse), 'the bouncer is on again, at once');
+		$this->assertSame(2, $reparseCount, 'one reparse per unresolved line');
 	}
 }
