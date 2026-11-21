@@ -948,6 +948,27 @@ file is never served; the body comes from disk a chunk at a time. A caller write
 checks the digest over those bytes, and hands the file on (`pfctl -T replace|add|delete -f`) without parsing it into an
 array.
 
+The Outpost apply (issue #4037) takes an `ip-set/*` or `ip-aggregate/*` part only when every line is safe to hand to pf as
+one entry of the resource's family: one address, or one address followed by `/` and a prefix length, where `inet_pton()`
+parses the address as that family (so no range, netmask, host name, zone or white space) and the prefix length is decimal
+digits without a sign or a leading zero, at most the family's width. It does not compare spellings: hexadecimal digits in
+either case and an uncompressed IPv6 address are taken, and one canonical spelling per network is the Core Updater's to
+publish. One line that fails refuses the whole resource, which keeps its cursor. The Outpost also bounds every part by what
+`GetResources` said of it: its line count times the longest line a member may be, 64 bytes and a line feed for an IP
+member (no address or prefix the rule takes is longer) and 1 MiB and a line feed for any other. A `Content-Length` over
+that bound is refused before the body is read, and a body that runs past it is cut off there and refused. Any other
+answer is an error envelope, read at most 64 KiB whatever its status; a longer one is malformed. The Outpost sends its
+stored cursor only while its mirror on disk is the body that cursor records (the same digest); a mirror edited, missing or
+not a regular file sends `{}`, so a store rebuilt with another body under the same generation cannot answer `unchanged` to
+it. A delta part that does not arrive as `GetResources` described it (over its bound, not plain text, another line count,
+members out of byte order or a line repeated), parts that name one member in both (Core never emits that), a mirror this host
+cannot open for the merge, or a merge that is not the item's `digest` and `entries`, is discarded and the full body asked
+for; a line that is not a member is not, even in a part that is also out of byte order. A part the transport ends part way (the call's
+deadline, a reset, a connection closed short of its `Content-Length`) is Core not answering: the resource fails as
+unreachable and no full body is asked for under the same deadline. Any failure of the transfer itself, a reply curl cannot frame
+included, counts as unreachable and does not fall back. A part this host cannot write whole (a full disk), or a merged mirror it
+cannot create, write or close, fails the resource as a mirror failure, and no full body is asked for.
+
 **Errors**, in the JSON envelope: `not_found` (`404`) when the store does not hold that part (the resource is unknown or
 removed, the generation is neither the current one nor the applied baseline, or the delta is not the one from that
 generation to the current one: it was pruned when another generation was published or applied; ask `GetResources` again);
