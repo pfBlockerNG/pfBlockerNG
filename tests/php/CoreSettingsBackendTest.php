@@ -12,7 +12,7 @@ use PHPUnit\Framework\TestCase;
  * Issue #3924: on pfSense Core keeps no settings store; it runs the settings adapter (pfb_core_settings.sh, the `core_settings`
  * verb of pfblockerng.inc) once per call, one JSON request on stdin and one JSON reply on stdout (docs/misc/core-api-protocol.md).
  * Pinned here, for the adapter that answers over config.xml:
- *   - read: the 15 native `settings/dns` fields as pfb_core_dns_settings() projects them, beside the feed projections (issue #3937,
+ *   - read: the 19 native `settings/dns` fields as pfb_core_dns_settings() projects them, beside the feed projections (issue #3937,
  *     CoreSettingsFeedsBackendTest; empty here: config.xml holds no group), with their revision;
  *   - write: every changed field reaches its registered config.xml key and only that key, under the config lock, with one
  *     write_config() and the pending-changes mark; the projection afterwards is what was asked for;
@@ -104,7 +104,7 @@ final class CoreSettingsBackendTest extends TestCase
 		rmdir_recursive($this->dir);
 	}
 
-	/** @return array<string, mixed> the parity fixture's `defaults` native values: all 15 fields in the protocol's order */
+	/** @return array<string, mixed> the parity fixture's `defaults` native values: all 19 fields in the protocol's order */
 	private static function defaults(): array
 	{
 		return self::fixture()['defaults'];
@@ -237,7 +237,7 @@ final class CoreSettingsBackendTest extends TestCase
 
 		$this->assertSame(['version', 'revision', 'settings', 'platform'], array_keys($reply), "{$case['id']}: the reply's keys");
 		$this->assertSame(1, $reply['version']);
-		$this->assertSame(self::settings($native), $reply['settings'], "{$case['id']}: the 15 native fields, in the protocol's order");
+		$this->assertSame(self::settings($native), $reply['settings'], "{$case['id']}: the 19 native fields, in the protocol's order");
 		$this->assertSame(pfb_core_settings_revision(self::settings($native)), $reply['revision'], "{$case['id']}: the projection's revision");
 		$this->assertGreaterThanOrEqual(1, $reply['revision']);
 		$this->assertSame([], $GLOBALS['pfb_test_lock_events'], 'a read takes no lock');
@@ -351,6 +351,60 @@ final class CoreSettingsBackendTest extends TestCase
 
 		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(self::settings($current))], $reply, 'a list is a set: one domain is one flag');
 		$this->assertNothingWritten($before, 'only the order changed');
+	}
+
+	public function testWriteOfAnUnchangedListWhoseEntriesAreEqualAsNumbersWritesNothing(): void
+	{
+		// '1.0' and '1.00' are one number but two entries: a list is compared as a set of strings, so their order changes nothing
+		$this->arrange(['dnsbl/pfb_noaaaa_list' => base64_encode("1.0\n1.00")]);
+		$current = pfb_core_dns_settings();
+		$this->assertSame([['domain' => '1.0'], ['domain' => '1.00']], $current['noAaaaList'], 'before-state');
+		$wanted = array_merge($current, ['noAaaaList' => array_reverse($current['noAaaaList'])]);
+		$before = $GLOBALS['config'];
+
+		$reply = $this->backend(self::writeRequest($current, $wanted));
+
+		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(self::settings($current))], $reply);
+		$this->assertNothingWritten($before, 'only the order of the list changed');
+	}
+
+	/** @param array<string, mixed> $case */
+	#[DataProvider('storedCases')]
+	public function testAWriteOfWhatTheReadAnsweredIsAcceptedAndWritesNothing(array $case): void
+	{
+		// issue #4036: a client writes back what it read, a stored noAAAA entry the DNSBL page refuses included (lists-noaaaa-page-refused-kept)
+		$this->arrange($case['values']);
+		$read = $this->backend(['version' => 1, 'op' => 'read']);
+		$before = $GLOBALS['config'];
+
+		$reply = $this->backend(['version' => 1, 'op' => 'write', 'expectedRevision' => $read['revision'], 'settings' => $read['settings']]);
+
+		$this->assertSame(['version' => 1, 'revision' => $read['revision']], $reply, "{$case['id']}: " . json_encode($reply));
+		$this->assertNothingWritten($before, "{$case['id']}: nothing changed");
+	}
+
+	/** @return array<string, array{0: array<string, mixed>}> the parity fixture's `refused` rows (issue #4036) */
+	public static function refusedRows(): array
+	{
+		$doc = json_decode((string) file_get_contents(self::FIXTURE), TRUE, 512, JSON_THROW_ON_ERROR);
+		return array_combine(array_column($doc['refused'], 'id'), array_map(static fn(array $row): array => [$row], $doc['refused']));
+	}
+
+	/** @param array<string, mixed> $row */
+	#[DataProvider('refusedRows')]
+	public function testAWriteOfTheFixturesRefusedValueIsInvalidArgumentNamingTheFieldAndWritesNothing(array $row): void
+	{
+		// issue #4036: a hostile value, or a noAAAA entry the DNSBL page refuses, which a write may not add; Core refuses the same rows
+		$this->arrange([]);
+		$current = pfb_core_dns_settings();
+		$before = $GLOBALS['config'];
+
+		$reply = $this->backend(self::writeRequest($current, array_replace($current, $row['input'])));
+
+		$this->assertSame('invalid_argument', $reply['error']['code'] ?? NULL, "{$row['id']}: " . json_encode($reply));
+		$faults = array_filter($reply['error']['fieldErrors'] ?? [], static fn(array $f): bool => !in_array($f['message'], ['no such field', 'required'], TRUE));
+		$this->assertContains("dns.{$row['field']}", array_column($faults, 'field'), "{$row['id']}: {$row['description']} " . json_encode($reply));
+		$this->assertNothingWritten($before, "{$row['id']}: refused");
 	}
 
 	public function testWriteOfWhatConfigXmlAlreadyHoldsChangesNothing(): void

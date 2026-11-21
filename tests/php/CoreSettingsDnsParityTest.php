@@ -16,13 +16,14 @@ use PHPUnit\Framework\TestCase;
  * [GP_Bypass_List] sections exactly while its switch is on, so a switch is the ini writer's own gate, and a list is what the
  * section holds with its switch turned on, as pfB-DNS reads it (decider/pfb_unbound.go): a noAAAA row is `domain,flag`, one
  * flag per domain (the last row's), the wildcard flag held as a leading dot; a bypass row is an address or CIDR, each once.
- * Not held, as documented in docs/misc/core-api-protocol.md: a noAAAA row with a '%' (pfB-DNS refuses the whole ini) or a
- * name with white space (it matches no query), and the netmask and zone forms of a bypass entry the DNSBL page never saves.
- * A `refused` row is a value of these fields the adapter's write refuses, naming the field; Core refuses it too.
+ * Not held, as documented in docs/misc/core-api-protocol.md: a noAAAA row with a '%' (one that is no valid interpolation makes
+ * pfB-DNS refuse the whole ini) or a name with white space (it matches no query), and the netmask and zone forms of a bypass
+ * entry the DNSBL page never saves. A case's `ini` is the raw text of the two sections today's writer gives for its stored
+ * values (null: no section), so that pfB-DNS can be shown to build the same tables from either input. A `refused` row is a
+ * value of these fields the adapter's write refuses, naming the field (CoreSettingsBackendTest); Core refuses it too.
  */
 #[CoversFunction('pfb_unbound_python_ini')]
 #[CoversFunction('pfb_dnsbl_ini_inputs')]
-#[CoversFunction('pfb_core_settings_request_refusal')]
 final class CoreSettingsDnsParityTest extends TestCase
 {
 	private const FIXTURE = __DIR__ . '/../core/fixtures/settings_dns_parity.json';
@@ -104,34 +105,11 @@ final class CoreSettingsDnsParityTest extends TestCase
 			'the defaults case names every field');
 		$refused = array_column($doc['refused'], 'id');
 		$this->assertSame(array_values(array_unique($refused)), $refused, 'a refused row id appears once');
-	}
-
-	/** @return array<string, array{0: array<string, mixed>}> */
-	public static function refused(): array
-	{
-		$doc = json_decode((string) file_get_contents(self::FIXTURE), TRUE, 512, JSON_THROW_ON_ERROR);
-		$rows = [];
-		foreach ($doc['refused'] as $row) {
-			$rows[$row['id']] = [$row];
+		foreach ($doc['cases'] as $case) {
+			if (array_key_exists('ini', $case)) {
+				$this->assertSame(array_column(self::SECTIONS, 1), array_keys($case['ini']), "{$case['id']}: both sections, present or null");
+			}
 		}
-		return $rows;
-	}
-
-	/** @param array<string, mixed> $row */
-	#[DataProvider('refused')]
-	public function testTheAdaptersWriteRefusesTheFixturesHostileValueNamingTheField(array $row): void
-	{
-		$interfaces = static fn(): array => [];
-		$settings = pfb_core_settings($interfaces);
-		$this->assertNull(pfb_core_settings_request_refusal(['version' => 1, 'op' => 'write', 'expectedRevision' => 1, 'settings' => $settings], $interfaces),
-			'the adapter takes back what it read');
-		$settings['dns'] = array_replace($settings['dns'], $row['input']);
-
-		$reply = pfb_core_settings_request_refusal(['version' => 1, 'op' => 'write', 'expectedRevision' => 1, 'settings' => $settings], $interfaces);
-
-		$this->assertSame('invalid_argument', $reply['error']['code'] ?? NULL, "{$row['id']}: " . json_encode($reply));
-		$faults = array_filter($reply['error']['fieldErrors'] ?? [], static fn(array $f): bool => !in_array($f['message'], ['no such field', 'required'], TRUE));
-		$this->assertContains("dns.{$row['field']}", array_column($faults, 'field'), "{$row['id']}: {$row['description']} " . json_encode($reply));
 	}
 
 	/** @param array<string, mixed> $case */
@@ -159,6 +137,10 @@ final class CoreSettingsDnsParityTest extends TestCase
 		pfb_dnsbl_ini_inputs();
 		$switches = ['noAaaa' => $GLOBALS['pfb']['dnsbl_noaaaa'] === PfbToggle::On, 'groupPolicy' => $GLOBALS['pfb']['dnsbl_gp'] === PfbToggle::On];
 		$ini = pfb_unbound_python_ini('enabled');
+		if (array_key_exists('ini', $case)) {
+			$sections = array_combine(array_column(self::SECTIONS, 1), array_map(static fn(array $s): ?string => self::sectionText($ini, $s[1]), array_values(self::SECTIONS)));
+			$this->assertSame($case['ini'], $sections, "{$case['id']}: the ini sections today's writer gives, from\n{$ini}");
+		}
 		$GLOBALS['pfb']['dnsbl_noaaaa'] = $GLOBALS['pfb']['dnsbl_gp'] = PfbToggle::On;
 		$on = pfb_unbound_python_ini('enabled');
 		$lists = [];
@@ -184,16 +166,20 @@ final class CoreSettingsDnsParityTest extends TestCase
 		}
 	}
 
-	/** @return list<string> the values of the rows of the ini's $section, configparser's white space stripped; none when there is no section */
+	/** The raw text of the ini's $section, its header excluded; NULL when there is no section. */
+	private static function sectionText(string $ini, string $section): ?string
+	{
+		return preg_match('/\n\[' . $section . '\]\n((?:[^\[\n][^\n]*\n|\n)*)/', $ini, $m) === 1 ? $m[1] : NULL;
+	}
+
+	/** @return list<string> the values of the rows of the ini's $section, stripped as pfB-DNS strips them (Python's str.strip()); none when there is no section */
 	private static function sectionRows(string $ini, string $section): array
 	{
-		if (preg_match('/\n\[' . $section . '\]\n((?:[^\[\n][^\n]*\n|\n)*)/', $ini, $m) !== 1) {
-			return [];
-		}
+		$space = '[\t-\r \x{1c}-\x{1f}\x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}]+';
 		$rows = [];
-		foreach (array_filter(explode("\n", $m[1]), 'strlen') as $line) {
+		foreach (array_filter(explode("\n", self::sectionText($ini, $section) ?? ''), 'strlen') as $line) {
 			[, $value] = explode('=', $line, 2);
-			$rows[] = trim($value);
+			$rows[] = (string) preg_replace("/^{$space}|{$space}\$/Du", '', $value);
 		}
 		return $rows;
 	}

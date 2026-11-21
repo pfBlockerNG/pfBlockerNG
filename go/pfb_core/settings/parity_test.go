@@ -21,6 +21,7 @@ type dnsFixture struct {
 		Input       map[string]json.RawMessage `json:"input"`
 		Valid       bool                       `json:"valid"`
 		Native      map[string]json.RawMessage `json:"native"`
+		Ini         map[string]*string         `json:"ini"` // the raw [noAAAA] and [GP_Bypass_List] text today's writer gives (issue #4036)
 	} `json:"cases"`
 	Refused []struct {
 		ID          string                     `json:"id"`
@@ -50,8 +51,9 @@ func loadDnsFixture(t *testing.T) dnsFixture {
 }
 
 // The parity fixture of settings/dns (issue #3842): tests/core/fixtures/settings_dns_parity.json, frozen against today's
-// PHP by tests/php/CoreSettingsDnsParityTest.php. Each case's input (its native value when it has none) is saved into a
-// freshly initialized store: Core's verdict must be the case's, and an accepted save must leave exactly its native values.
+// PHP by tests/php/CoreSettingsDnsParityTest.php. A posted case's input is saved into a freshly initialized store: Core's verdict
+// must be the case's. A stored case reaches Core as the Outpost's adapter reads it (issue #4036): a load takes its native values,
+// and a write of them back, what a client sends after a read, is accepted. An accepted case must leave exactly its native values.
 func TestTheDnsProjectionMatchesTodaysPhpOnEveryFixtureCase(t *testing.T) {
 	doc := loadDnsFixture(t)
 	for _, c := range doc.Cases {
@@ -63,9 +65,25 @@ func TestTheDnsProjectionMatchesTodaysPhpOnEveryFixtureCase(t *testing.T) {
 			if input == nil {
 				input = c.Native
 			}
-			st := open(t, t.TempDir())
-			if _, err := st.Initialize(t.Context(), nil); err != nil {
-				t.Fatal(err)
+			var st *Store
+			if c.Source == "stored" {
+				stored := map[string]any{}
+				for field, raw := range c.Native {
+					var v any
+					if err := json.Unmarshal(raw, &v); err != nil {
+						t.Fatal(err)
+					}
+					stored[field] = v
+				}
+				var err error
+				if st, err = Load(newRefreshBackend(1, map[string]map[string]any{"dns": stored}), testSchema()); err != nil {
+					t.Fatalf("%s\nthe adapter's read of %s does not load: %v", c.Description, jsonOf(t, c.Native), err)
+				}
+			} else {
+				st = open(t, t.TempDir())
+				if _, err := st.Initialize(t.Context(), nil); err != nil {
+					t.Fatal(err)
+				}
 			}
 			_, err := st.Save(t.Context(), 1, map[string]map[string]json.RawMessage{"dns": input})
 			if accepted := err == nil; accepted != c.Valid {
@@ -85,6 +103,25 @@ func TestTheDnsProjectionMatchesTodaysPhpOnEveryFixtureCase(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A write may add only a noAAAA entry the DNSBL page accepts (issue #4036), while an entry the Outpost's read brought in that the
+// page refuses stays writable, so a client can write back what it read.
+func TestANoAaaaEntryAWriteAddsIsHeldToTheDnsblPagesRule(t *testing.T) {
+	st, err := Load(newRefreshBackend(1, map[string]map[string]any{"dns": {"noAaaaList": []any{map[string]any{"domain": "*.example.com"}}}}), testSchema())
+	if err != nil {
+		t.Fatalf("a stored entry the page refuses does not load: %v", err)
+	}
+	added := `{"dns": {"noAaaaList": [{"domain": "*.example.com"}, {"domain": "example.com."}, {"domain": ".ads.example.net"}, {"domain": "1.0"}]}}`
+	if _, err := st.Save(t.Context(), 1, changes(t, added)); err != nil {
+		t.Fatalf("Save(%s) = %v, want the held entry kept and the entries the page accepts added", added, err)
+	}
+	refused := `{"dns": {"noAaaaList": [{"domain": "*.example.com"}, {"domain": "*.other.example"}]}}`
+	_, err = st.Save(t.Context(), 2, changes(t, refused))
+	var invalid *ValidationError
+	if !errors.As(err, &invalid) || len(invalid.Fields) != 1 || invalid.Fields[0].Field != "dns.noAaaaList[1].domain" {
+		t.Fatalf("Save(%s) = %v, want dns.noAaaaList[1].domain refused alone", refused, err)
 	}
 }
 
