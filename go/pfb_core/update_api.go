@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/hooks"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/schedule"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/scheduler"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
@@ -167,7 +168,7 @@ func updateMethods(sched *scheduler.Scheduler, gate *update.Gate) map[string]met
 			lifecycle, lifecycleErr := pick("lifecycle", p.Lifecycle, "", "install")
 			pkgOp, pkgOpErr := "", []fieldError(nil)
 			if p.PkgOp == nil || *p.PkgOp != "" {
-				pkgOp, pkgOpErr = pick("pkgOp", p.PkgOp, "", "install", "upgrade", "reinstall", "delete")
+				pkgOp, pkgOpErr = pick("pkgOp", p.PkgOp, "", hooks.PkgOps...)
 			}
 			bad = append(append(bad, lifecycleErr...), pkgOpErr...)
 			if bad != nil {

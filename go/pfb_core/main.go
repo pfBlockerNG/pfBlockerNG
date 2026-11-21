@@ -1,7 +1,7 @@
 // pfb-core, the pfBlockerNG Core daemon (map #3813): the platform-neutral business logic behind a versioned HTTP+JSON API
 // that the co-located pfSense layer (PHP, native curl) calls over a Unix socket. docs/misc/core-api-protocol.md is the contract.
 //
-//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--hook-dir PATH] [--python-wrapper PATH] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
+//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
 //	pfb-core --run-hooks pre|post --hook-dir PATH (--settings-backend-cmd PATH | --state-dir DIR) [--python-wrapper PATH]
 //
 //	--socket PATH       the API's Unix socket: its directory is made 0700 and the socket 0600, the server's user's alone
@@ -57,8 +57,9 @@
 // in-flight API requests finish (up to 3 s) and the socket is removed.
 //
 // Exit status: 0 after a clean stop, 1 when it cannot serve (including settings it cannot read at start), 2 for a usage error.
-// With --run-hooks: 0 once the hooks ran, whatever they did; 1 when the settings cannot be read; 2 for a usage error or
-// a context it refuses. Nothing runs unless the status is 0.
+// With --run-hooks: 0 once the hooks ran, whatever they did, or when the settings are not initialized; 1 when the hooks
+// did not all run: the settings cannot be read (nothing runs), or TERM, INT or HUP cancelled the run; 2 for a usage
+// error or a context it refuses (nothing runs).
 package main
 
 import (
@@ -145,12 +146,17 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 				"(--settings-backend-cmd PATH | --state-dir DIR) [--python-wrapper PATH]")
 			return 2
 		}
+		// SIGPIPE noticed, not ignored: a closed console fails its writes instead of ending the run, and hooks keep the
+		// default action. A hangup cancels the run, so that no hook outlives its timeout.
+		signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+		ctx, stop := signal.NotifyContext(ctx, syscall.SIGHUP)
+		defer stop()
 		backend, kind := settingsBackend(*stateDir, *backendCmd)
 		runner := hooks.Runner{Dir: hookDir, Python: pythonWrapper}
 		return runHooks(ctx, runHooksWhen, backend, kind, runner, os.Stdin, os.Stdout, stderr)
 	}
 	if *socket == "" || *stateDir == "" || fl.NArg() != 0 {
-		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--hook-dir PATH] [--python-wrapper PATH] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
+		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
 		return 2
 	}
 	logger := log.New(stderr, "pfb_core: ", log.LstdFlags)
