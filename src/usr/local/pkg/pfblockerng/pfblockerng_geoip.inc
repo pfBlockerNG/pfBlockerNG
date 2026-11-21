@@ -1378,6 +1378,7 @@ function pfb_geoip_render_catalog(string $catalog, string $output_root = '/usr/l
 	if (!is_dir($output_root) && !@mkdir($output_root, 0755, TRUE)) {
 		return "{$output_root} cannot be created";
 	}
+	// shortcut: each page is rewritten in place, as today, so a request can read one half written; stage and rename if that shows.
 	foreach ($continents as $page => $continent) {
 		$php_data = pfb_geoip_continent_page($literal($continent), $page, $sources["{$page}|4"] ?? '',
 			$sources["{$page}|6"] ?? '', count($lists["{$page}|4"] ?? []), count($lists["{$page}|6"] ?? []));
