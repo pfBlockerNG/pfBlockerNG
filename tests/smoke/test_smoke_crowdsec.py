@@ -912,7 +912,7 @@ def test_a_drop_by_the_bouncers_rule_shows_in_alerts(bouncer: SmokeVM, engine: S
         # The filterlog daemon runs
         _sh(vm, "/bin/ps -waxo command | /usr/bin/grep -q '[p]fblockerng.inc filterlog'")
         # Earlier tests' drops of the address are in the logs already: start from empty ones
-        _sh(vm, f": > {h.IP_BLOCK_LOG} && : > {UNIFIED_LOG}")
+        _sh(vm, f"true > {h.IP_BLOCK_LOG} && true > {UNIFIED_LOG}")
         assert lookup not in gui.get(ALERTS_PAGE).text, f"before-state: no Alerts row links {lookup}"
 
         # pf drops it on the way out; ping reports the refusal, which is the point
