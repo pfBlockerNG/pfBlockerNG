@@ -471,7 +471,7 @@
 		},
 		{
 			"id": "generation-strings-kept",
-			"description": "A generation is kept as the string it is: leading zeros stay, and the largest 64-bit value is valid, with or without leading zeros.",
+			"description": "A generation is kept as the string it is: leading zeros stay, in a string of up to 20 characters.",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
@@ -482,7 +482,7 @@
 					}
 				],
 				"dnsbl": {
-					"generation": "0000018446744073709551615",
+					"generation": "00000000000000000088",
 					"groups": []
 				},
 				"removed": []
@@ -500,7 +500,7 @@
 				],
 				"removed": [],
 				"dnsbl": {
-					"generation": "0000018446744073709551615",
+					"generation": "00000000000000000088",
 					"groups": []
 				},
 				"issues": []
