@@ -75,6 +75,24 @@ final class OutpostCursorFileTest extends TestCase
 			'the write left a temporary file');
 	}
 
+	/**
+	 * The cursor file is created 0600, not made so after it was written under a wider umask; the process umask is left as it
+	 * was (review of slice 8c, L10). The creation mode itself cannot be observed from here without a race: the review recorded
+	 * it with strace.
+	 */
+	public function testUnderAUmaskOf022TheFileIsModeSixHundredAndTheUmaskIsKept(): void
+	{
+		$this->lock();
+		$saved = umask(022);
+		try {
+			$this->assertNull(pfb_outpost_cursor_advance('ip-set/Abuse/ipv4', '42', self::DIGEST, 1));
+			$this->assertSame(022, umask(), 'the write changed the process umask');
+		} finally {
+			umask($saved);
+		}
+		$this->assertSame(0600, fileperms($this->file) & 0777);
+	}
+
 	public function testAdvancingAResourceAgainReplacesOnlyItsCursor(): void
 	{
 		$this->lock();

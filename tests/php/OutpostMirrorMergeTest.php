@@ -15,6 +15,7 @@ use PHPUnit\Framework\TestCase;
  * never holding the members in a PHP array; the digest of the result is the xxh128 Go's resource store computes.
  */
 #[CoversFunction('pfb_outpost_part_check')]
+#[CoversFunction('pfb_outpost_ip_member_valid')]
 #[CoversFunction('pfb_outpost_mirror_merge')]
 #[CoversFunction('pfb_content_hash')]
 final class OutpostMirrorMergeTest extends TestCase
@@ -46,6 +47,14 @@ final class OutpostMirrorMergeTest extends TestCase
 			'IPv4 addresses and CIDRs'        => ['ipv4', "0.0.0.0/0\n1.2.3.4\n1.2.3.4/32\n10.0.0.0/8\n255.255.255.255\n"],
 			'IPv6 addresses and CIDRs'        => ['ipv6', "2001:db8::/32\n2001:db8::1\n::127.1.7.7\n::ffff:1.2.3.4\nfe80::/10\n"],
 			'the longest IPv6 member'         => ['ipv6', "1111:2222:3333:4444:5555:6666:7777:8888/128\n"],
+			// the Outpost checks that pf reads a line as one entry, not its spelling: that is Core's (decision on #4037)
+			'upper-case hexadecimal'          => ['ipv6', "2001:DB8::A\n"],
+			'mixed-case hexadecimal'          => ['ipv6', "2001:Db8::aB/64\n"],
+			'an uncompressed IPv6 address'    => ['ipv6', "2001:db8:0:0:0:0:0:b\n"],
+			'IPv6 with every zero written'    => ['ipv6', "0000:0000:0000:0000:0000:0000:0000:0001\n"],
+			'IPv6 with a dotted IPv4 tail'    => ['ipv6', "0:0:0:0:0:ffff:1.2.3.4/128\n::ffff:1.2.3.4\n"],
+			'the unspecified address'         => ['ipv6', "::\n::/0\n::1/128\n"],
+			'IPv4 prefixes of every width'    => ['ipv4', "0.0.0.0/0\n1.2.3.4/32\n10.0.0.0/8\n"],
 			'an empty part'                   => ['ipv4', ''],
 			'JSON Lines of another resource'  => [NULL, "{\"cc\":\"AD\"}\n{\"cc\":\"AE\"}\n"],
 			'a UTF-8 domain'                  => [NULL, "b\u{fc}cher.example\n"],
@@ -72,6 +81,19 @@ final class OutpostMirrorMergeTest extends TestCase
 			'a carriage return'               => ['ipv4', "1.2.3.4\r\n"],
 			'a NUL'                           => ['ipv4', "1.2.3.4\x00\n"],
 			'a leading zero in an octet'      => ['ipv4', "1.2.3.04\n"],
+			'a leading zero in the first one' => ['ipv4', "010.1.1.1\n"],
+			'a host name that looks like one' => ['ipv4', "pfbipset-nx.invalid\n"],
+			'an IPv4 prefix of 33'            => ['ipv4', "1.2.3.4/33\n"],
+			'a signed prefix of 8'            => ['ipv4', "1.0.0.0/+8\n"],
+			'a trailing space'                => ['ipv4', "1.2.3.4 \n"],
+			'a prefix with a trailing space'  => ['ipv4', "1.2.3.0/24 \n"],
+			'two slashes'                     => ['ipv4', "1.2.3.0/24/8\n"],
+			'a hexadecimal prefix'            => ['ipv6', "2001:db8::/a\n"],
+			'an IPv6 prefix of 129'           => ['ipv6', "::1/129\n"],
+			'an IPv6 prefix with a zero'      => ['ipv6', "2001:db8::/032\n"],
+			'five hexadecimal digits'         => ['ipv6', "2001:0db80::1\n"],
+			'two compressed runs'             => ['ipv6', "2001::db8::1\n"],
+			'a last valid line with no newline' => ['ipv4', "1.2.3.4\n5.6.7.89"],
 			'a prefix over 32'                => ['ipv4', "1.2.3.0/33\n"],
 			'a prefix with a leading zero'    => ['ipv4', "1.2.3.0/024\n"],
 			'a signed prefix'                 => ['ipv4', "1.2.3.0/+24\n"],
@@ -80,8 +102,6 @@ final class OutpostMirrorMergeTest extends TestCase
 			'an IPv6 member in an IPv4 set'   => ['ipv4', "2001:db8::1\n"],
 			'an IPv4 member in an IPv6 set'   => ['ipv6', "1.2.3.4\n"],
 			'a zone'                          => ['ipv6', "fe80::1%em0\n"],
-			'upper-case hexadecimal'          => ['ipv6', "2001:DB8::1\n"],
-			'an uncompressed IPv6 address'    => ['ipv6', "2001:db8:0:0:0:0:0:1\n"],
 			'a prefix over 128'               => ['ipv6', "2001:db8::/129\n"],
 			'a last line with no newline'     => ['ipv4', "1.2.3.4\n5.6.7.8"],
 			'a line longer than any member'   => ['ipv4', str_repeat('1', 4096) . "\n"],
@@ -103,6 +123,140 @@ final class OutpostMirrorMergeTest extends TestCase
 
 		$this->assertIsString($checked['error'], 'the part was accepted: ' . json_encode($checked));
 		$this->assertNotSame('', $checked['error']);
+	}
+
+	/**
+	 * A member of an IP set is read at most 64 bytes and its line feed at a time. No address or prefix the rule takes is longer
+	 * than 49 bytes ("0000:0000:0000:0000:0000:ffff:255.255.255.255/128"), so a longer line is refused as too long, never read
+	 * on as the start of another (review of slice 8c, L9).
+	 */
+	public function testAnIPLineOfSixtyFiveBytesIsRefusedAsLongerThanAMember(): void
+	{
+		$line = '0000:0000:0000:0000:0000:ffff:255.255.255.255/128';
+		$this->assertSame(['entries' => 1, 'error' => NULL], pfb_outpost_part_check($this->file('part', "{$line}\n"), 'ipv6'));
+
+		$long = pfb_outpost_part_check($this->file('part', str_repeat('0', 16) . "{$line}\n"), 'ipv6');
+		$this->assertSame(65, 16 + strlen($line));
+		$this->assertStringContainsString('line 1 is longer than a member', (string) $long['error']);
+
+		$this->assertStringContainsString('line 1 is not a member',
+			(string) pfb_outpost_part_check($this->file('part', str_repeat('0', 15) . "{$line}\n"), 'ipv6')['error']);
+	}
+
+	/**
+	 * Each line of the IP set parity corpus (go/pfb_core/ipset/testdata/ipset.json) that today's pipeline leaves in a set it
+	 * would publish, with why the Outpost refuses it: none of these is one address or one prefix of its set's family. Every
+	 * other line of those lists is taken. A line is listed as "<family> <line>".
+	 */
+	private const CORPUS_REFUSED = [
+		'ipv4 '                         => 'an empty line',
+		'ipv4    '                      => 'white space only',
+		"ipv4 \t1.1.1.1"                => 'a leading tab',
+		'ipv4  1.1.1.1'                 => 'a leading space',
+		'ipv4 1.1.1.1 '                 => 'a trailing space',
+		"ipv4 1.1.1.1\r"                => 'a carriage return',
+		"ipv4 1.1.1.2\r"                => 'a carriage return',
+		"ipv4 2.2.2.2\r"                => 'a carriage return',
+		'ipv4 1.1.1.12.2.2.2'           => 'two addresses welded by a missing line feed',
+		'ipv4 2.2.2.23.3.3.3'           => 'two addresses welded by a missing line feed',
+		'ipv4 #'                        => 'the placeholder of an empty set',
+		'ipv4 # c'                      => 'a comment',
+		'ipv4  # not a comment'         => 'a comment after a space',
+		'ipv4 1.1.1.1 tail'             => 'trailing text',
+		'ipv4 1.2.3.7 tail'             => 'trailing text',
+		'ipv4 foo 1.2.3.5'              => 'leading text',
+		'ipv4 010.1.1.1'                => 'a leading zero in an octet, which inet_pton refuses',
+		'ipv4 010.9.9.9'                => 'a leading zero in an octet, which inet_pton refuses',
+		'ipv4 1.2.3.4/33'               => 'a prefix longer than 32',
+		'ipv4 1.2.3.9/33'               => 'a prefix longer than 32',
+		'ipv4 1.2.3.0/255.255.255.0'    => 'a netmask in place of a prefix length',
+		'ipv4 1.2.3.4-1.2.3.9'          => 'a range',
+		'ipv4 192.0.2.1-192.0.2.9'      => 'a range',
+		'ipv4 5.5.5.1-5.5.5.9'          => 'a range',
+		'ipv4 name.invalid'             => 'a host name',
+		'ipv4 name.invalid/24'          => 'a host name with a prefix',
+		'ipv4 pfbipset-nx.invalid'      => 'a host name',
+		'ipv4 ::ffff:1.2.3.8'           => 'an IPv6 address in an IPv4 set',
+		'ipv4 2001:db8::/32'            => 'an IPv6 prefix in an IPv4 set',
+		'ipv4 2001:db9::5'              => 'an IPv6 address in an IPv4 set',
+		'ipv6 pfbipset-nx.invalid'      => 'a host name',
+		'ipv6 fe80::1%em0'              => 'a zone',
+		'ipv6 ::1/129'                  => 'a prefix longer than 128',
+		'ipv6 2001:db9::2 tail'         => 'trailing text',
+		'ipv6 x 2001:db9::3'            => 'leading text',
+		'ipv6 1.2.3.4'                  => 'an IPv4 address in an IPv6 set',
+		'ipv6 127.1.7.7'                => 'an IPv4 address in an IPv6 set',
+		'ipv6 203.0.113.1'              => 'an IPv4 address in an IPv6 set',
+		'ipv6 203.0.113.2'              => 'an IPv4 address in an IPv6 set',
+		'ipv6 203.0.113.3'              => 'an IPv4 address in an IPv6 set',
+		'ipv6 203.0.113.4'              => 'an IPv4 address in an IPv6 set',
+	];
+
+	/**
+	 * Every line the corpus records in a list that is a set's content: the member files of the per-feed steps (cidr_aggregate,
+	 * preprocess, suppress), the deny files (recompute, pmax, closing, and the pipeline's deny_final), the canonical sets
+	 * (canonical, and the pipeline's canonical), the union's aggregate and consumer files (and the pipeline's), and the DNSBLIP
+	 * content. Bookkeeping lists (master, mastercat, counts, match, kept, sources, logs) are not sets, and a list recorded only by
+	 * its digest has no lines. A file named *_v4 or *_v6, or a pipeline union by the files it kept, gives the family; else the case.
+	 *
+	 * @return array<string, array{string, string}> per "<family> <line>", once
+	 */
+	public static function corpusSetLines(): array
+	{
+		$corpus = json_decode((string) file_get_contents(__DIR__ . '/../../go/pfb_core/ipset/testdata/ipset.json'), TRUE, 64, JSON_THROW_ON_ERROR);
+		$rows = [];
+		$family = static fn (string $name, string $case): string => preg_match('/_v([46])(?:\.txt)?$/D', $name, $m) === 1 ? "ipv{$m[1]}" : 'ip' . $case;
+		$add = static function (mixed $list, string $f) use (&$rows): void {
+			if (is_array($list) && array_is_list($list)) {
+				foreach ($list as $line) {
+					$rows["{$f} {$line}"] = [$line, $f];
+				}
+			}
+		};
+		foreach ($corpus['cases'] as $case) {
+			$e = $case['expect'];
+			$f = $family('', $case['family']);
+			match ($case['op']) {
+				'canonical'                                 => $add($e['set'], $f),
+				'cidr_aggregate', 'preprocess', 'suppress'  => $add($e['members'] ?? NULL, $f),
+				'union'                                     => [$add($e['aggregate'], $f), $add($e['consumer'], $f)],
+				'dnsblip'                                   => $add($e['content'], $f),
+				'recompute', 'pmax', 'closing'              => array_map(static fn (string $file, mixed $l) => $add($l, $family($file, $case['family'])),
+					array_keys($e['deny'] ?? []), array_values($e['deny'] ?? [])),
+				'pipeline'                                  => array_map(static function (array $pass) use ($add, $family, $case): void {
+					foreach (['canonical', 'deny_final'] as $k) {
+						foreach ($pass[$k] ?? [] as $file => $l) {
+							$add($l, $family((string) $file, $case['family']));
+						}
+					}
+					foreach ($pass['aggregate'] ?? [] as $union) {
+						$uf = $family((string) ($union['kept'][0] ?? ''), $case['family']);
+						$add($union['aggregate'], $uf);
+						$add($union['consumer'], $uf);
+					}
+				}, $e['passes']),
+				default                                     => NULL,
+			};
+		}
+		ksort($rows, SORT_STRING);
+		return $rows;
+	}
+
+	/** The Outpost takes every line of the corpus that pf reads as one entry of its set's family, and only those (L1). */
+	#[DataProvider('corpusSetLines')]
+	public function testACorpusLineIsTakenExactlyWhenItIsOneAddressOrPrefix(string $line, string $family): void
+	{
+		$refused = self::CORPUS_REFUSED["{$family} {$line}"] ?? NULL;
+		$this->assertSame($refused === NULL, pfb_outpost_ip_member_valid($line, $family),
+			$refused === NULL ? 'a line that is one address or prefix was refused' : "a line was taken although it is {$refused}");
+	}
+
+	public function testEveryRefusedLineOfTheListIsALineOfTheCorpus(): void
+	{
+		$rows = self::corpusSetLines();
+		$this->assertSame([], array_values(array_diff(array_keys(self::CORPUS_REFUSED), array_keys($rows))),
+			'the list names a line the corpus no longer holds');
+		$this->assertGreaterThan(800, count($rows), 'the corpus walk found fewer set lines than the corpus holds');
 	}
 
 	public function testAMissingPartIsRefused(): void

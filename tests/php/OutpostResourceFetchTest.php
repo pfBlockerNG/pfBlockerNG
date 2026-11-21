@@ -313,6 +313,8 @@ final class OutpostResourceFetchTest extends TestCase
 			'delta without removeEntries'           => [self::items(array_diff_key($delta, ['removeEntries' => 1]))],
 			'delta from another generation'         => [self::items(['from' => '6'] + $delta)],
 			'delta whose generation goes backwards' => [self::items(['generation' => '5'] + $delta)],
+			'delta whose generation is its from'    => [self::items(['generation' => '7'] + $delta)],
+			'delta from a generation that is none'  => [self::items(['from' => '07x'] + $delta)],
 			'unchanged at another generation'       => [self::items(['kind' => 'unchanged', 'generation' => '6'])],
 		];
 	}
@@ -440,6 +442,63 @@ final class OutpostResourceFetchTest extends TestCase
 		$this->assertMirror($full);
 	}
 
+	/**
+	 * The merge must give exactly the body the reply describes. A merge of the right line count whose digest is that of another
+	 * body of the same length, or of the right digest beside another count, is discarded (review of slice 8c, L2).
+	 *
+	 * @return array<string, array{string, int}>
+	 */
+	public static function mergesThatAreNotTheReply(): array
+	{
+		$merged = "1.1.1.1\n10.0.0.0/8\n192.0.2.7\n2.2.2.2\n";
+		return [
+			'the digest of another body of the same length' => ["1.1.1.1\n10.0.0.0/8\n192.0.2.7\n3.3.3.3\n", 4],
+			'the right digest beside another count'         => [$merged, 5],
+		];
+	}
+
+	#[DataProvider('mergesThatAreNotTheReply')]
+	public function testAMergeThatIsNotTheBodyTheReplyDescribesFallsBack(string $described, int $entries): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$add = "2.2.2.2\n";
+		$reply = self::items(['kind' => 'delta', 'generation' => '9', 'from' => '7', 'addEntries' => 1, 'removeEntries' => 0,
+			'digest' => hash('xxh128', $described), 'entries' => $entries, 'metadata' => []]);
+		$full = "4.4.4.4\n";
+		[$result, $requests] = $this->fetch([$reply, self::text($add), self::text(''), self::full('9', $full), self::text($full)],
+			self::cursor('7', self::OLD));
+
+		$this->assertCount(5, $requests);
+		$this->assertSame(['resources' => [self::ID => []]], $requests[3]['params'], 'the fallback must ask with the empty cursor');
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame(['full', TRUE], [$result['kind'], $result['fellBack']]);
+		$this->assertMirror($full);
+	}
+
+	/** @return array<string, array{string}> */
+	public static function scratchPaths(): array
+	{
+		return ['the add part' => ['work/add'], 'the remove part' => ['work/remove'], 'the staged mirror' => ['pfB_Abuse_v4.txt.new']];
+	}
+
+	/** A symbolic link where the fetch writes is replaced, never written through (review of slice 8c, L9). */
+	#[DataProvider('scratchPaths')]
+	public function testALinkWhereTheFetchWritesIsNotFollowed(string $path): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$target = "{$this->dir}/target";
+		file_put_contents($target, 'keep');
+		$this->assertTrue(symlink($target, "{$this->dir}/{$path}"));
+		$add = "2.2.2.2\n";
+		$new = "1.1.1.1\n10.0.0.0/8\n192.0.2.7\n2.2.2.2\n";
+		[$result] = $this->fetch([self::delta('9', '7', $add, '', $new), self::text($add), self::text('')], self::cursor('7', self::OLD));
+
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame('keep', file_get_contents($target), 'the link target was written through');
+		unlink($target);
+		$this->assertMirror($new);
+	}
+
 	public function testWhenTheFallbackFullBodyFailsTooTheMirrorIsUnchangedAndTheFailureNamed(): void
 	{
 		file_put_contents($this->mirror, self::OLD);
@@ -484,14 +543,211 @@ final class OutpostResourceFetchTest extends TestCase
 		$this->assertMirror(self::OLD);
 	}
 
-	public function testADeltaPartWhoseLineCountDiffersFromTheReplysFailsTheResource(): void
+	/** @return array<string, array{array, array}> */
+	public static function failedDeltaParts(): array
+	{
+		$add = "2.2.2.2\n";
+		return [
+			'an add part of more lines than the reply named' => [self::text("2.2.2.2\n3.3.3.3\n"), self::text('')],
+			'an add part cut off before its end'             => [self::text("2.2.", strlen($add)), self::text('')],
+			'a remove part of more lines than it named'      => [self::text($add), self::text("1.1.1.1\n")],
+		];
+	}
+
+	/**
+	 * A delta part that does not arrive as the reply described it fails the same way on every run, so it is discarded like a
+	 * failed merge and the full body asked for (review of slice 8c, L4).
+	 */
+	#[DataProvider('failedDeltaParts')]
+	public function testADeltaPartThatIsNotWhatTheReplyNamedFallsBackToTheFullBody(array $addReply, array $removeReply): void
 	{
 		file_put_contents($this->mirror, self::OLD);
 		$reply = self::delta('9', '7', "2.2.2.2\n", '', "1.1.1.1\n10.0.0.0/8\n192.0.2.7\n2.2.2.2\n");
-		[$result] = $this->fetch([$reply, self::text("2.2.2.2\n3.3.3.3\n"), self::text('')], self::cursor('7', self::OLD));
+		$full = "4.4.4.4\n";
+		$script = [$reply, $addReply, $removeReply, self::full('9', $full), self::text($full)];
+		// a part that does not arrive whole ends the fetch of the parts: the remove part is never asked for
+		if (isset($addReply['length'])) {
+			array_splice($script, 2, 1);
+		}
+		[$result, $requests] = $this->fetch($script, self::cursor('7', self::OLD));
 
+		$this->assertSame(['resources' => [self::ID => []]], $requests[count($requests) - 2]['params'], 'the fallback must ask with the empty cursor');
+		$this->assertSame(['id' => self::ID, 'generation' => '9', 'part' => 'members'], $requests[count($requests) - 1]['params']);
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame(['full', TRUE, NULL, NULL, 0, 0], [$result['kind'], $result['fellBack'], $result['add'], $result['remove'],
+			$result['addEntries'], $result['removeEntries']]);
+		$this->assertMirror($full);
+	}
+
+	public function testAFallbackFullBodyThatIsNotWhatTheReplyNamedFailsWithoutAnotherFallback(): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$reply = self::delta('9', '7', "2.2.2.2\n", '', "1.1.1.1\n10.0.0.0/8\n192.0.2.7\n2.2.2.2\n");
+		[$result, $requests] = $this->fetch([$reply, self::text("2.2.2.2\n3.3.3.3\n"), self::text(''), self::full('9', "4.4.4.4\n"),
+			self::text("4.4.4.4\n5.5.5.5\n")], self::cursor('7', self::OLD));
+
+		$this->assertCount(5, $requests);
 		$this->assertFailed($result, 'verify');
+		$this->assertTrue($result['fellBack']);
 		$this->assertMirror(self::OLD);
+	}
+
+	/**
+	 * Scenario: the cursor file holds a generation as "007" and Core answers "7". A generation is a number written as decimal
+	 * digits (protocol "Request": "007" is valid), so the answer is to that cursor (review of slice 8c, L3).
+	 */
+	public function testAGenerationIsComparedByItsValueNotItsSpelling(): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		[$result] = $this->fetch([self::items(['kind' => 'unchanged', 'generation' => '7'])], self::cursor('007', self::OLD));
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame(['unchanged', '7'], [$result['kind'], $result['generation']]);
+
+		$add = "2.2.2.2\n";
+		$new = "1.1.1.1\n10.0.0.0/8\n192.0.2.7\n2.2.2.2\n";
+		[$result, $requests] = $this->fetch([self::delta('9', '7', $add, '', $new), self::text($add), self::text('')], self::cursor('007', self::OLD));
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame(['delta', '9'], [$result['kind'], $result['generation']]);
+		$this->assertSame(['id' => self::ID, 'generation' => '9', 'part' => 'add', 'from' => '7'], $requests[1]['params'],
+			'a part must name the generations as GetResources gave them');
+		$this->assertMirror($new);
+	}
+
+	public function testADeltaAcrossADigitBoundaryMovesForward(): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$new = "1.1.1.1\n10.0.0.0/8\n";
+		[$result] = $this->fetch([self::delta('10', '9', '', "192.0.2.7\n", $new), self::text(''), self::text("192.0.2.7\n")],
+			self::cursor('9', self::OLD));
+
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame(['delta', '10'], [$result['kind'], $result['generation']]);
+		$this->assertMirror($new);
+	}
+
+	/**
+	 * Scenario: a delta is answered, its body was pruned by a racing publish, and the second GetResources says the resource is
+	 * gone. The result describes only what the second answer said: nothing of the vanished generation (review of slice 8c, L8).
+	 */
+	public function testASecondPassReturnsNoFieldOfTheFirst(): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$add = "2.2.2.2\n";
+		[$result, $requests] = $this->fetch([self::delta('9', '7', $add, '', self::OLD . $add), self::error(404, 'not_found'),
+			self::items(['error' => ['code' => 'not_found', 'message' => 'gone']])], self::cursor('7', self::OLD));
+
+		$this->assertCount(3, $requests);
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame(['not_found', NULL, NULL, NULL, NULL, NULL, NULL, 0, 0],
+			[$result['kind'], $result['generation'], $result['digest'], $result['entries'], $result['metadata'], $result['add'],
+				$result['remove'], $result['addEntries'], $result['removeEntries']]);
+		$this->assertMirror(self::OLD);
+	}
+
+	/** @return array<string, array{mixed}> */
+	public static function malformedCodes(): array
+	{
+		return [
+			'upper case'           => ['NotFound'],
+			'a line feed'          => ["not_found\nINJECTED"],
+			'a space'              => ['not found'],
+			'empty'                => [''],
+			'longer than 64 bytes' => [str_repeat('a', 65)],
+			'a number'             => [404],
+		];
+	}
+
+	/** Only a code of the protocol's shape reaches the result, which the apply logs (review of slice 8c, L5). */
+	#[DataProvider('malformedCodes')]
+	public function testABodyErrorWhoseCodeIsNotACodeIsAMalformedReply(mixed $code): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$reply = ['status' => 500, 'type' => 'application/json', 'body' => json_encode(['error' => ['code' => $code, 'message' => 'no']])];
+		[$result, $requests] = $this->fetch([self::full('8', "1.1.1.1\n"), $reply], self::cursor('7', self::OLD));
+
+		$this->assertCount(2, $requests);
+		$this->assertFailed($result, 'body');
+		$this->assertNull($result['code']);
+		$this->assertStringContainsString('malformed', (string) $result['error']);
+		if (is_string($code) && $code !== '') {
+			$this->assertStringNotContainsString($code, (string) $result['error'], 'the code that is not a code reached the error text');
+		}
+		$this->assertMirror(self::OLD);
+	}
+
+	public function testABodyErrorWithTheLongestCodeKeepsItsCode(): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$code = str_repeat('a', 63) . '_';
+		[$result] = $this->fetch([self::full('8', "1.1.1.1\n"), self::error(500, $code)], self::cursor('7', self::OLD));
+
+		$this->assertFailed($result, 'body');
+		$this->assertSame($code, $result['code']);
+	}
+
+	/** @return array<string, array{array}> */
+	public static function bodiesOverTheirBound(): array
+	{
+		// one member of an IP set is at most 64 bytes and its line feed: the bound of a one-entry body is 65 bytes
+		$long = "1.1.1.1\n2.2.2.2\n3.3.3.3\n4.4.4.4\n5.5.5.5\n6.6.6.6\n7.7.7.7\n8.8.8.8\n9.9.9.9\n";
+		return [
+			'a Content-Length over the bound'            => [self::text($long)],
+			'a body with no Content-Length that runs on' => [['close' => TRUE] + self::text($long)],
+		];
+	}
+
+	/** A body longer than the reply's entries can make is refused, not written to disk whole (review of slice 8c, L6). */
+	#[DataProvider('bodiesOverTheirBound')]
+	public function testABodyLongerThanItsEntriesAllowIsRefused(array $body): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		[$result] = $this->fetch([self::full('8', "1.1.1.1\n"), $body], self::cursor('7', self::OLD));
+
+		$this->assertFailed($result, 'body');
+		$this->assertStringContainsString('65 bytes', (string) $result['error'], 'the refusal must name the bound');
+		$this->assertMirror(self::OLD);
+	}
+
+	public function testABodyOfAnotherResourceMayHoldMembersOfOneMebibyte(): void
+	{
+		$rows = str_repeat('a', 1 << 20) . "\n";
+		[$result] = $this->fetch([self::full('3', $rows, NULL, NULL, 'geo-catalog'), ['close' => TRUE] + self::text($rows)], NULL, 30, 'geo-catalog');
+		$this->assertTrue($result['ok'], json_encode(['error' => $result['error']]));
+		$this->assertMirror($rows);
+
+		unlink($this->mirror);
+		$over = $rows . 'b';
+		[$result] = $this->fetch([self::full('4', $rows, NULL, NULL, 'geo-catalog'), ['close' => TRUE] + self::text($over)], NULL, 30, 'geo-catalog');
+		$this->assertFailed($result, 'body');
+		$this->assertFileDoesNotExist($this->mirror);
+	}
+
+	/** @return array<string, array{string, bool}> */
+	public static function contentTypes(): array
+	{
+		return [
+			'text/plain'                 => ['text/plain', TRUE],
+			'text/plain with parameters' => ['text/plain; charset=utf-8', TRUE],
+			'Text/Plain'                 => ['Text/Plain;charset=utf-8', TRUE],
+			'a longer type name'         => ['text/plainish', FALSE],
+			'text/html'                  => ['text/html', FALSE],
+		];
+	}
+
+	#[DataProvider('contentTypes')]
+	public function testOnlyAPlainTextBodyIsTaken(string $type, bool $taken): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$body = "1.1.1.1\n";
+		[$result] = $this->fetch([self::full('8', $body), ['type' => $type] + self::text($body)], self::cursor('7', self::OLD));
+
+		if ($taken) {
+			$this->assertTrue($result['ok'], json_encode($result));
+			$this->assertMirror($body);
+		} else {
+			$this->assertFailed($result, 'body');
+			$this->assertMirror(self::OLD);
+		}
 	}
 
 	public function testAnIPv6SetRefusesAnIPv4Member(): void

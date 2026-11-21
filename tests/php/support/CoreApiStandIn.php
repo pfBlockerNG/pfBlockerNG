@@ -12,10 +12,11 @@ declare(strict_types=1);
  *
  *   php CoreApiStandIn.php <socket> <record file> script <script file>
  *     answers one connection per entry of the script file, a JSON list, in order, and exits 0 once every entry was served.
- *     An entry is {"status": int, "type": "<Content-Type>", "body": "<text>"} with two optional keys: "length", the
- *     Content-Length sent in place of the body's own (more than the body: a truncated reply), and "hang": TRUE, which answers
- *     nothing and holds the connection until the client closes it. Each request is appended to the record file as one JSON
- *     line {"path": "<request path>", "params": <the decoded request body>}.
+ *     An entry is {"status": int, "type": "<Content-Type>", "body": "<text>"} with three optional keys: "length", the
+ *     Content-Length sent in place of the body's own (more than the body: a truncated reply); "close": TRUE, which sends no
+ *     Content-Length, so the body ends where the connection closes; and "hang": TRUE, which answers nothing and holds the
+ *     connection until the client closes it. Each request is appended to the record file as one JSON line
+ *     {"path": "<request path>", "params": <the decoded request body>}.
  */
 [, $socket, $record, $status, $body] = $argv + [NULL, NULL, NULL, '200', ''];
 
@@ -71,8 +72,8 @@ if ($status === 'script') {
 			continue;
 		}
 		$text = (string) $reply['body'];
-		$length = $reply['length'] ?? strlen($text);
-		@fwrite($conn, "HTTP/1.1 {$reply['status']} Stand-in\r\nContent-Type: {$reply['type']}\r\nContent-Length: {$length}"
+		$length = empty($reply['close']) ? "\r\nContent-Length: " . ($reply['length'] ?? strlen($text)) : '';
+		@fwrite($conn, "HTTP/1.1 {$reply['status']} Stand-in\r\nContent-Type: {$reply['type']}{$length}"
 			. "\r\nConnection: close\r\n\r\n{$text}");
 		fclose($conn);
 	}
