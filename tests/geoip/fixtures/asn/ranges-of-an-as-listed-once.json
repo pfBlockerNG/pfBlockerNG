@@ -1,0 +1,8 @@
+{
+    "description": "An AS with several ranges, IPv4 and IPv6, is listed once, in AS order.",
+    "csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,Cloudflare Inc,cloudflare.com\n8.8.8.0,8.8.8.255,AS15169,Google LLC,google.com\n1.1.1.0,1.1.1.255,AS13335,Cloudflare Inc,cloudflare.com\n2001:4860::,2001:4860:ffff:ffff:ffff:ffff:ffff:ffff,AS15169,Google LLC,google.com\n9.9.9.0,9.9.9.255,AS19281,Quad9,quad9.net\n",
+    "expect": {
+        "table": "AS13335 [ Cloudflare Inc ]\nAS15169 [ Google LLC ]\nAS19281 [ Quad9 ]\n",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

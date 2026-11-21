@@ -1,0 +1,8 @@
+{
+    "description": "sort -n reads a sign, a fraction and leading blanks; equal values keep the first row.",
+    "csv": "start_ip,end_ip,asn,name,domain\na,b,AS5,Five,f\na,b,AS-5,Neg,n\na,b,AS1.5,Frac,f\na,b,AS 3,Space,s\na,b,AS\t4,Tab,t\na,b,AS2.50,TwoHalf,t\na,b,AS2.5,Dup,d\n",
+    "expect": {
+        "table": "AS-5 [ Neg ]\nAS1.5 [ Frac ]\nAS2.50 [ TwoHalf ]\nAS 3 [ Space ]\nAS\t4 [ Tab ]\nAS5 [ Five ]\n",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

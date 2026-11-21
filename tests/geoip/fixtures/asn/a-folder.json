@@ -1,0 +1,10 @@
+{
+    "description": "A folder named asn.csv is not a file: the table is left as it was, and nothing is logged.",
+    "csv": {
+        "dir": true
+    },
+    "expect": {
+        "table": "AS0 [ previous ]\n",
+        "log": ""
+    }
+}

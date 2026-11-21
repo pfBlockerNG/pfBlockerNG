@@ -1,0 +1,8 @@
+{
+    "description": "A row of three fields has no name field and no comma left to replace.",
+    "csv": "start_ip,end_ip,asn,name,domain\n1.2.3.0,1.2.3.255,AS64501\n",
+    "expect": {
+        "table": "AS64501 ]\n",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

@@ -1,0 +1,8 @@
+{
+    "description": "Numbers past 64 bits still sort by value.",
+    "csv": "start_ip,end_ip,asn,name,domain\na,b,AS99999999999999999999,Big,b\na,b,AS99999999999999999998,Smaller,s\na,b,AS100000000000000000000,Bigger,b\na,b,AS0.99999999999999999999,Fraction,f\n",
+    "expect": {
+        "table": "AS0.99999999999999999999 [ Fraction ]\nAS99999999999999999998 [ Smaller ]\nAS99999999999999999999 [ Big ]\nAS100000000000000000000 [ Bigger ]\n",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

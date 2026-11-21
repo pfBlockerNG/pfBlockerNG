@@ -1,0 +1,12 @@
+{
+    "description": "A name that is not UTF-8 is carried as its bytes.",
+    "csv": {
+        "b64": "c3RhcnRfaXAsZW5kX2lwLGFzbixuYW1lLGRvbWFpbgphLGIsQVM2LENhZuksYwo="
+    },
+    "expect": {
+        "table": {
+            "b64": "QVM2IFsgQ2Fm6SBdCg=="
+        },
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}
