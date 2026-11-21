@@ -66,7 +66,7 @@ func Capture(prefix string, s Sinks, run func(out *os.File)) bool {
 	var (
 		mu     sync.Mutex // a tick checks the exit and takes its size, or the exit fixes the cutoff: never interleaved
 		done   bool
-		cutoff int64 // the output's size when run returned
+		cutoff int64 // the output's size, sampled after run returned
 	)
 	exited := make(chan struct{})
 	go func() {
