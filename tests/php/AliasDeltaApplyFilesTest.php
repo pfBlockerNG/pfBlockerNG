@@ -419,6 +419,17 @@ SH
 		$this->assertStringStartsWith("{$this->batchdir}/", $this->calls()[0]['file'], 'the batch file is written where the caller said');
 	}
 
+	/** The batch files keep the names the array form gave them through tempnam(): `pfb_add_*` and `pfb_del_*`. */
+	public function testTheBatchFilesKeepTheirAddAndDelNames(): void
+	{
+		$this->apply(self::addresses(1, 1), self::addresses(1, 2), 10000, 10000, 'delta');
+
+		$names = array_map(static fn (array $call): string => basename($call['file']), $this->calls());
+		$this->assertCount(2, $names);
+		$this->assertMatchesRegularExpression('/^pfb_add_[0-9a-f]+$/', $names[0]);
+		$this->assertMatchesRegularExpression('/^pfb_del_[0-9a-f]+$/', $names[1]);
+	}
+
 	/** @return array<string, array{int}> */
 	public static function umasks(): array
 	{
