@@ -7,7 +7,8 @@ replay every case and must agree with it:
 - PHP/Python (the old path): `tests/php/FeedParse*CorpusTest.php`, through the production functions themselves.
 
 `normalize.json`, `ip.json` and `dnsbl.json` pin the per-line stage (#3906); `feed.json`, `normcache.json` and `prescript.json` pin the
-per-feed stage around it (#3976): whole feeds through the loops, the `.norm` cache, the pre-script.
+per-feed stage around it (#3976): whole feeds through the loops, the `.norm` cache, the pre-script. `postscript.json` pins the
+post-scripts (#4035).
 
 The expectations were produced by the old path and then reviewed row by row; they are frozen. A case (`normalize.json`) or
 line (`dnsbl.json`) where Core differs from the old path on purpose holds Core's result in `expect` and the old path's in
@@ -189,3 +190,30 @@ Case: `id`, `description`, `setup`, `script`, `list_type`, `blocks` and `expect`
 - `expect`: `ok`; `reason`, `""`, `"stage"` (no staged copy could be made), `"exit"` (non-zero: `status` is it, 126 for a script that
   cannot be run, 127 for one that is missing), `"timeout"` (killed) or `"deleted"` (the script removed its input); `status`; `files`, the
   directory after the call and before the cleanup (`norm`, `staged`): a failed script leaves no staged copy.
+
+## `postscript.json`: the post-scripts (the two call sites of `sync_package_pfblockerng()`)
+
+`{"schema": 1, "prefix", "env", "header", "cases": [...]}`. `prefix` is the shell every script starts with, after its `#!/bin/sh`
+line: it records what the script saw (`$#`, the arguments, `pwd -P`, `PFB_TEST_ENV`) in `PFB_TEST_SEEN`, and defines `pfb_block`,
+which reports to the fifo `PFB_TEST_READY` when that is set, sends SIGALRM to its parent when `PFB_TEST_ALARM` is set (the
+alarm of today's `timeout(1)`: the timeout firing), and then reads the fifo `PFB_TEST_BLOCK`, which nobody writes. `env` is the
+value of `PFB_TEST_ENV`; `header` is the feed's header in the log lines. The PHP runner evaluates the call sites verbatim, cut
+out of `pfblockerng_apply.inc`; the Go runner calls `PostScript`.
+
+Case: `id`, `description`, `list_type`, `name`, `tree`, `feed`, `blocks`, `expect`, and `old_expect` with `departure` where
+Core differs on purpose (the Go runner asserts `expect`, the PHP runner `expect` with `old_expect`'s keys in place).
+
+- `list_type`: `dnsbl` (the script runs on `feed/feed.post`, a copy of `feed/feed.orig`, which is then deleted) or `_v4`/`_v6`
+  (it runs on `feed/feed.orig` itself; `feed/feed.orig.post` is the restore point the loop renames back).
+- `name`: the list's `script_post`; `{root}` is the case's folder. The list-script folders are `list/` then `pkg/`.
+- `tree`: files under `list/`, `pkg/` and `outside/`: `{"body", "mode": "exec"|"noexec"}` with optionally `"shebang": false`
+  (no `#!` line), `{"link": target}` or `{"dir": true}`.
+- `feed`: the feed folder's files before the run.
+- `blocks`: the script blocks until killed. The PHP runner sets `PFB_TEST_ALARM`; the Go runner cancels the context when the
+  script has reported.
+- `expect`: `files`, the feed folder afterwards (each entry its content, `{"link": target}` or `{"type": "dir"|"fifo"}`);
+  `between` (IP only), the folder before the restore, what the loop's empty-feed check reads; `seen`, what the script recorded,
+  or null when it never ran (`{root}` and `{cwd}`, the runner's folder, expand); `log`, `errors` and `transcript`, the main log,
+  the error log and the Update transcript without `pfb_logger()`'s stamps, each a string or `{prefix, repeat, times, suffix}`;
+  `failed`, whether the loop records a script failure; `alive`, null, or whether the child the script started (it holds the
+  fifo `PFB_TEST_ALIVE` and writes its PID to `PFB_TEST_PID`) is alive when the run has returned.
