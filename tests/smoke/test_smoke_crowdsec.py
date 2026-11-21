@@ -928,8 +928,13 @@ def test_a_drop_by_the_bouncers_rule_shows_in_alerts(bouncer: SmokeVM, engine: S
         got = {(r[1], r[4], r[5], r[9], r[12], r[14], r[15], r[16]) for r in rows}
         assert got == {("177400402", "block", "4", banned, "out", "crowdsec_v4", "Unknown", "CrowdSec")}, rows
 
-        page = gui.get(ALERTS_PAGE).text
-        assert lookup in page, f"the Alerts page links {banned} to {lookup}"
+        # The daemon writes unified.log, which the Alerts page's default view reads, after ip_block.log
+        _await(
+            lambda: gui.get(ALERTS_PAGE).text,
+            lambda page: lookup in page,
+            f"the Alerts page linking {banned} to {lookup}",
+            cap=30.0,
+        )
     finally:
         _save(gui, _on_fields(engine))
 

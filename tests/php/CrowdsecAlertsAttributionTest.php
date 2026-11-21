@@ -25,13 +25,14 @@ final class CrowdsecAlertsAttributionTest extends TestCase
 {
 	private const DAEMON_DEADLINE_S = 15.0;
 
-	// What `pfctl -vvsr` prints for the bouncer's four rules (D5, "all interfaces" off, logging on) and one pfB rule
+	// What `pfctl -vvsr` prints for the bouncer's four rules (D5, "all interfaces" off, logging on) and one pfB rule, on
+	// different interfaces
 	private const RULES = <<<'RULES'
-		@3(0) block drop in log quick on vtnet0 inet from <crowdsec_v4:2> to any label "CrowdSec IPv4" label "descr=CrowdSec IPv4" ridentifier 177400401
+		@3(0) block drop in log quick on vtnet2 inet from <crowdsec_v4:2> to any label "CrowdSec IPv4" label "descr=CrowdSec IPv4" ridentifier 177400401
 		  [ Evaluations: 10        Packets: 0         Bytes: 0           States: 0     ]
-		@4(0) block drop out log quick on vtnet0 inet from any to <crowdsec_v4:2> label "CrowdSec IPv4 out" label "descr=CrowdSec IPv4 out" ridentifier 177400402
-		@5(0) block drop in log quick on vtnet0 inet6 from <crowdsec_v6:1> to any label "CrowdSec IPv6" label "descr=CrowdSec IPv6" ridentifier 177400601
-		@6(0) block drop out log quick on vtnet0 inet6 from any to <crowdsec_v6:1> label "CrowdSec IPv6 out" label "descr=CrowdSec IPv6 out" ridentifier 177400602
+		@4(0) block drop out log quick on vtnet2 inet from any to <crowdsec_v4:2> label "CrowdSec IPv4 out" label "descr=CrowdSec IPv4 out" ridentifier 177400402
+		@5(0) block drop in log quick on vtnet2 inet6 from <crowdsec_v6:1> to any label "CrowdSec IPv6" label "descr=CrowdSec IPv6" ridentifier 177400601
+		@6(0) block drop out log quick on vtnet2 inet6 from any to <crowdsec_v6:1> label "CrowdSec IPv6 out" label "descr=CrowdSec IPv6 out" ridentifier 177400602
 		@7(0) block drop in log quick on vtnet0 inet from <pfB_Test_v4:1> to any label "USER_RULE: pfB_Test_v4" ridentifier 1770000001
 		RULES;
 
@@ -41,7 +42,8 @@ final class CrowdsecAlertsAttributionTest extends TestCase
 	protected function setUp(): void
 	{
 		$this->root = sys_get_temp_dir() . '/pfb_crowdsec_alerts_' . getmypid() . '_' . bin2hex(random_bytes(6));
-		$this->assertTrue(mkdir("{$this->root}/deny", 0777, TRUE) && mkdir("{$this->root}/native", 0777, TRUE), 'test setup: sandbox');
+		$this->assertTrue(mkdir("{$this->root}/deny", 0777, TRUE) && mkdir("{$this->root}/native", 0777, TRUE)
+			&& mkdir("{$this->root}/permit", 0777, TRUE), 'test setup: sandbox');
 		$this->savedPfb = $GLOBALS['pfb'] ?? NULL;
 		$GLOBALS['pfb']['pfctl'] = __DIR__ . '/fixtures/fake_pfctl.sh';
 		putenv("PFB_FAKE_RULES={$this->root}/rules.txt");
@@ -127,7 +129,7 @@ final class CrowdsecAlertsAttributionTest extends TestCase
 			config_set_path('interfaces', ['lan' => ['if' => 'vtnet1', 'ipaddr' => '10.0.0.1', 'subnet' => '24']]);
 			$GLOBALS['pfb'] = array_replace($GLOBALS['pfb'], [
 				'pfctl' => __DIR__ . '/fixtures/fake_pfctl.sh',
-				'denydir' => "{$root}/deny", 'nativedir' => "{$root}/native",
+				'denydir' => "{$root}/deny", 'nativedir' => "{$root}/native", 'permitdir' => "{$root}/permit",
 				'ip_blocklog' => "{$root}/ip_block.log", 'ip_permitlog' => "{$root}/ip_permit.log",
 				'ip_matchlog' => "{$root}/ip_match.log", 'unilog' => "{$root}/unified.log",
 				'ip_cache' => "{$root}/ip_cache.sqlite", 'geoipshare' => '', 'rdns' => FALSE,
@@ -201,5 +203,29 @@ final class CrowdsecAlertsAttributionTest extends TestCase
 		$this->assertSame([['Block', 'crowdsec_v4', 'CrowdSec'], ['Block', 'crowdsec_v6', 'CrowdSec'], ['Block', 'crowdsec_v4', 'CrowdSec'],
 			['Block', 'pfB_Test_v4', 'Test_Feed']],
 			array_map(static fn (array $r): array => [$r[0], $r[15], $r[17]], $unified));
+	}
+
+	/**
+	 * A CrowdSec drop leaves no feed attribution in the daemon's per-host IP cache: that cache answers later pfB rows, and the
+	 * CrowdSec row's deny-folder lookup is not what a pfB permit rule's pass of the same address (after the ban ended) is
+	 * attributed to.
+	 */
+	public function testACrowdsecDropSeedsNoFeedAttributionForALaterPfbRow(): void
+	{
+		$this->rules(self::RULES . "\n" . '@8(0) pass in log quick on vtnet0 inet from <pfB_Allow_v4:1> to any label "USER_RULE: pfB_Allow_v4" ridentifier 1770000002');
+		// The address is in a deny feed and a permit feed
+		file_put_contents("{$this->root}/deny/Test_Feed.txt", "192.0.2.20\n");
+		file_put_contents("{$this->root}/native/Placeholder.txt", "placeholder\n");
+		file_put_contents("{$this->root}/permit/Allow_Feed.txt", "192.0.2.20\n");
+
+		[$block, ] = $this->runDaemon([
+			self::filterlog('3,,,177400401,vtnet2,match,block,in,4,0x0,,64,12345,0,DF,6,tcp,60,192.0.2.20,10.0.0.5,51234,22,0,S,1,,64240,,mss'),
+			self::filterlog('8,,,1770000002,vtnet0,match,pass,in,4,0x0,,64,12346,0,DF,6,tcp,60,192.0.2.20,10.0.0.5,51235,443,0,S,1,,64240,,mss'),
+		]);
+		$permit = (string) @file_get_contents("{$this->root}/ip_permit.log");
+		$this->assertSame([['crowdsec_v4', 'Unknown', 'CrowdSec']], array_map(static fn (array $r): array => [$r[14], $r[15], $r[16]], $block));
+		$row = str_getcsv(trim($permit), ',', '"', '');
+		$this->assertSame(['pfB_Allow_v4', '192.0.2.20', 'Allow_Feed'], [$row[14] ?? NULL, $row[15] ?? NULL, $row[16] ?? NULL],
+			"the pass row's feed comes from the permit folder, not the CrowdSec row's lookup: {$permit}");
 	}
 }
