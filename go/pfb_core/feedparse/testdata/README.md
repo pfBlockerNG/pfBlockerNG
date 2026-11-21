@@ -208,12 +208,20 @@ Core differs on purpose (the Go runner asserts `expect`, the PHP runner `expect`
 - `name`: the list's `script_post`; `{root}` is the case's folder. The list-script folders are `list/` then `pkg/`.
 - `tree`: files under `list/`, `pkg/` and `outside/`: `{"body", "mode": "exec"|"noexec"}` with optionally `"shebang": false`
   (no `#!` line), `{"link": target}` or `{"dir": true}`.
-- `feed`: the feed folder's files before the run.
-- `blocks`: the script blocks until killed. The PHP runner sets `PFB_TEST_ALARM`; the Go runner cancels the context when the
-  script has reported.
+- `feed`: the feed folder before the run: each entry its content, `{"link": target}` or `{"type": "dir"}` (an empty folder).
+- `blocks`: the script blocks until killed. The PHP runner sets `PFB_TEST_ALARM`; the Go runner, once the script has reported,
+  ends the context as the 300-second limit does (with the limit's cause), so the run is a timeout.
 - `expect`: `files`, the feed folder afterwards (each entry its content, `{"link": target}` or `{"type": "dir"|"fifo"}`);
   `between` (IP only), the folder before the restore, what the loop's empty-feed check reads; `seen`, what the script recorded,
   or null when it never ran (`{root}` and `{cwd}`, the runner's folder, expand); `log`, `errors` and `transcript`, the main log,
   the error log and the Update transcript without `pfb_logger()`'s stamps, each a string or `{prefix, repeat, times, suffix}`;
-  `failed`, whether the loop records a script failure; `alive`, null, or whether the child the script started (it holds the
-  fifo `PFB_TEST_ALIVE` and writes its PID to `PFB_TEST_PID`) is alive when the run has returned.
+  `failed`, whether the loop records a script failure; `reason` and `status`, the Go result's `Reason` (`""`, `"stage"`,
+  `"exit"` or `"timeout"`, set exactly when `failed`) and `Status` (the exit status for `"exit"`, else 0), which only the Go
+  runner asserts; `alive`, null, or whether the child the script started (it holds the fifo `PFB_TEST_ALIVE` and writes its
+  PID to `PFB_TEST_PID`) is alive when the run has returned.
+
+`old_expect` records today's PHP as the PHP runner runs it on Linux, where `timeout(1)` is GNU coreutils'. What the
+departure notes say about FreeBSD's `timeout(1)` comes from its documentation and is unverified on FreeBSD.
+
+Two harmless differences have no case: a restore point that the script left as an empty folder or as a dangling symbolic
+link is removed by Core, where today's PHP leaves it in the feed folder.
