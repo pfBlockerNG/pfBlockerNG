@@ -1,0 +1,28 @@
+{
+	"schema": 1,
+	"description": "A country name that is not UTF-8. Core refuses the share and keeps the previous generation: the geo-catalog carries names as JSON text, which cannot hold such bytes (#4034 slice 5b, as #4127 refuses a row the continent files could not carry); today's PHP writes the bytes into the continent file and the pages (old_expect).",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-en.csv": {
+			"b64": "Z2VvbmFtZV9pZCxsb2NhbGVfY29kZSxjb250aW5lbnRfY29kZSxjb250aW5lbnRfbmFtZSxjb3VudHJ5X2lzb19jb2RlLGNvdW50cnlfbmFtZSxpc19pbl9ldXJvcGVhbl91bmlvbgo2MjUyMDAxLGVuLE5BLCJOb3J0aCBBbWVyaWNhIixVUywiVW5pdGVkIFN0YXRlcyIsMAoxODE0OTkxLGVuLEFTLEFzaWEsQ04sQ2hpbmEsMAoyOTIxMDQ0LGVuLEVVLEV1cm9wZSxERSxEZXV0c2No/2xhbmQsMQo="
+		},
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n1.0.1.0/24,1814991,1814991,,0,0,\n2.16.0.0/13,2921044,2921044,,0,0,\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"expect": {
+		"ok": false,
+		"files": {
+			"cc/DE_v4.txt": null
+		},
+		"tree": "d102fa3700f2a74722c4c258376c6c48cd998b4df93834972f6d5161ebc140e1",
+		"catalog": null
+	},
+	"old_expect": {
+		"ok": true,
+		"files": {
+			"cc/DE_v4.txt": "2.16.0.0/13\n"
+		},
+		"tree": "7ff62d4a3601c362a43c17fd5c24e10773403550b586c59d8340113730bbb4f0",
+		"catalog": "202c0e168835f26af7ceb8f066a36fcecc40ac009747263b3bfe8b9e9fb25fbc"
+	}
+}

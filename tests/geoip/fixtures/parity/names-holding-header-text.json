@@ -1,0 +1,18 @@
+{
+	"schema": 1,
+	"description": "A country name holding \"# Country: \" and a localized continent name holding \":\": the continent page lists the name with every \"# Country: \" removed and shows the continent without its colons, as today's PHP reads its continent files (#4034 slice 5b).",
+	"locale": "fr",
+	"share_mtime": "2026-11-17T08:30:00Z",
+	"share": {
+		"GeoLite2-Country-Locations-fr.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,fr,NA,\"Amérique: du Nord\",US,\"États # Country: Unis\",0\n1814991,fr,AS,Asie,CN,Chine,0\n2921044,fr,EU,Europe,DE,Allemagne,1\n",
+		"GeoLite2-Country-Locations-en.csv": "geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union\n6252001,en,NA,\"North America\",US,\"United States\",0\n1814991,en,AS,Asia,CN,China,0\n2921044,en,EU,Europe,DE,Germany,1\n",
+		"GeoLite2-Country-Blocks-IPv4.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n3.0.0.0/15,6252001,6252001,,0,0,\n1.0.1.0/24,1814991,1814991,,0,0,\n2.16.0.0/13,2921044,2921044,,0,0,\n",
+		"GeoLite2-Country-Blocks-IPv6.csv": "network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast\n2600::/12,6252001,6252001,,0,0,\n"
+	},
+	"expect": {
+		"ok": true,
+		"files": {},
+		"tree": "28e3a8a07c1869cbc36466140449960d001d1a89df3b9ab1464a4cbbb06ea53c",
+		"catalog": "31772755bdea82e6007bdd9454ca9a873cdf9bacc4bb8c78db84a4567fcd1dad"
+	}
+}
