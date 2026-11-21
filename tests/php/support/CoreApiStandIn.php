@@ -16,7 +16,9 @@ declare(strict_types=1);
  *     Content-Length sent in place of the body's own (more than the body: a truncated reply); "close": TRUE, which sends no
  *     Content-Length, so the body ends where the connection closes; "hang": TRUE, which answers nothing and holds the
  *     connection until the client closes it; and "stall": TRUE, which sends the reply and then holds the connection until the
- *     client closes it (with a "length" over the body: a reply that goes silent part way). Each request is appended to the record file as one JSON line
+ *     client closes it (with a "length" over the body: a reply that goes silent part way); "interim": TRUE, which sends an
+ *     HTTP 103 block with a Content-Length of 100000 before the reply; and "lengthFirst": TRUE, which sends the
+ *     Content-Length before the Content-Type. Each request is appended to the record file as one JSON line
  *     {"path": "<request path>", "params": <the decoded request body>}.
  */
 [, $socket, $record, $status, $body] = $argv + [NULL, NULL, NULL, '200', ''];
@@ -68,8 +70,10 @@ if ($status === 'script') {
 		file_put_contents($record, json_encode(['path' => $path, 'params' => json_decode($request[1], TRUE)]) . "\n", FILE_APPEND);
 		if (empty($reply['hang'])) {
 			$text = (string) $reply['body'];
-			$length = empty($reply['close']) ? "\r\nContent-Length: " . ($reply['length'] ?? strlen($text)) : '';
-			@fwrite($conn, "HTTP/1.1 {$reply['status']} Stand-in\r\nContent-Type: {$reply['type']}{$length}"
+			$length = empty($reply['close']) ? 'Content-Length: ' . ($reply['length'] ?? strlen($text)) : '';
+			$headers = empty($reply['lengthFirst']) ? ["Content-Type: {$reply['type']}", $length] : [$length, "Content-Type: {$reply['type']}"];
+			$interim = empty($reply['interim']) ? '' : "HTTP/1.1 103 Early Hints\r\nContent-Length: 100000\r\n\r\n";
+			@fwrite($conn, $interim . "HTTP/1.1 {$reply['status']} Stand-in\r\n" . implode("\r\n", array_filter($headers))
 				. "\r\nConnection: close\r\n\r\n{$text}");
 		}
 		if (!empty($reply['hang']) || !empty($reply['stall'])) {

@@ -998,4 +998,53 @@ final class OutpostResourceFetchTest extends TestCase
 		$this->assertSame([basename($this->mirror)], array_values(array_diff(scandir($this->dir), ['.', '..', 'work', 'script.json', 'requests'])),
 			'a temporary file of the fetch was left beside the mirror');
 	}
+
+	/** An interim block (HTTP 103) before the reply is not the reply: its Content-Length bounds nothing. */
+	public function testAnInterimBlockBeforeTheReplyIsNotJudgedAsTheReply(): void
+	{
+		$body = "1.1.1.1\n";
+		[$result] = $this->fetch([self::full('8', $body), ['interim' => TRUE] + self::text($body)], NULL);
+
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertMirror($body);
+	}
+
+	/**
+	 * A plain-text part over 64 KiB but within its bound is taken whichever header comes first: the Content-Length is judged
+	 * once the whole header block, the Content-Type included, is known.
+	 */
+	public function testALargePartWithItsContentLengthBeforeItsContentTypeIsTaken(): void
+	{
+		$members = [];
+		for ($i = 0; $i < 10000; $i++) {
+			$members[] = sprintf('10.%d.%d.%d', intdiv($i, 65536), intdiv($i, 256) % 256, $i % 256);
+		}
+		sort($members, SORT_STRING);
+		$body = implode("\n", $members) . "\n";
+		$this->assertGreaterThan(65536, strlen($body));
+		[$result] = $this->fetch([self::full('8', $body), ['lengthFirst' => TRUE] + self::text($body)], NULL);
+
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertMirror($body);
+	}
+
+	/** A disk that takes no more of the body (/dev/full) is the mirror's failure, not the transport's or the body's. */
+	public function testABodyTheLocalDiskCannotHoldIsALocalFailure(): void
+	{
+		if (PHP_OS_FAMILY !== 'Linux' || !is_writable('/dev/full')) {
+			$this->markTestSkipped('needs /dev/full, which only Linux has');
+		}
+		$socket = "{$this->dir}/api.sock";
+		file_put_contents("{$this->dir}/script.json", json_encode([self::text("1.1.1.1\n")]));
+		$started = pfb_test_start_process([PHP_BINARY, __DIR__ . '/support/CoreApiStandIn.php', $socket, "{$this->dir}/requests",
+			'script', "{$this->dir}/script.json"]);
+		$this->awaitListening($started);
+		$full = fopen('/dev/full', 'wb');
+		$got = @pfb_core_fetch_body(['id' => self::ID, 'generation' => '8', 'part' => 'members'], $full, 65, $socket, 30);
+		fclose($full);
+		pfb_test_finish_process($started, 30.0);
+
+		$this->assertNotNull($got['error']);
+		$this->assertTrue($got['local'] ?? FALSE, json_encode($got));
+	}
 }
