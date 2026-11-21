@@ -4660,6 +4660,11 @@ function pfb_outpost_member_max(?string $family): int {
 	return $family === NULL ? 1048576 : 64;
 }
 
+/** Whether $member is not empty and holds only characters an IP set member is spelled with: hexadecimal digits, '.', ':' and '/'. */
+function pfb_outpost_member_chars_valid(string $member): bool {
+	return $member !== '' && strspn($member, '0123456789abcdefABCDEF.:/') === strlen($member);
+}
+
 /**
  * Whether pf reads $member as one entry of an IP set of $family ('ipv4' or 'ipv6'): one address, or one address, '/' and a
  * prefix length. inet_pton() must parse the address as the family, so a range, a netmask, a host name, a zone or white space
@@ -4669,7 +4674,7 @@ function pfb_outpost_member_max(?string $family): int {
  */
 function pfb_outpost_ip_member_valid(string $member, string $family): bool {
 	// the characters first: no platform's inet_pton() is asked what it makes of anything else
-	if (strspn($member, '0123456789abcdefABCDEF.:/') !== strlen($member)) {
+	if (!pfb_outpost_member_chars_valid($member)) {
 		return FALSE;
 	}
 	[$address, $prefix] = explode('/', $member, 2) + [1 => NULL];
@@ -16197,12 +16202,15 @@ function pfb_apply_alias_delta(
  * pfb_outpost_part_check() passed them. A line is sent as it is, its newline dropped; the files are read a line at a time,
  * never whole.
  *
- * A negative count is refused: nothing is sent. Then the decision is pfb_apply_alias_delta()'s, from counts: replace when
+ * On the delta and auto paths a negative count (any of the four) is refused: nothing is sent; a replace uses no count and goes
+ * ahead. Then the decision is pfb_apply_alias_delta()'s, from counts: replace when
  * $force_replace, in mode 'replace', or in mode 'auto' when ($add_entries + $remove_entries) / max($entries, $previous_entries)
  * reaches PFB_DELTA_CHURN_THRESHOLD; otherwise a delta. Counts of zero and zero are nothing to do: no call, and no file is
  * read, so a file is not checked against a count of zero then. Any other delta first reads both files through: a file that
- * cannot be opened, holds a line longer than an IP set member, or holds another number of lines than its count sends
- * nothing. Then the adds and the deletes go to pfctl in batches of $batch_size (clamped to [64, 4096]), each in a batch file
+ * cannot be opened, holds an empty line or a line with a byte outside an IP set member's characters (a CRLF line), holds a
+ * line longer than an IP set member, or holds another number of lines than its count sends nothing; the count check after
+ * sending is only a backstop against a file that changes between the two passes, when the batches already sent stay applied
+ * and ok is FALSE. Then the adds and the deletes go to pfctl in batches of $batch_size (clamped to [64, 4096]), each in a batch file
  * of mode 0600 that pfctl reads with -f, so a member is never an argument; a failed batch leaves the remaining ones sent.
  *
  * @param string $table_file the table's mirror, what a replace loads
@@ -16210,7 +16218,7 @@ function pfb_apply_alias_delta(
  * @param int    $previous_entries the members of the table before it
  * @param string $tmpdir where each batch file is written; '' for the system's temporary directory
  * @return array{delta: bool, ok: bool} delta TRUE on the delta path (refused files included), FALSE on a replace or for a
- *   negative count; ok FALSE when anything was refused, a batch file could not be written or any pfctl call failed
+ *   refused negative count; ok FALSE when anything was refused, a batch file could not be written or any pfctl call failed
  */
 function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $table_file, string $add_file, int $add_entries,
     string $remove_file, int $remove_entries, int $entries, int $previous_entries, string $mode, int $batch_size,
@@ -16234,15 +16242,24 @@ function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $t
 			}
 			$sides[] = $fh;
 			$read = 0;
-			while (($line = fgets($fh, $max + 2)) !== FALSE && strlen(rtrim($line, "\n")) <= $max) {
+			while (($line = fgets($fh, $max + 2)) !== FALSE && strlen($member = rtrim($line, "\n")) <= $max) {
 				$read++;
+				// pf takes no empty line and no line with a byte outside an address or a prefix (a CRLF line is one)
+				if (!pfb_outpost_member_chars_valid($member)) {
+					pfb_logger(" Updating [ {$table} ]: the {$side} file line {$read} is not a member\n", 1);
+					return NULL;
+				}
 			}
 			if ($line !== FALSE) {
 				pfb_logger(" Updating [ {$table} ]: the {$side} file holds a line over {$max} bytes\n", 1);
 			} elseif ($read !== $count) {
 				pfb_logger(" Updating [ {$table} ]: the {$side} file holds {$read} members, not {$count}\n", 1);
 			}
-			if ($line !== FALSE || $read !== $count || !rewind($fh)) {
+			if ($line !== FALSE || $read !== $count) {
+				return NULL;
+			}
+			if (!rewind($fh)) {
+				pfb_logger(" Updating [ {$table} ]: cannot rewind {$path}\n", 1);
 				return NULL;
 			}
 		}
@@ -16263,16 +16280,18 @@ function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $t
 function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string $table_file, callable $members, int $add_entries,
     int $remove_entries, int $entries, int $previous_entries, string $mode, int $batch_size, bool $force_replace,
     string $tmpdir): array {
-	if ($add_entries < 0 || $remove_entries < 0) {
-		pfb_logger(" Updating [ {$table} ]: refused, a negative count (add {$add_entries}, remove {$remove_entries})\n", 1);
-		return ['delta' => FALSE, 'ok' => FALSE];
-	}
 	$batch_size = pfb_alias_delta_batch_clamp($batch_size);
 	$churn      = $add_entries + $remove_entries;
 	$table_size = max($entries, $previous_entries);
+	$replace    = $force_replace || $mode === 'replace';
 
-	if ($force_replace || $mode === 'replace'
-	    || ($mode === 'auto' && $table_size > 0 && ($churn / $table_size) >= PFB_DELTA_CHURN_THRESHOLD)) {
+	// a replace reloads the table from its file and uses no count; a delta trusts all four
+	if (!$replace && min($add_entries, $remove_entries, $entries, $previous_entries) < 0) {
+		pfb_logger(" Updating [ {$table} ]: refused, a negative count (add {$add_entries}, remove {$remove_entries}, entries {$entries}, previous {$previous_entries})\n", 1);
+		return ['delta' => FALSE, 'ok' => FALSE];
+	}
+
+	if ($replace || ($mode === 'auto' && $table_size > 0 && ($churn / $table_size) >= PFB_DELTA_CHURN_THRESHOLD)) {
 		// issue #722: nothing else on a live box distinguishes the delta path from a
 		// replace (pfb_pfctl_table_op logs only on error) — this line is the sole apply-path
 		// oracle the smoke suite (and a human reading the log) can grep for.
@@ -16300,8 +16319,11 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 		// 'x': a fresh file of this run's own, never one that is already there
 		$path = "{$tmpdir}/pfb_{$op}_" . bin2hex(random_bytes(8));
 		$umask = umask(0077);
-		$fh    = @fopen($path, 'xb');
-		umask($umask);
+		try {
+			$fh = @fopen($path, 'xb');
+		} finally {
+			umask($umask);
+		}
 		$written = FALSE;
 		if ($fh !== FALSE) {
 			try {
