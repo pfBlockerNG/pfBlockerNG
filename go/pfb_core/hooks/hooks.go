@@ -167,6 +167,8 @@ func (r Runner) run(ctx context.Context, when string, index int, h Hook, env []s
 	}
 	r.sinks().Line(false, "\n[ pfB Hook ] %s %s (%s, timeout %ds)\n", when, label, h.Script, timeout)
 	status, e := r.exec(ctx, argv, env, time.Duration(min(timeout, math.MaxInt64/int64(time.Second)))*time.Second)
+	// decided before any line is written, so that a slow log never widens the window in which a cancel still counts
+	cut := status > 128 && (ctx.Err() != nil || r.SignalLag > 0 && cancelledWithin(ctx, r.SignalLag))
 	switch {
 	case e == timedOut:
 		r.sinks().Line(true, "[ pfB Hook ] %s %s TIMED OUT after %ds (killed); continuing\n", when, label, timeout)
@@ -174,7 +176,7 @@ func (r Runner) run(ctx context.Context, when string, index int, h Hook, env []s
 		return e
 	case status != 0:
 		r.sinks().Line(true, "[ pfB Hook ] %s %s exited non-zero [ %d ]; continuing\n", when, label, status)
-		if status > 128 && (ctx.Err() != nil || r.SignalLag > 0 && cancelledWithin(ctx, r.SignalLag)) {
+		if cut {
 			return interrupted // its status is logged; it still counts as cut short
 		}
 	default:

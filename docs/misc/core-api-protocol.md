@@ -956,8 +956,10 @@ pfb-core --run-hooks pre|post --hook-dir PATH (--settings-backend-cmd PATH | --s
 - **Output.** stderr is the main log: every runner line and all of each hook's sanitized output, without time stamps. The
   one-shot's own lines (a refused context, settings it cannot read, an uninitialized Core) carry the `pfb_core:` prefix and
   the date and time, as the daemon's do. With `"lifecycle": "uninstall"` stdout, the package operation's console, gets the
-  same text, each piece after the main log has it; a failed write to either, a closed pipe included (SIGPIPE does not end the
-  one-shot), is dropped and never stops the other. Without a lifecycle stdout stays empty. There is no transcript and no
+  same text, each piece after the main log has it, the one-shot's own lines on settings it cannot read included; a failed
+  write to either, a closed pipe included (SIGPIPE does not end the one-shot), is dropped and never stops the other. A
+  refused context, and a signal while the context is read, are logged to stderr alone: the lifecycle is not known then.
+  Without a lifecycle stdout stays empty. There is no transcript and no
   separate error log. Two departures from `pfb_run_hooks()`: while `$pfb['hook_lifecycle']` is set it copies the main log to
   stdout with `pfb_logger()`'s date and time at the start of each runner line, where the one-shot's copy is unstamped; and
   without a lifecycle it still copies the runner's lines to stdout when that is a terminal, where the one-shot copies

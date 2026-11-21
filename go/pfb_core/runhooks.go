@@ -38,7 +38,7 @@ var hookFields = map[string]struct {
 // of when, read from the hooks projection alone through the adapter program backendCmd, else the file backend of
 // stateDir, run once by runner with the context read from stdin. It needs no Core API, takes no lock and publishes
 // nothing. Every line and all hook output go to stderr, the main log; under the uninstall lifecycle stdout gets a copy,
-// the console of the package operation. The status is 0 once the hooks ran, whatever they did, or when the settings are
+// the console of the package operation, of all but a refused context's line. The status is 0 once the hooks ran, whatever they did, or when the settings are
 // not initialized (no hooks); 2 for a context outside the vocabulary and 1 for settings that cannot be read, when nothing
 // runs; 1 when ctx ended while the context was still being read, or with an enabled hook unrun or cut short.
 func runHooks(ctx context.Context, when, stateDir, backendCmd string, runner hooks.Runner, stdin io.Reader,
@@ -63,15 +63,22 @@ func runHooks(ctx context.Context, when, stateDir, backendCmd string, runner hoo
 		logger.Printf("refused the hook context: %v", err)
 		return 2
 	}
+	runner.Log = stderr
+	if c.Lifecycle == "uninstall" { // pfb_run_streams_to_stdout(): a package lifecycle's console sees the main log
+		runner.Log = io.MultiWriter(dropErrors{stderr}, dropErrors{stdout})
+	}
+	logger.SetOutput(runner.Log)
 	backend, kind := settingsBackend(stateDir, backendCmd)
-	if info, err := statStateDir(stateDir); kind == "file" && (err != nil || !info.IsDir()) {
-		reason := "is not a directory"
-		var pathErr *fs.PathError
-		if errors.As(err, &pathErr) { // its Err alone: the error text holds the path unquoted
-			reason = pathErr.Err.Error()
+	if kind == "file" {
+		if info, err := statStateDir(stateDir); err != nil || !info.IsDir() {
+			reason := "is not a directory"
+			var pathErr *fs.PathError
+			if errors.As(err, &pathErr) { // its Err alone: the error text holds the path unquoted
+				reason = pathErr.Err.Error()
+			}
+			logger.Printf("cannot read the hooks: the state directory %q: %s", stateDir, reason)
+			return 1
 		}
-		logger.Printf("cannot read the hooks: the state directory %q: %s", stateDir, reason)
-		return 1
 	}
 	store, err := settings.Load(hooksOnly{backend}, settings.Production())
 	if err != nil {
@@ -82,10 +89,6 @@ func runHooks(ctx context.Context, when, stateDir, backendCmd string, runner hoo
 	if err != nil { // an uninitialized Core, which the daemon serves: it has no hooks
 		logger.Printf("no hooks run: %v", err)
 		return 0
-	}
-	runner.Log = stderr
-	if c.Lifecycle == "uninstall" { // pfb_run_streams_to_stdout(): a package lifecycle's console sees the main log
-		runner.Log = io.MultiWriter(dropErrors{stderr}, dropErrors{stdout})
 	}
 	if runner.Run(ctx, when, hooks.Rows(value), c) {
 		return 1
