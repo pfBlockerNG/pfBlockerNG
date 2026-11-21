@@ -1,0 +1,13 @@
+{
+  "description": "Version 1 Update requests as Core writes them to the update program's stdin (go/pfb_core/update Request, with version 1 added). go/pfb_core/update request_fixture_test.go checks that Core writes exactly these members; tests/php/CoreUpdateServeTest.php checks that the Outpost worker (pfb_core_update_request()) accepts each one and reads its lifecycle and pkgOp. Issue #4035.",
+  "requests": [
+    {"version": 1, "trigger": "manual", "scope": "both", "force": "none"},
+    {"version": 1, "trigger": "scheduled", "scope": "both", "force": "none", "feeds": ["ipv4:feed_v4", "dnsbl:ads"], "extras": ["extra:dcc", "extra:bl"]},
+    {"version": 1, "trigger": "manual", "scope": "both", "force": "none", "lifecycle": "install"},
+    {"version": 1, "trigger": "manual", "scope": "both", "force": "none", "lifecycle": "install", "pkgOp": "install"},
+    {"version": 1, "trigger": "manual", "scope": "both", "force": "none", "lifecycle": "install", "pkgOp": "upgrade"},
+    {"version": 1, "trigger": "manual", "scope": "both", "force": "none", "lifecycle": "install", "pkgOp": "reinstall"},
+    {"version": 1, "trigger": "manual", "scope": "both", "force": "none", "pkgOp": "delete"},
+    {"version": 1, "trigger": "apply", "scope": "both", "force": "none", "lifecycle": "install", "pkgOp": "upgrade"}
+  ]
+}
