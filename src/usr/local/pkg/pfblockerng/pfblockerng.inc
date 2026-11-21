@@ -27212,6 +27212,8 @@ function pfb_daemon_filterlog() {
 
 	// Persistent negative cache: trackers absent from the ruleset are never reparsed again.
 	$tracker_misses = array();
+	// The CrowdSec bouncer's rows' GeoIP and rDNS per host (#4164), which the IP cache does not keep
+	$crowdsec_hosts = array();
 
 	if (($s_handle = @fopen('php://stdin', 'r')) !== FALSE) {
 		logger(LOG_NOTICE, localize_text('filterlog daemon started'), LOG_PREFIX_PKG_PFBLOCKERNG);
@@ -27436,36 +27438,48 @@ function pfb_daemon_filterlog() {
 							}
 						}
 
-						// Determine GeoIP isocode of host
-						if (!empty($pathgeoip)) {
-							$geoip = exec("{$pathgeoip} " . escapeshellarg($host) . " country iso_code | grep -v '^\$' | cut -d '\"' -f2 2>&1");
-							$geoip = pfb_filter($geoip, PFB_FILTER_ALPHA, 'pfb_daemon_filterlog', 'Unk');
+						// A CrowdSec row's GeoIP and rDNS, once per host: it stays out of the IP cache, which answers pfB rows
+						if ($crowdsec && isset($crowdsec_hosts[$host])) {
+							[$geoip, $resolved_host] = $crowdsec_hosts[$host];
 						}
 						else {
-							$geoip = 'Unk';
-						}
+							// Determine GeoIP isocode of host
+							if (!empty($pathgeoip)) {
+								$geoip = exec("{$pathgeoip} " . escapeshellarg($host) . " country iso_code | grep -v '^\$' | cut -d '\"' -f2 2>&1");
+								$geoip = pfb_filter($geoip, PFB_FILTER_ALPHA, 'pfb_daemon_filterlog', 'Unk');
+							}
+							else {
+								$geoip = 'Unk';
+							}
 
-						if ($pfb['rdns']) {
-							$resolved_host = gethostbyaddr($host) ?: 'Unknown';
-							if ($host == $resolved_host || $resolved_host == 'Unknown') {
+							if ($pfb['rdns']) {
+								$resolved_host = gethostbyaddr($host) ?: 'Unknown';
+								if ($host == $resolved_host || $resolved_host == 'Unknown') {
+									$resolved_host = 'Unknown';
+								}
+							} else {
 								$resolved_host = 'Unknown';
 							}
-						} else {
-							$resolved_host = 'Unknown';
+						}
+
+						// Every looked-up row is filtered before it is logged, cached or not
+						$pfb_query[0]	= pfb_filter($pfb_query[0], PFB_FILTER_HTML, 'pfb_daemon_filterlog');
+						$pfb_query[1]	= pfb_filter($pfb_query[1], PFB_FILTER_HTML, 'pfb_daemon_filterlog');
+						$geoip		= pfb_filter($geoip, PFB_FILTER_HTML, 'pfb_daemon_filterlog');
+						$resolved_host	= pfb_filter($resolved_host, PFB_FILTER_HOSTNAME, 'pfb_daemon_filterlog', 'Unknown');
+						if ($crowdsec) {
+							if (count($crowdsec_hosts) >= 10000) {
+								$crowdsec_hosts = array();
+							}
+							$crowdsec_hosts[$host] = array($geoip, $resolved_host);
 						}
 
 						// Save entry to IP cache only when attribution was not deferred by a GeoIP swap, and only a pfB row's: the
-						// cache answers later pfB rows of this host (a CrowdSec row's GeoIP and rDNS are looked up each time)
+						// cache answers later pfB rows of this host, which the CrowdSec row's feed is not
 						if (!$geoip_deferred && !$crowdsec) {
 							$db_update = "INSERT into ipcache ( host, q0, q1, geoip, resolved_host ) VALUES ( :host, :q0, :q1, :geoip, :resolved_host )";
 							$db_handle = pfb_open_sqlite(7, 'Add to IP cache');
 							if ($db_handle) {
-								$pfb_host	= pfb_filter($host, PFB_FILTER_HTML, 'pfb_daemon_filterlog');
-								$pfb_query[0]	= pfb_filter($pfb_query[0], PFB_FILTER_HTML, 'pfb_daemon_filterlog');
-								$pfb_query[1]	= pfb_filter($pfb_query[1], PFB_FILTER_HTML, 'pfb_daemon_filterlog');
-								$geoip		= pfb_filter($geoip, PFB_FILTER_HTML, 'pfb_daemon_filterlog');
-								$resolved_host	= pfb_filter($resolved_host, PFB_FILTER_HOSTNAME, 'pfb_daemon_filterlog', 'Unknown');
-
 								$stmt = $db_handle->prepare($db_update);
 								if ($stmt) {
 									$stmt->bindValue(':host', $host, SQLITE3_TEXT);

@@ -179,11 +179,11 @@ final class CrowdsecAlertsAttributionTest extends TestCase
 
 		[$block, $unified] = $this->runDaemon([
 			// Inbound IPv4 TCP from a banned address to a LAN host, by the inbound IPv4 rule
-			self::filterlog('3,,,177400401,vtnet0,match,block,in,4,0x0,,64,12345,0,DF,6,tcp,60,192.0.2.10,10.0.0.5,51234,22,0,S,1,,64240,,mss'),
+			self::filterlog('3,,,177400401,vtnet2,match,block,in,4,0x0,,64,12345,0,DF,6,tcp,60,192.0.2.10,10.0.0.5,51234,22,0,S,1,,64240,,mss'),
 			// Outbound IPv6 UDP to a banned address, by the outbound IPv6 rule
-			self::filterlog('6,,,177400602,vtnet0,match,block,out,6,0x00,0x00000,64,udp,17,40,2001:db8:1::5,2001:db8:4074::1,5353,53,40'),
+			self::filterlog('6,,,177400602,vtnet2,match,block,out,6,0x00,0x00000,64,udp,17,40,2001:db8:1::5,2001:db8:4074::1,5353,53,40'),
 			// An inbound drop toward a routed subnet on no local interface: the inbound rule's banned side is the source
-			self::filterlog('3,,,177400401,vtnet0,match,block,in,4,0x0,,64,12345,0,DF,6,tcp,60,192.0.2.10,198.18.10.20,51234,22,0,S,1,,64240,,mss'),
+			self::filterlog('3,,,177400401,vtnet2,match,block,in,4,0x0,,64,12345,0,DF,6,tcp,60,192.0.2.10,198.18.10.20,51234,22,0,S,1,,64240,,mss'),
 			// The same IPv4 address later dropped by the pfB rule
 			self::filterlog('7,,,1770000001,vtnet0,match,block,in,4,0x0,,64,12346,0,DF,6,tcp,60,192.0.2.10,10.0.0.5,51235,23,0,S,1,,64240,,mss'),
 		]);
@@ -214,16 +214,21 @@ final class CrowdsecAlertsAttributionTest extends TestCase
 	{
 		$this->rules(self::RULES . "\n" . '@8(0) pass in log quick on vtnet0 inet from <pfB_Allow_v4:1> to any label "USER_RULE: pfB_Allow_v4" ridentifier 1770000002');
 		// The address is in a deny feed and a permit feed
-		file_put_contents("{$this->root}/deny/Test_Feed.txt", "192.0.2.20\n");
 		file_put_contents("{$this->root}/native/Placeholder.txt", "placeholder\n");
 		file_put_contents("{$this->root}/permit/Allow_Feed.txt", "192.0.2.20\n");
+
+		file_put_contents("{$this->root}/deny/Test_Feed.txt", "192.0.2.20\n192.0.2.21\n");
 
 		[$block, ] = $this->runDaemon([
 			self::filterlog('3,,,177400401,vtnet2,match,block,in,4,0x0,,64,12345,0,DF,6,tcp,60,192.0.2.20,10.0.0.5,51234,22,0,S,1,,64240,,mss'),
 			self::filterlog('8,,,1770000002,vtnet0,match,pass,in,4,0x0,,64,12346,0,DF,6,tcp,60,192.0.2.20,10.0.0.5,51235,443,0,S,1,,64240,,mss'),
+			// And the other way round: a pfB row caches the host's feed, which a later CrowdSec row does not take
+			self::filterlog('7,,,1770000001,vtnet0,match,block,in,4,0x0,,64,12347,0,DF,6,tcp,60,192.0.2.21,10.0.0.5,51236,25,0,S,1,,64240,,mss'),
+			self::filterlog('3,,,177400401,vtnet2,match,block,in,4,0x0,,64,12348,0,DF,6,tcp,60,192.0.2.21,10.0.0.5,51237,22,0,S,1,,64240,,mss'),
 		]);
 		$permit = (string) @file_get_contents("{$this->root}/ip_permit.log");
-		$this->assertSame([['crowdsec_v4', 'Unknown', 'CrowdSec']], array_map(static fn (array $r): array => [$r[14], $r[15], $r[16]], $block));
+		$this->assertSame([['192.0.2.20', 'crowdsec_v4', 'Unknown', 'CrowdSec'], ['192.0.2.21', 'pfB_Test_v4', '192.0.2.21', 'Test_Feed'],
+			['192.0.2.21', 'crowdsec_v4', 'Unknown', 'CrowdSec']], array_map(static fn (array $r): array => [$r[8], $r[14], $r[15], $r[16]], $block));
 		$row = str_getcsv(trim($permit), ',', '"', '');
 		$this->assertSame(['pfB_Allow_v4', '192.0.2.20', 'Allow_Feed'], [$row[14] ?? NULL, $row[15] ?? NULL, $row[16] ?? NULL],
 			"the pass row's feed comes from the permit folder, not the CrowdSec row's lookup: {$permit}");
