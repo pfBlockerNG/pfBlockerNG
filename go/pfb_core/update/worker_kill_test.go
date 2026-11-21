@@ -338,12 +338,13 @@ func TestWorkerDeathKeepsExclusionUntilTheNativeProgramExits(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := independentLog(t)
-	// The released program still writes "finished" into its folder: wait for its exit (the lock it holds) before the
-	// temporary folders go (#4166).
+	// The released program still writes "finished" into its folder: wait for the lock holder, which exits after it,
+	// before the temporary folders go (#4166). The FIFO stays open until then: closing it before the program has opened
+	// it would drop the line.
 	t.Cleanup(func() {
 		_, _ = release.WriteString("finish\n")
-		_ = release.Close()
 		awaitUnlocked(t, log.Name()).Close()
+		_ = release.Close()
 	})
 	cmd, err := startOwnedWorker(t, p.Path, log, false)
 	if err != nil {
