@@ -25,7 +25,10 @@ type PostScript struct {
 type PostScriptResult struct {
 	Skipped bool // no post-script is set, or it is not a vetted file: nothing ran, and nothing failed
 	// Reason is "" when the script exited 0; else PreScriptStage, PreScriptExit or PreScriptTimeout, a script failure, or
-	// PreScriptCancelled.
+	// PreScriptCancelled: the caller ended the run, and the script did not fail. A cancelled run leaves the feed as a failed
+	// one does: RunDNSBL's staged copy is removed and the download untouched; RunIP has already renamed its restore point
+	// back over the download, or removed a restore point that is no regular file, and a folder the script left at the
+	// download keeps both where they are. Its line stays in Errors.
 	Reason string
 	Status int // when Reason is PreScriptExit: as PreScriptResult.Status, or -1 when no output file could be made
 
@@ -52,8 +55,9 @@ func (p PostScript) RunDNSBL(ctx context.Context, orig, staged string) PostScrip
 
 // RunIP is the IP post-script: orig is copied to restore, and the script runs on orig itself with vtype (_v4 or _v6). A
 // failed script is undone at once, as Restore does. After a successful one orig holds its output, which the caller's
-// empty-feed check reads; Restore then puts the download back. A restore point that cannot be written is left as it was:
-// one an earlier Restore could not rename back holds the only good copy.
+// empty-feed check reads; Restore then puts the download back. A regular file at the restore point that cannot be written
+// is left as it was: one an earlier Restore could not rename back holds the only good copy. Anything else there (an empty
+// folder a script left) is removed, as Restore does, so that it does not fail every later run.
 func (p PostScript) RunIP(ctx context.Context, orig, restore, vtype string) PostScriptResult {
 	script, ok := p.vet()
 	if !ok {
@@ -61,6 +65,9 @@ func (p PostScript) RunIP(ctx context.Context, orig, restore, vtype string) Post
 	}
 	p.sinks().Line(false, "\nExecuting post-script: %s\n", p.Name)
 	if err := copyFile(orig, restore); err != nil {
+		if info, err := os.Lstat(restore); err == nil && !info.Mode().IsRegular() {
+			os.Remove(restore)
+		}
 		p.sinks().Line(true, "\n[ %s ] post-script '%s' could not stage its restore point; skipping\n", p.Header, p.Name)
 		return PostScriptResult{Reason: PreScriptStage}
 	}
@@ -98,6 +105,9 @@ func (p PostScript) vet() (string, bool) {
 	}
 	name := filepath.Base(p.Name)
 	for _, dir := range p.Dirs {
+		if dir == "" { // an unset folder, which Abs would make the working folder
+			continue
+		}
 		base, err := filepath.Abs(dir)
 		if err != nil {
 			continue

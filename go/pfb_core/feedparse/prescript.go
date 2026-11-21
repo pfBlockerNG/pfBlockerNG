@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -27,7 +26,8 @@ const bourneShell = "/bin/sh"
 var errScriptTimedOut = errors.New("script ran past its limit")
 
 // PreScriptResult is the outcome of RunPreScript (pfb_list_pre_script_run()): whether the transform ran, the file to parse, and
-// why it did not.
+// why it did not. PreScriptCancelled means the caller ended the run: the script did not fail, but the feed is left as for a
+// failed run, the staged copy removed and Path the normalized feed.
 type PreScriptResult struct {
 	OK     bool
 	Path   string // the staged copy when OK, else the normalized feed: what a failed transform leaves the caller to keep
@@ -131,30 +131,38 @@ func (p PreScriptResult) Cleanup() {
 	}
 }
 
-// copyFile copies src, which must be a regular file, to a new file beside dst and renames it over dst: whatever sits at
-// dst (a copy left by an earlier run, a symbolic link) is replaced, never written through, and a failed copy leaves dst
-// as it was. The copy is 0644, as the old path's copy() leaves it under the usual umask, so that a script that drops
-// privileges reads its input.
+// copyFile copies src, which must be a regular file or a symbolic link to one (copy() follows it too), to dst+".tmp", its
+// one temporary name, and renames that over dst: whatever sits at dst (a copy left by an earlier run, a symbolic link) is
+// replaced, never written through, and a failed copy leaves dst as it was. A source of another type is refused before it
+// is opened, so that a FIFO there cannot block the open. What an interrupted copy left at the temporary name is removed
+// first and the file is created anew without following a link, so at most one leftover per destination exists; it is
+// synced before the rename, so that a power loss cannot leave dst empty. The copy is 0644, as the old path's copy() leaves
+// it under the usual umask, so that a script that drops privileges reads its input.
 func copyFile(src, dst string) error {
+	if info, err := os.Stat(src); err != nil || !info.Mode().IsRegular() {
+		return errors.Join(err, fs.ErrInvalid)
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	if info, err := in.Stat(); err != nil || !info.Mode().IsRegular() {
+	if info, err := in.Stat(); err != nil || !info.Mode().IsRegular() { // src replaced since the check
 		return errors.Join(err, fs.ErrInvalid)
 	}
-	out, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".")
+	tmp := dst + ".tmp"
+	os.Remove(tmp)
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
 		return err
 	}
 	_, err = io.Copy(out, in)
-	err = errors.Join(err, out.Chmod(0o644), out.Close())
+	err = errors.Join(err, out.Chmod(0o644), out.Sync(), out.Close())
 	if err == nil {
-		err = os.Rename(out.Name(), dst)
+		err = os.Rename(tmp, dst)
 	}
 	if err != nil {
-		os.Remove(out.Name())
+		os.Remove(tmp)
 	}
 	return err
 }

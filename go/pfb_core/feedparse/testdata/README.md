@@ -216,9 +216,10 @@ Core differs on purpose (the Go runner asserts `expect`, the PHP runner `expect`
   or null when it never ran (`{root}` and `{cwd}`, the runner's folder, expand); `log`, `errors` and `transcript`, the main log,
   the error log and the Update transcript without `pfb_logger()`'s stamps, each a string or `{prefix, repeat, times, suffix}`;
   `failed`, whether the loop records a script failure; `reason` and `status`, the Go result's `Reason` (`""`, `"stage"`,
-  `"exit"` or `"timeout"`, set exactly when `failed`) and `Status` (the exit status for `"exit"`, else 0), which only the Go
-  runner asserts; `alive`, null, or whether the child the script started (it holds the fifo `PFB_TEST_ALIVE` and writes its
-  PID to `PFB_TEST_PID`) is alive when the run has returned.
+  `"exit"`, `"timeout"` or `"cancelled"`, set exactly when `failed`) and `Status` (the exit status for `"exit"`, else 0), which
+  only the Go runner asserts; `"cancelled"` (the caller ended the run) has no case, since the runner ends a blocked script as
+  the limit does, and the loader refuses it; `alive`, null, or whether the child the script started (it holds the fifo
+  `PFB_TEST_ALIVE` and writes its PID to `PFB_TEST_PID`) is alive when the run has returned.
 
 `old_expect` records today's PHP as the PHP runner runs it on Linux, where `timeout(1)` is GNU coreutils'. What the
 departure notes say about FreeBSD's `timeout(1)` comes from its documentation and is unverified on FreeBSD.
