@@ -4641,11 +4641,6 @@ function pfb_core_error_code(mixed $reply): ?string {
 	return is_string($code) && preg_match('/^[a-z_]{1,64}$/D', $code) === 1 ? $code : NULL;
 }
 
-/** Whether $id has the shape of a Core resource id (go/pfb_core/resources ValidID). */
-function pfb_outpost_resource_id_valid(string $id): bool {
-	return strlen($id) <= 128 && preg_match('~^(?:ip-(?:set|aggregate)/[A-Za-z0-9_-]+/ipv[46]|geo-catalog|dnsbl/[A-Za-z0-9_-]+)$~D', $id) === 1;
-}
-
 /** Whether $generation is a generation as Core writes one: a string of decimal digits that fits 64 bits. */
 function pfb_outpost_generation_valid(mixed $generation): bool {
 	return is_string($generation) && ctype_digit($generation) && pfb_outpost_generation_cmp($generation, '18446744073709551615') <= 0;
@@ -5070,7 +5065,7 @@ function pfb_outpost_cursors_read(?string $path = NULL): array {
 }
 
 function pfb_outpost_cursor_valid(string $id, mixed $generation, mixed $digest, mixed $entries): bool {
-	return pfb_outpost_resource_id_valid($id) && pfb_outpost_generation_valid($generation) && pfb_outpost_digest_valid($digest)
+	return pfb_core_resource_id($id) && pfb_outpost_generation_valid($generation) && pfb_outpost_digest_valid($digest)
 		&& is_int($entries) && $entries >= 0;
 }
 
