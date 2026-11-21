@@ -4547,6 +4547,7 @@ function pfb_core_call(string $method, array $params = [], ?string $socket = NUL
  * @return array<string, mixed> the 19 fields, in the protocol's order
  */
 function pfb_core_dns_settings(): array {
+	$lists = pfb_core_dns_list_fields();
 	$on = static fn(string $key): bool => pfb_cfg_toggle_read(PfbConfig::read($key)) === PfbToggle::On;
 	$cap = (string) PfbConfig::read('dnsbl/pfb_py_cache_max');
 	$control = $on('dnsbl/pfb_control');
@@ -4566,7 +4567,8 @@ function pfb_core_dns_settings(): array {
 		'controlLegacy'         => $control && $on('dnsbl/pfb_control_legacy'),
 		'regexCap'              => $on('dnsbl/pfb_regex_cap'),
 		'metricsClientIp'       => $on('gen/pfb_metrics_client_ip'),
-	] + array_replace(pfb_core_table_read(pfb_core_dns_list_fields()), ['noAaaaList' => pfb_core_noaaaa_list(pfb_core_table_text('dnsbl/pfb_noaaaa_list'))]);
+	] + array_replace($lists, pfb_core_table_read(array_diff_key($lists, ['noAaaaList' => TRUE])),
+		['noAaaaList' => pfb_core_noaaaa_list(pfb_core_table_text($lists['noAaaaList'][0]))]);
 }
 
 /**
@@ -4608,7 +4610,7 @@ function pfb_core_noaaaa_list(string $stored64): array {
 	foreach (pfb_core_table_text_lines($stored64) as $line) {
 		$entry = pfb_core_noaaaa_entry($line);
 		if ($entry !== NULL) {
-			$domain = 'd' . ltrim($entry, '.');	// a prefix keeps a numeric domain a string key
+			$domain = ltrim($entry, '.');
 			unset($entries[$domain]);
 			$entries[$domain] = ['domain' => $entry];
 		}
@@ -5225,8 +5227,8 @@ function pfb_core_table_merge(array $wanted, array $current, array $fields, arra
 		if (is_array($value)) {
 			[$want, $was] = [array_column($value, $arg[0]), array_column($current[$name], $arg[0])];
 			if ($kind === 'text') {
-				sort($want);
-				sort($was);
+				sort($want, SORT_STRING);
+				sort($was, SORT_STRING);
 			}
 			if ($want === $was) {
 				continue;
@@ -6169,9 +6171,10 @@ function pfb_core_settings_refusal(string $code, string $message, array $fieldEr
 /**
  * The refusal for a malformed settings adapter request, NULL for a well-formed one: nothing is locked or written before it passes.
  * A request holds exactly the keys of its op, and a write's `settings` exactly `dns` (the 19 fields, each of its native type and
- * range, the lists as pfb_core_table_faults() holds them, no noAAAA domain listed twice), the feed projections (pfb_core_feed_projection_faults(), issue #3937), `schedule` (pfb_core_schedule_faults(), issue #3941) and
- * `ingest` (an object here; pfb_core_settings_backend() holds it to what config.xml and the platform project, issue #3975) and the
- * table-driven projections (pfb_core_table_faults(), issue #4031) and `feeds/geoip` (pfb_core_geoip_faults()).
+ * range, the lists as pfb_core_table_faults() holds them, no noAAAA domain listed twice), the feed projections
+ * (pfb_core_feed_projection_faults(), issue #3937), `schedule` (pfb_core_schedule_faults(), issue #3941) and `ingest` (an object
+ * here; pfb_core_settings_backend() holds it to what config.xml and the platform project, issue #3975) and the table-driven
+ * projections (pfb_core_table_faults(), issue #4031) and `feeds/geoip` (pfb_core_geoip_faults()).
  *
  * @param array<mixed> $request
  * @param ?callable(): array<string, string> $interfaces realif => IPv4 address; pfb_core_interface_addresses() by default (a test seam)
@@ -6231,7 +6234,7 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
 	if ($listFaults === []) {
 		$domains = [];
 		foreach ($dns['noAaaaList'] as $i => $item) {
-			$domain = ltrim($item['domain'], '.');	// pfB-DNS keeps one flag per domain
+			$domain = ltrim($item['domain'], '.');
 			if (isset($domains[$domain])) {
 				$listFaults[] = ['field' => "dns.noAaaaList[{$i}].domain", 'message' => 'names the domain of an earlier item'];
 			}
@@ -6288,6 +6291,7 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		return ['version' => 1, 'revision' => pfb_core_settings_revision($settings), 'settings' => $settings, 'platform' => ['pendingToken' => $token]];
 	}
 	$fields = pfb_core_dns_fields();
+	$dnsLists = pfb_core_dns_list_fields();
 	$wanted = $request['settings']['dns'];
 	$lock = pfb_dns_config_lock();
 	if ($lock === NULL) {
@@ -6324,6 +6328,14 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 			return pfb_core_settings_refusal('invalid_argument', "a Blacklist provider's title and feed are the package's", $fixed);
 		}
 		$current = pfb_core_dns_settings();
+		// issue #4036: an entry a write adds to the noAAAA list passes the DNSBL page's rule, or the page's next save fails; a held one round-trips
+		$held = array_column($current['noAaaaList'], 'domain');
+		$added = array_filter(array_column($wanted['noAaaaList'], 'domain'), static fn(string $domain): bool => !in_array($domain, $held, TRUE)
+			&& empty(pfb_filter(rtrim($domain, '.'), PFB_FILTER_DOMAIN, 'pfb_core_settings')));
+		if ($added !== []) {
+			return pfb_core_settings_refusal('invalid_argument', 'a noAAAA entry the DNSBL page would refuse', array_map(static fn(int $i): array =>
+				['field' => "dns.noAaaaList[{$i}].domain", 'message' => 'must be a domain the DNSBL page accepts'], array_keys($added)));
+		}
 		$changed = array_keys(array_filter(array_intersect_key($wanted, $fields), static fn(mixed $value, string $field): bool => $value !== $current[$field], ARRAY_FILTER_USE_BOTH));
 		$sections = $lists = [];
 		foreach (PFB_CORE_FEED_SECTIONS as $projection => $section) {
@@ -6338,7 +6350,6 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 			$keys += pfb_core_table_merge($request['settings'][$id], $now[$id], $table, $sections);
 		}
 		pfb_core_geoip_merge($request['settings']['feeds/geoip'], $now['feeds/geoip'], $sections);
-		$dnsLists = pfb_core_dns_list_fields();
 		$keys += pfb_core_table_merge(array_intersect_key($wanted, $dnsLists), array_intersect_key($current, $dnsLists), $dnsLists, $sections);
 		if ($changed === [] && $sections === [] && $keys === []) {
 			return ['version' => 1, 'revision' => $request['expectedRevision']];

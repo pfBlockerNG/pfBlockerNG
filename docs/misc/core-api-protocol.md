@@ -210,24 +210,31 @@ stored list separately, so a list survives while its switch is off.
 - A `noAaaaList` entry is a domain as `pfb-dns` keys its noAAAA table: printable ASCII except `,`, `%`, `#` and upper
   case, and no second leading dot. A leading dot is the wildcard flag (the ini's `domain,1`). The table keeps one flag
   per domain, the last row's, so the list names each domain once, plain or as a wildcard, never both.
+- A write may add only a noAAAA entry the DNSBL page saves: `pfb_filter()`'s domain rule once its trailing dots are off
+  (letters, digits, `_` and `-` in labels of at most 63 characters joined by dots, none empty). A stored entry outside
+  that rule would make every later save of the page fail. An entry the list already holds stays writable whatever it is,
+  so a client can write back what it read: Core's load takes the list the Outpost reads, and only an item a write adds is
+  held to the page's rule.
 - A `groupPolicyBypassList` entry is an IP address without a zone, or an address with a prefix length of digits within
   its family. Host bits under the prefix and a prefix length with leading zeros are allowed, as `pfb-dns` reads them. The
-  entry is lower case, as the Outpost stores it. Each entry is listed once.
-- The Outpost does not project an entry that `pfb-dns` skips or that can never match a query. Three departures from the ini
-  are deliberate. A noAAAA row holding `%` is not held: today it makes `pfb-dns` refuse the whole ini. A noAAAA name with
-  white space is not held: it matches no query. A bypass entry in netmask form (`10.0.0.0/255.255.255.0`) or with an IPv6
-  zone (`fe80::1%em0`) is not held: `pfb-dns` takes both from the ini, but the DNSBL page never saves either.
+  entry is lower case, as the Outpost stores it. Each entry is listed once. Entries are compared as written, so one network
+  under two spellings (`10.0.0.1`, `10.0.0.1/32`, `10.0.0.1/032`) is two entries.
+- The Outpost does not project an entry that `pfb-dns` skips (a row the ini writer drops, a row of three fields). Beyond
+  that, three departures from the ini are deliberate. A noAAAA row holding `%` is not held: today a `%` that is not a valid
+  interpolation makes `pfb-dns` refuse the whole ini, and a valid one (`a%%b.com`, `%(0)s`) is interpolated into another
+  name. A noAAAA name with white space is not held: it matches no query. A bypass entry in netmask form
+  (`10.0.0.0/255.255.255.0`) or with an IPv6 zone (`fe80::1%em0`) is not held: `pfb-dns` takes both from the ini, but the
+  DNSBL page never saves either.
 - On a write, the Outpost merges each list into its text area: a line whose entry stays is kept, a line holding no entry
   Core can hold (a comment, a departure above) is kept, a line whose entry went is dropped, and a new entry is appended.
   A list is compared as a set, so a write that only reorders it changes nothing.
 
 Parity fixture: `tests/core/fixtures/settings_dns_parity.json`. `CoreSettingsDnsParityTest` (PHPUnit) freezes it against
-today's PHP. `go/pfb_core/settings/parity_test.go` runs Core against it. Its `refused` rows are values of the noAAAA and
-Group Policy fields that both the Outpost's write and Core refuse, naming the field.
-
-`tests/core/fixtures/dns_ini_projection_parity.json` freezes, for a matrix of stored configurations, the two ini sections
-today's writer produces beside the four fields the Outpost projects (`CoreSettingsDnsIniProjectionParityTest`), so that
-`pfb-dns` can be shown to build the same tables from either input.
+today's PHP. `go/pfb_core/settings/parity_test.go` runs Core against it: a posted case is saved, and a stored case is loaded
+as the adapter's read brings it in, then written back. Its `refused` rows are values of the noAAAA and Group Policy fields
+that both the Outpost's write and Core refuse, naming the field. A case of those fields also holds, under `ini`, the raw
+text of the `[noAAAA]` and `[GP_Bypass_List]` sections today's writer gives for its stored values (null: no section), which
+`CoreSettingsDnsParityTest` freezes, so that `pfb-dns` can be shown to build the same tables from either input.
 
 ### Projections `feeds/ipv4`, `feeds/ipv6`, `feeds/dnsbl`
 

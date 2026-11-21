@@ -26,7 +26,8 @@ const (
 // same projection: while that one is false, this bool is held false. A string matches Pattern (when set) and is none of
 // Reserved. A list's items are objects of the fields Items, its Key field unique and non-empty across them; Check and
 // CheckList (not published) refuse an item whose fields, or a list whose items, do not hold together. Check also refuses a
-// scalar field's decoded value, which it gets as {Name: value}.
+// scalar field's decoded value, which it gets as {Name: value}. Admit (not published) refuses an item a write adds to a list,
+// one whose key the list does not hold yet: a load does not run it, so an item outside its rule still loads and round-trips.
 type Field struct {
 	Name     string   `json:"name"`
 	Type     Type     `json:"type"`
@@ -46,6 +47,7 @@ type Field struct {
 	Legacy    map[string]string                      `json:"-"`
 	Check     func(item map[string]any) []FieldError `json:"-"`
 	CheckList func(list []any) []FieldError          `json:"-"` // field names relative to the list: "[i].…"
+	Admit     func(item map[string]any) []FieldError `json:"-"`
 }
 
 // Projection is a group of fields read and versioned together, published as the resource settings/<ID>. A ReadOnly projection
@@ -81,10 +83,6 @@ func Production() Schema {
 
 func dnsProjection() Projection {
 	policy := []string{"ignore", "apex", "honor"}
-	// A noAAAA entry is a domain as pfB-DNS keys it, a leading dot for its wildcard flag: printable ASCII but for , % # and upper case
-	// (pfB-DNS splits its row at the comma, refuses the ini at a %, and the Outpost cuts a line at # and lowers it), no second leading dot.
-	noAaaa := Field{Name: "noAaaaList", Type: TypeList, Default: []any{}, Key: "domain", CheckList: checkNoAaaaDomains, Items: []Field{
-		{Name: "domain", Type: TypeString, Default: "", Pattern: `^\.?[\x21\x22\x24\x26-\x2b\x2d\x2f-\x40\x5b-\x7e][\x21\x22\x24\x26-\x2b\x2d-\x40\x5b-\x7e]*$`}}}
 	return Projection{ID: "dns", Fields: []Field{
 		{Name: "replyLogging", Type: TypeBool, Default: true},
 		{Name: "tldWildcard", Type: TypeBool, Default: false},
@@ -102,22 +100,37 @@ func dnsProjection() Projection {
 		{Name: "regexCap", Type: TypeBool, Default: false},
 		{Name: "metricsClientIp", Type: TypeBool, Default: false},
 		{Name: "noAaaa", Type: TypeBool, Default: false},
-		noAaaa,
+		// A noAAAA entry is a domain as pfB-DNS keys it, a leading dot for its wildcard flag: printable ASCII but for , % # and upper case
+		// (pfB-DNS splits its row at the comma, refuses the ini at a %, and the Outpost cuts a line at # and lowers it), no second leading dot.
+		{Name: "noAaaaList", Type: TypeList, Default: []any{}, Key: "domain", CheckList: checkNoAaaaDomains, Admit: admitNoAaaaDomain, Items: []Field{
+			{Name: "domain", Type: TypeString, Default: "", Pattern: `^\.?[\x21\x22\x24\x26-\x2b\x2d\x2f-\x40\x5b-\x7e][\x21\x22\x24\x26-\x2b\x2d-\x40\x5b-\x7e]*$`}}},
 		{Name: "groupPolicy", Type: TypeBool, Default: false},
 		{Name: "groupPolicyBypassList", Type: TypeList, Default: []any{}, Key: "cidr", Check: checkBypassEntry,
 			Items: []Field{{Name: "cidr", Type: TypeString, Default: ""}}},
 	}, Retired: []string{"logViaWebserver", "hstsNullBlocking"}} // #4054, #4056
 }
 
-// checkNoAaaaDomains refuses a noAAAA list that names one domain twice, plain and as a wildcard: pfB-DNS keeps one flag per domain.
+// checkNoAaaaDomains refuses each item of a noAAAA list that names the domain of an earlier one, plain and as a wildcard: pfB-DNS
+// keeps one flag per domain.
 func checkNoAaaaDomains(list []any) []FieldError {
+	var errs []FieldError
 	seen := map[string]bool{}
 	for i, item := range list {
 		d := strings.TrimPrefix(item.(map[string]any)["domain"].(string), ".")
 		if seen[d] {
-			return []FieldError{{Field: fmt.Sprintf("[%d].domain", i), Message: "names the domain of an earlier item"}}
+			errs = append(errs, FieldError{Field: fmt.Sprintf("[%d].domain", i), Message: "names the domain of an earlier item"})
 		}
 		seen[d] = true
+	}
+	return errs
+}
+
+// admitNoAaaaDomain holds a noAAAA entry a write adds to what the DNSBL page saves (pfb_filter's domain rule once its trailing dots
+// are off, as the whitelist's checkWhitelistDomain), so that a later page save does not refuse the stored line.
+func admitNoAaaaDomain(item map[string]any) []FieldError {
+	d := strings.TrimRight(item["domain"].(string), ".")
+	if !pattern(`^[a-z0-9_.-]{1,254}$`).MatchString(d) || checkWhitelistDomain(map[string]any{"domain": d}) != nil {
+		return []FieldError{{Field: "domain", Message: "must be a domain the DNSBL page accepts: letters, digits, _ and -, in labels of at most 63 characters joined by dots, none empty"}}
 	}
 	return nil
 }

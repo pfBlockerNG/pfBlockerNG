@@ -173,7 +173,8 @@ Authorization = property of **write**, not call site (generalises
     fields `noAaaa`, `noAaaaList`, `groupPolicy` and `groupPolicyBypassList`. The settings
     adapter reads them through the gateway (`pfb_core_dns_settings()`) and writes them with
     `PfbConfig::writeSystem()`; a list is merged into its text area, so comment lines and
-    lines Core does not hold stay as they are.
+    lines Core does not hold stay as they are. A write adds only a noAAAA entry the DNSBL
+    page would save.
     Page checkbox rendering accepts either the enum from GET or raw POST redisplay
     through the same adapter; TOP1M comparison snapshots use `toStored()` to keep
     both sides scalar (`''`, not the enum's backing `'off'`).
