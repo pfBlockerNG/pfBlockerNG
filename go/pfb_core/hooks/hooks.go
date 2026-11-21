@@ -67,6 +67,9 @@ func Rows(value map[string]any) []Hook {
 	return rows
 }
 
+// PkgOps are the package operations a Context's PkgOp may name; "" is none.
+var PkgOps = []string{"install", "upgrade", "reinstall", "delete"}
+
 // Context is what a fire point tells its hooks, each set on the child only as a PFB_* environment entry.
 type Context struct {
 	Lifecycle string            // install: PFB_POST_INSTALL=1; uninstall: PFB_PRE_UNINSTALL=1; otherwise both 0
@@ -269,9 +272,9 @@ func (r Runner) sinks() output.Sinks {
 	return output.Sinks{Log: r.Log, Transcript: r.Transcript, Errors: r.Errors}
 }
 
-// environ is the hooks' environment: the runner's own, then PFB_<NAME> for each context value whose upper-cased name is
-// [A-Z0-9_]+ and that holds no NUL, then PFB_WHEN and the lifecycle entries, which no context name replaces. A PkgOp
-// holding a NUL is no operation: PFB_PKG_OP is set empty, as hooks expect it always set.
+// environ is the hooks' environment: the runner's own without any PFB_* entry, then PFB_<NAME> for each context value
+// whose upper-cased name is [A-Z0-9_]+ and that holds no NUL, then PFB_WHEN and the lifecycle entries, which no context
+// name replaces. A PkgOp holding a NUL is no operation: PFB_PKG_OP is set empty, as hooks expect it always set.
 func environ(when string, c Context) []string {
 	vars := map[string]string{}
 	for _, name := range slices.Sorted(maps.Keys(c.Vars)) {
@@ -298,7 +301,7 @@ func environ(when string, c Context) []string {
 	}
 	vars["WHEN"], vars["PKG_OP"] = when, pkgOp
 	vars["POST_INSTALL"], vars["PRE_UNINSTALL"] = flag(c.Lifecycle == "install"), flag(c.Lifecycle == "uninstall")
-	env := os.Environ()
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "PFB_") })
 	for _, name := range slices.Sorted(maps.Keys(vars)) {
 		env = append(env, "PFB_"+name+"="+vars[name])
 	}
