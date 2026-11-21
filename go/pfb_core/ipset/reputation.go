@@ -126,7 +126,6 @@ func feedReputation(rows []string, in PrepIn) (members, match []string) {
 		count[cut3(r)]++
 	}
 	white, black := strings.ToLower(in.CCWhite), strings.ToLower(in.CCBlack)
-	countries := strings.ReplaceAll(in.CC, ",", ", ")
 	var blocked, exempt []string
 	keys, _ := over(count, in.Max)
 	for _, key := range keys {
@@ -135,7 +134,7 @@ func feedReputation(rows []string, in PrepIn) (members, match []string) {
 			cc = in.Geo(key)
 		}
 		switch {
-		case cc == "" || !strings.Contains(countries, cc):
+		case cc == "" || !listed(in.CC, cc):
 			blocked = append(blocked, key)
 		case white == "match" || black == "match":
 			exempt = append(exempt, key)
@@ -159,6 +158,10 @@ func feedReputation(rows []string, in PrepIn) (members, match []string) {
 	}
 	return sortUniq(rows), match
 }
+
+// listed is whether cc is an entry of the comma-separated country list. Today's shell matches a substring, so an entry
+// such as "A1_US" exempts US too (#4149).
+func listed(list, cc string) bool { return slices.Contains(strings.Split(list, ","), cc) }
 
 // RecomputeIn is one family's batch recompute. Feeds are the pristine per-feed snapshots in priority order, highest first (the
 // caller resolves a missing snapshot); the first feed to list a row owns it. Master is the masterfile as it stands, both
@@ -540,7 +543,7 @@ func Recompute(in RecomputeIn) RecomputeOut {
 		default:
 			for _, key := range offenders {
 				switch cc := in.Rep.Geo(key); {
-				case cc == "" || !strings.Contains(in.Rep.CC, cc):
+				case cc == "" || !listed(in.Rep.CC, cc):
 					action[key] = outside
 				case white == "match" || black == "match":
 					action[key] = "matchexempt"

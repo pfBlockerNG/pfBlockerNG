@@ -280,6 +280,11 @@ previous table, where today's shell truncates it first, keeping its mode and wri
 changes apart from MaxMind's, so it is not part of the country-list generation. How the `geo-catalog` resource carries
 it, and in which order, is slice 9 (#4038).*
 
+*Amendment 2026-11-21 (issue #4149, owner decision): the `reputation` rows leave out a country's proxy and satellite
+lists (`A1_<ISO>`, `A2_<ISO>`), which today's PHP conversion never writes, so today's tab never offers them: the
+Reputation stage compares an offender's plain ISO code with the country list, now entry by entry rather than as a
+substring, so such an entry could never match. The plain `A1` and `A2` entries stay, as today.*
+
 - **Canonical body:** members sorted and unique in byte order, one per line, the order `pfb_canonical_alias_set` produces
   (`pfb.inc:14880`; `docs/misc/architecture-notes.md:1194-1197`). `digest` is the xxh128 of that body.
 - **Generation:** a `uint64` per resource, written as a decimal string on the wire, as `GetUpdate`'s cursor is

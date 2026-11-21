@@ -33,8 +33,8 @@ const (
 )
 
 // Reputation is the dMax and pMax setting. Max is the member count per /24 that a /24 must exceed to be an offender. The rest
-// is dMax only: CC is a comma separated country list matched as a substring, CCWhite and CCBlack are "match", "block" or any
-// other value, and Geo classifies each offender /24.
+// is dMax only: CC is a comma separated country list (no spaces) matched entry by entry, CCWhite and CCBlack are "match",
+// "block" or any other value, and Geo classifies each offender /24.
 type Reputation struct {
 	Max              int
 	CC               string

@@ -15,7 +15,7 @@
 			"cc/A1_US_v4.txt": "20.0.0.0/8\n21.0.0.0/8\n22.0.0.0/8\n23.0.0.0/8\n26.0.0.0/8\n"
 		},
 		"tree": "8d9b1b7e33cde9e7d1fba0c26c16b1bbe3eb18c559a60ac3ad26a0cc27feb5e3",
-		"catalog": "e490b7eba8b8a3158a51d9951705ac7048c7f9838a74fb3d57814b19ec4271dd"
+		"catalog": "6b3604182aeea164e2d22c14598484974351515447ca38c2dcc62727b18a6158"
 	},
 	"old_expect": {
 		"ok": true,
