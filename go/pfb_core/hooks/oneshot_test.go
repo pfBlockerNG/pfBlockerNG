@@ -330,6 +330,7 @@ func TestOneShotRefusesAContextOutsideItsVocabulary(t *testing.T) {
 		{"a lone low surrogate", "post", `{"trigger":"x\uDC00"}`},
 		{"a NUL under a member name with a line break", "pre", `{"a\nFAKE LINE":"\u0000"}`},
 		{"U+FFFD under a member name with a line break", "pre", `{"a\nFAKE LINE":"\ufffd"}`},
+		{"an unknown member name with a line break", "pre", `{"a\nFAKE LINE":"x"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) { refused(t, tc.when, tc.stdin) })
 	}
