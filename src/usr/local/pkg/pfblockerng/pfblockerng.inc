@@ -27467,6 +27467,8 @@ function pfb_daemon_filterlog() {
 						$pfb_query[1]	= pfb_filter($pfb_query[1], PFB_FILTER_HTML, 'pfb_daemon_filterlog');
 						$geoip		= pfb_filter($geoip, PFB_FILTER_HTML, 'pfb_daemon_filterlog');
 						$resolved_host	= pfb_filter($resolved_host, PFB_FILTER_HOSTNAME, 'pfb_daemon_filterlog', 'Unknown');
+						// A CrowdSec row is remembered here, never in the IP cache: that answers later pfB rows of this host,
+						// which the CrowdSec row's feed is not
 						if ($crowdsec) {
 							if (count($crowdsec_hosts) >= 10000) {
 								$crowdsec_hosts = array();
@@ -27474,9 +27476,8 @@ function pfb_daemon_filterlog() {
 							$crowdsec_hosts[$host] = array($geoip, $resolved_host);
 						}
 
-						// Save entry to IP cache only when attribution was not deferred by a GeoIP swap, and only a pfB row's: the
-						// cache answers later pfB rows of this host, which the CrowdSec row's feed is not
-						if (!$geoip_deferred && !$crowdsec) {
+						// Save entry to IP cache only when attribution was not deferred by a GeoIP swap.
+						elseif (!$geoip_deferred) {
 							$db_update = "INSERT into ipcache ( host, q0, q1, geoip, resolved_host ) VALUES ( :host, :q0, :q1, :geoip, :resolved_host )";
 							$db_handle = pfb_open_sqlite(7, 'Add to IP cache');
 							if ($db_handle) {
