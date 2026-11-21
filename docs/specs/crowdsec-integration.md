@@ -629,8 +629,9 @@ listed only rules on `<pfB_…>` tables, so the filterlog daemon skipped every l
 - **When.** The ruleset carries the rules only while the bouncer should run (D5), so its drops are attributed then.
   A row already written stays a CrowdSec row: the Alerts page recognizes it by the table it names. A `filter.log` line
   the daemon reads after a reload has removed the rules is skipped, as a removed pfB rule's lines are, but its tracker
-  stays in the daemon's cache of unresolvable trackers for a minute only, not for the daemon's life: the rules come back
-  with the same trackers when the bouncer is turned on again, and the filterlog daemon is not restarted then.
+  is not kept in the daemon's cache of unresolvable trackers: the rules come back with the same trackers when the
+  bouncer is turned on again, and the filterlog daemon is not restarted then. (A one-minute miss was tried and
+  dropped: turning the bouncer back on within that minute would lose its drops.)
 - **Row.** The alias is the table (`crowdsec_v4`, `crowdsec_v6`), as the dashboard widget names it (#4161); the rule
   number is the rule's tracker, and the Rule cell's tooltip names the rule (`CrowdSec IPv4`, `CrowdSec IPv4 out`, and
   the IPv6 pair). The feed is `CrowdSec`. The matched entry is

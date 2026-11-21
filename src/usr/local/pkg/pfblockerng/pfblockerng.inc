@@ -26541,7 +26541,8 @@ function pfb_collect_localhosts() {
 //
 // $rule_list: positive cache from pfb_filterrules(); rebuilt in place on a reparse.
 // $miss_cache: PERSISTENT negative cache keyed by "tracker\0type"; survives reparses, so each
-//   unresolvable tracker/type triggers at most ONE reparse for the daemon's life (keyed by
+//   unresolvable tracker/type (except the CrowdSec bouncer's fixed trackers, never cached: #4164) triggers at most ONE
+//   reparse for the daemon's life (keyed by
 //   type + checking the positive cache first, so a transient type mismatch never suppresses a
 //   later match). $reparse: callable() => array, fresh rule list. $on_reparse: callable() =>
 //   void, refresh daemon-local IP/host collections after a reparse.
@@ -26551,8 +26552,7 @@ function pfb_resolve_tracker(
 	string $tracker,
 	string $type,
 	callable $reparse,
-	?callable $on_reparse = NULL,
-	?int $now = NULL
+	?callable $on_reparse = NULL
 ): bool {
 	// Known pfB tracker of the matching type. Checked before the miss cache so a tracker
 	// that becomes valid (e.g. after a reparse for another tracker) always resolves.
@@ -26562,9 +26562,8 @@ function pfb_resolve_tracker(
 
 	$miss_key = "{$tracker}\0{$type}";
 
-	// Negative cache: a tracker/type the ruleset doesn't list (anchor/trackerless) — never reparse again; a CrowdSec bouncer
-	// tracker's miss lasts until its expiry time.
-	if (isset($miss_cache[$miss_key]) && ($miss_cache[$miss_key] === TRUE || $miss_cache[$miss_key] > ($now ?? time()))) {
+	// Negative cache: a tracker/type the ruleset doesn't list (anchor/trackerless) — never reparse again.
+	if (isset($miss_cache[$miss_key])) {
 		return FALSE;
 	}
 
@@ -26587,9 +26586,12 @@ function pfb_resolve_tracker(
 		return FALSE;
 	}
 
-	// Still unresolved for this tracker/type after a fresh parse — record in the negative cache. The CrowdSec bouncer's fixed
-	// trackers (#4164) for a minute only: its rules come back with them when it is turned on again
-	$miss_cache[$miss_key] = in_array((int) $tracker, pfb_crowdsec_tracker_ids(), TRUE) ? ($now ?? time()) + 60 : TRUE;
+	// Still unresolved for this tracker/type after a fresh parse — record in the negative cache. Not the CrowdSec bouncer's
+	// fixed trackers (#4164): its rules come back with them when it is turned on again, and its lines come only while they
+	// are loaded or just after
+	if (!in_array((int) $tracker, pfb_crowdsec_tracker_ids(), TRUE)) {
+		$miss_cache[$miss_key] = TRUE;
+	}
 	return FALSE;
 }
 
@@ -27354,7 +27356,7 @@ function pfb_daemon_filterlog() {
 					// Determine if DST IP or SRC IP is the external host. The CrowdSec bouncer's rules (#4164) say which side is
 					// banned: the inbound rule's source, the outbound rule's destination.
 					// issue #713: port field is selected by IP version -- see pfb_filterlog_port().
-					$crowdsec_dir = pfb_crowdsec_rule_direction((int) $d[3]);
+					$crowdsec_dir = in_array($pfb_alias, PFB_CROWDSEC_TABLES, TRUE) ? pfb_crowdsec_rule_direction((int) $d[3]) : NULL;
 					if ($crowdsec_dir !== NULL ? $crowdsec_dir === 'in' : (isset($pfb_local[$dstip]) || pfb_local_ip($dstip, $pfb_localsub))) {
 						$dir	= 'in';
 						$host	= $srcip;
