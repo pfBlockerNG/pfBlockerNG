@@ -105,7 +105,12 @@ final class CoreSettingsDnsParityTest extends TestCase
 			'the defaults case names every field');
 		$refused = array_column($doc['refused'], 'id');
 		$this->assertSame(array_values(array_unique($refused)), $refused, 'a refused row id appears once');
+		$keys = ['dnsbl/pfb_noaaaa', 'dnsbl/pfb_noaaaa_list', 'dnsbl/pfb_gp', 'dnsbl/pfb_gp_bypass_list'];
 		foreach ($doc['cases'] as $case) {
+			// A regenerated fixture that drops the raw ini of a case touching the four fields of issue #4036 fails here
+			$touches = array_intersect(array_keys($case['values']), $keys) !== []
+				|| array_intersect(array_keys($case['native'] ?? []), ['noAaaa', 'noAaaaList', 'groupPolicy', 'groupPolicyBypassList']) !== [];
+			$this->assertTrue(!$touches || array_key_exists('ini', $case), "{$case['id']}: a case touching the noAAAA or Group Policy fields carries its ini");
 			if (array_key_exists('ini', $case)) {
 				$this->assertSame(array_column(self::SECTIONS, 1), array_keys($case['ini']), "{$case['id']}: both sections, present or null");
 			}

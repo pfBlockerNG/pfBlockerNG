@@ -47,13 +47,27 @@ func loadDnsFixture(t *testing.T) dnsFixture {
 		t.Fatalf("fixture schema %d projection %q with %d cases and %d refused, want schema 1, dns, some of both", doc.Schema, doc.Projection,
 			len(doc.Cases), len(doc.Refused))
 	}
+	// The raw ini of a case touching the noAAAA or Group Policy fields (issue #4036) cannot vanish from a regenerated fixture
+	for _, c := range doc.Cases {
+		touches := false
+		for key := range c.Values {
+			touches = touches || slices.Contains([]string{"dnsbl/pfb_noaaaa", "dnsbl/pfb_noaaaa_list", "dnsbl/pfb_gp", "dnsbl/pfb_gp_bypass_list"}, key)
+		}
+		for field := range c.Native {
+			touches = touches || slices.Contains([]string{"noAaaa", "noAaaaList", "groupPolicy", "groupPolicyBypassList"}, field)
+		}
+		if touches && c.Ini == nil {
+			t.Errorf("case %s touches the noAAAA or Group Policy fields but carries no ini", c.ID)
+		}
+	}
 	return doc
 }
 
 // The parity fixture of settings/dns (issue #3842): tests/core/fixtures/settings_dns_parity.json, frozen against today's
-// PHP by tests/php/CoreSettingsDnsParityTest.php. A posted case's input is saved into a freshly initialized store: Core's verdict
-// must be the case's. A stored case reaches Core as the Outpost's adapter reads it (issue #4036): a load takes its native values,
-// and a write of them back, what a client sends after a read, is accepted. An accepted case must leave exactly its native values.
+// PHP by tests/php/CoreSettingsDnsParityTest.php. Each case's input (its native value when it has none) is saved into a freshly
+// initialized store: Core's verdict must be the case's, and an accepted save must leave exactly its native values. A stored case
+// with no input whose noAAAA list holds entries is a list the Outpost's adapter reads and a client writes back (issue #4036): the
+// store first loads that list alone, as the adapter's read brings it in, so the save still proves every other field.
 func TestTheDnsProjectionMatchesTodaysPhpOnEveryFixtureCase(t *testing.T) {
 	doc := loadDnsFixture(t)
 	for _, c := range doc.Cases {
@@ -65,24 +79,20 @@ func TestTheDnsProjectionMatchesTodaysPhpOnEveryFixtureCase(t *testing.T) {
 			if input == nil {
 				input = c.Native
 			}
-			var st *Store
-			if c.Source == "stored" {
-				stored := map[string]any{}
-				for field, raw := range c.Native {
-					var v any
-					if err := json.Unmarshal(raw, &v); err != nil {
-						t.Fatal(err)
-					}
-					stored[field] = v
-				}
-				var err error
-				if st, err = Load(newRefreshBackend(1, map[string]map[string]any{"dns": stored}), testSchema()); err != nil {
-					t.Fatalf("%s\nthe adapter's read of %s does not load: %v", c.Description, jsonOf(t, c.Native), err)
-				}
-			} else {
-				st = open(t, t.TempDir())
-				if _, err := st.Initialize(t.Context(), nil); err != nil {
+			st := open(t, t.TempDir())
+			if _, err := st.Initialize(t.Context(), nil); err != nil {
+				t.Fatal(err)
+			}
+			var held []any
+			if c.Source == "stored" && c.Input == nil && c.Native["noAaaaList"] != nil {
+				if err := json.Unmarshal(c.Native["noAaaaList"], &held); err != nil {
 					t.Fatal(err)
+				}
+			}
+			if len(held) > 0 {
+				var err error
+				if st, err = Load(newRefreshBackend(1, map[string]map[string]any{"dns": {"noAaaaList": held}}), testSchema()); err != nil {
+					t.Fatalf("%s\nthe adapter's read of noAaaaList %s does not load: %v", c.Description, jsonOf(t, held), err)
 				}
 			}
 			_, err := st.Save(t.Context(), 1, map[string]map[string]json.RawMessage{"dns": input})
@@ -122,6 +132,27 @@ func TestANoAaaaEntryAWriteAddsIsHeldToTheDnsblPagesRule(t *testing.T) {
 	var invalid *ValidationError
 	if !errors.As(err, &invalid) || len(invalid.Fields) != 1 || invalid.Fields[0].Field != "dns.noAaaaList[1].domain" {
 		t.Fatalf("Save(%s) = %v, want dns.noAaaaList[1].domain refused alone", refused, err)
+	}
+}
+
+// A dry run never refuses a noAAAA entry for the DNSBL page's rule (issue #4036): a page validates the whole projection as config.xml
+// holds it, which may carry an entry Core has not loaded yet. The rule holds on a real write, where the stored list is compared.
+func TestTheDryRunLeavesTheAddedNoAaaaEntryRuleToTheWrite(t *testing.T) {
+	st := open(t, t.TempDir())
+	if _, err := st.Initialize(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if v := projection(t, get(t, st, "dns"), "dns").Value["noAaaaList"]; jsonOf(t, v) != "[]" {
+		t.Fatalf("before-state: Core holds noAaaaList %s, want []", jsonOf(t, v))
+	}
+	list := `{"dns": {"noAaaaList": [{"domain": "ok.example"}, {"domain": "*.example.com"}]}}`
+	if err := st.Validate(changes(t, list)); err != nil {
+		t.Errorf("Validate(%s) = %v, want it accepted: the dry run leaves the added-entry rule to the write", list, err)
+	}
+	_, err := st.Save(t.Context(), 1, changes(t, list))
+	var invalid *ValidationError
+	if !errors.As(err, &invalid) || len(invalid.Fields) != 1 || invalid.Fields[0].Field != "dns.noAaaaList[1].domain" {
+		t.Fatalf("Save(%s) = %v, want dns.noAaaaList[1].domain refused alone", list, err)
 	}
 }
 
