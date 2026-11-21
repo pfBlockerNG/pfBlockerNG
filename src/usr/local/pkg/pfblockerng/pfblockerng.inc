@@ -13130,11 +13130,12 @@ function pfb_run_hooks($when, $ctx = array()) {
 	// PFB_POST_INSTALL=1 when the pass is the install/upgrade resync (turn ON); PFB_PRE_UNINSTALL=1
 	// when it is the pre-deinstall (turn OFF); both '0' on a normal cron/manual/force update
 	// (always emitted as '1'/'0', #695).
-	$ctx += pfb_hook_lifecycle_ctx($pfb['hook_lifecycle'] ?? '');
+	// An Update Core runs (pfb_core_update_serve()) takes both from its request instead.
+	$ctx += pfb_hook_lifecycle_ctx($pfb['core_update_lifecycle'] ?? $pfb['hook_lifecycle'] ?? '');
 	// #697: the actual package-manager operation read from the pkg ancestor's argv, so a hook can
 	// tell a fresh install from an upgrade (PFB_PKG_OP = install|upgrade|reinstall|delete; '' when
 	// the pass is not run under pkg -- a normal cron/manual update). Context only.
-	$ctx['PKG_OP'] = pfb_pkg_operation();
+	$ctx['PKG_OP'] = $pfb['core_update_pkg_op'] ?? pfb_pkg_operation();
 	$env = array();
 	foreach ($ctx as $name => $value) {
 		// Names are developer-controlled (PFB_TRIGGER, PFB_IP_CHANGED, ...); values

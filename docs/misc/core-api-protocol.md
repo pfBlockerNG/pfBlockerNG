@@ -689,8 +689,8 @@ Two optional parameters, which any trigger takes, name the package operation the
 
 Any other value, `null` aside, is `invalid_argument` with a field error on the parameter, and nothing starts. `uninstall` is
 not a `lifecycle` an Update takes: the uninstall runs its hooks through [`--run-hooks`](#hooks-outside-an-update). Core copies
-both into the request the Update command receives on stdin. The package resync that sends them, and the Update loop that runs
-the hooks with them, are not wired yet.
+both into the request the Update command receives on stdin, whose worker gives them to the Update's hooks (see
+[Update command](#update-command)). The package resync that sends them is not wired yet.
 
 ### GetUpdate
 
@@ -734,7 +734,12 @@ The worker receives this request on stdin and reports progress and results as fo
   "force": "none|parse|download|both", "feeds": [ids], "extras": ["extra:dcc", "extra:bl"], "lifecycle": "install", "pkgOp":
   "install|upgrade|reinstall|delete"}`. `feeds`, `extras`, `lifecycle` and `pkgOp` are left out when empty, and the last two
   are what `StartUpdate` was given; a feed id is the schedule's (`ipv4:<header>_v4`, `ipv6:<header>_v6`, `dnsbl:<header>`). A `scheduled` or `retry`
-  Update names what to run; a `manual` one runs its scope.
+  Update names what to run; a `manual` one runs its scope. The worker (`pfb_core_update_request()`) accepts `lifecycle` only as
+  `install` and `pkgOp` only as `install`, `upgrade`, `reinstall` or `delete`; absent or `null` is none, and any other value or
+  type refuses the request (exit 2, nothing runs), as an unknown field does. Every hook the Update fires gets
+  `PFB_POST_INSTALL=1` with `lifecycle` `install` (else `0`), and `PFB_PKG_OP` set to `pkgOp`; without `pkgOp` it is read from
+  a `pkg` ancestor process, as outside an Update. The requests Core writes are pinned on both
+  sides by `tests/core/fixtures/update_request_v1.json`.
 - **stdout and stderr:** the per-Update transcript, `update.log` in `--state-dir`: a regular file, never a pipe. `GetUpdate`
   reads this file; the browser never tails the rotating main log. There is no whole-transcript cap or trimming. For PHP hook and
   per-list script invocations, the transcript includes the first 1,048,576 combined stdout/stderr bytes and one notice only
