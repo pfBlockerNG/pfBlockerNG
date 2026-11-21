@@ -129,6 +129,23 @@ final class GeoipConversionCorpusTest extends TestCase
 		ksort($want);
 		ksort($actual);
 		$this->assertSame($want, $actual, basename($file) . ": {$case['description']}\ntree:\n" . $this->listing());
+
+		// The pages themselves, byte for byte, as pfblockerng_get_countries() wrote them when the golden was recorded: the
+		// template must not move while the code around it is cut apart (#4037).
+		$pages = json_decode((string) file_get_contents(__DIR__ . '/../geoip/fixtures/parity_pages.json'), TRUE, 512,
+			JSON_THROW_ON_ERROR);
+		$this->assertSame($pages[basename($file, '.json')], $this->pages(), basename($file) . ': the pages written');
+	}
+
+	/** @return array<string,string> every page under www/, file name => sha256 of its bytes */
+	private function pages(): array
+	{
+		$out = [];
+		foreach (glob("{$this->root}/www/*") ?: [] as $page) {
+			$out[basename($page)] = hash_file('sha256', $page);
+		}
+		ksort($out, SORT_STRING);
+		return $out;
 	}
 
 	/** The country table Go embeds (go/pfb_core/geoip/countries.json) is pfblockerng_uc_countries()'s, in its order. */
