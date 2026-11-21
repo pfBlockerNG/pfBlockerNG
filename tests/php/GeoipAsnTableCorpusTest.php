@@ -17,8 +17,8 @@ use PHPUnit\Framework\TestCase;
  *   expect  table (pfblockerng_asn.txt afterwards, as content; it holds "AS0 [ previous ]\n" before the run) and log
  *           (what the run appends to the Extras log, its time reading "{now}").
  *
- * The functions run under LC_ALL=C: the corpus pins the byte-wise reading of cut and sort, which is FreeBSD's as well
- * as GNU's in that locale.
+ * The function runs under LC_ALL=C, so the corpus pins the byte-wise reading of cut and sort that the Go port takes.
+ * Here they are GNU's; the appliance's FreeBSD tools are not run.
  */
 final class GeoipAsnTableCorpusTest extends TestCase
 {
