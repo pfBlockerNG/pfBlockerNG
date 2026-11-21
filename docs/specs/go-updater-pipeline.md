@@ -161,6 +161,11 @@ No lock crosses a process boundary: the Core Updater holds Core's lock, the Outp
 | ADR-12 `pre` hook | PHP `pfb_run_hooks('pre')` at the top of the pass (`apply.inc:1454`) | Core Updater, stage 4 |
 | ADR-12 `post` hook | PHP `pfb_run_hooks('post')` at the closing tail (`apply.inc:5582`) | Core Updater, stage 19 |
 
+*Amendment 2026-11-21 (issue #4035, slice 6b): the IP post-script row above is wrong about the output. Today's code, and the
+Go port (`feedparse.PostScript`), run the IP post-script on the download itself; the staged copy is a restore point, not the
+script's input. The restore point is renamed back over the download at once when the script fails, and otherwise after the
+empty-feed check. The script's output therefore reaches only that check and is never kept as the baseline.*
+
 **The `post` contract.** The Core Updater runs `post` after all feed and file processing. That is what the owner wanted from
 it. Today's code also fires it after the pfSense apply (`apply.inc:5542-5544`: "AFTER the IP/DNSBL reloads,
 filter_configure(), and the FINAL REPORTING 'closing' step"); the owner calls that a happy accident, and it is kept: `post`

@@ -4,7 +4,6 @@
 package hooks
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -21,24 +20,18 @@ import (
 	"syscall"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/output"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/process"
 )
 
 const (
 	defaultTimeout = 60 // seconds
 	defaultGrace   = 5 * time.Second
-	allowance      = 1 << 20 // core-api-protocol.md "Update command"
-	drainTick      = 200 * time.Millisecond
 	bourneShell    = "/bin/sh"
-	notice         = "\n[ pfBlockerNG ] Script output limit (1,048,576 bytes) reached; remaining output is in the main log.\n"
 )
 
 var errTimedOut = errors.New("hook timed out")
-
-// beforeTickSize runs once a drain tick is taken, before the size it reads up to is decided; tests widen that gap.
-var beforeTickSize = func() {}
 
 // end is how a hook ended as far as the run goes on.
 type end int
@@ -97,8 +90,8 @@ type Runner struct {
 // after the grace; what it started is left alone. A hook that is skipped, times out or exits non-zero is logged and the
 // next one runs: the caller never fails because of a hook. When ctx ends, a running hook gets TERM and KILL the same
 // way, no further hook starts, and one line says the run was cancelled and how many enabled hooks did not run. Output
-// goes to a fresh regular file, sanitized into the logs while the hook runs, and read up to its size when the hook
-// exited.
+// goes to a fresh regular file, sanitized into the logs while the hook runs, and read up to its size sampled after the
+// hook exited (output.Capture).
 func (r Runner) Run(ctx context.Context, when string, rows []Hook, c Context) {
 	if when != "pre" && when != "post" {
 		return
@@ -126,7 +119,7 @@ func (r Runner) Run(ctx context.Context, when string, rows []Hook, c Context) {
 		if left == 1 {
 			plural = ""
 		}
-		r.line(true, "[ pfB Hook ] %s run cancelled; %d enabled hook%s did not run\n", when, left, plural)
+		r.sinks().Line(true, "[ pfB Hook ] %s run cancelled; %d enabled hook%s did not run\n", when, left, plural)
 		return
 	}
 }
@@ -145,7 +138,7 @@ func (r Runner) run(ctx context.Context, when string, index int, h Hook, env []s
 		if h.Script != "" {
 			missing = "'" + h.Script + "' "
 		}
-		r.line(true, "[ pfB Hook ] %s %s script %snot a valid file in %s; skipping\n", when, label, missing, r.Dir)
+		r.sinks().Line(true, "[ pfB Hook ] %s %s script %snot a valid file in %s; skipping\n", when, label, missing, r.Dir)
 		return ran
 	}
 	argv := []string{path}
@@ -155,7 +148,7 @@ func (r Runner) run(ctx context.Context, when string, index int, h Hook, env []s
 			return cancelled
 		}
 		if !ok {
-			r.line(true, "[ pfB Hook ] %s %s script '%s' has no usable launcher; skipping\n", when, label, h.Script)
+			r.sinks().Line(true, "[ pfB Hook ] %s %s script '%s' has no usable launcher; skipping\n", when, label, h.Script)
 			return ran
 		}
 		argv = []string{r.Python, path}
@@ -164,17 +157,17 @@ func (r Runner) run(ctx context.Context, when string, index int, h Hook, env []s
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	r.line(false, "\n[ pfB Hook ] %s %s (%s, timeout %ds)\n", when, label, h.Script, timeout)
+	r.sinks().Line(false, "\n[ pfB Hook ] %s %s (%s, timeout %ds)\n", when, label, h.Script, timeout)
 	status, e := r.exec(ctx, argv, env, time.Duration(min(timeout, math.MaxInt64/int64(time.Second)))*time.Second)
 	switch {
 	case e == timedOut:
-		r.line(true, "[ pfB Hook ] %s %s TIMED OUT after %ds (killed); continuing\n", when, label, timeout)
+		r.sinks().Line(true, "[ pfB Hook ] %s %s TIMED OUT after %ds (killed); continuing\n", when, label, timeout)
 	case e != ran:
 		return e
 	case status != 0:
-		r.line(true, "[ pfB Hook ] %s %s exited non-zero [ %d ]; continuing\n", when, label, status)
+		r.sinks().Line(true, "[ pfB Hook ] %s %s exited non-zero [ %d ]; continuing\n", when, label, status)
 	default:
-		r.line(false, "[ pfB Hook ] %s %s completed\n", when, label)
+		r.sinks().Line(false, "[ pfB Hook ] %s %s completed\n", when, label)
 	}
 	return ran
 }
@@ -226,73 +219,30 @@ func (r Runner) grace() time.Duration {
 	return defaultGrace
 }
 
-// exec runs argv under the survivor policy with its output appended to a fresh regular file, which it sanitizes into
-// the logs while the hook runs and up to the size the file had when the hook's own process exited: a descendant may
-// keep writing to it, and is not waited for. status is the exit status: 128+n for signal n; as timeout(1) reports a
-// failure to start, 127 when the program does not exist and 126 when it exists but cannot be started; and -1 when no
-// output file can be made.
+// exec runs argv under the survivor policy with its output captured (output.Capture): sanitized into the logs while the
+// hook runs, and up to its size sampled once the hook's own process has exited and been reaped, so that what a service
+// the hook left running writes in between is included. status is the exit status: 128+n for signal n; as timeout(1)
+// reports a failure to start, 127 when the program does not exist and 126 when it exists but cannot be started; and -1
+// when no output file can be made.
 func (r Runner) exec(ctx context.Context, argv, env []string, timeout time.Duration) (status int, e end) {
-	capture, err := os.CreateTemp("", "pfb-hook-output-")
-	if err != nil {
-		return -1, ran
-	}
-	defer capture.Close()
-	name := capture.Name()
-	// as PHP's 'a': a seek by the hook leaves no hole; O_NOFOLLOW refuses a link planted at that name
-	hook, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND|syscall.O_NOFOLLOW, 0)
-	if err != nil {
-		os.Remove(name)
-		return -1, ran
-	}
-	defer hook.Close()
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errTimedOut)
 	defer cancel()
-	var (
-		mu     sync.Mutex // a tick checks the exit and takes its size, or the exit fixes the cutoff: never interleaved
-		done   bool
-		out    process.Outcome
-		cutoff int64 // the output's size when the hook's own process exited
-	)
-	exited := make(chan struct{})
-	go func() {
-		start := func(argv []string) process.Outcome {
-			cmd := exec.Command(argv[0], argv[1:]...)
-			cmd.Env, cmd.Stdout, cmd.Stderr = env, hook, hook
-			return process.RunSurvivor(ctx, cmd, r.grace())
-		}
-		o := start(argv)
-		if len(argv) == 1 && errors.Is(o.CommandErr, syscall.ENOEXEC) { // no #! line: sh runs it, as execvp() does
-			o = start([]string{bourneShell, argv[0]})
-		}
-		mu.Lock()
-		if info, err := capture.Stat(); err == nil {
-			cutoff = info.Size()
-		}
-		out, done = o, true
-		mu.Unlock()
-		os.Remove(name) // both descriptors are open; tests take the name's absence as the sign that the cutoff is fixed
-		close(exited)
-	}()
-	d := r.newDrain(capture)
-	tick := time.NewTicker(drainTick)
-	defer tick.Stop()
-wait:
-	for {
-		select {
-		case <-exited:
-			break wait
-		case <-tick.C:
-			beforeTickSize()
-			mu.Lock()
-			info, err := capture.Stat()
-			read := !done && err == nil // the file only grows: a size taken before the exit is within the cutoff
-			mu.Unlock()
-			if read {
-				d.feed(info.Size(), false)
+	var out process.Outcome
+	captured := output.Capture("pfb-hook-output-", r.sinks(),
+		func(hook *os.File) {
+			start := func(argv []string) process.Outcome {
+				cmd := exec.Command(argv[0], argv[1:]...)
+				cmd.Env, cmd.Stdout, cmd.Stderr = env, hook, hook
+				return process.RunSurvivor(ctx, cmd, r.grace())
 			}
-		}
+			out = start(argv)
+			if len(argv) == 1 && errors.Is(out.CommandErr, syscall.ENOEXEC) { // no #! line: sh runs it, as execvp() does
+				out = start([]string{bourneShell, argv[0]})
+			}
+		})
+	if !captured {
+		return -1, ran
 	}
-	d.feed(cutoff, true)
 	notStarted := ctx.Err() != nil && errors.Is(out.CommandErr, context.Cause(ctx))
 	var exit *exec.ExitError
 	switch {
@@ -315,111 +265,8 @@ wait:
 	return 126, ran
 }
 
-// drain sanitizes a hook's output file into the main log, all of it, and into the transcript up to the allowance, then
-// one notice.
-type drain struct {
-	limit                       *io.LimitedReader
-	size                        int64 // the most of the file it may read
-	in                          *bufio.Reader
-	log, transcript             *bufio.Writer
-	errs                        io.Writer
-	left                        int
-	noticed                     bool
-	logFailed, transcriptFailed bool
-}
-
-func (r Runner) newDrain(f *os.File) *drain {
-	limit := &io.LimitedReader{R: f}
-	return &drain{limit: limit, in: bufio.NewReaderSize(limit, 64<<10), log: bufio.NewWriter(orDiscard(r.Log)),
-		transcript: bufio.NewWriter(orDiscard(r.Transcript)), errs: orDiscard(r.Errors), left: allowance}
-}
-
-// feed sanitizes the file up to size, a size it had, and flushes both logs: a failed log does not stop the other.
-func (d *drain) feed(size int64, final bool) {
-	if size > d.size {
-		d.limit.N += size - d.size
-		d.size = size
-	}
-	sanitize(d.in, final, func(text string, atomic bool) {
-		d.log.WriteString(text)
-		switch {
-		case d.noticed:
-		case len(text) <= d.left:
-			d.transcript.WriteString(text)
-			d.left -= len(text)
-		default:
-			if !atomic { // a run of printable ASCII: cut at the allowance
-				d.transcript.WriteString(text[:d.left])
-			}
-			d.transcript.WriteString(notice)
-			d.noticed = true
-		}
-	})
-	d.flush(d.log, &d.logFailed, "main log")
-	d.flush(d.transcript, &d.transcriptFailed, "transcript")
-}
-
-// flush flushes one log; its first failure is one line in the error log. A bufio.Writer keeps its error, so a failed
-// log takes no more.
-func (d *drain) flush(w *bufio.Writer, failed *bool, name string) {
-	if err := w.Flush(); err != nil && !*failed {
-		*failed = true
-		fmt.Fprintf(d.errs, "[ pfB Script Output ] Failed to write script output to %s; child status is preserved\n", name)
-	}
-}
-
-// sanitize is pfb_script_output_sanitize_chunk() over what in holds: printable ASCII, TAB and LF stay; other ASCII
-// controls, DEL and each byte of malformed UTF-8 become \xNN; Unicode Cc and Cf become \u{HEX}; other characters stay.
-// emit gets runs of printable ASCII (atomic false) and single units that must not be cut (atomic true). Unless final, a
-// character whose bytes in has not all read yet stays there for the next call.
-func sanitize(in *bufio.Reader, final bool, emit func(text string, atomic bool)) {
-	for {
-		b, err := in.Peek(utf8.UTFMax)
-		switch {
-		case len(b) == 0:
-			return
-		case printable(b[0]):
-			b, _ = in.Peek(in.Buffered())
-			n := 1
-			for n < len(b) && printable(b[n]) {
-				n++
-			}
-			emit(string(b[:n]), false)
-			in.Discard(n)
-			continue
-		case b[0] < utf8.RuneSelf:
-			emit(fmt.Sprintf(`\x%02X`, b[0]), true)
-			in.Discard(1)
-			continue
-		case err != nil && !final && !utf8.FullRune(b):
-			return
-		}
-		ch, size := utf8.DecodeRune(b)
-		switch {
-		case ch == utf8.RuneError && size == 1:
-			emit(fmt.Sprintf(`\x%02X`, b[0]), true)
-		case unicode.In(ch, unicode.Cc, unicode.Cf):
-			emit(fmt.Sprintf(`\u{%X}`, ch), true)
-		default:
-			emit(string(b[:size]), true)
-		}
-		in.Discard(size)
-	}
-}
-
-func printable(b byte) bool { return b >= 0x20 && b <= 0x7e || b == '\t' || b == '\n' }
-
-// line writes one runner line to the main log and the transcript, and a failure's to the error log too.
-func (r Runner) line(failure bool, format string, args ...any) {
-	text := fmt.Sprintf(format, args...)
-	for _, w := range []io.Writer{r.Log, r.Transcript} {
-		if w != nil {
-			io.WriteString(w, text)
-		}
-	}
-	if failure && r.Errors != nil {
-		io.WriteString(r.Errors, text)
-	}
+func (r Runner) sinks() output.Sinks {
+	return output.Sinks{Log: r.Log, Transcript: r.Transcript, Errors: r.Errors}
 }
 
 // environ is the hooks' environment: the runner's own, then PFB_<NAME> for each context value whose upper-cased name is
@@ -463,11 +310,4 @@ func blank(s string) bool {
 	return strings.TrimFunc(s, func(r rune) bool {
 		return unicode.IsSpace(r) || unicode.In(r, unicode.Z) || r == 0xFEFF || r == 0
 	}) == ""
-}
-
-func orDiscard(w io.Writer) io.Writer {
-	if w == nil {
-		return io.Discard
-	}
-	return w
 }

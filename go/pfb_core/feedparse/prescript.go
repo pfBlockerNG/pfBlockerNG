@@ -22,8 +22,12 @@ var (
 // bourneShell runs a script that is no executable format, as execvp() does for the old path.
 const bourneShell = "/bin/sh"
 
+// errScriptTimedOut is the cause of a run's 300-second limit, which tells a timeout from the caller's cancellation.
+var errScriptTimedOut = errors.New("script ran past its limit")
+
 // PreScriptResult is the outcome of RunPreScript (pfb_list_pre_script_run()): whether the transform ran, the file to parse, and
-// why it did not.
+// why it did not. PreScriptCancelled means the caller ended the run: the script did not fail, but the feed is left as for a
+// failed run, the staged copy removed and Path the normalized feed.
 type PreScriptResult struct {
 	OK     bool
 	Path   string // the staged copy when OK, else the normalized feed: what a failed transform leaves the caller to keep
@@ -35,8 +39,11 @@ type PreScriptResult struct {
 const (
 	PreScriptStage   = "stage"   // the staged copy could not be made
 	PreScriptExit    = "exit"    // the script exited non-zero, or could not be started
-	PreScriptTimeout = "timeout" // the script was killed: it ran past its limit, or ctx ended
+	PreScriptTimeout = "timeout" // the script ran past its limit and was killed
 	PreScriptDeleted = "deleted" // the script removed its staged input
+	// PreScriptCancelled: ctx ended before the script did, which was killed or never started; the caller's, not the
+	// script's failure.
+	PreScriptCancelled = "cancelled"
 )
 
 // RunPreScript is pfb_list_pre_script_run(): a copy of norm is staged at staged and script is run on it, with args after the
@@ -50,7 +57,9 @@ const (
 //
 // OK is true when the script succeeded and left its staged copy (an emptied copy is a valid transform); Path is then the copy
 // to parse, and Cleanup removes it afterwards. Any failure removes the staged copy and keeps the caller on norm, its last
-// known-good feed.
+// known-good feed. One run at a time per staged path: copyFile has one temporary name per destination, so two
+// concurrent runs on the same staged path can overwrite each other, and the caller holds that exclusion (the Update
+// runs one feed at a time under its lock).
 func RunPreScript(ctx context.Context, script, norm, staged string, log io.Writer, args ...string) PreScriptResult {
 	failed := func(reason string, status int) PreScriptResult {
 		os.Remove(staged)
@@ -62,34 +71,51 @@ func RunPreScript(ctx context.Context, script, norm, staged string, log io.Write
 	if err := copyFile(norm, staged); err != nil {
 		return failed(PreScriptStage, 0)
 	}
-	ctx, cancel := context.WithTimeout(ctx, preScriptTimeout)
-	defer cancel()
-	argv := append([]string{staged}, args...)
-	outcome := runProcessGroup(ctx, log, script, argv)
-	if outcome.WatchdogErr == nil && errors.Is(outcome.CommandErr, syscall.ENOEXEC) {
-		outcome = runProcessGroup(ctx, log, bourneShell, append([]string{script}, argv...))
-	}
-	err := errors.Join(outcome.CommandErr, outcome.Interrupted, outcome.WatchdogErr)
-	var exit *exec.ExitError
-	switch {
-	case outcome.Interrupted == nil && outcome.WatchdogErr == nil && (outcome.CommandErr == nil || errors.Is(outcome.CommandErr, exec.ErrWaitDelay)):
-	case ctx.Err() != nil:
-		return failed(PreScriptTimeout, 0)
-	case errors.As(err, &exit):
-		status := exit.ExitCode()
-		if ws, ok := exit.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			status = 128 + int(ws.Signal())
-		}
-		return failed(PreScriptExit, status)
-	case errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.ENOEXEC):
-		return failed(PreScriptExit, 126)
-	default:
-		return failed(PreScriptExit, 127)
+	if reason, status := runScript(ctx, log, script, append([]string{staged}, args...)); reason != "" {
+		return failed(reason, status)
 	}
 	if _, err := os.Stat(staged); err != nil {
 		return failed(PreScriptDeleted, 0)
 	}
 	return PreScriptResult{OK: true, Path: staged}
+}
+
+// runScript runs script with args, as the program named, for at most 300 seconds under the strict policy (RunPreScript's),
+// with its output to out; a file that is no executable format (no #! line) is run by /bin/sh, as execvp() does. reason is ""
+// when it exited 0, else PreScriptExit with the status as PreScriptResult.Status has it; PreScriptTimeout or
+// PreScriptCancelled only when the limit or ctx ended the run before the script exited by itself.
+func runScript(ctx context.Context, out io.Writer, script string, args []string) (reason string, status int) {
+	ctx, cancel := context.WithTimeoutCause(ctx, preScriptTimeout, errScriptTimedOut)
+	defer cancel()
+	outcome := runProcessGroup(ctx, out, script, args)
+	if outcome.WatchdogErr == nil && errors.Is(outcome.CommandErr, syscall.ENOEXEC) {
+		outcome = runProcessGroup(ctx, out, bourneShell, append([]string{script}, args...))
+	}
+	err := errors.Join(outcome.CommandErr, outcome.Interrupted, outcome.WatchdogErr)
+	// ctx ended the run when the runner interrupted the script for it, or never started it (the watchdog's start included);
+	// else the script's status stands
+	cause := context.Cause(ctx)
+	ended := cause != nil && (errors.Is(outcome.Interrupted, cause) || errors.Is(outcome.CommandErr, cause) ||
+		errors.Is(outcome.WatchdogErr, cause))
+	var exit *exec.ExitError
+	switch {
+	case outcome.Interrupted == nil && outcome.WatchdogErr == nil && (outcome.CommandErr == nil || errors.Is(outcome.CommandErr, exec.ErrWaitDelay)):
+		return "", 0
+	case ended && errors.Is(cause, errScriptTimedOut):
+		return PreScriptTimeout, 0
+	case ended:
+		return PreScriptCancelled, 0
+	case errors.As(err, &exit):
+		status := exit.ExitCode()
+		if ws, ok := exit.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			status = 128 + int(ws.Signal())
+		}
+		return PreScriptExit, status
+	case errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.ENOEXEC):
+		return PreScriptExit, 126
+	default:
+		return PreScriptExit, 127
+	}
 }
 
 // runProcessGroup delegates group ownership while retaining the pre-script's argv, log and IO-drain budget.
@@ -107,21 +133,38 @@ func (p PreScriptResult) Cleanup() {
 	}
 }
 
-// copyFile copies src over dst, creating or truncating it: a copy left by an earlier run is replaced. The copy is 0644, as the old
-// path's copy() leaves it under the usual umask, so that a script that drops privileges reads its input.
+// copyFile copies src, which must be a regular file or a symbolic link to one (copy() follows it too), to dst+".tmp", its
+// one temporary name, and renames that over dst: whatever sits at dst (a copy left by an earlier run, a symbolic link) is
+// replaced, never written through, and a failed copy leaves dst as it was. A source of another type is refused before it
+// is opened, so that a FIFO there cannot block the open. What an interrupted copy left at the temporary name is removed
+// first and the file is created anew without following a link, so at most one leftover per destination exists; it is
+// synced before the rename, so that a power loss cannot leave dst empty. The copy is 0644, as the old path's copy() leaves
+// it under the usual umask, so that a script that drops privileges reads its input.
 func copyFile(src, dst string) error {
+	if info, err := os.Stat(src); err != nil || !info.Mode().IsRegular() {
+		return errors.Join(err, fs.ErrInvalid)
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if info, err := in.Stat(); err != nil || !info.Mode().IsRegular() { // src replaced since the check
+		return errors.Join(err, fs.ErrInvalid)
+	}
+	tmp := dst + ".tmp"
+	os.Remove(tmp)
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
 		return err
 	}
 	_, err = io.Copy(out, in)
-	if cerr := out.Close(); err == nil {
-		err = cerr
+	err = errors.Join(err, out.Chmod(0o644), out.Sync(), out.Close())
+	if err == nil {
+		err = os.Rename(tmp, dst)
+	}
+	if err != nil {
+		os.Remove(tmp)
 	}
 	return err
 }

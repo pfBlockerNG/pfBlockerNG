@@ -442,8 +442,8 @@ func shortGrace(t *testing.T) {
 	t.Cleanup(func() { preScriptGrace = old })
 }
 
-// runGroup runs groupScript (after prelude) until the caller's context ends, as the script reports it is running, and checks that
-// the run is a timeout and that no member of the script's process group is left.
+// runGroup runs groupScript (after prelude) until its limit ends it (limitOnEvent), as the script reports it is running, and checks
+// that the run is a timeout and that no member of the script's process group is left.
 func runGroup(t *testing.T, prelude string) {
 	t.Helper()
 	shortGrace(t)
@@ -456,9 +456,9 @@ func runGroup(t *testing.T, prelude string) {
 		t.Fatal(err)
 	}
 	gone := aliveWatch(t, dir)
-	ctx, cancel := context.WithTimeout(context.Background(), watchdog)
+	ctx, cancel, limit := limitOnEvent()
 	defer cancel()
-	reported, release := blockOnFifo(t, dir, cancel) // makes PFB_TEST_BLOCK and PFB_TEST_READY
+	reported, release := blockOnFifo(t, dir, limit) // makes PFB_TEST_BLOCK and PFB_TEST_READY
 	defer release()
 	freeOnCleanup(t, filepath.Join(dir, "block.fifo"))
 	got := RunPreScript(ctx, script, norm, staged, nil)
