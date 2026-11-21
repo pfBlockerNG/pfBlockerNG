@@ -21,8 +21,8 @@ use PHPUnit\Framework\TestCase;
  *   when         the fire point, the one-shot's argument. stdin: the one-shot's context object, a content.
  *   python, rows, files  as in tests/hooks/fixtures/runner (HookRunnerCorpusTest documents them).
  *   expect       runs (each recorded invocation's script, wrapped, args and PFB_* environment, in order), log (the main
- *                log, without pfb_logger()'s time stamps), console (what reached stdout, without time stamps), absent
- *                (canary files that must not exist).
+ *                log, without pfb_logger()'s time stamps), console (what reached stdout, each time stamp written as
+ *                {stamp}), absent (canary files that must not exist).
  *   old_expect   today's answer where Go deliberately differs: its keys replace expect's here.
  * A content is a string or {"prefix", "repeat", "times", "suffix"}; {root} in it is the scenario root.
  */
@@ -130,6 +130,10 @@ final class HookOneShotCorpusTest extends TestCase
 		file_put_contents("{$root}/scenario.json", json_encode(['caller' => $sc['caller'], 'when' => $sc['when'],
 			'argv' => $argv, 'vars' => $vars, 'rows' => $sc['rows']], JSON_THROW_ON_ERROR));
 		$repo = dirname(__DIR__, 2);
+		// the extract below starts inside the verb's block: its guard must be the one right before it
+		$guard = '/elseif \(\$argv\[1\] == \'runhooks\'\) \{\s*\$when = \(\$argv\[2\] \?\? \'\'\)/';
+		$this->assertMatchesRegularExpression($guard,
+			(string) file_get_contents("{$repo}/src/usr/local/www/pfblockerng/pfblockerng.php"), 'the runhooks verb guards it');
 		file_put_contents("{$root}/worker.php", <<<'PHP'
 <?php
 [, $root, $repo] = $argv;
@@ -185,7 +189,7 @@ PHP);
 		$this->assertSame($this->content($expect['log']),
 			preg_replace(self::STAMP, '', (string) file_get_contents("{$root}/main.log")), 'main log without time stamps');
 		$this->assertSame($this->content($expect['console']),
-			preg_replace(self::STAMP, '', (string) file_get_contents("{$root}/worker.out")), 'console without time stamps');
+			preg_replace(self::STAMP, '{stamp} ', (string) file_get_contents("{$root}/worker.out")), 'console');
 		foreach ($expect['absent'] ?? [] as $canary) {
 			$this->assertFileDoesNotExist("{$root}/{$canary}", 'an unevaluated value was evaluated');
 		}

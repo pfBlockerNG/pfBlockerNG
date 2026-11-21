@@ -1,5 +1,6 @@
 {
  "description": "The uninstall disable pass's pre hooks: PFB_PRE_UNINSTALL=1 and the pkg delete operation. A package lifecycle copies to the console exactly what the main log gets: the runner's lines and each hook's sanitised output, a failure included.",
+ "departure": "Today pfb_logger() stamps each line it starts on the console with the date and time, as in the main log; the one-shot copies the main log unstamped.",
  "caller": "uninstall",
  "vars": {
   "TRIGGER": "update"
@@ -57,5 +58,8 @@
   ],
   "log": "\n[ pfB Hook ] pre Stop proxy (hook_pre_a.sh, timeout 60s)\nstopping haproxy\nesc \\x1B[31mred\\x1B[0m bad \\xFF end\n[ pfB Hook ] pre Stop proxy completed\n\n[ pfB Hook ] pre #1 (hook_pre_b.sh, timeout 60s)\nno newline[ pfB Hook ] pre #1 exited non-zero [ 3 ]; continuing\n",
   "console": "\n[ pfB Hook ] pre Stop proxy (hook_pre_a.sh, timeout 60s)\nstopping haproxy\nesc \\x1B[31mred\\x1B[0m bad \\xFF end\n[ pfB Hook ] pre Stop proxy completed\n\n[ pfB Hook ] pre #1 (hook_pre_b.sh, timeout 60s)\nno newline[ pfB Hook ] pre #1 exited non-zero [ 3 ]; continuing\n"
+ },
+ "old_expect": {
+  "console": "\n{stamp} [ pfB Hook ] pre Stop proxy (hook_pre_a.sh, timeout 60s)\nstopping haproxy\nesc \\x1B[31mred\\x1B[0m bad \\xFF end\n{stamp} [ pfB Hook ] pre Stop proxy completed\n\n{stamp} [ pfB Hook ] pre #1 (hook_pre_b.sh, timeout 60s)\nno newline[ pfB Hook ] pre #1 exited non-zero [ 3 ]; continuing\n"
  }
 }

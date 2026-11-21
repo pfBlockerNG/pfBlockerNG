@@ -1,5 +1,6 @@
 {
  "description": "The uninstall disable pass's post hooks with its change context: a .py hook runs through the wrapper, a row whose file is missing is skipped, and the console gets the same text as the main log.",
+ "departure": "Today pfb_logger() stamps each line it starts on the console with the date and time, as in the main log; the one-shot copies the main log unstamped.",
  "caller": "uninstall",
  "vars": {
   "TRIGGER": "update",
@@ -78,5 +79,8 @@
   ],
   "log": "\n[ pfB Hook ] post Reload (hook_post_a.py, timeout 60s)\nreloaded\n[ pfB Hook ] post Reload completed\n[ pfB Hook ] post #1 script 'hook_post_missing.sh' not a valid file in {root}/hooks; skipping\n\n[ pfB Hook ] post #2 (hook_post_c.sh, timeout 60s)\ndone\n[ pfB Hook ] post #2 completed\n",
   "console": "\n[ pfB Hook ] post Reload (hook_post_a.py, timeout 60s)\nreloaded\n[ pfB Hook ] post Reload completed\n[ pfB Hook ] post #1 script 'hook_post_missing.sh' not a valid file in {root}/hooks; skipping\n\n[ pfB Hook ] post #2 (hook_post_c.sh, timeout 60s)\ndone\n[ pfB Hook ] post #2 completed\n"
+ },
+ "old_expect": {
+  "console": "\n{stamp} [ pfB Hook ] post Reload (hook_post_a.py, timeout 60s)\nreloaded\n{stamp} [ pfB Hook ] post Reload completed\n{stamp} [ pfB Hook ] post #1 script 'hook_post_missing.sh' not a valid file in {root}/hooks; skipping\n\n{stamp} [ pfB Hook ] post #2 (hook_post_c.sh, timeout 60s)\ndone\n{stamp} [ pfB Hook ] post #2 completed\n"
  }
 }
