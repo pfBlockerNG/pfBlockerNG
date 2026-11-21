@@ -2002,7 +2002,7 @@ Full design: ADR-39.
 
 ## IP autorule reconciliation — immutable user rules (ADR-41)
 
-The IP-side autorule pass in `sync_package_pfblockerng()` reconciles pfBlockerNG's own
+The IP-side autorule pass in `pfb_apply_objects()` (called by `sync_package_pfblockerng()`) reconciles pfBlockerNG's own
 `filter/rule` entries each update via the pure helper `pfb_build_autorule_list($existing_rules,
 $pfb_generated, $order, $float, $in_ifaces, $out_ifaces)` (pfblockerng.inc). It is a **stable
 bucket reorder**: every surviving rule is sorted into one of four buckets — pfB pass/match, pfB
@@ -2328,6 +2328,16 @@ emits one deprecation log line via `pfb_verb_deprecation_warning()`. The CLI exp
 `pfblockerng.php pfb_trigger scope=<…> force=<true|false> trigger=<…>`. HA-sync (`pfblockerng.xml`)
 and the smoke harness (`tests/smoke/helpers.py` `reload()`) call the new API directly.
 
+**The apply functions (#4037).** The parts of the pass that touch pfSense are functions of their own in
+`pfblockerng_apply.inc`, so that the version 2 Outpost apply can call them: `pfb_apply_enter()` (the HA
+receive-suppression flag, the DNS listener VIPs under the DNS configuration lock, the DNSBL policy upgrade; FALSE when
+that lock is unavailable), `pfb_apply_objects()` (alias and rule writes, the pfctl table updates, the saved settings,
+the filter reload, kill states, the XMLRPC sync and the metrics export; it returns the changed aliases, whether an IP
+unlock forced a re-block and whether the reload launch failed) and `pfb_apply_settle()` (the pending mark, the
+due-ledger flag and the apply record). `sync_package_pfblockerng()` calls them in that order and is the temporary
+shim the cutover (#3977) deletes. What the pass does to pfSense is frozen by corpus A
+(`tests/outpost/fixtures/apply/`, run by `tests/php/OutpostApplyCorpusTest.php`).
+
 **Deprecated-verb migration map** (each old verb still works through an adapter; the deprecation
 line is logged for the three operator-facing verbs):
 
@@ -2369,7 +2379,7 @@ the feeds with a `*.fail` retry marker (and applies what that changed). It stays
 `maintenance.metricsExport` are both on; the wrapper runs `/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php
 /usr/local/www/pfblockerng/pfblockerng.php metrics` and tests nothing. The `pfb_metrics_enabled` sentinel is only the publish guard
 inside the Outpost (below), not a schedule: a sentinel removed by hand makes each run log once and publish nothing until the next sync pass
-recreates it. `pfb_metrics_configure_export()` creates it from `sync_package_pfblockerng()`, and removes it together with
+recreates it. `pfb_metrics_configure_export()` creates it from the update pass (`pfb_apply_objects()`), and removes it together with
 `/var/tmp/node_exporter/pfblockerng.prom` otherwise and on package deinstall; it touches no crontab. Both directions take an exclusive
 lock on `pfb_metrics.lock` around the sentinel and the published files only, and release it on return, before the cron retirement
 that follows (`install_cron_job()` can start cron, which would inherit a held lock and block every publish);
