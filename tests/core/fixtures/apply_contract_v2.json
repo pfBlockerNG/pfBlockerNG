@@ -3315,8 +3315,8 @@
 			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
-			"id": "issue-code-zero-width-space",
-			"description": "A code with U+200B.",
+			"id": "issue-code-unit-separator",
+			"description": "A code with the control byte 0x1F.",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
@@ -3324,7 +3324,7 @@
 					{
 						"resource": "r",
 						"stage": "parse",
-						"code": "c\u200bc",
+						"code": "c\u001fc",
 						"message": "m"
 					}
 				]
@@ -3332,41 +3332,25 @@
 			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
-			"id": "issue-resource-256-printable-ascii",
-			"description": "A resource of exactly 256 printable ASCII bytes.",
+			"id": "issue-resource-257-bytes",
+			"description": "A resource of 257 bytes.",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
 				"issues": [
 					{
-						"resource": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+						"resource": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
 						"stage": "parse",
 						"code": "c",
 						"message": "m"
 					}
 				]
 			},
-			"accepted": {
-				"trigger": "manual",
-				"scope": "both",
-				"pendingToken": null,
-				"pendingOutsideWindow": false,
-				"resources": [],
-				"removed": [],
-				"dnsbl": null,
-				"issues": [
-					{
-						"resource": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
-						"stage": "parse",
-						"code": "c",
-						"message": "m"
-					}
-				]
-			}
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
 			"id": "issue-resource-space-and-tilde",
-			"description": "A resource holding a space and a tilde, the first and last printable ASCII bytes besides DEL.",
+			"description": "A resource holding a space and a tilde, the first and last printable ASCII bytes (0x20 and 0x7E).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",

@@ -268,7 +268,7 @@ final class CoreUpdateV2ContractTest extends TestCase
 
 		$this->assertLessThanOrEqual($limits['resultLineBytes'], strlen($line), "every id {$kind}: within the bound of a line");
 		if ($kind === 'failed') {
-			$this->assertSame(286826, strlen($line), 'the longest line the docs state');
+			$this->assertSame(286826, strlen($line), 'the longest line the docs state (docs/misc/core-api-protocol.md states the same 286826: change both together)');
 		}
 		$this->assertSame($limits['ids'], substr_count($line, '"pfB_'), "every id {$kind}: every alias is on the line");
 	}

@@ -810,9 +810,8 @@ writes no result and exits 2. A field that is `null` is absent; an unknown field
 
 `resources` and `removed` hold at most 2,048 ids together, so that the report of every request accepted fits one result line
 (below). `scope` does not constrain what the request lists (`scope: "dnsbl"` with an `ip-set` is accepted): the validator
-checks the request's shape, and the apply honours `scope` when it acts. Each of `resources`, `removed`, `applied`,
-`removed` (report) and `failed` is still refused over 4,096 entries with `<list> holds more than 4096 entries`, a check
-that runs on each list before the combined bound of 2,048 ids.
+checks the request's shape, and the apply honours `scope` when it acts. Each of `resources` and `removed` is still
+refused over 4,096 entries with `<list> holds more than 4096 entries`, a check that runs before the combined bound.
 
 - **A resource** is `{"id", "generation", "action", "direction", "entries"}`. The `id` is a [resource id](#resources) the
   apply handles: an `ip-set`, an `ip-aggregate` or the `geo-catalog`, never a `dnsbl/*` id (pfB-DNS fetches those). Each
@@ -860,7 +859,8 @@ appear in this order; a field is left out when the apply has nothing to say in i
 Every id on a result line is one a request may hold: the `geo-catalog`, or an id that maps to an alias. A `changedAliases`
 entry is a pfBlockerNG alias name: `pfB_` and letters, digits and underscores, at most 31 characters. `applied`, `removed`
 and `failed` name at most 2,048 ids together, each id once across the three, and `changedAliases` at most 2,048 aliases,
-each once.
+each once. Each of `applied`, `removed` and `failed` is still refused over 4,096 entries the same way, before their
+combined bound of 2,048 ids; `changedAliases` is refused over 2,048 with `changedAliases holds more than 2048 entries`.
 
 A result line is at most 524,288 bytes, its newline included: half of the 1 MiB Core reads back from fd 3 in all, so the
 lines of one Update leave room for each other. When a line would be longer, every `failed` message longer than
