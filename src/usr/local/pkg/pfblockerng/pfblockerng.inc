@@ -9575,6 +9575,8 @@ if (isset($argv[1])) {
 				logger(LOG_INFO, localize_text('pfSense Firewall log missing'), LOG_PREFIX_PKG_PFBLOCKERNG);
 				exit;
 			}
+			// The CrowdSec bouncer's trackers and tables (#4164): this branch exits before the includes at the end of this file
+			require_once __DIR__ . '/pfblockerng_crowdsec.inc';
 			pfb_daemon_filterlog();
 			exit;
 	}
@@ -13529,7 +13531,7 @@ function pfb_widget_alias_hidden($pfb_alias, $show_agg = FALSE) {
 function pfb_rule_alias_packets(array $filter_rules, array $pf_rules): array {
 	$agg = array();
 	$tracked_rules = array();
-	$crowdsec_trackers = array_merge(...array_values(array_map('array_values', PFB_CROWDSEC_TRACKERS)));
+	$crowdsec_trackers = pfb_crowdsec_tracker_ids();
 
 	foreach ($filter_rules as $rule) {
 		if (strpos($rule['descr'], 'pfB_DNSBL_Ping') !== FALSE || strpos($rule['descr'], 'pfB_DNSBL_Permit') !== FALSE) {
@@ -26586,7 +26588,7 @@ function pfb_resolve_tracker(
 	// Still unresolved for this tracker/type after a fresh parse — record in the negative cache. Not the CrowdSec bouncer's
 	// fixed trackers (#4164): its rules come back with them when it is turned on again, and its lines come only while they
 	// are loaded or just after
-	if (!in_array((int) $tracker, array_merge(...array_values(array_map('array_values', PFB_CROWDSEC_TRACKERS))), TRUE)) {
+	if (!in_array((int) $tracker, pfb_crowdsec_tracker_ids(), TRUE)) {
 		$miss_cache[$miss_key] = TRUE;
 	}
 	return FALSE;

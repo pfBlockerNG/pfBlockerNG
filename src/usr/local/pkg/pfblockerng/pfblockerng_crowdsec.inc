@@ -767,6 +767,15 @@ function pfb_crowdsec_widget_rules(): array {
 }
 
 /**
+ * Every one of the bouncer's rule trackers (PFB_CROWDSEC_TRACKERS), as one list.
+ *
+ * @return list<int>
+ */
+function pfb_crowdsec_tracker_ids(): array {
+	return array_merge(...array_values(array_map('array_values', PFB_CROWDSEC_TRACKERS)));
+}
+
+/**
  * The bouncer's table a `pfctl -vvsr` rule line drops on (#4164), or NULL: the line must carry one of its family's
  * PFB_CROWDSEC_TRACKERS and name that family's table (`<crowdsec_v4:N>`, or `<crowdsec_v4>` while a reload has killed it),
  * so a user's rule on the tables, or another rule carrying one of the trackers, stays someone else's.
