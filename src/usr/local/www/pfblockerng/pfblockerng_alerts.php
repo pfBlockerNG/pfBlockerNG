@@ -3170,6 +3170,9 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	$eval_new = $attribution['eval_new'];
 	$alias_new = $attribution['alias_new'];
 	$pfb_matchtitle = $attribution['pfb_matchtitle'];
+	// A drop by the CrowdSec bouncer's rule (#4164): its decisions live on the CrowdSec engine and its rules come before every
+	// pfB rule, so pfBlockerNG's suppress, unlock and whitelist actions do not apply
+	$crowdsec = in_array($fields[13], PFB_CROWDSEC_TABLES, TRUE);
 
 	// HTML-encode the resolved/DHCP hostnames before they are printed as cell text.
 	$hostname['src'] = pfb_hsc($hostname['src']);
@@ -3222,7 +3225,11 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	// Suppression Icon -- any family, any mask (ADR-53 follow-up, issue #422).
 	// GeoIP rows stay excluded (maintainer constraint).
 	$supp_ip = $unlock_ip = '&nbsp;&nbsp;&nbsp;';
-	if ($rtype == 'Block' && !$pfb_geoip) {
+	if ($crowdsec) {
+		$supp_ip = '<a class="fa-solid fa-shield-halved icon-pointer" target="_blank" rel="noopener noreferrer" href="'
+				. PFB_CROWDSEC_STATUS_PAGE . '?lookup=' . $h_host . '" title="Click for CrowdSec decision lookup for [ ' . $h_host . ' ]"></a>';
+	}
+	elseif ($rtype == 'Block' && !$pfb_geoip) {
 
 		$supp_key = ($vtype == 6) ? 'ipsuppression_v6' : 'ipsuppression';
 		$supp_match = NULL;
@@ -3290,7 +3297,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	// posted host). The stored table must match THIS
 	// row's table -- a host unlocked in another alias still shows the Unlock
 	// icon here.
-	if ($rtype == 'Block' && !$pfb_geoip) {
+	if ($rtype == 'Block' && !$pfb_geoip && !$crowdsec) {
 		$tnote = "\n\nNote:\n&emsp;&emsp;&#8226; Unlocking is temporary; the next IP table reload locks the IP again.\n"
 			. "&emsp;&emsp;&#8226; Review Threat Source ( i ) Icons for further IP details.";
 
@@ -3418,6 +3425,10 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		$rule = "<s>{$h_rule_alias}</s><br />" . pfb_hsc($alias_new) . "<br /><small>({$h_rule_num})</small>";
 	} else {
 		$rule = "{$h_rule_alias}<br /><small>({$h_rule_num})</small>";
+	}
+	// The CrowdSec bouncer's rule its tracker identifies (#4164), named in a tooltip
+	if ($crowdsec && ($rule_name = pfb_crowdsec_rule_name((int) $fields[0])) !== NULL) {
+		$rule = '<span title="' . pfb_hsc($rule_name) . "\">{$rule}</span>";
 	}
 
 	$dup_cnt = '';
@@ -4738,6 +4749,10 @@ if (!$alert_summary):
 
 					$ip_copy = $ip_fields;
 					$ip_copy[99] = array_shift($ip_copy);
+					// The CrowdSec bouncer's rows render as logged (#4164): nothing to look up
+					if (in_array($ip_copy[13], PFB_CROWDSEC_TABLES, TRUE)) {
+						continue;
+					}
 					$ip_rq = pfb_ip_render_query($ip_copy);
 
 					$ip_prefetch_rows[] = array(

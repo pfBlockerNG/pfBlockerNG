@@ -731,8 +731,8 @@ function pfb_crowdsec_rules(string $type): string {
 		$af = $n === 4 ? 'inet' : 'inet6';
 		$table = PFB_CROWDSEC_TABLES["ipv{$n}"];
 		$id = PFB_CROWDSEC_TRACKERS["ipv{$n}"];
-		$in = "CrowdSec IPv{$n}";
-		$out = "CrowdSec IPv{$n} out";
+		$in = (string) pfb_crowdsec_rule_name($id['in']);
+		$out = (string) pfb_crowdsec_rule_name($id['out']);
 		$rules .= "block drop in{$log} quick{$on} {$af} from <{$table}> to any label \"{$in}\" label \"descr={$in}\" ridentifier {$id['in']}{$tag}\n"
 		    . "block drop out{$log} quick{$on} {$af} from any to <{$table}> label \"{$out}\" label \"descr={$out}\" ridentifier {$id['out']}{$tag}\n";
 	}
@@ -758,12 +758,62 @@ function pfb_crowdsec_widget_rules(): array {
 	foreach (array_keys(pfb_crowdsec_rule_families(pfb_crowdsec_settings())) as $n) {
 		$table = PFB_CROWDSEC_TABLES["ipv{$n}"];
 		$id = PFB_CROWDSEC_TRACKERS["ipv{$n}"];
-		$rows[] = ['descr' => "CrowdSec IPv{$n}", 'tracker' => $id['in'], 'type' => 'block', 'source' => ['address' => $table],
+		$rows[] = ['descr' => pfb_crowdsec_rule_name($id['in']), 'tracker' => $id['in'], 'type' => 'block', 'source' => ['address' => $table],
 			'destination' => ['address' => 'any']];
-		$rows[] = ['descr' => "CrowdSec IPv{$n} out", 'tracker' => $id['out'], 'type' => 'block', 'source' => ['address' => 'any'],
+		$rows[] = ['descr' => pfb_crowdsec_rule_name($id['out']), 'tracker' => $id['out'], 'type' => 'block', 'source' => ['address' => 'any'],
 			'destination' => ['address' => $table]];
 	}
 	return $rows;
+}
+
+/**
+ * Every one of the bouncer's rule trackers (PFB_CROWDSEC_TRACKERS), as one list.
+ *
+ * @return list<int>
+ */
+function pfb_crowdsec_tracker_ids(): array {
+	return array_merge(...array_values(array_map('array_values', PFB_CROWDSEC_TRACKERS)));
+}
+
+/**
+ * The bouncer's table a `pfctl -vvsr` rule line drops on (#4164), or NULL: the line must carry one of its family's
+ * PFB_CROWDSEC_TRACKERS and name that family's table (`<crowdsec_v4:N>`, or `<crowdsec_v4>` while a reload has killed it),
+ * so a user's rule on the tables, or another rule carrying one of the trackers, stays someone else's.
+ */
+function pfb_crowdsec_rule_table(string $tracker, string $line): ?string {
+	foreach (PFB_CROWDSEC_TRACKERS as $family => $ids) {
+		$table = PFB_CROWDSEC_TABLES[$family];
+		if (in_array((int) $tracker, $ids, TRUE) && preg_match("/ <{$table}[:>]/", $line) === 1) {
+			return $table;
+		}
+	}
+	return NULL;
+}
+
+/**
+ * The direction of the bouncer's rule a tracker identifies (D5): 'in' (it drops from its table) or 'out' (to it); NULL for any
+ * other tracker.
+ */
+function pfb_crowdsec_rule_direction(int $tracker): ?string {
+	foreach (PFB_CROWDSEC_TRACKERS as $ids) {
+		if (($dir = array_search($tracker, $ids, TRUE)) !== FALSE) {
+			return $dir;
+		}
+	}
+	return NULL;
+}
+
+/**
+ * The name of the bouncer's rule a tracker identifies (D5): "CrowdSec IPv4", "CrowdSec IPv4 out", "CrowdSec IPv6" or "CrowdSec IPv6 out";
+ * NULL for any other tracker.
+ */
+function pfb_crowdsec_rule_name(int $tracker): ?string {
+	foreach (PFB_CROWDSEC_TRACKERS as $family => $ids) {
+		if (($dir = array_search($tracker, $ids, TRUE)) !== FALSE) {
+			return 'CrowdSec IPv' . substr($family, -1) . ($dir === 'out' ? ' out' : '');
+		}
+	}
+	return NULL;
 }
 
 /**

@@ -103,6 +103,25 @@ PHP;
 	}
 
 	/**
+	 * Scenario: a CrowdSec table's row (#4161), now that Alerts reports the bouncer's drops (#4164).
+	 * When the widget renders it with dropped packets,
+	 * Then its packets link filters IP alerts by the table, as a pfB alias row's does.
+	 */
+	public function testCrowdsecTableRowLinksItsPacketsToAlerts(): void
+	{
+		$row = var_export(['count' => '2', 'img' => 'ROW_ICON', 'update' => '', 'packets' => '3', 'rule' => 2, 'type' => 'Block'], TRUE);
+		$after = <<<PHP
+echo "\\n__ROW__";
+pfBlockerNG_get_table(['crowdsec_v4' => {$row}], 'js');
+PHP;
+		$result = $this->runWidget([], [], FALSE, '', $after);
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$cols = explode('||', (string) strtok(substr($result['stdout'], (int) strpos($result['stdout'], '__ROW__') + 7), "\n"));
+		$this->assertStringContainsString('href="/pfblockerng/pfblockerng_alerts.php?filterip=crowdsec_v4"', $cols[2]);
+		$this->assertSame('ip', $cols[5]);
+	}
+
+	/**
 	 * Scenario: the header counts a row by its group too (issue #3602).
 	 * Given a block rule with 77 packets on an IP alias that has no aliases/alias entry,
 	 *   so its row carries no alias id,

@@ -447,4 +447,28 @@ final class FilterlogTrackerResolveTest extends TestCase
 		$this->assertSame(0, $reparseCount, 'No reparse on positive cache hit');
 		$this->assertSame(0, $callbackCount, 'on_reparse callback must NOT fire on a positive cache hit');
 	}
+
+	/**
+	 * The CrowdSec bouncer's trackers are fixed (#4159): a drop line read while its rules are not loaded (one read just
+	 * after the reload that removed them) must not make the tracker a miss at all, or the bouncer's drops would stay out
+	 * of Alerts once it is turned on again (#4164), even a few seconds later.
+	 */
+	public function testABouncerTrackerAbsentFromTheRulesetIsNotCachedAsAMiss(): void
+	{
+		$ruleList = $this->emptyRuleList();
+		$missCache = [];
+		$loaded = FALSE;
+		$reparseCount = 0;
+		$reparse = function () use (&$reparseCount, &$loaded): array {
+			$reparseCount++;
+			return $loaded ? $this->ruleListWithPfb('177400402', 'block') : $this->emptyRuleList();
+		};
+
+		$this->assertFalse(pfb_resolve_tracker($ruleList, $missCache, '177400402', 'block', $reparse), 'rules not loaded');
+		$this->assertSame([], $missCache, 'the bouncer tracker is not cached as a miss');
+
+		$loaded = TRUE;
+		$this->assertTrue(pfb_resolve_tracker($ruleList, $missCache, '177400402', 'block', $reparse), 'the bouncer is on again, at once');
+		$this->assertSame(2, $reparseCount, 'one reparse per unresolved line');
+	}
 }

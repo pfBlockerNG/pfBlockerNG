@@ -9575,6 +9575,8 @@ if (isset($argv[1])) {
 				logger(LOG_INFO, localize_text('pfSense Firewall log missing'), LOG_PREFIX_PKG_PFBLOCKERNG);
 				exit;
 			}
+			// The CrowdSec bouncer's trackers and tables (#4164): this branch exits before the includes at the end of this file
+			require_once __DIR__ . '/pfblockerng_crowdsec.inc';
 			pfb_daemon_filterlog();
 			exit;
 	}
@@ -13529,7 +13531,7 @@ function pfb_widget_alias_hidden($pfb_alias, $show_agg = FALSE) {
 function pfb_rule_alias_packets(array $filter_rules, array $pf_rules): array {
 	$agg = array();
 	$tracked_rules = array();
-	$crowdsec_trackers = array_merge(...array_values(array_map('array_values', PFB_CROWDSEC_TRACKERS)));
+	$crowdsec_trackers = pfb_crowdsec_tracker_ids();
 
 	foreach ($filter_rules as $rule) {
 		if (strpos($rule['descr'], 'pfB_DNSBL_Ping') !== FALSE || strpos($rule['descr'], 'pfB_DNSBL_Permit') !== FALSE) {
@@ -21765,6 +21767,11 @@ function pfb_ip_render_attribution(array $fields): array {
 	global $pfb;
 
 	$rq = pfb_ip_render_query($fields);
+	// A drop by the CrowdSec bouncer's rule (#4164) renders as logged: no feed list or alias table holds its tables' entries
+	if (in_array($fields[13], PFB_CROWDSEC_TABLES, TRUE)) {
+		return array('host' => $rq['host'], 'hostname' => $rq['hostname'], 'pfb_geoip' => FALSE, 'field15' => $rq['field15'],
+			'mask' => '', 'feed_new' => '', 'eval_new' => '', 'alias_new' => '', 'pfb_matchtitle' => '');
+	}
 	$geoip_lock = FALSE;
 	if ($rq['pfb_geoip']) {
 		$geoip_lock = pfb_geoip_generation_read_lock();
@@ -25940,19 +25947,20 @@ function pfb_filterrules() {
 						if ($type == 'match') {
 							$type = 'unkn(%u)';
 						}
-	
-						if (!is_array($rule_list[$id])) {
-							$rule_list[$id] = array();
-						}
-	
+
 						$rule_list['id'][]	= $id;
-						$rule_list[$id]['name']	= $descr;
-						$rule_list[$id]['type']	= $type;
-	
+						$rule_list[$id]		= array('name' => $descr, 'type' => $type);
+
 						$int = strstr(ltrim(strstr($result, ' on ', FALSE), ' on '), ' ', TRUE);
 						if (!empty($int)) {
 							 $rule_list['int'][$int] = '';
 						}
+					}
+					// The CrowdSec bouncer's rules (#4164), named by their table as a pfB rule by its alias; Kill States
+					// leaves their interfaces alone
+					elseif (($table = pfb_crowdsec_rule_table($id, $result)) !== NULL) {
+						$rule_list['id'][]	= $id;
+						$rule_list[$id]		= array('name' => $table, 'type' => $type);
 					}
 					else {
 						// All other non-pfBlockerNG Tracker IDs
@@ -26533,7 +26541,8 @@ function pfb_collect_localhosts() {
 //
 // $rule_list: positive cache from pfb_filterrules(); rebuilt in place on a reparse.
 // $miss_cache: PERSISTENT negative cache keyed by "tracker\0type"; survives reparses, so each
-//   unresolvable tracker/type triggers at most ONE reparse for the daemon's life (keyed by
+//   unresolvable tracker/type (except the CrowdSec bouncer's fixed trackers, never cached: #4164) triggers at most ONE
+//   reparse for the daemon's life (keyed by
 //   type + checking the positive cache first, so a transient type mismatch never suppresses a
 //   later match). $reparse: callable() => array, fresh rule list. $on_reparse: callable() =>
 //   void, refresh daemon-local IP/host collections after a reparse.
@@ -26577,8 +26586,12 @@ function pfb_resolve_tracker(
 		return FALSE;
 	}
 
-	// Still unresolved for this tracker/type after a fresh parse — record in the negative cache.
-	$miss_cache[$miss_key] = TRUE;
+	// Still unresolved for this tracker/type after a fresh parse — record in the negative cache. Not the CrowdSec bouncer's
+	// fixed trackers (#4164): its rules come back with them when it is turned on again, and its lines come only while they
+	// are loaded or just after
+	if (!in_array((int) $tracker, pfb_crowdsec_tracker_ids(), TRUE)) {
+		$miss_cache[$miss_key] = TRUE;
+	}
 	return FALSE;
 }
 
@@ -27199,6 +27212,8 @@ function pfb_daemon_filterlog() {
 
 	// Persistent negative cache: trackers absent from the ruleset are never reparsed again.
 	$tracker_misses = array();
+	// The CrowdSec bouncer's rows' GeoIP and rDNS per host (#4164), which the IP cache does not keep
+	$crowdsec_hosts = array();
 
 	if (($s_handle = @fopen('php://stdin', 'r')) !== FALSE) {
 		logger(LOG_NOTICE, localize_text('filterlog daemon started'), LOG_PREFIX_PKG_PFBLOCKERNG);
@@ -27303,6 +27318,9 @@ function pfb_daemon_filterlog() {
 
 					$int		= convert_real_interface_to_friendly_descr($d[4]);
 					$pfb_alias	= pfb_filter($rule_list[$d[3]]['name'], PFB_FILTER_WORD, 'pfb_daemon_filterlog', 'Unknown');
+					// A drop by the CrowdSec bouncer's rule (#4164): its tables are no feed, and the log does not say which
+					// decision matched
+					$crowdsec	= in_array($pfb_alias, PFB_CROWDSEC_TABLES, TRUE);
 
 					// Action setting variables
 					if ($d[6] == 'block') {
@@ -27340,9 +27358,11 @@ function pfb_daemon_filterlog() {
 						$tcp_flags	= $d[12] == 'tcp' ? $d[20] : '';
 					}
 
-					// Determine if DST IP or SRC IP is the external host
+					// Determine if DST IP or SRC IP is the external host. The CrowdSec bouncer's rules (#4164) say which side is
+					// banned: the inbound rule's source, the outbound rule's destination.
 					// issue #713: port field is selected by IP version -- see pfb_filterlog_port().
-					if (isset($pfb_local[$dstip]) || pfb_local_ip($dstip, $pfb_localsub)) {
+					$crowdsec_dir = $crowdsec ? pfb_crowdsec_rule_direction((int) $d[3]) : NULL;
+					if ($crowdsec_dir !== NULL ? $crowdsec_dir === 'in' : (isset($pfb_local[$dstip]) || pfb_local_ip($dstip, $pfb_localsub))) {
 						$dir	= 'in';
 						$host	= $srcip;
 						$client	= $dstip;
@@ -27400,10 +27420,11 @@ function pfb_daemon_filterlog() {
 						}
 						$geoip_lock = $geoip_folder ? pfb_geoip_generation_read_lock() : FALSE;
 						$geoip_deferred = $geoip_folder && $geoip_lock === FALSE;
-						$pfb_query = find_reported_header($host, $folder, $geoip_folder);
+						// No feed lookup for a CrowdSec row: it is no feed attribution, so it never reaches the per-host cache below
+						$pfb_query = $crowdsec ? array('CrowdSec', 'Unknown') : find_reported_header($host, $folder, $geoip_folder);
 
 						// Report specific ET IQRisk details
-						if ($et_enabled && strpos($pfb_query[0], "{$et_header}") !== FALSE) {
+						if (!$crowdsec && $et_enabled && strpos($pfb_query[0], "{$et_header}") !== FALSE) {
 							$ET_orig = $pfb_query;
 							$pfb_query = find_reported_header($host, "{$pfb['etdir']}/*", FALSE);
 
@@ -27417,35 +27438,49 @@ function pfb_daemon_filterlog() {
 							}
 						}
 
-						// Determine GeoIP isocode of host
-						if (!empty($pathgeoip)) {
-							$geoip = exec("{$pathgeoip} " . escapeshellarg($host) . " country iso_code | grep -v '^\$' | cut -d '\"' -f2 2>&1");
-							$geoip = pfb_filter($geoip, PFB_FILTER_ALPHA, 'pfb_daemon_filterlog', 'Unk');
+						// A CrowdSec row's GeoIP and rDNS, once per host: it stays out of the IP cache, which answers pfB rows
+						if ($crowdsec && isset($crowdsec_hosts[$host])) {
+							[$geoip, $resolved_host] = $crowdsec_hosts[$host];
 						}
 						else {
-							$geoip = 'Unk';
-						}
+							// Determine GeoIP isocode of host
+							if (!empty($pathgeoip)) {
+								$geoip = exec("{$pathgeoip} " . escapeshellarg($host) . " country iso_code | grep -v '^\$' | cut -d '\"' -f2 2>&1");
+								$geoip = pfb_filter($geoip, PFB_FILTER_ALPHA, 'pfb_daemon_filterlog', 'Unk');
+							}
+							else {
+								$geoip = 'Unk';
+							}
 
-						if ($pfb['rdns']) {
-							$resolved_host = gethostbyaddr($host) ?: 'Unknown';
-							if ($host == $resolved_host || $resolved_host == 'Unknown') {
+							if ($pfb['rdns']) {
+								$resolved_host = gethostbyaddr($host) ?: 'Unknown';
+								if ($host == $resolved_host || $resolved_host == 'Unknown') {
+									$resolved_host = 'Unknown';
+								}
+							} else {
 								$resolved_host = 'Unknown';
 							}
-						} else {
-							$resolved_host = 'Unknown';
+						}
+
+						// Every looked-up row is filtered before it is logged, cached or not
+						$pfb_query[0]	= pfb_filter($pfb_query[0], PFB_FILTER_HTML, 'pfb_daemon_filterlog');
+						$pfb_query[1]	= pfb_filter($pfb_query[1], PFB_FILTER_HTML, 'pfb_daemon_filterlog');
+						$geoip		= pfb_filter($geoip, PFB_FILTER_HTML, 'pfb_daemon_filterlog');
+						$resolved_host	= pfb_filter($resolved_host, PFB_FILTER_HOSTNAME, 'pfb_daemon_filterlog', 'Unknown');
+						// A CrowdSec row is remembered here, never in the IP cache: that answers later pfB rows of this host,
+						// which the CrowdSec row's feed is not
+						if ($crowdsec) {
+							if (count($crowdsec_hosts) >= 10000) {
+								$crowdsec_hosts = array();
+							}
+							$crowdsec_hosts[$host] = array($geoip, $resolved_host);
 						}
 
 						// Save entry to IP cache only when attribution was not deferred by a GeoIP swap.
-						if (!$geoip_deferred) {
+						elseif (!$geoip_deferred) {
 							$db_update = "INSERT into ipcache ( host, q0, q1, geoip, resolved_host ) VALUES ( :host, :q0, :q1, :geoip, :resolved_host )";
 							$db_handle = pfb_open_sqlite(7, 'Add to IP cache');
 							if ($db_handle) {
-								$pfb_host	= pfb_filter($host, PFB_FILTER_HTML, 'pfb_daemon_filterlog');
-								$pfb_query[0]	= pfb_filter($pfb_query[0], PFB_FILTER_HTML, 'pfb_daemon_filterlog');
-								$pfb_query[1]	= pfb_filter($pfb_query[1], PFB_FILTER_HTML, 'pfb_daemon_filterlog');
-								$geoip		= pfb_filter($geoip, PFB_FILTER_HTML, 'pfb_daemon_filterlog');
-								$resolved_host	= pfb_filter($resolved_host, PFB_FILTER_HOSTNAME, 'pfb_daemon_filterlog', 'Unknown');
-
 								$stmt = $db_handle->prepare($db_update);
 								if ($stmt) {
 									$stmt->bindValue(':host', $host, SQLITE3_TEXT);
@@ -27469,6 +27504,11 @@ function pfb_daemon_filterlog() {
 						$pfb_query[1]	= htmlspecialchars($ip_cache['q1'])		?: 'Unknown';
 						$geoip		= htmlspecialchars($ip_cache['geoip'])		?: 'Unknown';
 						$resolved_host	= htmlspecialchars($ip_cache['resolved_host'])	?: 'Unknown';
+					}
+
+					// A CrowdSec row read from the cache keeps the cached GeoIP and rDNS, not the pfB feed attribution
+					if ($crowdsec) {
+						$pfb_query = array('CrowdSec', 'Unknown');
 					}
 
 					// Modify host for ASN query

@@ -613,3 +613,42 @@ severity for the whole stream, so the mapping is the daemon's. This changes D1's
   log level help says so and points at the System Logs log level.
 - **Command line.** `-syslog` follows `-c <config>`, so `pfb_crowdsec_child_pattern()`, which matches the command line
   up to `-c` and the space after it, still finds the bouncer, including one an earlier version's rc script started and a package upgrade left running.
+
+## Amendment 2026-11-21 — the bouncer's drops in Alerts and Reports (#4164)
+
+[#4164](https://github.com/pfBlockerNG/pfBlockerNG/issues/4164): with the trackers of the #4159 amendment, pfBlockerNG's
+Alerts and Reports pipeline attributes drops by the bouncer's rules as it attributes its own rules' drops. It still
+listed only rules on `<pfB_…>` tables, so the filterlog daemon skipped every line the bouncer's rules logged.
+
+- **Attribution.** `pfb_filterrules()`, which reads the loaded ruleset (`pfctl -vvsr`), lists a rule whose line carries
+  one of `PFB_CROWDSEC_TRACKERS` and names that family's table (`pfb_crowdsec_rule_table()`) under the table's name,
+  as it lists a pfB rule under its alias. A user's rule on the tables, or another rule carrying one of the trackers,
+  stays someone else's. The filterlog daemon's tracker resolution then writes the drop to `ip_block.log`, the unified
+  log and the syslog export, with the action, family and direction of any IP block row. Kill States does not take the
+  bouncer's interfaces.
+- **When.** The ruleset carries the rules only while the bouncer should run (D5), so its drops are attributed then.
+  A row already written stays a CrowdSec row: the Alerts page recognizes it by the table it names. A `filter.log` line
+  the daemon reads after a reload has removed the rules is skipped, as a removed pfB rule's lines are, but its tracker
+  is not kept in the daemon's cache of unresolvable trackers: the rules come back with the same trackers when the
+  bouncer is turned on again, and the filterlog daemon is not restarted then. (A one-minute miss was tried and
+  dropped: turning the bouncer back on within that minute would lose its drops.)
+- **Row.** The alias is the table (`crowdsec_v4`, `crowdsec_v6`), as the dashboard widget names it (#4161); the rule
+  number is the rule's tracker, and the Rule cell's tooltip names the rule (`CrowdSec IPv4`, `CrowdSec IPv4 out`, and
+  the IPv6 pair). The feed is `CrowdSec`. The matched entry is
+  `Unknown`: the log does not say which decision matched (an address or a range), and the decision's origin and
+  scenario are not in it either. A pfB feed that lists the address too did not drop it, so it is not consulted; the
+  host's IP cache entry keeps its pfB attribution for pfB rules' drops.
+- **Direction.** For the bouncer's rules the tracker gives the banned side: the inbound rule's source, the outbound
+  rule's destination. The daemon records that side as the host and the direction, instead of guessing from the local
+  addresses, so a drop toward a routed subnet on no local interface still names the banned address.
+- **Decision origin: considered and declined (owner, 2026-11-21).** The row does not name the decision's origin or
+  scenario. Reading them from files the bouncer would write (a LAPI request from the filterlog daemon would hold up the
+  log) was built and reviewed, then dropped: the bouncer keeps its own logs, so anyone who needs to know why an address
+  was banned can cross-check them, and the Status subtab's lookup, linked from the row, shows the live decision.
+- **Alerts page.** The row renders as logged: the bouncer's tables are no feed or alias table, so the render-time
+  re-check does not apply. pfBlockerNG's suppress, unlock and whitelist actions are not offered, because the decisions
+  live on the CrowdSec engine and the bouncer's rules come before every pfB rule. Beside the Threat Source lookup, the
+  external address links to the Status subtab's lookup (D7, `?lookup=<address>`), which shows the matching decisions
+  with their origin, scenario and expiry.
+- **Dashboard widget.** A CrowdSec table's packet count links to the Alerts tab filtered by the table, as a pfB
+  alias row's does (#4161 left it unlinked while Alerts did not report the drops).

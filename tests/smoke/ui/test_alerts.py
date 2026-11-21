@@ -2612,6 +2612,76 @@ def test_ipv6_alert_external_host_attribution(
         )
 
 
+@pytest.mark.ui_render
+def test_crowdsec_alert_renders_as_logged_with_the_status_lookup(webui: "WebUI", smoke_vm: helpers.SmokeVM) -> None:
+    """A drop by the CrowdSec bouncer's rule (#4164) renders as the filterlog daemon logged it.
+
+    Given ip_block.log holding no row for a TEST-NET-3 address,
+    When a row is appended as the daemon writes a drop by the bouncer's inbound IPv4 rule (alias ``crowdsec_v4``,
+      feed ``CrowdSec``, evaluated ``Unknown``) and the Alerts page is GET-ted,
+    Then that row names the bouncer's rule in the Rule cell's tooltip, links the address to the CrowdSec Status
+      subtab's lookup, shows the feed and evaluated cell as
+      logged (no drift strike, no "Not listed!"), and offers none of pfBlockerNG's suppress, unlock or whitelist
+      actions, which do not apply to the bouncer's decisions.
+    """
+    vm = smoke_vm
+    banned = "203.0.113.44"
+    seed = {
+        **_ipv6_alert_seed_fields(time.strftime("%b %e %H:%M:%S"), banned, "192.168.1.100", "in", banned),
+        "rule": "177400401",
+        "ipv": "4",
+        "proto_id": "6",
+        "proto": "TCP-S",
+        "src_port": "51234",
+        "dst_port": "22",
+        "geoip": "Unk",
+        "alias": "crowdsec_v4",
+        "ip_eval": "Unknown",
+        "feed": "CrowdSec",
+    }
+    lookup = f"/pfblockerng/pfblockerng_crowdsec_status.php?lookup={banned}"
+    ip_block_log = helpers.IP_BLOCK_LOG
+    ensure = vm.ssh(f"mkdir -p {ip_block_log.rsplit('/', 1)[0]} && touch {ip_block_log}", timeout=15)
+    assert ensure.returncode == 0, f"ensure {ip_block_log}: rc={ensure.returncode} {ensure.stderr!r}"
+    size = vm.ssh("stat", "-f", "%z", ip_block_log, timeout=15)
+    assert size.returncode == 0, f"stat {ip_block_log}: rc={size.returncode} {size.stderr!r}"
+    original_size = size.stdout.strip()
+
+    pre = webui.get(ALERTS_PAGE)
+    assert not looks_like_login_page(pre.text), "alerts page GET returned the login form before the seed"
+    assert lookup not in pre.text, f"before-state: {lookup!r} already rendered"
+    try:
+        appended = subprocess.run(
+            vm.ssh_argv("tee", "-a", ip_block_log),
+            input=",".join(seed.values()) + "\n",
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert appended.returncode == 0, f"append to {ip_block_log}: rc={appended.returncode} {appended.stderr!r}"
+
+        resp = webui.get(ALERTS_PAGE)
+        assert not looks_like_login_page(resp.text), "alerts page GET returned the login form after the seed"
+        row = row_containing(resp.text, lookup)
+        assert '<span title="CrowdSec IPv4">crowdsec_v4<br /><small>(177400401)</small></span>' in row, (
+            f"the table and the rule's tracker, the rule named in the tooltip: {row}"
+        )
+        assert "CrowdSec<br /><small>Unknown</small>" in row, f"feed and evaluated cell as logged: {row}"
+        assert f"pfblockerng_threats.php?host={banned}" in row, f"the Threat Source lookup stays: {row}"
+        for marker in ("<s>", "Not listed", "PFBIPSUP|", "IPULCK|", "PFBIPWHITE|"):
+            assert marker not in row, f"{marker!r} on the CrowdSec row: {row}"
+    finally:
+        restored = subprocess.run(
+            vm.ssh_argv("/usr/bin/truncate", "-s", original_size, ip_block_log),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert restored.returncode == 0, f"restore {ip_block_log}: rc={restored.returncode} {restored.stderr!r}"
+
+
 def _read_guest_file(vm: helpers.SmokeVM, path: str) -> str | None:
     result = vm.ssh("cat", path)
     if result.returncode == 0:
