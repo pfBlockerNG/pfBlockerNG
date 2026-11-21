@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -83,11 +85,14 @@ exit 7`)
 	}
 }
 
-// On its limit (ctx), the hook's own process gets TERM; a child it started is not signalled, even one that ignores TERM
-// and would die with a process-group KILL.
+// On its limit (ctx), the hook's own process gets TERM; a child it started is not signalled: neither one that ignores
+// TERM (which would die with a process-group KILL) nor one with the default TERM behaviour (which would die of a
+// group TERM).
 func TestRunSurvivorTermsOnlyTheLeaderWhenItsLimitEnds(t *testing.T) {
 	dir, alive, _ := survivorFIFOs(t)
-	cmd := exec.Command("/bin/sh", "-c", `( trap '' TERM; exec 9> "$D/alive"; echo child > "$D/ready"; read -r line < "$D/release" ) &
+	cmd := exec.Command("/bin/sh", "-c", `sleep 3600 &
+echo $! > "$D/plain.pid"
+( trap '' TERM; exec 9> "$D/alive"; echo child > "$D/ready"; read -r line < "$D/release" ) &
 read -r line < "$D/ready"
 echo ready > "$D/leader"
 read -r line < "$D/idle"`)
@@ -105,6 +110,18 @@ read -r line < "$D/idle"`)
 		t.Fatalf("RunSurvivor = %+v; want the leader ended by TERM and the run interrupted", out)
 	}
 	assertStillRunning(t, alive, "the TERM-ignoring child")
+	raw, err := os.ReadFile(filepath.Join(dir, "plain.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || plain <= 1 {
+		t.Fatalf("plain.pid holds %q; want a pid", raw)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(plain, syscall.SIGKILL) })
+	if err := syscall.Kill(plain, 0); err != nil {
+		t.Fatalf("the child with default TERM handling is gone (%v); want it left alone", err)
+	}
 }
 
 // A hook that ignores TERM is KILLed once the grace has passed.
