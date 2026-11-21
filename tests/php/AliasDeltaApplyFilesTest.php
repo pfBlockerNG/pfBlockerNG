@@ -627,18 +627,18 @@ SH
 	// ---------------------------------------------------------------------------------------------------------------
 
 	/**
-	 * A line that pfctl would read as an option (a leading "-") reaches pfctl only inside the file it is handed with -f:
-	 * the command line of every call is exactly -t <table> -T <verb> -f <batch file>, whatever the members hold.
+	 * The members reach pfctl only inside the file it is handed with -f: the command line of every call is exactly
+	 * -t <table> -T <verb> -f <batch file>. (A line pfctl would read as an option, a leading "-", is refused before any call.)
 	 */
-	public function testAMemberThatLooksLikeAnOptionNeverReachesTheCommandLine(): void
+	public function testNoMemberReachesTheCommandLine(): void
 	{
-		$hostile = ['-Fall', '-e', '--', '-f/etc/passwd'];
+		$add = ['10.1.0.1', '2001:db8::/32'];
 
-		$result = $this->apply($hostile, ['-d'], 10000, 10000, 'delta');
+		$result = $this->apply($add, ['10.2.0.0/16'], 10000, 10000, 'delta');
 
 		$this->assertTrue($result['delta']);
 		$calls = $this->calls();
-		$this->assertSame([['add', $hostile], ['delete', ['-d']]],
+		$this->assertSame([['add', $add], ['delete', ['10.2.0.0/16']]],
 			array_map(static fn (array $c): array => [$c['verb'], $c['lines']], $calls), 'the members travel in the -f files');
 		foreach ($calls as $i => $call) {
 			$argv = file("{$this->dir}/argv" . ($i + 1), FILE_IGNORE_NEW_LINES);
