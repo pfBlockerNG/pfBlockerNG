@@ -1201,13 +1201,11 @@ function pfb_filter_reload_exec(): int {
 }
 
 /**
- * The apply's entry under the held feed-pass lock: the HA receive-suppression flag ($pfb_sync_absorb), the DNS
- * listener VIPs under the DNS configuration lock, and the DNSBL policy upgrade. FALSE when that lock is unavailable:
- * the changes are marked pending and the locks the caller owns are released.
+ * The apply's entry, under the held feed-pass lock; sets $pfb_sync_absorb. FALSE when the DNS configuration lock is
+ * unavailable: the changes are then already marked pending and each lock whose owner flag is TRUE already released,
+ * so the caller returns at once and must not release those locks again.
  */
 function pfb_apply_enter(bool $pfb_feed_pass_owner, bool $pfb_dispatch_owner, ?bool &$pfb_sync_absorb): bool {
-	global $pfb;
-
 	// issue #3674: a pass that starts suppressed applies a received policy; its own writes into synced sections stay unsent.
 	$pfb_sync_absorb = pfb_sync_receive_suppressed();
 
@@ -5010,9 +5008,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 }
 
 /**
- * The pass's pfSense objects: alias and rule writes, the pfctl table updates, the saved settings, the filter
- * reload, kill states, the XMLRPC sync and the metrics export. Returns what the `post` hook and the settle read:
- * the aliases whose table changed, whether an IP unlock forced a re-block, and whether the reload launch failed.
+ * The pass's pfSense objects. Returns what the `post` hook and the settle read: the aliases whose table changed,
+ * whether an IP unlock forced a re-block, and whether the reload launch failed.
  *
  * @return array{changedAliases:array,ipUnlockForced:bool,reloadUnknown:bool}
  */
@@ -5486,7 +5483,7 @@ function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $p
 	return ['changedAliases' => $pfb_alias_lists, 'ipUnlockForced' => $pfb_ip_unlock_forced, 'reloadUnknown' => $pfb_filter_reload_unknown];
 }
 
-/** Settles a real Update pass: the pending mark it saw ($pfb_pending_seen), the due-ledger flag and the apply record. */
+/** Settles what a real Update pass applied; $pfb_pending_seen is the pending mark it saw at its start. */
 function pfb_apply_settle(bool $pfb_accounting_pending, bool $pfb_filter_reload_unknown, ?string $pfb_pending_seen,
     int $pfb_pass_started): void {
 	global $pfb;
