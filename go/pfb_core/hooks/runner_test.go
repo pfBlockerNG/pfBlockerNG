@@ -457,6 +457,23 @@ func TestRunnerLogsAMissingInterpreterAs127(t *testing.T) {
 	}
 }
 
+// Not a corpus row: today's PHP reports this through the shell that runs timeout(1), and the result differs between
+// shells (137 with a Killed line, or -1).
+func TestRunnerLogsAHookKilledByASignalAs128PlusTheSignal(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "hook_pre_a.sh"), "#!/bin/sh\nkill -KILL $$\n", 0o755)
+	writeFile(t, filepath.Join(dir, "hook_pre_b.sh"), "#!/bin/sh\ntouch '"+dir+"/ran'\n", 0o755)
+	var log bytes.Buffer
+	hooks.Runner{Dir: dir, Log: &log, Grace: time.Second}.Run(context.Background(), "pre",
+		pre("hook_pre_a.sh", "hook_pre_b.sh"), hooks.Context{})
+	if want := "pre #0 exited non-zero [ 137 ]; continuing"; !strings.Contains(log.String(), want) {
+		t.Errorf("log %q; want it to hold %q", log.String(), want)
+	}
+	if !exists(filepath.Join(dir, "ran")) {
+		t.Error("the second hook did not run")
+	}
+}
+
 // liveRun runs one hook that writes, blocks on the FIFO go until the log holds mark, then writes again, and returns
 // the log and the transcript.
 func liveRun(t *testing.T, body, mark string) (log, transcript string) {
