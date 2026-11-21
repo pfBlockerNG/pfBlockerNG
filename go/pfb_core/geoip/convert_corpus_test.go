@@ -32,6 +32,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"maps"
@@ -324,7 +325,7 @@ func catalogDigest(t *testing.T, body []byte) string {
 		}
 		d := json.NewDecoder(strings.NewReader(m))
 		d.DisallowUnknownFields()
-		if err := d.Decode(&row); err != nil || d.More() {
+		if err := d.Decode(&row); err != nil || !errors.Is(d.Decode(&struct{}{}), io.EOF) { // nothing after the row
 			t.Fatalf("catalog line %d is not one row: %q: %v", i+1, m, err)
 		}
 		n := func(p *int) string {
