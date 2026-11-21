@@ -39,7 +39,7 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 | `SaveSettings` | `requestId`, `expectedRevision`, `changes` | `{"revision", "projections": [...]}`: the projections whose value changed, and the revision, as Core read the backend again after the write (a failed read keeps what was written) |
 | `ValidateSettings` | `changes` | `{}`, or the errors `SaveSettings` would give (bar the rule for an added `noAaaaList` entry); changes nothing |
 | `SettingsChanged` | none | what `GetSettings` answers: Core read its backend again |
-| `StartUpdate` | `requestId`, `trigger`: `manual` (`scope`, `force`), `apply` or `retry` | `{}` once the Update is admitted; `conflict` while one runs |
+| `StartUpdate` | `requestId`, `trigger`: `manual` (`scope`, `force`), `apply` or `retry`; optional `lifecycle`, `pkgOp` | `{}` once the Update is admitted; `conflict` while one runs |
 | `GetUpdate` | `after` (optional cursor, a decimal string; default: the start) | `{"running", "update", "log", "next"}`: the current or last Update and a chunk of its log; `next` is a string |
 | `GetSchedule` | none | `{"scheduled", "feeds", "extras", "lastSuccessfulCheck"}`: when the scheduled Updates last ran and are next due, and each item's last successful check |
 | `GetResources` | `resources` (optional; none: nothing is read): resource id to cursor | `{"resources": {id: item}}`: per resource unchanged, a delta from the cursor, or the full body, described without its members; read-only |
@@ -679,6 +679,19 @@ a quarter-hour run, so one whose model cannot be built from the settings (not in
 starts nothing and is `unavailable` too, with the reason, as `GetSchedule` is; a `scheduled` one is logged and skipped. An
 `apply` plans nothing and needs no model.
 
+Two optional parameters, which any trigger takes, name the package operation the Update runs for (issue #4035; spec
+`docs/specs/go-updater-pipeline.md` section 5, "Install and upgrade are one Update"):
+
+| Parameter | Values | The Update's hooks see |
+|---|---|---|
+| `lifecycle` | `install`, or absent | `PFB_POST_INSTALL=1` with `install`, else `0`; `PFB_PRE_UNINSTALL` is always `0` |
+| `pkgOp` | `install`, `upgrade`, `reinstall`, `delete` or `""` (the same as absent) | `PFB_PKG_OP` set to it, empty when absent |
+
+Any other value, `null` aside, is `invalid_argument` with a field error on the parameter, and nothing starts. `uninstall` is
+not a `lifecycle` an Update takes: the uninstall runs its hooks through [`--run-hooks`](#hooks-outside-an-update). Core copies
+both into the request the Update command receives on stdin, whose worker gives them to the Update's hooks (see
+[Update command](#update-command)). The package resync that sends them is not wired yet.
+
 ### GetUpdate
 
 Progress is polled, not streamed. `after` is an opaque cursor: the `next` of an earlier reply, passed back as the decimal
@@ -718,9 +731,15 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
 The worker receives this request on stdin and reports progress and results as follows:
 
 - **stdin:** one JSON object, `{"version": 1, "trigger": "scheduled|manual|apply|retry", "scope": "ip|dnsbl|both",
-  "force": "none|parse|download|both", "feeds": [ids], "extras": ["extra:dcc", "extra:bl"]}`. `feeds` and `extras` are left out
-  when empty; a feed id is the schedule's (`ipv4:<header>_v4`, `ipv6:<header>_v6`, `dnsbl:<header>`). A `scheduled` or `retry`
-  Update names what to run; a `manual` one runs its scope.
+  "force": "none|parse|download|both", "feeds": [ids], "extras": ["extra:dcc", "extra:bl"], "lifecycle": "install", "pkgOp":
+  "install|upgrade|reinstall|delete"}`. `feeds`, `extras`, `lifecycle` and `pkgOp` are left out when empty, and the last two
+  are what `StartUpdate` was given; a feed id is the schedule's (`ipv4:<header>_v4`, `ipv6:<header>_v6`, `dnsbl:<header>`). A `scheduled` or `retry`
+  Update names what to run; a `manual` one runs its scope. The worker (`pfb_core_update_request()`) accepts `lifecycle` only as
+  `install` and `pkgOp` only as `install`, `upgrade`, `reinstall` or `delete`; absent or `null` is none, and any other value or
+  type refuses the request (exit 2, nothing runs), as an unknown field does. Every hook the Update fires gets
+  `PFB_POST_INSTALL=1` with `lifecycle` `install` (else `0`), and `PFB_PKG_OP` set to `pkgOp`; without `pkgOp` it is read from
+  a `pkg` ancestor process, as outside an Update. The requests Core writes are pinned on both
+  sides by `tests/core/fixtures/update_request_v1.json`.
 - **stdout and stderr:** the per-Update transcript, `update.log` in `--state-dir`: a regular file, never a pipe. `GetUpdate`
   reads this file; the browser never tails the rotating main log. There is no whole-transcript cap or trimming. For PHP hook and
   per-list script invocations, the transcript includes the first 1,048,576 combined stdout/stderr bytes and one notice only
@@ -870,6 +889,90 @@ fits: the longest, every one of 2,048 ids of 36 bytes failed and every alias of 
 once shortened. A report beyond the bounds is refused, and no line is written for it.
 
 With `pendingOutsideWindow` true the apply marks the changes pending and applies nothing, so its one line holds no `applied`.
+
+### Hooks outside an Update
+
+`pfb-core --run-hooks pre|post` runs the ADR-12 hooks of one fire point once and exits (issue #4035; spec
+`docs/specs/go-updater-pipeline.md` section 5, "Hooks outside an Update"). It is for the two callers that fire hooks without an
+Update, while the Core API may be stopped: the uninstall disable pass and the `runhooks` test verb of `pfblockerng.php`. Neither
+calls it yet; they still run `pfb_run_hooks()` until the cutover.
+
+```text
+pfb-core --run-hooks pre|post --hook-dir PATH (--settings-backend-cmd PATH | --state-dir DIR) [--python-wrapper PATH] < context
+```
+
+- **Flags.** The same flags the daemon takes. The hook rows come from the [`hooks`](#projection-hooks) projection, read once
+  through the settings backend: the adapter program of `--settings-backend-cmd`, else `settings.json` in `--state-dir`. Only
+  that projection is read, as `pfb_run_hooks()` reads only the hook rows: another projection holding a value Core refuses, or
+  one Core does not know, does not stop the run, although the daemon refuses to start on it. A state directory without
+  `settings.json` is an uninitialized Core, which the daemon serves: one line is logged, no hook runs, and the status is 0.
+  A `--state-dir` that does not exist or is not a directory is not one: one line, which quotes the path and gives the reason,
+  is logged, no hook runs, and the status is 1.
+  `--hook-dir` is the absolute folder the hook files are vetted in and run from; `--python-wrapper` is the absolute path of the
+  program a `.py` hook runs through (without it a `.py` hook is logged and skipped). Other daemon flags are accepted and
+  ignored. It opens no socket, takes neither `core.lock` nor the Update lock, waits for neither, and publishes nothing.
+- **stdin.** Exactly one JSON object, with only these members, each optional:
+
+  | Member | Type and values | Hook variable |
+  |---|---|---|
+  | `trigger` | string | `PFB_TRIGGER` |
+  | `lifecycle` | `"uninstall"` | `PFB_PRE_UNINSTALL=1` (absent: `0`); `PFB_POST_INSTALL` is always `0` |
+  | `pkgOp` | `"install"`, `"upgrade"`, `"reinstall"`, `"delete"` or `""` | `PFB_PKG_OP` (absent: empty) |
+  | `ipChanged`, `dnsblChanged` | bool, `post` only | `PFB_IP_CHANGED`, `PFB_DNSBL_CHANGED`: `1` or `0` |
+  | `changedIpAliases`, `changedDnsblGroups` | string, `post` only (the names separated by spaces) | `PFB_CHANGED_IP_ALIASES`, `PFB_CHANGED_DNSBL_GROUPS` |
+
+  A member that is absent sets no variable, except as the table says. `PFB_WHEN` is the fire point, and `post` also gets
+  `PFB_STATUS=ok`, the reserved value. A string reaches the hook as the UTF-8 text its JSON decodes to, escapes resolved, as an
+  environment entry, never through a shell. A string value may not hold U+FFFD, which is also what invalid UTF-8 and a lone
+  surrogate escape (`"\ud800"`) decode to; a valid surrogate pair is its character. The hook's environment is pfb-core's own
+  without any `PFB_*` entry, plus the variables above, so a `PFB_*` variable of the caller never reaches a hook; the Python
+  wrapper's `--print-interpreter` probe gets the same environment. This departs from `pfb_run_hooks()`, which passes an
+  inherited `PFB_*` variable through unless the context sets the same name: the wrapper's own overrides (`PFB_PYTHON_DIR`,
+  `PFB_PKG_BIN`, `PFB_PYTHON_DEPENDENCIES`) are dropped too. The `runhooks` verb's context is `{"trigger": "manual-test"}`
+  for `pre` (or the trigger argument it is given) and, for
+  `post`, the trigger with `"ipChanged": false, "dnsblChanged": false, "changedIpAliases": "", "changedDnsblGroups": ""`.
+- **Refusals.** A member not in the table (names are case-sensitive), a member given twice, a value of another type or outside
+  its values, a `post` member for `pre`, a string holding a NUL or U+FFFD (invalid UTF-8 and a lone surrogate escape
+  included), input over 16 MiB, and input that is not exactly one JSON object (empty input, `null`, an array, two objects,
+  trailing data) refuse the run: nothing runs, the settings backend is not called, one line is logged, with any member name
+  it gives quoted, and the exit status is 2.
+- **The run.** The hook runner of the Core Updater runs the enabled rows of the fire point one after another in list order,
+  with its vetting, launchers, per-hook timeouts and survivor lifetime. A hook that is skipped, fails or times out is logged
+  and the next one runs. TERM, INT or HUP ends a running hook as an Update's cancellation does: no further hook starts, one
+  line says the run was cancelled, and the exit status is 1. Every enabled row of the fire point not yet started counts as
+  not run, a row whose script vetting would have skipped included. A hook that the same signal ends first, as one sent to
+  the whole process group does (a terminal's Ctrl-C, a hangup, `kill -TERM -<pgid>`), counts as cut short: a hook that ends
+  by a signal or with a status above 128 while, or within 250 ms before, the run is cancelled. Its status line is logged
+  first, as for any failed hook, then the line that the run was cancelled. A hook that exits 130 on its own, with no signal
+  to the one-shot, is a failed hook. Three limits follow. First, a hook that handles the signal itself and exits with a
+  status from 1 to 128 counts as run, so with nothing else left unrun the status is 0. Second, a group signal that the
+  one-shot acts on more than 250 ms after the last hook's death (a starved host) is not seen as cutting that hook short,
+  and the status is 0.
+  Third, a HUP or INT that pfb-core inherited ignored (`nohup`, a background job of a shell without job control) stays
+  ignored, and its hooks inherit that ignore. A signal that comes while the one-shot waits for its context ends the wait:
+  one line is logged, nothing runs, and the status is 1; when the context had been read in full by then, the one-shot goes
+  on with it as if the signal had come next. One that comes during the settings read is acted on once that read ends (at
+  most the adapter's 10 s read timeout); it leaves the status 0 when the fire point has no enabled hook.
+- **Output.** stderr is the main log: every runner line and all of each hook's sanitized output, without time stamps. The
+  one-shot's own lines (a refused context, settings it cannot read, an uninitialized Core) carry the `pfb_core:` prefix and
+  the date and time, as the daemon's do. With `"lifecycle": "uninstall"` stdout, the package operation's console, gets the
+  same text, each piece after the main log has it, the one-shot's own lines on settings it cannot read included; a failed
+  write to either, a closed pipe included (SIGPIPE does not end the one-shot), is dropped and never stops the other. A
+  refused context, and a signal while the context is read, are logged to stderr alone: the lifecycle is not known then.
+  Without a lifecycle stdout stays empty. There is no transcript and no
+  separate error log. Two departures from `pfb_run_hooks()`: while `$pfb['hook_lifecycle']` is set it copies the main log to
+  stdout with `pfb_logger()`'s date and time at the start of each runner line, where the one-shot's copy is unstamped; and
+  without a lifecycle it still copies the runner's lines to stdout when that is a terminal, where the one-shot copies
+  nothing.
+- **Exit status.** 0 once the hooks ran, whatever they did, and for an uninitialized Core; 1 when the hooks did not all run:
+  the settings cannot be read (a missing or failing backend, a `--state-dir` that is no directory, or hook rows Core refuses,
+  as for a Core that cannot read its settings at start), when nothing runs, a signal came while the context was read, or a
+  signal left an enabled hook unrun or cut one short; 2 for a usage error (`--run-hooks` without `pre` or
+  `post`, an argument after the flags, no `--hook-dir`, neither backend flag, a relative `--hook-dir` or `--python-wrapper`)
+  or a refused context, when nothing runs.
+
+Corpus: `tests/hooks/fixtures/oneshot`, run through today's callers by `tests/php/HookOneShotCorpusTest.php` and through the
+binary by `go/pfb_core/hooks/oneshot_test.go`.
 
 ## Resources
 

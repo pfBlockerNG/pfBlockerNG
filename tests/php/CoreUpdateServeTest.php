@@ -21,6 +21,7 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_core_update_serve')]
 #[CoversFunction('pfb_core_update_request')]
+#[CoversFunction('pfb_run_hooks')]
 final class CoreUpdateServeTest extends TestCase
 {
 	private const FEED = 'ipv4:feed_v4';
@@ -232,7 +233,80 @@ final class CoreUpdateServeTest extends TestCase
 			'an extra other than dcc/bl' => [$ok + ['extras' => ['extra:foo']]],
 			'an extra without its prefix' => [$ok + ['extras' => ['dcc']]],
 			'a duplicate extra'         => [$ok + ['extras' => ['extra:dcc', 'extra:dcc']]],
+			'lifecycle uninstall'       => [$ok + ['lifecycle' => 'uninstall']],
+			'lifecycle Install'         => [$ok + ['lifecycle' => 'Install']],
+			'an empty lifecycle'        => [$ok + ['lifecycle' => '']],
+			'lifecycle true'            => [$ok + ['lifecycle' => TRUE]],
+			'lifecycle as a list'       => [$ok + ['lifecycle' => ['install']]],
+			'pkgOp remove'              => [$ok + ['pkgOp' => 'remove']],
+			'pkgOp Upgrade'             => [$ok + ['pkgOp' => 'Upgrade']],
+			'an empty pkgOp'            => [$ok + ['pkgOp' => '']],
+			'pkgOp 1'                   => [$ok + ['pkgOp' => 1]],
+			'pkgOp as an object'        => [$ok + ['pkgOp' => ['op' => 'install']]],
 		];
+	}
+
+	/** @return array<string, array{0: string}> */
+	public static function coreRequests(): array
+	{
+		$fixture = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/update_request_v1.json'), TRUE, 512, JSON_THROW_ON_ERROR);
+		$out = [];
+		foreach ($fixture['requests'] as $request) {
+			$json = (string) json_encode($request);
+			$out[$json] = [$json];
+		}
+		return $out;
+	}
+
+	/**
+	 * Every version 1 request Core writes (tests/core/fixtures/update_request_v1.json, which go/pfb_core/update checks against what
+	 * Core writes) is accepted, and its lifecycle and pkgOp are read as sent, absent as none (issue #4035).
+	 */
+	#[DataProvider('coreRequests')]
+	public function testEveryRequestCoreWritesIsAcceptedWithItsLifecycleAndPkgOp(string $json): void
+	{
+		$sent = json_decode($json, TRUE);
+
+		$request = pfb_core_update_request($json);
+
+		$this->assertSame($sent['trigger'], $request['trigger']);
+		$this->assertSame($sent['lifecycle'] ?? NULL, $request['lifecycle']);
+		$this->assertSame($sent['pkgOp'] ?? NULL, $request['pkgOp']);
+	}
+
+	/**
+	 * The members tests/core/fixtures/update_request_v1.json lists, which go/pfb_core/update holds against Core's Request, are exactly
+	 * the fields pfb_core_update_request() checks a request against, and none of them is refused as unknown (issue #4035).
+	 */
+	public function testTheWorkerAcceptsExactlyTheMembersCoreCanWrite(): void
+	{
+		$fixture = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/update_request_v1.json'), TRUE, 512, JSON_THROW_ON_ERROR);
+		$members = $fixture['members'];
+		$source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');
+		$this->assertSame(1, preg_match('/function pfb_core_update_request\(.*?array_diff\(array_keys\(\$request\), \[([^\]]*)\]\)/s', $source, $list),
+			'pfb_core_update_request() checks the fields against one list');
+		$accepted = array_map(static fn (string $field): string => trim($field, " '"), explode(',', $list[1]));
+		sort($members);
+		sort($accepted);
+		$this->assertSame($members, $accepted);
+
+		foreach (array_merge($members, ['unlisted']) as $member) {
+			try {
+				pfb_core_update_request((string) json_encode(array_merge(self::req('manual'), [$member => NULL])));
+				$message = '';
+			} catch (InvalidArgumentException $e) {
+				$message = $e->getMessage();
+			}
+			$this->assertSame($member === 'unlisted', str_contains($message, 'unknown field'), "{$member}: {$message}");
+		}
+	}
+
+	public function testANullLifecycleAndPkgOpAreNone(): void
+	{
+		$request = pfb_core_update_request((string) json_encode(self::req('manual', ['lifecycle' => NULL, 'pkgOp' => NULL])));
+
+		$this->assertNull($request['lifecycle']);
+		$this->assertNull($request['pkgOp']);
 	}
 
 	/** @param array<string, mixed>|string $request */
@@ -711,6 +785,54 @@ final class CoreUpdateServeTest extends TestCase
 		$this->assertSame(0, $run['exit'], $run['stdout'] . $run['stderr']);
 		$this->assertStringContainsString('Dispatching pending apply.', $run['stdout']);
 		$this->assertSame('{"version":1,"outcomes":{},"attempted":[],"geoipReady":true}' . "\n", file_get_contents($result));
+	}
+
+	/** @return array<string, array{0: array<string, string>, 1: string, 2: string}> */
+	public static function packageRuns(): array
+	{
+		return [
+			'lifecycle install, pkgOp upgrade' => [['lifecycle' => 'install', 'pkgOp' => 'upgrade'], '1', 'upgrade'],
+			'lifecycle install alone'           => [['lifecycle' => 'install'], '1', 'install'],
+			'pkgOp delete alone'                => [['pkgOp' => 'delete'], '0', 'delete'],
+			'neither'                           => [[], '0', 'install'],
+		];
+	}
+
+	/**
+	 * Install and upgrade are one Update (docs/specs/go-updater-pipeline.md section 5): the hooks of an Update Core starts with
+	 * lifecycle install get PFB_POST_INSTALL=1, and its pkgOp as PFB_PKG_OP over the one read from the pkg ancestor; an Update
+	 * without them gets PFB_POST_INSTALL=0 and the ancestor's operation, as before (issue #4035).
+	 *
+	 * @param array<string, string> $package
+	 */
+	#[DataProvider('packageRuns')]
+	public function testTheHooksOfAnUpdateGetItsLifecycleAndPkgOp(array $package, string $postInstall, string $pkgOp): void
+	{
+		// Given a recording pre hook, and the worker run under a `pkg install` process (perl's $0 stands in for it)
+		mkdir("{$this->dir}/hooks", 0755);
+		$record = "{$this->dir}/hook_env";
+		file_put_contents("{$this->dir}/hooks/hook_pre_record.sh", "#!/bin/sh\nenv | grep -E '^PFB_(POST_INSTALL|PRE_UNINSTALL|PKG_OP)=' | sort > "
+			. escapeshellarg($record) . "\n");
+		chmod("{$this->dir}/hooks/hook_pre_record.sh", 0755);
+		$in = "{$this->dir}/request";
+		$result = "{$this->dir}/fd3";
+		file_put_contents($in, (string) json_encode(self::req('apply', $package)));
+		touch($result);
+		$command = ['perl', '-e', '$0 = shift; exit(system(@ARGV) >> 8)', 'pkg install pfSense-pkg-pfBlockerNG', PHP_BINARY,
+			__DIR__ . '/support/CoreUpdateWorker.php'];
+		$env = ['PFB_TEST_DIR' => $this->dir, 'PFB_TEST_HOOKS' => '1', 'PATH' => (string) getenv('PATH')];
+		$process = proc_open($command, [0 => ['file', $in, 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w'], 3 => ['file', $result, 'w']], $pipes, NULL, $env);
+		$this->assertIsResource($process);
+		stream_set_blocking($pipes[1], FALSE);
+		stream_set_blocking($pipes[2], FALSE);
+
+		// When it serves the apply, whose sync fires the pre hooks
+		$run = pfb_test_finish_process([$process, $pipes, implode(' ', $command)], 60.0);
+
+		// Then the hook saw the Update's package context
+		$this->assertSame(0, $run['exit'], $run['stdout'] . $run['stderr']);
+		$this->assertSame("PFB_PKG_OP={$pkgOp}\nPFB_POST_INSTALL={$postInstall}\nPFB_PRE_UNINSTALL=0\n", (string) @file_get_contents($record),
+			$run['stdout'] . $run['stderr']);
 	}
 
 	public function testAPassKilledByTermHasTheFeedsItFinishedReportedOnFdThree(): void
