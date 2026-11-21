@@ -26,12 +26,17 @@ final class AliasDeltaApplyFilesTest extends TestCase
 	/** Where the function under test may write its batch file. */
 	private string $batchdir = '';
 
+	/** @var mixed the ledger directory ($pfb['dbdir']) the test found, put back by tearDown() */
+	private mixed $dbdir = NULL;
+
 	protected function setUp(): void
 	{
 		global $pfb;
+		$this->dbdir = $pfb['dbdir'] ?? NULL;
 		@mkdir($pfb['logdir'], 0777, TRUE);
 		$this->dir = sys_get_temp_dir() . '/pfbdeltafiles' . bin2hex(random_bytes(4));
 		$this->assertTrue(mkdir($this->dir, 0700));
+		$pfb['dbdir'] = $this->dir;
 		$this->batchdir = "{$this->dir}/batch";
 		$this->assertTrue(mkdir($this->batchdir, 0700));
 		// A pfctl double: records each call's arguments (one per line), the file it got with -f and that file's mode, and fails the calls
@@ -68,6 +73,8 @@ SH
 
 	protected function tearDown(): void
 	{
+		global $pfb;
+		$pfb['dbdir'] = $this->dbdir;
 		rmdir_recursive($this->dir);
 	}
 
@@ -598,10 +605,17 @@ SH
 
 		unlink("{$this->dir}/log");
 		file_put_contents($add, str_repeat('1', 65) . "\n");
+		$offset = self::logOffset();
 		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv6', $this->members('mirror', ['10.255.0.1']),
 			$add, 2, $this->members('remove', []), 0, 10000, 10000, 'delta', 64, FALSE, $this->batchdir);
 		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
 		$this->assertSame([], $this->calls());
+		// the line is no member either, so the refusal is told by the log: it is the length rule that stopped it
+		$logged = self::loggedSince($offset);
+		$this->assertCount(1, array_filter($logged, static fn (string $l): bool => str_contains($l, 'the add file holds a line over 64 bytes')),
+			'one line names the length rule: ' . implode(' | ', $logged));
+		$this->assertSame([], array_filter($logged, static fn (string $l): bool => str_contains($l, 'is not a member')),
+			'no line blames the line for being no member: ' . implode(' | ', $logged));
 	}
 
 	/**
@@ -781,6 +795,73 @@ SH
 		$this->assertCount(1, $named, 'one line names the side and the line: ' . implode(' | ', self::loggedSince($offset)));
 		$this->assertCount(1, array_filter(self::loggedSince($offset), static fn (string $l): bool => !str_contains($l, 'delta +')),
 			'and no other line besides the delta decision: ' . implode(' | ', self::loggedSince($offset)));
+	}
+
+	/**
+	 * A batch that is skipped for want of its file leaves the table behind its mirror, as a failed pfctl call does: the ledger
+	 * holds the open ip/<table>/apply entry, so the tick's retry has something to reconcile. The batch directory is a regular
+	 * file, so no batch file can be created.
+	 *
+	 * @return array<string, array{string}>
+	 */
+	public static function applyPaths(): array
+	{
+		return ['members from files' => ['files'], 'members from arrays' => ['arrays']];
+	}
+
+	#[DataProvider('applyPaths')]
+	public function testASkippedBatchOpensTheTablesApplyEntryInTheLedger(string $path): void
+	{
+		$notadir = "{$this->dir}/notadir";
+		file_put_contents($notadir, '');
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'ip'), 'no entry is open before the apply');
+
+		$result = $path === 'files'
+			? pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+				$this->members('add', ['10.1.0.1']), 1, $this->members('remove', []), 0, 100, 100, 'delta', 64, FALSE, $notadir)
+			: pfb_apply_alias_delta_members($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+				static fn (): array => [['10.1.0.1'], []], 1, 0, 100, 100, 'delta', 64, FALSE, $notadir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertSame([], $this->calls(), 'no pfctl call was made');
+		$open = pfb_sync_status_list_open($this->dir, 'ip');
+		$this->assertCount(1, $open, 'the skipped batch opens one entry');
+		$this->assertSame(['ip', self::TABLE, 'apply'], [$open[0]['facility'], $open[0]['item'], $open[0]['stage']]);
+		$this->assertStringContainsString('batch file', $open[0]['message']);
+	}
+
+	/**
+	 * A file that gained lines after the first pass is sent only up to its count: the line that would exceed it is refused, so no
+	 * batch holds a line beyond the count, and the result fails.
+	 */
+	#[DataProvider('rewrittenSides')]
+	public function testALineBeyondTheCountOfAFileThatGrewIsNeverSent(string $side): void
+	{
+		$members = self::addresses(2000, 1);
+		$grown = array_merge($members, self::addresses(100, 2));
+		$long = $this->members($side, $members);
+		$short = $this->members($side === 'add' ? 'remove' : 'add', ['10.2.0.1']);
+		file_put_contents("{$this->dir}/rewrite", implode("\n", $grown) . "\n");
+		file_put_contents("{$this->dir}/rewrite.to", $long);
+		$offset = self::logOffset();
+
+		$result = $side === 'add'
+			? pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+				$long, 2000, $short, 1, 100000, 100000, 'delta', 64, FALSE, $this->batchdir)
+			: pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+				$short, 1, $long, 2000, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$sent = [];
+		foreach ($this->calls() as $call) {
+			if ($call['verb'] === ($side === 'add' ? 'add' : 'delete')) {
+				array_push($sent, ...$call['lines']);
+			}
+		}
+		$this->assertSame([], array_slice(array_diff($sent, $members), 0, 5), 'none of the lines the file gained was sent (first five shown)');
+		$this->assertCount(2000, $sent, 'exactly the 2000 lines of the count were sent');
+		$over = array_filter(self::loggedSince($offset), static fn (string $l): bool => str_contains($l, "the {$side} file holds more than 2000 members"));
+		$this->assertCount(1, $over, 'one line says the file outgrew its count: ' . implode(' | ', self::loggedSince($offset)));
 	}
 
 	/**
