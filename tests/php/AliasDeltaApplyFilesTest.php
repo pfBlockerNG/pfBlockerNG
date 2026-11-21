@@ -733,38 +733,75 @@ SH
 		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $family, $this->members('mirror', ['10.255.0.1']),
 			$this->members('add', ['10.1.0.1']), 1, $this->members('remove', []), 0, 10000, 10000, $mode, 64, $force, $this->batchdir);
 
-		$this->assertFalse($result['ok']);
+		$this->assertSame(['delta' => FALSE, 'ok' => FALSE], $result);
 		$this->assertSame([], $this->calls());
 		$this->assertCount(1, self::loggedSince($offset), 'one line says why: ' . implode(' | ', self::loggedSince($offset)));
 	}
 
 	/**
-	 * A member file rewritten in place after the first pass is checked again as it is sent: the double rewrites the add file
-	 * when pfctl gets the first batch, and the function, which reads the file in batches, reaches the new bytes on its next
-	 * one. The lines before the bad one keep their length, so what the stream already buffered is still the old file's prefix.
+	 * A member file rewritten in place after the first pass is checked again as it is sent: the double rewrites the file named
+	 * in "rewrite.to" when pfctl gets its first call, and the function, which reads the file in batches, reaches the new bytes
+	 * on its next batch. The lines before the bad one keep their length, so what the stream already buffered is still the old
+	 * file's prefix.
+	 *
+	 * @return array<string, array{string}>
 	 */
-	public function testALineRewrittenBetweenThePassesStopsTheSendingAfterTheBatchesAlreadySent(): void
+	public static function rewrittenSides(): array
+	{
+		return ['the add file' => ['add'], 'the remove file' => ['remove']];
+	}
+
+	#[DataProvider('rewrittenSides')]
+	public function testALineRewrittenBetweenThePassesStopsTheSendingAfterTheBatchesAlreadySent(string $side): void
 	{
 		$members = self::addresses(2000, 1);
-		$add = $this->members('add', $members);
-		$this->assertGreaterThan(16384, filesize($add), 'the file outgrows the stream buffer, so later lines are read after the rewrite');
+		$long = $this->members($side, $members);
+		$short = $this->members($side === 'add' ? 'remove' : 'add', ['10.2.0.1']);
+		$this->assertGreaterThan(16384, filesize($long), 'the file outgrows the stream buffer, so later lines are read after the rewrite');
 		$bad = $members;
 		$bad[1899] = 'ae0';
 		file_put_contents("{$this->dir}/rewrite", implode("\n", $bad) . "\n");
-		file_put_contents("{$this->dir}/rewrite.to", $add);
+		file_put_contents("{$this->dir}/rewrite.to", $long);
 		$offset = self::logOffset();
 
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
-			$add, 2000, $this->members('remove', ['10.2.0.1']), 1, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+		$result = $side === 'add'
+			? pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+				$long, 2000, $short, 1, 100000, 100000, 'delta', 64, FALSE, $this->batchdir)
+			: pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+				$short, 1, $long, 2000, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
 
 		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
-		$shape = $this->shape();
-		$this->assertSame(array_fill(0, 29, ['add', 64]), $shape, '29 batches of 64 (lines 1 to 1856) went out; the batch holding line 1900 and the deletes did not');
+		// the add side is rewritten while its own batches go out; the remove side is rewritten when the one add batch has gone
+		$expected = $side === 'add'
+			? array_fill(0, 29, ['add', 64])
+			: array_merge([['add', 1]], array_fill(0, 29, ['delete', 64]));
+		$this->assertSame($expected, $this->shape(), '29 batches of 64 (lines 1 to 1856) went out; the batch holding line 1900 and what follows it did not');
 		$named = array_values(array_filter(self::loggedSince($offset),
-			static fn (string $l): bool => str_contains($l, 'the add file') && str_contains($l, 'line 1900 ')));
+			static fn (string $l): bool => str_contains($l, "the {$side} file") && str_contains($l, 'line 1900 ')));
 		$this->assertCount(1, $named, 'one line names the side and the line: ' . implode(' | ', self::loggedSince($offset)));
 		$this->assertCount(1, array_filter(self::loggedSince($offset), static fn (string $l): bool => !str_contains($l, 'delta +')),
 			'and no other line besides the delta decision: ' . implode(' | ', self::loggedSince($offset)));
+	}
+
+	/**
+	 * An exception that is not a refused line is never reported as one, whatever its type: one thrown while the batches are sent
+	 * escapes with its own type, and no batch of the interrupted run reaches pfctl.
+	 */
+	public function testAnExceptionFromAMemberSourceEscapesInsteadOfCountingAsARefusedLine(): void
+	{
+		$source = static function (): Generator {
+			yield '10.1.0.1';
+			throw new UnexpectedValueException('a failure of the source, not a refused line');
+		};
+
+		try {
+			pfb_apply_alias_delta_members($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+				static fn (): array => [$source(), []], 2, 0, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+			$this->fail('the exception was swallowed');
+		} catch (UnexpectedValueException $e) {
+			$this->assertSame('a failure of the source, not a refused line', $e->getMessage());
+		}
+		$this->assertSame([], $this->calls());
 	}
 
 	/** @return array<string, array{int, int, string, bool}> the entries after, the entries before, the mode, the force flag */
