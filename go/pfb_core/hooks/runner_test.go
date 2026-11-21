@@ -345,10 +345,12 @@ func TestRunnerTickNeverReadsPastTheExitCutoff(t *testing.T) {
 		"( read x < '"+dir+"/late'; echo late; : > '"+dir+"/wrote' ) &\n"+
 		"echo first\nread x < '"+dir+"/go'\n", 0o755)
 	inGap, resume := make(chan struct{}), make(chan struct{})
-	var once sync.Once
+	var once, resumed sync.Once
 	saved := *hooks.BeforeTickSize
 	*hooks.BeforeTickSize = func() { once.Do(func() { close(inGap); <-resume }) }
 	t.Cleanup(func() { *hooks.BeforeTickSize = saved })
+	unblock := func() { resumed.Do(func() { close(resume) }) }
+	t.Cleanup(unblock) // runs before the restore above: a failing run must not leave the runner blocked
 	var log, transcript bytes.Buffer
 	done := start(context.Background(), hooks.Runner{Dir: dir, Log: &log, Transcript: &transcript, Grace: time.Second},
 		pre("hook_pre_a.sh"), hooks.Context{})
@@ -369,7 +371,7 @@ func TestRunnerTickNeverReadsPastTheExitCutoff(t *testing.T) {
 	await(t, "the descendant to write after the hook exited", func() bool {
 		return exists(filepath.Join(dir, "wrote"))
 	})
-	close(resume)
+	unblock()
 	finished(t, done)
 	want := "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\nfirst\n[ pfB Hook ] pre #0 completed\n"
 	if log.String() != want || transcript.String() != want {
@@ -426,6 +428,9 @@ func TestRunnerReportsAFailedOutputSinkOncePerHook(t *testing.T) {
 // interpreter path is a symlink loop (ELOOP).
 func TestRunnerLogsAStartFailureOtherThanNotFoundAs126(t *testing.T) {
 	dir := t.TempDir()
+	if len("#!"+dir+"/loop") > 250 {
+		t.Skip("the temporary path is too long for a #! line")
+	}
 	if err := os.Symlink("loop", filepath.Join(dir, "loop")); err != nil {
 		t.Fatal(err)
 	}
@@ -434,6 +439,19 @@ func TestRunnerLogsAStartFailureOtherThanNotFoundAs126(t *testing.T) {
 	hooks.Runner{Dir: dir, Log: &log, Grace: time.Second}.Run(context.Background(), "pre", pre("hook_pre_a.sh"),
 		hooks.Context{})
 	want := "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ 126 ]; continuing\n"
+	if log.String() != want {
+		t.Errorf("log %q; want %q", log.String(), want)
+	}
+}
+
+// A hook whose #! interpreter does not exist is logged as 127, the status timeout(1) gives a program not found.
+func TestRunnerLogsAMissingInterpreterAs127(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "hook_pre_a.sh"), "#!/nonexistent/interpreter\n", 0o755)
+	var log bytes.Buffer
+	hooks.Runner{Dir: dir, Log: &log, Grace: time.Second}.Run(context.Background(), "pre", pre("hook_pre_a.sh"),
+		hooks.Context{})
+	want := "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ 127 ]; continuing\n"
 	if log.String() != want {
 		t.Errorf("log %q; want %q", log.String(), want)
 	}
