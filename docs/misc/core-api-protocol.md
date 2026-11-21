@@ -49,7 +49,8 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 `GetVersion` is also the health check: a `200` with `status` `serving` means Core takes requests.
 
 The privileged uid is served every method. A further local client (`--client-uid`) is served only `GetVersion`,
-`GetSettings`, `GetResources`, `GetResourceBody` and `ReportApplied` ([Local authentication](#local-authentication)).
+`GetSettings`, `GetResources`, `GetResourceBody` and `ReportApplied`, and reads through them only the `dns` and
+`policy/dnsbl` settings projections and the `dnsbl/*` resources ([Local authentication](#local-authentication)).
 
 ## Settings
 
@@ -836,8 +837,9 @@ report naming one is recorded: the store can change between the report and the f
 reports yet.
 
 **Refusals.** `invalid_argument`, with nothing recorded, when `resources` is missing or `null`, lists more than 4096
-resources, or names an id that is not a `dnsbl/*` resource id (field `resources`), or when an entry is not an object or
-lacks its `generation` or `digest`, or one of them has the shape a `GetResources` cursor refuses (field
+resources, names an id that is not a `dnsbl/*` resource id, or holds a `null` entry (field `resources`); when an entry
+is a string, a number or another value that is not an object (field `resources.<id>`); or when an entry lacks its
+`generation` or `digest`, or one of them has the shape a `GetResources` cursor refuses (field
 `resources.<id>.generation` or `resources.<id>.digest`). It is a mutating method: a repeat of its `requestId` with the
 same body gets the first answer, and with another body `conflict` ([requestId and replay](#requestid-and-replay)).
 
@@ -883,6 +885,8 @@ again, with the byte-identical body, to resolve an unknown outcome such as a tim
 - Core remembers the last 4096 finished `requestId`s (one still running is never forgotten), in memory only: a
   restarted Core remembers none. A client that cannot tell
   whether its request ran before a restart reads the state it changed instead of repeating it.
+- The privileged uid's requests and the further local clients' (`--client-uid`) are remembered apart, 4096 each, so
+  nothing a client sends makes Core forget a privileged `requestId`. The clients share one memory.
 
 A read-only method takes no `requestId` and is never replayed.
 
@@ -920,6 +924,12 @@ Two fences, each enough on its own against an unprivileged user:
    method runs. A further local client is then checked against the method it calls: it is served only `GetVersion`,
    `GetSettings`, `GetResources`, `GetResourceBody` and `ReportApplied`. Any other method, an unknown one included,
    answers it `unauthenticated` and does not run, so a client learns nothing of the methods it may not call.
+   Within those methods a client reads only what pfb-dns builds from: `GetSettings` serves it the `dns` and
+   `policy/dnsbl` projections (with no `projectionIds`, those two), and refuses any other id as it refuses a projection
+   that does not exist (`invalid_argument`, `no such projection`, field `projectionIds[<i>]`). `GetResources` answers
+   an id outside `dnsbl/*` `not_found` for that id, and `GetResourceBody` answers its body `not_found`, as for a
+   resource the store does not hold. A uid that is both `--allow-uid` and a `--client-uid` is the privileged caller
+   and is served everything.
 
 Flags: `--allow-uid UID` is the privileged caller (default 0, root: PHP on pfSense). Each `--client-uid UID` admits one more
 local client, limited to the methods above.
@@ -933,7 +943,8 @@ every process of that user, Unbound included. A dedicated pfb-dns user narrows t
 
 *Amendment 2026-11-21 (issue #4036): a further local client was served every method, so admitting pfb-dns's user would
 have let any process of that user call `SaveSettings` or `StartUpdate`. It is now served the read methods pfb-dns needs
-and `ReportApplied` only.*
+and `ReportApplied` only, reads only the `dns` and `policy/dnsbl` projections and the `dnsbl/*` resources, and has
+a replay memory of its own.*
 
 ## On pfSense
 

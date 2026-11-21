@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
@@ -26,7 +25,7 @@ import (
 
 const (
 	appliedFile         = "applied.json"
-	appliedPrefix       = "dnsbl/"
+	dnsblPrefix         = "dnsbl/" // the resources pfb-dns reads and reports, and all a further local client may read
 	maxAppliedResources = 4096
 	maxAppliedFile      = defaultMaxBody // a record re-encodes a request's resources, so it is never larger than its body
 )
@@ -39,7 +38,6 @@ type appliedRecord struct {
 
 // appliedMethods is ReportApplied, recording into stateDir.
 func appliedMethods(stateDir string) map[string]method {
-	var mu sync.Mutex // one write at a time: they share the temporary file
 	return map[string]method{"ReportApplied": {mutating: true, client: true, call: func(_ context.Context, params []byte) (any, error) {
 		var p struct {
 			RequestID string                     `json:"requestId"`
@@ -52,8 +50,6 @@ func appliedMethods(stateDir string) map[string]method {
 		if bad != nil {
 			return nil, newError(codeInvalidArgument, "the report is not valid; nothing was recorded", bad...)
 		}
-		mu.Lock()
-		defer mu.Unlock()
 		return struct{}{}, writeApplied(stateDir, report)
 	}}}
 }
@@ -69,7 +65,7 @@ func parseApplied(entries map[string]*resourceCursor) (map[string]resources.Curs
 	}
 	report, bad := make(map[string]resources.Cursor, len(entries)), []fieldError(nil)
 	for _, id := range slices.Sorted(maps.Keys(entries)) {
-		if !strings.HasPrefix(id, appliedPrefix) {
+		if !strings.HasPrefix(id, dnsblPrefix) {
 			bad = append(bad, fieldError{Field: "resources", Message: fmt.Sprintf("%q is not a dnsbl/* resource id", id)})
 			continue
 		}
@@ -130,8 +126,9 @@ func readApplied(stateDir string) (map[string]resources.Cursor, error) {
 	return report, nil
 }
 
-// writeApplied replaces appliedFile in stateDir with report: written whole and synced under a temporary name, renamed over
-// the old file (a symlink there is replaced, never followed), then the directory synced.
+// writeApplied replaces appliedFile in stateDir with report: written whole and synced under a temporary name of its own,
+// renamed over the old file (a symlink there is replaced, never followed), then the directory synced. Two reports never
+// share a temporary file, so they need no lock: the later rename wins whole.
 func writeApplied(stateDir string, report map[string]resources.Cursor) error {
 	rec := appliedRecord{Format: 1, Resources: make(map[string]*resourceCursor, len(report))}
 	for id, c := range report {
@@ -142,8 +139,8 @@ func writeApplied(stateDir string, report map[string]resources.Cursor) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(stateDir, appliedFile)
-	tmp, err := os.OpenFile(path+".tmp", os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
+	// A new file, never an existing one: CreateTemp makes it 0600, where reusing a file would keep that file's mode.
+	tmp, err := os.CreateTemp(stateDir, appliedFile+".*.tmp")
 	if err != nil {
 		return err
 	}
@@ -155,10 +152,10 @@ func writeApplied(stateDir string, report map[string]resources.Cursor) error {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(path+".tmp", path)
+		err = os.Rename(tmp.Name(), filepath.Join(stateDir, appliedFile))
 	}
 	if err != nil {
-		_ = os.Remove(path + ".tmp")
+		_ = os.Remove(tmp.Name())
 		return err
 	}
 	dir, err := os.Open(stateDir)

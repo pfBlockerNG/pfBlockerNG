@@ -79,7 +79,7 @@ func newError(code, message string, fields ...fieldError) *apiError {
 
 // method is one API method. params is the request body, a JSON object; mutating methods carry a requestId in it and
 // run at most once per requestId (replay.go). A further local client (--client-uid) is served only the methods marked
-// client; the privileged uid is served every method.
+// client, and such a method narrows what it serves to the client (fromClient); the privileged uid is served every method.
 type method struct {
 	mutating bool
 	client   bool
@@ -135,13 +135,23 @@ type options struct {
 }
 
 type server struct {
-	o      options
-	ln     *net.UnixListener
-	http   *http.Server
-	replay *replayCache
+	o            options
+	ln           *net.UnixListener
+	http         *http.Server
+	replay       *replayCache // the privileged uid's
+	clientReplay *replayCache // the further local clients': nothing a client sends evicts a privileged entry
 }
 
 type peerKey struct{}
+
+// clientKey marks a request's context as a further local client's (--client-uid), not the privileged uid's.
+type clientKey struct{}
+
+// fromClient reports whether ctx is a further local client's request.
+func fromClient(ctx context.Context) bool {
+	c, _ := ctx.Value(clientKey{}).(bool)
+	return c
+}
 
 type peer struct {
 	uid uint32
@@ -206,7 +216,7 @@ func listen(o options) (*server, error) {
 		_ = ln.Close()
 		return nil, fmt.Errorf("cannot set the socket's owner and mode: %w", err)
 	}
-	s := &server{o: o, ln: ln, replay: newReplayCache(replayEntries)}
+	s := &server{o: o, ln: ln, replay: newReplayCache(replayEntries), clientReplay: newReplayCache(replayEntries)}
 	s.http = &http.Server{
 		Handler:           http.HandlerFunc(s.handle),
 		ReadHeaderTimeout: o.readHeaderTimeout,
@@ -320,7 +330,7 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	name, ok := strings.CutPrefix(r.URL.Path, "/"+apiVersion+"/")
 	m, known := s.o.methods[name]
-	if client && (!ok || !known || !m.client) { // an unknown method is refused alike: a client learns nothing of the others
+	if client && !m.client { // an unknown method's zero value is refused alike: a client learns nothing of the others
 		s.o.logf("refused a client of uid %d calling %q: a client is served only the methods marked for it", p.uid, r.URL.Path)
 		s.write(w, errorResponse(newError(codeUnauthenticated, "a further local client may not call this method")))
 		return
@@ -328,6 +338,10 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 	if !ok || !known {
 		s.write(w, errorResponse(newError(codeNotFound, "no such method: "+r.URL.Path)))
 		return
+	}
+	replay := s.replay
+	if client {
+		r, replay = r.WithContext(context.WithValue(r.Context(), clientKey{}, true)), s.clientReplay
 	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -368,7 +382,7 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		return s.call(ctx, name, m, body)
 	}
-	s.write(w, s.replay.do(r.Context(), name, id, sha256.Sum256(body), run))
+	s.write(w, replay.do(r.Context(), name, id, sha256.Sum256(body), run))
 }
 
 // checkObject accepts exactly one JSON object and nothing after it.

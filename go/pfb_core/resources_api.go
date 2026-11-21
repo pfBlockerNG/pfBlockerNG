@@ -44,14 +44,14 @@ type resourceCursor struct {
 }
 
 // resourceMethods is GetResources and GetResourceBody over store, read-only. Without a store (no --resource-dir) they answer
-// unavailable.
+// unavailable. A further local client (pfb-dns) reads only the dnsbl/* resources: to it no other resource exists.
 func resourceMethods(store *resources.Store) map[string]method {
-	return map[string]method{"GetResourceBody": {client: true, call: func(_ context.Context, params []byte) (any, error) {
+	return map[string]method{"GetResourceBody": {client: true, call: func(ctx context.Context, params []byte) (any, error) {
 		if store == nil {
 			return nil, newError(codeUnavailable, "Core runs no resource store: start it with --resource-dir")
 		}
-		return resourceBody(store, params)
-	}}, "GetResources": {client: true, call: func(_ context.Context, params []byte) (any, error) {
+		return resourceBody(store, params, fromClient(ctx))
+	}}, "GetResources": {client: true, call: func(ctx context.Context, params []byte) (any, error) {
 		if store == nil {
 			return nil, newError(codeUnavailable, "Core runs no resource store: start it with --resource-dir")
 		}
@@ -76,6 +76,10 @@ func resourceMethods(store *resources.Store) map[string]method {
 		}
 		items := make(map[string]resourceItem, len(ids))
 		for _, id := range ids {
+			if fromClient(ctx) && !strings.HasPrefix(id, dnsblPrefix) {
+				items[id] = resourceItem{Error: newError(codeNotFound, "the store has no such resource")}
+				continue
+			}
 			r, err := store.Get(id, cursors[id])
 			switch {
 			case errors.Is(err, resources.ErrNotFound):
@@ -119,8 +123,9 @@ func resourceItemOf(r resources.Reply) resourceItem {
 	return it
 }
 
-// resourceBody answers GetResourceBody: the part of one resource the store holds, streamed from its file.
-func resourceBody(store *resources.Store, params []byte) (any, error) {
+// resourceBody answers GetResourceBody: the part of one resource the store holds, streamed from its file. To a further
+// local client (client) a resource outside dnsbl/* is one the store does not hold.
+func resourceBody(store *resources.Store, params []byte, client bool) (any, error) {
 	var p struct {
 		ID         *string `json:"id"`
 		Generation *string `json:"generation"`
@@ -169,6 +174,9 @@ func resourceBody(store *resources.Store, params []byte) (any, error) {
 	}
 	if bad != nil {
 		return nil, newError(codeInvalidArgument, "the body request is not valid; nothing was read", bad...)
+	}
+	if client && !strings.HasPrefix(*p.ID, dnsblPrefix) {
+		return nil, newError(codeNotFound, "the store holds no such body")
 	}
 	f, size, err := store.Body(*p.ID, g, *p.Part, from)
 	switch {

@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
 )
+
+// clientProjections are the projections a further local client (pfb-dns) may read: to it no other projection exists.
+var clientProjections = []string{"dns", "policy/dnsbl"}
 
 // settingsMethods are the six settings methods over st (docs/misc/core-api-protocol.md, "Settings").
 func settingsMethods(st *settings.Store) map[string]method {
@@ -17,12 +22,26 @@ func settingsMethods(st *settings.Store) map[string]method {
 			}
 			return st.Schema(), nil
 		}},
-		"GetSettings": {client: true, call: func(_ context.Context, params []byte) (any, error) {
+		"GetSettings": {client: true, call: func(ctx context.Context, params []byte) (any, error) {
 			var p struct {
 				ProjectionIDs []string `json:"projectionIds"`
 			}
 			if err := decodeParams(params, &p); err != nil {
 				return nil, err
+			}
+			if fromClient(ctx) { // refused as the store refuses a projection it does not have
+				var bad []settings.FieldError
+				for i, id := range p.ProjectionIDs {
+					if !slices.Contains(clientProjections, id) {
+						bad = append(bad, settings.FieldError{Field: fmt.Sprintf("projectionIds[%d]", i), Message: "no such projection"})
+					}
+				}
+				if bad != nil {
+					return nil, settingsError(&settings.ValidationError{Fields: bad}, "")
+				}
+				if len(p.ProjectionIDs) == 0 {
+					p.ProjectionIDs = clientProjections
+				}
 			}
 			snap, err := st.Get(p.ProjectionIDs)
 			return snap, settingsError(err, "")

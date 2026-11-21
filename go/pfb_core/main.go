@@ -142,7 +142,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	defer lock.Close()
 	switch report, err := readApplied(*stateDir); {
 	case err != nil:
-		logger.Printf("ignored %s, which is not a report ReportApplied would record: %v", appliedFile, err)
+		logger.Printf("ignored %s: %v", appliedFile, err)
 	case report != nil:
 		logger.Printf("applied report: %d resources", len(report))
 	}

@@ -463,8 +463,13 @@ func (s *Store) RemovalApplied(id string) error {
 
 // FoldApplied folds report, what the consumer of the ids under prefix serves (id to the generation and digest it applied),
 // into the store: a listed id held at that generation and digest gets it as its applied baseline, and a removed id the
-// report no longer lists is deleted (RemovalApplied). A generation or digest the store does not hold changes nothing.
+// report no longer lists is deleted (RemovalApplied). A generation or digest the store does not hold changes nothing. A nil
+// report (the consumer has not reported) changes nothing; an empty one reports that it serves nothing, so every removed id
+// under prefix is deleted.
 func (s *Store) FoldApplied(prefix string, report map[string]Cursor) error {
+	if report == nil {
+		return nil
+	}
 	idx, err := s.loadWriter()
 	if err != nil {
 		return err
@@ -477,6 +482,7 @@ func (s *Store) FoldApplied(prefix string, report map[string]Cursor) error {
 		case !strings.HasPrefix(id, prefix):
 		case !listed && e.Removed:
 			errs = append(errs, s.RemovalApplied(id))
+		// The last clause, an id whose baseline already is that generation, only saves a write: Applied would change nothing
 		case listed && c.Generation == e.Current.Generation && c.Digest == e.Current.Digest &&
 			(e.Applied == nil || e.Applied.Generation != c.Generation):
 			errs = append(errs, s.Applied(id, c.Generation))
