@@ -388,7 +388,8 @@ func (s *Store) Reload(ctx context.Context) (Snapshot, error) {
 }
 
 // Validate is Save's validation without the write: changes are checked over the current settings (the defaults while
-// uninitialized), and the store, its revision and its generations stay as they are.
+// uninitialized), and the store, its revision and its generations stay as they are. A list field's Admit is left to the write:
+// a page's dry run sends the whole projection as the platform holds it, which may carry an item Core has not loaded.
 func (s *Store) Validate(changes map[string]map[string]json.RawMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -399,7 +400,7 @@ func (s *Store) Validate(changes map[string]map[string]json.RawMessage) error {
 			base = s.values[p.ID]
 		}
 		change, refused := changeFor(p, changes)
-		_, perr := apply(p, base, change, p.ID)
+		_, perr := applyAs(p, base, change, p.ID, false)
 		errs = append(errs, refused...)
 		errs = append(errs, perr...)
 	}

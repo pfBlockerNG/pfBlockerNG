@@ -37,7 +37,7 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 | `GetSettings` | `projectionIds` (optional; none: all) | `{"initialized", "revision", "projections": [{"resourceId", "generation", "value"}]}` |
 | `InitializeSettings` | `requestId`, `settings` | `{"revision": 1, "projections": [...]}`: every projection |
 | `SaveSettings` | `requestId`, `expectedRevision`, `changes` | `{"revision", "projections": [...]}`: the projections whose value changed, and the revision, as Core read the backend again after the write (a failed read keeps what was written) |
-| `ValidateSettings` | `changes` | `{}`, or the errors `SaveSettings` would give; changes nothing |
+| `ValidateSettings` | `changes` | `{}`, or the errors `SaveSettings` would give (bar the rule for an added `noAaaaList` entry); changes nothing |
 | `SettingsChanged` | none | what `GetSettings` answers: Core read its backend again |
 | `StartUpdate` | `requestId`, `trigger`: `manual` (`scope`, `force`), `apply` or `retry` | `{}` once the Update is admitted; `conflict` while one runs |
 | `GetUpdate` | `after` (optional cursor, a decimal string; default: the start) | `{"running", "update", "log", "next"}`: the current or last Update and a chunk of its log; `next` is a string |
@@ -183,8 +183,9 @@ Validation: before the Outpost persists a change, it calls [`ValidateSettings`](
 A dry run of `SaveSettings`: `changes` is validated over the current settings (the defaults while Core is uninitialized)
 and the reply is `{}`. It takes no `requestId` and no `expectedRevision`, and it changes nothing: no write, no revision or
 generation change. A fault is the same `invalid_argument` with the same field errors `SaveSettings` gives for these
-`changes` (`changes.dns.decisionCacheMax`). A pass says the values are valid, not that a later `SaveSettings` finds the
-revision unchanged.
+`changes` (`changes.dns.decisionCacheMax`), except the rule for an entry a write adds to `noAaaaList`, which only
+`SaveSettings` applies: a page's dry run sends the projection as `config.xml` holds it, which may carry an entry Core has
+not loaded yet. A pass says the values are valid, not that a later `SaveSettings` finds the revision unchanged.
 
 ### Projection `dns`
 
@@ -214,7 +215,8 @@ stored list separately, so a list survives while its switch is off.
   (letters, digits, `_` and `-` in labels of at most 63 characters joined by dots, none empty). A stored entry outside
   that rule would make every later save of the page fail. An entry the list already holds stays writable whatever it is,
   so a client can write back what it read: Core's load takes the list the Outpost reads, and only an item a write adds is
-  held to the page's rule.
+  held to the page's rule. The rule applies to a write (`SaveSettings`, and the adapter's write), not to the
+  `ValidateSettings` dry run.
 - A `groupPolicyBypassList` entry is an IP address without a zone, or an address with a prefix length of digits within
   its family. Host bits under the prefix and a prefix length with leading zeros are allowed, as `pfb-dns` reads them. The
   entry is lower case, as the Outpost stores it. Each entry is listed once. Entries are compared as written, so one network
