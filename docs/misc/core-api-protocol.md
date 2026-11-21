@@ -803,10 +803,14 @@ writes no result and exits 2. A field that is `null` is absent; an unknown field
 | `scope` | `ip`, `dnsbl` or `both`; `both` when absent |
 | `pendingToken` | 1 to 64 printable ASCII characters other than the space; compared and stored, never parsed |
 | `pendingOutsideWindow` | a boolean; `false` when absent |
-| `resources` | a list of at most 4,096 resources (below) |
-| `removed` | a list of at most 4,096 ids whose resources left the configuration |
+| `resources` | a list of resources (below) |
+| `removed` | a list of the ids whose resources left the configuration |
 | `dnsbl` | `{"generation", "groups"}`: `groups` a list of at most 4,096 `{"name", "entries", "changed"}`, a name of 1 to 128 letters, digits and underscores, each once |
 | `issues` | a list of at most 4,096 `{"resource", "stage", "code", "message"}` |
+
+`resources` and `removed` hold at most 2,048 ids together, so that the report of every request accepted fits one result line
+(below). `scope` does not constrain what the request lists (`scope: "dnsbl"` with an `ip-set` is accepted): the validator
+checks the request's shape, and the apply honours `scope` when it acts.
 
 - **A resource** is `{"id", "generation", "action", "direction", "entries"}`. The `id` is a [resource id](#resources) the
   apply handles: an `ip-set`, an `ip-aggregate` or the `geo-catalog`, never a `dnsbl/*` id (pfB-DNS fetches those). Each
@@ -824,13 +828,15 @@ writes no result and exits 2. A field that is `null` is absent; an unknown field
   whose alias would be one of them (`ip-set/Deny_Aggregated/ipv4`) maps to no alias. An id that maps to no alias (another
   class, a group with `-`, a group too long, a reserved name) refuses the request. Distinct ids therefore never share an
   alias. The id is never used as a path or a table name; the alias is.
-- **An issue's** `resource` and `code` are strings of 1 to 256 bytes of plain text: no character of the Unicode category
-  "other" (`\p{C}`: control, format, private-use, surrogate and unassigned characters) and no line or paragraph separator
-  (U+2028, U+2029). Its `stage` is one of the sync-status ledger's: `download`, `script`, `parse`, `dedup` or `apply`. Its
-  `message` is any string, kept as bounded text: invalid UTF-8 is replaced, each run of control characters and line or
-  paragraph separators becomes one space (so the lines of a tool's error output stay apart as words), every other `\p{C}`
-  character is removed, the surrounding white space is trimmed, the text is cut to at most 1,024 bytes, never inside a
-  character, and trimmed again. Markup in it stays as it is, for the page that shows it to escape.
+- **An issue's** `resource` and `code` are strings of 1 to 256 bytes of plain text: no control (`\p{Cc}`), format
+  (`\p{Cf}`), private-use (`\p{Co}`) or surrogate (`\p{Cs}`) character and no line or paragraph separator (`\p{Zl}`,
+  `\p{Zp}`). An unassigned code point is accepted: which code points are unassigned depends on the Unicode version of each
+  side's regular expression library, so neither side refuses them. Its `stage` is one of the sync-status ledger's:
+  `download`, `script`, `parse`, `dedup` or `apply`. Its `message` is any string, kept as bounded text: invalid UTF-8 is
+  replaced, each run of control characters and line or paragraph separators becomes one space (so the lines of a tool's
+  error output stay apart as words), every other `\p{C}` character is removed, the surrounding white space is trimmed, the
+  text is cut to at most 1,024 bytes, never inside a character, and trimmed again. Markup in it stays as it is, for the page
+  that shows it to escape.
 
 **fd 3:** result lines, each one JSON object and a newline, in printable ASCII, written as each step finishes. The fields
 appear in this order; a field is left out when the apply has nothing to say in it, and `version` is always present:
@@ -851,13 +857,16 @@ appear in this order; a field is left out when the apply has nothing to say in i
 | `failed` | `{"id", "stage", "message"}` per resource not applied, `stage` being `fetch` or `apply`, the message bounded as an issue's is, except that its 1,024 bytes are counted as written on the line, JSON escapes included |
 
 Every id on a result line is one a request may hold: the `geo-catalog`, or an id that maps to an alias. A `changedAliases`
-entry is a pfBlockerNG alias name: `pfB_` and letters, digits and underscores, at most 31 characters. Each list holds at most
-4,096 entries.
+entry is a pfBlockerNG alias name: `pfB_` and letters, digits and underscores, at most 31 characters. `applied`, `removed`
+and `failed` name at most 2,048 ids together, each id once across the three, and `changedAliases` at most 2,048 aliases,
+each once.
 
 A result line is at most 524,288 bytes, its newline included: half of the 1 MiB Core reads back from fd 3 in all, so the
-lines of one Update leave room for each other. When a line would be longer, every `failed` message becomes
-`left out to fit the result line`; nothing else is ever shortened or left out. A report whose line is still too long is
-refused, and no line is written for it.
+lines of one Update leave room for each other. When a line would be longer, every `failed` message longer than
+`left out to fit the result line` (31 bytes, as written) becomes that text, and a shorter one is kept, so shortening never
+lengthens a line; nothing else is ever shortened or left out. With the bounds above, the report of every request accepted
+fits: the longest, every one of 2,048 ids of 36 bytes failed and every alias of 31 characters changed, is 286,826 bytes
+once shortened. A report beyond the bounds is refused, and no line is written for it.
 
 With `pendingOutsideWindow` true the apply marks the changes pending and applies nothing, so its one line holds no `applied`.
 
