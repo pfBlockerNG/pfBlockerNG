@@ -576,6 +576,20 @@ final class OutpostResourceFetchTest extends TestCase
 		$this->assertMirror(self::OLD);
 	}
 
+	/** A line that is not a member wins over an ordering fault earlier in the same part. */
+	public function testADeltaPartOutOfOrderThenALineThatIsNotAMemberDoesNotFallBack(): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$add = "5.6.7.8\n1.2.3.4\n1.2.3.4-9\n";
+		[$result, $requests] = $this->fetch([self::delta('9', '7', $add, '', self::OLD), self::text($add), self::text('')],
+			self::cursor('7', self::OLD));
+
+		$this->assertCount(3, $requests, 'a part with a line that is not a member must not be retried as a full body');
+		$this->assertFailed($result, 'members');
+		$this->assertFalse($result['fellBack']);
+		$this->assertMirror(self::OLD);
+	}
+
 	/**
 	 * The merge stages the new mirror beside the old one. When this host cannot create it, the failure is the mirror's: a full
 	 * body would be staged in the same place, so none is asked for.

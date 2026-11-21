@@ -290,6 +290,8 @@ final class OutpostMirrorMergeTest extends TestCase
 			'a last line with no newline'     => ['ipv4', "1.2.3.4\n5.6.7.8"],
 			'a line longer than any member'   => ['ipv4', str_repeat('1', 4096) . "\n"],
 			'a range below a higher member'   => ['ipv4', "5.6.7.8\n1.2.3.4-1.2.3.9\n"],
+			'a range after a line out of order'   => ['ipv4', "5.6.7.8\n1.2.3.4\n1.2.3.4-9\n"],
+			'no newline after a line out of order' => ['ipv4', "5.6.7.8\n1.2.3.4\n9.9.9.9"],
 			'a # line of another kind'        => [NULL, "#x\n"],
 		];
 	}
@@ -400,13 +402,31 @@ final class OutpostMirrorMergeTest extends TestCase
 		$this->assertFileDoesNotExist($out);
 	}
 
-	public function testAMergeWhoseInputIsMissingStops(): void
+	/**
+	 * A part this host cannot read is a local failure; a mirror that cannot be opened is not: a full body would rebuild it, so
+	 * the fetch falls back.
+	 */
+	#[DataProvider('missingInputs')]
+	public function testAMergeWhoseInputIsMissingStops(bool $mirror, bool $remove, bool $add, bool $local): void
 	{
 		$out = "{$this->dir}/out";
-		$merged = pfb_outpost_mirror_merge("{$this->dir}/none", $this->file('remove', ''), $this->file('add', ''), $out);
+		$merged = pfb_outpost_mirror_merge($mirror ? $this->file('mirror', "1.1.1.1\n") : "{$this->dir}/none",
+			$remove ? $this->file('remove', '') : "{$this->dir}/none", $add ? $this->file('add', '') : "{$this->dir}/none", $out);
 
 		$this->assertIsString($merged['error']);
+		$this->assertSame($local, $merged['local'] ?? FALSE, 'the failure was not classified as expected: ' . json_encode($merged));
 		$this->assertFileDoesNotExist($out);
+	}
+
+	/** @return array<string, array{bool, bool, bool, bool}> mirror, remove, add present; whether the failure is local */
+	public static function missingInputs(): array
+	{
+		return [
+			'the mirror'          => [FALSE, TRUE, TRUE, FALSE],
+			'the remove part'     => [TRUE, FALSE, TRUE, TRUE],
+			'the add part'        => [TRUE, TRUE, FALSE, TRUE],
+			'the mirror and a part' => [FALSE, FALSE, TRUE, TRUE],
+		];
 	}
 
 	/** @return array<string, array{string, string}> */
