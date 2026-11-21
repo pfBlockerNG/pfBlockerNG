@@ -348,3 +348,117 @@ func TestPostScriptThatIgnoresTermIsKilledAtItsLimit(t *testing.T) {
 		t.Errorf("feed folder %q; want %q", have, files)
 	}
 }
+
+// readFeedFile is the content of path, or "<none>" when nothing is there.
+func readFeedFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "<none>"
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// A result restores once, for every copy of it: once its restore point is back over the download, a later Restore on that
+// result or on a copy made before never renames a later run's restore point over that run's output. A failed run, which
+// RunIP undid at once, leaves a result that restores nothing.
+func TestPostScriptRestoreActsOnceForEveryCopy(t *testing.T) {
+	for _, first := range []string{"same result", "copy made before", "failed run"} {
+		t.Run(first, func(t *testing.T) {
+			dir := t.TempDir()
+			orig := writeScript(t, dir, "post.sh", "#!/bin/sh\necho changed > \"$1\"\n")
+			if err := os.WriteFile(filepath.Join(dir, "fail.sh"), []byte("#!/bin/sh\necho changed > \"$1\"\nexit 3\n"),
+				0o755); err != nil {
+				t.Fatal(err)
+			}
+			restore := filepath.Join(dir, "feed.orig.post")
+			check := func(when, wantOrig, wantRestore string) {
+				t.Helper()
+				if o, r := readFeedFile(t, orig), readFeedFile(t, restore); o != wantOrig || r != wantRestore {
+					t.Errorf("%s: download %q, restore point %q; want %q, %q", when, o, r, wantOrig, wantRestore)
+				}
+			}
+			p := PostScript{Name: "post.sh", Dirs: []string{dir}, Header: "hdr"}
+			if first == "failed run" {
+				p.Name = "fail.sh"
+			}
+			r := p.RunIP(context.Background(), orig, restore, "_v4")
+			held := r
+			if first == "failed run" {
+				if r.Reason != PreScriptExit || r.Status != 3 {
+					t.Fatalf("first run %+v; want exit status 3", r)
+				}
+			} else {
+				r.Restore()
+			}
+			check("after the first run", "a.example\n", "<none>")
+
+			if err := os.WriteFile(orig, []byte("b.example\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			p.Name = "post.sh"
+			second := p.RunIP(context.Background(), orig, restore, "_v4")
+			if second.Reason != "" || second.Skipped {
+				t.Fatalf("second run %+v; want a success", second)
+			}
+			if first == "copy made before" {
+				held.Restore()
+			} else {
+				r.Restore()
+			}
+			check("after the first run's result restored again", "changed\n", "b.example\n")
+			second.Restore()
+			check("after the second run's restore", "b.example\n", "<none>")
+		})
+	}
+}
+
+// A Restore whose rename failed (the script left a folder at the download) may be retried: once the folder is gone, the
+// same result puts the download back.
+func TestPostScriptRestoreRetriesAFailedRename(t *testing.T) {
+	dir := t.TempDir()
+	orig := writeScript(t, dir, "post.sh", "#!/bin/sh\nrm \"$1\"\nmkdir \"$1\"\n: > \"$1/x\"\n")
+	restore := filepath.Join(dir, "feed.orig.post")
+	r := PostScript{Name: "post.sh", Dirs: []string{dir}, Header: "hdr"}.RunIP(context.Background(), orig, restore, "_v4")
+	if r.Reason != "" || r.Skipped {
+		t.Fatalf("run %+v; want a success", r)
+	}
+	r.Restore()
+	if b, err := os.ReadFile(restore); err != nil || string(b) != "a.example\n" {
+		t.Fatalf("restore point after the failed rename %q, %v; want it kept", b, err)
+	}
+	if err := os.RemoveAll(orig); err != nil {
+		t.Fatal(err)
+	}
+	r.Restore()
+	if o, rp := readFeedFile(t, orig), readFeedFile(t, restore); o != "a.example\n" || rp != "<none>" {
+		t.Errorf("after the retry: download %q, restore point %q; want the download back and no restore point", o, rp)
+	}
+}
+
+// The empty-feed probe never opens what is not a regular file: a FIFO a post-script left at the download is no content at
+// once, where open(2) would block for ever. guard only fails a hung probe.
+func TestCountContentOfAFifoIsNoContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "feed.orig")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Skipf("no fifos on this host: %v", err)
+	}
+	t.Cleanup(func() { // a probe blocked in open(2) is let go
+		if f, err := os.OpenFile(path, os.O_RDWR|syscall.O_NONBLOCK, 0); err == nil {
+			f.Close()
+		}
+	})
+	done := make(chan int, 1)
+	go func() { done <- CountContent(path) }()
+	select {
+	case n := <-done:
+		if n != NoProbe {
+			t.Errorf("CountContent of a FIFO = %d; want NoProbe", n)
+		}
+	case <-time.After(guard):
+		t.Fatal("CountContent blocked on the FIFO")
+	}
+}
