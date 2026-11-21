@@ -385,17 +385,18 @@ final class CoreSettingsBackendTest extends TestCase
 
 	public function testAWriteMayAddANoAaaaEntryTheDnsblPageAccepts(): void
 	{
-		// issue #4036: the page's rule takes a name once its trailing dots are off, a leading dot (the wildcard flag) and a numeric label
+		// issue #4036: the page's rule takes a name once its trailing dots are off (two here, which pfb_filter() alone refuses), a leading
+		// dot (the wildcard flag) and a numeric label
 		$this->arrange(['dnsbl/pfb_noaaaa_list' => base64_encode('*.example.com')]);
 		$current = pfb_core_dns_settings();
 		$this->assertSame([['domain' => '*.example.com']], $current['noAaaaList'], 'before-state: a held entry the page refuses');
-		$added = [['domain' => '*.example.com'], ['domain' => 'example.com.'], ['domain' => '.ads.example.net'], ['domain' => '1.0']];
+		$added = [['domain' => '*.example.com'], ['domain' => 'example.com.'], ['domain' => '.ads.example.net'], ['domain' => '1.0'], ['domain' => 'example.org..']];
 
 		$reply = $this->backend(self::writeRequest($current, array_merge($current, ['noAaaaList' => $added])));
 
 		$this->assertArrayNotHasKey('error', $reply, json_encode($reply));
-		$this->assertSame(['*.example.com', 'example.com.', '.ads.example.net', '1.0'], array_column(pfb_core_dns_settings()['noAaaaList'], 'domain'),
-			'the held entry kept and the three the page accepts added');
+		$this->assertSame(['*.example.com', 'example.com.', '.ads.example.net', '1.0', 'example.org..'], array_column(pfb_core_dns_settings()['noAaaaList'], 'domain'),
+			'the held entry kept and the four the page accepts added');
 	}
 
 	/** @return array<string, array{0: array<string, mixed>}> the parity fixture's `refused` rows (issue #4036) */

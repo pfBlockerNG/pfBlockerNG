@@ -123,7 +123,7 @@ func TestANoAaaaEntryAWriteAddsIsHeldToTheDnsblPagesRule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a stored entry the page refuses does not load: %v", err)
 	}
-	added := `{"dns": {"noAaaaList": [{"domain": "*.example.com"}, {"domain": "example.com."}, {"domain": ".ads.example.net"}, {"domain": "1.0"}]}}`
+	added := `{"dns": {"noAaaaList": [{"domain": "*.example.com"}, {"domain": "example.com."}, {"domain": ".ads.example.net"}, {"domain": "1.0"}, {"domain": "example.org.."}]}}`
 	if _, err := st.Save(t.Context(), 1, changes(t, added)); err != nil {
 		t.Fatalf("Save(%s) = %v, want the held entry kept and the entries the page accepts added", added, err)
 	}
