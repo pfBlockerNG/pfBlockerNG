@@ -398,15 +398,22 @@ func TestALocalFileOverTheCeilingIsRefused(t *testing.T) {
 // the internal-address filter refusing it and refused below the root. (A bracketed [::1] literal is refused outright:
 // entry-bracketed-ipv6.) Without ::1 among the loopbacks the filter would refuse the name as a private address.
 func TestANameThatResolvesToLoopbackV6IsSelfHosted(t *testing.T) {
-	ln6, err := net.Listen("tcp", "[::1]:0")
-	if err != nil {
-		t.Skipf("::1 cannot listen here: %v", err)
-	}
-	// "localhost" may reach either loopback, so both answer.
-	ln4, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(ln6.Addr().(*net.TCPAddr).Port))
-	if err != nil {
-		ln6.Close()
-		t.Fatal(err)
+	// "localhost" may reach either loopback, so both answer. Nothing reserves the IPv4 side of the IPv6 port, so a
+	// refused bind (EADDRINUSE) takes a fresh pair; any other error is real.
+	var ln6, ln4 net.Listener
+	for attempt := 1; ln4 == nil; attempt++ {
+		var err error
+		ln6, err = net.Listen("tcp", "[::1]:0")
+		if err != nil {
+			t.Skipf("::1 cannot listen here: %v", err)
+		}
+		ln4, err = net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(ln6.Addr().(*net.TCPAddr).Port))
+		if err != nil {
+			ln6.Close()
+			if !errors.Is(err, syscall.EADDRINUSE) || attempt == 20 {
+				t.Fatalf("no free ::1/127.0.0.1 port pair after %d tries: %v", attempt, err)
+			}
+		}
 	}
 	var hits atomic.Int32
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
