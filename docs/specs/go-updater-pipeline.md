@@ -271,6 +271,14 @@ localized Locations file with a row whose first six fields (the id, locale, cont
 name) are not UTF-8, and a control character in a name is escaped, so every line is a valid resource member. The English
 continent name only names the page, which needs a word. ASN choices come with slice 5c.*
 
+*Amendment 2026-11-21 (issue #4034, slice 5c): the ASN choices are the ASN table, `pfblockerng_asn.txt`, which the ASN
+conversion (`go/pfb_core/geoip`, `ASNTable`) writes from IPinfo's `asn.csv` as today's `pfblockerng.sh asn_table` does:
+one `AS<number> [ <name> ]` line per AS number, in AS-number order, the first row of a number kept, and a name cut at
+its first comma and stripped of its quotes, as today. It is published whole (written beside the live table, then renamed
+over it), so a failure keeps the previous table, where today's shell truncates it first. Its source changes apart from
+MaxMind's, so it is not part of the country-list generation. How the `geo-catalog` resource carries it, and in which
+order, is slice 9 (#4038).*
+
 - **Canonical body:** members sorted and unique in byte order, one per line, the order `pfb_canonical_alias_set` produces
   (`pfb.inc:14880`; `docs/misc/architecture-notes.md:1194-1197`). `digest` is the xxh128 of that body.
 - **Generation:** a `uint64` per resource, written as a decimal string on the wire, as `GetUpdate`'s cursor is
