@@ -29,6 +29,12 @@ use PHPUnit\Framework\TestCase;
  *                gone, when the run returns), throws (the class of what pfb_run_hooks() threw, "" for nothing).
  *   old_expect   today's answer where Go deliberately differs: its keys replace expect's here.
  * A content is a string, {"b64": bytes} or {"prefix", "repeat", "times", "suffix"}.
+ *
+ * Three scenarios store "timeout": "1" (child-of-a-timed-out-hook-is-left-alone, hook-that-ignores-term-is-killed,
+ * post-hook-past-its-timeout-is-killed-and-the-next-runs): the timeout is the behaviour under test, and one second is
+ * its smallest value. Each of their hooks writes the pid file the scenario reads only once its setup is done (its TERM
+ * trap installed, its child running), and a missing or empty pid file fails the scenario, so a hook too slow to set up
+ * within the second fails loudly instead of passing for the wrong reason.
  */
 #[CoversFunction('pfb_run_hooks')]
 #[CoversFunction('pfb_req_to_hook_trigger')]

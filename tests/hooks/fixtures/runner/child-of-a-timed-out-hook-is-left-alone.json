@@ -11,7 +11,7 @@
  ],
  "files": {
   "hooks/hook_pre_parent.sh": {
-   "body": "#!/bin/sh\n(trap '' TERM; exec sleep 3600) &\necho $! > '{root}/child.pid'\necho $$ > '{root}/hook.pid'\nexec sleep 3600\n"
+   "body": "#!/bin/sh\nmkfifo '{root}/child-ready'\nsh -c 'trap \"\" TERM; echo $$ > \"$1/child.pid\"; echo ready > \"$1/child-ready\"; exec sleep 3600' sh '{root}' &\nread line < '{root}/child-ready'\necho $$ > '{root}/hook.pid'\nexec sleep 3600\n"
   }
  },
  "expect": {
