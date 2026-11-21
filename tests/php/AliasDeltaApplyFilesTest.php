@@ -54,6 +54,8 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$infile" ] && cp "$infile" "$dir/call$n" && { stat -c %a "$infile" 2>/dev/null || stat -f %Lp "$infile"; } > "$dir/mode$n"
 printf '%s\t%s\t%s\n' "$action" "$table" "$infile" >> "$dir/log"
+# a test's "rewrite" file replaces, in place, the file named in "rewrite.to" when the first call arrives
+if [ "$n" = 1 ] && [ -f "$dir/rewrite" ]; then cp "$dir/rewrite" "$(cat "$dir/rewrite.to")"; fi
 if [ -f "$dir/fail" ] && grep -qx "$n" "$dir/fail"; then
 	echo "pfctl: Cannot $action table: Operation not permitted"
 	exit 1
@@ -122,7 +124,7 @@ SH
 	 */
 	private function apply(array $add, array $remove, int $entries, int $previous, string $mode, int $batch = 64, bool $force = FALSE): array
 	{
-		return pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		return pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
 			$this->members('add', $add), count($add), $this->members('remove', $remove), count($remove),
 			$entries, $previous, $mode, $batch, $force, $this->batchdir);
 	}
@@ -253,7 +255,7 @@ SH
 
 	public function testBothFilesEmptyMakeNoCallAndNeedNoFile(): void
 	{
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
 			"{$this->dir}/no-add", 0, "{$this->dir}/no-remove", 0, 100, 100, 'delta', 64, FALSE, $this->batchdir);
 
 		$this->assertSame(['delta' => TRUE, 'ok' => TRUE], $result);
@@ -262,7 +264,7 @@ SH
 
 	public function testZeroAndZeroReadNoFileEvenWhenTheFilesHoldLines(): void
 	{
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
 			$this->members('add', ['10.1.0.1']), 0, $this->members('remove', ['10.2.0.1']), 0, 100, 100, 'delta', 64, FALSE,
 			$this->batchdir);
 
@@ -285,7 +287,7 @@ SH
 	{
 		$offset = self::logOffset();
 
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
 			$this->members('add', ['10.1.0.1']), $addCount, $this->members('remove', ['10.2.0.1']), $removeCount, 100, 100, $mode,
 			64, FALSE, $this->batchdir);
 
@@ -298,7 +300,7 @@ SH
 	#[DataProvider('replacePaths')]
 	public function testANegativeCountDoesNotStopAReplace(string $mode, bool $force): void
 	{
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
 			$this->members('add', ['10.1.0.1']), -1, $this->members('remove', ['10.2.0.1']), -7, 100, 100, $mode,
 			64, $force, $this->batchdir);
 
@@ -329,7 +331,7 @@ SH
 	{
 		$offset = self::logOffset();
 
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
 			$this->members('add', ['10.1.0.1']), 1, $this->members('remove', []), 0, $entries, $previous, $mode, 64, FALSE,
 			$this->batchdir);
 
@@ -359,7 +361,7 @@ SH
 		$counts[$side] = $count;
 		$offset = self::logOffset();
 
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
 			$paths['add'], $counts['add'], $paths['remove'], $counts['remove'], 10000, 10000, 'delta', 64, FALSE, $this->batchdir);
 
 		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
@@ -375,7 +377,7 @@ SH
 		$old = umask(0022);
 		try {
 			try {
-				pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+				pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
 					$this->members('add', ['10.1.0.1']), 1, $this->members('remove', []), 0, 10000, 10000, 'delta', 64, FALSE,
 					"{$this->dir}/nul\0dir");
 				$this->fail('a temporary directory holding a NUL byte did not throw');
@@ -393,7 +395,7 @@ SH
 		$add = "{$this->dir}/add";
 		file_put_contents($add, "10.1.0.1\n10.1.0.2");
 
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
 			$add, 2, $this->members('remove', []), 0, 100, 100, 'delta', 64, FALSE, $this->batchdir);
 
 		$this->assertSame(['delta' => TRUE, 'ok' => TRUE], $result);
@@ -498,7 +500,7 @@ SH
 	public function testABatchFileThatCannotBeCreatedIsSentNowhereAndFailsTheResult(): void
 	{
 		$offset = self::logOffset();
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
 			$this->members('add', ['10.1.0.1']), 1, $this->members('remove', []), 0, 100, 100, 'delta', 64, FALSE,
 			"{$this->dir}/no-such-dir");
 
@@ -530,7 +532,7 @@ SH
 
 		$offset = self::logOffset();
 
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
 			$paths['add'], 1, $paths['remove'], 1, 100, 100, 'delta', 64, FALSE, $this->batchdir);
 
 		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
@@ -560,7 +562,7 @@ SH
 		$counts[$side] = $count;
 		$offset = self::logOffset();
 
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
 			$this->members('add', $members['add']), $counts['add'], $this->members('remove', $members['remove']), $counts['remove'],
 			10000, 10000, 'delta', 64, FALSE, $this->batchdir);
 
@@ -574,7 +576,7 @@ SH
 	/** The counts 1 of 100 choose a delta; the add file holds 50 members, a churn that would have been a replace: nothing is sent. */
 	public function testADeltaChosenFromACountTheFileContradictsSendsNothing(): void
 	{
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
 			$this->members('add', self::addresses(50, 1)), 1, $this->members('remove', []), 0, 100, 100, 'auto', 64, FALSE,
 			$this->batchdir);
 
@@ -582,22 +584,23 @@ SH
 		$this->assertSame([], $this->calls());
 	}
 
-	/** A member is at most 64 bytes: a line of 64 is sent whole, and one of 65 sends nothing, even where its pieces would make up the count. */
-	public function testALineOfSixtyFourBytesIsAMemberAndOneOfSixtyFiveIsNot(): void
+	/** The longest spelling the rule admits (49 bytes) is sent whole; a line of 65 bytes is refused, even where its pieces would make up the count. */
+	public function testTheLongestMemberIsSentAndALineOfSixtyFiveBytesIsNot(): void
 	{
-		$member = str_repeat('1', 64);
+		$member = 'ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255/128';
+		$this->assertSame(49, strlen($member));
 		$add = "{$this->dir}/add";
 		file_put_contents($add, "{$member}\n");
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv6', $this->members('mirror', ['10.255.0.1']),
 			$add, 1, $this->members('remove', []), 0, 10000, 10000, 'delta', 64, FALSE, $this->batchdir);
 		$this->assertSame(['delta' => TRUE, 'ok' => TRUE], $result);
 		$this->assertSame([['add', [$member]]], array_map(static fn (array $c): array => [$c['verb'], $c['lines']], $this->calls()));
 
 		unlink("{$this->dir}/log");
-		file_put_contents($add, "{$member}1\n");
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		file_put_contents($add, str_repeat('1', 65) . "\n");
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv6', $this->members('mirror', ['10.255.0.1']),
 			$add, 2, $this->members('remove', []), 0, 10000, 10000, 'delta', 64, FALSE, $this->batchdir);
-		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result, 'a 65-byte line read in two pieces is two lines: a bound must not split it');
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
 		$this->assertSame([], $this->calls());
 	}
 
@@ -613,7 +616,7 @@ SH
 		memory_reset_peak_usage();
 		$base = memory_get_usage();
 
-		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
 			$add, 1, $this->members('remove', []), 0, 10000, 10000, 'delta', 64, FALSE, $this->batchdir);
 		$peak = memory_get_peak_usage() - $base;
 
@@ -632,7 +635,7 @@ SH
 	 */
 	public function testNoMemberReachesTheCommandLine(): void
 	{
-		$add = ['10.1.0.1', '2001:db8::/32'];
+		$add = ['10.1.0.1', '10.3.0.0/24'];
 
 		$result = $this->apply($add, ['10.2.0.0/16'], 10000, 10000, 'delta');
 
@@ -645,6 +648,164 @@ SH
 			$this->assertSame(['-t', self::TABLE, '-T', $call['verb'], '-f', $call['file']], $argv, 'nothing else is on the command line');
 			$this->assertStringStartsWith("{$this->batchdir}/", $call['file']);
 		}
+	}
+
+	// ---------------------------------------------------------------------------------------------------------------
+	// A line must be a member of the table's family, on both passes
+	// ---------------------------------------------------------------------------------------------------------------
+
+	/** @return array<string, array{string, string}> the table's family and a line pf would not read as an address of it */
+	public static function nonMembers(): array
+	{
+		return [
+			'an interface name, ae0'                         => ['ipv4', 'ae0'],
+			'an interface name made of hex digits, bce0'     => ['ipv6', 'bce0'],
+			'a host name made of hex digits, dead.beef'      => ['ipv4', 'dead.beef'],
+			'an incomplete address, abc'                     => ['ipv4', 'abc'],
+			'a prefix over the width, 1.2.3.4/99'            => ['ipv4', '1.2.3.4/99'],
+			'only separators, ////'                          => ['ipv6', '////'],
+			'an IPv6 address in an ipv4 table'               => ['ipv4', '2001:db8::1'],
+			'an IPv4 address in an ipv6 table'               => ['ipv6', '10.1.0.1'],
+			'an IPv6 prefix in an ipv4 table'                => ['ipv4', '2001:db8::/32'],
+		];
+	}
+
+	#[DataProvider('nonMembers')]
+	public function testALineThatIsNotAMemberOfTheTablesFamilySendsNothingAndNamesItsSideAndLine(string $family, string $line): void
+	{
+		foreach (['add', 'remove'] as $side) {
+			$fix = ['ipv4' => '10.1.0.1', 'ipv6' => '2001:db8::1'][$family];
+			$paths = ['add' => $this->members('add', [$fix]), 'remove' => $this->members('remove', [$fix])];
+			$paths[$side] = $this->members($side, [$fix, $line]);
+			$counts = ['add' => 1, 'remove' => 1, $side => 2];
+			@unlink("{$this->dir}/log");
+			$offset = self::logOffset();
+
+			$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $family, $this->members('mirror', ['10.255.0.1']),
+				$paths['add'], $counts['add'], $paths['remove'], $counts['remove'], 10000, 10000, 'delta', 64, FALSE, $this->batchdir);
+
+			$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result, "{$line} in the {$side} file of an {$family} table");
+			$this->assertSame([], $this->calls(), 'nothing is sent from a file pf would read differently');
+			$named = array_values(array_filter(self::loggedSince($offset),
+				static fn (string $l): bool => str_contains($l, "the {$side} file") && str_contains($l, 'line 2 ')));
+			$this->assertCount(1, $named, 'one line names the side and the line: ' . implode(' | ', self::loggedSince($offset)));
+		}
+	}
+
+	/** @return array<string, array{string, string}> the table's family and a member pf reads as an address of it */
+	public static function memberSpellings(): array
+	{
+		return [
+			'an IPv4 prefix'                  => ['ipv4', '10.9.0.0/16'],
+			'an IPv6 prefix'                  => ['ipv6', '2001:db8::/32'],
+			'upper-case hexadecimal'          => ['ipv6', 'FE80::ABCD'],
+			'an uncompressed IPv6 address'    => ['ipv6', '2001:0db8:0000:0000:0000:0000:0000:0001'],
+		];
+	}
+
+	#[DataProvider('memberSpellings')]
+	public function testAMemberOfTheTablesFamilyIsSent(string $family, string $line): void
+	{
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $family, $this->members('mirror', ['10.255.0.1']),
+			$this->members('add', [$line]), 1, $this->members('remove', []), 0, 10000, 10000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => TRUE], $result);
+		$this->assertSame([['add', [$line]]], array_map(static fn (array $c): array => [$c['verb'], $c['lines']], $this->calls()));
+	}
+
+	/** @return array<string, array{string, string, bool}> */
+	public static function unknownFamilies(): array
+	{
+		return [
+			'ipv5 in delta mode'    => ['ipv5', 'delta', FALSE],
+			'upper-case IPV4'       => ['IPV4', 'delta', FALSE],
+			'an empty family'       => ['', 'delta', FALSE],
+			'a family on a replace' => ['inet', 'replace', FALSE],
+			'a family on a forced replace' => ['inet6', 'delta', TRUE],
+		];
+	}
+
+	#[DataProvider('unknownFamilies')]
+	public function testAFamilyThatIsNeitherIpv4NorIpv6RefusesTheCallWithNoPfctlCall(string $family, string $mode, bool $force): void
+	{
+		$offset = self::logOffset();
+
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $family, $this->members('mirror', ['10.255.0.1']),
+			$this->members('add', ['10.1.0.1']), 1, $this->members('remove', []), 0, 10000, 10000, $mode, 64, $force, $this->batchdir);
+
+		$this->assertFalse($result['ok']);
+		$this->assertSame([], $this->calls());
+		$this->assertCount(1, self::loggedSince($offset), 'one line says why: ' . implode(' | ', self::loggedSince($offset)));
+	}
+
+	/**
+	 * A member file rewritten in place after the first pass is checked again as it is sent: the double rewrites the add file
+	 * when pfctl gets the first batch, and the function, which reads the file in batches, reaches the new bytes on its next
+	 * one. The lines before the bad one keep their length, so what the stream already buffered is still the old file's prefix.
+	 */
+	public function testALineRewrittenBetweenThePassesStopsTheSendingAfterTheBatchesAlreadySent(): void
+	{
+		$members = self::addresses(2000, 1);
+		$add = $this->members('add', $members);
+		$this->assertGreaterThan(16384, filesize($add), 'the file outgrows the stream buffer, so later lines are read after the rewrite');
+		$bad = $members;
+		$bad[1899] = 'ae0';
+		file_put_contents("{$this->dir}/rewrite", implode("\n", $bad) . "\n");
+		file_put_contents("{$this->dir}/rewrite.to", $add);
+		$offset = self::logOffset();
+
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+			$add, 2000, $this->members('remove', ['10.2.0.1']), 1, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$shape = $this->shape();
+		$this->assertSame(array_fill(0, 29, ['add', 64]), $shape, '29 batches of 64 (lines 1 to 1856) went out; the batch holding line 1900 and the deletes did not');
+		$named = array_values(array_filter(self::loggedSince($offset),
+			static fn (string $l): bool => str_contains($l, 'the add file') && str_contains($l, 'line 1900 ')));
+		$this->assertCount(1, $named, 'one line names the side and the line: ' . implode(' | ', self::loggedSince($offset)));
+		$this->assertCount(1, array_filter(self::loggedSince($offset), static fn (string $l): bool => !str_contains($l, 'delta +')),
+			'and no other line besides the delta decision: ' . implode(' | ', self::loggedSince($offset)));
+	}
+
+	/** @return array<string, array{int, int, string, bool}> the entries after, the entries before, the mode, the force flag */
+	public static function negativeTableSizesOnAReplace(): array
+	{
+		$rows = [];
+		foreach ([[-1, 100], [100, -1], [-1, -1]] as [$entries, $previous]) {
+			foreach ([['replace', FALSE], ['delta', TRUE]] as [$mode, $force]) {
+				$rows["entries {$entries}, previous {$previous}, " . ($force ? 'a forced replace' : "mode {$mode}")] = [$entries, $previous, $mode, $force];
+			}
+		}
+		return $rows;
+	}
+
+	/** A replace reloads the table from its file: a negative table size, like a negative add or remove count, does not stop it. */
+	#[DataProvider('negativeTableSizesOnAReplace')]
+	public function testANegativeTableSizeDoesNotStopAReplace(int $entries, int $previous, string $mode, bool $force): void
+	{
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+			$this->members('add', ['10.1.0.1']), 1, $this->members('remove', []), 0, $entries, $previous, $mode, 64, $force, $this->batchdir);
+
+		$this->assertSame(['delta' => FALSE, 'ok' => TRUE], $result);
+		$this->assertSame([['replace', 1]], $this->shape());
+	}
+
+	/** A replace that goes ahead although a count is negative says so once, with the four counts; one with sound counts says nothing of the kind. */
+	public function testAReplaceWithANegativeCountLogsTheFourCountsOnce(): void
+	{
+		$offset = self::logOffset();
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+			$this->members('add', ['10.1.0.1']), 3, $this->members('remove', []), -2, 40, -1, 'replace', 64, FALSE, $this->batchdir);
+		$this->assertSame(['delta' => FALSE, 'ok' => TRUE], $result);
+		$negative = array_values(array_filter(self::loggedSince($offset), static fn (string $l): bool => str_contains($l, 'negative count')));
+		$this->assertCount(1, $negative, implode(' | ', self::loggedSince($offset)));
+		$this->assertStringContainsString('add 3, remove -2, entries 40, previous -1', $negative[0]);
+
+		unlink("{$this->dir}/log");
+		$offset = self::logOffset();
+		$this->apply(['10.1.0.1'], [], 40, 40, 'replace');
+		$this->assertSame([], array_values(array_filter(self::loggedSince($offset), static fn (string $l): bool => str_contains($l, 'negative count'))),
+			'sound counts log no such line');
 	}
 
 	// ---------------------------------------------------------------------------------------------------------------
@@ -683,7 +844,7 @@ SH
 		$this->assertNotSame(0, $control['exit'], "the list of members fit under the cap, so the cap proves nothing: {$control['stdout']}");
 		$this->assertStringContainsString('Allowed memory size', $control['stderr']);
 
-		$args = implode(', ', [var_export($this->pfctl(), TRUE), var_export(self::TABLE, TRUE), var_export($remove, TRUE),
+		$args = implode(', ', [var_export($this->pfctl(), TRUE), var_export(self::TABLE, TRUE), "'ipv4'", var_export($remove, TRUE),
 			var_export($add, TRUE), '200000', var_export($remove, TRUE), '1', '200000', '1', "'delta'", '4096', 'FALSE',
 			var_export($this->batchdir, TRUE)]);
 		$run = $this->underMemoryCap('$r = pfb_apply_alias_delta_files(' . $args . ");\n"
