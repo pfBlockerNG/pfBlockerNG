@@ -854,13 +854,16 @@ publish. One line that fails refuses the whole resource, which keeps its cursor.
 `GetResources` said of it: its line count times the longest line a member may be, 64 bytes and a line feed for an IP
 member (no address or prefix the rule takes is longer) and 1 MiB and a line feed for any other. A `Content-Length` over
 that bound is refused before the body is read, and a body that runs past it is cut off there and refused. Any other
-answer is an error envelope, read at most 64 KiB whatever its status; a longer one is malformed. A delta part that does not
-arrive as `GetResources` described it (over its bound, not plain text, another line count), or whose merge is not the
-item's `digest` and `entries`, is discarded and the full body asked for. A part the transport ends part way (the call's
+answer is an error envelope, read at most 64 KiB whatever its status; a longer one is malformed. The Outpost sends its
+stored cursor only while its mirror on disk is the body that cursor records (the same digest); a mirror edited, missing or
+not a regular file sends `{}`, so a store rebuilt with another body under the same generation cannot answer `unchanged` to
+it. A delta part that does not arrive as `GetResources` described it (over its bound, not plain text, another line count,
+members out of byte order or a line repeated), parts that name one member in both (Core never emits that), or a merge that
+is not the item's `digest` and `entries`, is discarded and the full body asked for; a line that is not a member is not. A part the transport ends part way (the call's
 deadline, a reset, a connection closed short of its `Content-Length`) is Core not answering: the resource fails as
 unreachable and no full body is asked for under the same deadline. Any failure of the transfer itself, a reply curl cannot frame
-included, counts as unreachable and does not fall back. A part this host cannot write whole (a full disk) fails the resource
-as a mirror failure, and no full body is asked for.
+included, counts as unreachable and does not fall back. A part this host cannot write whole (a full disk), or a merged mirror it
+cannot create, write or close, fails the resource as a mirror failure, and no full body is asked for.
 
 **Errors**, in the JSON envelope: `not_found` (`404`) when the store does not hold that part (the resource is unknown or
 removed, the generation is neither the current one nor the applied baseline, or the delta is not the one from that

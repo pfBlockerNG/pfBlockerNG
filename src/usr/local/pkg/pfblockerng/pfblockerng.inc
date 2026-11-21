@@ -4707,7 +4707,8 @@ function pfb_outpost_member_valid(string $member, ?string $family): bool {
  * (pfb_outpost_member_valid()), and comes strictly after the one before it in byte order (sorted and unique).
  *
  * @param ?string $family 'ipv4' or 'ipv6' for an IP set or aggregate, NULL for any other resource
- * @return array{entries: int, error: ?string} the line count, or why the part is refused whole
+ * @return array{entries: int, error: ?string, order?: true} the line count, or why the part is refused whole; order when every
+ *   line read is a member but one does not come after the line before it
  */
 function pfb_outpost_part_check(string $path, ?string $family): array {
 	$fh = @fopen($path, 'rb');
@@ -4718,6 +4719,7 @@ function pfb_outpost_part_check(string $path, ?string $family): array {
 	$entries = 0;
 	$prev = NULL;
 	$error = NULL;
+	$order = FALSE;
 	while ($error === NULL && ($line = fgets($fh, $max + 2)) !== FALSE) {
 		$entries++;
 		$member = substr($line, 0, -1);
@@ -4727,19 +4729,24 @@ function pfb_outpost_part_check(string $path, ?string $family): array {
 			$error = "line {$entries} is not a member";
 		} elseif ($prev !== NULL && strcmp($prev, $member) >= 0) {
 			$error = "line {$entries} does not come after the line before it in byte order";
+			$order = TRUE;
 		}
 		$prev = $member;
 	}
 	fclose($fh);
-	return $error === NULL ? ['entries' => $entries, 'error' => NULL] : ['entries' => 0, 'error' => "{$path}: {$error}"];
+	if ($error === NULL) {
+		return ['entries' => $entries, 'error' => NULL];
+	}
+	return ['entries' => 0, 'error' => "{$path}: {$error}"] + ($order ? ['order' => TRUE] : []);
 }
 
 /**
  * Write to $out the mirror with the members of $remove taken out and those of $add put in, by one pass over the three sorted
  * files, a line at a time: no member list is held in memory. A remove line the mirror lacks, an add line it already holds,
- * or an input out of byte order stops the merge, and $out is removed.
+ * a member named by both parts, or an input out of byte order stops the merge, and $out is removed.
  *
- * @return array{entries: int, error: ?string} the members written, or why the merge stopped
+ * @return array{entries: int, error: ?string, local?: true} the members written, or why the merge stopped; local when this
+ *   host could not open an input or create, write or close $out
  */
 function pfb_outpost_mirror_merge(string $mirror, string $remove, string $add, string $out): array {
 	$names = ['the mirror', 'the remove part', 'the add part'];
@@ -4747,6 +4754,7 @@ function pfb_outpost_mirror_merge(string $mirror, string $remove, string $add, s
 	@unlink($out);
 	$w = in_array(FALSE, $in, TRUE) ? FALSE : @fopen($out, 'xb');
 	$error = $w === FALSE ? 'an input cannot be read or the result cannot be created' : NULL;
+	$local = $w === FALSE;
 	$prev = [NULL, NULL, NULL];
 	$next = static function (int $i) use (&$in, &$prev, &$error, $names): ?string {
 		$line = $error === NULL ? fgets($in[$i]) : FALSE;
@@ -4762,21 +4770,35 @@ function pfb_outpost_mirror_merge(string $mirror, string $remove, string $add, s
 	};
 	$entries = 0;
 	[$m, $r, $a] = [$next(0), $next(1), $next(2)];
-	while ($error === NULL && ($m !== NULL || $a !== NULL || $r !== NULL)) {
-		if ($r !== NULL && ($m === NULL || strcmp($r, $m) < 0)) {
-			$error = 'the remove part names a member the mirror does not hold';
-		} elseif ($r !== NULL && $r === $m) {
-			[$m, $r] = [$next(0), $next(1)];
-		} elseif ($a !== NULL && $a === $m) {
+	while ($error === NULL) {
+		// the lowest line of the three inputs, and which of them hold it
+		$x = NULL;
+		foreach ([$m, $r, $a] as $line) {
+			if ($line !== NULL && ($x === NULL || strcmp($line, $x) < 0)) {
+				$x = $line;
+			}
+		}
+		if ($x === NULL) {
+			break;
+		}
+		if ($r === $x && $a === $x) {
+			$error = 'both the remove part and the add part name a member';
+		} elseif ($r === $x) {
+			if ($m !== $x) {
+				$error = 'the remove part names a member the mirror does not hold';
+			} else {
+				[$m, $r] = [$next(0), $next(1)];
+			}
+		} elseif ($a === $x && $m === $x) {
 			$error = 'the add part names a member the mirror already holds';
 		} else {
-			$take = $a !== NULL && ($m === NULL || strcmp($a, $m) < 0);
-			$line = ($take ? $a : $m) . "\n";
+			$line = "{$x}\n";
 			if (fwrite($w, $line) !== strlen($line)) {
 				$error = "{$out} cannot be written";
+				$local = TRUE;
 			}
 			$entries++;
-			if ($take) {
+			if ($a === $x) {
 				$a = $next(2);
 			} else {
 				$m = $next(0);
@@ -4788,12 +4810,13 @@ function pfb_outpost_mirror_merge(string $mirror, string $remove, string $add, s
 			fclose($fh);
 		}
 	}
-	if ($w !== FALSE && !fclose($w)) {
-		$error ??= "{$out} cannot be written";
+	if ($w !== FALSE && !fclose($w) && $error === NULL) {
+		$error = "{$out} cannot be written";
+		$local = TRUE;
 	}
 	if ($error !== NULL) {
 		@unlink($out);
-		return ['entries' => 0, 'error' => $error];
+		return ['entries' => 0, 'error' => $error] + ($local ? ['local' => TRUE] : []);
 	}
 	return ['entries' => $entries, 'error' => NULL];
 }
@@ -4830,8 +4853,9 @@ function pfb_outpost_reply_kind(array $item, array $sent): ?string {
 }
 
 /**
- * Fetch the parts of an answer to their files, each bounded by its line count, then check each against the member rule and
- * that line count. Every part is fetched before any is checked: a part refused here is never asked for again.
+ * Fetch the parts of an answer to their files, each bounded by its line count, then check each against the member rule, the
+ * canonical order and that line count. Every part is fetched before any is checked: a part refused here is never asked for
+ * again. A delta part out of order, or of another line count, is verify unless a part holds a line that is not a member.
  *
  * @param array<string, array{string, int}> $parts part name => [its file, the line count the reply named]
  * @param ?string $from the delta's from, NULL for a full body
@@ -4866,9 +4890,12 @@ function pfb_outpost_parts_fetch(string $id, string $generation, array $parts, ?
 	foreach ($parts as $part => [$path, $lines]) {
 		$checked = pfb_outpost_part_check($path, $family);
 		if ($checked['error'] !== NULL) {
-			return ['members', $checked['error'], NULL];
-		}
-		if ($checked['entries'] !== $lines) {
+			// a delta part of members out of order did not arrive as described; a line that is not a member is never retried
+			if ($from === NULL || !isset($checked['order'])) {
+				return ['members', $checked['error'], NULL];
+			}
+			$mismatch ??= ['verify', $checked['error'], NULL];
+		} elseif ($checked['entries'] !== $lines) {
 			$mismatch ??= ['verify', "the {$part} part holds {$checked['entries']} lines, not {$lines}", NULL];
 		}
 	}
@@ -4877,13 +4904,13 @@ function pfb_outpost_parts_fetch(string $id, string $generation, array $parts, ?
 
 /**
  * Fetch one resource from the Core API for the Outpost apply (docs/misc/core-api-protocol.md "Resources", spec section 8.2)
- * and bring its mirror to the generation Core serves. The cursor sent is the stored generation with the digest of the mirror
- * as it is on disk now, so an edited mirror is answered full; a missing mirror, or one that is not a regular file, sends none.
- * A delta's parts are fetched to $workdir/add and $workdir/remove and merged into the mirror. A delta whose part does not
- * arrive as the reply described it (too long, not plain text, another line count), or whose merge is not the reply's digest
- * and entries, is discarded and the full body fetched instead; a part with a line that is not a member, or that the
- * transport ends part way, or that this host cannot write, is not. Every
- * part is checked by pfb_outpost_part_check() and the new mirror verified and synced before it replaces the old one by
+ * and bring its mirror to the generation Core serves. The cursor sent is the stored one only while the mirror on disk is the
+ * body it records (the same digest); an edited mirror, a missing one, or one that is not a regular file sends none, so Core
+ * answers full. A delta's parts are fetched to $workdir/add and $workdir/remove and merged into the mirror. A delta whose part
+ * does not arrive as the reply described it (too long, not plain text, another line count, out of byte order or a repeated
+ * line), whose parts name one member in both, or whose merge is not the reply's digest and entries, is discarded and the full
+ * body fetched instead; a part with a line that is not a member, or that the transport ends part way, or that this host cannot
+ * write, is not, nor is a new mirror this host cannot stage. Every part is checked by pfb_outpost_part_check() and the new mirror verified and synced before it replaces the old one by
  * rename: any failure leaves the old mirror in place.
  *
  * Any failure of the transfer itself, a reply curl cannot frame included, counts as unreachable and does not fall back.
@@ -4892,8 +4919,8 @@ function pfb_outpost_parts_fetch(string $id, string $generation, array $parts, ?
  * other error answered to the call; code names it), unavailable (the resource or its body), reply (an answer of the wrong
  * shape, a generation going backwards in a delta included), body (a body longer than its bound, not plain text, refused by
  * an error envelope, or pruned twice), members (a line that is not a member), verify (a body that is not the line
- * count or digest the reply named), mirror (a file beside the mirror, a part, or the rename could not be written, or the
- * disk took fewer bytes of a part than it was given).
+ * count or digest the reply named), mirror (a file beside the mirror, a part, the merged mirror, or the rename could not be
+ * written, or the disk took fewer bytes of a part than it was given).
  *
  * @param ?array{generation: string, digest: string, entries: int} $cursor what the cursor file holds for $id, NULL for none
  * @param string $workdir a directory of this resource's own for the delta parts
@@ -4919,9 +4946,9 @@ function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $w
 	};
 	$sent = [];
 	clearstatcache(TRUE, $mirror);
-	$digest = $cursor !== NULL && !is_link($mirror) && is_file($mirror) ? pfb_content_hash($mirror) : FALSE;
-	if (is_string($digest)) {
-		$sent = ['generation' => (string) $cursor['generation'], 'digest' => $digest];
+	// a mirror that is not the body the cursor records is not that generation's: send no cursor
+	if ($cursor !== NULL && !is_link($mirror) && is_file($mirror) && pfb_content_hash($mirror) === $cursor['digest']) {
+		$sent = ['generation' => (string) $cursor['generation'], 'digest' => $cursor['digest']];
 	}
 	// a body pruned by a publish that raced the read: ask again once (protocol "GetResourceBody")
 	$raced = 0;
@@ -4965,7 +4992,9 @@ function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $w
 		if ($failed === NULL) {
 			// a full body's line count was checked with its part
 			$merged = $kind === 'delta' ? pfb_outpost_mirror_merge($mirror, $remove, $add, $staged) : ['entries' => $item['entries'], 'error' => NULL];
-			if ($merged['error'] !== NULL || $merged['entries'] !== $item['entries'] || pfb_content_hash($staged) !== $item['digest']) {
+			if (isset($merged['local'])) {
+				$failed = ['mirror', (string) $merged['error'], NULL];
+			} elseif ($merged['error'] !== NULL || $merged['entries'] !== $item['entries'] || pfb_content_hash($staged) !== $item['digest']) {
 				$failed = ['verify', 'the new mirror is not the body the reply named', NULL];
 			}
 		}
