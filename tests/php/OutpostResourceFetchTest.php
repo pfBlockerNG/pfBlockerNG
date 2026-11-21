@@ -309,6 +309,7 @@ final class OutpostResourceFetchTest extends TestCase
 			'full with a numeric generation'        => [self::items(['generation' => 8] + $full)],
 			'full with a signed generation'         => [self::items(['generation' => '-8'] + $full)],
 			'full with a generation over 64 bits'   => [self::items(['generation' => '18446744073709551616'] + $full)],
+			'full with a generation of 21 digits'   => [self::items(['generation' => str_repeat('0', 20) . '1'] + $full)],
 			'full with negative entries'            => [self::items(['entries' => -1] + $full)],
 			'full with entries as a string'         => [self::items(['entries' => '1'] + $full)],
 			'full with metadata that is no object'  => [self::items(['metadata' => 'deny'] + $full)],
