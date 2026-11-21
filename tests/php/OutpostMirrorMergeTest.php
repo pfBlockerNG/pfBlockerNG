@@ -99,6 +99,8 @@ final class OutpostMirrorMergeTest extends TestCase
 			'a signed prefix'                 => ['ipv4', "1.2.3.0/+24\n"],
 			'an empty prefix'                 => ['ipv4', "1.2.3.0/\n"],
 			'a netmask prefix'                => ['ipv4', "1.2.3.0/255.255.255.0\n"],
+			'a prefix with a trailing dot'    => ['ipv4', "1.2.3.0/24.\n"],
+			'a prefix that is a fraction'     => ['ipv6', "::/.5\n"],
 			'an IPv6 member in an IPv4 set'   => ['ipv4', "2001:db8::1\n"],
 			'an IPv4 member in an IPv6 set'   => ['ipv6', "1.2.3.4\n"],
 			'a zone'                          => ['ipv6', "fe80::1%em0\n"],

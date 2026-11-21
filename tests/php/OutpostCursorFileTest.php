@@ -131,6 +131,37 @@ final class OutpostCursorFileTest extends TestCase
 		$this->assertSame($before, file_get_contents($this->file));
 	}
 
+	/** @return array<string, array{array<string, array<string, mixed>>}> */
+	public static function documentsThatCannotBeWritten(): array
+	{
+		$many = [];
+		// about 100 bytes each: 12000 cursors pass the 1 MiB the reader takes
+		for ($i = 0; $i < 12000; $i++) {
+			$many["ip-set/Group{$i}/ipv4"] = ['generation' => '18446744073709551615', 'digest' => self::DIGEST, 'entries' => 1];
+		}
+		return [
+			'a string that is not UTF-8'  => [['geo-catalog' => ['generation' => "4\xff", 'digest' => self::DIGEST, 'entries' => 1]]],
+			'a document longer than 1 MiB' => [$many],
+		];
+	}
+
+	/**
+	 * A document that cannot be encoded, or that the reader would refuse as too long, is never written: the write fails and the
+	 * file keeps every byte it had.
+	 */
+	#[DataProvider('documentsThatCannotBeWritten')]
+	public function testADocumentThatCannotBeReadBackIsNotWrittenAndTheFileIsKept(array $cursors): void
+	{
+		$this->lock();
+		$this->assertNull(pfb_outpost_cursor_advance('ip-set/Abuse/ipv4', '42', self::DIGEST, 1));
+		$before = (string) file_get_contents($this->file);
+
+		$this->assertIsString(pfb_outpost_cursors_write($cursors, $this->file), 'the write did not fail');
+		$this->assertSame(hash('sha256', $before), hash_file('sha256', $this->file), 'the cursor file changed');
+		$this->assertSame(['pfb_apply_cursors.json', 'pfb_feed_pass.lock'], array_values(array_diff(scandir($this->dir), ['.', '..'])),
+			'the write left a temporary file');
+	}
+
 	/** @return array<string, array{string, string, int}> */
 	public static function badCursors(): array
 	{

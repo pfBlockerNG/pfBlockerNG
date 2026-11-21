@@ -242,6 +242,8 @@ final class OutpostResourceFetchTest extends TestCase
 			'Core runs no store or is stopping' => [self::error(503, 'unavailable'), 'core_unavailable', 'unavailable'],
 			'the caller is not admitted'        => [self::error(401, 'unauthenticated'), 'refused', 'unauthenticated'],
 			'the request was refused'           => [self::error(400, 'invalid_argument'), 'refused', 'invalid_argument'],
+			'a code holding a line break'       => [self::error(400, "invalid_argument\nINJECTED"), 'refused', NULL],
+			'a code of 100 bytes'               => [self::error(400, str_repeat('a', 100)), 'refused', NULL],
 		];
 	}
 
@@ -311,6 +313,8 @@ final class OutpostResourceFetchTest extends TestCase
 			'full with entries as a string'         => [self::items(['entries' => '1'] + $full)],
 			'full with metadata that is no object'  => [self::items(['metadata' => 'deny'] + $full)],
 			'delta without removeEntries'           => [self::items(array_diff_key($delta, ['removeEntries' => 1]))],
+			'delta with negative addEntries'        => [self::items(['addEntries' => -1] + $delta)],
+			'delta with negative removeEntries'     => [self::items(['removeEntries' => -1] + $delta)],
 			'delta from another generation'         => [self::items(['from' => '6'] + $delta)],
 			'delta whose generation goes backwards' => [self::items(['generation' => '5'] + $delta)],
 			'delta whose generation is its from'    => [self::items(['generation' => '7'] + $delta)],
@@ -340,13 +344,14 @@ final class OutpostResourceFetchTest extends TestCase
 		$this->assertFileDoesNotExist($this->mirror);
 	}
 
-	public function testATruncatedBodyFailsTheResourceAndKeepsTheMirror(): void
+	/** A connection that ends short of the body's Content-Length is a transport failure, not a body of the wrong shape. */
+	public function testABodyCutShortOfItsContentLengthIsUnreachableAndKeepsTheMirror(): void
 	{
 		file_put_contents($this->mirror, self::OLD);
 		$body = "1.1.1.1\n8.8.8.8\n";
 		[$result] = $this->fetch([self::full('8', $body), self::text("1.1.1.1\n8.8", strlen($body))], self::cursor('7', self::OLD));
 
-		$this->assertFailed($result, 'body');
+		$this->assertFailed($result, 'unreachable');
 		$this->assertMirror(self::OLD);
 	}
 
@@ -549,7 +554,6 @@ final class OutpostResourceFetchTest extends TestCase
 		$add = "2.2.2.2\n";
 		return [
 			'an add part of more lines than the reply named' => [self::text("2.2.2.2\n3.3.3.3\n"), self::text('')],
-			'an add part cut off before its end'             => [self::text("2.2.", strlen($add)), self::text('')],
 			'a remove part of more lines than it named'      => [self::text($add), self::text("1.1.1.1\n")],
 		];
 	}
@@ -564,12 +568,8 @@ final class OutpostResourceFetchTest extends TestCase
 		file_put_contents($this->mirror, self::OLD);
 		$reply = self::delta('9', '7', "2.2.2.2\n", '', "1.1.1.1\n10.0.0.0/8\n192.0.2.7\n2.2.2.2\n");
 		$full = "4.4.4.4\n";
-		$script = [$reply, $addReply, $removeReply, self::full('9', $full), self::text($full)];
-		// a part that does not arrive whole ends the fetch of the parts: the remove part is never asked for
-		if (isset($addReply['length'])) {
-			array_splice($script, 2, 1);
-		}
-		[$result, $requests] = $this->fetch($script, self::cursor('7', self::OLD));
+		[$result, $requests] = $this->fetch([$reply, $addReply, $removeReply, self::full('9', $full), self::text($full)],
+			self::cursor('7', self::OLD));
 
 		$this->assertSame(['resources' => [self::ID => []]], $requests[count($requests) - 2]['params'], 'the fallback must ask with the empty cursor');
 		$this->assertSame(['id' => self::ID, 'generation' => '9', 'part' => 'members'], $requests[count($requests) - 1]['params']);
@@ -577,6 +577,60 @@ final class OutpostResourceFetchTest extends TestCase
 		$this->assertSame(['full', TRUE, NULL, NULL, 0, 0], [$result['kind'], $result['fellBack'], $result['add'], $result['remove'],
 			$result['addEntries'], $result['removeEntries']]);
 		$this->assertMirror($full);
+	}
+
+	/** @return array<string, array{array, int}> */
+	public static function partsCutOffByTheTransport(): array
+	{
+		return [
+			'closed short of its Content-Length' => [self::text('2.2.', 8), 30],
+			'silent after a few bytes'           => [['stall' => TRUE] + self::text('2.2.', 8), 1],
+		];
+	}
+
+	/**
+	 * Scenario: a delta part starts to arrive and the transport ends it (the connection closes short of its Content-Length, or
+	 * the call's deadline passes while it is silent). Core is not answering: the fetch is unreachable and asks for no full body
+	 * under the same deadline.
+	 */
+	#[DataProvider('partsCutOffByTheTransport')]
+	public function testADeltaPartTheTransportCutsOffIsUnreachableWithoutAFallback(array $addReply, int $timeout): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$reply = self::delta('9', '7', "2.2.2.2\n", '', "1.1.1.1\n10.0.0.0/8\n192.0.2.7\n2.2.2.2\n");
+		[$result, $requests] = $this->fetch([$reply, $addReply], self::cursor('7', self::OLD), $timeout);
+
+		$this->assertSame(['/v1/GetResources', '/v1/GetResourceBody'], array_column($requests, 'path'));
+		$this->assertFailed($result, 'unreachable');
+		$this->assertFalse($result['fellBack']);
+		$this->assertMirror(self::OLD);
+	}
+
+	/** @return array<string, array{?array, string}> */
+	public static function partFailuresThatAreNotTheDeltas(): array
+	{
+		return [
+			'an error envelope with a code'       => [self::error(500, 'internal'), 'body'],
+			'the store cannot serve the part'     => [self::error(503, 'unavailable'), 'unavailable'],
+			'Core stops listening before the part' => [NULL, 'unreachable'],
+		];
+	}
+
+	/**
+	 * A delta part that fails for a reason a full body would meet too (Core named the error, cannot serve, or does not answer)
+	 * fails the resource: no full body is asked for.
+	 */
+	#[DataProvider('partFailuresThatAreNotTheDeltas')]
+	public function testADeltaPartFailureThatIsNotTheDeltasOwnDoesNotFallBack(?array $addReply, string $failure): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$reply = self::delta('9', '7', "2.2.2.2\n", '', "1.1.1.1\n10.0.0.0/8\n192.0.2.7\n2.2.2.2\n");
+		[$result, $requests] = $this->fetch($addReply === NULL ? [$reply] : [$reply, $addReply], self::cursor('7', self::OLD));
+
+		$this->assertSame(1, count(array_keys(array_column($requests, 'path'), '/v1/GetResources')), 'a full body was asked for');
+		$this->assertFailed($result, $failure);
+		$this->assertFalse($result['fellBack']);
+		$this->assertMirror(self::OLD);
 	}
 
 	public function testAFallbackFullBodyThatIsNotWhatTheReplyNamedFailsWithoutAnotherFallback(): void
@@ -610,6 +664,22 @@ final class OutpostResourceFetchTest extends TestCase
 		$this->assertSame(['delta', '9'], [$result['kind'], $result['generation']]);
 		$this->assertSame(['id' => self::ID, 'generation' => '9', 'part' => 'add', 'from' => '7'], $requests[1]['params'],
 			'a part must name the generations as GetResources gave them');
+		$this->assertMirror($new);
+	}
+
+	/** Scenario: the cursor file holds "7" and Core spells the same generation "007": the answer is to that cursor. */
+	public function testAGenerationCoreSpellsWithLeadingZerosIsTheCursorsGeneration(): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		[$result] = $this->fetch([self::items(['kind' => 'unchanged', 'generation' => '007'])], self::cursor('7', self::OLD));
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame(['unchanged', '007'], [$result['kind'], $result['generation']]);
+
+		$add = "2.2.2.2\n";
+		$new = "1.1.1.1\n10.0.0.0/8\n192.0.2.7\n2.2.2.2\n";
+		[$result] = $this->fetch([self::delta('9', '007', $add, '', $new), self::text($add), self::text('')], self::cursor('7', self::OLD));
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame(['delta', '9'], [$result['kind'], $result['generation']]);
 		$this->assertMirror($new);
 	}
 
@@ -705,6 +775,95 @@ final class OutpostResourceFetchTest extends TestCase
 
 		$this->assertFailed($result, 'body');
 		$this->assertStringContainsString('65 bytes', (string) $result['error'], 'the refusal must name the bound');
+		$this->assertMirror(self::OLD);
+	}
+
+	/** A Content-Length over the bound refuses the body before any of it is written, even when fewer bytes would follow. */
+	public function testAContentLengthOverTheBoundIsRefusedBeforeTheBodyIsRead(): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		[$result] = $this->fetch([self::full('8', "1.1.1.1\n"), self::text("1.1.1.1\n", 1000)], self::cursor('7', self::OLD));
+
+		$this->assertFailed($result, 'body');
+		$this->assertStringContainsString('65 bytes', (string) $result['error'], 'the refusal must name the bound');
+		$this->assertMirror(self::OLD);
+	}
+
+	/** @return array<string, array{int}> */
+	public static function lineCountsAtTheLimitOfTheBound(): array
+	{
+		// 65 bytes a line: the largest count whose bound a PHP integer holds, and the next, whose bound is every size
+		return [
+			'the largest count'   => [intdiv(PHP_INT_MAX, 65)],
+			'one line more'       => [intdiv(PHP_INT_MAX, 65) + 1],
+		];
+	}
+
+	/**
+	 * A line count so large that its bound passes what a PHP integer holds bounds nothing, rather than wrapping to a negative
+	 * bound that refuses every body: the body arrives and is refused for its line count.
+	 */
+	#[DataProvider('lineCountsAtTheLimitOfTheBound')]
+	public function testALineCountWhoseBoundPassesTheIntegerRangeLeavesTheBodyUnbounded(int $entries): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		[$result] = $this->fetch([self::full('8', "1.1.1.1\n", NULL, $entries), self::text("1.1.1.1\n")], self::cursor('7', self::OLD));
+
+		$this->assertFailed($result, 'verify');
+		$this->assertMirror(self::OLD);
+	}
+
+	/** An error envelope of exactly $length bytes with the code unavailable. */
+	private static function envelope(int $length): string
+	{
+		$empty = json_encode(['error' => ['code' => 'unavailable', 'message' => '']]);
+		return json_encode(['error' => ['code' => 'unavailable', 'message' => str_repeat('x', $length - strlen($empty))]]);
+	}
+
+	/** @return array<string, array{int, int}> */
+	public static function envelopesOverTheirCap(): array
+	{
+		return [
+			'HTTP 200, one byte over 64 KiB'  => [200, 65537],
+			'HTTP 503, one byte over 64 KiB'  => [503, 65537],
+			'HTTP 200, well over 64 KiB'      => [200, 300000],
+		];
+	}
+
+	/**
+	 * An answer that is not a plain-text body is an error envelope, and an envelope is read at most 64 KiB whatever the status
+	 * and the part's bound: a longer one is malformed, its code untaken.
+	 */
+	#[DataProvider('envelopesOverTheirCap')]
+	public function testAnEnvelopeOverSixtyFourKiBIsMalformedWhateverTheStatus(int $status, int $length): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$envelope = ['status' => $status, 'type' => 'application/json', 'body' => self::envelope($length)];
+		$this->assertSame($length, strlen($envelope['body']));
+		// 10000 lines of an IP set: a bound of 650000 bytes, far over the envelope's cap
+		[$result] = $this->fetch([self::full('8', "1.1.1.1\n", NULL, 10000), $envelope], self::cursor('7', self::OLD));
+
+		$this->assertFailed($result, 'body');
+		$this->assertNull($result['code']);
+		$this->assertStringContainsString('65536 bytes', (string) $result['error'], 'the refusal must name the envelope cap');
+		$this->assertMirror(self::OLD);
+	}
+
+	/** @return array<string, array{int}> */
+	public static function errorStatuses(): array
+	{
+		return ['404' => [404], '500' => [500]];
+	}
+
+	/** Only an HTTP 200 answer is a body: plain text of well-formed members under an error status is not taken. */
+	#[DataProvider('errorStatuses')]
+	public function testAPlainTextAnswerUnderAnErrorStatusIsNotABody(int $status): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		$body = "1.1.1.1\n";
+		[$result] = $this->fetch([self::full('8', $body), ['status' => $status] + self::text($body)], self::cursor('7', self::OLD));
+
+		$this->assertFailed($result, 'body');
 		$this->assertMirror(self::OLD);
 	}
 
