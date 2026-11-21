@@ -180,6 +180,7 @@ final class CoreUpdateV2ContractTest extends TestCase
 			foreach ($row['acceptedCounts'] as $list => $count) {
 				$this->assertCount($count, $request[$list], "{$row['id']}: {$list}");
 			}
+			$this->assertCount(count($request['resources']), array_column($request['resources'], 'alias'), "{$row['id']}: every resource has an alias");
 			$this->assertSame(array_values(array_unique(array_column($request['resources'], 'alias'))), array_column($request['resources'], 'alias'),
 				"{$row['id']}: every resource has an alias of its own");
 			return;
@@ -276,6 +277,14 @@ final class CoreUpdateV2ContractTest extends TestCase
 	/** A failure message's invalid UTF-8 is replaced before its line break becomes a space. JSON cannot hold the byte: no row can. */
 	public function testAFailureMessageOfInvalidUtf8BesideALineBreakIsWrittenAsText(): void
 	{
+		// whatever mbstring.substitute_character holds: with "none" mb_scrub() drops the byte
+		$substitute = mb_substitute_character();
+		mb_substitute_character('none');
+		try {
+			$this->assertSame('a? b', pfb_core_update_v2_message("a\xff\nb"));
+		} finally {
+			mb_substitute_character($substitute);
+		}
 		$this->assertSame('{"version":2,"failed":[{"id":"geo-catalog","stage":"apply","message":"a? b"}]}' . "\n",
 			pfb_core_update_v2_result(['failed' => [['id' => 'geo-catalog', 'stage' => 'apply', 'message' => "a\xff\nb"]]]));
 	}
