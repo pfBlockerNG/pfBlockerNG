@@ -1,0 +1,25 @@
+{
+ "description": "Output is sanitized once: invalid UTF-8, terminal escapes, CR and DEL become \\xNN, Unicode Cc/Cf become \\u{HEX}, TAB and LF and printable text stay. stderr and stdout share the capture file. Output without a final newline leaves the status line on its last line.",
+ "when": "pre",
+ "rows": [
+  {
+   "script": "hook_pre_text.sh",
+   "when": "pre",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_text.sh": {
+   "body": "#!/bin/sh\nprintf 'warn on stderr\\n' >&2\nprintf 'ok \\303\\251 \\377\\376 \\033[31mred\\033[0m \\r\\n tab\\t \\342\\200\\213 \\302\\205 \\177 end'\n"
+  }
+ },
+ "expect": {
+  "runs": [],
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_text.sh, timeout 60s)\nwarn on stderr\nok é \\xFF\\xFE \\x1B[31mred\\x1B[0m \\x0D\n tab\t \\u{200B} \\u{85} \\x7F end[ pfB Hook ] pre #0 completed\n",
+  "errors": "",
+  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_text.sh, timeout 60s)\nwarn on stderr\nok é \\xFF\\xFE \\x1B[31mred\\x1B[0m \\x0D\n tab\t \\u{200B} \\u{85} \\x7F end[ pfB Hook ] pre #0 completed\n"
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}

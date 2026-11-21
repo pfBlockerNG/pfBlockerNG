@@ -3,8 +3,8 @@
 The Linux unit suites prove these lifetimes in CI. This builds the same Go test binaries for the box and runs them
 there: the strict runner (``internal/process``: a pre-script's attached descendants are gone when the run returns,
 the leader keeps its TERM grace, and Core's death cleans the transient group), the feed pre-script cases built on
-it, and the Update's apply program hosted independently (its exit status, its result descriptor, and a child it
-leaves running).
+it, the hooks' survivor runner (only the hook's own process is signalled; a child it started outlives it), and the
+Update's apply program hosted independently (its exit status, its result descriptor, and a child it leaves running).
 
 DESELECTED from the default ``python -m pytest``. Run it on the pool::
 
@@ -59,6 +59,17 @@ CASES: dict[str, tuple[str, tuple[str, ...]]] = {
             "TestUnrelatedHangupDoesNotAbandonTheGroup",
             "TestRunKeepsStartErrorAndAlreadyCancelledCause",
             "TestCoreDeathCleansAttachedGroup",
+        ),
+    ),
+    # issue #4035: the hooks' survivor policy (timeout --foreground): only the hook's own process is signalled.
+    "survivor": (
+        "./internal/process",
+        (
+            "TestRunSurvivorReturnsAtLeaderExitLeavingAChildThatHoldsItsOutput",
+            "TestRunSurvivorTermsOnlyTheLeaderWhenItsLimitEnds",
+            "TestRunSurvivorKillsALeaderThatIgnoresTermAfterTheGrace",
+            "TestRunSurvivorRefusesOutputThatIsNotAFile",
+            "TestRunSurvivorKeepsTheStatusTheStartErrorAndAnEndedContext",
         ),
     ),
     "update": (

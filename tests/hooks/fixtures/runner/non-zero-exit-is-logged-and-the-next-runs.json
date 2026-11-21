@@ -1,0 +1,46 @@
+{
+ "description": "A hook's non-zero exit is logged with its status and the next hook runs.",
+ "when": "post",
+ "rows": [
+  {
+   "script": "hook_post_fail.sh",
+   "when": "post",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_post_ok.sh",
+   "when": "post",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_post_fail.sh": {
+   "body": "#!/bin/sh\necho failing\nexit 3\n"
+  },
+  "hooks/hook_post_ok.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_post_ok.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "post",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   }
+  ],
+  "log": "\n[ pfB Hook ] post #0 (hook_post_fail.sh, timeout 60s)\nfailing\n[ pfB Hook ] post #0 exited non-zero [ 3 ]; continuing\n\n[ pfB Hook ] post #1 (hook_post_ok.sh, timeout 60s)\n[ pfB Hook ] post #1 completed\n",
+  "errors": "[ pfB Hook ] post #0 exited non-zero [ 3 ]; continuing\n",
+  "transcript": "\n[ pfB Hook ] post #0 (hook_post_fail.sh, timeout 60s)\nfailing\n[ pfB Hook ] post #0 exited non-zero [ 3 ]; continuing\n\n[ pfB Hook ] post #1 (hook_post_ok.sh, timeout 60s)\n[ pfB Hook ] post #1 completed\n"
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}

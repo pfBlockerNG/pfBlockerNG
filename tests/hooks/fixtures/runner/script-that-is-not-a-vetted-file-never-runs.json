@@ -1,0 +1,153 @@
+{
+ "description": "A script that is not a bare hook_pre_*.sh or .py file name of a regular file in the hook directory is logged in one line and never run (each would create its canary): an absolute path, a path with /, .., a symlink to a file outside the directory, the other fire point's prefix, another extension, a directory, a missing file, a dangling symlink. An empty or blank script is not selected at all, so it is not logged. A symlink to a file inside the directory runs under its own name, and the hooks after the refused ones still run.",
+ "when": "pre",
+ "rows": [
+  {
+   "script": "",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "   ",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "{root}/hooks/hook_pre_real.sh",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "sub/hook_pre_sub.sh",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "../hook_pre_outside.sh",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "..",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_pre_link.sh",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_post_wrong.sh",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_pre_text.txt",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_pre_dir.sh",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_pre_missing.sh",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_pre_dangling.sh",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_pre_alias.sh",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_pre_ok.sh",
+   "when": "pre",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_real.sh": {
+   "body": "#!/bin/sh\ntouch '{root}/canary-absolute'\n"
+  },
+  "hooks/sub/hook_pre_sub.sh": {
+   "body": "#!/bin/sh\ntouch '{root}/canary-slash'\n"
+  },
+  "hook_pre_outside.sh": {
+   "body": "#!/bin/sh\ntouch '{root}/canary-dotdot'\n"
+  },
+  "outside.sh": {
+   "body": "#!/bin/sh\ntouch '{root}/canary-symlink-out'\n"
+  },
+  "hooks/hook_pre_link.sh": {
+   "symlink": "../outside.sh"
+  },
+  "hooks/hook_post_wrong.sh": {
+   "body": "#!/bin/sh\ntouch '{root}/canary-other-fire-point'\n"
+  },
+  "hooks/hook_pre_text.txt": {
+   "body": "#!/bin/sh\ntouch '{root}/canary-extension'\n"
+  },
+  "hooks/hook_pre_dir.sh": {
+   "dir": true
+  },
+  "hooks/hook_pre_dangling.sh": {
+   "symlink": "gone.sh"
+  },
+  "hooks/hook_pre_ok.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  },
+  "hooks/hook_pre_alias.sh": {
+   "symlink": "hook_pre_ok.sh"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_pre_alias.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   },
+   {
+    "script": "hook_pre_ok.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   }
+  ],
+  "log": "[ pfB Hook ] pre #0 script '{root}/hooks/hook_pre_real.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #1 script 'sub/hook_pre_sub.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #2 script '../hook_pre_outside.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #3 script '..' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #4 script 'hook_pre_link.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #5 script 'hook_post_wrong.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #6 script 'hook_pre_text.txt' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #7 script 'hook_pre_dir.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #8 script 'hook_pre_missing.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #9 script 'hook_pre_dangling.sh' not a valid file in {root}/hooks; skipping\n\n[ pfB Hook ] pre #10 (hook_pre_alias.sh, timeout 60s)\n[ pfB Hook ] pre #10 completed\n\n[ pfB Hook ] pre #11 (hook_pre_ok.sh, timeout 60s)\n[ pfB Hook ] pre #11 completed\n",
+  "errors": "[ pfB Hook ] pre #0 script '{root}/hooks/hook_pre_real.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #1 script 'sub/hook_pre_sub.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #2 script '../hook_pre_outside.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #3 script '..' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #4 script 'hook_pre_link.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #5 script 'hook_post_wrong.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #6 script 'hook_pre_text.txt' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #7 script 'hook_pre_dir.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #8 script 'hook_pre_missing.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #9 script 'hook_pre_dangling.sh' not a valid file in {root}/hooks; skipping\n",
+  "absent": [
+   "canary-absolute",
+   "canary-slash",
+   "canary-dotdot",
+   "canary-symlink-out",
+   "canary-other-fire-point",
+   "canary-extension"
+  ],
+  "transcript": "[ pfB Hook ] pre #0 script '{root}/hooks/hook_pre_real.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #1 script 'sub/hook_pre_sub.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #2 script '../hook_pre_outside.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #3 script '..' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #4 script 'hook_pre_link.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #5 script 'hook_post_wrong.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #6 script 'hook_pre_text.txt' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #7 script 'hook_pre_dir.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #8 script 'hook_pre_missing.sh' not a valid file in {root}/hooks; skipping\n[ pfB Hook ] pre #9 script 'hook_pre_dangling.sh' not a valid file in {root}/hooks; skipping\n\n[ pfB Hook ] pre #10 (hook_pre_alias.sh, timeout 60s)\n[ pfB Hook ] pre #10 completed\n\n[ pfB Hook ] pre #11 (hook_pre_ok.sh, timeout 60s)\n[ pfB Hook ] pre #11 completed\n"
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}

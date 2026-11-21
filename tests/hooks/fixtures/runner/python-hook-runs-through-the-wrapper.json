@@ -1,0 +1,39 @@
+{
+ "description": "A .py hook runs only through the Python wrapper, with the hook's path as its one argument; it needs no executable bit.",
+ "when": "post",
+ "rows": [
+  {
+   "script": "hook_post_a.py",
+   "when": "post",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_post_a.py": {
+   "body": "{record}\n",
+   "mode": "0644"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_post_a.py",
+    "wrapped": true,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "post",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   }
+  ],
+  "log": "\n[ pfB Hook ] post #0 (hook_post_a.py, timeout 60s)\n[ pfB Hook ] post #0 completed\n",
+  "errors": "",
+  "transcript": "\n[ pfB Hook ] post #0 (hook_post_a.py, timeout 60s)\n[ pfB Hook ] post #0 completed\n"
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}

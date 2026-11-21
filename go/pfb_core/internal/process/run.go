@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"syscall"
 	"time"
@@ -60,6 +61,50 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) Outcome {
 // RunIndependent starts cmd and reaps it without owning its lifetime: nothing here signals the program or its descendants,
 // so the Update's settings apply and the services it starts outlive whoever asked for it (issue #4022).
 func RunIndependent(cmd *exec.Cmd) error { return cmd.Run() }
+
+// RunSurvivor is the survivor policy of the update hooks (timeout --foreground): when ctx ends, cmd's own process gets
+// TERM, then KILL if it is still running after grace. Nothing else is signalled, so a service it started outlives it.
+// It returns when that process exits, without waiting for a descendant: stdin, stdout and stderr must each be nil or an
+// *os.File, never a pipe a descendant could hold open; anything else is refused before cmd starts.
+func RunSurvivor(ctx context.Context, cmd *exec.Cmd, grace time.Duration) Outcome {
+	for _, stdio := range []any{cmd.Stdin, cmd.Stdout, cmd.Stderr} {
+		if _, ok := stdio.(*os.File); stdio != nil && !ok {
+			return Outcome{CommandErr: errors.New("survivor stdio must be a file, never a pipe")}
+		}
+	}
+	if ctx.Err() != nil {
+		return Outcome{CommandErr: context.Cause(ctx)}
+	}
+	if err := cmd.Start(); err != nil {
+		return Outcome{CommandErr: err}
+	}
+	exited, done := make(chan struct{}), make(chan struct{})
+	var interrupted error
+	go func() {
+		defer close(done)
+		select {
+		case <-exited:
+			return
+		case <-ctx.Done():
+		}
+		if exitedUnreaped(cmd.Process.Pid) { // it ended on its own as ctx did: keep its status
+			return
+		}
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		kill := time.NewTimer(grace)
+		defer kill.Stop()
+		select {
+		case <-exited:
+		case <-kill.C:
+			_ = cmd.Process.Kill()
+		}
+		interrupted = fmt.Errorf("command was killed: %w", context.Cause(ctx))
+	}()
+	err := cmd.Wait()
+	close(exited)
+	<-done
+	return Outcome{CommandErr: err, Interrupted: interrupted}
+}
 
 // strictCleanup observes kernel exit independently of Wait's descendant-held IO pipes.
 func strictCleanup(ctx context.Context, cmd *exec.Cmd, watcher *watchdog, exited <-chan struct{}, grace time.Duration) error {

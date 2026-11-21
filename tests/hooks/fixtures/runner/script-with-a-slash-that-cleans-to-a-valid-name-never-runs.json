@@ -1,0 +1,31 @@
+{
+ "description": "A script name with a / never runs, even one whose path cleans to a valid hook file of the directory (hook_pre_x/../hook_pre_ok.sh, with hook_pre_x a real directory): it is not a bare file name. The hook it names would create the canary.",
+ "when": "pre",
+ "vars": {
+  "TRIGGER": "cron"
+ },
+ "rows": [
+  {
+   "script": "hook_pre_x/../hook_pre_ok.sh",
+   "when": "pre",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_x": {
+   "dir": true
+  },
+  "hooks/hook_pre_ok.sh": {
+   "body": "#!/bin/sh\ntouch '{root}/canary-dotdot'\n"
+  }
+ },
+ "expect": {
+  "runs": [],
+  "log": "[ pfB Hook ] pre #0 script 'hook_pre_x/../hook_pre_ok.sh' not a valid file in {root}/hooks; skipping\n",
+  "errors": "[ pfB Hook ] pre #0 script 'hook_pre_x/../hook_pre_ok.sh' not a valid file in {root}/hooks; skipping\n",
+  "transcript": "[ pfB Hook ] pre #0 script 'hook_pre_x/../hook_pre_ok.sh' not a valid file in {root}/hooks; skipping\n",
+  "absent": [
+   "canary-dotdot"
+  ]
+ }
+}

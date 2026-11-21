@@ -1,0 +1,44 @@
+{
+ "description": "Output past the allowance: the main log holds all of it, the transcript the first 1,048,576 bytes and one notice.",
+ "departure": "Today's viewer holds the first 1,000,000 characters and its notice names that limit.",
+ "when": "pre",
+ "rows": [
+  {
+   "script": "hook_pre_big.sh",
+   "when": "pre",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_big.sh": {
+   "body": "#!/bin/sh\nhead -c 10485760 /dev/zero | tr '\\000' A\necho\n"
+  }
+ },
+ "expect": {
+  "runs": [],
+  "log": {
+   "prefix": "\n[ pfB Hook ] pre #0 (hook_pre_big.sh, timeout 60s)\n",
+   "repeat": "A",
+   "times": 10485760,
+   "suffix": "\n[ pfB Hook ] pre #0 completed\n"
+  },
+  "transcript": {
+   "prefix": "\n[ pfB Hook ] pre #0 (hook_pre_big.sh, timeout 60s)\n",
+   "repeat": "A",
+   "times": 1048576,
+   "suffix": "\n[ pfBlockerNG ] Script output limit (1,048,576 bytes) reached; remaining output is in the main log.\n[ pfB Hook ] pre #0 completed\n"
+  },
+  "errors": ""
+ },
+ "old_expect": {
+  "transcript": {
+   "prefix": "\n[ pfB Hook ] pre #0 (hook_pre_big.sh, timeout 60s)\n",
+   "repeat": "A",
+   "times": 1000000,
+   "suffix": "\n[ pfBlockerNG ] Script output limit (1,000,000 characters) reached; remaining output is in the main log.\n[ pfB Hook ] pre #0 completed\n"
+  }
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}

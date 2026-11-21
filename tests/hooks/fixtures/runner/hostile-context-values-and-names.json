@@ -1,0 +1,57 @@
+{
+ "description": "Context values reach the hook as environment entries, byte for byte: a line break, quotes, $(...) and backticks are never evaluated (no canary). A name is upper-cased; one that is not [A-Z0-9_]+ is dropped.",
+ "when": "pre",
+ "vars": {
+  "TRIGGER": "cron",
+  "LINES": "one\ntwo\r\n",
+  "QUOTES": "it's \"quoted\"",
+  "SUBST": "$(touch '{root}/canary-subst')",
+  "TICKS": "`touch '{root}/canary-ticks'`",
+  "lower_name": "lower",
+  "BAD-NAME": "x",
+  "SP ACE": "x",
+  "": "x",
+  "Ü": "x",
+  "A=B": "x"
+ },
+ "rows": [
+  {
+   "script": "hook_pre_a.sh",
+   "when": "pre",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_a.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_pre_a.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": "",
+     "PFB_LINES": "one\ntwo\r\n",
+     "PFB_QUOTES": "it's \"quoted\"",
+     "PFB_SUBST": "$(touch '{root}/canary-subst')",
+     "PFB_TICKS": "`touch '{root}/canary-ticks'`",
+     "PFB_LOWER_NAME": "lower"
+    }
+   }
+  ],
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 completed\n",
+  "absent": [
+   "canary-subst",
+   "canary-ticks"
+  ],
+  "errors": "",
+  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 completed\n"
+ }
+}

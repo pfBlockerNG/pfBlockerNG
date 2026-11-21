@@ -1,0 +1,38 @@
+{
+ "description": "An executable .sh hook with no #! line runs through /bin/sh, as execvp() runs it today.",
+ "when": "pre",
+ "rows": [
+  {
+   "script": "hook_pre_bare.sh",
+   "when": "pre",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_bare.sh": {
+   "body": "{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_pre_bare.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   }
+  ],
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_bare.sh, timeout 60s)\n[ pfB Hook ] pre #0 completed\n",
+  "errors": "",
+  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_bare.sh, timeout 60s)\n[ pfB Hook ] pre #0 completed\n"
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}

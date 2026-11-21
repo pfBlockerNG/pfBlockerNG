@@ -1,0 +1,56 @@
+{
+ "description": "A hook that ignores TERM is KILLed after the grace; the next hook runs.",
+ "when": "pre",
+ "rows": [
+  {
+   "script": "hook_pre_stubborn.sh",
+   "when": "pre",
+   "enabled": "on",
+   "timeout": "1"
+  },
+  {
+   "script": "hook_pre_ok.sh",
+   "when": "pre",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_stubborn.sh": {
+   "body": "#!/bin/sh\ntrap '' TERM\necho $$ > '{root}/hook.pid'\nexec sleep 3600\n"
+  },
+  "hooks/hook_pre_ok.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_pre_ok.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   }
+  ],
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_stubborn.sh, timeout 1s)\n[ pfB Hook ] pre #0 TIMED OUT after 1s (killed); continuing\n\n[ pfB Hook ] pre #1 (hook_pre_ok.sh, timeout 60s)\n[ pfB Hook ] pre #1 completed\n",
+  "errors": "[ pfB Hook ] pre #0 TIMED OUT after 1s (killed); continuing\n",
+  "dead": [
+   "hook.pid"
+  ],
+  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_stubborn.sh, timeout 1s)\n[ pfB Hook ] pre #0 TIMED OUT after 1s (killed); continuing\n\n[ pfB Hook ] pre #1 (hook_pre_ok.sh, timeout 60s)\n[ pfB Hook ] pre #1 completed\n"
+ },
+ "departure": "Today timeout(1) exits 137 when it had to KILL, so the timeout is logged as a non-zero exit.",
+ "old_expect": {
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_stubborn.sh, timeout 1s)\n[ pfB Hook ] pre #0 exited non-zero [ 137 ]; continuing\n\n[ pfB Hook ] pre #1 (hook_pre_ok.sh, timeout 60s)\n[ pfB Hook ] pre #1 completed\n",
+  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_stubborn.sh, timeout 1s)\n[ pfB Hook ] pre #0 exited non-zero [ 137 ]; continuing\n\n[ pfB Hook ] pre #1 (hook_pre_ok.sh, timeout 60s)\n[ pfB Hook ] pre #1 completed\n",
+  "errors": "[ pfB Hook ] pre #0 exited non-zero [ 137 ]; continuing\n"
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}

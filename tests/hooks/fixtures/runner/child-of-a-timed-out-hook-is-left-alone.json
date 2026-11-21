@@ -1,0 +1,33 @@
+{
+ "description": "Survivor policy: the timeout ends the hook's own process only. Children it started, one that ignores TERM and one with the default TERM behaviour, are left running.",
+ "when": "pre",
+ "rows": [
+  {
+   "script": "hook_pre_parent.sh",
+   "when": "pre",
+   "enabled": "on",
+   "timeout": "1"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_parent.sh": {
+   "body": "#!/bin/sh\nmkfifo '{root}/child-ready'\nsleep 3600 &\necho $! > '{root}/plain.pid'\nsh -c 'trap \"\" TERM; echo $$ > \"$1/child.pid\"; echo ready > \"$1/child-ready\"; exec sleep 3600' sh '{root}' &\nread line < '{root}/child-ready'\necho $$ > '{root}/hook.pid'\nexec sleep 3600\n"
+  }
+ },
+ "expect": {
+  "runs": [],
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_parent.sh, timeout 1s)\n[ pfB Hook ] pre #0 TIMED OUT after 1s (killed); continuing\n",
+  "errors": "[ pfB Hook ] pre #0 TIMED OUT after 1s (killed); continuing\n",
+  "alive": [
+   "child.pid",
+   "plain.pid"
+  ],
+  "dead": [
+   "hook.pid"
+  ],
+  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_parent.sh, timeout 1s)\n[ pfB Hook ] pre #0 TIMED OUT after 1s (killed); continuing\n"
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}

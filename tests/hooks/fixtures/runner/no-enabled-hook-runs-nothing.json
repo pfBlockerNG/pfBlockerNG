@@ -1,0 +1,33 @@
+{
+ "description": "No enabled hook for the fire point: nothing runs and nothing is logged.",
+ "when": "post",
+ "rows": [
+  {
+   "script": "hook_post_a.sh",
+   "when": "post",
+   "enabled": ""
+  },
+  {
+   "script": "hook_pre_a.sh",
+   "when": "pre",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_post_a.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  },
+  "hooks/hook_pre_a.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [],
+  "log": "",
+  "errors": "",
+  "transcript": ""
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}

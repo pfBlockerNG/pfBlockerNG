@@ -1,0 +1,122 @@
+{
+ "description": "A timeout of 0, a negative or non-numeric one, or none is the default 60 seconds; one larger than a day is kept.",
+ "when": "pre",
+ "rows": [
+  {
+   "script": "hook_pre_0.sh",
+   "when": "pre",
+   "enabled": "on",
+   "timeout": "0"
+  },
+  {
+   "script": "hook_pre_1.sh",
+   "when": "pre",
+   "enabled": "on",
+   "timeout": "-5"
+  },
+  {
+   "script": "hook_pre_2.sh",
+   "when": "pre",
+   "enabled": "on",
+   "timeout": "abc"
+  },
+  {
+   "script": "hook_pre_3.sh",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_pre_4.sh",
+   "when": "pre",
+   "enabled": "on",
+   "timeout": "90000"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_0.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  },
+  "hooks/hook_pre_1.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  },
+  "hooks/hook_pre_2.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  },
+  "hooks/hook_pre_3.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  },
+  "hooks/hook_pre_4.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_pre_0.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   },
+   {
+    "script": "hook_pre_1.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   },
+   {
+    "script": "hook_pre_2.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   },
+   {
+    "script": "hook_pre_3.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   },
+   {
+    "script": "hook_pre_4.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   }
+  ],
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_0.sh, timeout 60s)\n[ pfB Hook ] pre #0 completed\n\n[ pfB Hook ] pre #1 (hook_pre_1.sh, timeout 60s)\n[ pfB Hook ] pre #1 completed\n\n[ pfB Hook ] pre #2 (hook_pre_2.sh, timeout 60s)\n[ pfB Hook ] pre #2 completed\n\n[ pfB Hook ] pre #3 (hook_pre_3.sh, timeout 60s)\n[ pfB Hook ] pre #3 completed\n\n[ pfB Hook ] pre #4 (hook_pre_4.sh, timeout 90000s)\n[ pfB Hook ] pre #4 completed\n",
+  "errors": "",
+  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_0.sh, timeout 60s)\n[ pfB Hook ] pre #0 completed\n\n[ pfB Hook ] pre #1 (hook_pre_1.sh, timeout 60s)\n[ pfB Hook ] pre #1 completed\n\n[ pfB Hook ] pre #2 (hook_pre_2.sh, timeout 60s)\n[ pfB Hook ] pre #2 completed\n\n[ pfB Hook ] pre #3 (hook_pre_3.sh, timeout 60s)\n[ pfB Hook ] pre #3 completed\n\n[ pfB Hook ] pre #4 (hook_pre_4.sh, timeout 90000s)\n[ pfB Hook ] pre #4 completed\n"
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}
