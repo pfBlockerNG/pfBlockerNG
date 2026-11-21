@@ -830,22 +830,9 @@ func procStatus(t *testing.T) func(pid int, field string, sig syscall.Signal) bo
 	}
 }
 
-// readingAPipe is whether a thread of pid sleeps in a pipe read: the one-shot waiting for its context. The wait channel
-// is pipe_read on current kernels, pipe_wait on older ones.
-func readingAPipe(pid int) bool {
-	tasks, _ := filepath.Glob("/proc/" + strconv.Itoa(pid) + "/task/*/wchan")
-	for _, task := range tasks {
-		if b, _ := os.ReadFile(task); string(b) == "pipe_read" || string(b) == "pipe_wait" {
-			return true
-		}
-	}
-	return false
-}
-
 // WHEN TERM reaches the one-shot while it waits for its context on a stdin that stays open THEN it stops waiting, logs
 // one line, runs nothing, calls no settings backend and exits 1.
 func TestOneShotSignalledWhileReadingTheContextExitsOne(t *testing.T) {
-	procStatus(t)
 	root, flags := oneShotRoot(t)
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -862,7 +849,10 @@ func TestOneShotSignalledWhileReadingTheContextExitsOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Close()
-	await(t, "pfb-core to wait for its context", func() bool { return readingAPipe(cmd.Process.Pid) })
+	// more white space than a pipe holds: the write returns only once pfb-core is reading its context
+	if _, err := w.Write(bytes.Repeat([]byte(" "), 1<<20)); err != nil {
+		t.Fatal(err)
+	}
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
