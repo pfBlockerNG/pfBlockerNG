@@ -314,3 +314,37 @@ func TestCopyFileTakesOverALeftoverTemporaryFile(t *testing.T) {
 		})
 	}
 }
+
+// Not a corpus row: today's PHP reports the KILL through the shell that runs timeout(1), and the result differs between
+// shells (137 with a Killed line, or -1). Here a script that ignores TERM is killed once the grace is over: a timeout.
+func TestPostScriptThatIgnoresTermIsKilledAtItsLimit(t *testing.T) {
+	dir, test := t.TempDir(), t.TempDir()
+	ctx, cancel, limit := limitOnEvent()
+	defer cancel()
+	reported, release := blockOnFifo(t, test, limit)
+	defer release()
+	body := "#!/bin/sh\ntrap '' TERM\necho started\n" + blockingScript[len("#!/bin/sh\n"):]
+	orig := writeScript(t, dir, "post.sh", body)
+	var log, errs, transcript bytes.Buffer
+	p := PostScript{Name: "post.sh", Dirs: []string{dir}, Header: "hdr", Log: &log, Errors: &errs, Transcript: &transcript}
+	got := p.RunDNSBL(ctx, orig, filepath.Join(dir, "feed.post"))
+	select {
+	case <-reported:
+	default:
+		t.Fatal("the script never reported it was running: the kill was not the event under test")
+	}
+	const tail = "\n[ hdr ] post-script 'post.sh' TIMED OUT (killed); discarding its output\n"
+	want := "\nExecuting post-script: post.sh\nstarted\n" + tail
+	if got.Reason != PreScriptTimeout || got.Status != 0 || got.Skipped {
+		t.Errorf("Skipped, Reason, Status = %v, %q, %d; want false, %q, 0",
+			got.Skipped, got.Reason, got.Status, PreScriptTimeout)
+	}
+	if log.String() != want || transcript.String() != want || errs.String() != tail {
+		t.Errorf("log %q, transcript %q, errors %q; want %q, %q, %q", log.String(), transcript.String(), errs.String(), want,
+			want, tail)
+	}
+	files := map[string]string{"feed.orig": "=a.example\n", "post.sh": "=" + body}
+	if have := listFeed(t, dir); !maps.Equal(files, have) {
+		t.Errorf("feed folder %q; want %q", have, files)
+	}
+}
