@@ -95,6 +95,7 @@ final class CrowdsecApplyTest extends TestCase
 			'table_v6'         => 'crowdsec_v6',
 			'log_level'        => 'warning',
 			'status_file'      => '/var/run/pfb_crowdsec.json',
+			'decisions_dir'    => '/var/run/pfb_crowdsec',
 		], json_decode($json, TRUE, 4, JSON_THROW_ON_ERROR));
 	}
 

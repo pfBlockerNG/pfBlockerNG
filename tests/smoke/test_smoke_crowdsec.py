@@ -82,6 +82,7 @@ SYNC_SECTION = "installedpackages/pfblockerngsync/config/0"
 MASTER = f"{h.CFG_GLOBAL}/enable_cb"
 CONFIG_FILE = "/usr/local/etc/pfb_crowdsec.json"
 STATUS_FILE = "/var/run/pfb_crowdsec.json"
+DECISIONS_DIR = "/var/run/pfb_crowdsec"
 PIDFILE = "/var/run/pfb_crowdsec.pid"
 DAEMON_PIDFILE = "/var/run/pfb_crowdsec_daemon.pid"
 RC = "/usr/local/etc/rc.d/pfb_crowdsec.sh"
@@ -622,6 +623,7 @@ def test_the_config_file_is_0600_with_the_d3_values(bouncer: SmokeVM, engine: St
         "table_v6": "crowdsec_v6",
         "log_level": "info",
         "status_file": STATUS_FILE,
+        "decisions_dir": DECISIONS_DIR,
     }
 
 
@@ -897,8 +899,9 @@ def test_a_drop_by_the_bouncers_rule_is_logged_with_its_tracker(bouncer: SmokeVM
 def test_a_drop_by_the_bouncers_rule_shows_in_alerts(bouncer: SmokeVM, engine: StubLapi, gui: WebUI) -> None:
     """Given the bouncer on with logging on, and pfBlockerNG's filterlog daemon running,
     When the firewall sends a packet to a banned IPv4 address (a seed decision),
-    Then ip_block.log gets an outbound block row under crowdsec_v4 with the outbound IPv4 rule's tracker, CrowdSec as
-    the feed and the matched entry Unknown,
+    Then ip_block.log gets an outbound block row under crowdsec_v4 with the outbound IPv4 rule's tracker, the
+    decision's origin (crowdsec, from the bouncer's decision file) as the feed and the banned address as the matched
+    entry,
     And the Alerts page shows it, linking the address to the Status subtab's lookup."""
     vm = bouncer
     banned = "192.0.2.10"
@@ -909,6 +912,7 @@ def test_a_drop_by_the_bouncers_rule_shows_in_alerts(bouncer: SmokeVM, engine: S
             lambda: _rules(vm), lambda r: len(r) == 4 and all(" log " in line for line in r), "the four logged rules"
         )
         _await(lambda: _tables(vm), _holds(banned), f"{banned} banned again after the reload")
+        assert banned in _sh(vm, f"cat {DECISIONS_DIR}/crowdsec.txt").split(), "the bouncer's decision file names it"
         # The filterlog daemon runs
         _sh(vm, "/bin/ps -waxo command | /usr/bin/grep -q '[p]fblockerng.inc filterlog'")
         # Earlier tests' drops of the address are in the logs already: start from empty ones
@@ -926,7 +930,7 @@ def test_a_drop_by_the_bouncers_rule_shows_in_alerts(bouncer: SmokeVM, engine: S
         # [1] tracker, [4] action, [5] family, [9] destination, [12] direction, [14] alias, [15] matched entry,
         # [16] feed
         got = {(r[1], r[4], r[5], r[9], r[12], r[14], r[15], r[16]) for r in rows}
-        assert got == {("177400402", "block", "4", banned, "out", "crowdsec_v4", "Unknown", "CrowdSec")}, rows
+        assert got == {("177400402", "block", "4", banned, "out", "crowdsec_v4", banned, "crowdsec")}, rows
 
         page = gui.get(ALERTS_PAGE).text
         assert lookup in page, f"the Alerts page links {banned} to {lookup}"
@@ -1253,7 +1257,7 @@ class _Leftovers:
 
 
 def _leftovers(vm: SmokeVM) -> _Leftovers:
-    paths = f"{RC} {CONFIG_FILE} {STATUS_FILE} {PIDFILE} {DAEMON_PIDFILE} {CROWDSEC_DIR}"
+    paths = f"{RC} {CONFIG_FILE} {STATUS_FILE} {PIDFILE} {DAEMON_PIDFILE} {CROWDSEC_DIR} {DECISIONS_DIR}"
     found = vm.ssh(f"find {paths} -type f 2>/dev/null; true").stdout.split()
     return _Leftovers(sorted(found), _tables(vm), _processes(vm))
 
@@ -1262,12 +1266,14 @@ def _leftovers(vm: SmokeVM) -> _Leftovers:
 def test_deinstall_leaves_nothing_behind(bouncer: SmokeVM, engine: StubLapi) -> None:
     """Given the bouncer on with both tables full,
     When the package is deleted,
-    Then no rc file, binary, config file, status file or pidfile is left, no bouncer process runs, and neither table
-    holds an address."""
+    Then no rc file, binary, config file, status file, decision file or pidfile is left, no bouncer process runs, and
+    neither table holds an address."""
     vm = bouncer
     _converged(vm, engine)
     present = _leftovers(vm)
-    assert {RC, CONFIG_FILE, STATUS_FILE} <= set(present.files), f"before-state: {present.files}"
+    assert {RC, CONFIG_FILE, STATUS_FILE, f"{DECISIONS_DIR}/crowdsec.txt"} <= set(present.files), (
+        f"before-state: {present.files}"
+    )
     assert any(path.endswith("/pfb_crowdsec") for path in present.files), f"before-state, the binary: {present.files}"
     pidfiles = _sh(vm, f"cat {PIDFILE} {DAEMON_PIDFILE}").split()
     assert len(present.processes.splitlines()) == 2, (

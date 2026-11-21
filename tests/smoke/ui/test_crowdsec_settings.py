@@ -175,6 +175,7 @@ def test_the_save_starts_and_stops_the_bouncer_and_an_empty_key_field_keeps_the_
         "table_v6": "crowdsec_v6",
         "log_level": "debug",
         "status_file": "/var/run/pfb_crowdsec.json",
+        "decisions_dir": "/var/run/pfb_crowdsec",
     }
     helpers.wait_until(lambda: _running(vm), timeout=30.0, what="the bouncer runs after the save")
 

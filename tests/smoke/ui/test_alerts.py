@@ -2618,7 +2618,7 @@ def test_crowdsec_alert_renders_as_logged_with_the_status_lookup(webui: "WebUI",
 
     Given ip_block.log holding no row for a TEST-NET-3 address,
     When a row is appended as the daemon writes a drop by the bouncer's inbound IPv4 rule (alias ``crowdsec_v4``,
-      feed ``CrowdSec``, evaluated ``Unknown``) and the Alerts page is GET-ted,
+      feed the decision's origin ``CAPI``, evaluated the banned address) and the Alerts page is GET-ted,
     Then that row links the address to the CrowdSec Status subtab's lookup, shows the feed and evaluated cell as
       logged (no drift strike, no "Not listed!"), and offers none of pfBlockerNG's suppress, unlock or whitelist
       actions, which do not apply to the bouncer's decisions.
@@ -2635,8 +2635,8 @@ def test_crowdsec_alert_renders_as_logged_with_the_status_lookup(webui: "WebUI",
         "dst_port": "22",
         "geoip": "Unk",
         "alias": "crowdsec_v4",
-        "ip_eval": "Unknown",
-        "feed": "CrowdSec",
+        "ip_eval": banned,
+        "feed": "CAPI",
     }
     lookup = f"/pfblockerng/pfblockerng_crowdsec_status.php?lookup={banned}"
     ip_block_log = helpers.IP_BLOCK_LOG
@@ -2663,8 +2663,10 @@ def test_crowdsec_alert_renders_as_logged_with_the_status_lookup(webui: "WebUI",
         resp = webui.get(ALERTS_PAGE)
         assert not looks_like_login_page(resp.text), "alerts page GET returned the login form after the seed"
         row = row_containing(resp.text, lookup)
-        assert "crowdsec_v4<br /><small>(177400401)</small>" in row, f"the table and the rule's tracker: {row}"
-        assert "CrowdSec<br /><small>Unknown</small>" in row, f"feed and evaluated cell as logged: {row}"
+        assert '<span title="CrowdSec IPv4">crowdsec_v4<br /><small>(177400401)</small></span>' in row, (
+            f"the table and the rule's tracker, the rule named in the tooltip: {row}"
+        )
+        assert f"CAPI<br /><small>{banned}</small>" in row, f"origin and banned value as logged: {row}"
         assert f"pfblockerng_threats.php?host={banned}" in row, f"the Threat Source lookup stays: {row}"
         for marker in ("<s>", "Not listed", "PFBIPSUP|", "IPULCK|", "PFBIPWHITE|"):
             assert marker not in row, f"{marker!r} on the CrowdSec row: {row}"

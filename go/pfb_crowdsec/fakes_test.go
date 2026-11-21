@@ -234,12 +234,13 @@ func ok(body string) lapiReply { return lapiReply{http.StatusOK, body} }
 
 const testKey = "s3cretBouncerKey-1234567890"
 
-// testConfig is a valid config pointing at the stub LAPI, with its status file in a fresh directory.
+// testConfig is a valid config pointing at the stub LAPI, with its status file and decisions folder in a fresh directory.
 func testConfig(t *testing.T, apiURL string) *config {
 	t.Helper()
+	dir := t.TempDir()
 	raw := fmt.Sprintf(`{"api_url": %q, "api_key": %q, "update_frequency": "10s", "table_v4": "crowdsec_v4",
-		"table_v6": "crowdsec_v6", "log_level": "debug", "status_file": %q}`,
-		apiURL, testKey, filepath.Join(t.TempDir(), "pfb_crowdsec.json"))
+		"table_v6": "crowdsec_v6", "log_level": "debug", "status_file": %q, "decisions_dir": %q}`,
+		apiURL, testKey, filepath.Join(dir, "pfb_crowdsec.json"), filepath.Join(dir, "decisions"))
 	cfg, err := parseConfig([]byte(raw))
 	if err != nil {
 		t.Fatalf("parseConfig(valid test config) = %v", err)

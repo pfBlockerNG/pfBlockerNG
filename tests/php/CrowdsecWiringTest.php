@@ -112,6 +112,10 @@ final class CrowdsecWiringTest extends TestCase
 			file_put_contents("{$this->dir}/{$name}", "x\n");
 		}
 		file_put_contents("{$this->dir}/unrelated", "kept\n");
+		// The per-origin decision files (#4164)
+		$GLOBALS['pfb']['crowdsec_decisions'] = "{$this->dir}/decisions";
+		mkdir("{$this->dir}/decisions");
+		file_put_contents("{$this->dir}/decisions/CAPI.txt", "192.0.2.7\n");
 
 		pfb_crowdsec_teardown();
 

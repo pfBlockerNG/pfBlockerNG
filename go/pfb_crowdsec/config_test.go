@@ -18,6 +18,7 @@ func validConfigMap() map[string]any {
 		"table_v6":         "crowdsec_v6",
 		"log_level":        "info",
 		"status_file":      "/var/run/pfb_crowdsec.json",
+		"decisions_dir":    "/var/run/pfb_crowdsec",
 	}
 }
 
@@ -46,7 +47,7 @@ func TestParseConfigReadsTheD3File(t *testing.T) {
 
 func TestParseConfigDefaultsTheOptionalValues(t *testing.T) {
 	m := validConfigMap()
-	for _, key := range []string{"update_frequency", "table_v4", "table_v6", "log_level", "status_file"} {
+	for _, key := range []string{"update_frequency", "table_v4", "table_v6", "log_level", "status_file", "decisions_dir"} {
 		delete(m, key)
 	}
 	cfg, err := parseConfig(configJSON(t, m))
@@ -54,7 +55,7 @@ func TestParseConfigDefaultsTheOptionalValues(t *testing.T) {
 		t.Fatalf("parseConfig(minimal) = %v", err)
 	}
 	if cfg.interval != 10*time.Second || cfg.TableV4 != "crowdsec_v4" || cfg.TableV6 != "crowdsec_v6" ||
-		cfg.level != levelInfo || cfg.StatusFile != "/var/run/pfb_crowdsec.json" {
+		cfg.level != levelInfo || cfg.StatusFile != "/var/run/pfb_crowdsec.json" || cfg.DecisionsDir != "/var/run/pfb_crowdsec" {
 		t.Fatalf("defaults = %+v (interval %v, level %d); want the D3 values", cfg, cfg.interval, cfg.level)
 	}
 }
@@ -107,6 +108,10 @@ func TestParseConfigRejectsHostileValues(t *testing.T) {
 		{"status relative", "status_file", "pfb_crowdsec.json"},
 		{"status nul", "status_file", "/var/run/pfb\x00crowdsec.json"},
 		{"status empty", "status_file", ""},
+		{"decisions relative", "decisions_dir", "pfb_crowdsec"},
+		{"decisions nul", "decisions_dir", "/var/run/pfb\x00crowdsec"},
+		{"decisions empty", "decisions_dir", ""},
+		{"decisions root", "decisions_dir", "/"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

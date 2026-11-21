@@ -14,12 +14,16 @@ use PHPUnit\Framework\TestCase;
  *     pfb_resolve_tracker() resolves the rule's tracker; a rule on the tables with another tracker, or one of the trackers on
  *     another table, stays someone else's; the bouncer's rules add no interface to Kill States' list;
  *   - the filterlog daemon writes such a drop to ip_block.log and unified.log under the table, the action, family and
- *     direction, with CrowdSec as the feed and the matched entry Unknown: the log does not say which decision matched, and a
- *     pfB feed that also lists the address did not drop it. A later drop of that address by a pfB rule keeps its own feed.
+ *     direction, with the origin of the decision that bans the address as the feed and the banned value (address or range)
+ *     as the matched entry, read from the bouncer's per-origin decision files (no LAPI request); Unknown for both when no file
+ *     names it, or the file's name is not a safe origin. A pfB feed that also lists the address did not drop it. A later drop
+ *     of that address by a pfB rule keeps its own feed;
+ *   - pfb_crowdsec_decision_origin() answers each address once until the decision files change.
  */
 #[CoversFunction('pfb_filterrules')]
 #[CoversFunction('pfb_crowdsec_rule_table')]
 #[CoversFunction('pfb_daemon_filterlog')]
+#[CoversFunction('pfb_crowdsec_decision_origin')]
 final class CrowdsecAlertsAttributionTest extends TestCase
 {
 	private const DAEMON_DEADLINE_S = 15.0;
@@ -40,7 +44,8 @@ final class CrowdsecAlertsAttributionTest extends TestCase
 	protected function setUp(): void
 	{
 		$this->root = sys_get_temp_dir() . '/pfb_crowdsec_alerts_' . getmypid() . '_' . bin2hex(random_bytes(6));
-		$this->assertTrue(mkdir("{$this->root}/deny", 0777, TRUE) && mkdir("{$this->root}/native", 0777, TRUE), 'test setup: sandbox');
+		$this->assertTrue(mkdir("{$this->root}/deny", 0777, TRUE) && mkdir("{$this->root}/native", 0777, TRUE)
+			&& mkdir("{$this->root}/decisions", 0777, TRUE), 'test setup: sandbox');
 		$this->savedPfb = $GLOBALS['pfb'] ?? NULL;
 		$GLOBALS['pfb']['pfctl'] = __DIR__ . '/fixtures/fake_pfctl.sh';
 		putenv("PFB_FAKE_RULES={$this->root}/rules.txt");
@@ -130,6 +135,7 @@ final class CrowdsecAlertsAttributionTest extends TestCase
 				'ip_blocklog' => "{$root}/ip_block.log", 'ip_permitlog' => "{$root}/ip_permit.log",
 				'ip_matchlog' => "{$root}/ip_match.log", 'unilog' => "{$root}/unified.log",
 				'ip_cache' => "{$root}/ip_cache.sqlite", 'geoipshare' => '', 'rdns' => FALSE,
+				'crowdsec_decisions' => "{$root}/decisions",
 				'asn_reporting' => 'disabled', 'asn_token' => '', 'sqlite_timeout' => 1000,
 			]);
 			pfb_daemon_filterlog();
@@ -173,12 +179,19 @@ final class CrowdsecAlertsAttributionTest extends TestCase
 		// A pfB feed lists the IPv4 address too: it is not what dropped it
 		file_put_contents("{$this->root}/deny/Test_Feed.txt", "192.0.2.10\n");
 		file_put_contents("{$this->root}/native/Placeholder.txt", "placeholder\n");
+		// The bouncer's decision files: an address banned by CAPI, a range from a blocklist, and a file whose name is no origin
+		file_put_contents("{$this->root}/decisions/CAPI.txt", "192.0.2.10\n198.51.100.7\n");
+		file_put_contents("{$this->root}/decisions/lists:firehol_level1.txt", "2001:db8:4074::/48\n");
+		file_put_contents("{$this->root}/decisions/bad,name.txt", "192.0.2.98\n");
 
 		[$block, $unified] = $this->runDaemon([
 			// Inbound IPv4 TCP from a banned address to a LAN host, by the inbound IPv4 rule
 			self::filterlog('3,,,177400401,vtnet0,match,block,in,4,0x0,,64,12345,0,DF,6,tcp,60,192.0.2.10,10.0.0.5,51234,22,0,S,1,,64240,,mss'),
 			// Outbound IPv6 UDP to a banned address, by the outbound IPv6 rule
 			self::filterlog('6,,,177400602,vtnet0,match,block,out,6,0x00,0x00000,64,udp,17,40,2001:db8:1::5,2001:db8:4074::1,5353,53,40'),
+			// Inbound drops of addresses no decision file names, or only a file whose name is no origin
+			self::filterlog('3,,,177400401,vtnet0,match,block,in,4,0x0,,64,12345,0,DF,6,tcp,60,192.0.2.99,10.0.0.5,51234,22,0,S,1,,64240,,mss'),
+			self::filterlog('3,,,177400401,vtnet0,match,block,in,4,0x0,,64,12345,0,DF,6,tcp,60,192.0.2.98,10.0.0.5,51234,22,0,S,1,,64240,,mss'),
 			// The same IPv4 address later dropped by the pfB rule
 			self::filterlog('7,,,1770000001,vtnet0,match,block,in,4,0x0,,64,12346,0,DF,6,tcp,60,192.0.2.10,10.0.0.5,51235,23,0,S,1,,64240,,mss'),
 		]);
@@ -186,15 +199,38 @@ final class CrowdsecAlertsAttributionTest extends TestCase
 		// ip_block.log: [1] tracker, [4] action, [5] family, [12] direction, [14] alias, [15] matched entry, [16] feed
 		$pick = static fn (array $r): array => [$r[1], $r[4], $r[5], $r[8], $r[9], $r[12], $r[14], $r[15], $r[16]];
 		$this->assertSame([
-			['177400401', 'block', '4', '192.0.2.10', '10.0.0.5', 'in', 'crowdsec_v4', 'Unknown', 'CrowdSec'],
-			['177400602', 'block', '6', '2001:db8:1::5', '2001:db8:4074::1', 'out', 'crowdsec_v6', 'Unknown', 'CrowdSec'],
+			['177400401', 'block', '4', '192.0.2.10', '10.0.0.5', 'in', 'crowdsec_v4', '192.0.2.10', 'CAPI'],
+			['177400602', 'block', '6', '2001:db8:1::5', '2001:db8:4074::1', 'out', 'crowdsec_v6', '2001:db8:4074::/48', 'lists:firehol_level1'],
+			['177400401', 'block', '4', '192.0.2.99', '10.0.0.5', 'in', 'crowdsec_v4', 'Unknown', 'Unknown'],
+			['177400401', 'block', '4', '192.0.2.98', '10.0.0.5', 'in', 'crowdsec_v4', 'Unknown', 'Unknown'],
 			['1770000001', 'block', '4', '192.0.2.10', '10.0.0.5', 'in', 'pfB_Test_v4', '192.0.2.10', 'Test_Feed'],
 		], array_map($pick, $block));
 		// The Alerts page reads a row after popping its duplicate marker
 		$this->assertTrue(pfb_ip_log_row_schema_ok(array_slice($block[0], 0, -1), 'non_unified'), 'the CrowdSec row has the current schema');
 
 		// unified.log: the event type first, then the ip_block.log row
-		$this->assertSame([['Block', 'crowdsec_v4', 'CrowdSec'], ['Block', 'crowdsec_v6', 'CrowdSec'], ['Block', 'pfB_Test_v4', 'Test_Feed']],
+		$this->assertSame([['Block', 'crowdsec_v4', 'CAPI'], ['Block', 'crowdsec_v6', 'lists:firehol_level1'], ['Block', 'crowdsec_v4', 'Unknown'],
+			['Block', 'crowdsec_v4', 'Unknown'], ['Block', 'pfB_Test_v4', 'Test_Feed']],
 			array_map(static fn (array $r): array => [$r[0], $r[15], $r[17]], $unified));
+	}
+
+	public function testTheOriginLookupAnswersEachAddressOnceUntilTheDecisionFilesChange(): void
+	{
+		$dir = "{$this->root}/decisions";
+		$GLOBALS['pfb']['crowdsec_decisions'] = $dir;
+		$GLOBALS['pfb']['grep'] = '/usr/bin/grep';
+		file_put_contents("{$dir}/CAPI.txt", "192.0.2.10\n");
+		touch($dir, 1_000_000_000);
+		$this->assertSame(['CAPI', '192.0.2.10'], pfb_crowdsec_decision_origin('192.0.2.10'));
+
+		// The bouncer moves the address to another origin, but the folder still reads as unchanged: the answer is cached
+		rename("{$dir}/CAPI.txt", "{$dir}/cscli.txt");
+		touch($dir, 1_000_000_000);
+		$this->assertSame(['CAPI', '192.0.2.10'], pfb_crowdsec_decision_origin('192.0.2.10'), 'cached');
+
+		// The folder changed: looked up again
+		touch($dir, 1_000_000_060);
+		$this->assertSame(['cscli', '192.0.2.10'], pfb_crowdsec_decision_origin('192.0.2.10'), 'after the files changed');
+		$this->assertSame(['Unknown', 'Unknown'], pfb_crowdsec_decision_origin('192.0.2.11'), 'no decision names it');
 	}
 }

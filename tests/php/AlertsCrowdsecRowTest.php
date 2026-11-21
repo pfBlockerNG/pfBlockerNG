@@ -7,11 +7,13 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Issue #4164 -- how the Alerts page renders a drop by the CrowdSec bouncer's rule, which the filterlog daemon logs under the
- * bouncer's table with CrowdSec as the feed and the matched entry Unknown.
+ * bouncer's table with the decision's origin as the feed and the banned value as the matched entry.
  *
  * Intent pinned here:
  *   - the row shows as logged: the bouncer's tables are no feed and no pfB alias table, so the render-time re-check against
- *     the feed lists and alias tables does not apply, and a pfB feed that lists the address now is no drift;
+ *     the feed lists and alias tables does not apply, and a pfB feed that lists the address now is no drift; an origin with a
+ *     colon (a blocklist, "lists:<name>") shows whole, not read as a Proofpoint ET category;
+ *   - the Rule cell's tooltip names the bouncer's rule its tracker identifies ("CrowdSec IPv4", "CrowdSec IPv6 out");
  *   - pfBlockerNG's suppress, unlock and whitelist actions do not apply (the decisions live on the CrowdSec engine, and the
  *     bouncer's rules come before every pfB rule), so the row offers none; it links the external host to the CrowdSec Status
  *     subtab's lookup, beside the Threat Source lookup every row has.
@@ -85,10 +87,11 @@ final class AlertsCrowdsecRowTest extends TestCase
 	}
 
 	/** An ip_block.log row as the filterlog daemon writes a drop by the bouncer's rule, duplicate marker popped. */
-	private static function row(string $tracker, int $family, string $src, string $dst, string $dir, string $table): array
+	private static function row(string $tracker, int $family, string $src, string $dst, string $dir, string $table,
+	    string $eval = 'Unknown', string $feed = 'Unknown'): array
 	{
 		return ['2026-11-21 10:00:00', $tracker, 'vtnet0', 'WAN', 'block', $family, '6', 'TCP-S', $src, $dst, '51234', '22', $dir,
-			'Unk', $table, 'Unknown', 'CrowdSec', 'Unknown', 'Unknown', 'Unknown', '', ''];
+			'Unk', $table, $eval, $feed, 'Unknown', 'Unknown', 'Unknown', '', ''];
 	}
 
 	private function render(array $fields, string $mode = 'non_unified'): string
@@ -102,10 +105,11 @@ final class AlertsCrowdsecRowTest extends TestCase
 
 	public function testAnInboundIpv4DropRendersAsLoggedWithTheCrowdsecLookup(): void
 	{
-		$html = $this->render(self::row('177400401', 4, '192.0.2.10', '10.0.0.5', 'in', 'crowdsec_v4'));
+		$html = $this->render(self::row('177400401', 4, '192.0.2.10', '10.0.0.5', 'in', 'crowdsec_v4', '192.0.2.10', 'CAPI'));
 
-		$this->assertStringContainsString('<td>crowdsec_v4<br /><small>(177400401)</small></td>', $html, 'the table and the rule tracker');
-		$this->assertStringContainsString('>CrowdSec<br /><small>Unknown</small></td>', $html, 'the feed and matched entry as logged');
+		$this->assertStringContainsString('<td><span title="CrowdSec IPv4">crowdsec_v4<br /><small>(177400401)</small></span></td>', $html,
+			'the table and the rule tracker, the rule named in the tooltip');
+		$this->assertStringContainsString('>CAPI<br /><small>192.0.2.10</small></td>', $html, 'the origin and banned value as logged');
 		$this->assertStringNotContainsString('<s>', $html, 'no drift against pfB feeds or alias tables');
 		$this->assertStringNotContainsString('Not listed', $html);
 		$this->assertStringContainsString('href="/pfblockerng/pfblockerng_crowdsec_status.php?lookup=192.0.2.10"', $html, 'the CrowdSec lookup');
@@ -117,13 +121,14 @@ final class AlertsCrowdsecRowTest extends TestCase
 
 	public function testAnOutboundIpv6DropLinksTheExternalHostInTheUnifiedView(): void
 	{
-		$fields = self::row('177400602', 6, '2001:db8:1::5', '2001:db8:4074::1', 'out', 'crowdsec_v6');
+		$fields = self::row('177400602', 6, '2001:db8:1::5', '2001:db8:4074::1', 'out', 'crowdsec_v6', '2001:db8:4074::/48', 'lists:firehol');
 		$fields[] = '+';	// Unified rows keep their duplicate marker
 		$html = $this->render($fields, 'Unified');
 
 		$this->assertStringContainsString('href="/pfblockerng/pfblockerng_crowdsec_status.php?lookup=2001:db8:4074::1"', $html);
 		$this->assertStringNotContainsString('lookup=2001:db8:1::5', $html, 'the local host is not looked up');
-		$this->assertStringContainsString('>CrowdSec<br /><small>Unknown</small></td>', $html);
+		$this->assertStringContainsString('>lists:firehol<br /><small>2001:db8:4074::/48</small></td>', $html, 'the whole origin, colon and all');
+		$this->assertStringContainsString('<span title="CrowdSec IPv6 out">crowdsec_v6<br /><small>(177400602)</small></span>', $html);
 		$this->assertStringNotContainsString('<s>', $html);
 		foreach (['IPULCK|', 'PFBIPSUP|', 'PFBIPWHITE|'] as $action) {
 			$this->assertStringNotContainsString($action, $html, "no pfBlockerNG action {$action}");
@@ -140,5 +145,6 @@ final class AlertsCrowdsecRowTest extends TestCase
 		$this->assertStringContainsString('IPULCK|192.0.2.10|pfB_Other_v4', $html);
 		$this->assertStringContainsString('PFBIPSUP|add|192.0.2.10|pfB_Other_v4', $html);
 		$this->assertStringNotContainsString('pfblockerng_crowdsec_status.php', $html);
+		$this->assertStringNotContainsString('<span title=', $html, 'no rule-name tooltip on a pfB row');
 	}
 }
