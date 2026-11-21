@@ -97,6 +97,7 @@ func TestTheSchemaNamesEveryDnsFieldWithItsTypeAndDefault(t *testing.T) {
 		"decisionCacheMax": "int 10000 0..5000000", "cnameValidation": "bool false",
 		"control": "bool false", "controlLegacy": "bool false requires control", "regexCap": "bool false",
 		"metricsClientIp": "bool false",
+		"noAaaa":          "bool false", "noAaaaList": "list []", "groupPolicy": "bool false", "groupPolicyBypassList": "list []", // #4036
 	}
 	if s.Projections[0].ID != "dns" {
 		t.Fatalf("projections = %s, want dns first", got)

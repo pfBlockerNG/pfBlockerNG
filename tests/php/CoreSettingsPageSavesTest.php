@@ -260,6 +260,27 @@ final class CoreSettingsPageSavesTest extends TestCase
 		$this->assertNull($result['settingsFailed']);
 	}
 
+	public function testADnsblSaveOfTheNoAaaaAndBypassListsReachesCoreThroughTheDryRunAndTheNotice(): void
+	{
+		// issue #4036: the DNSBL page saves both switches and both lists; Core judges them as `settings/dns` fields, then reads them again
+		$socket = $this->core(self::accepting());
+
+		$result = $this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket], 'post' => [
+			'pfb_noaaaa' => 'on', 'pfb_noaaaa_list' => "example.com\n.ads.example.net # wildcard",
+			'pfb_gp' => 'on', 'pfb_gp_bypass_list' => "10.0.0.0/24\n192.0.2.7",
+		]]);
+
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertSame([self::DNSBL_SAVE], $result['writes']);
+		$requests = $this->requests();
+		$this->assertSame(['ValidateSettings', 'SettingsChanged'], array_column($requests, 'method'), 'judged before the write, told after it');
+		$dns = $requests[0]['body']['changes']['dns'];
+		$this->assertTrue($dns['noAaaa'] ?? NULL, 'the dry run judges the posted noAAAA switch');
+		$this->assertSame([['domain' => 'example.com'], ['domain' => '.ads.example.net']], $dns['noAaaaList'] ?? NULL, 'the dry run judges the posted noAAAA list');
+		$this->assertTrue($dns['groupPolicy'] ?? NULL, 'the dry run judges the posted Group Policy switch');
+		$this->assertSame([['cidr' => '10.0.0.0/24'], ['cidr' => '192.0.2.7']], $dns['groupPolicyBypassList'] ?? NULL, 'the dry run judges the posted bypass list');
+	}
+
 	public function testTheDnsblNoticeIsForcedSoCoreIsToldWithoutAskingItsRevision(): void
 	{
 		$socket = $this->core(self::accepting());

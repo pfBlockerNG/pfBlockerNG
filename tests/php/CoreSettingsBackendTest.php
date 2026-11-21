@@ -312,6 +312,47 @@ final class CoreSettingsBackendTest extends TestCase
 		$this->assertSame(pfb_core_settings_revision(self::settings($wanted)), $reply['revision']);
 	}
 
+	public function testWriteOfTheNoAaaaAndBypassFieldsStoresThemKeepingTheListsOtherLines(): void
+	{
+		// issue #4036: a list is merged into its text area: a comment or a line Core cannot hold stays, a dropped entry goes, a new one is appended
+		$this->arrange(['dnsbl/pfb_noaaaa_list' => base64_encode("# keep me\nold.example\n.keep.example\nspace inside.example"),
+			'dnsbl/pfb_gp_bypass_list' => base64_encode("# printers\n192.0.2.1\nfe80::1%em0")]);
+		$current = pfb_core_dns_settings();
+		$this->assertSame([['domain' => 'old.example'], ['domain' => '.keep.example']], $current['noAaaaList'], 'before-state');
+		$this->assertSame([['cidr' => '192.0.2.1']], $current['groupPolicyBypassList'], 'before-state');
+		$wanted = array_merge($current, ['noAaaa' => TRUE, 'noAaaaList' => [['domain' => '.keep.example'], ['domain' => 'new.example']],
+			'groupPolicy' => TRUE, 'groupPolicyBypassList' => [['cidr' => '192.0.2.1'], ['cidr' => '10.0.0.0/8']]]);
+		$before = $GLOBALS['config'];
+
+		$reply = $this->backend(self::writeRequest($current, $wanted));
+
+		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(self::settings($wanted))], $reply);
+		$this->assertSame($wanted, pfb_core_dns_settings(), 'the projection afterwards is what was asked for');
+		$section = PFB_SECTIONS['dnsbl'];
+		$this->assertSame('on', config_get_path("{$section}/pfb_noaaaa"));
+		$this->assertSame('on', config_get_path("{$section}/pfb_gp"));
+		$this->assertSame("# keep me\n.keep.example\nspace inside.example\nnew.example", base64_decode(config_get_path("{$section}/pfb_noaaaa_list")));
+		$this->assertSame("# printers\n192.0.2.1\nfe80::1%em0\n10.0.0.0/8", base64_decode(config_get_path("{$section}/pfb_gp_bypass_list")));
+		$this->assertEqualsCanonicalizing(["{$section}/pfb_noaaaa", "{$section}/pfb_noaaaa_list", "{$section}/pfb_gp", "{$section}/pfb_gp_bypass_list"],
+			self::changedLeaves($before, $GLOBALS['config']), 'no other config.xml key is touched');
+		$this->assertSame([self::MESSAGE], $GLOBALS['pfb_test_write_config_calls'], 'one write_config()');
+		$this->assertFileExists("{$this->dir}/pending", 'the change applies on the next Update');
+	}
+
+	public function testWriteOfTheSameListEntriesInAnotherOrderChangesNothing(): void
+	{
+		$this->arrange(['dnsbl/pfb_noaaaa_list' => base64_encode("a.example\n.b.example"), 'dnsbl/pfb_gp_bypass_list' => base64_encode("192.0.2.1\n10.0.0.0/8")]);
+		$current = pfb_core_dns_settings();
+		$wanted = array_merge($current, ['noAaaaList' => array_reverse($current['noAaaaList']), 'groupPolicyBypassList' => array_reverse($current['groupPolicyBypassList'])]);
+		$this->assertCount(2, $wanted['noAaaaList'], 'before-state');
+		$before = $GLOBALS['config'];
+
+		$reply = $this->backend(self::writeRequest($current, $wanted, pfb_core_settings_revision(self::settings($current))));
+
+		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(self::settings($current))], $reply, 'a list is a set: one domain is one flag');
+		$this->assertNothingWritten($before, 'only the order changed');
+	}
+
 	public function testWriteOfWhatConfigXmlAlreadyHoldsChangesNothing(): void
 	{
 		$this->arrange(['dnsbl/pfb_idn_block_malicious' => '']);
