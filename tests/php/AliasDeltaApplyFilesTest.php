@@ -860,7 +860,7 @@ SH
 		}
 		$this->assertSame([], array_slice(array_diff($sent, $members), 0, 5), 'none of the lines the file gained was sent (first five shown)');
 		$this->assertCount(2000, $sent, 'exactly the 2000 lines of the count were sent');
-		$over = array_filter(self::loggedSince($offset), static fn (string $l): bool => str_contains($l, "the {$side} file holds more than 2000 members"));
+		$over = array_filter(self::loggedSince($offset), static fn (string $l): bool => str_contains($l, 'the ' . ($side === 'add' ? 'add' : 'delete') . ' file holds more than 2000 members'));
 		$this->assertCount(1, $over, 'one line says the file outgrew its count: ' . implode(' | ', self::loggedSince($offset)));
 	}
 
