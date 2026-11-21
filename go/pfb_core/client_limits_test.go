@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -263,5 +264,142 @@ func TestConcurrentReportsLeaveOneOfThemRecorded(t *testing.T) {
 				t.Fatalf("round %d: a temporary file is left in the state directory: %s", round, e.Name())
 			}
 		}
+	}
+}
+
+// refusalBound is the most a refusal to a client may weigh: whatever it sent, so that the replay memory's answers to it
+// stay small however many it sends.
+const refusalBound = 4 << 10
+
+// startClientWithStore serves Core's real method table, with a resource store, to a further local client.
+func startClientWithStore(t *testing.T) *harness {
+	t.Helper()
+	state, store := t.TempDir(), t.TempDir()
+	st, err := settings.Open(state, settings.Production())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return start(t, func(o *options) {
+		o.methods = coreMethods(state, st, resources.Open(store), nil, nil)
+		o.allowUID = privilegedUID
+		o.clientUIDs = []uint32{clientUID}
+		o.peerUID = func(*net.UnixConn) (uint32, error) { return clientUID, nil }
+	}, nil)
+}
+
+func TestARefusalToAClientIsSmallWhateverItSent(t *testing.T) {
+	big := strings.Repeat("a", 1<<20-512) // with the rest of the request, just under the body limit
+	var shortBadIDs, emptyProjections []string
+	for i := range maxAppliedResources {
+		shortBadIDs = append(shortBadIDs, fmt.Sprintf(`"x%d":{}`, i))
+	}
+	for range 300000 {
+		emptyProjections = append(emptyProjections, `""`)
+	}
+	cases := map[string]struct{ method, body string }{
+		"a report with a 1 MiB id":                     {"ReportApplied", appliedReport("r1", appliedEntry(big, "1", digestA))},
+		"a report with a 1 MiB dnsbl id":               {"ReportApplied", appliedReport("r2", appliedEntry("dnsbl/"+big, "1", digestA))},
+		"a report with a 1 MiB parameter name":         {"ReportApplied", `{"requestId":"r3","resources":{},"` + big + `":1}`},
+		"a report with a mistyped entry of a 1 MiB id": {"ReportApplied", `{"requestId":"r4","resources":{"` + big + `":5}}`},
+		"a report of as many bad ids as the bound":     {"ReportApplied", appliedReport("r5", shortBadIDs...)},
+		"GetVersion with a 1 MiB parameter name":       {"GetVersion", `{"` + big + `":1}`},
+		"GetSettings with a 1 MiB parameter name":      {"GetSettings", `{"` + big + `":1}`},
+		"GetSettings naming 300000 projections":        {"GetSettings", `{"projectionIds":[` + strings.Join(emptyProjections, ",") + `]}`},
+		"GetResources with a 1 MiB id":                 {"GetResources", `{"resources":{"` + big + `":{}}}`},
+		"GetResources with a mistyped 1 MiB id":        {"GetResources", `{"resources":{"` + big + `":5}}`},
+		"GetResources with a 1 MiB parameter name":     {"GetResources", `{"resources":{},"` + big + `":1}`},
+		"GetResourceBody with a 1 MiB id":              {"GetResourceBody", `{"id":"` + big + `","generation":"1","part":"members"}`},
+		"GetResourceBody with a 1 MiB parameter":       {"GetResourceBody", `{"id":"dnsbl/a","generation":"1","part":"members","` + big + `":1}`},
+	}
+	h := startClientWithStore(t)
+	for _, name := range slices.Sorted(maps.Keys(cases)) {
+		t.Run(name, func(t *testing.T) {
+			got := h.post("/v1/"+cases[name].method, cases[name].body)
+			if code := errorCode(t, got); code != codeInvalidArgument {
+				t.Errorf("answered %d %.200s, want invalid_argument", got.status, got.body)
+			}
+			if len(got.body) >= refusalBound {
+				t.Errorf("the refusal is %d bytes, want under %d: %.300s", len(got.body), refusalBound, got.body)
+			}
+		})
+	}
+}
+
+// otherClientUID is a second further local client.
+const otherClientUID = 1003
+
+func TestEachClientUIDHasItsOwnReplayMemory(t *testing.T) {
+	state := t.TempDir()
+	h, uid := startSwitchable(t, state, privilegedUID, clientUID, otherClientUID)
+	recordedReport := appliedReport("same", appliedEntry("dnsbl/manifest", "3", digestA))
+	refusedReport := appliedReport("same", appliedEntry("ip-set/g/ipv4", "3", digestA))
+
+	// Given one client recorded a report under requestId "same"
+	uid.Store(clientUID)
+	first := h.post("/v1/ReportApplied", recordedReport)
+	wantJSON(t, first, http.StatusOK, `{}`)
+
+	// When another client sends another body under the same requestId, it is its own request: run, not a conflict
+	uid.Store(otherClientUID)
+	other := h.post("/v1/ReportApplied", refusedReport)
+	wantError(t, other, http.StatusBadRequest, codeInvalidArgument, "resources")
+
+	// Then each one's repeat gets its own first answer
+	uid.Store(clientUID)
+	if again := h.post("/v1/ReportApplied", recordedReport); again.status != first.status || !bytes.Equal(again.body, first.body) {
+		t.Errorf("the first client's repeat got %d %s, want its first answer %d %s", again.status, again.body, first.status, first.body)
+	}
+	uid.Store(otherClientUID)
+	if again := h.post("/v1/ReportApplied", refusedReport); again.status != other.status || !bytes.Equal(again.body, other.body) {
+		t.Errorf("the other client's repeat got %d %s, want its first answer %d %s", again.status, again.body, other.status, other.body)
+	}
+	if have, want := recorded(t, state), compact(t, recordedReport); have != want {
+		t.Errorf("recorded:\n have %s\n want %s", have, want)
+	}
+}
+
+func TestAMethodCalledWithoutACallersMarkServesOnlyWhatAClientMayRead(t *testing.T) {
+	state, storeDir := t.TempDir(), t.TempDir()
+	st, err := settings.Open(state, settings.Production())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &resRig{t: t, dir: storeDir, store: resources.Open(storeDir)}
+	r.pub("dnsbl/main", nil, "member")
+	r.pub("ip-set/Abuse/ipv4", nil, "member")
+	table := coreMethods(state, st, r.store, nil, nil)
+	unmarked := context.Background() // no path through the server: no mark says who calls
+	if _, err := table["InitializeSettings"].call(unmarked, []byte(`{"requestId":"i","settings":{"dns":{"control":true}}}`)); err != nil {
+		t.Fatalf("InitializeSettings: %v", err)
+	}
+
+	// GetSettings gives a client's projections only
+	snap, err := table["GetSettings"].call(unmarked, []byte(`{}`))
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	raw, _ := json.Marshal(snap)
+	if got := projectionIDs(t, reply{status: http.StatusOK, body: raw}); !slices.Equal(got, clientProjectionIDs) {
+		t.Errorf("GetSettings without a mark gave %v, want a client's %v", got, clientProjectionIDs)
+	}
+
+	// GetResources and GetResourceBody hold no resource outside dnsbl/*
+	res, err := table["GetResources"].call(unmarked, []byte(`{"resources":{"dnsbl/main":{},"ip-set/Abuse/ipv4":{}}}`))
+	if err != nil {
+		t.Fatalf("GetResources: %v", err)
+	}
+	items := res.(map[string]any)["resources"].(map[string]resourceItem)
+	if e := items["ip-set/Abuse/ipv4"].Error; e == nil || e.Code != codeNotFound {
+		t.Errorf("GetResources without a mark served ip-set/Abuse/ipv4: %+v, want not_found", items["ip-set/Abuse/ipv4"])
+	}
+	if items["dnsbl/main"].Error != nil {
+		t.Errorf("GetResources without a mark refused dnsbl/main: %+v", items["dnsbl/main"])
+	}
+	body, err := table["GetResourceBody"].call(unmarked, []byte(`{"id":"ip-set/Abuse/ipv4","generation":"1","part":"members"}`))
+	if b, ok := body.(*bodyStream); ok {
+		_ = b.f.Close()
+	}
+	if e, ok := err.(*apiError); !ok || e.Code != codeNotFound {
+		t.Errorf("GetResourceBody without a mark = %v, %v; want not_found", body, err)
 	}
 }
