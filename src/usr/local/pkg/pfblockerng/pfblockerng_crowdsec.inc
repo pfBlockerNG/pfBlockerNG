@@ -767,6 +767,21 @@ function pfb_crowdsec_widget_rules(): array {
 }
 
 /**
+ * The bouncer's table a `pfctl -vvsr` rule line drops on (#4164), or NULL: the line must carry one of its family's
+ * PFB_CROWDSEC_TRACKERS and name that family's table (`<crowdsec_v4:N>`, or `<crowdsec_v4>` while a reload has killed it),
+ * so a user's rule on the tables, or another rule carrying one of the trackers, stays someone else's.
+ */
+function pfb_crowdsec_rule_table(string $tracker, string $line): ?string {
+	foreach (PFB_CROWDSEC_TRACKERS as $family => $ids) {
+		$table = PFB_CROWDSEC_TABLES[$family];
+		if (in_array($tracker, array_map('strval', $ids), TRUE) && preg_match("/ <{$table}[:>]/", $line) === 1) {
+			return $table;
+		}
+	}
+	return NULL;
+}
+
+/**
  * After a filter reload (D5): SIGUSR1 makes the bouncer re-create and refill its tables from memory at once. Only to the pid in
  * PFB_CROWDSEC_PIDFILE that isvalidpid() confirms, and only while its command line is the bouncer's (a stale pidfile may name a reused
  * pid); never to daemon(8)'s supervisor, which SIGUSR1 kills (#4069). A missed signal costs at most one pull: the next one reconciles.
