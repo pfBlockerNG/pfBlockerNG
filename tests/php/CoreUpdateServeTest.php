@@ -606,6 +606,14 @@ final class CoreUpdateServeTest extends TestCase
 		$this->assertSame(0, $run['exit'], $run['out']);
 	}
 
+	public function testAVersion1RequestWithoutAScopeRunsBoth(): void
+	{
+		$run = $this->serve(array_diff_key(self::req('manual'), ['scope' => 1]));
+
+		$this->assertSame(['sync:' . json_encode(['scope' => 'both', 'force' => FALSE, 'trigger' => 'manual'])], $this->calls);
+		$this->assertSame(0, $run['exit'], $run['out']);
+	}
+
 	/**
 	 * A manual Update reports what the Outpost saw of GeoIP like any other: Core's Extras plan uses the last readiness reported, so a
 	 * manual Update that ran while a generation swap was in progress must not leave Core believing it is ready.

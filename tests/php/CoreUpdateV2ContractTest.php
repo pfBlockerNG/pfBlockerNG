@@ -13,10 +13,12 @@ use PHPUnit\Framework\TestCase;
  *   - a request is validated whole before anything runs: a refused one is refused with its reason, word for word, and an
  *     accepted one comes back in one normal form (defaults filled, each ip-set and ip-aggregate with its alias, each issue's
  *     message cut to bounded text);
- *   - a resource id maps to an alias by one rule (decision 1 of the issue), and an id that maps to none, or two ids that map
- *     to one alias, refuse the request;
- *   - a result line is written in one fixed shape, never longer than the fixture's resultLineBytes (failure messages are
- *     shortened first), and a report the contract does not hold, or one that cannot fit, is refused, never written.
+ *   - a resource id maps to an alias by one rule (decision 1 of the issue), and an id that maps to none refuses the request:
+ *     distinct ids never share an alias, as an ip-set cannot take an aggregate's;
+ *   - a request names at most the fixture's limits.ids ids, and the report of every request accepted fits one result line
+ *     (testTheLongestReportOfARequestAtTheBoundFitsOneResultLine);
+ *   - a result line is written in one fixed shape, never longer than the fixture's resultLineBytes (a failure message longer
+ *     than the placeholder is shortened first), and a report the contract does not hold is refused, never written.
  */
 #[CoversFunction('pfb_core_update_v2_request')]
 #[CoversFunction('pfb_core_update_v2_alias')]
@@ -151,6 +153,7 @@ final class CoreUpdateV2ContractTest extends TestCase
 		$this->assertSame($doc['limits']['requestBytes'] + 1, strlen(self::stdin('over-1-mib')), 'the row over the bound is one byte over it');
 		$this->assertSame(PFB_CORE_UPDATE_MAX_REQUEST, $doc['limits']['requestBytes'], 'the bound is the one pfblockerng.inc reads stdin to');
 		$this->assertSame(PFB_CORE_UPDATE_V2_LINE_BYTES, $doc['limits']['resultLineBytes'], 'the bound is the one the result writer keeps to');
+		$this->assertSame(PFB_CORE_UPDATE_V2_MAX_IDS, $doc['limits']['ids'], 'the bound on the ids of a request and of a report');
 		foreach ($doc['results'] as $row) {
 			$this->assertCount(1, array_intersect(['report', 'reportJSON'], array_keys($row)), "{$row['id']}: one report");
 			$this->assertCount(1, array_intersect(['line', 'refused'], array_keys($row)), "{$row['id']}: one verdict");
@@ -218,5 +221,59 @@ final class CoreUpdateV2ContractTest extends TestCase
 		$this->assertSame(1, substr_count($line, "\n"), "{$row['id']}: one line");
 		$this->assertSame(1, preg_match('/^[\x20-\x7e]*\n\z/', $line), "{$row['id']}: printable ASCII and one newline");
 		$this->assertSame(2, json_decode($line, TRUE, 8, JSON_THROW_ON_ERROR)['version'], "{$row['id']}: of version 2");
+	}
+
+	/** @return array<string, array{0: string}> */
+	public static function everyIdOfOneKind(): array
+	{
+		return ['every id failed' => ['failed'], 'every id applied' => ['applied'], 'every id removed' => ['removed']];
+	}
+
+	/**
+	 * The report of a request at the bound fits one result line, whatever the apply did. A line is the sum of its entries, so
+	 * the longest is a report whose every id is of one kind: failed, applied or removed (a mix lies between them, and a line that
+	 * fits before its failure messages are shortened is written as it is). Each is built from the rules the code holds: the
+	 * longest id the request takes, the longest generation, a message as long as it may be written, an alias for every table.
+	 */
+	#[DataProvider('everyIdOfOneKind')]
+	public function testTheLongestReportOfARequestAtTheBoundFitsOneResultLine(string $kind): void
+	{
+		$limits = self::fixture()['limits'];
+		$group = $limits['idBytes'];
+		while (pfb_core_update_v2_alias('ip-set/' . str_repeat('G', $group) . '/ipv4') === NULL) {
+			$group--;
+		}
+		$generation = '18446744073709551615';
+		$this->assertTrue(pfb_core_generation($generation) && !pfb_core_generation("{$generation}0") && !pfb_core_generation('18446744073709551616'),
+			'the longest generation');
+		$ids = $aliases = $resources = [];
+		for ($i = 0; $i < $limits['ids']; $i++) {
+			$ids[] = $id = 'ip-set/' . str_pad((string) $i, $group, 'G', STR_PAD_LEFT) . '/ipv' . ($i % 2 === 0 ? '4' : '6');
+			$aliases[] = (string) pfb_core_update_v2_alias($id);
+			$resources[] = ['id' => $id, 'generation' => $generation, 'action' => 'deny', 'direction' => ['ingress', 'egress'], 'entries' => PHP_INT_MAX];
+		}
+		$this->assertGreaterThan(strlen('ip-aggregate/permit/ipv6'), strlen($ids[0]), 'an ip-set id is the longest an alias allows');
+		$request = ['version' => 2, 'trigger' => 'scheduled'] + ($kind === 'removed' ? ['removed' => $ids] : ['resources' => $resources]);
+		$accepted = pfb_core_update_v2_request(json_encode($request, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+		$this->assertCount($limits['ids'], [...$accepted['resources'], ...$accepted['removed']], 'the request is at the bound, and accepted');
+
+		$report = match ($kind) {
+			'failed'  => ['failed' => array_map(static fn (string $id): array => ['id' => $id, 'stage' => 'apply',
+				'message' => str_repeat('a', 2 * $limits['messageBytes'])], $ids)],
+			'applied' => ['applied' => array_fill_keys($ids, $generation)],
+			default   => ['removed' => $ids],
+		};
+		$line = pfb_core_update_v2_result($report + ['changedAliases' => $aliases, 'ipChanged' => FALSE, 'dnsblChanged' => FALSE,
+			'reloadLaunched' => FALSE]);
+
+		$this->assertLessThanOrEqual($limits['resultLineBytes'], strlen($line), "every id {$kind}: within the bound of a line");
+		$this->assertSame($limits['ids'], substr_count($line, '"pfB_'), "every id {$kind}: every alias is on the line");
+	}
+
+	/** A failure message's invalid UTF-8 is replaced before its line break becomes a space. JSON cannot hold the byte: no row can. */
+	public function testAFailureMessageOfInvalidUtf8BesideALineBreakIsWrittenAsText(): void
+	{
+		$this->assertSame('{"version":2,"failed":[{"id":"geo-catalog","stage":"apply","message":"a? b"}]}' . "\n",
+			pfb_core_update_v2_result(['failed' => [['id' => 'geo-catalog', 'stage' => 'apply', 'message' => "a\xff\nb"]]]));
 	}
 }
