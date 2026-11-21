@@ -4660,11 +4660,6 @@ function pfb_outpost_member_max(?string $family): int {
 	return $family === NULL ? 1048576 : 64;
 }
 
-/** Whether $member is not empty and holds only characters an IP set member is spelled with: hexadecimal digits, '.', ':' and '/'. */
-function pfb_outpost_member_chars_valid(string $member): bool {
-	return $member !== '' && strspn($member, '0123456789abcdefABCDEF.:/') === strlen($member);
-}
-
 /**
  * Whether pf reads $member as one entry of an IP set of $family ('ipv4' or 'ipv6'): one address, or one address, '/' and a
  * prefix length. inet_pton() must parse the address as the family, so a range, a netmask, a host name, a zone or white space
@@ -4673,8 +4668,8 @@ function pfb_outpost_member_chars_valid(string $member): bool {
  * publish (decision on issue #4037).
  */
 function pfb_outpost_ip_member_valid(string $member, string $family): bool {
-	// the characters first: no platform's inet_pton() is asked what it makes of anything else
-	if (!pfb_outpost_member_chars_valid($member)) {
+	// the characters first (hexadecimal digits, '.', ':' and '/'): no platform's inet_pton() is asked what it makes of anything else
+	if ($member === '' || strspn($member, '0123456789abcdefABCDEF.:/') !== strlen($member)) {
 		return FALSE;
 	}
 	[$address, $prefix] = explode('/', $member, 2) + [1 => NULL];
@@ -16202,17 +16197,21 @@ function pfb_apply_alias_delta(
  * pfb_outpost_part_check() passed them. A line is sent as it is, its newline dropped; the files are read a line at a time,
  * never whole.
  *
+ * Each line must be a member of the table's family (pfb_outpost_ip_member_valid()): one address or one prefix of it, so pf never
+ * reads a line as an interface or a host name. It is checked on both passes. A $family other than 'ipv4' or 'ipv6' refuses the call.
+ *
  * On the delta and auto paths a negative count (any of the four) is refused: nothing is sent; a replace uses no count and goes
- * ahead. Then the decision is pfb_apply_alias_delta()'s, from counts: replace when
+ * ahead, logging the four counts. Then the decision is pfb_apply_alias_delta()'s, from counts: replace when
  * $force_replace, in mode 'replace', or in mode 'auto' when ($add_entries + $remove_entries) / max($entries, $previous_entries)
  * reaches PFB_DELTA_CHURN_THRESHOLD; otherwise a delta. Counts of zero and zero are nothing to do: no call, and no file is
  * read, so a file is not checked against a count of zero then. Any other delta first reads both files through: a file that
- * cannot be opened, holds an empty line or a line with a byte outside an IP set member's characters (a CRLF line), holds a
- * line longer than an IP set member, or holds another number of lines than its count sends nothing; the count check after
- * sending is only a backstop against a file that changes between the two passes, when the batches already sent stay applied
- * and ok is FALSE. Then the adds and the deletes go to pfctl in batches of $batch_size (clamped to [64, 4096]), each in a batch file
+ * cannot be opened, holds a line that is not a member of the family (an empty line and a CRLF line included), holds a
+ * line longer than an IP set member, or holds another number of lines than its count sends nothing. The second pass, which
+ * feeds pfctl, checks each line again and the count at the end, against a file that changes between the two passes: on a bad
+ * line the sending stops, on a wrong count it ends; the batches already sent stay applied and ok is FALSE. Then the adds and the deletes go to pfctl in batches of $batch_size (clamped to [64, 4096]), each in a batch file
  * of mode 0600 that pfctl reads with -f, so a member is never an argument; a failed batch leaves the remaining ones sent.
  *
+ * @param string $family 'ipv4' or 'ipv6': the family of the table's members
  * @param string $table_file the table's mirror, what a replace loads
  * @param int    $entries          the members of the table after the change
  * @param int    $previous_entries the members of the table before it
@@ -16220,15 +16219,26 @@ function pfb_apply_alias_delta(
  * @return array{delta: bool, ok: bool} delta TRUE on the delta path (refused files included), FALSE on a replace or for a
  *   refused negative count; ok FALSE when anything was refused, a batch file could not be written or any pfctl call failed
  */
-function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $table_file, string $add_file, int $add_entries,
-    string $remove_file, int $remove_entries, int $entries, int $previous_entries, string $mode, int $batch_size,
+function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $family, string $table_file, string $add_file,
+    int $add_entries, string $remove_file, int $remove_entries, int $entries, int $previous_entries, string $mode, int $batch_size,
     bool $force_replace = FALSE, string $tmpdir = ''): array {
-	// an alias table holds an IP set: a member of either family is at most this long
-	$max = pfb_outpost_member_max('ipv4');
-	$members = static function () use ($add_file, $remove_file, $add_entries, $remove_entries, $table, $max): ?array {
-		$lines = static function ($fh) use ($max): Generator {
+	if ($family !== 'ipv4' && $family !== 'ipv6') {
+		pfb_logger(" Updating [ {$table} ]: refused, the family is neither ipv4 nor ipv6\n", 1);
+		return ['delta' => FALSE, 'ok' => FALSE];
+	}
+	$max = pfb_outpost_member_max($family);
+	$members = static function () use ($add_file, $remove_file, $add_entries, $remove_entries, $table, $family, $max): ?array {
+		// the second pass: a file rewritten since the first is checked again as it is sent
+		$lines = static function ($fh, string $side) use ($table, $family, $max): Generator {
+			$n = 0;
 			while (($line = fgets($fh, $max + 2)) !== FALSE) {
-				yield rtrim($line, "\n");
+				$member = rtrim($line, "\n");
+				if (!pfb_outpost_ip_member_valid($member, $family)) {
+					fclose($fh);
+					throw new UnexpectedValueException(" Updating [ {$table} ]: the {$side} file line " . ($n + 1) . " is not a member\n");
+				}
+				$n++;
+				yield $member;
 			}
 			fclose($fh);
 		};
@@ -16240,12 +16250,12 @@ function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $t
 				pfb_logger(" Updating [ {$table} ]: cannot read {$path}\n", 1);
 				return NULL;
 			}
-			$sides[] = $fh;
+			$sides[] = [$fh, $side];
 			$read = 0;
 			while (($line = fgets($fh, $max + 2)) !== FALSE && strlen($member = rtrim($line, "\n")) <= $max) {
 				$read++;
-				// pf takes no empty line and no line with a byte outside an address or a prefix (a CRLF line is one)
-				if (!pfb_outpost_member_chars_valid($member)) {
+				// a line pf would read as anything but an address or a prefix of the family (an interface or a host name, a CRLF line) is refused
+				if (!pfb_outpost_ip_member_valid($member, $family)) {
 					pfb_logger(" Updating [ {$table} ]: the {$side} file line {$read} is not a member\n", 1);
 					return NULL;
 				}
@@ -16259,11 +16269,11 @@ function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $t
 				return NULL;
 			}
 			if (!rewind($fh)) {
-				pfb_logger(" Updating [ {$table} ]: cannot rewind {$path}\n", 1);
+				pfb_logger(" Updating [ {$table} ]: cannot rewind the {$side} file {$path}\n", 1);
 				return NULL;
 			}
 		}
-		return [$lines($sides[0]), $lines($sides[1])];
+		return [$lines(...$sides[0]), $lines(...$sides[1])];
 	};
 	return pfb_apply_alias_delta_members($pfctl_bin, $table, $table_file, $members, $add_entries, $remove_entries, $entries,
 	    $previous_entries, $mode, $batch_size, $force_replace, $tmpdir);
@@ -16286,9 +16296,13 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 	$replace    = $force_replace || $mode === 'replace';
 
 	// a replace reloads the table from its file and uses no count; a delta trusts all four
-	if (!$replace && min($add_entries, $remove_entries, $entries, $previous_entries) < 0) {
-		pfb_logger(" Updating [ {$table} ]: refused, a negative count (add {$add_entries}, remove {$remove_entries}, entries {$entries}, previous {$previous_entries})\n", 1);
-		return ['delta' => FALSE, 'ok' => FALSE];
+	if (min($add_entries, $remove_entries, $entries, $previous_entries) < 0) {
+		$counts = "add {$add_entries}, remove {$remove_entries}, entries {$entries}, previous {$previous_entries}";
+		if (!$replace) {
+			pfb_logger(" Updating [ {$table} ]: refused, a negative count ({$counts})\n", 1);
+			return ['delta' => FALSE, 'ok' => FALSE];
+		}
+		pfb_logger(" Updating [ {$table} ]: a negative count ({$counts}) does not stop the replace\n", 1);
 	}
 
 	if ($replace || ($mode === 'auto' && $table_size > 0 && ($churn / $table_size) >= PFB_DELTA_CHURN_THRESHOLD)) {
@@ -16341,24 +16355,30 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 	};
 
 	$ok = TRUE;
-	foreach (['add' => [$sides[0], $add_entries], 'delete' => [$sides[1], $remove_entries]] as $op => [$lines, $count]) {
-		$chunk = [];
-		$read  = 0;
-		foreach ($lines as $line) {
-			$chunk[] = $line;
-			$read++;
-			if (count($chunk) === $batch_size) {
-				$ok    = $push($op, $chunk) && $ok;
-				$chunk = [];
+	try {
+		foreach (['add' => [$sides[0], $add_entries], 'delete' => [$sides[1], $remove_entries]] as $op => [$lines, $count]) {
+			$chunk = [];
+			$read  = 0;
+			foreach ($lines as $line) {
+				$chunk[] = $line;
+				$read++;
+				if (count($chunk) === $batch_size) {
+					$ok    = $push($op, $chunk) && $ok;
+					$chunk = [];
+				}
+			}
+			if ($chunk !== []) {
+				$ok = $push($op, $chunk) && $ok;
+			}
+			if ($read !== $count) {
+				pfb_logger(" Updating [ {$table} ]: {$op} read {$read} members, not {$count}\n", 1);
+				$ok = FALSE;
 			}
 		}
-		if ($chunk !== []) {
-			$ok = $push($op, $chunk) && $ok;
-		}
-		if ($read !== $count) {
-			pfb_logger(" Updating [ {$table} ]: {$op} read {$read} members, not {$count}\n", 1);
-			$ok = FALSE;
-		}
+	} catch (UnexpectedValueException $e) {
+		// a line a member source refuses as it is read (pfb_apply_alias_delta_files()): the sending stops, the batches sent stay
+		pfb_logger($e->getMessage(), 1);
+		return ['delta' => TRUE, 'ok' => FALSE];
 	}
 	return ['delta' => TRUE, 'ok' => $ok];
 }
