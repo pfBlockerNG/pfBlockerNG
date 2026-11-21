@@ -845,6 +845,16 @@ file is never served; the body comes from disk a chunk at a time. A caller write
 checks the digest over those bytes, and hands the file on (`pfctl -T replace|add|delete -f`) without parsing it into an
 array.
 
+The Outpost apply (issue #4037) takes an `ip-set/*` or `ip-aggregate/*` part only when every line is safe to hand to pf as
+one entry of the resource's family: one address, or one address followed by `/` and a prefix length, where `inet_pton()`
+parses the address as that family (so no range, netmask, host name, zone or white space) and the prefix length is decimal
+digits without a sign or a leading zero, at most the family's width. It does not compare spellings: hexadecimal digits in
+either case and an uncompressed IPv6 address are taken, and one canonical spelling per network is the Core Updater's to
+publish. One line that fails refuses the whole resource, which keeps its cursor. The Outpost also bounds every part by what
+`GetResources` said of it: its line count times the longest line a member may be, 64 bytes and a line feed for an IP
+member (no address or prefix the rule takes is longer) and 1 MiB and a line feed for any other. A `Content-Length` over
+that bound is refused before the body is read, and a body that runs past it is cut off there and refused.
+
 **Errors**, in the JSON envelope: `not_found` (`404`) when the store does not hold that part (the resource is unknown or
 removed, the generation is neither the current one nor the applied baseline, or the delta is not the one from that
 generation to the current one: it was pruned when another generation was published or applied; ask `GetResources` again);
