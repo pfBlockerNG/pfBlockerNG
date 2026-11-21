@@ -46,28 +46,19 @@ type resourceCursor struct {
 // resourceMethods is GetResources and GetResourceBody over store, read-only. Without a store (no --resource-dir) they answer
 // unavailable.
 func resourceMethods(store *resources.Store) map[string]method {
-	return map[string]method{"GetResourceBody": {call: func(_ context.Context, params []byte) (any, error) {
+	return map[string]method{"GetResourceBody": {client: true, call: func(_ context.Context, params []byte) (any, error) {
 		if store == nil {
 			return nil, newError(codeUnavailable, "Core runs no resource store: start it with --resource-dir")
 		}
 		return resourceBody(store, params)
-	}}, "GetResources": {call: func(_ context.Context, params []byte) (any, error) {
+	}}, "GetResources": {client: true, call: func(_ context.Context, params []byte) (any, error) {
 		if store == nil {
 			return nil, newError(codeUnavailable, "Core runs no resource store: start it with --resource-dir")
 		}
 		var p struct {
 			Resources map[string]*resourceCursor `json:"resources"`
 		}
-		if err := decodeParams(params, &p); err != nil {
-			var ae *apiError
-			if errors.As(err, &ae) {
-				for i := range ae.FieldErrors {
-					// A path from the decoder writes "/" as "~1" and "~" as "~0"; an unknown name is verbatim
-					if f := &ae.FieldErrors[i]; f.Message != "unknown parameter" {
-						f.Field = strings.ReplaceAll(strings.ReplaceAll(f.Field, "~1", "/"), "~0", "~")
-					}
-				}
-			}
+		if err := decodeResourceParams(params, &p); err != nil {
 			return nil, err
 		}
 		ids := slices.Sorted(maps.Keys(p.Resources))
@@ -99,6 +90,21 @@ func resourceMethods(store *resources.Store) map[string]method {
 		}
 		return map[string]any{"resources": items}, nil
 	}}}
+}
+
+// decodeResourceParams is decodeParams for parameters keyed by resource id: a field error names the id as given.
+func decodeResourceParams(params []byte, v any) error {
+	err := decodeParams(params, v)
+	var ae *apiError
+	if errors.As(err, &ae) {
+		for i := range ae.FieldErrors {
+			// A path from the decoder writes "/" as "~1" and "~" as "~0"; an unknown name is verbatim
+			if f := &ae.FieldErrors[i]; f.Message != "unknown parameter" {
+				f.Field = strings.ReplaceAll(strings.ReplaceAll(f.Field, "~1", "/"), "~0", "~")
+			}
+		}
+	}
+	return err
 }
 
 func resourceItemOf(r resources.Reply) resourceItem {

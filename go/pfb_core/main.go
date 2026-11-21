@@ -4,7 +4,8 @@
 //	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
 //
 //	--socket PATH       the API's Unix socket: its directory is made 0700 and the socket 0600, the server's user's alone
-//	--state-dir DIR     Core's own storage: core.lock and, without --settings-backend-cmd, settings.json; --update-cmd adds
+//	--state-dir DIR     Core's own storage: core.lock, applied.json (the last ReportApplied) and, without
+//	                    --settings-backend-cmd, settings.json; --update-cmd adds
 //	                    schedule_state.json, update.log and Update receipts; --maintenance-cmd adds maintenance.log and its
 //	                    private receipts. The directory is made 0700 and is the server user's alone.
 //	--settings-backend-cmd PATH
@@ -139,6 +140,12 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		return 1
 	}
 	defer lock.Close()
+	switch report, err := readApplied(*stateDir); {
+	case err != nil:
+		logger.Printf("ignored %s, which is not a report ReportApplied would record: %v", appliedFile, err)
+	case report != nil:
+		logger.Printf("applied report: %d resources", len(report))
+	}
 	var backend settings.Backend = settings.NewFileBackend(*stateDir)
 	kind := "file"
 	if *backendCmd != "" {
@@ -204,6 +211,7 @@ func coreMethods(stateDir string, store *settings.Store, resourceStore *resource
 	maps.Copy(methods, settingsMethods(store))
 	maps.Copy(methods, resourceMethods(resourceStore))
 	maps.Copy(methods, updateMethods(sched, gate))
+	maps.Copy(methods, appliedMethods(stateDir))
 	return methods
 }
 

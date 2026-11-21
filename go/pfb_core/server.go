@@ -78,15 +78,17 @@ func newError(code, message string, fields ...fieldError) *apiError {
 }
 
 // method is one API method. params is the request body, a JSON object; mutating methods carry a requestId in it and
-// run at most once per requestId (replay.go).
+// run at most once per requestId (replay.go). A further local client (--client-uid) is served only the methods marked
+// client; the privileged uid is served every method.
 type method struct {
 	mutating bool
+	client   bool
 	call     func(ctx context.Context, params []byte) (any, error)
 }
 
 func productionMethods() map[string]method {
 	return map[string]method{
-		"GetVersion": {call: func(_ context.Context, params []byte) (any, error) {
+		"GetVersion": {client: true, call: func(_ context.Context, params []byte) (any, error) {
 			if err := decodeParams(params, &struct{}{}); err != nil {
 				return nil, err
 			}
@@ -306,7 +308,8 @@ func (s *server) write(w http.ResponseWriter, r response) {
 
 func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 	p, _ := r.Context().Value(peerKey{}).(peer)
-	if p.err != nil || (p.uid != s.o.allowUID && !slices.Contains(s.o.clientUIDs, p.uid)) {
+	client := p.err == nil && p.uid != s.o.allowUID && slices.Contains(s.o.clientUIDs, p.uid)
+	if p.err != nil || (p.uid != s.o.allowUID && !client) {
 		if p.err != nil {
 			s.o.logf("refused a caller whose credential cannot be read: %v", p.err)
 		} else {
@@ -317,6 +320,11 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	name, ok := strings.CutPrefix(r.URL.Path, "/"+apiVersion+"/")
 	m, known := s.o.methods[name]
+	if client && (!ok || !known || !m.client) { // an unknown method is refused alike: a client learns nothing of the others
+		s.o.logf("refused a client of uid %d calling %q: a client is served only the methods marked for it", p.uid, r.URL.Path)
+		s.write(w, errorResponse(newError(codeUnauthenticated, "a further local client may not call this method")))
+		return
+	}
 	if !ok || !known {
 		s.write(w, errorResponse(newError(codeNotFound, "no such method: "+r.URL.Path)))
 		return

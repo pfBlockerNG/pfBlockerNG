@@ -17,7 +17,7 @@ func settingsMethods(st *settings.Store) map[string]method {
 			}
 			return st.Schema(), nil
 		}},
-		"GetSettings": {call: func(_ context.Context, params []byte) (any, error) {
+		"GetSettings": {client: true, call: func(_ context.Context, params []byte) (any, error) {
 			var p struct {
 				ProjectionIDs []string `json:"projectionIds"`
 			}
