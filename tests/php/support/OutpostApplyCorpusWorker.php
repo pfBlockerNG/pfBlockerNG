@@ -19,7 +19,7 @@ declare(strict_types=1);
  * written as lines and base64-encoded here), `files` (path under the work directory, or under {aliasdir} => lines, NULL
  * removes), `kernel` (table => lines, NULL removes), `pfctlFail` (list of "<table>.<verb>"), `pending` (TRUE: a GUI
  * change is marked pending before the pass), `openRecord` (TRUE: a received policy's apply record is open), `reload`
- * ("ok" or "missing"). The record of a pass is what the test compares with the step's `expect`.
+ * ("ok" or "missing"), `dnsConfigLockHeld` (TRUE: another process holds the DNS configuration lock). The record of a pass is what the test compares with the step's `expect`.
  */
 
 [, $scenarioFile, $work, $resultFile] = $argv;
@@ -259,6 +259,7 @@ foreach ($sc['steps'] as $step) {
 		pfb_mark_pending_changes();
 		pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
 	}
+	$GLOBALS['pfb_test_try_lock_fail'] = !empty($step['dnsConfigLockHeld']);	// the DNS configuration lock is held elsewhere
 	if (!empty($step['openRecord'])) {
 		$time = time() - 100;
 		file_put_contents("{$pfb['dbdir']}/pfb_sync_receive.json", json_encode(['accepted_digest' => NULL,
