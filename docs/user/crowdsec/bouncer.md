@@ -30,8 +30,8 @@ traffic matching those tables.
 - It opens no listening port.
 - It does not go through pfBlockerNG's feeds or Update pass. Saving or running an update neither starts, stops nor
   restarts it.
-- When the bouncer stops, it empties both tables, so nothing is blocked until it runs again (fail-open), as with the
-  official CrowdSec firewall bouncer. While the LAPI is unreachable, the bouncer keeps enforcing the last set of bans
+- When the bouncer is stopped normally, it empties both tables, so nothing is blocked until it runs again (fail-open),
+  as with the official CrowdSec firewall bouncer. While the LAPI is unreachable, the bouncer keeps enforcing the last set of bans
   it received.
 
 ## Before you start
@@ -98,7 +98,7 @@ The bouncer runs only while all three of these are true:
 - a bouncer key is stored on this firewall.
 
 Turning any of them off stops the bouncer and removes its rules. The bouncer also follows a change to these settings
-received through XMLRPC sync, the setup wizard, a package install or upgrade, and a reboot.
+received through XMLRPC sync, the setup wizard, and a package install or upgrade, and it starts again at boot.
 
 ## Firewall rules and tables
 
@@ -121,7 +121,8 @@ The rules drop packets silently (`block drop`) and use `quick`, so no later rule
 - With **All interfaces** off, the rules apply only on the selected interfaces. A family for which none of the selected
   interfaces exists gets no rules.
 - The tables are not pfSense aliases and do not appear under **Firewall > Aliases**. They hold only what the bouncer puts
-  in them, and only while it runs. pfBlockerNG stores no banned address in `config.xml`.
+  in them, and a normal stop empties them. (A bouncer that crashes or has to be killed leaves them as they were until
+  it starts again or the filter is reloaded.) pfBlockerNG stores no banned address in `config.xml`.
 - A filter reload removes both tables. The bouncer is told to recreate and refill them immediately; if that signal is
   missed, its next pull restores them within 10 seconds.
 - When a new single address is banned, the bouncer also kills the states of existing connections to or from it, so an
@@ -138,15 +139,16 @@ it loads.
   `CrowdSec is disabled`, or `no bouncer API key is stored on this node`), plus the bouncer's version, its start time
   and when it last wrote its status. **(stale)** next to that time means the bouncer has not written its status for
   more than three pull intervals: it is stuck or stopped.
-- **LAPI**: the LAPI URL (never the key), the last successful pull, the last error with its time, and the number of
-  LAPI requests and failed requests since the bouncer started.
+- **LAPI**: the LAPI URL (never the key), the last successful pull, the last failed pull (**Last error**) with its time
+  and error, and the number of LAPI requests and failed requests since the bouncer started. A failed usage report
+  counts as a failed request, but shows only in the log, not under **Last error**.
 - **Decisions**: the number of banned values (addresses and ranges) per address family and per origin, with a total
   per family. Origins are reported by the LAPI as they are, for example `crowdsec` (the engine's own scenarios), `cscli`
   (added by hand), `cscli-import`, `CAPI` (the community blocklist), `lists` (blocklists subscribed through the CrowdSec
   console) and `console`. A value banned by decisions of several origins is counted once, under the origin of its
   lowest-numbered (usually oldest) decision.
-- **Dropped**: packets and bytes dropped per address family since the bouncer started. These come from the inbound
-  rule of each family only.
+- **Dropped**: packets and bytes dropped per address family. These are the pf counters of each family's inbound rule,
+  so they count since the last filter reload, which resets them, not since the bouncer started.
 - **Table crowdsec_v4** and **Table crowdsec_v6**: the contents of each table, 100 entries per page.
 - **Decision Lookup**: enter an IP address to ask the LAPI which decisions it holds on that address, with their value,
   scope, origin, scenario, type and remaining duration. The lookup uses the stored URL and key, and times out after
@@ -155,7 +157,7 @@ it loads.
 
 ### Dashboard widget
 
-While the bouncer runs, the **pfBlockerNG** dashboard widget lists `crowdsec_v4` and `crowdsec_v6` after pfBlockerNG's
+While the bouncer is enabled (see [When the bouncer runs](#when-the-bouncer-runs)), the **pfBlockerNG** dashboard widget lists `crowdsec_v4` and `crowdsec_v6` after pfBlockerNG's
 own aliases, with the number of entries in each table and the packets matched by its rules. Each name links to the
 Status subtab.
 
@@ -179,8 +181,10 @@ the engine.
 
 ## Logs
 
-The bouncer writes to the system log with the tag `pfb_crowdsec`. Each line has the form `level=<level> msg=<text>` and
-is sent at the matching syslog severity: `debug`, `info`, `warning` or `err`. The bouncer's **Log level** decides which
+The bouncer writes to the system log with the tag `pfb_crowdsec`. Each of its lines has the form `level=<level> msg=<text>`
+and is sent at the matching syslog severity: `debug`, `info`, `warning` or `err`. The service script's own start and
+stop messages (`INFO [pfBlockerNG] CrowdSec bouncer started`, `ERROR [pfBlockerNG] CrowdSec bouncer: ... - not started`),
+and any crash output, use the same tag in a different format. The bouncer's **Log level** decides which
 lines it sends; pfSense then decides which of them it keeps.
 
 pfSense keeps only lines at or above **Default Log Level** under **Status > System Logs > Settings**. On pfSense CE 2.9
@@ -198,12 +202,12 @@ should run, the file includes these families:
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
 | `fw_bouncer_banned_ips` | gauge | `origin`, `ip_type` | Values the bouncer bans, per origin and address family |
-| `fw_bouncer_dropped_packets` | gauge | `ip_type` | Packets dropped by the inbound rule of each family since the bouncer started |
-| `fw_bouncer_dropped_bytes` | gauge | `ip_type` | Bytes dropped by the inbound rule of each family since the bouncer started |
+| `fw_bouncer_dropped_packets` | gauge | `ip_type` | Packets dropped by the inbound rule of each family since the last filter reload |
+| `fw_bouncer_dropped_bytes` | gauge | `ip_type` | Bytes dropped by the inbound rule of each family since the last filter reload |
 | `pfblockerng_crowdsec_lapi_requests_total` | counter | | LAPI requests completed since the bouncer started |
 | `pfblockerng_crowdsec_lapi_errors_total` | counter | | Completed LAPI requests that failed since the bouncer started |
 | `pfblockerng_crowdsec_last_pull_timestamp_seconds` | gauge | | Unix time of the last successful pull |
-| `pfblockerng_crowdsec_last_error_timestamp_seconds` | gauge | | Unix time of the last error, `0` for none |
+| `pfblockerng_crowdsec_last_error_timestamp_seconds` | gauge | | Unix time of the last failed pull, `0` for none |
 
 `ip_type` is `ipv4` or `ipv6`. The `fw_bouncer_*` names are those of the official CrowdSec firewall bouncer, so
 dashboards built for it work with these metrics. The dropped counters are per address family only: there is one table,
@@ -251,8 +255,8 @@ or not.
 - **Reboot**: the bouncer starts with the other packages and pulls the full set of decisions. Nothing needs to be done.
 - **Configuration restore**: restoring the whole configuration reinstalls the packages at the next boot, which applies
   the restored CrowdSec settings. Restoring only the **Package Manager** area reloads the filter, so the rules follow the
-  restored settings at once, but the bouncer itself only follows them at the next save of the CrowdSec settings,
-  pfBlockerNG's enable, or a reboot.
+  restored settings at once, but the bouncer itself does not follow them, not even after a reboot. Save the CrowdSec
+  Settings subtab once after such a restore.
 - **Uninstall**: removing pfBlockerNG stops the bouncer and removes its service script, its configuration file
   (`/usr/local/etc/pfb_crowdsec.json`), its status file and its program. Its rules disappear with the package. Its
   settings follow **Keep Settings** on **Firewall > pfBlockerNG > General**, like the rest of pfBlockerNG's settings.
