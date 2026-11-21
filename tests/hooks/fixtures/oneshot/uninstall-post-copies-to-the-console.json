@@ -1,0 +1,82 @@
+{
+ "description": "The uninstall disable pass's post hooks with its change context: a .py hook runs through the wrapper, a row whose file is missing is skipped, and the console gets the same text as the main log.",
+ "caller": "uninstall",
+ "vars": {
+  "TRIGGER": "update",
+  "IP_CHANGED": "1",
+  "DNSBL_CHANGED": "0",
+  "STATUS": "ok",
+  "CHANGED_IP_ALIASES": "pfB_Alpha_v4 pfB_Beta_v6",
+  "CHANGED_DNSBL_GROUPS": "Ads"
+ },
+ "pkgOp": "delete",
+ "when": "post",
+ "stdin": "{\"trigger\":\"update\",\"lifecycle\":\"uninstall\",\"pkgOp\":\"delete\",\"ipChanged\":true,\"dnsblChanged\":false,\"changedIpAliases\":\"pfB_Alpha_v4 pfB_Beta_v6\",\"changedDnsblGroups\":\"Ads\"}",
+ "rows": [
+  {
+   "script": "hook_post_a.py",
+   "when": "post",
+   "enabled": "on",
+   "description": "Reload"
+  },
+  {
+   "script": "hook_post_missing.sh",
+   "when": "post",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_post_c.sh",
+   "when": "post",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_post_a.py": {
+   "body": "{record}\necho reloaded\n",
+   "mode": "0644"
+  },
+  "hooks/hook_post_c.sh": {
+   "body": "#!/bin/sh\n{record}\necho done\n"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_post_a.py",
+    "wrapped": true,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "post",
+     "PFB_TRIGGER": "update",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "1",
+     "PFB_PKG_OP": "delete",
+     "PFB_IP_CHANGED": "1",
+     "PFB_DNSBL_CHANGED": "0",
+     "PFB_STATUS": "ok",
+     "PFB_CHANGED_IP_ALIASES": "pfB_Alpha_v4 pfB_Beta_v6",
+     "PFB_CHANGED_DNSBL_GROUPS": "Ads"
+    }
+   },
+   {
+    "script": "hook_post_c.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "post",
+     "PFB_TRIGGER": "update",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "1",
+     "PFB_PKG_OP": "delete",
+     "PFB_IP_CHANGED": "1",
+     "PFB_DNSBL_CHANGED": "0",
+     "PFB_STATUS": "ok",
+     "PFB_CHANGED_IP_ALIASES": "pfB_Alpha_v4 pfB_Beta_v6",
+     "PFB_CHANGED_DNSBL_GROUPS": "Ads"
+    }
+   }
+  ],
+  "log": "\n[ pfB Hook ] post Reload (hook_post_a.py, timeout 60s)\nreloaded\n[ pfB Hook ] post Reload completed\n[ pfB Hook ] post #1 script 'hook_post_missing.sh' not a valid file in {root}/hooks; skipping\n\n[ pfB Hook ] post #2 (hook_post_c.sh, timeout 60s)\ndone\n[ pfB Hook ] post #2 completed\n",
+  "console": "\n[ pfB Hook ] post Reload (hook_post_a.py, timeout 60s)\nreloaded\n[ pfB Hook ] post Reload completed\n[ pfB Hook ] post #1 script 'hook_post_missing.sh' not a valid file in {root}/hooks; skipping\n\n[ pfB Hook ] post #2 (hook_post_c.sh, timeout 60s)\ndone\n[ pfB Hook ] post #2 completed\n"
+ }
+}
