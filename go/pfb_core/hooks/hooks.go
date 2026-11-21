@@ -86,7 +86,7 @@ type Runner struct {
 	Dir        string        // the hook directory
 	Python     string        // the Python wrapper (pfb_python.sh): a .py hook runs only through it
 	Log        io.Writer     // the main log: every line and all of each hook's output (nil: none)
-	Errors     io.Writer     // the error log: the lines of a hook that was skipped or failed (nil: none)
+	Errors     io.Writer     // the error log: skipped or failed hooks, failed output writes, a cancelled run (nil: none)
 	Transcript io.Writer     // the Update transcript: every line and the first 1,048,576 bytes of each hook's output (nil: none)
 	Grace      time.Duration // between TERM and KILL; 0 is 5 s
 }
@@ -238,7 +238,8 @@ func (r Runner) exec(ctx context.Context, argv, env []string, timeout time.Durat
 	}
 	defer capture.Close()
 	name := capture.Name()
-	hook, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND, 0) // as PHP's 'a': a seek by the hook leaves no hole
+	// as PHP's 'a': a seek by the hook leaves no hole; O_NOFOLLOW refuses a link planted at that name
+	hook, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		os.Remove(name)
 		return -1, ran
