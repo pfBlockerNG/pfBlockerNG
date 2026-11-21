@@ -4641,11 +4641,6 @@ function pfb_core_error_code(mixed $reply): ?string {
 	return is_string($code) && preg_match('/^[a-z_]{1,64}$/D', $code) === 1 ? $code : NULL;
 }
 
-/** Whether $generation is a generation as Core writes one: a string of decimal digits that fits 64 bits. */
-function pfb_outpost_generation_valid(mixed $generation): bool {
-	return is_string($generation) && ctype_digit($generation) && pfb_outpost_generation_cmp($generation, '18446744073709551615') <= 0;
-}
-
 /** Order two valid generations by value without arithmetic: a generation can exceed what a PHP integer holds. */
 function pfb_outpost_generation_cmp(string $a, string $b): int {
 	$a = ltrim($a, '0');
@@ -4829,7 +4824,7 @@ function pfb_outpost_reply_kind(array $item, array $sent): ?string {
 	$kind = $item['kind'] ?? NULL;
 	$generation = $item['generation'] ?? NULL;
 	$from = $sent['generation'] ?? NULL;
-	if (!pfb_outpost_generation_valid($generation)) {
+	if (!pfb_core_generation($generation)) {
 		return NULL;
 	}
 	if ($kind === 'unchanged') {
@@ -4844,7 +4839,7 @@ function pfb_outpost_reply_kind(array $item, array $sent): ?string {
 	}
 	$counted = is_int($item['addEntries'] ?? NULL) && $item['addEntries'] >= 0 && is_int($item['removeEntries'] ?? NULL)
 		&& $item['removeEntries'] >= 0;
-	return $kind === 'delta' && $from !== NULL && $counted && pfb_outpost_generation_valid($item['from'] ?? NULL)
+	return $kind === 'delta' && $from !== NULL && $counted && pfb_core_generation($item['from'] ?? NULL)
 		&& pfb_outpost_generation_cmp($item['from'], $from) === 0 && pfb_outpost_generation_cmp($generation, $from) > 0 ? 'delta' : NULL;
 }
 
@@ -5065,7 +5060,7 @@ function pfb_outpost_cursors_read(?string $path = NULL): array {
 }
 
 function pfb_outpost_cursor_valid(string $id, mixed $generation, mixed $digest, mixed $entries): bool {
-	return pfb_core_resource_id($id) && pfb_outpost_generation_valid($generation) && pfb_outpost_digest_valid($digest)
+	return pfb_core_resource_id($id) && pfb_core_generation($generation) && pfb_outpost_digest_valid($digest)
 		&& is_int($entries) && $entries >= 0;
 }
 
@@ -15522,7 +15517,6 @@ function pfb_pfctl_op_failed(string $op, int $rc, string $stderr): bool {
 // On failure (non-zero rc or pfctl error output) logs one attributed line via pfb_logger().
 // $pfctl_bin defaults to $pfb['pfctl']; pass explicitly when the binary is a
 // per-call parameter (e.g. pfb_apply_alias_delta, which accepts a mock binary in tests).
-// Returns ['out' => lines, 'rc' => status, 'failed' => whether it was logged as a failure].
 function pfb_pfctl_table_op(string $table, string $op, string $args = '', string $pfctl_bin = ''): array {
 	global $pfb;
 	if ($pfctl_bin === '') {
@@ -16199,41 +16193,62 @@ function pfb_apply_alias_delta(
 
 /**
  * pfb_apply_alias_delta() for members held in files (the Outpost apply, issue #4037): the members to add and to remove are
- * files of one member per line, as pfb_outpost_fetch() leaves a delta's parts, read a line at a time and never whole.
+ * files of one member per line, each line ending in a newline, as pfb_outpost_fetch() leaves a delta's parts once
+ * pfb_outpost_part_check() passed them. A line is sent as it is, its newline dropped; the files are read a line at a time,
+ * never whole.
  *
- * The decision is pfb_apply_alias_delta()'s, from counts: replace when $force_replace, in mode 'replace', or in mode 'auto'
- * when ($add_entries + $remove_entries) / max($entries, $previous_entries) reaches PFB_DELTA_CHURN_THRESHOLD; otherwise the
- * adds and then the deletes go to pfctl in batches of $batch_size (clamped to [64, 4096]). A member reaches pfctl only inside
- * the batch file it reads with -f, never as an argument.
- *
- * ok is FALSE when any pfctl call failed, a batch file could not be written, a member file could not be opened, or a file
- * held another number of lines than its count. Both member files are opened before the first pfctl call, so one that
- * cannot be opened sends nothing; any other failure leaves every remaining batch still sent.
+ * A negative count is refused: nothing is sent. Then the decision is pfb_apply_alias_delta()'s, from counts: replace when
+ * $force_replace, in mode 'replace', or in mode 'auto' when ($add_entries + $remove_entries) / max($entries, $previous_entries)
+ * reaches PFB_DELTA_CHURN_THRESHOLD; otherwise a delta. Counts of zero and zero are nothing to do: no call, and no file is
+ * read, so a file is not checked against a count of zero then. Any other delta first reads both files through: a file that
+ * cannot be opened, holds a line longer than an IP set member, or holds another number of lines than its count sends
+ * nothing. Then the adds and the deletes go to pfctl in batches of $batch_size (clamped to [64, 4096]), each in a batch file
+ * of mode 0600 that pfctl reads with -f, so a member is never an argument; a failed batch leaves the remaining ones sent.
  *
  * @param string $table_file the table's mirror, what a replace loads
  * @param int    $entries          the members of the table after the change
  * @param int    $previous_entries the members of the table before it
  * @param string $tmpdir where each batch file is written; '' for the system's temporary directory
- * @return array{delta: bool, ok: bool} delta TRUE when the delta path was taken, FALSE for a replace
+ * @return array{delta: bool, ok: bool} delta TRUE on the delta path (refused files included), FALSE on a replace or for a
+ *   negative count; ok FALSE when anything was refused, a batch file could not be written or any pfctl call failed
  */
 function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $table_file, string $add_file, int $add_entries,
     string $remove_file, int $remove_entries, int $entries, int $previous_entries, string $mode, int $batch_size,
     bool $force_replace = FALSE, string $tmpdir = ''): array {
-	$members = static function () use ($add_file, $remove_file, $table): ?array {
-		$lines = static function ($fh): Generator {
-			while (($line = fgets($fh)) !== FALSE) {
+	// an alias table holds an IP set: a member of either family is at most this long
+	$max = pfb_outpost_member_max('ipv4');
+	$members = static function () use ($add_file, $remove_file, $add_entries, $remove_entries, $table, $max): ?array {
+		$lines = static function ($fh) use ($max): Generator {
+			while (($line = fgets($fh, $max + 2)) !== FALSE) {
 				yield rtrim($line, "\n");
 			}
 			fclose($fh);
 		};
-		// is_file: a directory opens for reading but yields no line
-		$add    = is_file($add_file) ? @fopen($add_file, 'rb') : FALSE;
-		$remove = is_file($remove_file) ? @fopen($remove_file, 'rb') : FALSE;
-		if ($add === FALSE || $remove === FALSE) {
-			pfb_logger(" Updating [ {$table} ]: cannot read " . ($add === FALSE ? $add_file : $remove_file) . "\n", 1);
-			return NULL;
+		$sides = [];
+		foreach (['add' => [$add_file, $add_entries], 'remove' => [$remove_file, $remove_entries]] as $side => [$path, $count]) {
+			// is_file: a directory opens for reading but yields no line
+			$fh = is_file($path) ? @fopen($path, 'rb') : FALSE;
+			if ($fh === FALSE) {
+				pfb_logger(" Updating [ {$table} ]: cannot read {$path}\n", 1);
+				array_map('fclose', $sides);
+				return NULL;
+			}
+			$sides[] = $fh;
+			$read = 0;
+			while (($line = fgets($fh, $max + 2)) !== FALSE && strlen(rtrim($line, "\n")) <= $max) {
+				$read++;
+			}
+			if ($line !== FALSE) {
+				pfb_logger(" Updating [ {$table} ]: the {$side} file holds a line over {$max} bytes\n", 1);
+			} elseif ($read !== $count) {
+				pfb_logger(" Updating [ {$table} ]: the {$side} file holds {$read} members, not {$count}\n", 1);
+			}
+			if ($line !== FALSE || $read !== $count || !rewind($fh)) {
+				array_map('fclose', $sides);
+				return NULL;
+			}
 		}
-		return [$lines($add), $lines($remove)];
+		return [$lines($sides[0]), $lines($sides[1])];
 	};
 	return pfb_apply_alias_delta_members($pfctl_bin, $table, $table_file, $members, $add_entries, $remove_entries, $entries,
 	    $previous_entries, $mode, $batch_size, $force_replace, $tmpdir);
@@ -16250,11 +16265,14 @@ function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $t
 function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string $table_file, callable $members, int $add_entries,
     int $remove_entries, int $entries, int $previous_entries, string $mode, int $batch_size, bool $force_replace,
     string $tmpdir): array {
+	if ($add_entries < 0 || $remove_entries < 0) {
+		pfb_logger(" Updating [ {$table} ]: refused, a negative count (add {$add_entries}, remove {$remove_entries})\n", 1);
+		return ['delta' => FALSE, 'ok' => FALSE];
+	}
 	$batch_size = pfb_alias_delta_batch_clamp($batch_size);
 	$churn      = $add_entries + $remove_entries;
 	$table_size = max($entries, $previous_entries);
 
-	// Force replace (boot/enable-disable initial load path), mode replace, or the auto-mode large-churn escape hatch.
 	if ($force_replace || $mode === 'replace'
 	    || ($mode === 'auto' && $table_size > 0 && ($churn / $table_size) >= PFB_DELTA_CHURN_THRESHOLD)) {
 		// issue #722: nothing else on a live box distinguishes the delta path from a
@@ -16283,20 +16301,23 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 		$data = implode("\n", $chunk) . "\n";
 		// 'x': a fresh file of this run's own, never one that is already there
 		$path = "{$tmpdir}/pfb_{$op}_" . bin2hex(random_bytes(8));
-		$fh   = @fopen($path, 'xb');
-		if ($fh === FALSE) {
-			pfb_logger(" pfb_apply_alias_delta: temporary file failed — dropped {$op} chunk ({$table})\n", 1);
-			return FALSE;
+		$umask = umask(0077);
+		$fh    = @fopen($path, 'xb');
+		umask($umask);
+		$written = FALSE;
+		if ($fh !== FALSE) {
+			try {
+				$written = fwrite($fh, $data) === strlen($data);
+				$written = fclose($fh) && $written;
+				if ($written) {
+					return !pfb_pfctl_table_op($table, $op, '-f ' . escapeshellarg($path), $pfctl_bin)['failed'];
+				}
+			} finally {
+				@unlink($path);
+			}
 		}
-		$ok = fwrite($fh, $data) === strlen($data);
-		$ok = fclose($fh) && $ok;
-		if ($ok) {
-			$ok = !pfb_pfctl_table_op($table, $op, '-f ' . escapeshellarg($path), $pfctl_bin)['failed'];
-		} else {
-			pfb_logger(" pfb_apply_alias_delta: temporary file failed — dropped {$op} chunk ({$table})\n", 1);
-		}
-		@unlink($path);
-		return $ok;
+		pfb_logger(" pfb_apply_alias_delta: temporary file failed — dropped {$op} chunk ({$table})\n", 1);
+		return FALSE;
 	};
 
 	$ok = TRUE;
