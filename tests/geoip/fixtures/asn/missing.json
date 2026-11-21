@@ -1,0 +1,8 @@
+{
+    "description": "No asn.csv: the table is left as it was, and nothing is logged.",
+    "csv": null,
+    "expect": {
+        "table": "AS0 [ previous ]\n",
+        "log": ""
+    }
+}

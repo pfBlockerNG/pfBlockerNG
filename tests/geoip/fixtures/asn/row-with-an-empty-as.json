@@ -1,0 +1,8 @@
+{
+    "description": "An empty AS field leaves the comma first, and the first two bytes come off.",
+    "csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.1,,Name,n\n",
+    "expect": {
+        "table": "ASame ]\n",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

@@ -1,0 +1,8 @@
+{
+    "description": "sort -nu keeps the first row of an AS number, in file order.",
+    "csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS64500,Zeta,z.example\n2.0.0.0,2.0.0.255,AS64500,Alpha,a.example\n",
+    "expect": {
+        "table": "AS64500 [ Zeta ]\n",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

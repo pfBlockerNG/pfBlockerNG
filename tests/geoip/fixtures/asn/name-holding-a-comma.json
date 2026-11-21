@@ -1,0 +1,8 @@
+{
+    "description": "cut splits on every comma, quoted or not: a quoted name holding one ends there.",
+    "csv": "start_ip,end_ip,asn,name,domain\n1.0.0.0,1.0.0.255,AS13335,\"Cloudflare, Inc.\",cloudflare.com\n",
+    "expect": {
+        "table": "AS13335 [ Cloudflare ]\n",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

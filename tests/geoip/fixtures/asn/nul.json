@@ -1,0 +1,8 @@
+{
+    "description": "A NUL in a name is data.",
+    "csv": "start_ip,end_ip,asn,name,domain\na,b,AS4,Na\u0000me,n\n",
+    "expect": {
+        "table": "AS4 [ Na\u0000me ]\n",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

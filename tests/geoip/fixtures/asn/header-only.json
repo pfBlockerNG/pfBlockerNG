@@ -1,0 +1,8 @@
+{
+    "description": "The first line is the header: a file holding only it gives an empty table.",
+    "csv": "start_ip,end_ip,asn,name,domain\n",
+    "expect": {
+        "table": "",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

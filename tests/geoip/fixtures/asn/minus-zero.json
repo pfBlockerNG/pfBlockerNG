@@ -1,0 +1,8 @@
+{
+    "description": "Minus zero and a lone minus sign are zero.",
+    "csv": "start_ip,end_ip,asn,name,domain\na,b,AS0,Zero,z\na,b,AS-0,MinusZero,m\na,b,AS-,Dash,d\na,b,AS-.0,Point,p\n",
+    "expect": {
+        "table": "AS0 [ Zero ]\n",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

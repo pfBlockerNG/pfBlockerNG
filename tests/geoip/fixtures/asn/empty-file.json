@@ -1,0 +1,8 @@
+{
+    "description": "An empty file gives an empty table.",
+    "csv": "",
+    "expect": {
+        "table": "",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

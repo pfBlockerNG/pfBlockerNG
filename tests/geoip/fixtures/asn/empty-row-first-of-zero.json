@@ -1,0 +1,8 @@
+{
+    "description": "An empty row is a value of zero like any other: when it comes first, it is the one kept.",
+    "csv": "start_ip,end_ip,asn,name,domain\n\na,b,AS0,Zero,z\na,b\n",
+    "expect": {
+        "table": "AS ]\n",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

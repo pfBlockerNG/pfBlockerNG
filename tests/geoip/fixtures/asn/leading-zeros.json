@@ -1,0 +1,8 @@
+{
+    "description": "A number with leading zeros equals the one without, and is written as it was read.",
+    "csv": "start_ip,end_ip,asn,name,domain\na,b,AS007,Seven,s\na,b,AS7,Other,o\n",
+    "expect": {
+        "table": "AS007 [ Seven ]\n",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

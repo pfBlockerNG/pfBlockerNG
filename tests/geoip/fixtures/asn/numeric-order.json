@@ -1,0 +1,8 @@
+{
+    "description": "AS numbers sort by value, not byte order.",
+    "csv": "start_ip,end_ip,asn,name,domain\na,b,AS100,Hundred,h\na,b,AS9,Nine,n\na,b,AS10,Ten,t\n",
+    "expect": {
+        "table": "AS9 [ Nine ]\nAS10 [ Ten ]\nAS100 [ Hundred ]\n",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

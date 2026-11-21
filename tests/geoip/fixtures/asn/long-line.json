@@ -1,0 +1,18 @@
+{
+    "description": "A 10 MiB name is carried whole.",
+    "csv": {
+        "prefix": "start_ip,end_ip,asn,name,domain\na,b,AS8,",
+        "repeat": "x",
+        "times": 10485760,
+        "suffix": ",d\n"
+    },
+    "expect": {
+        "table": {
+            "prefix": "AS8 [ ",
+            "repeat": "x",
+            "times": 10485760,
+            "suffix": " ]\n"
+        },
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}
