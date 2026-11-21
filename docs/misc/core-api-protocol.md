@@ -858,7 +858,9 @@ answer is an error envelope, read at most 64 KiB whatever its status; a longer o
 arrive as `GetResources` described it (over its bound, not plain text, another line count), or whose merge is not the
 item's `digest` and `entries`, is discarded and the full body asked for. A part the transport ends part way (the call's
 deadline, a reset, a connection closed short of its `Content-Length`) is Core not answering: the resource fails as
-unreachable and no full body is asked for under the same deadline.
+unreachable and no full body is asked for under the same deadline. Any failure of the transfer itself, a reply curl cannot frame
+included, counts as unreachable and does not fall back. A part this host cannot write whole (a full disk) fails the resource
+as a mirror failure, and no full body is asked for.
 
 **Errors**, in the JSON envelope: `not_found` (`404`) when the store does not hold that part (the resource is unknown or
 removed, the generation is neither the current one nor the applied baseline, or the delta is not the one from that

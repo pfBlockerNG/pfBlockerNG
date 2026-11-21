@@ -4569,8 +4569,9 @@ const PFB_OUTPOST_CURSOR_MAX = 1048576;
  * @param array<string, string> $params id, generation, part, and from with add and remove
  * @param resource $file
  * @param int $max the longest body taken, in bytes
- * @return array{status: int, code: ?string, error: ?string} error NULL once the whole body is in $file; status 0 when no
- *   whole HTTP reply came (no answer, or the transport ended it part way); code the error envelope's code
+ * @return array{status: int, code: ?string, error: ?string, local?: true} error NULL once the whole body is in $file; status
+ *   0 when no whole HTTP reply came (no answer, or the transport ended it part way); code the error envelope's code; local
+ *   when $file took fewer bytes than it was given (a full disk), which is this host's failure and not the body's
  */
 function pfb_core_fetch_body(array $params, $file, int $max, ?string $socket = NULL, int $timeout = 30): array {
 	$ch = pfb_core_request('GetResourceBody', $params, $socket, $timeout);
@@ -4583,38 +4584,47 @@ function pfb_core_fetch_body(array $params, $file, int $max, ?string $socket = N
 	};
 	$limit = static fn ($ch): int => $body($ch) ? $max : 65536;
 	$over = FALSE;
+	$short = FALSE;
 	$length = NULL;
+	$interim = FALSE;
 	curl_setopt_array($ch, [
-		// the Content-Length is judged at the end of the header block, once the status and the Content-Type are both known
-		CURLOPT_HEADERFUNCTION => static function ($ch, string $header) use ($limit, &$over, &$length): int {
-			if (preg_match('/^Content-Length:\s*(\d+)\s*$/Di', $header, $m) === 1) {
+		// the Content-Length is judged at the end of the header block, once the status and the Content-Type are both known; each
+		// status line starts a block of its own, and a block below 200 (an interim reply) is not judged
+		CURLOPT_HEADERFUNCTION => static function ($ch, string $header) use ($limit, &$over, &$length, &$interim): int {
+			if (preg_match('/^HTTP\/\S+\s+(\d{3})/', $header, $m) === 1) {
+				$length = NULL;
+				$interim = (int) $m[1] < 200;
+			} elseif (preg_match('/^Content-Length:\s*(\d+)\s*$/Di', $header, $m) === 1) {
 				$length = (float) $m[1];
-			} elseif (trim($header) === '' && $length !== NULL && $length > $limit($ch)) {
+			} elseif (trim($header) === '' && !$interim && $length !== NULL && $length > $limit($ch)) {
 				$over = TRUE;
 				return 0;
 			}
 			return strlen($header);
 		},
-		CURLOPT_WRITEFUNCTION  => static function ($ch, string $data) use ($file, $limit, &$over): int {
+		CURLOPT_WRITEFUNCTION  => static function ($ch, string $data) use ($file, $limit, &$over, &$short): int {
 			if (ftell($file) + strlen($data) > $limit($ch)) {
 				$over = TRUE;
 				return 0;
 			}
-			return (int) fwrite($file, $data);
+			$written = (int) @fwrite($file, $data);
+			$short = $written !== strlen($data);
+			return $written;
 		},
 	]);
 	$done = curl_exec($ch);
 	$status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
 	$type = strtolower((string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE));
-	$curlErrno = curl_errno($ch);
 	$curlError = curl_error($ch);
 	if ($over) {
 		return ['status' => $status, 'code' => NULL, 'error' => "GetResourceBody answered more than {$limit($ch)} bytes, the bound of this reply"];
 	}
+	if ($short) {
+		return ['status' => $status, 'code' => NULL, 'error' => 'the body could not be written to its file', 'local' => TRUE];
+	}
 	if ($done !== TRUE) {
-		// a write this side refused is the body's fault; anything else is the transport's (a timeout, a reset, a short body)
-		return ['status' => $curlErrno === CURLE_WRITE_ERROR ? $status : 0, 'code' => NULL,
-			'error' => "the body did not arrive whole: {$curlError}"];
+		// every refusal this side makes is caught above, so what is left is the transport's (a timeout, a reset, a short body, a reply curl cannot frame)
+		return ['status' => 0, 'code' => NULL, 'error' => "the body did not arrive whole: {$curlError}"];
 	}
 	if ($body($ch)) {
 		return ['status' => 200, 'code' => NULL, 'error' => NULL];
@@ -4843,6 +4853,7 @@ function pfb_outpost_parts_fetch(string $id, string $generation, array $parts, ?
 		fclose($fh);
 		if ($got['error'] !== NULL) {
 			$failure = match (TRUE) {
+				isset($got['local'])           => 'mirror',
 				$got['code'] === 'not_found'   => 'pruned',
 				$got['status'] === 0           => 'unreachable',
 				$got['code'] === 'unavailable' => 'unavailable',
@@ -4871,15 +4882,18 @@ function pfb_outpost_parts_fetch(string $id, string $generation, array $parts, ?
  * A delta's parts are fetched to $workdir/add and $workdir/remove and merged into the mirror. A delta whose part does not
  * arrive as the reply described it (too long, not plain text, another line count), or whose merge is not the reply's digest
  * and entries, is discarded and the full body fetched instead; a part with a line that is not a member, or that the
- * transport ends part way, is not. Every
+ * transport ends part way, or that this host cannot write, is not. Every
  * part is checked by pfb_outpost_part_check() and the new mirror verified and synced before it replaces the old one by
  * rename: any failure leaves the old mirror in place.
+ *
+ * Any failure of the transfer itself, a reply curl cannot frame included, counts as unreachable and does not fall back.
  *
  * failure, when ok is FALSE: unreachable (no whole HTTP reply), core_unavailable (the call answered unavailable), refused (any
  * other error answered to the call; code names it), unavailable (the resource or its body), reply (an answer of the wrong
  * shape, a generation going backwards in a delta included), body (a body longer than its bound, not plain text, refused by
  * an error envelope, or pruned twice), members (a line that is not a member), verify (a body that is not the line
- * count or digest the reply named), mirror (a file beside the mirror, a part, or the rename could not be written).
+ * count or digest the reply named), mirror (a file beside the mirror, a part, or the rename could not be written, or the
+ * disk took fewer bytes of a part than it was given).
  *
  * @param ?array{generation: string, digest: string, entries: int} $cursor what the cursor file holds for $id, NULL for none
  * @param string $workdir a directory of this resource's own for the delta parts
