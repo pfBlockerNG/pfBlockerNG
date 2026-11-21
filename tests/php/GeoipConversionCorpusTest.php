@@ -38,6 +38,34 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfblockerng_get_countries')]
 final class GeoipConversionCorpusTest extends TestCase
 {
+	private const NO_PAGES = 'no pages written';
+	private const CORE_DIFFERS = "Core's catalog deliberately differs (old_expect)";
+
+	/** The scenarios whose pages the renderer must write from the catalog, byte for byte (#4037). */
+	private const CATALOG_PARITY = [
+		'blank-lines' => TRUE, 'continent-name-empty-once-trimmed' => TRUE, 'continent-only-locations' => TRUE,
+		'crlf-line-endings' => TRUE, 'csv-space-before-quote' => TRUE, 'duplicate-geoname-in-locations' => TRUE,
+		'duplicate-networks' => TRUE, 'geoname-containing-a000' => TRUE, 'geoname-leading-zero' => TRUE,
+		'geoname-missing-from-locations' => TRUE, 'geoname-zero' => TRUE, 'header-only-blocks' => TRUE, 'hostile-iso' => TRUE,
+		'interrupted-swap-marker' => TRUE, 'locale-fr' => TRUE, 'locations-empty-iso' => TRUE,
+		'names-holding-header-text' => TRUE, 'previous-generation-replaced' => TRUE, 'ten-mib-line' => TRUE,
+		'top-spammers' => TRUE, 'wrong-column-count' => TRUE,
+	];
+
+	/** The other scenarios, each with why its pages are not rendered from the catalog. */
+	private const NO_CATALOG_PARITY = [
+		'blocks-v4-missing' => self::NO_PAGES, 'blocks-v6-missing' => self::NO_PAGES,
+		'continent-without-countries' => self::NO_PAGES, 'locale-file-missing' => self::NO_PAGES,
+		'locale-not-offered' => self::NO_PAGES, 'publish-fails-rolls-back' => self::NO_PAGES,
+		'publish-iso-list-fails-rolls-back' => self::NO_PAGES,
+		'csv-quoted-crlf' => self::CORE_DIFFERS, 'first-conversion' => self::CORE_DIFFERS, 'flag-spellings' => self::CORE_DIFFERS,
+		'forged-header-outside-path-with-network' => self::CORE_DIFFERS, 'forged-header-outside-path' => self::CORE_DIFFERS,
+		'invalid-utf8' => self::CORE_DIFFERS, 'locale-english-file-missing' => self::CORE_DIFFERS,
+		'locations-name-not-utf8' => self::CORE_DIFFERS, 'network-not-a-cidr' => self::CORE_DIFFERS,
+		'nul-byte' => self::CORE_DIFFERS, 'proxy-and-satellite' => self::CORE_DIFFERS,
+		'proxy-continent-only-id' => self::CORE_DIFFERS, 'quoted-comma-and-line-break' => self::CORE_DIFFERS,
+	];
+
 	private string $root = '';
 	/** @var array<string,mixed> */
 	private array $savedPfb = [];
@@ -136,16 +164,42 @@ final class GeoipConversionCorpusTest extends TestCase
 			JSON_THROW_ON_ERROR);
 		$this->assertSame($pages[basename($file, '.json')], $this->pages(), basename($file) . ': the pages written');
 
-		// The same pages from the geo-catalog (#4037): where the rows read back are the catalog Core publishes in this
-		// scenario, the renderer given them as Core writes them (JSON Lines in byte order) writes today's pages.
-		if ($rows !== NULL && ($case['expect']['catalog'] ?? NULL) === $actual['catalog']) {
+		// The same pages from the geo-catalog (#4037): in a scenario of CATALOG_PARITY the rows read back are the catalog
+		// Core publishes, and the renderer given them as Core writes them (JSON Lines in byte order) writes today's pages.
+		// Every other scenario is in NO_CATALOG_PARITY, for the reason it gives, and that reason is checked here.
+		$name = basename($file, '.json');
+		$this->assertNotSame(isset(self::CATALOG_PARITY[$name]), isset(self::NO_CATALOG_PARITY[$name]),
+			"{$name}: in exactly one of CATALOG_PARITY and NO_CATALOG_PARITY");
+		$parity = FALSE;
+		if (isset(self::CATALOG_PARITY[$name])) {
+			$this->assertNotNull($rows, "{$name}: pages to read the catalog back from");
+			$this->assertSame($case['expect']['catalog'] ?? NULL, $actual['catalog'], "{$name}: today's catalog is Core's");
 			$lines = array_map(static fn (array $row): string => json_encode($row, JSON_THROW_ON_ERROR), $rows);
 			sort($lines, SORT_STRING);
 			$this->assertNotFalse(file_put_contents("{$this->root}/tools/geo_catalog", implode("\n", $lines) . "\n"));
 			$this->assertTrue(mkdir("{$this->root}/www_catalog", 0700));
-			$this->assertNull(pfb_geoip_render_catalog("{$this->root}/tools/geo_catalog", "{$this->root}/www_catalog"));
-			$this->assertSame($this->pages(), $this->pages('www_catalog'), basename($file) . ': the pages rendered from the catalog');
+			$this->assertSame(['error' => NULL, 'skipped' => []],
+				pfb_geoip_render_catalog("{$this->root}/tools/geo_catalog", "{$this->root}/www_catalog"));
+			$this->assertSame($this->pages(), $this->pages('www_catalog'), "{$name}: the pages rendered from the catalog");
+			$parity = TRUE;
+		} elseif (self::NO_CATALOG_PARITY[$name] === self::NO_PAGES) {
+			$this->assertNull($rows, "{$name}: no pages written");
+		} else {
+			$this->assertArrayHasKey('old_expect', $case, "{$name}: an owner decision makes Core's catalog differ");
+			$this->assertNotSame($case['expect']['catalog'] ?? NULL, $actual['catalog'], "{$name}: Core's catalog differs");
 		}
+		$this->assertSame(isset(self::CATALOG_PARITY[$name]), $parity, "{$name}: the catalog parity ran");
+	}
+
+	/** Every corpus scenario is in exactly one of the two sets, and each set names only corpus scenarios. */
+	public function testEveryScenarioIsInOneCatalogParitySet(): void
+	{
+		$scenarios = array_keys(self::corpus());
+		sort($scenarios, SORT_STRING);
+		$this->assertSame([], array_intersect_key(self::CATALOG_PARITY, self::NO_CATALOG_PARITY));
+		$named = array_keys(self::CATALOG_PARITY + self::NO_CATALOG_PARITY);
+		sort($named, SORT_STRING);
+		$this->assertSame($scenarios, $named);
 	}
 
 	/** @return array<string,string> every page under $dir (under the root), file name => sha256 of its bytes */

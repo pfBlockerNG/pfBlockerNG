@@ -10,11 +10,15 @@ use PHPUnit\Framework\TestCase;
  * The GeoIP pages rendered from the geo-catalog (#4037): the rows Core publishes (docs/specs/go-updater-pipeline.md §7,
  * JSON Lines in byte order) give the continent pages and the Reputation page pfblockerng_get_countries() writes from the
  * continent files, byte for byte. A name is data in the generated page whatever it holds; a catalog the renderer cannot
- * trust is refused whole and leaves the pages on disk as they were.
+ * trust is refused whole and leaves the pages on disk as they were; a page Core names that is not one of the nine
+ * continent pages is skipped and reported. Every page is staged beside its target before any target is replaced.
  */
 #[CoversFunction('pfb_geoip_render_catalog')]
 final class GeoipCatalogRenderTest extends TestCase
 {
+	/** What the renderer returns when every page was written and none was skipped. */
+	private const WRITTEN = ['error' => NULL, 'skipped' => []];
+
 	private string $tmp = '';
 	private mixed $originalPfb = NULL;
 	private bool $hadPfb = FALSE;
@@ -75,11 +79,17 @@ final class GeoipCatalogRenderTest extends TestCase
 			['kind' => 'reputation', 'position' => 2, 'iso' => 'ZZ', 'country' => 'Zulu', 'networks' => 1],
 			['kind' => 'reputation', 'position' => 3, 'iso' => 'ZZ', 'country' => 'Zulu', 'networks' => 1],
 		]);
-		$this->assertNull(pfb_geoip_render_catalog($catalog, "{$this->tmp}/www"));
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($catalog, "{$this->tmp}/www"));
 
-		$today = $this->pages("{$this->tmp}/today");
+		$today = $this->contents("{$this->tmp}/today");
 		$this->assertSame(['pfblockerng_Africa.php', 'pfblockerng_Top_Spammers.php', 'pfblockerng_reputation.php'], array_keys($today));
-		$this->assertSame($today, $this->pages("{$this->tmp}/www"));
+		$this->assertSame($today, $this->contents("{$this->tmp}/www"));
+		// A staged page is published with the mode today's pages get, not a temporary file's 0600.
+		foreach (array_keys($today) as $page) {
+			$this->assertSame(sprintf('%o', fileperms("{$this->tmp}/today/{$page}")), sprintf('%o', fileperms("{$this->tmp}/www/{$page}")),
+				"{$page}: its mode");
+		}
+		$this->assertSame(array_keys($today), self::entries("{$this->tmp}/www"), 'no temporary file is left');
 	}
 
 	/** @return array<string, array{string}> */
@@ -111,7 +121,7 @@ final class GeoipCatalogRenderTest extends TestCase
 	public function testAHostileNameIsDataInTheGeneratedPages(string $name): void
 	{
 		$benign = $this->renderNamed('Plain', "{$this->tmp}/benign");
-		$this->assertNull(pfb_geoip_render_catalog($this->namedCatalog($name), "{$this->tmp}/www"));
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($this->namedCatalog($name), "{$this->tmp}/www"));
 
 		foreach (['pfblockerng_Africa.php', 'pfblockerng_reputation.php'] as $page) {
 			$path = "{$this->tmp}/www/{$page}";
@@ -145,7 +155,7 @@ final class GeoipCatalogRenderTest extends TestCase
 			['kind' => 'reputation', 'position' => 2, 'iso' => 'CN', 'country' => 'China', 'networks' => 9],
 			['kind' => 'reputation', 'position' => 1, 'iso' => 'CN', 'country' => 'China', 'networks' => 5],
 		]);
-		$this->assertNull(pfb_geoip_render_catalog($catalog, "{$this->tmp}/www"));
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($catalog, "{$this->tmp}/www"));
 
 		$asia = (string) file_get_contents("{$this->tmp}/www/pfblockerng_Asia.php");
 		$this->assertStringContainsString("= array(\t\"CN\" => \"First CN (5)\",\n\t\t\"JP\" => \"Japan JP (7)\",\n\t\t\"CN\" => \"Second CN (6)\"\n\t);", $asia);
@@ -183,16 +193,25 @@ final class GeoipCatalogRenderTest extends TestCase
 			'an ISO with a space' => ["{$page}\n" . $country('"position":1,"iso":"Z Z","country":"Zulu","networks":3') . "\n"],
 			'an ISO with a quote' => ["{$page}\n" . $country('"position":1,"iso":"Z\"","country":"Zulu","networks":3') . "\n"],
 			'an empty ISO' => ["{$page}\n" . $country('"position":1,"iso":"","country":"Zulu","networks":3') . "\n"],
+			'an ISO ending in a newline' => ["{$page}\n" . $country('"position":1,"iso":"ZZ\n","country":"Zulu","networks":3') . "\n"],
+			'an ISO with a letter outside ASCII' => ["{$page}\n" . $country('"position":1,"iso":"ZÉ","country":"Zulu","networks":3') . "\n"],
 			'a country that is not a string' => ["{$page}\n" . $country('"position":1,"iso":"ZZ","country":["Zulu"],"networks":3') . "\n"],
+			'a country that is a number' => ["{$page}\n" . $country('"position":1,"iso":"ZZ","country":5,"networks":3') . "\n"],
+			'a country that is null' => ["{$page}\n" . $country('"position":1,"iso":"ZZ","country":null,"networks":3') . "\n"],
+			'a country that is true' => ["{$page}\n" . $country('"position":1,"iso":"ZZ","country":true,"networks":3') . "\n"],
 			'a continent that is not a string' => ["{\"kind\":\"page\",\"page\":\"Africa\",\"continent\":null}\n"],
 			'a page twice' => ["{$page}\n{$page}\n"],
+			'a page Core does not know twice' => ["{\"kind\":\"page\",\"page\":\"Foo\",\"continent\":\"Foo\"}\n{\"kind\":\"page\",\"page\":\"Foo\",\"continent\":\"Foo\"}\n"],
 			'a country row of a page without its page row' => [$country($plain) . "\n"],
+			'a country row of an unknown page without its page row' => ["{$page}\n" . str_replace('"Africa"', '"Foo"', $country($plain)) . "\n"],
+			'a malformed country row of an unknown page' => ["{\"kind\":\"page\",\"page\":\"Foo\",\"continent\":\"Foo\"}\n"
+				. str_replace('"Africa"', '"Foo"', $country('"position":1,"iso":"Z Z","country":"Zulu","networks":3')) . "\n"],
 			'a blank line between rows' => ["{$page}\n\n" . $country($plain) . "\n"],
 			'no newline after the last row' => ["{$page}\n" . $country($plain)],
-			'an unknown continent page' => ["{\"kind\":\"page\",\"page\":\"Atlantis\",\"continent\":\"Atlantis\"}\n"],
-			'the Reputation page named as a continent page' => ["{\"kind\":\"page\",\"page\":\"reputation\",\"continent\":\"Reputation\"}\n"],
-			'another package page named as a continent page' => ["{\"kind\":\"page\",\"page\":\"dnsbl\",\"continent\":\"DNSBL\"}\n"],
 			'a page name with a path' => ["{\"kind\":\"page\",\"page\":\"..\/Africa\",\"continent\":\"Africa\"}\n"],
+			'a page name ending in a newline' => ["{\"kind\":\"page\",\"page\":\"Africa\\n\",\"continent\":\"Africa\"}\n"],
+			'a page name that is a number' => ["{\"kind\":\"page\",\"page\":5,\"continent\":\"Africa\"}\n"],
+			'an empty page name' => ["{\"kind\":\"page\",\"page\":\"\",\"continent\":\"Africa\"}\n"],
 		];
 	}
 
@@ -207,12 +226,147 @@ final class GeoipCatalogRenderTest extends TestCase
 		file_put_contents("{$this->tmp}/www/pfblockerng_reputation.php", 'previous Reputation');
 		file_put_contents("{$this->tmp}/catalog", $body);
 
-		$error = pfb_geoip_render_catalog("{$this->tmp}/catalog", "{$this->tmp}/www");
+		['error' => $error, 'skipped' => $skipped] = pfb_geoip_render_catalog("{$this->tmp}/catalog", "{$this->tmp}/www");
 
 		$this->assertIsString($error);
 		$this->assertNotSame('', $error);
+		$this->assertSame([], $skipped);
 		$this->assertSame(['pfblockerng_Africa.php' => 'previous Africa', 'pfblockerng_reputation.php' => 'previous Reputation'],
 			$this->contents("{$this->tmp}/www"));
+		$this->assertSame(['pfblockerng_Africa.php', 'pfblockerng_reputation.php'], self::entries("{$this->tmp}/www"));
+	}
+
+	/**
+	 * Given a catalog with a tenth page Core found in its continent files (Foo) beside a known one, when it is rendered,
+	 * then the known page and the Reputation page are written, Foo and every country row naming it are skipped and Foo
+	 * is reported: it becomes no file and none of its countries reaches a page.
+	 */
+	public function testAPageThatIsNotAContinentPageIsSkippedAndReported(): void
+	{
+		$known = [
+			['kind' => 'page', 'page' => 'Africa', 'continent' => 'Africa'],
+			['kind' => 'country', 'page' => 'Africa', 'family' => 4, 'position' => 1, 'iso' => 'ZZ', 'country' => 'Zulu', 'networks' => 3],
+			['kind' => 'reputation', 'position' => 1, 'iso' => 'ZZ', 'country' => 'Zulu', 'networks' => 3],
+		];
+		$this->assertTrue(mkdir("{$this->tmp}/known", 0700));
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($this->catalog($known), "{$this->tmp}/known"));
+
+		$result = pfb_geoip_render_catalog($this->catalog([...$known,
+			['kind' => 'page', 'page' => 'Foo', 'continent' => 'Fooland'],
+			['kind' => 'country', 'page' => 'Foo', 'family' => 4, 'position' => 1, 'iso' => 'FF', 'country' => 'Fooland', 'networks' => 1],
+			['kind' => 'country', 'page' => 'Foo', 'family' => 6, 'position' => 1, 'iso' => 'FF', 'country' => 'Fooland', 'networks' => 1],
+		]), "{$this->tmp}/www");
+
+		$this->assertSame(['error' => NULL, 'skipped' => ['Foo']], $result);
+		$this->assertSame($this->contents("{$this->tmp}/known"), $this->contents("{$this->tmp}/www"));
+		$this->assertSame(['pfblockerng_Africa.php', 'pfblockerng_reputation.php'], self::entries("{$this->tmp}/www"));
+	}
+
+	/** @return array<string, array{string}> */
+	public static function packagePageNames(): array
+	{
+		return ['the Reputation page' => ['reputation'], 'the DNSBL page' => ['dnsbl']];
+	}
+
+	/**
+	 * Given a catalog naming another package page as a continent page, with a country row, when it is rendered, then that
+	 * page is skipped: its page file is not written from the row (the Reputation page is the one its own rows give), and
+	 * the name is reported.
+	 */
+	#[DataProvider('packagePageNames')]
+	public function testAnotherPackagePageNamedAsAContinentPageIsSkipped(string $name): void
+	{
+		$reputation = [['kind' => 'reputation', 'position' => 1, 'iso' => 'ZZ', 'country' => 'Zulu', 'networks' => 3]];
+		$this->assertTrue(mkdir("{$this->tmp}/known", 0700));
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($this->catalog($reputation), "{$this->tmp}/known"));
+
+		$result = pfb_geoip_render_catalog($this->catalog([...$reputation,
+			['kind' => 'page', 'page' => $name, 'continent' => 'Injected'],
+			['kind' => 'country', 'page' => $name, 'family' => 4, 'position' => 1, 'iso' => 'II', 'country' => 'Injected', 'networks' => 1],
+		]), "{$this->tmp}/www");
+
+		$this->assertSame(['error' => NULL, 'skipped' => [$name]], $result);
+		$this->assertSame($this->contents("{$this->tmp}/known"), $this->contents("{$this->tmp}/www"));
+		$this->assertSame(['pfblockerng_reputation.php'], self::entries("{$this->tmp}/www"));
+	}
+
+	/**
+	 * Given pages on disk and a target that is a directory (a continent page, or the Reputation page that is staged with
+	 * them), when a catalog is rendered, then nothing is written: every page keeps its old bytes, no temporary file is
+	 * left, and the failure names the page.
+	 */
+	#[DataProvider('blockedPages')]
+	public function testATargetThatCannotBeReplacedLeavesEveryPage(string $blocked): void
+	{
+		$pages = ['pfblockerng_Africa.php', 'pfblockerng_Asia.php', 'pfblockerng_reputation.php'];
+		foreach ($pages as $page) {
+			$this->assertTrue($page === $blocked ? mkdir("{$this->tmp}/www/{$page}") : file_put_contents("{$this->tmp}/www/{$page}", "old {$page}") !== FALSE);
+		}
+		$catalog = $this->catalog([
+			['kind' => 'page', 'page' => 'Africa', 'continent' => 'Africa'],
+			['kind' => 'page', 'page' => 'Asia', 'continent' => 'Asia'],
+			['kind' => 'reputation', 'position' => 1, 'iso' => 'ZZ', 'country' => 'Zulu', 'networks' => 3],
+		]);
+
+		['error' => $error, 'skipped' => $skipped] = pfb_geoip_render_catalog($catalog, "{$this->tmp}/www");
+
+		$this->assertIsString($error);
+		$this->assertStringContainsString($blocked, $error);
+		$this->assertSame([], $skipped);
+		$this->assertSame($pages, self::entries("{$this->tmp}/www"), 'no temporary file is left');
+		$this->assertDirectoryExists("{$this->tmp}/www/{$blocked}");
+		foreach (array_diff($pages, [$blocked]) as $page) {
+			$this->assertSame("old {$page}", file_get_contents("{$this->tmp}/www/{$page}"), "{$page} keeps its old bytes");
+		}
+	}
+
+	/** @return array<string, array{string}> */
+	public static function blockedPages(): array
+	{
+		return ['a continent page' => ['pfblockerng_Asia.php'], 'the Reputation page' => ['pfblockerng_reputation.php']];
+	}
+
+	/**
+	 * Given a target page that is a symbolic link, when a catalog is rendered, then the link is replaced by the page and
+	 * the file it pointed to is not written through it.
+	 */
+	public function testASymbolicLinkAtATargetIsReplacedNotWrittenThrough(): void
+	{
+		file_put_contents("{$this->tmp}/outside", 'outside');
+		$this->assertTrue(symlink("{$this->tmp}/outside", "{$this->tmp}/www/pfblockerng_Africa.php"));
+		$this->assertTrue(mkdir("{$this->tmp}/plain", 0700));
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($this->namedCatalog('Plain'), "{$this->tmp}/plain"));
+
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($this->namedCatalog('Plain'), "{$this->tmp}/www"));
+
+		clearstatcache();
+		$this->assertFalse(is_link("{$this->tmp}/www/pfblockerng_Africa.php"));
+		$this->assertSame('outside', file_get_contents("{$this->tmp}/outside"));
+		$this->assertSame($this->contents("{$this->tmp}/plain"), $this->contents("{$this->tmp}/www"));
+	}
+
+	/**
+	 * Given a catalog of exactly PFB_GEOIP_CATALOG_MAX bytes (a valid row padded with JSON white space), when it is
+	 * rendered, then its page is written; one byte more is refused before it is decoded and writes nothing.
+	 */
+	public function testACatalogOverTheBoundIsRefusedBeforeItIsDecoded(): void
+	{
+		$this->assertSame(16 << 20, PFB_GEOIP_CATALOG_MAX);
+		$row = '{"kind":"page","page":"Africa","continent":"Africa"}';
+		$padded = static fn (int $size): string => $row . str_repeat(' ', $size - strlen($row) - 1) . "\n";
+
+		file_put_contents("{$this->tmp}/catalog", $padded(PFB_GEOIP_CATALOG_MAX));
+		$this->assertSame(PFB_GEOIP_CATALOG_MAX, filesize("{$this->tmp}/catalog"));
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog("{$this->tmp}/catalog", "{$this->tmp}/www"));
+		$this->assertSame(['pfblockerng_Africa.php', 'pfblockerng_reputation.php'], self::entries("{$this->tmp}/www"));
+
+		file_put_contents("{$this->tmp}/catalog", $padded(PFB_GEOIP_CATALOG_MAX + 1));
+		$this->assertTrue(mkdir("{$this->tmp}/over", 0700));
+		['error' => $error, 'skipped' => $skipped] = pfb_geoip_render_catalog("{$this->tmp}/catalog", "{$this->tmp}/over");
+		$this->assertIsString($error);
+		$this->assertStringContainsString('larger than ' . PFB_GEOIP_CATALOG_MAX . ' bytes', $error);
+		$this->assertSame([], $skipped);
+		$this->assertSame([], self::entries("{$this->tmp}/over"));
 	}
 
 	/** @return array<string, array{string}> */
@@ -238,9 +392,9 @@ final class GeoipCatalogRenderTest extends TestCase
 			restore_error_handler();
 		}
 
-		$this->assertNull(pfb_geoip_render_catalog("{$this->tmp}/catalog", "{$this->tmp}/www"));
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog("{$this->tmp}/catalog", "{$this->tmp}/www"));
 
-		$this->assertSame(['pfblockerng_reputation.php'], array_keys($this->pages("{$this->tmp}/today")));
+		$this->assertSame(['pfblockerng_reputation.php'], array_keys($this->contents("{$this->tmp}/today")));
 		$this->assertSame([
 			'pfblockerng_Africa.php' => 'previous Africa',
 			'pfblockerng_reputation.php' => (string) file_get_contents("{$this->tmp}/today/pfblockerng_reputation.php"),
@@ -249,9 +403,10 @@ final class GeoipCatalogRenderTest extends TestCase
 
 	public function testACatalogThatCannotBeReadIsRefused(): void
 	{
-		$error = pfb_geoip_render_catalog("{$this->tmp}/missing", "{$this->tmp}/www");
+		['error' => $error, 'skipped' => $skipped] = pfb_geoip_render_catalog("{$this->tmp}/missing", "{$this->tmp}/www");
 
 		$this->assertIsString($error);
+		$this->assertSame([], $skipped);
 		$this->assertStringContainsString("{$this->tmp}/missing", $error);
 		$this->assertSame([], $this->contents("{$this->tmp}/www"));
 	}
@@ -261,7 +416,7 @@ final class GeoipCatalogRenderTest extends TestCase
 	{
 		file_put_contents("{$this->tmp}/not-a-folder", '');
 
-		$error = pfb_geoip_render_catalog($this->namedCatalog('Plain'), "{$this->tmp}/not-a-folder/www");
+		['error' => $error] = pfb_geoip_render_catalog($this->namedCatalog('Plain'), "{$this->tmp}/not-a-folder/www");
 
 		$this->assertIsString($error);
 		$this->assertStringContainsString("{$this->tmp}/not-a-folder/www", $error);
@@ -271,7 +426,7 @@ final class GeoipCatalogRenderTest extends TestCase
 	private function renderNamed(string $name, string $dir): array
 	{
 		$this->assertTrue(mkdir($dir, 0700));
-		$this->assertNull(pfb_geoip_render_catalog($this->namedCatalog($name), $dir));
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($this->namedCatalog($name), $dir));
 		return $this->contents($dir);
 	}
 
@@ -308,12 +463,6 @@ final class GeoipCatalogRenderTest extends TestCase
 		$this->assertNotFalse(file_put_contents("{$this->tmp}/cc/{$file}", implode("\n", $lines) . "\n"));
 	}
 
-	/** @return array<string,string> every file in $dir, name => sha256 */
-	private function pages(string $dir): array
-	{
-		return array_map(static fn (string $content): string => hash('sha256', $content), $this->contents($dir));
-	}
-
 	/** @return array<string,string> every file in $dir, name => content */
 	private function contents(string $dir): array
 	{
@@ -323,6 +472,14 @@ final class GeoipCatalogRenderTest extends TestCase
 		}
 		ksort($out, SORT_STRING);
 		return $out;
+	}
+
+	/** @return list<string> every entry in $dir, dot files (a temporary page) included, in byte order */
+	private static function entries(string $dir): array
+	{
+		$entries = array_values(array_diff(scandir($dir) ?: [], ['.', '..']));
+		sort($entries, SORT_STRING);
+		return $entries;
 	}
 
 	/** @return list<string> the page's tokens by kind, without their text */
