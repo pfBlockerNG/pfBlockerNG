@@ -628,8 +628,9 @@ listed only rules on `<pfB_…>` tables, so the filterlog daemon skipped every l
   bouncer's interfaces.
 - **When.** The ruleset carries the rules only while the bouncer should run (D5), so its drops are attributed then.
   A row already written stays a CrowdSec row: the Alerts page recognizes it by the table it names. A `filter.log` line
-  the daemon reads after the rules are gone (its first-run parse of the whole log) is skipped, as a removed pfB rule's
-  lines are.
+  the daemon reads after a reload has removed the rules is skipped, as a removed pfB rule's lines are, but its tracker
+  is not kept in the daemon's cache of unresolvable trackers: the rules come back with the same trackers when the
+  bouncer is turned on again, and the filterlog daemon is not restarted then.
 - **Row.** The alias is the table (`crowdsec_v4`, `crowdsec_v6`), as the dashboard widget names it (#4161); the rule
   number is the rule's tracker, which names the rule and its direction. The feed is `CrowdSec`. The matched entry is
   `Unknown`: the log does not say which decision matched (an address or a range), and the decision's origin and
@@ -640,3 +641,5 @@ listed only rules on `<pfB_…>` tables, so the filterlog daemon skipped every l
   live on the CrowdSec engine and the bouncer's rules come before every pfB rule. Beside the Threat Source lookup, the
   external address links to the Status subtab's lookup (D7, `?lookup=<address>`), which shows the matching decisions
   with their origin, scenario and expiry.
+- **Dashboard widget.** A CrowdSec table's packet count links to the Alerts tab filtered by the table, as a pfB
+  alias row's does (#4161 left it unlinked while Alerts did not report the drops).
