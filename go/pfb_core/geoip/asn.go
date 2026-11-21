@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"errors"
 	"io"
 	"maps"
 	"os"
@@ -28,7 +29,9 @@ type ASNTable struct {
 //
 //	cut -d ',' -f3-4 | cut -c 3- | sort -nu | tr -d '"' | sed -e 's/,/ [ /g' -e 's/$/ ]/g' -e 's/^/AS/'
 //
-// read byte by byte, as the C locale reads it: the first two bytes come off, not the first two characters.
+// read byte by byte, as the C locale reads it: the first two bytes come off, not the first two characters, and a number
+// has no thousands separator. The table is a new file of mode 0644 renamed over the path, where the shell's > keeps the
+// old file's mode and writes through a symbolic link.
 func (a ASNTable) Run(ctx context.Context) bool {
 	if info, err := os.Stat(a.CSV); err != nil || !info.Mode().IsRegular() {
 		return false
@@ -53,7 +56,8 @@ func (a ASNTable) Run(ctx context.Context) bool {
 		}
 		if n > 0 {
 			row := asnRow(bytes.TrimSuffix(line, []byte("\n")))
-			if key := readNumber(row); first[key] == nil {
+			key := readNumber(row)
+			if _, seen := first[key]; !seen { // an empty row is a line like any other
 				first[key] = row
 			}
 		}
@@ -80,19 +84,8 @@ func (a ASNTable) publish(ctx context.Context, body []byte) bool {
 	if err != nil {
 		return false
 	}
-	_, err = tmp.Write(body)
-	if err == nil {
-		err = tmp.Chmod(0o644)
-	}
-	if err == nil {
-		err = tmp.Sync()
-	}
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = ctx.Err()
-	}
+	_, werr := tmp.Write(body)
+	err = errors.Join(werr, tmp.Chmod(0o644), tmp.Sync(), tmp.Close(), ctx.Err())
 	if err == nil {
 		err = rename(tmp.Name(), a.Table)
 	}
@@ -104,7 +97,7 @@ func (a ASNTable) publish(ctx context.Context, body []byte) bool {
 }
 
 // asnRow is `cut -d ',' -f3-4 | cut -c 3-`: a line holding no comma passes whole, one of fewer than three fields is
-// empty.
+// empty, and so is a result of two bytes or fewer.
 func asnRow(line []byte) []byte {
 	if bytes.IndexByte(line, ',') >= 0 {
 		fields := bytes.SplitN(line, []byte(","), 5)
