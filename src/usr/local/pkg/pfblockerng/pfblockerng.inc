@@ -27316,6 +27316,9 @@ function pfb_daemon_filterlog() {
 
 					$int		= convert_real_interface_to_friendly_descr($d[4]);
 					$pfb_alias	= pfb_filter($rule_list[$d[3]]['name'], PFB_FILTER_WORD, 'pfb_daemon_filterlog', 'Unknown');
+					// A drop by the CrowdSec bouncer's rule (#4164): its tables are no feed, and the log does not say which
+					// decision matched
+					$crowdsec	= in_array($pfb_alias, PFB_CROWDSEC_TABLES, TRUE);
 
 					// Action setting variables
 					if ($d[6] == 'block') {
@@ -27356,7 +27359,7 @@ function pfb_daemon_filterlog() {
 					// Determine if DST IP or SRC IP is the external host. The CrowdSec bouncer's rules (#4164) say which side is
 					// banned: the inbound rule's source, the outbound rule's destination.
 					// issue #713: port field is selected by IP version -- see pfb_filterlog_port().
-					$crowdsec_dir = in_array($pfb_alias, PFB_CROWDSEC_TABLES, TRUE) ? pfb_crowdsec_rule_direction((int) $d[3]) : NULL;
+					$crowdsec_dir = $crowdsec ? pfb_crowdsec_rule_direction((int) $d[3]) : NULL;
 					if ($crowdsec_dir !== NULL ? $crowdsec_dir === 'in' : (isset($pfb_local[$dstip]) || pfb_local_ip($dstip, $pfb_localsub))) {
 						$dir	= 'in';
 						$host	= $srcip;
@@ -27415,10 +27418,11 @@ function pfb_daemon_filterlog() {
 						}
 						$geoip_lock = $geoip_folder ? pfb_geoip_generation_read_lock() : FALSE;
 						$geoip_deferred = $geoip_folder && $geoip_lock === FALSE;
-						$pfb_query = find_reported_header($host, $folder, $geoip_folder);
+						// No feed lookup for a CrowdSec row: it is no feed attribution, so it never reaches the per-host cache below
+						$pfb_query = $crowdsec ? array('CrowdSec', 'Unknown') : find_reported_header($host, $folder, $geoip_folder);
 
 						// Report specific ET IQRisk details
-						if ($et_enabled && strpos($pfb_query[0], "{$et_header}") !== FALSE) {
+						if (!$crowdsec && $et_enabled && strpos($pfb_query[0], "{$et_header}") !== FALSE) {
 							$ET_orig = $pfb_query;
 							$pfb_query = find_reported_header($host, "{$pfb['etdir']}/*", FALSE);
 
@@ -27450,8 +27454,9 @@ function pfb_daemon_filterlog() {
 							$resolved_host = 'Unknown';
 						}
 
-						// Save entry to IP cache only when attribution was not deferred by a GeoIP swap.
-						if (!$geoip_deferred) {
+						// Save entry to IP cache only when attribution was not deferred by a GeoIP swap, and only a pfB row's: the
+						// cache answers later pfB rows of this host (a CrowdSec row's GeoIP and rDNS are looked up each time)
+						if (!$geoip_deferred && !$crowdsec) {
 							$db_update = "INSERT into ipcache ( host, q0, q1, geoip, resolved_host ) VALUES ( :host, :q0, :q1, :geoip, :resolved_host )";
 							$db_handle = pfb_open_sqlite(7, 'Add to IP cache');
 							if ($db_handle) {
@@ -27486,9 +27491,8 @@ function pfb_daemon_filterlog() {
 						$resolved_host	= htmlspecialchars($ip_cache['resolved_host'])	?: 'Unknown';
 					}
 
-					// A drop by the CrowdSec bouncer's rule (#4164): its tables are no feed, and the log does not say which
-					// decision matched. The host's cached feed attribution stays for pfB rules.
-					if (in_array($pfb_alias, PFB_CROWDSEC_TABLES, TRUE)) {
+					// A CrowdSec row read from the cache keeps the cached GeoIP and rDNS, not the pfB feed attribution
+					if ($crowdsec) {
 						$pfb_query = array('CrowdSec', 'Unknown');
 					}
 
