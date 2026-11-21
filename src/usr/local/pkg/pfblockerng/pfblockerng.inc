@@ -16206,18 +16206,21 @@ function pfb_apply_alias_delta(
  * reaches PFB_DELTA_CHURN_THRESHOLD; otherwise a delta. Counts of zero and zero are nothing to do: no call, and no file is
  * read, so a file is not checked against a count of zero then. Any other delta first reads both files through: a file that
  * cannot be opened, holds a line that is not a member of the family (an empty line and a CRLF line included), holds a
- * line longer than an IP set member, or holds another number of lines than its count sends nothing. The second pass, which
- * feeds pfctl, checks each line again and the count at the end, against a file that changes between the two passes: on a bad
- * line the sending stops, on a wrong count it ends; the batches already sent stay applied and ok is FALSE. Then the adds and the deletes go to pfctl in batches of $batch_size (clamped to [64, 4096]), each in a batch file
- * of mode 0600 that pfctl reads with -f, so a member is never an argument; a failed batch leaves the remaining ones sent.
+ * line longer than an IP set member, or holds another number of lines than its count sends nothing. Then the adds and the
+ * deletes go to pfctl in batches of $batch_size (clamped to [64, 4096]), each in a batch file of mode 0600 that pfctl reads
+ * with -f, so a member is never an argument; a failed batch leaves the remaining ones sent. The second pass, which feeds
+ * pfctl, checks each line again and the count at the end, against a file that changes between the two passes: on a bad line
+ * the sending stops, on a wrong count it ends; the batches already sent stay applied and ok is FALSE. A final line without
+ * a newline is accepted; that a file is complete is pfb_outpost_part_check()'s and the digest's job, not this function's.
  *
  * @param string $family 'ipv4' or 'ipv6': the family of the table's members
  * @param string $table_file the table's mirror, what a replace loads
  * @param int    $entries          the members of the table after the change
  * @param int    $previous_entries the members of the table before it
  * @param string $tmpdir where each batch file is written; '' for the system's temporary directory
- * @return array{delta: bool, ok: bool} delta TRUE on the delta path (refused files included), FALSE on a replace or for a
- *   refused negative count; ok FALSE when anything was refused, a batch file could not be written or any pfctl call failed
+ * @return array{delta: bool, ok: bool} delta TRUE on the delta path (refused files included), FALSE on a replace, for a
+ *   refused negative count and for a refused family (which also makes no call, on a replace too); ok FALSE when anything was
+ *   refused, a batch file could not be written or any pfctl call failed
  */
 function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $family, string $table_file, string $add_file,
     int $add_entries, string $remove_file, int $remove_entries, int $entries, int $previous_entries, string $mode, int $batch_size,
@@ -16235,7 +16238,9 @@ function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $f
 				$member = rtrim($line, "\n");
 				if (!pfb_outpost_ip_member_valid($member, $family)) {
 					fclose($fh);
-					throw new UnexpectedValueException(" Updating [ {$table} ]: the {$side} file line " . ($n + 1) . " is not a member\n");
+					pfb_logger(" Updating [ {$table} ]: the {$side} file line " . ($n + 1) . " is not a member\n", 1);
+					yield NULL;
+					return;
 				}
 				$n++;
 				yield $member;
@@ -16284,7 +16289,8 @@ function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $f
  * something to apply, and returns the members to add and to remove as two iterables of lines, or NULL when they cannot be
  * read. Contract: pfb_apply_alias_delta_files().
  *
- * @param callable(): ?array{0: iterable<string>, 1: iterable<string>} $members
+ * @param callable(): ?array{0: iterable<?string>, 1: iterable<?string>} $members the member source; it reports a line it
+ *   refuses as it is read by logging it and yielding NULL, on which the sending stops and ok is FALSE
  * @return array{delta: bool, ok: bool}
  */
 function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string $table_file, callable $members, int $add_entries,
@@ -16355,30 +16361,28 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 	};
 
 	$ok = TRUE;
-	try {
-		foreach (['add' => [$sides[0], $add_entries], 'delete' => [$sides[1], $remove_entries]] as $op => [$lines, $count]) {
-			$chunk = [];
-			$read  = 0;
-			foreach ($lines as $line) {
-				$chunk[] = $line;
-				$read++;
-				if (count($chunk) === $batch_size) {
-					$ok    = $push($op, $chunk) && $ok;
-					$chunk = [];
-				}
+	foreach (['add' => [$sides[0], $add_entries], 'delete' => [$sides[1], $remove_entries]] as $op => [$lines, $count]) {
+		$chunk = [];
+		$read  = 0;
+		foreach ($lines as $line) {
+			if ($line === NULL) {
+				// the source refused a line and logged it: the sending stops, the batches sent stay
+				return ['delta' => TRUE, 'ok' => FALSE];
 			}
-			if ($chunk !== []) {
-				$ok = $push($op, $chunk) && $ok;
-			}
-			if ($read !== $count) {
-				pfb_logger(" Updating [ {$table} ]: {$op} read {$read} members, not {$count}\n", 1);
-				$ok = FALSE;
+			$chunk[] = $line;
+			$read++;
+			if (count($chunk) === $batch_size) {
+				$ok    = $push($op, $chunk) && $ok;
+				$chunk = [];
 			}
 		}
-	} catch (UnexpectedValueException $e) {
-		// a line a member source refuses as it is read (pfb_apply_alias_delta_files()): the sending stops, the batches sent stay
-		pfb_logger($e->getMessage(), 1);
-		return ['delta' => TRUE, 'ok' => FALSE];
+		if ($chunk !== []) {
+			$ok = $push($op, $chunk) && $ok;
+		}
+		if ($read !== $count) {
+			pfb_logger(" Updating [ {$table} ]: {$op} read {$read} members, not {$count}\n", 1);
+			$ok = FALSE;
+		}
 	}
 	return ['delta' => TRUE, 'ok' => $ok];
 }
