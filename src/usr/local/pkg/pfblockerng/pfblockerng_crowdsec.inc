@@ -774,7 +774,7 @@ function pfb_crowdsec_widget_rules(): array {
 function pfb_crowdsec_rule_table(string $tracker, string $line): ?string {
 	foreach (PFB_CROWDSEC_TRACKERS as $family => $ids) {
 		$table = PFB_CROWDSEC_TABLES[$family];
-		if (in_array($tracker, array_map('strval', $ids), TRUE) && preg_match("/ <{$table}[:>]/", $line) === 1) {
+		if (in_array((int) $tracker, $ids, TRUE) && preg_match("/ <{$table}[:>]/", $line) === 1) {
 			return $table;
 		}
 	}
