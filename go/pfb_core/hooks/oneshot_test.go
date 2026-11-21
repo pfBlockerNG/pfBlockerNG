@@ -49,8 +49,13 @@ func pfbCore(t *testing.T) string {
 			return
 		}
 		coreBinary.path = filepath.Join(coreBinary.dir, "pfb-core")
-		out, err := exec.Command("go", "build", "-o", coreBinary.path, "..").CombinedOutput()
-		if err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute) // only salvages a hung build
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "go", "build", "-o", coreBinary.path, "..").CombinedOutput()
+		switch {
+		case ctx.Err() != nil:
+			coreBinary.err = errors.New("STUCK: go build did not finish within 5 minutes")
+		case err != nil:
 			coreBinary.err = errors.New(err.Error() + ": " + string(out))
 		}
 	})
@@ -979,16 +984,47 @@ func TestOneShotRefusesAStateDirectoryThatIsNoDirectory(t *testing.T) {
 	}
 }
 
-// WHEN a hook fails by itself with 255 and TERM reaches the one-shot right after that hook's exit THEN the log holds the
-// hook's status and then that the run was cancelled, and the exit status is 1: the hook counts as cut short.
-func TestOneShotLogsTheStatusOfAHookThatExitedJustBeforeTERM(t *testing.T) {
-	// a background child waits for the hook to be reaped, then sends TERM to the one-shot, the hook's parent
-	_, flags := hookRoot(t, [2]string{"hook_pre_a.sh", "#!/bin/sh\nme=$$ core=$PPID\n" +
-		"( while kill -0 $me 2>/dev/null; do :; done; kill -TERM $core ) &\nexit 255\n"})
-	got := oneShot(t, `{"trigger":"cron"}`, append([]string{"--run-hooks", "pre"}, flags...)...)
-	want := "[ pfB Hook ] pre #0 exited non-zero [ 255 ]; continuing\n" +
-		"[ pfB Hook ] pre run cancelled; 0 enabled hooks did not run\n"
-	if got.status != 1 || !strings.HasSuffix(got.stderr, want) {
-		t.Errorf("exit status %d and stderr %s, want 1 and a log ending %q", got.status, clip(got.stderr), want)
+// WHEN --settings-backend-cmd is given with a --state-dir that does not exist THEN the state directory is never needed:
+// the hooks run and the exit status is 0.
+func TestOneShotThroughTheAdapterIgnoresTheStateDirectory(t *testing.T) {
+	root, flags := oneShotRoot(t)
+	got := oneShot(t, `{"trigger":"cron"}`,
+		append([]string{"--run-hooks", "pre", "--state-dir", filepath.Join(root, "missing")}, flags...)...)
+	if runs := recordedRuns(t, root); got.status != 0 || len(runs) != 1 || runs[0].Script != "hook_pre_a.sh" {
+		t.Errorf("exit status %d and runs %+v, want 0 and hook_pre_a.sh once; stderr %s", got.status, runs,
+			clip(got.stderr))
+	}
+}
+
+// WHEN the settings cannot be read, through a failing backend or from a state directory that does not exist THEN under
+// "lifecycle":"uninstall" the console (stdout) gets the same line as the main log (stderr), and without a lifecycle
+// stdout stays empty.
+func TestOneShotCopiesAnUnreadableSettingsLineToTheUninstallConsole(t *testing.T) {
+	for _, source := range []string{"a failing backend", "a missing state directory"} {
+		for _, stdin := range []string{`{"lifecycle":"uninstall"}`, `{}`} {
+			t.Run(source+" "+stdin, func(t *testing.T) {
+				root, flags := oneShotRoot(t)
+				args := []string{"--run-hooks", "pre", "--state-dir", filepath.Join(root, "missing")}
+				if source == "a failing backend" {
+					backend := filepath.Join(root, "backend.sh")
+					if err := os.WriteFile(backend, []byte("#!/bin/sh\necho broken >&2\nexit 1\n"), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					args = append(args, "--settings-backend-cmd", backend)
+				}
+				got := oneShot(t, stdin, append(args, flags[2:]...)...)
+				if got.status != 1 || !strings.Contains(got.stderr, "cannot read the hooks") {
+					t.Fatalf("exit status %d and stderr %s, want 1 and the line that the hooks cannot be read",
+						got.status, clip(got.stderr))
+				}
+				want := ""
+				if stdin != `{}` {
+					want = got.stderr
+				}
+				if got.stdout != want {
+					t.Errorf("stdout %s, want %s", clip(got.stdout), clip(want))
+				}
+			})
+		}
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/hooks"
@@ -627,23 +628,78 @@ func TestRunnerLogsTheStatusOfAHookCutShortAfterItsExit(t *testing.T) {
 	}
 }
 
-// The lag wait answers whether the run is cancelled within the lag: true as soon as a cancel comes inside it, false
-// only once the whole lag has passed without one.
+// statusLog is a log that records, at the first write of a hook's status line, whether the lag wait had been entered.
+type statusLog struct {
+	buf          bytes.Buffer // not embedded: its WriteString would bypass Write
+	calls        *int
+	waitedBefore int // -1 until the status line is written
+}
+
+func (l *statusLog) Write(p []byte) (int, error) {
+	if l.waitedBefore < 0 && bytes.Contains(p, []byte("exited non-zero")) {
+		l.waitedBefore = *l.calls
+	}
+	return l.buf.Write(p)
+}
+
+func (l *statusLog) String() string { return l.buf.String() }
+
+// WHEN a hook exits 255 under a signal lag THEN whether it was cut short is decided before its status line is written,
+// so that a slow log never stretches the window in which a later cancel still counts; the status line still comes
+// first in the log.
+func TestRunnerDecidesACutShortHookBeforeLoggingItsStatus(t *testing.T) {
+	calls := waitEntered(t, true)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "hook_pre_a.sh"), "#!/bin/sh\nexit 255\n", 0o755)
+	log := &statusLog{calls: calls, waitedBefore: -1}
+	cut := hooks.Runner{Dir: dir, Log: log, Grace: time.Second, SignalLag: time.Hour}.Run(context.Background(), "pre",
+		pre("hook_pre_a.sh"), hooks.Context{})
+	if log.waitedBefore != 1 || !cut {
+		t.Errorf("lag waits before the status line %d and cut %v; want 1 and true; log %q", log.waitedBefore, cut,
+			log.String())
+	}
+	want := "[ pfB Hook ] pre #0 exited non-zero [ 255 ]; continuing\n" +
+		"[ pfB Hook ] pre run cancelled; 0 enabled hooks did not run\n"
+	if !strings.HasSuffix(log.String(), want) {
+		t.Errorf("log %q; want it to end %q", log.String(), want)
+	}
+}
+
+// The lag wait answers whether the run is cancelled within the lag: it is still waiting before either a cancel or the
+// end of the lag, true when the cancel comes first and false when the lag ends first. Time is the bubble's fake clock.
 func TestCancelledWithinWaitsOutTheLag(t *testing.T) {
 	wait := *hooks.CancelledWithin
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	timer := time.AfterFunc(50*time.Millisecond, cancel)
-	defer timer.Stop()
-	if !wait(ctx, hang) {
-		t.Error("a cancel 50 ms into the lag: got false, want true")
-	}
-	const lag = 20 * time.Millisecond
-	began := time.Now()
-	if wait(context.Background(), lag) {
-		t.Error("no cancel at all: got true, want false")
-	}
-	if waited := time.Since(began); waited < lag {
-		t.Errorf("no cancel: answered after %v, want it to wait out the lag of %v", waited, lag)
-	}
+	const lag = time.Hour
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		answer := make(chan bool, 1)
+		go func() { answer <- wait(ctx, lag) }()
+		time.Sleep(lag - time.Nanosecond)
+		synctest.Wait()
+		select {
+		case got := <-answer:
+			t.Fatalf("answered %v with neither a cancel nor the lag's end", got)
+		default:
+		}
+		cancel()
+		synctest.Wait()
+		if got := <-answer; !got {
+			t.Error("a cancel inside the lag: got false, want true")
+		}
+	})
+	synctest.Test(t, func(t *testing.T) {
+		answer := make(chan bool, 1)
+		go func() { answer <- wait(context.Background(), lag) }()
+		time.Sleep(lag)
+		synctest.Wait()
+		select {
+		case got := <-answer:
+			if got {
+				t.Error("no cancel within the lag: got true, want false")
+			}
+		default:
+			t.Error("still waiting once the lag has ended")
+		}
+	})
 }

@@ -230,15 +230,27 @@ func scenario(t *testing.T, file string, sc any) (root string, expand func(strin
 	if err := dec.Decode(sc); err != nil {
 		t.Fatal(err)
 	}
+	if err := departurePaired(raw); err != nil {
+		t.Fatal(err)
+	}
+	root = t.TempDir()
+	return root, strings.NewReplacer("{record}", ". '"+root+"/record.sh'", "{root}", root).Replace
+}
+
+// departurePaired is whether the scenario raw has an old_expect object exactly when it names its departure. A null
+// old_expect is no object: the PHP corpus reads it as absent.
+func departurePaired(raw []byte) error {
 	var d struct {
 		Departure string          `json:"departure"`
 		OldExpect json.RawMessage `json:"old_expect"`
 	}
-	if err := json.Unmarshal(raw, &d); err != nil || (d.OldExpect != nil) != (d.Departure != "") {
-		t.Fatalf("a scenario has old_expect exactly when it names its departure (%v)", err)
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return err
 	}
-	root = t.TempDir()
-	return root, strings.NewReplacer("{record}", ". '"+root+"/record.sh'", "{root}", root).Replace
+	if object := bytes.HasPrefix(d.OldExpect, []byte("{")); object != (d.Departure != "") {
+		return errors.New("a scenario has an old_expect object exactly when it names its departure")
+	}
+	return nil
 }
 
 // checkRuns compares the invocations recorded under root with expect, {record} and {root} expanded in each value.
@@ -337,6 +349,25 @@ func TestHookRunnerCorpus(t *testing.T) {
 }
 
 // clip quotes a text, its middle elided when long, so a 10 MiB mismatch stays readable.
+// The pairing check accepts a scenario with both a departure and an old_expect object, or neither, and refuses either
+// alone or a departure with a null old_expect.
+func TestDeparturePairedWithOldExpect(t *testing.T) {
+	for _, tc := range []struct {
+		json string
+		ok   bool
+	}{
+		{`{"departure":"why","old_expect":{"runs":[]}}`, true},
+		{`{}`, true},
+		{`{"departure":"why"}`, false},
+		{`{"old_expect":{"runs":[]}}`, false},
+		{`{"departure":"why","old_expect":null}`, false},
+	} {
+		if err := departurePaired([]byte(tc.json)); (err == nil) != tc.ok {
+			t.Errorf("%s: error %v, want accepted %v", tc.json, err, tc.ok)
+		}
+	}
+}
+
 func clip(s string) string {
 	if len(s) > 600 {
 		return strconv.Quote(s[:300]) + " ... " + strconv.Quote(s[len(s)-300:]) + " (" + strconv.Itoa(len(s)) + " bytes)"
