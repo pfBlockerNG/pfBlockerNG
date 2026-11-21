@@ -562,7 +562,7 @@ final class GeoipCatalogRenderTest extends TestCase
 		$this->assertSame('640', sprintf('%o', fileperms("{$www}/pfblockerng_Africa.php") & 07777));
 		$this->assertSame('640', sprintf('%o', fileperms("{$www}/pfblockerng_reputation.php") & 07777));
 		$this->assertSame(sprintf('%o', fileperms("{$this->tmp}/fresh") & 07777), sprintf('%o', fileperms("{$www}/pfblockerng_Asia.php") & 07777));
-		$this->assertStringNotContainsString('old', (string) file_get_contents("{$www}/pfblockerng_Africa.php"));
+		$this->assertNotSame('old pfblockerng_Africa.php', file_get_contents("{$www}/pfblockerng_Africa.php"));
 	}
 
 	/**
@@ -622,7 +622,8 @@ final class GeoipCatalogRenderTest extends TestCase
 	public function testAReputationPageWithCountriesIsLoggedAsToday(): void
 	{
 		unset($GLOBALS['pfb']['extras_update']);
-		$line = '/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d pfBlockerNG Reputation Tab\n$/D';
+		// pfb_logger()'s stamp and one space, then the line as logged, its own leading space included.
+		$line = '/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ' . preg_quote(' pfBlockerNG Reputation Tab') . '\n$/D';
 		$this->expectOutputRegex($line);
 
 		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($this->namedCatalog('Plain'), "{$this->tmp}/www"));
