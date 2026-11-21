@@ -942,7 +942,7 @@ $options_ccwhite		= [ 'ignore' => 'Ignore', 'match' => 'Match' ];
 $options_ccblack		= [ 'block' => 'Block', 'match' => 'Match' ];
 
 EOF;
-	if (!empty($et_options)) {
+	if ($et_options !== '') {
 		$php_rep .= <<<EOF
 \$options_ccexclude	= array($et_options);
 
@@ -1239,7 +1239,7 @@ $section->addInput(new Form_Select(
 ))->setHelp('Default: <strong>Block</strong><br />Select the \'Action\' format for ccblack');
 
 EOF;
-	if (!empty($et_options)) {
+	if ($et_options !== '') {
 		$php_rep .= <<<EOF
 
 \$section->addInput(new Form_Select(
@@ -1369,17 +1369,21 @@ function pfb_geoip_render_catalog(string $catalog, string $output_root = '/usr/l
 			continue;
 		}
 		['iso' => $iso, 'country' => $country, 'networks' => $networks, 'position' => $position] = $row;
+		if (($kind === 'country' && !in_array($row['family'], [4, 6], TRUE)) || !is_int($position) || !is_string($iso)
+			|| preg_match($word, $iso) !== 1 || !is_string($country) || !is_int($networks) || $networks < 0) {
+			return $refuse("{$at} is a {$kind} row of another shape");
+		}
+		$option = "\"{$iso}\" => \"" . $literal("{$country} {$iso} ({$networks})") . '"';
 		if ($kind === 'reputation') {
-			$list = &$reputation;
+			$taken = isset($reputation[$position]);
+			$reputation[$position] = $option;
 		} else {
-			$list = &$lists[$row['page']][$row['family']];
+			$taken = isset($lists[$row['page']][$row['family']][$position]);
+			$lists[$row['page']][$row['family']][$position] = $option;
 		}
-		if (($kind === 'country' && !in_array($row['family'], [4, 6], TRUE)) || !is_int($position) || isset($list[$position])
-			|| !is_string($iso) || preg_match($word, $iso) !== 1 || !is_string($country) || !is_int($networks) || $networks < 0) {
-			return $refuse("{$at} is a {$kind} row of another shape, or one whose position is taken");
+		if ($taken) {
+			return $refuse("{$at} takes a position its list already holds");
 		}
-		$list[$position] = "\"{$iso}\" => \"" . $literal("{$country} {$iso} ({$networks})") . '"';
-		unset($list);
 	}
 	// A list's options in position order as an array literal body, or NULL when its positions are not 1 to its length.
 	$source = static function (array $options): ?string {
