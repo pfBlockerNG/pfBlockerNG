@@ -8,7 +8,8 @@ package geoip_test
 //	csv          asn.csv: content (see corpusContent), null when there is none, or {"dir": true} for a folder of that
 //	             name.
 //	expect       table (pfblockerng_asn.txt afterwards; it holds "AS0 [ previous ]\n" before the run) and log (what the
-//	             run appends to the Extras log, its time reading "{now}"). Run reports a publication exactly when it logs one.
+//	             run appends to the Extras log, its time reading "{now}"). Run reports a publication exactly when it
+//	             logs one.
 
 import (
 	"bytes"
