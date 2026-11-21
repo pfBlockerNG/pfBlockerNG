@@ -27,19 +27,24 @@ type status struct {
 	Dropped                map[string]counter    `json:"dropped"`
 }
 
-// writeStatus replaces path atomically: a temp file in the same directory, mode 0644, renamed over it.
+// writeStatus replaces path atomically with the status.
 func writeStatus(path string, st *status) error {
 	data, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".pfb_crowdsec-status-*")
+	return writeFileAtomic(path, append(data, '\n'))
+}
+
+// writeFileAtomic replaces path atomically: a temp file in the same directory, mode 0644, renamed over it.
+func writeFileAtomic(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".pfb_crowdsec-*")
 	if err != nil {
 		return err
 	}
 	tmp := f.Name()
 	defer os.Remove(tmp) // a no-op once renamed
-	_, err = f.Write(append(data, '\n'))
+	_, err = f.Write(data)
 	if err == nil {
 		err = f.Chmod(0o644)
 	}

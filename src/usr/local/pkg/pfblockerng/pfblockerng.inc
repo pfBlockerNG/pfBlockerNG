@@ -21767,9 +21767,10 @@ function pfb_ip_render_attribution(array $fields): array {
 	global $pfb;
 
 	$rq = pfb_ip_render_query($fields);
-	// A drop by the CrowdSec bouncer's rule (#4164) renders as logged: no feed list or alias table holds its tables' entries
+	// A drop by the CrowdSec bouncer's rule (#4164) renders as logged: no feed list or alias table holds its tables' entries. Its
+	// feed is a decision origin, whose colon ("lists:<name>") is no Proofpoint ET category
 	if (in_array($fields[13], PFB_CROWDSEC_TABLES, TRUE)) {
-		return array('host' => $rq['host'], 'hostname' => $rq['hostname'], 'pfb_geoip' => FALSE, 'field15' => $rq['field15'],
+		return array('host' => $rq['host'], 'hostname' => $rq['hostname'], 'pfb_geoip' => FALSE, 'field15' => $fields[15],
 			'mask' => '', 'feed_new' => '', 'eval_new' => '', 'alias_new' => '', 'pfb_matchtitle' => '');
 	}
 	$geoip_lock = FALSE;
@@ -27483,10 +27484,10 @@ function pfb_daemon_filterlog() {
 						$resolved_host	= htmlspecialchars($ip_cache['resolved_host'])	?: 'Unknown';
 					}
 
-					// A drop by the CrowdSec bouncer's rule (#4164): its tables are no feed, and the log does not say which
-					// decision matched. The host's cached feed attribution stays for pfB rules.
+					// A drop by the CrowdSec bouncer's rule (#4164): the feed is the banning decision's origin and the matched
+					// entry its value, from the bouncer's decision files. The host's cached feed attribution stays for pfB rules.
 					if (in_array($pfb_alias, PFB_CROWDSEC_TABLES, TRUE)) {
-						$pfb_query = array('CrowdSec', 'Unknown');
+						$pfb_query = pfb_crowdsec_decision_origin($host);
 					}
 
 					// Modify host for ASN query

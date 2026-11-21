@@ -28,6 +28,8 @@ const PFB_CROWDSEC_STATUS_PAGE = '/pfblockerng/pfblockerng_crowdsec_status.php';
 const PFB_CROWDSEC_RCFILE = '/usr/local/etc/rc.d/pfb_crowdsec.sh';
 const PFB_CROWDSEC_CONFIG = '/usr/local/etc/pfb_crowdsec.json';
 const PFB_CROWDSEC_STATUS = '/var/run/pfb_crowdsec.json';
+// The bouncer's decision files (#4164): <origin>.txt per origin, listing the values it bans for that origin
+const PFB_CROWDSEC_DECISIONS = '/var/run/pfb_crowdsec';
 // The status file's address families (go/pfb_crowdsec ipTypes) and their tables (D3); a larger status file is not the bouncer's
 const PFB_CROWDSEC_TABLES = ['ipv4' => 'crowdsec_v4', 'ipv6' => 'crowdsec_v6'];
 // Each family's inbound and outbound rule's tracker (ridentifier, #4159), which filterlog logs; fixed across reloads and upgrades.
@@ -189,6 +191,7 @@ function pfb_crowdsec_config_json(array $settings): string {
 		'table_v6'         => PFB_CROWDSEC_TABLES['ipv6'],
 		'log_level'        => (string) $settings['log_level'],
 		'status_file'      => PFB_CROWDSEC_STATUS,
+		'decisions_dir'    => PFB_CROWDSEC_DECISIONS,
 	], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
 }
 
@@ -791,6 +794,52 @@ function pfb_crowdsec_rule_table(string $tracker, string $line): ?string {
 }
 
 /**
+ * The name of the bouncer's rule a tracker identifies (D5): "CrowdSec IPv4", "CrowdSec IPv4 out", "CrowdSec IPv6" or "CrowdSec IPv6 out";
+ * NULL for any other tracker.
+ */
+function pfb_crowdsec_rule_name(int $tracker): ?string {
+	foreach (PFB_CROWDSEC_TRACKERS as $family => $ids) {
+		$n = substr($family, -1);
+		if ($ids['in'] === $tracker) {
+			return "CrowdSec IPv{$n}";
+		}
+		if ($ids['out'] === $tracker) {
+			return "CrowdSec IPv{$n} out";
+		}
+	}
+	return NULL;
+}
+
+/**
+ * The origin of the decision that bans $host, and the banned value (the address or the range holding it), as the feed and the
+ * matched entry of an Alerts row (#4164). Read from the bouncer's decision files with find_reported_header(), as a pfB row's
+ * feed is read from the feed files: no LAPI request, so a LAPI down or slow never holds up the filterlog daemon. Each address
+ * is looked up once until the files change (the folder's mtime; the bouncer renames every file it writes). Unknown for both
+ * when no file names the address, or the file's name is not a safe origin.
+ *
+ * @return array{0: string, 1: string}
+ */
+function pfb_crowdsec_decision_origin(string $host): array {
+	global $pfb;
+	static $cache = [];
+	static $stamp = NULL;
+
+	$dir = $pfb['crowdsec_decisions'] ?? PFB_CROWDSEC_DECISIONS;
+	clearstatcache(TRUE, $dir);
+	$now = $dir . '|' . @filemtime($dir);
+	if ($now !== $stamp || count($cache) >= 10000) {
+		$cache = [];
+		$stamp = $now;
+	}
+	if (!isset($cache[$host])) {
+		$q = find_reported_header($host, escapeshellarg($dir) . '/*.txt');
+		$cache[$host] = preg_match('/^[A-Za-z0-9_:@+-]{1,200}$/D', (string) ($q[0] ?? '')) === 1
+		    && (is_ipaddr($q[1] ?? '') || is_subnet($q[1] ?? '')) ? [$q[0], $q[1]] : ['Unknown', 'Unknown'];
+	}
+	return $cache[$host];
+}
+
+/**
  * After a filter reload (D5): SIGUSR1 makes the bouncer re-create and refill its tables from memory at once. Only to the pid in
  * PFB_CROWDSEC_PIDFILE that isvalidpid() confirms, and only while its command line is the bouncer's (a stale pidfile may name a reused
  * pid); never to daemon(8)'s supervisor, which SIGUSR1 kills (#4069). A missed signal costs at most one pull: the next one reconciles.
@@ -818,4 +867,5 @@ function pfb_crowdsec_teardown(): void {
 	    'crowdsec_lockfile' => PFB_CROWDSEC_LOCKFILE, 'crowdsec_binary_record' => PFB_CROWDSEC_BINARY_RECORD] as $key => $path) {
 		unlink_if_exists($pfb[$key] ?? $path);
 	}
+	rmdir_recursive($pfb['crowdsec_decisions'] ?? PFB_CROWDSEC_DECISIONS);
 }

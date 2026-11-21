@@ -25,10 +25,11 @@ type daemon struct {
 	lastPull  time.Time
 	lastErrAt time.Time
 	lastErr   string
-	requests  uint64     // LAPI requests ended since start
-	errors    uint64     // of which failed
-	dropped   [2]counter // the inbound rules' counters at the last read
-	window    [2]counter // drops counted since the last usage post, across counter resets
+	requests  uint64            // LAPI requests ended since start
+	errors    uint64            // of which failed
+	dropped   [2]counter        // the inbound rules' counters at the last read
+	window    [2]counter        // drops counted since the last usage post, across counter resets
+	written   map[string]string // the decision files written: file name -> content; nil until the first write
 }
 
 func newDaemon(cfg *config, log *logger, pf *pfctl, api *lapiClient, now func() time.Time) *daemon {
@@ -67,6 +68,9 @@ func (d *daemon) finishPull(ctx context.Context, full bool, resp *streamResponse
 		} else {
 			fresh = d.apply(ctx, resp)
 		}
+	}
+	if err == nil {
+		d.writeDecisions()
 	}
 	d.reconcile(ctx)
 	d.killStates(ctx, fresh)
@@ -305,6 +309,7 @@ func (d *daemon) shutdown(ctx context.Context) {
 		}
 	}
 	d.log.infof("tables flushed")
+	d.removeDecisions()
 }
 
 // run pulls at once, then on every tick; reconciles on SIGUSR1; posts usage after the first successful pull and on its

@@ -28,6 +28,7 @@ type config struct {
 	TableV6         string `json:"table_v6"`
 	LogLevel        string `json:"log_level"`
 	StatusFile      string `json:"status_file"`
+	DecisionsDir    string `json:"decisions_dir"`
 
 	interval time.Duration
 	level    logLevel
@@ -57,6 +58,7 @@ func parseConfig(data []byte) (*config, error) {
 		TableV6:         "crowdsec_v6",
 		LogLevel:        "info",
 		StatusFile:      "/var/run/pfb_crowdsec.json",
+		DecisionsDir:    "/var/run/pfb_crowdsec",
 	}
 	if err := checkConfigKeys(data); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
@@ -74,7 +76,8 @@ func parseConfig(data []byte) (*config, error) {
 	return cfg, nil
 }
 
-var configKeys = []string{"api_url", "api_key", "update_frequency", "table_v4", "table_v6", "log_level", "status_file"}
+var configKeys = []string{"api_url", "api_key", "update_frequency", "table_v4", "table_v6", "log_level", "status_file",
+	"decisions_dir"}
 
 // checkConfigKeys requires one JSON object whose keys are configKeys, spelled exactly and each at most once (encoding/json
 // alone matches keys case-insensitively and lets a repeated key win).
@@ -136,6 +139,9 @@ func (c *config) validate() error {
 	}
 	if !filepath.IsAbs(c.StatusFile) || strings.ContainsRune(c.StatusFile, 0) {
 		return errors.New("status_file must be an absolute path")
+	}
+	if !filepath.IsAbs(c.DecisionsDir) || strings.ContainsRune(c.DecisionsDir, 0) || filepath.Clean(c.DecisionsDir) == "/" {
+		return errors.New("decisions_dir must be an absolute path below /")
 	}
 	return nil
 }

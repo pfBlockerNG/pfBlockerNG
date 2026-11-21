@@ -18,6 +18,10 @@
 // (Unix seconds, 0 for never), last_error, lapi_requests, lapi_errors (requests that have ended),
 // banned.{ipv4,ipv6}.{total,origins{<origin>:<count>}} and dropped.{ipv4,ipv6}.{packets,bytes} (the inbound rules'
 // counters, reset by every filter reload).
+//
+// Decision files (decisions_dir, #4164): <origin>.txt per origin, the values (address or prefix) whose lowest-numbered
+// decision has that origin, one per line, sorted, mode 0644; rewritten atomically after a pull that changed them, removed at
+// shutdown. The origin becomes A-Z a-z 0-9 _ : @ + - only ("hidden" when it holds the key).
 package main
 
 import (
