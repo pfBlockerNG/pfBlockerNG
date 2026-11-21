@@ -29,7 +29,6 @@ const (
 	defaultTimeout = 60 // seconds
 	defaultGrace   = 5 * time.Second
 	bourneShell    = "/bin/sh"
-	signalLag      = 250 * time.Millisecond // how long a hook's signal death waits for that signal to cancel the run
 )
 
 var errTimedOut = errors.New("hook timed out")
@@ -86,6 +85,10 @@ type Runner struct {
 	Errors     io.Writer     // the error log: skipped or failed hooks, failed output writes, a cancelled run (nil: none)
 	Transcript io.Writer     // the Update transcript: every line and the first 1,048,576 bytes of each hook's output (nil: none)
 	Grace      time.Duration // between TERM and KILL; 0 is 5 s
+	// SignalLag is how long a hook that ends with a status above 128 waits for the run to be cancelled before it counts
+	// as failed rather than cut short: a signal sent to the whole process group can end the hook before its handler has
+	// cancelled ctx. 0 waits not at all: only whether ctx has ended when the hook does counts.
+	SignalLag time.Duration
 }
 
 // Run runs the enabled hooks of when (pre or post) among rows, one after another in list order, and returns when the
@@ -169,28 +172,25 @@ func (r Runner) run(ctx context.Context, when string, index int, h Hook, env []s
 		r.sinks().Line(true, "[ pfB Hook ] %s %s TIMED OUT after %ds (killed); continuing\n", when, label, timeout)
 	case e != ran:
 		return e
-	case status > 128 && cancelledSoon(ctx):
-		return interrupted
 	case status != 0:
 		r.sinks().Line(true, "[ pfB Hook ] %s %s exited non-zero [ %d ]; continuing\n", when, label, status)
+		if status > 128 && (ctx.Err() != nil || r.SignalLag > 0 && cancelledWithin(ctx, r.SignalLag)) {
+			return interrupted // its status is logged; it still counts as cut short
+		}
 	default:
 		r.sinks().Line(false, "[ pfB Hook ] %s %s completed\n", when, label)
 	}
 	return ran
 }
 
-// cancelledSoon is whether ctx is cancelled, or is within signalLag: a signal sent to the whole process group (a
-// terminal's Ctrl-C) can end a hook before the handler of the same signal has cancelled the run's context.
-func cancelledSoon(ctx context.Context) bool {
-	if ctx.Err() != nil {
-		return true
-	}
-	lag := time.NewTimer(signalLag)
-	defer lag.Stop()
+// cancelledWithin is whether ctx is cancelled now or within lag (Runner.SignalLag). A variable for the tests alone.
+var cancelledWithin = func(ctx context.Context, lag time.Duration) bool {
+	timer := time.NewTimer(lag)
+	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return true
-	case <-lag.C:
+	case <-timer.C:
 		return false
 	}
 }

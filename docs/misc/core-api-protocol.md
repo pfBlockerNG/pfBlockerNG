@@ -942,12 +942,17 @@ pfb-core --run-hooks pre|post --hook-dir PATH (--settings-backend-cmd PATH | --s
   line says the run was cancelled, and the exit status is 1. Every enabled row of the fire point not yet started counts as
   not run, a row whose script vetting would have skipped included. A hook that the same signal ends first, as one sent to
   the whole process group does (a terminal's Ctrl-C, a hangup, `kill -TERM -<pgid>`), counts as cut short: a hook that ends
-  by a signal or with a status above 128 while, or within 250 ms before, the run is cancelled. A hook that exits 130 on its
-  own, with no signal to the one-shot, is a failed hook. A signal that comes while the one-shot waits for its context ends
-  the wait: one line is logged, nothing runs, and the status is 1; when the context had been read in full by then, the
-  one-shot goes on with it as if the signal had come next. One that comes during the settings read is acted on once that
-  read ends (at most the adapter's 10 s read timeout); it leaves the status 0 when the fire point has no enabled hook. A
-  HUP or INT that pfb-core inherited ignored (`nohup`, a background job of a shell without job control) stays ignored.
+  by a signal or with a status above 128 while, or within 250 ms before, the run is cancelled. Its status line is logged
+  first, as for any failed hook, then the line that the run was cancelled. A hook that exits 130 on its own, with no signal
+  to the one-shot, is a failed hook. Three limits follow. First, a hook that handles the signal itself and exits with a
+  status from 1 to 128 counts as run, so with nothing else left unrun the status is 0. Second, a group signal that the
+  one-shot acts on more than 250 ms after the last hook's death (a starved host) is not seen as cutting that hook short,
+  and the status is 0.
+  Third, a HUP or INT that pfb-core inherited ignored (`nohup`, a background job of a shell without job control) stays
+  ignored, and its hooks inherit that ignore. A signal that comes while the one-shot waits for its context ends the wait:
+  one line is logged, nothing runs, and the status is 1; when the context had been read in full by then, the one-shot goes
+  on with it as if the signal had come next. One that comes during the settings read is acted on once that read ends (at
+  most the adapter's 10 s read timeout); it leaves the status 0 when the fire point has no enabled hook.
 - **Output.** stderr is the main log: every runner line and all of each hook's sanitized output, without time stamps. The
   one-shot's own lines (a refused context, settings it cannot read, an uninitialized Core) carry the `pfb_core:` prefix and
   the date and time, as the daemon's do. With `"lifecycle": "uninstall"` stdout, the package operation's console, gets the

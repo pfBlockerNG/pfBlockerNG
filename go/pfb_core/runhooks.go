@@ -44,25 +44,15 @@ var hookFields = map[string]struct {
 func runHooks(ctx context.Context, when, stateDir, backendCmd string, runner hooks.Runner, stdin io.Reader,
 	stdout, stderr io.Writer) int {
 	logger := log.New(stderr, "pfb_core: ", log.LstdFlags)
-	type read struct {
-		data []byte
-		err  error
-	}
-	got := make(chan read, 1)
+	got := make(chan hookInput, 1)
 	go func() { // a stdin that stays open must not outlast a signal
 		data, err := io.ReadAll(io.LimitReader(stdin, maxHookContext+1))
-		got <- read{data, err}
+		got <- hookInput{data, err}
 	}()
-	var in read
-	select {
-	case <-ctx.Done():
-		select {
-		case in = <-got: // the read ended as the signal came: go on with it, whichever select would pick
-		default:
-			logger.Printf("no hooks run: cancelled while reading the hook context")
-			return 1
-		}
-	case in = <-got:
+	in, ok := awaitHookInput(ctx, got)
+	if !ok {
+		logger.Printf("no hooks run: cancelled while reading the hook context")
+		return 1
 	}
 	if in.err != nil {
 		logger.Printf("refused the hook context: %v", in.err)
@@ -101,6 +91,28 @@ func runHooks(ctx context.Context, when, stateDir, backendCmd string, runner hoo
 		return 1
 	}
 	return 0
+}
+
+// hookInput is the read of a --run-hooks context from stdin.
+type hookInput struct {
+	data []byte
+	err  error
+}
+
+// awaitHookInput waits for the read on got unless ctx ends first; ok is false when ctx ended with the read unfinished.
+// A read that has ended when ctx has too is taken, whichever ready case select would pick.
+func awaitHookInput(ctx context.Context, got <-chan hookInput) (in hookInput, ok bool) {
+	select {
+	case <-ctx.Done():
+		select {
+		case in = <-got:
+			return in, true
+		default:
+			return hookInput{}, false
+		}
+	case in = <-got:
+		return in, true
+	}
 }
 
 // hooksOnly reads a backend for its hooks projection alone: what the others hold is not the one-shot's to refuse.

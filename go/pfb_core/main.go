@@ -60,8 +60,10 @@
 // With --run-hooks: 0 once the hooks ran, whatever they did, or when the settings are not initialized; 1 when the hooks
 // did not all run: the settings cannot be read (nothing runs), TERM, INT or HUP came while the context was read (nothing
 // runs), or such a signal left an enabled hook unrun or cut one short; 2 for a usage error or a context it refuses
-// (nothing runs). An INT or HUP inherited ignored stays ignored. A signal during the settings read is acted on once
-// that read ends (at most the adapter's 10 s read timeout).
+// (nothing runs). An INT or HUP inherited ignored stays ignored, and the hooks inherit the ignore. A signal during the
+// settings read is acted on once that read ends (at most the adapter's 10 s read timeout). A hook that handles the
+// signal itself and exits with a status from 1 to 128 counts as run: with nothing else unrun the status is 0. A group
+// signal acted on more than 250 ms after the last hook's death is not seen as cutting that hook short: the status is 0.
 package main
 
 import (
@@ -91,9 +93,9 @@ import (
 
 const shutdownGrace = 3 * time.Second // below the rc script's 5 s before KILL
 
-// interruptIgnored is whether pfb-core started with SIGINT ignored, read before main's Notify clears the ignore: the
-// one-shot keeps it, as it keeps an ignored SIGHUP.
-var interruptIgnored = signal.Ignored(os.Interrupt)
+// ownSignals is whether run owns the process's signals; main sets it. run installs them once the flags say which mode
+// runs, the one-shot's before any Notify, so that a SIGINT or SIGHUP inherited ignored is never unignored for a moment.
+var ownSignals bool
 
 func run(ctx context.Context, args []string, stderr io.Writer) int {
 	fl := flag.NewFlagSet("pfb-core", flag.ContinueOnError)
@@ -152,24 +154,35 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 				"(--settings-backend-cmd PATH | --state-dir DIR) [--python-wrapper PATH]")
 			return 2
 		}
-		// SIGPIPE noticed, not ignored: a closed console fails its writes instead of ending the run, and hooks keep the
-		// default action. A hangup or an interrupt cancels the run, so that no hook outlives its timeout, unless it came
-		// in ignored (nohup, a background job of a shell without job control).
-		signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
-		if interruptIgnored { // main's Notify replaced the ignore
-			signal.Ignore(os.Interrupt)
-		}
-		if !signal.Ignored(syscall.SIGHUP) {
+		if ownSignals {
+			// SIGPIPE noticed, not ignored: a closed console fails its writes instead of ending the run, and hooks keep
+			// the default action. TERM, and an interrupt or a hangup unless it came in ignored (nohup, a background job
+			// of a shell without job control), cancel the run, so that no hook outlives its timeout. An ignored one is
+			// never passed to Notify, which would replace the ignore; the hooks inherit it.
+			signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+			cancels := []os.Signal{syscall.SIGTERM}
+			for _, sig := range []os.Signal{os.Interrupt, syscall.SIGHUP} {
+				if !signal.Ignored(sig) {
+					cancels = append(cancels, sig)
+				}
+			}
 			var stop context.CancelFunc
-			ctx, stop = signal.NotifyContext(ctx, syscall.SIGHUP)
+			ctx, stop = signal.NotifyContext(ctx, cancels...)
 			defer stop()
 		}
-		runner := hooks.Runner{Dir: hookDir, Python: pythonWrapper}
+		// shortcut: a handler that runs later than the lag after the last hook's death (a starved box) leaves a group
+		// signal during that hook unseen, and the exit status is 0; upgrade if a caller ever needs that exact.
+		runner := hooks.Runner{Dir: hookDir, Python: pythonWrapper, SignalLag: 250 * time.Millisecond}
 		return runHooks(ctx, runHooksWhen, *stateDir, *backendCmd, runner, os.Stdin, os.Stdout, stderr)
 	}
 	if *socket == "" || *stateDir == "" || fl.NArg() != 0 {
 		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
 		return 2
+	}
+	if ownSignals {
+		var stop context.CancelFunc
+		ctx, stop = signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
+		defer stop()
 	}
 	logger := log.New(stderr, "pfb_core: ", log.LstdFlags)
 	if err := privateDir(*stateDir, 0o700); err != nil {
@@ -299,8 +312,6 @@ func lockStateDir(dir string) (*os.File, error) {
 }
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
-	code := run(ctx, os.Args[1:], os.Stderr)
-	stop()
-	os.Exit(code)
+	ownSignals = true
+	os.Exit(run(context.Background(), os.Args[1:], os.Stderr))
 }
