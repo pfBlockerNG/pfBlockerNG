@@ -511,7 +511,10 @@ func (c Conversion) split(s stage) []byte {
 			add := func(country, iso string, networks int) {
 				o := option{country, iso, networks}
 				options = append(options, o)
-				if family == "4" && !strings.Contains(iso, "_rep") {
+				// The Reputation tab offers no proxy or satellite list of a country: the exclusion it feeds
+				// compares a plain ISO code (#4149).
+				proxy := strings.HasPrefix(iso, "A1_") || strings.HasPrefix(iso, "A2_")
+				if family == "4" && !strings.Contains(iso, "_rep") && !proxy {
 					reputation = append(reputation, o)
 				}
 			}
