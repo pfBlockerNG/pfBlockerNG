@@ -7,21 +7,22 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * The corpus of `pfb-core --run-hooks` (#4035 slice 6c) driven through today's two callers of pfb_run_hooks() outside an
- * Update: the runhooks verb of pfblockerng.php, whose own block is evaluated with the scenario's arguments, and the
- * uninstall disable pass, whose hooks run with $pfb['hook_lifecycle'] = 'uninstall' under a pkg process. Each scenario runs
- * in a fresh PHP process. go/pfb_core/hooks/oneshot_test.go runs the one-shot binary on the same files, with the scenario's
- * stdin, and compares the same recorded invocations, the main log with its stderr, and the console with its stdout.
+ * The corpus of `pfb-core --run-hooks` (#4035 slice 6c) driven through today's two callers of pfb_run_hooks() outside
+ * an Update: the runhooks verb of pfblockerng.php, whose own block is evaluated with the scenario's arguments, and the
+ * uninstall disable pass, whose hooks run with $pfb['hook_lifecycle'] = 'uninstall' under a pkg process. Each scenario
+ * runs in a fresh PHP process. go/pfb_core/hooks/oneshot_test.go runs the one-shot binary on the same files, with the
+ * scenario's stdin, and compares the same recorded invocations, the main log with its stderr, and the console with its
+ * stdout.
  *
  * A scenario (the Go side refuses unknown keys):
  *   description  what it pins; departure says why Go differs when old_expect is present.
- *   caller       "runhooks": argv are the verb's arguments after runhooks. "uninstall": vars is the context the disable pass
- *                gives pfb_run_hooks() and pkgOp the operation of the pkg process it runs under.
+ *   caller       "runhooks": argv are the verb's arguments after runhooks. "uninstall": vars is the context the disable
+ *                pass gives pfb_run_hooks() and pkgOp the operation of the pkg process it runs under.
  *   when         the fire point, the one-shot's argument. stdin: the one-shot's context object, a content.
  *   python, rows, files  as in tests/hooks/fixtures/runner (HookRunnerCorpusTest documents them).
- *   expect       runs (each recorded invocation's script, wrapped, args and PFB_* environment, in order), log (the main log,
- *                without pfb_logger()'s time stamps), console (what reached stdout, without time stamps), absent (canary
- *                files that must not exist).
+ *   expect       runs (each recorded invocation's script, wrapped, args and PFB_* environment, in order), log (the main
+ *                log, without pfb_logger()'s time stamps), console (what reached stdout, without time stamps), absent
+ *                (canary files that must not exist).
  *   old_expect   today's answer where Go deliberately differs: its keys replace expect's here.
  * A content is a string or {"prefix", "repeat", "times", "suffix"}; {root} in it is the scenario root.
  */
@@ -57,11 +58,13 @@ final class HookOneShotCorpusTest extends TestCase
 	/** @param array<string,mixed>|string $content */
 	private function content(array|string $content): string
 	{
-		$expand = fn(string $text): string => str_replace(['{record}', '{root}'], [". '{root}/record.sh'", $this->root], $text);
+		$expand = fn(string $text): string
+			=> str_replace(['{record}', '{root}'], [". '{root}/record.sh'", $this->root], $text);
 		if (is_string($content)) {
 			return $expand($content);
 		}
-		return $expand($content['prefix'] ?? '') . str_repeat($content['repeat'], $content['times']) . $expand($content['suffix'] ?? '');
+		return $expand($content['prefix'] ?? '') . str_repeat($content['repeat'], $content['times'])
+			. $expand($content['suffix'] ?? '');
 	}
 
 	/** @param array<string,mixed> $sc */
@@ -124,8 +127,8 @@ final class HookOneShotCorpusTest extends TestCase
 			$vars[(string) $name] = $this->content($value);
 		}
 		$argv = array_map(fn(string $arg): string => $this->content($arg), $sc['argv'] ?? []);
-		file_put_contents("{$root}/scenario.json", json_encode(['caller' => $sc['caller'], 'when' => $sc['when'], 'argv' => $argv,
-			'vars' => $vars, 'rows' => $sc['rows']], JSON_THROW_ON_ERROR));
+		file_put_contents("{$root}/scenario.json", json_encode(['caller' => $sc['caller'], 'when' => $sc['when'],
+			'argv' => $argv, 'vars' => $vars, 'rows' => $sc['rows']], JSON_THROW_ON_ERROR));
 		$repo = dirname(__DIR__, 2);
 		file_put_contents("{$root}/worker.php", <<<'PHP'
 <?php
@@ -165,8 +168,9 @@ PHP);
 			$command .= 'perl -e ' . escapeshellarg('$0 = shift; exit(system(@ARGV) >> 8)') . ' '
 				. escapeshellarg(self::PKG_ARGV[$sc['pkgOp']]) . ' ';
 		}
-		$command .= escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg("{$root}/worker.php") . ' ' . escapeshellarg($root) . ' '
-			. escapeshellarg($repo) . ' > ' . escapeshellarg("{$root}/worker.out") . ' 2> ' . escapeshellarg("{$root}/worker.err");
+		$command .= escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg("{$root}/worker.php") . ' ' . escapeshellarg($root)
+			. ' ' . escapeshellarg($repo) . ' > ' . escapeshellarg("{$root}/worker.out")
+			. ' 2> ' . escapeshellarg("{$root}/worker.err");
 		exec($command, $discard, $status);
 		$this->assertSame(0, $status, 'worker: ' . file_get_contents("{$root}/worker.err"));
 
