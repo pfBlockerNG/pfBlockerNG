@@ -853,7 +853,12 @@ either case and an uncompressed IPv6 address are taken, and one canonical spelli
 publish. One line that fails refuses the whole resource, which keeps its cursor. The Outpost also bounds every part by what
 `GetResources` said of it: its line count times the longest line a member may be, 64 bytes and a line feed for an IP
 member (no address or prefix the rule takes is longer) and 1 MiB and a line feed for any other. A `Content-Length` over
-that bound is refused before the body is read, and a body that runs past it is cut off there and refused.
+that bound is refused before the body is read, and a body that runs past it is cut off there and refused. Any other
+answer is an error envelope, read at most 64 KiB whatever its status; a longer one is malformed. A delta part that does not
+arrive as `GetResources` described it (over its bound, not plain text, another line count), or whose merge is not the
+item's `digest` and `entries`, is discarded and the full body asked for. A part the transport ends part way (the call's
+deadline, a reset, a connection closed short of its `Content-Length`) is Core not answering: the resource fails as
+unreachable and no full body is asked for under the same deadline.
 
 **Errors**, in the JSON envelope: `not_found` (`404`) when the store does not hold that part (the resource is unknown or
 removed, the generation is neither the current one nor the applied baseline, or the delta is not the one from that

@@ -4563,60 +4563,72 @@ const PFB_OUTPOST_CURSOR_MAX = 1048576;
  *
  * At most $max bytes of a body reach $file: a Content-Length over $max is refused before the body is read, and a body that
  * runs past $max is cut off there and refused. The caller derives $max from what GetResources said of the part: its line
- * count times the longest line the member rule admits (pfb_outpost_member_max() and its line feed). An error envelope is read
- * up to 64 KiB, and its code is taken only in the protocol's shape (lower-case letters and underscores, at most 64 bytes).
+ * count times the longest line the member rule admits (pfb_outpost_member_max() and its line feed). Any other answer is an
+ * error envelope, read up to 64 KiB whatever the status, and its code is taken only by pfb_core_error_code().
  *
  * @param array<string, string> $params id, generation, part, and from with add and remove
  * @param resource $file
  * @param int $max the longest body taken, in bytes
- * @return array{status: int, code: ?string, error: ?string} error NULL once the whole body is in $file; status 0 when no HTTP
- *   reply came; code the error envelope's code when there is one of the protocol's shape
+ * @return array{status: int, code: ?string, error: ?string} error NULL once the whole body is in $file; status 0 when no
+ *   whole HTTP reply came (no answer, or the transport ended it part way); code the error envelope's code
  */
 function pfb_core_fetch_body(array $params, $file, int $max, ?string $socket = NULL, int $timeout = 30): array {
 	$ch = pfb_core_request('GetResourceBody', $params, $socket, $timeout);
 	if (is_string($ch)) {
 		return ['status' => 0, 'code' => NULL, 'error' => $ch];
 	}
-	$limit = static fn ($ch): int => (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE) === 200 ? $max : 65536;
+	$body = static function ($ch): bool {
+		$type = strtolower((string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE));
+		return (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE) === 200 && ($type === 'text/plain' || str_starts_with($type, 'text/plain;'));
+	};
+	$limit = static fn ($ch): int => $body($ch) ? $max : 65536;
 	$over = FALSE;
-	$written = 0;
+	$length = NULL;
 	curl_setopt_array($ch, [
-		CURLOPT_HEADERFUNCTION => static function ($ch, string $header) use ($limit, &$over): int {
-			if (preg_match('/^Content-Length:\s*(\d+)\s*$/Di', $header, $m) === 1 && (float) $m[1] > $limit($ch)) {
+		// the Content-Length is judged at the end of the header block, once the status and the Content-Type are both known
+		CURLOPT_HEADERFUNCTION => static function ($ch, string $header) use ($limit, &$over, &$length): int {
+			if (preg_match('/^Content-Length:\s*(\d+)\s*$/Di', $header, $m) === 1) {
+				$length = (float) $m[1];
+			} elseif (trim($header) === '' && $length !== NULL && $length > $limit($ch)) {
 				$over = TRUE;
 				return 0;
 			}
 			return strlen($header);
 		},
-		CURLOPT_WRITEFUNCTION  => static function ($ch, string $data) use ($file, $limit, &$over, &$written): int {
-			if ($written + strlen($data) > $limit($ch)) {
+		CURLOPT_WRITEFUNCTION  => static function ($ch, string $data) use ($file, $limit, &$over): int {
+			if (ftell($file) + strlen($data) > $limit($ch)) {
 				$over = TRUE;
 				return 0;
 			}
-			$done = (int) fwrite($file, $data);
-			$written += $done;
-			return $done;
+			return (int) fwrite($file, $data);
 		},
 	]);
 	$done = curl_exec($ch);
 	$status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
 	$type = strtolower((string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE));
+	$curlErrno = curl_errno($ch);
 	$curlError = curl_error($ch);
 	if ($over) {
 		return ['status' => $status, 'code' => NULL, 'error' => "GetResourceBody answered more than {$limit($ch)} bytes, the bound of this reply"];
 	}
 	if ($done !== TRUE) {
-		return ['status' => $status, 'code' => NULL, 'error' => "the body did not arrive whole: {$curlError}"];
+		// a write this side refused is the body's fault; anything else is the transport's (a timeout, a reset, a short body)
+		return ['status' => $curlErrno === CURLE_WRITE_ERROR ? $status : 0, 'code' => NULL,
+			'error' => "the body did not arrive whole: {$curlError}"];
 	}
-	if ($status === 200 && ($type === 'text/plain' || str_starts_with($type, 'text/plain;'))) {
+	if ($body($ch)) {
 		return ['status' => 200, 'code' => NULL, 'error' => NULL];
 	}
 	rewind($file);
-	$reply = json_decode((string) stream_get_contents($file), TRUE);
-	$code = is_array($reply) && is_string($reply['error']['code'] ?? NULL) && preg_match('/^[a-z_]{1,64}$/D', $reply['error']['code']) === 1
-		? $reply['error']['code'] : NULL;
+	$code = pfb_core_error_code(json_decode((string) stream_get_contents($file), TRUE));
 	return ['status' => $status, 'code' => $code,
 		'error' => "GetResourceBody answered HTTP {$status}" . ($code === NULL ? " with a malformed reply ({$type})" : " ({$code})")];
+}
+
+/** The code of a Core API error envelope when it has the protocol's shape (lower-case letters and underscores, at most 64 bytes). */
+function pfb_core_error_code(mixed $reply): ?string {
+	$code = is_array($reply) ? $reply['error']['code'] ?? NULL : NULL;
+	return is_string($code) && preg_match('/^[a-z_]{1,64}$/D', $code) === 1 ? $code : NULL;
 }
 
 /** Whether $id has the shape of a Core resource id (go/pfb_core/resources ValidID). */
@@ -4626,11 +4638,7 @@ function pfb_outpost_resource_id_valid(string $id): bool {
 
 /** Whether $generation is a generation as Core writes one: a string of decimal digits that fits 64 bits. */
 function pfb_outpost_generation_valid(mixed $generation): bool {
-	if (!is_string($generation) || !ctype_digit($generation)) {
-		return FALSE;
-	}
-	$digits = ltrim($generation, '0');
-	return strlen($digits) < 20 || (strlen($digits) === 20 && strcmp($digits, '18446744073709551615') <= 0);
+	return is_string($generation) && ctype_digit($generation) && pfb_outpost_generation_cmp($generation, '18446744073709551615') <= 0;
 }
 
 /** Order two valid generations by value without arithmetic: a generation can exceed what a PHP integer holds. */
@@ -4828,7 +4836,8 @@ function pfb_outpost_parts_fetch(string $id, string $generation, array $parts, ?
 		if ($fh === FALSE) {
 			return ['mirror', "{$path} cannot be created", NULL];
 		}
-		$bound = (int) min(PHP_INT_MAX, $lines * (pfb_outpost_member_max($family) + 1));
+		$line = pfb_outpost_member_max($family) + 1;
+		$bound = $lines > intdiv(PHP_INT_MAX, $line) ? PHP_INT_MAX : $lines * $line;
 		$got = pfb_core_fetch_body(['id' => $id, 'generation' => $generation, 'part' => $part] + ($from === NULL ? [] : ['from' => $from]),
 			$fh, $bound, $socket, $timeout);
 		fclose($fh);
@@ -4860,15 +4869,16 @@ function pfb_outpost_parts_fetch(string $id, string $generation, array $parts, ?
  * and bring its mirror to the generation Core serves. The cursor sent is the stored generation with the digest of the mirror
  * as it is on disk now, so an edited mirror is answered full; a missing mirror, or one that is not a regular file, sends none.
  * A delta's parts are fetched to $workdir/add and $workdir/remove and merged into the mirror. A delta whose part does not
- * arrive as the reply described it (cut off, too long, not plain text, another line count), or whose merge is not the reply's
- * digest and entries, is discarded and the full body fetched instead; a part with a line that is not a member is not. Every
+ * arrive as the reply described it (too long, not plain text, another line count), or whose merge is not the reply's digest
+ * and entries, is discarded and the full body fetched instead; a part with a line that is not a member, or that the
+ * transport ends part way, is not. Every
  * part is checked by pfb_outpost_part_check() and the new mirror verified and synced before it replaces the old one by
  * rename: any failure leaves the old mirror in place.
  *
- * failure, when ok is FALSE: unreachable (no HTTP reply), core_unavailable (the call answered unavailable), refused (any
+ * failure, when ok is FALSE: unreachable (no whole HTTP reply), core_unavailable (the call answered unavailable), refused (any
  * other error answered to the call; code names it), unavailable (the resource or its body), reply (an answer of the wrong
- * shape, a generation going backwards in a delta included), body (a body that did not arrive whole, is longer than its
- * bound, is not plain text, or was pruned twice), members (a line that is not a member), verify (a body that is not the line
+ * shape, a generation going backwards in a delta included), body (a body longer than its bound, not plain text, refused by
+ * an error envelope, or pruned twice), members (a line that is not a member), verify (a body that is not the line
  * count or digest the reply named), mirror (a file beside the mirror, a part, or the rename could not be written).
  *
  * @param ?array{generation: string, digest: string, entries: int} $cursor what the cursor file holds for $id, NULL for none
@@ -4905,13 +4915,12 @@ function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $w
 		// each pass describes only what its own answer said
 		$result = ['fellBack' => $result['fellBack']] + $empty;
 		$asked = pfb_core_call('GetResources', ['resources' => [$id => (object) $sent]], $socket, $timeout);
-		$code = $asked['body']['error']['code'] ?? NULL;
 		if ($asked['status'] === 0) {
 			return $fail('unreachable', (string) $asked['error']);
 		}
 		if ($asked['status'] !== 200) {
-			return $fail($code === 'unavailable' ? 'core_unavailable' : 'refused', "GetResources answered HTTP {$asked['status']}",
-				is_string($code) ? $code : NULL);
+			$code = pfb_core_error_code($asked['body']);
+			return $fail($code === 'unavailable' ? 'core_unavailable' : 'refused', "GetResources answered HTTP {$asked['status']}", $code);
 		}
 		$items = $asked['body']['resources'] ?? NULL;
 		$item = is_array($items) && array_keys($items) === [$id] ? $items[$id] : NULL;
@@ -4939,13 +4948,12 @@ function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $w
 			? pfb_outpost_parts_fetch($id, $item['generation'], ['members' => [$staged, $item['entries']]], NULL, $family, $socket, $timeout)
 			: pfb_outpost_parts_fetch($id, $item['generation'], ['add' => [$add, $item['addEntries']], 'remove' => [$remove, $item['removeEntries']]],
 				$item['from'], $family, $socket, $timeout);
-		if ($failed === NULL && $kind === 'delta') {
-			$merged = pfb_outpost_mirror_merge($mirror, $remove, $add, $staged);
+		if ($failed === NULL) {
+			// a full body's line count was checked with its part
+			$merged = $kind === 'delta' ? pfb_outpost_mirror_merge($mirror, $remove, $add, $staged) : ['entries' => $item['entries'], 'error' => NULL];
 			if ($merged['error'] !== NULL || $merged['entries'] !== $item['entries'] || pfb_content_hash($staged) !== $item['digest']) {
-				$failed = ['verify', 'the merged mirror is not the body the reply named', NULL];
+				$failed = ['verify', 'the new mirror is not the body the reply named', NULL];
 			}
-		} elseif ($failed === NULL && pfb_content_hash($staged) !== $item['digest']) {
-			$failed = ['verify', 'the body is not the digest the reply named', NULL];
 		}
 		if ($failed !== NULL) {
 			$discard();
@@ -5032,7 +5040,11 @@ function pfb_outpost_cursors_write(array $cursors, string $path): ?string {
 		return "the cursor file {$path} is written only under the apply lock";
 	}
 	ksort($cursors, SORT_STRING);
-	$json = json_encode(['schema' => 1, 'resources' => (object) $cursors], JSON_UNESCAPED_SLASHES) . "\n";
+	$json = json_encode(['schema' => 1, 'resources' => (object) $cursors], JSON_UNESCAPED_SLASHES);
+	if ($json === FALSE || strlen($json) >= PFB_OUTPOST_CURSOR_MAX) {
+		return "the cursor file {$path} is not written: its document cannot be encoded in " . (PFB_OUTPOST_CURSOR_MAX >> 20) . ' MiB';
+	}
+	$json .= "\n";
 	$tmp = "{$path}.tmp";
 	@unlink($tmp);
 	$umask = umask(0077);
