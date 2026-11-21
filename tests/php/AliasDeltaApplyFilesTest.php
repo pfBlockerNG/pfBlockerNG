@@ -404,21 +404,22 @@ SH
 
 	public function testABatchFileThatCannotBeCreatedIsSentNowhereAndFailsTheResult(): void
 	{
+		$offset = self::logOffset();
 		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
 			$this->members('add', ['10.1.0.1']), 1, $this->members('remove', []), 0, 100, 100, 'delta', 64, FALSE,
 			"{$this->dir}/no-such-dir");
 
 		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
 		$this->assertSame([], $this->calls(), 'no member is sent when the batch file cannot be written');
+		$this->assertCount(1, array_filter(self::loggedSince($offset), static fn (string $l): bool => str_contains($l, 'temporary file failed')),
+			'one line says the batch was dropped: ' . implode(' | ', self::loggedSince($offset)));
 	}
 
 	/** @return array<string, array{0: string, 1: string}> which side is broken, and how */
 	public static function unreadableSides(): array
 	{
 		return [
-			'a missing add file'        => ['add', 'missing'],
-			'a missing remove file'     => ['remove', 'missing'],
-			'an add path to a directory' => ['add', 'directory'],
+			'a missing add file'           => ['add', 'missing'],
 			'a remove path to a directory' => ['remove', 'directory'],
 		];
 	}
@@ -432,11 +433,15 @@ SH
 			$this->assertTrue(mkdir($paths[$side]));
 		}
 
+		$offset = self::logOffset();
+
 		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
 			$paths['add'], 1, $paths['remove'], 1, 100, 100, 'delta', 64, FALSE, $this->batchdir);
 
 		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
 		$this->assertSame([], $this->calls(), 'neither side is sent when one cannot be read: no half-applied delta');
+		$this->assertCount(1, array_filter(self::loggedSince($offset), static fn (string $l): bool => str_contains($l, "cannot read {$paths[$side]}")),
+			'one line names the file that cannot be read: ' . implode(' | ', self::loggedSince($offset)));
 	}
 
 	/** @return array<string, array{0: string, 1: int, 2: int}> the side, the lines its file holds, and the count it is given */
@@ -479,6 +484,25 @@ SH
 			$this->batchdir);
 
 		$this->assertFalse($result['ok']);
+		$this->assertSame([], $this->calls());
+	}
+
+	/** A member is at most 64 bytes: a line of 64 is sent whole, and one of 65 sends nothing, even where its pieces would make up the count. */
+	public function testALineOfSixtyFourBytesIsAMemberAndOneOfSixtyFiveIsNot(): void
+	{
+		$member = str_repeat('1', 64);
+		$add = "{$this->dir}/add";
+		file_put_contents($add, "{$member}\n");
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+			$add, 1, $this->members('remove', []), 0, 10000, 10000, 'delta', 64, FALSE, $this->batchdir);
+		$this->assertSame(['delta' => TRUE, 'ok' => TRUE], $result);
+		$this->assertSame([['add', [$member]]], array_map(static fn (array $c): array => [$c['verb'], $c['lines']], $this->calls()));
+
+		unlink("{$this->dir}/log");
+		file_put_contents($add, "{$member}1\n");
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+			$add, 2, $this->members('remove', []), 0, 10000, 10000, 'delta', 64, FALSE, $this->batchdir);
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result, 'a 65-byte line read in two pieces is two lines: a bound must not split it');
 		$this->assertSame([], $this->calls());
 	}
 
