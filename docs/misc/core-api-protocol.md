@@ -768,6 +768,109 @@ The cutover imports configuration only, so a Core that finds no state file start
 The worker retains its lock, log and receipt until its transaction completes. A new Core observes a live worker or reconciles its
 terminal receipt; it does not relaunch the same transaction.
 
+### Update command, version 2
+
+**Not used in production yet.** Version 2 is the contract of the Outpost apply (issue #4037; spec
+`docs/specs/go-updater-pipeline.md` section 8). The Outpost validates the request and writes the result lines
+(`pfb_core_update_v2_request()`, `pfb_core_update_v2_result()` in `pfblockerng_extra.inc`), but nothing serves version 2:
+Core's worker writes version 1 until the Core Updater loop (#4038) and the cutover (#3977). The contract is frozen in
+`tests/core/fixtures/apply_contract_v2.json`, which `tests/php/CoreUpdateV2ContractTest.php` runs and #4038 runs from Go.
+
+The invocation is the one above: the same `--update-cmd`, stdin and stdout as regular files, the result lines on fd 3, and the
+same meaning of the exit status (0 success, 75 deferred, 2 a refused request, anything else failure).
+
+**stdin:** one JSON object of at most 1,048,576 bytes and nothing after it but white space, nested at most seven levels deep
+(the object itself is the first level). A request nested deeper is refused as "the request is not one JSON object". Of keys
+that appear twice in one object, the last is read:
+
+```json
+{"version": 2, "trigger": "scheduled", "scope": "both", "pendingToken": "0123456789abcdef", "pendingOutsideWindow": false,
+ "resources": [{"id": "ip-set/Abuse/ipv4", "generation": "42", "action": "deny", "direction": ["ingress", "egress"], "entries": 15234},
+               {"id": "ip-aggregate/deny/ipv4", "generation": "17", "action": "alias_only", "entries": 90211},
+               {"id": "geo-catalog", "generation": "3"}],
+ "removed": ["ip-set/Old/ipv4"],
+ "dnsbl": {"generation": "88", "groups": [{"name": "Ads", "entries": 120344, "changed": true}]},
+ "issues": [{"resource": "feed/ipv4:Foo_v4", "stage": "download", "code": "curl_incomplete", "message": "..."}]}
+```
+
+The request is validated whole before anything runs. Anything it does not understand refuses it: the program logs the reason,
+writes no result and exits 2. A field that is `null` is absent; an unknown field, at any level, is refused.
+
+| Field | Rule |
+|---|---|
+| `version` | the integer `2` |
+| `trigger` | required: `scheduled`, `manual`, `apply` or `retry` |
+| `scope` | `ip`, `dnsbl` or `both`; `both` when absent |
+| `pendingToken` | 1 to 64 printable ASCII characters other than the space; compared and stored, never parsed |
+| `pendingOutsideWindow` | a boolean; `false` when absent |
+| `resources` | a list of resources (below) |
+| `removed` | a list of the ids whose resources left the configuration |
+| `dnsbl` | `{"generation", "groups"}`: `groups` a list of at most 4,096 `{"name", "entries", "changed"}`, a name of 1 to 128 letters, digits and underscores, each once |
+| `issues` | a list of at most 4,096 `{"resource", "stage", "code", "message"}` |
+
+`resources` and `removed` hold at most 2,048 ids together, so that the report of every request accepted fits one result line
+(below). `scope` does not constrain what the request lists (`scope: "dnsbl"` with an `ip-set` is accepted): the validator
+checks the request's shape, and the apply honours `scope` when it acts. Each of `resources` and `removed` is still
+refused over 4,096 entries with `<list> holds more than 4096 entries`, a check that runs before the combined bound.
+
+- **A resource** is `{"id", "generation", "action", "direction", "entries"}`. The `id` is a [resource id](#resources) the
+  apply handles: an `ip-set`, an `ip-aggregate` or the `geo-catalog`, never a `dnsbl/*` id (pfB-DNS fetches those). Each
+  id appears once across `resources` and `removed`. The `geo-catalog` takes only its `id` and `generation`.
+- **A generation** is a string of 1 to 20 ASCII decimal digits, leading zeros included, whose value fits an unsigned 64-bit
+  integer; it is kept as the string it is (`"007"` stays `"007"`).
+- **`action`** is `deny`, `permit`, `match` or `alias_only`; every `ip-aggregate` is `alias_only`. **`direction`** is a
+  non-empty list of `ingress` and `egress`, each once, for an `ip-set` whose action is not `alias_only`, and absent
+  otherwise. **`entries`** is a non-negative integer of at most 9223372036854775807 (2^63-1); a larger number is refused, as
+  it is in a DNSBL group's `entries`.
+- **An alias.** Each `ip-set` and `ip-aggregate` id maps to the alias the apply loads: `ip-set/<group>/ipv4` (or `ipv6`) is
+  `pfB_<group>_v4` (or `_v6`), and `ip-aggregate/<class>/<family>` is the ADR-11 alias `pfB_<Class>_Aggregated_v4|_v6` of
+  the class `deny`, `permit`, `match` or `native` (lower case in the id). An alias is at most 31 characters, the longest
+  name pf takes for a table (a group of at most 24 characters), and the eight aggregate aliases are reserved: an `ip-set`
+  whose alias would be one of them (`ip-set/Deny_Aggregated/ipv4`) maps to no alias. An id that maps to no alias (another
+  class, a group with `-`, a group too long, a reserved name) refuses the request. Distinct ids therefore never share an
+  alias. The id is never used as a path or a table name; the alias is.
+- **An issue's** `resource` and `code` are strings of 1 to 256 printable ASCII characters (bytes 0x20 to 0x7E): any other
+  byte, a non-ASCII character included, refuses the request, so no Unicode version can make the two sides disagree.
+  Its `stage` is one of the sync-status ledger's:
+  `download`, `script`, `parse`, `dedup` or `apply`. Its `message` is any string, kept as bounded text: invalid UTF-8 is
+  replaced, each run of control characters and line or paragraph separators becomes one space (so the lines of a tool's
+  error output stay apart as words), every other `\p{C}` character is removed, the surrounding white space is trimmed, the
+  text is cut to at most 1,024 bytes, never inside a character, and trimmed again. Markup in it stays as it is, for the page
+  that shows it to escape.
+
+**fd 3:** result lines, each one JSON object and a newline, in printable ASCII, written as each step finishes. The fields
+appear in this order; a field is left out when the apply has nothing to say in it, and `version` is always present:
+
+```json
+{"version": 2, "applied": {"ip-set/Abuse/ipv4": "42"}, "removed": ["ip-set/Old/ipv4"], "changedAliases": ["pfB_Abuse_v4"],
+ "ipChanged": true, "dnsblChanged": false, "reloadLaunched": true,
+ "failed": [{"id": "ip-set/Big/ipv4", "stage": "apply", "message": "pfctl: table limit"}]}
+```
+
+| Field | Meaning |
+|---|---|
+| `applied` | each resource applied, its id mapped to the generation string the request gave |
+| `removed` | each removal applied, the ids as the request gave them |
+| `changedAliases` | the alias of every table the apply pushed to pf: the `post` hook's `PFB_CHANGED_IP_ALIASES` |
+| `ipChanged`, `dnsblChanged` | the `post` hook's `PFB_IP_CHANGED` and `PFB_DNSBL_CHANGED` |
+| `reloadLaunched` | whether the filter reload was launched |
+| `failed` | `{"id", "stage", "message"}` per resource not applied, `stage` being `fetch` or `apply`, the message bounded as an issue's is, except that its 1,024 bytes are counted as written on the line, JSON escapes included |
+
+Every id on a result line is one a request may hold: the `geo-catalog`, or an id that maps to an alias. A `changedAliases`
+entry is a pfBlockerNG alias name: `pfB_` and letters, digits and underscores, at most 31 characters. `applied`, `removed`
+and `failed` name at most 2,048 ids together, each id once across the three, and `changedAliases` at most 2,048 aliases,
+each once. Each of `applied`, `removed` and `failed` is still refused over 4,096 entries the same way, before their
+combined bound of 2,048 ids; `changedAliases` is refused over 2,048 with `changedAliases holds more than 2048 entries`.
+
+A result line is at most 524,288 bytes, its newline included: half of the 1 MiB Core reads back from fd 3 in all, so the
+lines of one Update leave room for each other. When a line would be longer, every `failed` message longer than
+`left out to fit the result line` (31 bytes, as written) becomes that text, and a shorter one is kept, so shortening never
+lengthens a line; nothing else is ever shortened or left out. With the bounds above, the report of every request accepted
+fits: the longest, every one of 2,048 ids of 36 bytes failed and every alias of 31 characters changed, is 286,826 bytes
+once shortened. A report beyond the bounds is refused, and no line is written for it.
+
+With `pendingOutsideWindow` true the apply marks the changes pending and applies nothing, so its one line holds no `applied`.
+
 ## Resources
 
 The resource store is a directory (`--resource-dir`) that holds the bodies the Core Updater publishes for the Outpost apply and for

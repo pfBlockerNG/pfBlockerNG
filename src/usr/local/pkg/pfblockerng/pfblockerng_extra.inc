@@ -6561,6 +6561,41 @@ function pfb_core_update_retry_due(?bool &$manifest = NULL): bool
 const PFB_CORE_UPDATE_MAX_REQUEST = 1048576;	// as Core takes a result back (1 MiB)
 
 /**
+ * The fields of the one JSON object on stdin: at most PFB_CORE_UPDATE_MAX_REQUEST bytes, nested at most seven levels deep, and
+ * nothing after it but white space. Of keys that appear twice, the last is read.
+ *
+ * @return array<array-key, mixed>
+ * @throws InvalidArgumentException when it is not one
+ */
+function pfb_core_update_object(string $stdin): array
+{
+	if (strlen($stdin) > PFB_CORE_UPDATE_MAX_REQUEST) {
+		throw new InvalidArgumentException('the request is over ' . PFB_CORE_UPDATE_MAX_REQUEST . ' bytes');
+	}
+	$object = json_decode($stdin, FALSE, 8);
+	if (!$object instanceof stdClass) {
+		throw new InvalidArgumentException('the request is not one JSON object');
+	}
+	return (array) $object;
+}
+
+/**
+ * The request's $field, one of $allowed; $default when it is absent or null.
+ *
+ * @param array<array-key, mixed> $request
+ * @param list<string> $allowed
+ * @throws InvalidArgumentException "<field> is not one of <allowed>"
+ */
+function pfb_core_update_choose(array $request, string $field, array $allowed, ?string $default): string
+{
+	$value = $request[$field] ?? $default;
+	if (!is_string($value) || !in_array($value, $allowed, TRUE)) {
+		throw new InvalidArgumentException("{$field} is not one of " . implode(', ', $allowed));
+	}
+	return $value;
+}
+
+/**
  * The request Core sent (docs/misc/core-api-protocol.md, "Update command"), validated: version 1, a trigger, a scope and a force
  * of the protocol's vocabulary, feed ids by pfb_schedule_feed_id()'s rules and the two Extras, each id once. Anything else is
  * refused: a request is data from another process and decides what runs as root.
@@ -6570,14 +6605,7 @@ const PFB_CORE_UPDATE_MAX_REQUEST = 1048576;	// as Core takes a result back (1 M
  */
 function pfb_core_update_request(string $stdin): array
 {
-	if (strlen($stdin) > PFB_CORE_UPDATE_MAX_REQUEST) {
-		throw new InvalidArgumentException('the request is over ' . PFB_CORE_UPDATE_MAX_REQUEST . ' bytes');
-	}
-	$object = json_decode($stdin, FALSE, 8);
-	if (!$object instanceof stdClass) {
-		throw new InvalidArgumentException('the request is not one JSON object');
-	}
-	$request = (array) $object;
+	$request = pfb_core_update_object($stdin);
 	$unknown = array_diff(array_keys($request), ['version', 'trigger', 'scope', 'force', 'feeds', 'extras']);
 	if ($unknown !== []) {
 		throw new InvalidArgumentException('the request has the unknown field ' . json_encode(reset($unknown)));
@@ -6585,13 +6613,6 @@ function pfb_core_update_request(string $stdin): array
 	if (($request['version'] ?? NULL) !== 1) {
 		throw new InvalidArgumentException('the request is not of version 1');
 	}
-	$choose = static function (string $field, array $allowed, ?string $default) use ($request): string {
-		$value = $request[$field] ?? $default;
-		if (!is_string($value) || !in_array($value, $allowed, TRUE)) {
-			throw new InvalidArgumentException("{$field} is not one of " . implode(', ', $allowed));
-		}
-		return $value;
-	};
 	$ids = static function (string $field, callable $valid) use ($request): array {
 		$list = $request[$field] ?? [];
 		if (!is_array($list) || count($list) !== count(array_unique($list, SORT_REGULAR))) {
@@ -6605,15 +6626,387 @@ function pfb_core_update_request(string $stdin): array
 		return $list;
 	};
 	return [
-		'trigger' => $choose('trigger', ['scheduled', 'manual', 'apply', 'retry'], NULL),
-		'scope'   => $choose('scope', ['ip', 'dnsbl', 'both'], 'both'),
-		'force'   => $choose('force', ['none', 'parse', 'download', 'both'], 'none'),
+		'trigger' => pfb_core_update_choose($request, 'trigger', ['scheduled', 'manual', 'apply', 'retry'], NULL),
+		'scope'   => pfb_core_update_choose($request, 'scope', ['ip', 'dnsbl', 'both'], 'both'),
+		'force'   => pfb_core_update_choose($request, 'force', ['none', 'parse', 'download', 'both'], 'none'),
 		'feeds'   => $ids('feeds', static function (string $id): bool {
 			[$family, $header] = explode(':', $id, 2) + [1 => ''];
 			return pfb_schedule_feed_id($family, $header) === $id;
 		}),
 		'extras'  => $ids('extras', static fn (string $id): bool => in_array($id, ['extra:dcc', 'extra:bl'], TRUE)),
 	];
+}
+
+// issue #4037: version 2 of the update command (docs/misc/core-api-protocol.md, "Update command, version 2"), the Outpost
+// apply's contract. Nothing serves it yet: Core's worker writes version 1 until #4038. Contract: CoreUpdateV2ContractTest.
+const PFB_CORE_UPDATE_V2_MAX_ENTRIES = 4096;	// per list: two tables per group, nine continents, eight aggregates fit many times over
+const PFB_CORE_UPDATE_V2_MAX_IDS = 2048;	// ids across a request's resources and removed, a report's applied, removed and failed: each report fits a line
+const PFB_CORE_UPDATE_V2_MESSAGE_BYTES = 1024;	// an issue's message as filed, a failure's as escaped on the result line
+const PFB_CORE_UPDATE_V2_LINE_BYTES = 524288;	// a result line, its newline included: half of the 1 MiB Core reads back in all
+const PFB_CORE_UPDATE_V2_SHORTENED = 'left out to fit the result line';	// every failure message, when the line is too long
+
+/** Whether $id is a resource id by Core's grammar (go/pfb_core/resources ValidID): ip-set/<seg>/<family>, ip-aggregate/<seg>/<family>, geo-catalog or dnsbl/<seg>, at most 128 bytes. */
+function pfb_core_resource_id(string $id): bool
+{
+	return strlen($id) <= 128 && preg_match('#^(?:geo-catalog|dnsbl/[A-Za-z0-9_-]+|ip-(?:set|aggregate)/[A-Za-z0-9_-]+/ipv[46])\z#', $id) === 1;
+}
+
+/** Whether $value is a generation: a string of 1 to 20 ASCII decimal digits that fits 64 bits ("007" is one). */
+function pfb_core_generation(mixed $value): bool
+{
+	return is_string($value) && preg_match('/^[0-9]{1,20}\z/', $value) === 1
+		&& (strlen($value) < 20 || strcmp($value, '18446744073709551615') <= 0);
+}
+
+/**
+ * The alias of a resource id (decision 1 on #4037): ip-set/<group>/ipv4|ipv6 is pfB_<group>_v4|_v6, and ip-aggregate/<class>/<family>
+ * is the ADR-11 pfB_<Class>_Aggregated_v4|_v6 of the class deny, permit, match or native. NULL for any other id, for a group of
+ * anything but letters, digits and underscores (a name the apply's alias loop skips), for an alias over 31 characters (the
+ * longest pf table name), and for an ip-set that would take an aggregate's alias: so distinct ids never share an alias. A
+ * resource id is never used as a path or a table name; this is.
+ */
+function pfb_core_update_v2_alias(string $id): ?string
+{
+	$classes = implode('|', PFB_AGGREGATE_TYPES);
+	if (preg_match('#^ip-(?:set/([A-Za-z0-9_]+)|aggregate/(' . strtolower($classes) . '))/ipv([46])\z#', $id, $m) !== 1) {
+		return NULL;
+	}
+	if ($m[1] === '') {
+		return 'pfB_' . ucfirst($m[2]) . "_Aggregated_v{$m[3]}";
+	}
+	$alias = "pfB_{$m[1]}_v{$m[3]}";
+	return strlen($alias) <= 31 && preg_match('/^(?:' . $classes . ')_Aggregated\z/', $m[1]) !== 1 ? $alias : NULL;
+}
+
+/**
+ * An issue's or a failure's message as bounded text: each run of control characters and line or paragraph separators made one
+ * space, pfb_sanitize_text() (every other \p{C} character removed, white space trimmed), cut to PFB_CORE_UPDATE_V2_MESSAGE_BYTES
+ * never inside a character, and trimmed again. With $escaped the bytes counted are the JSON escapes the result line writes.
+ */
+function pfb_core_update_v2_message(string $message, bool $escaped = FALSE): string
+{
+	// the contract replaces an invalid byte with "?"; mb_scrub() follows mbstring.substitute_character, which may say otherwise
+	$substitute = mb_substitute_character();
+	mb_substitute_character(0x3F);
+	$text = mb_scrub($message, 'UTF-8');
+	mb_substitute_character($substitute);
+	$text = mb_strcut(pfb_sanitize_text(preg_replace('/[\p{Cc}\p{Zl}\p{Zp}]+/u', ' ', $text) ?? $text), 0, PFB_CORE_UPDATE_V2_MESSAGE_BYTES, 'UTF-8');
+	$json = static fn (string $s): int => strlen(json_encode($s, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)) - 2;
+	if ($escaped && $json($text) > PFB_CORE_UPDATE_V2_MESSAGE_BYTES) {
+		$cut = '';
+		$bytes = 0;
+		foreach (mb_str_split($text, 1, 'UTF-8') as $char) {
+			$bytes += $json($char);
+			if ($bytes > PFB_CORE_UPDATE_V2_MESSAGE_BYTES) {
+				break;
+			}
+			$cut .= $char;
+		}
+		$text = $cut;
+	}
+	return pfb_sanitize_text($text);
+}
+
+/**
+ * Refuses the first field of $object that is not one of $known.
+ *
+ * @param array<array-key, mixed> $object
+ * @param list<string> $known
+ * @throws InvalidArgumentException "<what> has the unknown field "<name>""
+ */
+function pfb_core_update_v2_known(string $what, array $object, array $known): void
+{
+	$unknown = array_diff(array_keys($object), $known);
+	if ($unknown !== []) {
+		throw new InvalidArgumentException("{$what} has the unknown field " . json_encode((string) reset($unknown)));
+	}
+}
+
+/**
+ * $item as the object $checks describes: each field => [what it must be, the check of its value], checked in that order, a
+ * field that is absent or null checked as null.
+ *
+ * @param array<string, array{0: string, 1: callable(mixed): bool}> $checks
+ * @return array<string, mixed>
+ * @throws InvalidArgumentException "<at> is not an object", "<at> has the unknown field ..." or "<at>.<field> is not <what>"
+ */
+function pfb_core_update_v2_object(string $at, mixed $item, array $checks): array
+{
+	if (!$item instanceof stdClass) {
+		throw new InvalidArgumentException("{$at} is not an object");
+	}
+	$item = (array) $item;
+	pfb_core_update_v2_known($at, $item, array_keys($checks));
+	$object = [];
+	foreach ($checks as $field => [$what, $check]) {
+		$object[$field] = $item[$field] ?? NULL;
+		if (!$check($object[$field])) {
+			throw new InvalidArgumentException("{$at}.{$field} is not {$what}");
+		}
+	}
+	return $object;
+}
+
+/**
+ * $value as an array of at most $max entries, the bound checked before any entry. A JSON list, in a request: json_decode()
+ * gives an object as stdClass.
+ *
+ * @return array<array-key, mixed>
+ * @throws InvalidArgumentException when it is not
+ */
+function pfb_core_update_v2_list(string $field, mixed $value, int $max = PFB_CORE_UPDATE_V2_MAX_ENTRIES): array
+{
+	if (!is_array($value)) {
+		throw new InvalidArgumentException("{$field} is not a list");
+	}
+	if (count($value) > $max) {
+		throw new InvalidArgumentException("{$field} holds more than {$max} entries");
+	}
+	return $value;
+}
+
+/**
+ * The version 2 request Core sends the update command on stdin, validated whole: anything it does not understand refuses it,
+ * with the reason, before anything runs. A field that is null is absent; trigger is required, scope defaults to both. Each id
+ * is a resource id the apply handles (no dnsbl/*: pfB-DNS fetches those), once across resources and removed, which hold at
+ * most PFB_CORE_UPDATE_V2_MAX_IDS ids together, and maps to an alias (the geo-catalog has none). scope does not constrain
+ * what the lists hold: the apply honours it when it acts. The normal form gives each ip-set and ip-aggregate its alias, and
+ * each issue's message as bounded text (pfb_core_update_v2_message()); generations stay the strings Core sent.
+ *
+ * @return array{trigger: string, scope: string, pendingToken: ?string, pendingOutsideWindow: bool,
+ *   resources: list<array{id: string, alias?: string, generation: string, action?: string, direction?: list<string>, entries?: int}>,
+ *   removed: list<array{id: string, alias?: string}>,
+ *   dnsbl: ?array{generation: string, groups: list<array{name: string, entries: int, changed: bool}>},
+ *   issues: list<array{resource: string, stage: string, code: string, message: string}>}
+ * @throws InvalidArgumentException the reason, when the request is refused
+ */
+function pfb_core_update_v2_request(string $stdin): array
+{
+	$request = pfb_core_update_object($stdin);
+	if (($request['version'] ?? NULL) !== 2) {
+		throw new InvalidArgumentException('the request is not of version 2');
+	}
+	pfb_core_update_v2_known('the request', $request,
+		['version', 'trigger', 'scope', 'pendingToken', 'pendingOutsideWindow', 'resources', 'removed', 'dnsbl', 'issues']);
+	$trigger = pfb_core_update_choose($request, 'trigger', ['scheduled', 'manual', 'apply', 'retry'], NULL);
+	$scope = pfb_core_update_choose($request, 'scope', ['ip', 'dnsbl', 'both'], 'both');
+	$token = $request['pendingToken'] ?? NULL;
+	if ($token !== NULL && (!is_string($token) || preg_match('/^[\x21-\x7e]{1,64}\z/', $token) !== 1)) {
+		throw new InvalidArgumentException('pendingToken is not 1 to 64 printable ASCII characters');
+	}
+	$outside = $request['pendingOutsideWindow'] ?? FALSE;
+	if (!is_bool($outside)) {
+		throw new InvalidArgumentException('pendingOutsideWindow is not a boolean');
+	}
+	$count = static fn (mixed $value): bool => is_int($value) && $value >= 0;
+
+	$seen = [];	// id => TRUE across resources and removed; distinct ids map to distinct aliases (pfb_core_update_v2_alias())
+	$claim = static function (string $at, mixed $id) use (&$seen): ?string {
+		if (!is_string($id) || !pfb_core_resource_id($id)) {
+			throw new InvalidArgumentException("{$at} is not a resource id");
+		}
+		if (str_starts_with($id, 'dnsbl/')) {
+			throw new InvalidArgumentException("{$at} names a dnsbl resource, which pfB-DNS fetches itself");
+		}
+		$alias = pfb_core_update_v2_alias($id);
+		if ($alias === NULL && $id !== 'geo-catalog') {
+			throw new InvalidArgumentException("{$at} maps to no alias");
+		}
+		if (isset($seen[$id])) {
+			throw new InvalidArgumentException("{$at} appears twice in resources and removed");
+		}
+		$seen[$id] = TRUE;
+		return $alias;
+	};
+
+	$resourceList = pfb_core_update_v2_list('resources', $request['resources'] ?? []);
+	$removedList = pfb_core_update_v2_list('removed', $request['removed'] ?? []);
+	if (count($resourceList) + count($removedList) > PFB_CORE_UPDATE_V2_MAX_IDS) {
+		throw new InvalidArgumentException('resources and removed hold more than ' . PFB_CORE_UPDATE_V2_MAX_IDS . ' ids together');
+	}
+
+	$resources = [];
+	foreach ($resourceList as $i => $item) {
+		$at = "resources[{$i}]";
+		if (!$item instanceof stdClass) {
+			throw new InvalidArgumentException("{$at} is not an object");
+		}
+		$item = (array) $item;
+		pfb_core_update_v2_known($at, $item, ['id', 'generation', 'action', 'direction', 'entries']);
+		$id = $item['id'] ?? NULL;
+		$alias = $claim("{$at}.id", $id);
+		$resource = ['id' => $id];
+		if ($alias === NULL) {
+			foreach (['action', 'direction', 'entries'] as $field) {
+				if (isset($item[$field])) {
+					throw new InvalidArgumentException("{$at} has the field \"{$field}\", which geo-catalog does not take");
+				}
+			}
+		} else {
+			$resource['alias'] = $alias;
+		}
+		if (!pfb_core_generation($item['generation'] ?? NULL)) {
+			throw new InvalidArgumentException("{$at}.generation is not a decimal string that fits 64 bits");
+		}
+		$resource['generation'] = $item['generation'];
+		if ($alias !== NULL) {
+			$action = $item['action'] ?? NULL;
+			if (!in_array($action, ['deny', 'permit', 'match', 'alias_only'], TRUE)) {
+				throw new InvalidArgumentException("{$at}.action is not one of deny, permit, match, alias_only");
+			}
+			if ($action !== 'alias_only' && str_starts_with($id, 'ip-aggregate/')) {
+				throw new InvalidArgumentException("{$at}.action is not alias_only, the action of every ip-aggregate");
+			}
+			$resource['action'] = $action;
+			$direction = $item['direction'] ?? NULL;
+			if ($action === 'alias_only') {
+				if ($direction !== NULL) {
+					throw new InvalidArgumentException("{$at} has the field \"direction\", which an alias_only resource does not take");
+				}
+			} elseif (!in_array($direction, [['ingress'], ['egress'], ['ingress', 'egress'], ['egress', 'ingress']], TRUE)) {
+				throw new InvalidArgumentException("{$at}.direction is not a non-empty list of distinct ingress, egress");
+			} else {
+				$resource['direction'] = $direction;
+			}
+			if (!$count($item['entries'] ?? NULL)) {
+				throw new InvalidArgumentException("{$at}.entries is not a non-negative integer");
+			}
+			$resource['entries'] = $item['entries'];
+		}
+		$resources[] = $resource;
+	}
+
+	$removed = [];
+	foreach ($removedList as $i => $id) {
+		$alias = $claim("removed[{$i}]", $id);
+		$removed[] = $alias === NULL ? ['id' => $id] : ['id' => $id, 'alias' => $alias];
+	}
+
+	$dnsbl = NULL;
+	if (isset($request['dnsbl'])) {
+		$dnsbl = pfb_core_update_v2_object('dnsbl', $request['dnsbl'],
+			['generation' => ['a decimal string that fits 64 bits', 'pfb_core_generation'], 'groups' => ['a list', 'is_array']]);
+		$groups = $names = [];
+		foreach (pfb_core_update_v2_list('dnsbl.groups', $dnsbl['groups']) as $i => $group) {
+			$group = pfb_core_update_v2_object("dnsbl.groups[{$i}]", $group, [
+				'name'    => ['a DNSBL group name', static fn (mixed $name): bool => is_string($name) && preg_match('/^[A-Za-z0-9_]{1,128}\z/', $name) === 1],
+				'entries' => ['a non-negative integer', $count],
+				'changed' => ['a boolean', 'is_bool'],
+			]);
+			if (isset($names[$group['name']])) {
+				throw new InvalidArgumentException("dnsbl.groups[{$i}].name appears twice");
+			}
+			$names[$group['name']] = TRUE;
+			$groups[] = $group;
+		}
+		$dnsbl['groups'] = $groups;
+	}
+
+	$issues = [];
+	// printable ASCII only: Unicode classes such as \p{Cf} differ by version between PCRE and Go
+	$text = ['a string of 1 to 256 printable ASCII characters',
+		static fn (mixed $value): bool => is_string($value) && preg_match('/^[\x20-\x7E]{1,256}$/D', $value) === 1];
+	$stages = ['download', 'script', 'parse', 'dedup', 'apply'];
+	foreach (pfb_core_update_v2_list('issues', $request['issues'] ?? []) as $i => $issue) {
+		$issue = pfb_core_update_v2_object("issues[{$i}]", $issue, [
+			'resource' => $text,
+			'stage'    => ['one of ' . implode(', ', $stages), static fn (mixed $stage): bool => in_array($stage, $stages, TRUE)],
+			'code'     => $text,
+			'message'  => ['a string', 'is_string'],
+		]);
+		$issue['message'] = pfb_core_update_v2_message($issue['message']);
+		$issues[] = $issue;
+	}
+
+	return ['trigger' => $trigger, 'scope' => $scope, 'pendingToken' => $token, 'pendingOutsideWindow' => $outside,
+		'resources' => $resources, 'removed' => $removed, 'dnsbl' => $dnsbl, 'issues' => $issues];
+}
+
+/**
+ * One result line of the version 2 apply, for fd 3: `{"version":2,...}` and a newline, printable ASCII, its fields in the order
+ * below, each left out when $report does not hold it or holds an empty map or list. Every id is one the request takes: the
+ * geo-catalog, or an id that maps to an alias. $report holds any of:
+ *   applied         id => the generation string the request gave, for each resource applied
+ *   removed         the ids, as the request gave them, of each removal applied (decision 3 on #4037)
+ *   changedAliases  the alias of every table pushed to pf: the post hook's PFB_CHANGED_IP_ALIASES
+ *   ipChanged, dnsblChanged  the post hook's PFB_IP_CHANGED and PFB_DNSBL_CHANGED
+ *   reloadLaunched  whether the filter reload was launched
+ *   failed          a list of {id, stage: fetch|apply, message}, each message as bounded text (pfb_core_update_v2_message())
+ * applied, removed and failed name at most PFB_CORE_UPDATE_V2_MAX_IDS ids together, each once, and changedAliases as many
+ * aliases, each once: so the report of every request accepted fits the line, of at most PFB_CORE_UPDATE_V2_LINE_BYTES
+ * (CoreUpdateV2ContractTest). When the line would be longer, every failure message longer than PFB_CORE_UPDATE_V2_SHORTENED
+ * as written becomes it; nothing else is ever shortened or left out.
+ *
+ * @param array<string, mixed> $report
+ * @throws InvalidArgumentException the reason, when $report is not one of these or cannot fit: such a line is never written
+ */
+function pfb_core_update_v2_result(array $report): string
+{
+	$fields = ['applied', 'removed', 'changedAliases', 'ipChanged', 'dnsblChanged', 'reloadLaunched', 'failed'];
+	pfb_core_update_v2_known('the report', $report, $fields);
+	$refuse = static function (bool $valid, string $reason): void {
+		if (!$valid) {
+			throw new InvalidArgumentException($reason);
+		}
+	};
+	$handled = static fn (mixed $id): bool => $id === 'geo-catalog' || (is_string($id) && pfb_core_update_v2_alias($id) !== NULL);
+	$line = ['version' => 2];
+	foreach ($fields as $field) {
+		if (!array_key_exists($field, $report)) {
+			continue;
+		}
+		$value = $report[$field];
+		switch ($field) {
+			case 'applied':
+				$refuse(is_array($value), 'applied is not a map of resource id to generation');
+				foreach (pfb_core_update_v2_list($field, $value) as $id => $generation) {
+					$refuse($handled($id) && pfb_core_generation($generation), 'applied is not a map of resource id to generation');
+				}
+				break;
+			case 'removed':
+			case 'changedAliases':
+				[$what, $valid, $max] = $field === 'removed' ? ['resource ids', $handled, PFB_CORE_UPDATE_V2_MAX_ENTRIES] : ['alias names',
+					static fn (mixed $alias): bool => is_string($alias) && preg_match('/^pfB_[A-Za-z0-9_]{1,27}\z/', $alias) === 1,
+					PFB_CORE_UPDATE_V2_MAX_IDS];
+				$refuse(is_array($value) && array_is_list($value), "{$field} is not a list of {$what}");
+				$refuse(array_filter(pfb_core_update_v2_list($field, $value, $max), $valid) === $value, "{$field} is not a list of {$what}");
+				break;
+			case 'failed':
+				$refuse(is_array($value) && array_is_list($value), 'failed is not a list');
+				foreach (pfb_core_update_v2_list($field, $value) as $i => $failure) {
+					$entry = pfb_core_update_v2_object("failed[{$i}]", is_array($failure) ? (object) $failure : NULL, [
+						'id'      => ['a resource id', $handled],
+						'stage'   => ['one of fetch, apply', static fn (mixed $stage): bool => in_array($stage, ['fetch', 'apply'], TRUE)],
+						'message' => ['a string', 'is_string'],
+					]);
+					$entry['message'] = pfb_core_update_v2_message($entry['message'], TRUE);
+					$value[$i] = $entry;
+				}
+				break;
+			default:
+				$refuse(is_bool($value), "{$field} is not a boolean");
+		}
+		if ($value !== []) {
+			$line[$field] = $value;
+		}
+	}
+	$ids = [...array_keys($line['applied'] ?? []), ...($line['removed'] ?? []), ...array_column($line['failed'] ?? [], 'id')];
+	$refuse(count($ids) <= PFB_CORE_UPDATE_V2_MAX_IDS, 'applied, removed and failed hold more than ' . PFB_CORE_UPDATE_V2_MAX_IDS . ' ids together');
+	$refuse(count(array_unique($ids)) === count($ids), 'an id appears more than once in applied, removed and failed');
+	$aliases = $line['changedAliases'] ?? [];
+	$refuse(count(array_unique($aliases)) === count($aliases), 'changedAliases holds an alias more than once');
+	$written = json_encode($line, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
+	if (strlen($written) > PFB_CORE_UPDATE_V2_LINE_BYTES && isset($line['failed'])) {
+		$short = strlen(json_encode(PFB_CORE_UPDATE_V2_SHORTENED, JSON_THROW_ON_ERROR));
+		$line['failed'] = array_map(static fn (array $failure): array =>
+			strlen(json_encode($failure['message'], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)) > $short
+				? array_replace($failure, ['message' => PFB_CORE_UPDATE_V2_SHORTENED]) : $failure, $line['failed']);
+		$written = json_encode($line, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
+	}
+	// a defence only: a report within the bounds above always fits
+	$refuse(strlen($written) <= PFB_CORE_UPDATE_V2_LINE_BYTES,
+		'the report does not fit one result line of ' . PFB_CORE_UPDATE_V2_LINE_BYTES . ' bytes, even with its failure messages shortened');
+	return $written;
 }
 
 /**

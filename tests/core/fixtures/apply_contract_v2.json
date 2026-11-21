@@ -1,0 +1,4279 @@
+{
+	"schema": 1,
+	"contract": "update-command-version-2",
+	"about": [
+		"Issue #4037 (slice 8a): the version 2 request the Core Updater writes on the update command's stdin and the result lines the Outpost apply writes on fd 3 (docs/misc/core-api-protocol.md, 'Update command, version 2'). Not used in production yet: Core's worker writes version 1 until #4038.",
+		"tests/php/CoreUpdateV2ContractTest.php runs every row against pfb_core_update_v2_request(), pfb_core_update_v2_alias() and pfb_core_update_v2_result(). #4038 runs the same file from Go when it writes the requests and reads the results: every accepted request must be one its request type writes or decodes, every result line one its reader parses with the same values, and no refused report may be a line it accepts.",
+		"A request row gives its stdin as 'request' (a JSON value, written as JSON) or as 'stdin': a string, or a list of parts joined in order, each a string or {repeat, times}: the string written times times, every '{i}' in it replaced by the repetition's index from 0.",
+		"A request row's verdict is 'accepted' (the normal form the validator returns), 'acceptedCounts' (the lengths of its lists, for a row too large to spell out) or 'refused' (the reason, word for word). A result row gives 'report' and either 'line', the exact bytes written, or 'refused'.",
+		"A result row gives its report as 'report' (a JSON value) or as 'reportJSON' (parts as a request row's 'stdin', joined and decoded), and its 'line' as a string or as such parts. A report names at most limits.ids ids across applied, removed and failed, each once, and at most limits.ids aliases in changedAliases, each once: as a request holds at most limits.ids ids across resources and removed, the report of every request accepted fits. No line is longer than limits.resultLineBytes, its newline included: when a report's line would be, every failure message longer than 'left out to fit the result line' becomes that text, and a report whose line is too long even then is refused."
+	],
+	"limits": {
+		"requestBytes": 1048576,
+		"listEntries": 4096,
+		"messageBytes": 1024,
+		"idBytes": 128,
+		"groupNameBytes": 128,
+		"fieldBytes": 256,
+		"tokenBytes": 64,
+		"ids": 2048,
+		"resultLineBytes": 524288
+	},
+	"aliases": [
+		{
+			"id": "ip-set/Abuse/ipv4",
+			"alias": "pfB_Abuse_v4"
+		},
+		{
+			"id": "ip-set/Abuse/ipv6",
+			"alias": "pfB_Abuse_v6"
+		},
+		{
+			"id": "ip-set/DNSBLIP/ipv4",
+			"alias": "pfB_DNSBLIP_v4"
+		},
+		{
+			"id": "ip-set/Africa/ipv6",
+			"alias": "pfB_Africa_v6"
+		},
+		{
+			"id": "ip-set/Top/ipv4",
+			"alias": "pfB_Top_v4"
+		},
+		{
+			"id": "ip-set/Deny_Aggregated/ipv4",
+			"alias": null
+		},
+		{
+			"id": "ip-aggregate/deny/ipv4",
+			"alias": "pfB_Deny_Aggregated_v4"
+		},
+		{
+			"id": "ip-aggregate/permit/ipv6",
+			"alias": "pfB_Permit_Aggregated_v6"
+		},
+		{
+			"id": "ip-aggregate/match/ipv4",
+			"alias": "pfB_Match_Aggregated_v4"
+		},
+		{
+			"id": "ip-aggregate/native/ipv6",
+			"alias": "pfB_Native_Aggregated_v6"
+		},
+		{
+			"id": "ip-aggregate/Deny/ipv4",
+			"alias": null
+		},
+		{
+			"id": "ip-aggregate/geo/ipv4",
+			"alias": null
+		},
+		{
+			"id": "ip-set/Foo-Bar/ipv4",
+			"alias": null
+		},
+		{
+			"id": "ip-set/ABCDEFGHIJKLMNOPQRSTUVWX/ipv4",
+			"alias": "pfB_ABCDEFGHIJKLMNOPQRSTUVWX_v4"
+		},
+		{
+			"id": "ip-set/ABCDEFGHIJKLMNOPQRSTUVWXY/ipv4",
+			"alias": null
+		},
+		{
+			"id": "ip-set/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/ipv6",
+			"alias": null
+		},
+		{
+			"id": "ip-set/Permit_Aggregated/ipv6",
+			"alias": null
+		},
+		{
+			"id": "ip-set/Match_Aggregated/ipv4",
+			"alias": null
+		},
+		{
+			"id": "ip-set/Native_Aggregated/ipv6",
+			"alias": null
+		},
+		{
+			"id": "geo-catalog",
+			"alias": null
+		},
+		{
+			"id": "dnsbl/manifest",
+			"alias": null
+		},
+		{
+			"id": "ip-set/Abuse/v4",
+			"alias": null
+		},
+		{
+			"id": "settings/dns",
+			"alias": null
+		},
+		{
+			"id": "ip-set/../ipv4",
+			"alias": null
+		},
+		{
+			"id": "ip-set/Abuse/ipv4\n",
+			"alias": null
+		},
+		{
+			"id": "ip-set/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/ipv4",
+			"alias": null
+		},
+		{
+			"id": "",
+			"alias": null
+		},
+		{
+			"id": "ip-set/deny_Aggregated/ipv4",
+			"alias": "pfB_deny_Aggregated_v4"
+		}
+	],
+	"requests": [
+		{
+			"id": "minimal",
+			"description": "Only the version and the trigger: scope is both, there is no pending token, and every list is empty.",
+			"request": {
+				"version": 2,
+				"trigger": "manual"
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "spec-example",
+			"description": "The example of spec section 8.1, without the withdrawn sinkholeRequired: every field of the request.",
+			"request": {
+				"version": 2,
+				"trigger": "scheduled",
+				"scope": "both",
+				"pendingToken": "0123456789abcdef",
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "ip-set/Abuse/ipv4",
+						"generation": "42",
+						"action": "deny",
+						"direction": [
+							"ingress",
+							"egress"
+						],
+						"entries": 15234
+					},
+					{
+						"id": "ip-aggregate/deny/ipv4",
+						"generation": "17",
+						"action": "alias_only",
+						"entries": 90211
+					},
+					{
+						"id": "geo-catalog",
+						"generation": "3"
+					}
+				],
+				"removed": [
+					"ip-set/Old/ipv4"
+				],
+				"dnsbl": {
+					"generation": "88",
+					"groups": [
+						{
+							"name": "Ads",
+							"entries": 120344,
+							"changed": true
+						}
+					]
+				},
+				"issues": [
+					{
+						"resource": "feed/ipv4:Foo_v4",
+						"stage": "download",
+						"code": "curl_incomplete",
+						"message": "The download was cut short."
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "scheduled",
+				"scope": "both",
+				"pendingToken": "0123456789abcdef",
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "ip-set/Abuse/ipv4",
+						"alias": "pfB_Abuse_v4",
+						"generation": "42",
+						"action": "deny",
+						"direction": [
+							"ingress",
+							"egress"
+						],
+						"entries": 15234
+					},
+					{
+						"id": "ip-aggregate/deny/ipv4",
+						"alias": "pfB_Deny_Aggregated_v4",
+						"generation": "17",
+						"action": "alias_only",
+						"entries": 90211
+					},
+					{
+						"id": "geo-catalog",
+						"generation": "3"
+					}
+				],
+				"removed": [
+					{
+						"id": "ip-set/Old/ipv4",
+						"alias": "pfB_Old_v4"
+					}
+				],
+				"dnsbl": {
+					"generation": "88",
+					"groups": [
+						{
+							"name": "Ads",
+							"entries": 120344,
+							"changed": true
+						}
+					]
+				},
+				"issues": [
+					{
+						"resource": "feed/ipv4:Foo_v4",
+						"stage": "download",
+						"code": "curl_incomplete",
+						"message": "The download was cut short."
+					}
+				]
+			}
+		},
+		{
+			"id": "null-is-absent",
+			"description": "An optional field that is null is absent: the defaults apply.",
+			"request": {
+				"version": 2,
+				"trigger": "apply",
+				"scope": null,
+				"pendingToken": null,
+				"pendingOutsideWindow": null,
+				"resources": null,
+				"removed": null,
+				"dnsbl": null,
+				"issues": null
+			},
+			"accepted": {
+				"trigger": "apply",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "every-action-and-direction",
+			"description": "Each action of an ip-set, each direction alone and both in the order given; an alias_only ip-set takes no direction. DNSBLIP, a continent and Top Spammers map by the same rule.",
+			"request": {
+				"version": 2,
+				"trigger": "retry",
+				"scope": "ip",
+				"resources": [
+					{
+						"id": "ip-set/Abuse/ipv4",
+						"generation": "1",
+						"action": "deny",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					},
+					{
+						"id": "ip-set/Allow/ipv6",
+						"generation": "2",
+						"action": "permit",
+						"direction": [
+							"egress"
+						],
+						"entries": 3
+					},
+					{
+						"id": "ip-set/Africa/ipv4",
+						"generation": "3",
+						"action": "match",
+						"direction": [
+							"egress",
+							"ingress"
+						],
+						"entries": 4
+					},
+					{
+						"id": "ip-set/DNSBLIP/ipv6",
+						"generation": "4",
+						"action": "deny",
+						"direction": [
+							"ingress",
+							"egress"
+						],
+						"entries": 5
+					},
+					{
+						"id": "ip-set/Top/ipv4",
+						"generation": "5",
+						"action": "alias_only",
+						"entries": 6
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "retry",
+				"scope": "ip",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "ip-set/Abuse/ipv4",
+						"alias": "pfB_Abuse_v4",
+						"generation": "1",
+						"action": "deny",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					},
+					{
+						"id": "ip-set/Allow/ipv6",
+						"alias": "pfB_Allow_v6",
+						"generation": "2",
+						"action": "permit",
+						"direction": [
+							"egress"
+						],
+						"entries": 3
+					},
+					{
+						"id": "ip-set/Africa/ipv4",
+						"alias": "pfB_Africa_v4",
+						"generation": "3",
+						"action": "match",
+						"direction": [
+							"egress",
+							"ingress"
+						],
+						"entries": 4
+					},
+					{
+						"id": "ip-set/DNSBLIP/ipv6",
+						"alias": "pfB_DNSBLIP_v6",
+						"generation": "4",
+						"action": "deny",
+						"direction": [
+							"ingress",
+							"egress"
+						],
+						"entries": 5
+					},
+					{
+						"id": "ip-set/Top/ipv4",
+						"alias": "pfB_Top_v4",
+						"generation": "5",
+						"action": "alias_only",
+						"entries": 6
+					}
+				],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "every-aggregate-class",
+			"description": "One ip-aggregate per class and family maps to its ADR-11 Uber alias.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"scope": "ip",
+				"resources": [
+					{
+						"id": "ip-aggregate/deny/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 1
+					},
+					{
+						"id": "ip-aggregate/permit/ipv6",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 1
+					},
+					{
+						"id": "ip-aggregate/match/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 1
+					},
+					{
+						"id": "ip-aggregate/native/ipv6",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 1
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "ip",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "ip-aggregate/deny/ipv4",
+						"alias": "pfB_Deny_Aggregated_v4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 1
+					},
+					{
+						"id": "ip-aggregate/permit/ipv6",
+						"alias": "pfB_Permit_Aggregated_v6",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 1
+					},
+					{
+						"id": "ip-aggregate/match/ipv4",
+						"alias": "pfB_Match_Aggregated_v4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 1
+					},
+					{
+						"id": "ip-aggregate/native/ipv6",
+						"alias": "pfB_Native_Aggregated_v6",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 1
+					}
+				],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "generation-strings-kept",
+			"description": "A generation is kept as the string it is: leading zeros stay, in a string of up to 20 characters.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "007"
+					}
+				],
+				"dnsbl": {
+					"generation": "00000000000000000088",
+					"groups": []
+				},
+				"removed": []
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "007"
+					}
+				],
+				"removed": [],
+				"dnsbl": {
+					"generation": "00000000000000000088",
+					"groups": []
+				},
+				"issues": []
+			}
+		},
+		{
+			"id": "generation-max",
+			"description": "18446744073709551615 is the largest generation.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "18446744073709551615",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"alias": "pfB_A_v4",
+						"generation": "18446744073709551615",
+						"action": "alias_only",
+						"entries": 0
+					}
+				],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "removed-each-kind",
+			"description": "removed names an ip-set, an ip-aggregate and the geo-catalog; each keeps its alias, if it has one.",
+			"request": {
+				"version": 2,
+				"trigger": "apply",
+				"removed": [
+					"ip-set/Old/ipv6",
+					"ip-aggregate/match/ipv4",
+					"geo-catalog"
+				]
+			},
+			"accepted": {
+				"trigger": "apply",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [
+					{
+						"id": "ip-set/Old/ipv6",
+						"alias": "pfB_Old_v6"
+					},
+					{
+						"id": "ip-aggregate/match/ipv4",
+						"alias": "pfB_Match_Aggregated_v4"
+					},
+					{
+						"id": "geo-catalog"
+					}
+				],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "id-of-128-bytes",
+			"description": "An id of 128 bytes, the longest Core accepts, maps to an alias longer than a pf table name.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "alias-of-31-characters",
+			"description": "An ip-set whose alias is 31 characters, the longest pf takes as a table name.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/ABCDEFGHIJKLMNOPQRSTUVWX/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "ip-set/ABCDEFGHIJKLMNOPQRSTUVWX/ipv4",
+						"alias": "pfB_ABCDEFGHIJKLMNOPQRSTUVWX_v4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "alias-of-32-characters",
+			"description": "An ip-set whose alias would be 32 characters, one more than pf takes.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/ABCDEFGHIJKLMNOPQRSTUVWXY/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "alias-of-107-characters",
+			"description": "An ip-set of 100 letters: the id is within 128 bytes, the alias far over 31 characters.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/ipv6",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "removed-alias-too-long",
+			"description": "A removed id whose alias would be longer than a pf table name.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"removed": [
+					"ip-set/ABCDEFGHIJKLMNOPQRSTUVWXY/ipv4"
+				]
+			},
+			"refused": "removed[0] maps to no alias"
+		},
+		{
+			"id": "pending-outside-window",
+			"description": "pendingOutsideWindow true with a pending token (decision 4 of the issue: the apply marks the changes pending and applies nothing).",
+			"request": {
+				"version": 2,
+				"trigger": "scheduled",
+				"scope": "dnsbl",
+				"pendingToken": "~!token-of-64-printable-ascii-characters-0123456789abcdefghijklm",
+				"pendingOutsideWindow": true
+			},
+			"accepted": {
+				"trigger": "scheduled",
+				"scope": "dnsbl",
+				"pendingToken": "~!token-of-64-printable-ascii-characters-0123456789abcdefghijklm",
+				"pendingOutsideWindow": true,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "dnsbl-groups",
+			"description": "The dnsbl object: its generation and per-group counts, each group once.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"scope": "dnsbl",
+				"dnsbl": {
+					"generation": "88",
+					"groups": [
+						{
+							"name": "Ads",
+							"entries": 0,
+							"changed": false
+						},
+						{
+							"name": "Malware_2",
+							"entries": 7,
+							"changed": true
+						}
+					]
+				}
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "dnsbl",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": {
+					"generation": "88",
+					"groups": [
+						{
+							"name": "Ads",
+							"entries": 0,
+							"changed": false
+						},
+						{
+							"name": "Malware_2",
+							"entries": 7,
+							"changed": true
+						}
+					]
+				},
+				"issues": []
+			}
+		},
+		{
+			"id": "scope-dnsbl-with-an-ip-set",
+			"description": "scope does not constrain what a request lists: the validator checks its shape, and the apply honours scope when it acts.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"scope": "dnsbl",
+				"resources": [
+					{
+						"id": "ip-set/Abuse/ipv4",
+						"generation": "1",
+						"action": "deny",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "dnsbl",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "ip-set/Abuse/ipv4",
+						"alias": "pfB_Abuse_v4",
+						"generation": "1",
+						"action": "deny",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "scope-ip-with-dnsbl",
+			"description": "scope ip with a dnsbl object: accepted, as scope dnsbl with an ip-set is.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"scope": "ip",
+				"dnsbl": {
+					"generation": "1",
+					"groups": [
+						{
+							"name": "Ads",
+							"entries": 1,
+							"changed": true
+						}
+					]
+				}
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "ip",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": {
+					"generation": "1",
+					"groups": [
+						{
+							"name": "Ads",
+							"entries": 1,
+							"changed": true
+						}
+					]
+				},
+				"issues": []
+			}
+		},
+		{
+			"id": "issue-message-as-text",
+			"description": "An issue's message is text: markup is kept as it is for the page to escape, and control characters (NUL, line breaks) are stripped with the white space around the message.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "feed/ipv4:Foo_v4",
+						"stage": "script",
+						"code": "exit_1",
+						"message": " <script>alert(1)</script>\u0000 line one\nline two\t&amp; "
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "feed/ipv4:Foo_v4",
+						"stage": "script",
+						"code": "exit_1",
+						"message": "<script>alert(1)</script>  line one line two &amp;"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-message-cut-on-a-character",
+			"description": "A message over 1,024 bytes is cut to at most 1,024 bytes, never inside a UTF-8 character.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"manual\",\"issues\":[{\"resource\":\"feed/ipv6:Bar_v6\",\"stage\":\"parse\",\"code\":\"empty\",\"message\":\"a",
+				{
+					"repeat": "é",
+					"times": 1000
+				},
+				"\"}]}"
+			],
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "feed/ipv6:Bar_v6",
+						"stage": "parse",
+						"code": "empty",
+						"message": "aééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-message-line-break",
+			"description": "A line break between words becomes one space.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "one\ntwo"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "one two"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-message-control-run",
+			"description": "A run of control characters (CR LF and a tab) becomes one space.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "one\r\n\ttwo"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "one two"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-message-line-separator",
+			"description": "U+2028 and U+2029 become a space.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "one two three"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "one two three"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-message-format-character",
+			"description": "A format character inside a word is removed, not made a space.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "zero​width"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "zerowidth"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-message-cut-after-a-space",
+			"description": "A cut to 1,024 bytes that lands after a space leaves no trailing space.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bcd"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-message-in-a-request-of-1-mib",
+			"description": "A request of exactly 1,048,576 bytes is accepted; its message of nearly 1 MiB of markup is cut to 1,024 bytes of text.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"retry\",\"scope\":\"ip\",\"issues\":[{\"resource\":\"feed/ipv4:Foo_v4\",\"stage\":\"download\",\"code\":\"curl_incomplete\",\"message\":\"",
+				{
+					"repeat": "<i>",
+					"times": 349477
+				},
+				{
+					"repeat": "x",
+					"times": 1
+				},
+				"\"}]}"
+			],
+			"accepted": {
+				"trigger": "retry",
+				"scope": "ip",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "feed/ipv4:Foo_v4",
+						"stage": "download",
+						"code": "curl_incomplete",
+						"message": "<i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i><"
+					}
+				]
+			}
+		},
+		{
+			"id": "resources-at-the-bound",
+			"description": "2,048 resources and no removal, the most ids a request may hold.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"scheduled\",\"scope\":\"ip\",\"resources\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"generation\":\"1\",\"action\":\"deny\",\"direction\":[\"ingress\"],\"entries\":1},",
+					"times": 2047
+				},
+				"{\"id\":\"ip-set/GLast/ipv4\",\"generation\":\"1\",\"action\":\"deny\",\"direction\":[\"ingress\"],\"entries\":1}]}"
+			],
+			"acceptedCounts": {
+				"resources": 2048,
+				"removed": 0,
+				"issues": 0
+			}
+		},
+		{
+			"id": "resources-and-removed-at-the-bound",
+			"description": "1,024 resources and 1,024 removals: the bound is on the ids of both lists together.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"scheduled\",\"scope\":\"ip\",\"resources\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"generation\":\"1\",\"action\":\"deny\",\"direction\":[\"ingress\"],\"entries\":1},",
+					"times": 1023
+				},
+				"{\"id\":\"ip-set/GLast/ipv4\",\"generation\":\"1\",\"action\":\"deny\",\"direction\":[\"ingress\"],\"entries\":1}",
+				"],\"removed\":[",
+				{
+					"repeat": "\"ip-set/R{i}/ipv6\",",
+					"times": 1023
+				},
+				"\"ip-set/RLast/ipv6\"]}"
+			],
+			"acceptedCounts": {
+				"resources": 1024,
+				"removed": 1024,
+				"issues": 0
+			}
+		},
+		{
+			"id": "resources-and-removed-2049",
+			"description": "One id over the bound on resources and removed together, though each list is under its own.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"scheduled\",\"scope\":\"ip\",\"resources\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"generation\":\"1\",\"action\":\"deny\",\"direction\":[\"ingress\"],\"entries\":1},",
+					"times": 1023
+				},
+				"{\"id\":\"ip-set/GLast/ipv4\",\"generation\":\"1\",\"action\":\"deny\",\"direction\":[\"ingress\"],\"entries\":1}",
+				"],\"removed\":[",
+				{
+					"repeat": "\"ip-set/R{i}/ipv6\",",
+					"times": 1024
+				},
+				"\"ip-set/RLast/ipv6\"]}"
+			],
+			"refused": "resources and removed hold more than 2048 ids together"
+		},
+		{
+			"id": "trailing-white-space",
+			"description": "White space after the object is not data.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\"}\n",
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "duplicate-key",
+			"description": "Of keys that appear twice, the last is read.",
+			"stdin": "{\"version\":2,\"trigger\":\"apply\",\"trigger\":\"manual\"}",
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "empty",
+			"description": "No input.",
+			"stdin": "",
+			"refused": "the request is not one JSON object"
+		},
+		{
+			"id": "not-json",
+			"description": "Text that is not JSON.",
+			"stdin": "version=2",
+			"refused": "the request is not one JSON object"
+		},
+		{
+			"id": "json-array",
+			"description": "A JSON array is not an object.",
+			"stdin": "[{\"version\":2,\"trigger\":\"manual\"}]",
+			"refused": "the request is not one JSON object"
+		},
+		{
+			"id": "json-string",
+			"description": "A JSON string is not an object.",
+			"stdin": "\"version 2\"",
+			"refused": "the request is not one JSON object"
+		},
+		{
+			"id": "two-objects",
+			"description": "Two objects, one after the other.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\"}{\"version\":2,\"trigger\":\"manual\"}",
+			"refused": "the request is not one JSON object"
+		},
+		{
+			"id": "data-after-the-object",
+			"description": "Data after the object.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\"} x",
+			"refused": "the request is not one JSON object"
+		},
+		{
+			"id": "raw-line-break-in-a-string",
+			"description": "A line break that is not escaped inside a string is not JSON.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\",\"pendingToken\":\"ab\ncd\"}",
+			"refused": "the request is not one JSON object"
+		},
+		{
+			"id": "nested-too-deep",
+			"description": "Nesting deeper than eight levels.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\",\"x\":[[[[[[[[1]]]]]]]]}",
+			"refused": "the request is not one JSON object"
+		},
+		{
+			"id": "nested-at-the-bound",
+			"description": "Nesting of seven levels, the deepest a request may be, reaches the field checks.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\",\"x\":[[[[[[]]]]]]}",
+			"refused": "the request has the unknown field \"x\""
+		},
+		{
+			"id": "nested-one-past-the-bound",
+			"description": "Nesting of eight levels.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\",\"x\":[[[[[[[]]]]]]]}",
+			"refused": "the request is not one JSON object"
+		},
+		{
+			"id": "over-1-mib",
+			"description": "One byte more than 1,048,576.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"retry\",\"scope\":\"ip\",\"issues\":[{\"resource\":\"feed/ipv4:Foo_v4\",\"stage\":\"download\",\"code\":\"curl_incomplete\",\"message\":\"",
+				{
+					"repeat": "<i>",
+					"times": 349477
+				},
+				{
+					"repeat": "x",
+					"times": 1
+				},
+				{
+					"repeat": "x",
+					"times": 1
+				},
+				"\"}]}"
+			],
+			"refused": "the request is over 1048576 bytes"
+		},
+		{
+			"id": "issue-message-of-1-mib",
+			"description": "An issue whose message is 1 MiB makes the request larger than 1 MiB.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"retry\",\"scope\":\"ip\",\"issues\":[{\"resource\":\"feed/ipv4:Foo_v4\",\"stage\":\"download\",\"code\":\"curl_incomplete\",\"message\":\"",
+				{
+					"repeat": "m",
+					"times": 1048576
+				},
+				"\"}]}"
+			],
+			"refused": "the request is over 1048576 bytes"
+		},
+		{
+			"id": "ten-mib",
+			"description": "A request of 10 MiB.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"retry\",\"scope\":\"ip\",\"issues\":[{\"resource\":\"feed/ipv4:Foo_v4\",\"stage\":\"download\",\"code\":\"curl_incomplete\",\"message\":\"",
+				{
+					"repeat": "x",
+					"times": 10485760
+				},
+				"\"}]}"
+			],
+			"refused": "the request is over 1048576 bytes"
+		},
+		{
+			"id": "version-1",
+			"description": "A version 1 request is not of this contract.",
+			"request": {
+				"version": 1,
+				"trigger": "manual"
+			},
+			"refused": "the request is not of version 2"
+		},
+		{
+			"id": "version-3",
+			"description": "A later version.",
+			"request": {
+				"version": 3,
+				"trigger": "manual"
+			},
+			"refused": "the request is not of version 2"
+		},
+		{
+			"id": "version-string",
+			"description": "The version as a string.",
+			"request": {
+				"version": "2",
+				"trigger": "manual"
+			},
+			"refused": "the request is not of version 2"
+		},
+		{
+			"id": "version-float",
+			"description": "The version as a JSON number with a fraction.",
+			"stdin": "{\"version\":2.0,\"trigger\":\"manual\"}",
+			"refused": "the request is not of version 2"
+		},
+		{
+			"id": "version-missing",
+			"description": "No version.",
+			"request": {
+				"trigger": "manual"
+			},
+			"refused": "the request is not of version 2"
+		},
+		{
+			"id": "unknown-field",
+			"description": "A field of version 1 is unknown to version 2.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"force": "none"
+			},
+			"refused": "the request has the unknown field \"force\""
+		},
+		{
+			"id": "unknown-field-feeds",
+			"description": "feeds belongs to version 1.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"feeds": []
+			},
+			"refused": "the request has the unknown field \"feeds\""
+		},
+		{
+			"id": "trigger-missing",
+			"description": "No trigger.",
+			"request": {
+				"version": 2
+			},
+			"refused": "trigger is not one of scheduled, manual, apply, retry"
+		},
+		{
+			"id": "trigger-unknown",
+			"description": "A trigger outside the vocabulary.",
+			"request": {
+				"version": 2,
+				"trigger": "cron"
+			},
+			"refused": "trigger is not one of scheduled, manual, apply, retry"
+		},
+		{
+			"id": "trigger-null",
+			"description": "A required field that is null.",
+			"request": {
+				"version": 2,
+				"trigger": null
+			},
+			"refused": "trigger is not one of scheduled, manual, apply, retry"
+		},
+		{
+			"id": "scope-unknown",
+			"description": "A scope outside the vocabulary.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"scope": "all"
+			},
+			"refused": "scope is not one of ip, dnsbl, both"
+		},
+		{
+			"id": "token-empty",
+			"description": "An empty token.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"pendingToken": ""
+			},
+			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+		},
+		{
+			"id": "token-65",
+			"description": "A token of 65 characters.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"pendingToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			},
+			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+		},
+		{
+			"id": "token-line-break",
+			"description": "A token with a line break.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"pendingToken": "0123\n4567"
+			},
+			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+		},
+		{
+			"id": "token-trailing-line-feed",
+			"description": "A token that ends in a line feed.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"pendingToken": "abc\n"
+			},
+			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+		},
+		{
+			"id": "token-nul",
+			"description": "A token with a NUL.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"pendingToken": "0123\u00004567"
+			},
+			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+		},
+		{
+			"id": "token-space",
+			"description": "A token with a space.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"pendingToken": "0123 4567"
+			},
+			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+		},
+		{
+			"id": "token-non-ascii",
+			"description": "A token with a character that is not ASCII.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"pendingToken": "café"
+			},
+			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+		},
+		{
+			"id": "token-number",
+			"description": "A token that is a number.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"pendingToken": 12
+			},
+			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+		},
+		{
+			"id": "outside-window-string",
+			"description": "pendingOutsideWindow as a string.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"pendingOutsideWindow": "false"
+			},
+			"refused": "pendingOutsideWindow is not a boolean"
+		},
+		{
+			"id": "resources-object",
+			"description": "resources as an object.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": {
+					"ip-set/A/ipv4": {
+						"generation": "1"
+					}
+				}
+			},
+			"refused": "resources is not a list"
+		},
+		{
+			"id": "resources-4097",
+			"description": "One resource over the bound; the bound is checked before any entry.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"scheduled\",\"scope\":\"ip\",\"resources\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"generation\":\"1\",\"action\":\"deny\",\"direction\":[\"ingress\"],\"entries\":1},",
+					"times": 4096
+				},
+				"{\"id\":\"ip-set/GLast/ipv4\",\"generation\":\"1\",\"action\":\"deny\",\"direction\":[\"ingress\"],\"entries\":1}]}"
+			],
+			"refused": "resources holds more than 4096 entries"
+		},
+		{
+			"id": "resources-10000",
+			"description": "10,000 resources.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"manual\",\"resources\":[",
+				{
+					"repeat": "{\"id\":\"geo-catalog\",\"generation\":\"1\"},",
+					"times": 9999
+				},
+				"{\"id\":\"geo-catalog\",\"generation\":\"1\"}]}"
+			],
+			"refused": "resources holds more than 4096 entries"
+		},
+		{
+			"id": "resource-not-object",
+			"description": "A resource that is a string.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					"geo-catalog"
+				]
+			},
+			"refused": "resources[0] is not an object"
+		},
+		{
+			"id": "resource-list",
+			"description": "A resource that is a JSON list.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					[
+						"geo-catalog",
+						"1"
+					]
+				]
+			},
+			"refused": "resources[0] is not an object"
+		},
+		{
+			"id": "resource-unknown-field",
+			"description": "members left the protocol (#4049): a resource carries none.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "1",
+						"members": []
+					}
+				]
+			},
+			"refused": "resources[0] has the unknown field \"members\""
+		},
+		{
+			"id": "id-missing",
+			"description": "A resource without an id.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id is not a resource id"
+		},
+		{
+			"id": "id-number",
+			"description": "An id that is a number.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": 7,
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id is not a resource id"
+		},
+		{
+			"id": "id-dot-dot",
+			"description": "An id with '..' as its group.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/../ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id is not a resource id"
+		},
+		{
+			"id": "id-slash-in-a-segment",
+			"description": "An id with '/' inside its group.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/B/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id is not a resource id"
+		},
+		{
+			"id": "id-nul",
+			"description": "An id with a NUL.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A\u0000/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id is not a resource id"
+		},
+		{
+			"id": "id-line-break",
+			"description": "An id with a line break after it.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog\n",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id is not a resource id"
+		},
+		{
+			"id": "id-control-character",
+			"description": "An id with a control character.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A\u001b/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id is not a resource id"
+		},
+		{
+			"id": "id-empty-segment",
+			"description": "An id with an empty group.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set//ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id is not a resource id"
+		},
+		{
+			"id": "id-family",
+			"description": "A family that is not ipv4 or ipv6.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/Abuse/v4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id is not a resource id"
+		},
+		{
+			"id": "id-family-ipv5",
+			"description": "A family other than ipv4 and ipv6.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv5",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id is not a resource id"
+		},
+		{
+			"id": "id-of-129-bytes",
+			"description": "An id of 129 bytes.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id is not a resource id"
+		},
+		{
+			"id": "id-settings",
+			"description": "A settings projection is not a resource the apply handles.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "settings/dns",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id is not a resource id"
+		},
+		{
+			"id": "id-feed",
+			"description": "A feed id is not a resource id.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "feed/ipv4:Foo_v4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id is not a resource id"
+		},
+		{
+			"id": "id-dnsbl",
+			"description": "A dnsbl resource: pfB-DNS fetches dnsbl/* itself.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "dnsbl/manifest",
+						"generation": "1"
+					}
+				]
+			},
+			"refused": "resources[0].id names a dnsbl resource, which pfB-DNS fetches itself"
+		},
+		{
+			"id": "id-dnsbl-with-a-dash",
+			"description": "A dnsbl id with a dash in its segment is still a dnsbl id.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "dnsbl/ads-and-trackers",
+						"generation": "1"
+					}
+				]
+			},
+			"refused": "resources[0].id names a dnsbl resource, which pfB-DNS fetches itself"
+		},
+		{
+			"id": "id-unknown-aggregate-class",
+			"description": "An ip-aggregate class that is not deny, permit, match or native.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-aggregate/geo/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "id-aggregate-class-case",
+			"description": "An ip-aggregate class is lower case.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-aggregate/Deny/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "id-group-with-a-dash",
+			"description": "A group with '-' is a resource id but no alias name (pfb_filter PFB_FILTER_WORD).",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/Foo-Bar/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "duplicate-id",
+			"description": "The same id twice in resources.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "1"
+					},
+					{
+						"id": "geo-catalog",
+						"generation": "2"
+					}
+				]
+			},
+			"refused": "resources[1].id appears twice in resources and removed"
+		},
+		{
+			"id": "duplicate-id-across-removed",
+			"description": "An id in resources and in removed.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				],
+				"removed": [
+					"ip-set/A/ipv4"
+				]
+			},
+			"refused": "removed[0] appears twice in resources and removed"
+		},
+		{
+			"id": "alias-collision",
+			"description": "An ip-set named after an aggregate, beside the aggregate: the ip-set maps to no alias.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-aggregate/deny/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					},
+					{
+						"id": "ip-set/Deny_Aggregated/ipv4",
+						"generation": "1",
+						"action": "deny",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[1].id maps to no alias"
+		},
+		{
+			"id": "alias-collision-across-removed",
+			"description": "An ip-set named after the aggregate a removed id names: the ip-set maps to no alias.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/Permit_Aggregated/ipv6",
+						"generation": "1",
+						"action": "permit",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				],
+				"removed": [
+					"ip-aggregate/permit/ipv6"
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "aggregate-alias-deny",
+			"description": "An ip-set alone whose alias would be the ADR-11 aggregate pfB_Deny_Aggregated_v4.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/Deny_Aggregated/ipv4",
+						"generation": "1",
+						"action": "deny",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "aggregate-alias-permit",
+			"description": "An ip-set alone whose alias would be the ADR-11 aggregate pfB_Permit_Aggregated_v6.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/Permit_Aggregated/ipv6",
+						"generation": "1",
+						"action": "deny",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "aggregate-alias-match",
+			"description": "An ip-set alone whose alias would be the ADR-11 aggregate pfB_Match_Aggregated_v4.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/Match_Aggregated/ipv4",
+						"generation": "1",
+						"action": "deny",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "aggregate-alias-native",
+			"description": "An ip-set alone whose alias would be the ADR-11 aggregate pfB_Native_Aggregated_v6.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/Native_Aggregated/ipv6",
+						"generation": "1",
+						"action": "deny",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "aggregate-alias-removed",
+			"description": "A removed ip-set whose alias would be an aggregate alias.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"removed": [
+					"ip-set/Native_Aggregated/ipv4"
+				]
+			},
+			"refused": "removed[0] maps to no alias"
+		},
+		{
+			"id": "generation-missing",
+			"description": "No generation.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog"
+					}
+				]
+			},
+			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "generation-number",
+			"description": "A generation as a JSON number.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": 42
+					}
+				]
+			},
+			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "generation-empty",
+			"description": "An empty generation.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": ""
+					}
+				]
+			},
+			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "generation-negative",
+			"description": "A negative generation.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "-1"
+					}
+				]
+			},
+			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "generation-fraction",
+			"description": "A generation with a fraction.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "1.5"
+					}
+				]
+			},
+			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "generation-plus",
+			"description": "A generation with a sign.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "+1"
+					}
+				]
+			},
+			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "generation-space",
+			"description": "A generation with white space.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": " 1"
+					}
+				]
+			},
+			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "generation-line-break",
+			"description": "A generation with a line break after it.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "1\n"
+					}
+				]
+			},
+			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "generation-overflow",
+			"description": "One more than the largest 64-bit value.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "18446744073709551616"
+					}
+				]
+			},
+			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "generation-of-20-characters",
+			"description": "A generation of 20 characters with leading zeros, kept as the string it is.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "00000000000000000042"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "00000000000000000042"
+					}
+				],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "generation-of-21-characters",
+			"description": "A generation of 21 characters: leading zeros count.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "000000000000000000042"
+					}
+				]
+			},
+			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "generation-of-900000-zeros",
+			"description": "A generation of 900,000 zeros is not echoed back.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"manual\",\"resources\":[{\"id\":\"geo-catalog\",\"generation\":\"",
+				{
+					"repeat": "0",
+					"times": 900000
+				},
+				"\"}]}"
+			],
+			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "dnsbl-generation-of-21-characters",
+			"description": "The dnsbl generation follows the same rule.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": "000000000000000000001",
+					"groups": []
+				}
+			},
+			"refused": "dnsbl.generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "generation-non-ascii-digit",
+			"description": "A digit that is not ASCII.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "١"
+					}
+				]
+			},
+			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "action-missing",
+			"description": "An ip-set without an action.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].action is not one of deny, permit, match, alias_only"
+		},
+		{
+			"id": "action-unknown",
+			"description": "An action outside the vocabulary.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"action": "block",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].action is not one of deny, permit, match, alias_only"
+		},
+		{
+			"id": "aggregate-action-deny",
+			"description": "An ip-aggregate is alias_only.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-aggregate/deny/ipv4",
+						"generation": "1",
+						"action": "deny",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].action is not alias_only, the action of every ip-aggregate"
+		},
+		{
+			"id": "direction-missing",
+			"description": "A deny ip-set without a direction.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"action": "deny",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].direction is not a non-empty list of distinct ingress, egress"
+		},
+		{
+			"id": "direction-empty",
+			"description": "An empty direction.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"action": "deny",
+						"entries": 0,
+						"direction": []
+					}
+				]
+			},
+			"refused": "resources[0].direction is not a non-empty list of distinct ingress, egress"
+		},
+		{
+			"id": "direction-unknown",
+			"description": "A direction outside the vocabulary.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"action": "deny",
+						"entries": 0,
+						"direction": [
+							"in"
+						]
+					}
+				]
+			},
+			"refused": "resources[0].direction is not a non-empty list of distinct ingress, egress"
+		},
+		{
+			"id": "direction-duplicate",
+			"description": "A direction twice.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"action": "deny",
+						"entries": 0,
+						"direction": [
+							"ingress",
+							"ingress"
+						]
+					}
+				]
+			},
+			"refused": "resources[0].direction is not a non-empty list of distinct ingress, egress"
+		},
+		{
+			"id": "direction-string",
+			"description": "A direction as a string.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"action": "deny",
+						"entries": 0,
+						"direction": "ingress"
+					}
+				]
+			},
+			"refused": "resources[0].direction is not a non-empty list of distinct ingress, egress"
+		},
+		{
+			"id": "direction-object",
+			"description": "A direction as an object.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"action": "deny",
+						"entries": 0,
+						"direction": {
+							"0": "ingress"
+						}
+					}
+				]
+			},
+			"refused": "resources[0].direction is not a non-empty list of distinct ingress, egress"
+		},
+		{
+			"id": "direction-on-alias-only",
+			"description": "An alias_only ip-set has no rule, so no direction.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0] has the field \"direction\", which an alias_only resource does not take"
+		},
+		{
+			"id": "direction-on-aggregate",
+			"description": "An ip-aggregate has no direction.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-aggregate/native/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"direction": [
+							"egress"
+						],
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0] has the field \"direction\", which an alias_only resource does not take"
+		},
+		{
+			"id": "entries-missing",
+			"description": "No entries.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"action": "alias_only"
+					}
+				]
+			},
+			"refused": "resources[0].entries is not a non-negative integer"
+		},
+		{
+			"id": "entries-negative",
+			"description": "Negative entries.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": -1
+					}
+				]
+			},
+			"refused": "resources[0].entries is not a non-negative integer"
+		},
+		{
+			"id": "entries-fraction",
+			"description": "Entries with a fraction.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 1.5
+					}
+				]
+			},
+			"refused": "resources[0].entries is not a non-negative integer"
+		},
+		{
+			"id": "entries-string",
+			"description": "Entries as a string.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": "5"
+					}
+				]
+			},
+			"refused": "resources[0].entries is not a non-negative integer"
+		},
+		{
+			"id": "entries-boolean",
+			"description": "Entries as a boolean.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": true
+					}
+				]
+			},
+			"refused": "resources[0].entries is not a non-negative integer"
+		},
+		{
+			"id": "entries-over-64-bits",
+			"description": "Entries larger than a 64-bit integer.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\",\"resources\":[{\"id\":\"ip-set/A/ipv4\",\"generation\":\"1\",\"action\":\"alias_only\",\"entries\":99999999999999999999}]}",
+			"refused": "resources[0].entries is not a non-negative integer"
+		},
+		{
+			"id": "entries-max",
+			"description": "9223372036854775807 (2^63-1) is the most entries a resource may hold.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\",\"resources\":[{\"id\":\"ip-set/A/ipv4\",\"generation\":\"1\",\"action\":\"alias_only\",\"entries\":9223372036854775807}]}",
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"alias": "pfB_A_v4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 9223372036854775807
+					}
+				],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "entries-over-max",
+			"description": "9223372036854775808 is one more than a signed 64-bit integer holds.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\",\"resources\":[{\"id\":\"ip-set/A/ipv4\",\"generation\":\"1\",\"action\":\"alias_only\",\"entries\":9223372036854775808}]}",
+			"refused": "resources[0].entries is not a non-negative integer"
+		},
+		{
+			"id": "dnsbl-group-entries-over-max",
+			"description": "A DNSBL group follows the same bound.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\",\"dnsbl\":{\"generation\":\"1\",\"groups\":[{\"name\":\"Ads\",\"entries\":9223372036854775808,\"changed\":true}]}}",
+			"refused": "dnsbl.groups[0].entries is not a non-negative integer"
+		},
+		{
+			"id": "geo-catalog-with-action",
+			"description": "The geo-catalog takes only its id and generation.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "1",
+						"action": "alias_only"
+					}
+				]
+			},
+			"refused": "resources[0] has the field \"action\", which geo-catalog does not take"
+		},
+		{
+			"id": "geo-catalog-with-entries",
+			"description": "The geo-catalog takes only its id and generation.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "1",
+						"entries": 3
+					}
+				]
+			},
+			"refused": "resources[0] has the field \"entries\", which geo-catalog does not take"
+		},
+		{
+			"id": "geo-catalog-with-a-null-field",
+			"description": "A field that is null is absent, on the geo-catalog too.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "1",
+						"action": null
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "1"
+					}
+				],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "removed-object",
+			"description": "removed as an object.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"removed": {
+					"ip-set/A/ipv4": true
+				}
+			},
+			"refused": "removed is not a list"
+		},
+		{
+			"id": "removed-4097",
+			"description": "One removed id over the bound.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"manual\",\"removed\":[",
+				{
+					"repeat": "\"geo-catalog\",",
+					"times": 4096
+				},
+				"\"geo-catalog\"]}"
+			],
+			"refused": "removed holds more than 4096 entries"
+		},
+		{
+			"id": "removed-not-a-string",
+			"description": "A removed entry that is an object.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"removed": [
+					{
+						"id": "ip-set/A/ipv4"
+					}
+				]
+			},
+			"refused": "removed[0] is not a resource id"
+		},
+		{
+			"id": "removed-dot-dot",
+			"description": "A removed id with '..'.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"removed": [
+					"ip-set/../ipv6"
+				]
+			},
+			"refused": "removed[0] is not a resource id"
+		},
+		{
+			"id": "removed-dnsbl",
+			"description": "A removed dnsbl resource.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"removed": [
+					"dnsbl/top1m"
+				]
+			},
+			"refused": "removed[0] names a dnsbl resource, which pfB-DNS fetches itself"
+		},
+		{
+			"id": "removed-no-alias",
+			"description": "A removed id that maps to no alias.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"removed": [
+					"ip-set/A-B/ipv4"
+				]
+			},
+			"refused": "removed[0] maps to no alias"
+		},
+		{
+			"id": "removed-duplicate",
+			"description": "The same removed id twice.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"removed": [
+					"ip-set/A/ipv4",
+					"ip-set/A/ipv4"
+				]
+			},
+			"refused": "removed[1] appears twice in resources and removed"
+		},
+		{
+			"id": "dnsbl-not-object",
+			"description": "dnsbl as a list.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": []
+			},
+			"refused": "dnsbl is not an object"
+		},
+		{
+			"id": "dnsbl-sinkhole-required",
+			"description": "sinkholeRequired was withdrawn (spec section 8.1 amendment, #4053).",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": "1",
+					"sinkholeRequired": true,
+					"groups": []
+				}
+			},
+			"refused": "dnsbl has the unknown field \"sinkholeRequired\""
+		},
+		{
+			"id": "dnsbl-generation",
+			"description": "A dnsbl generation that is not a decimal string.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": 1,
+					"groups": []
+				}
+			},
+			"refused": "dnsbl.generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "dnsbl-groups-missing",
+			"description": "dnsbl without groups.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": "1"
+				}
+			},
+			"refused": "dnsbl.groups is not a list"
+		},
+		{
+			"id": "dnsbl-groups-4097",
+			"description": "One group over the bound.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"manual\",\"dnsbl\":{\"generation\":\"1\",\"groups\":[",
+				{
+					"repeat": "{\"name\":\"G\",\"entries\":0,\"changed\":false},",
+					"times": 4096
+				},
+				"{\"name\":\"G\",\"entries\":0,\"changed\":false}]}}"
+			],
+			"refused": "dnsbl.groups holds more than 4096 entries"
+		},
+		{
+			"id": "dnsbl-group-not-object",
+			"description": "A group that is a string.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": "1",
+					"groups": [
+						"Ads"
+					]
+				}
+			},
+			"refused": "dnsbl.groups[0] is not an object"
+		},
+		{
+			"id": "dnsbl-group-unknown-field",
+			"description": "A group with an unknown field.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": "1",
+					"groups": [
+						{
+							"name": "Ads",
+							"entries": 0,
+							"changed": false,
+							"generation": "1"
+						}
+					]
+				}
+			},
+			"refused": "dnsbl.groups[0] has the unknown field \"generation\""
+		},
+		{
+			"id": "dnsbl-group-name-dash",
+			"description": "A group name with '-' (DNSBL group names are word characters).",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": "1",
+					"groups": [
+						{
+							"name": "Ads-1",
+							"entries": 0,
+							"changed": false
+						}
+					]
+				}
+			},
+			"refused": "dnsbl.groups[0].name is not a DNSBL group name"
+		},
+		{
+			"id": "dnsbl-group-name-nul",
+			"description": "A group name with a NUL.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": "1",
+					"groups": [
+						{
+							"name": "Ads\u0000",
+							"entries": 0,
+							"changed": false
+						}
+					]
+				}
+			},
+			"refused": "dnsbl.groups[0].name is not a DNSBL group name"
+		},
+		{
+			"id": "dnsbl-group-name-line-break",
+			"description": "A group name with a line break.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": "1",
+					"groups": [
+						{
+							"name": "Ads\n",
+							"entries": 0,
+							"changed": false
+						}
+					]
+				}
+			},
+			"refused": "dnsbl.groups[0].name is not a DNSBL group name"
+		},
+		{
+			"id": "dnsbl-group-name-empty",
+			"description": "An empty group name.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": "1",
+					"groups": [
+						{
+							"name": "",
+							"entries": 0,
+							"changed": false
+						}
+					]
+				}
+			},
+			"refused": "dnsbl.groups[0].name is not a DNSBL group name"
+		},
+		{
+			"id": "dnsbl-group-name-long",
+			"description": "A group name of 129 characters.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": "1",
+					"groups": [
+						{
+							"name": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+							"entries": 0,
+							"changed": false
+						}
+					]
+				}
+			},
+			"refused": "dnsbl.groups[0].name is not a DNSBL group name"
+		},
+		{
+			"id": "dnsbl-group-duplicate",
+			"description": "The same group twice.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": "1",
+					"groups": [
+						{
+							"name": "Ads",
+							"entries": 0,
+							"changed": false
+						},
+						{
+							"name": "Ads",
+							"entries": 1,
+							"changed": true
+						}
+					]
+				}
+			},
+			"refused": "dnsbl.groups[1].name appears twice"
+		},
+		{
+			"id": "dnsbl-group-entries-negative",
+			"description": "Negative group entries.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": "1",
+					"groups": [
+						{
+							"name": "Ads",
+							"entries": -5,
+							"changed": false
+						}
+					]
+				}
+			},
+			"refused": "dnsbl.groups[0].entries is not a non-negative integer"
+		},
+		{
+			"id": "dnsbl-group-changed-string",
+			"description": "changed as a string.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": "1",
+					"groups": [
+						{
+							"name": "Ads",
+							"entries": 0,
+							"changed": "true"
+						}
+					]
+				}
+			},
+			"refused": "dnsbl.groups[0].changed is not a boolean"
+		},
+		{
+			"id": "issues-object",
+			"description": "issues as an object.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": {}
+			},
+			"refused": "issues is not a list"
+		},
+		{
+			"id": "issues-4097",
+			"description": "One issue over the bound.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"manual\",\"issues\":[",
+				{
+					"repeat": "{\"resource\":\"r\",\"stage\":\"parse\",\"code\":\"c\",\"message\":\"m\"},",
+					"times": 4096
+				},
+				"{\"resource\":\"r\",\"stage\":\"parse\",\"code\":\"c\",\"message\":\"m\"}]}"
+			],
+			"refused": "issues holds more than 4096 entries"
+		},
+		{
+			"id": "issue-not-object",
+			"description": "An issue that is a string.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					"curl_incomplete"
+				]
+			},
+			"refused": "issues[0] is not an object"
+		},
+		{
+			"id": "issue-unknown-field",
+			"description": "An issue with an unknown field.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "m",
+						"severity": "high"
+					}
+				]
+			},
+			"refused": "issues[0] has the unknown field \"severity\""
+		},
+		{
+			"id": "issue-stage-unknown",
+			"description": "A stage that is not a ledger stage.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "fetch",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].stage is not one of download, script, parse, dedup, apply"
+		},
+		{
+			"id": "issue-code-nul",
+			"description": "A code with a NUL.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c\u0000",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-resource-line-break",
+			"description": "A resource with a line break.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "feed/ipv4:Foo_v4\n",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-resource-c1-control",
+			"description": "A resource with a C1 control character.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-resource-bidi-override",
+			"description": "A resource with a right-to-left override (a format character).",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "feed/ipv4:‮Foo_v4",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-code-zero-width",
+			"description": "A code with a zero-width space.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "curl​incomplete",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-resource-line-separator",
+			"description": "A resource with U+2028, the line separator.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "feed x",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-code-paragraph-separator",
+			"description": "A code with U+2029, the paragraph separator.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c ",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-code-private-use",
+			"description": "A code with a private-use character.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-code-long",
+			"description": "A code of 257 bytes.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-fields-of-256-bytes",
+			"description": "A resource and a code of exactly 256 bytes.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+						"stage": "parse",
+						"code": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+						"message": "m"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+						"stage": "parse",
+						"code": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+						"message": "m"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-non-ascii",
+			"description": "A resource and a code with U+0378: only printable ASCII is accepted, a rule no Unicode version changes.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r\u0378",
+						"stage": "parse",
+						"code": "c\u0378",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-resource-del",
+			"description": "A resource with DEL (0x7F), the byte after the printable range.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r\u007f",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-code-tab",
+			"description": "A code with a TAB.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c\tc",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-resource-e-acute",
+			"description": "A resource with a non-ASCII letter.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "café",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-code-unit-separator",
+			"description": "A code with the control byte 0x1F.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c\u001fc",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-resource-257-bytes",
+			"description": "A resource of 257 bytes.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-resource-space-and-tilde",
+			"description": "A resource holding a space and a tilde, the first and last printable ASCII bytes (0x20 and 0x7E).",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "a b~",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "a b~",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-resource-empty",
+			"description": "A resource of 0 bytes.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-code-empty",
+			"description": "A code of 0 bytes.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-resource-missing",
+			"description": "An issue without its resource.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-message-missing",
+			"description": "An issue without its message.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c"
+					}
+				]
+			},
+			"refused": "issues[0].message is not a string"
+		},
+		{
+			"id": "issue-message-number",
+			"description": "A message that is a number.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": 5
+					}
+				]
+			},
+			"refused": "issues[0].message is not a string"
+		}
+	],
+	"results": [
+		{
+			"id": "spec-first-line",
+			"description": "The first line of spec section 8.4: a table applied and its alias changed.",
+			"report": {
+				"applied": {
+					"ip-set/Abuse/ipv4": "42"
+				},
+				"changedAliases": [
+					"pfB_Abuse_v4"
+				]
+			},
+			"line": "{\"version\":2,\"applied\":{\"ip-set/Abuse/ipv4\":\"42\"},\"changedAliases\":[\"pfB_Abuse_v4\"]}\n"
+		},
+		{
+			"id": "spec-closing-line",
+			"description": "The closing line of spec section 8.4: the reload and the post hook's flags, and a failed table.",
+			"report": {
+				"applied": {
+					"geo-catalog": "3"
+				},
+				"reloadLaunched": true,
+				"ipChanged": true,
+				"dnsblChanged": false,
+				"failed": [
+					{
+						"id": "ip-set/Big/ipv4",
+						"stage": "apply",
+						"message": "pfctl: table limit"
+					}
+				]
+			},
+			"line": "{\"version\":2,\"applied\":{\"geo-catalog\":\"3\"},\"ipChanged\":true,\"dnsblChanged\":false,\"reloadLaunched\":true,\"failed\":[{\"id\":\"ip-set/Big/ipv4\",\"stage\":\"apply\",\"message\":\"pfctl: table limit\"}]}\n"
+		},
+		{
+			"id": "every-field-in-order",
+			"description": "Every field, written in one fixed order whatever the order given; generations are the strings the request gave.",
+			"report": {
+				"failed": [
+					{
+						"id": "ip-aggregate/deny/ipv6",
+						"stage": "fetch",
+						"message": "GetResources: unavailable"
+					}
+				],
+				"reloadLaunched": false,
+				"dnsblChanged": true,
+				"ipChanged": false,
+				"changedAliases": [
+					"pfB_Abuse_v4",
+					"pfB_Deny_Aggregated_v4"
+				],
+				"removed": [
+					"ip-set/Old/ipv4",
+					"geo-catalog"
+				],
+				"applied": {
+					"ip-set/Abuse/ipv4": "007",
+					"ip-aggregate/deny/ipv4": "18446744073709551615"
+				}
+			},
+			"line": "{\"version\":2,\"applied\":{\"ip-set/Abuse/ipv4\":\"007\",\"ip-aggregate/deny/ipv4\":\"18446744073709551615\"},\"removed\":[\"ip-set/Old/ipv4\",\"geo-catalog\"],\"changedAliases\":[\"pfB_Abuse_v4\",\"pfB_Deny_Aggregated_v4\"],\"ipChanged\":false,\"dnsblChanged\":true,\"reloadLaunched\":false,\"failed\":[{\"id\":\"ip-aggregate/deny/ipv6\",\"stage\":\"fetch\",\"message\":\"GetResources: unavailable\"}]}\n"
+		},
+		{
+			"id": "nothing-applied",
+			"description": "Decision 4 of the issue: outside the window the apply writes one line without applied.",
+			"report": {},
+			"line": "{\"version\":2}\n"
+		},
+		{
+			"id": "empty-lists-left-out",
+			"description": "An empty applied map or list says nothing and is left out; a false flag is kept.",
+			"report": {
+				"applied": {},
+				"removed": [],
+				"changedAliases": [],
+				"failed": [],
+				"ipChanged": false
+			},
+			"line": "{\"version\":2,\"ipChanged\":false}\n"
+		},
+		{
+			"id": "removed-only",
+			"description": "Decision 3 of the issue: an applied removal, the ids as the request gave them.",
+			"report": {
+				"removed": [
+					"ip-set/Old/ipv4",
+					"ip-aggregate/match/ipv6"
+				],
+				"changedAliases": [
+					"pfB_Old_v4"
+				]
+			},
+			"line": "{\"version\":2,\"removed\":[\"ip-set/Old/ipv4\",\"ip-aggregate/match/ipv6\"],\"changedAliases\":[\"pfB_Old_v4\"]}\n"
+		},
+		{
+			"id": "failed-message-as-text",
+			"description": "A failure message is text: each run of control characters one space, markup kept, and at most 1,024 bytes once escaped for the line, cut on a character.",
+			"report": {
+				"failed": [
+					{
+						"id": "ip-set/A/ipv4",
+						"stage": "apply",
+						"message": "pfctl: <b>table</b>\nlimit\u0000 éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+					}
+				]
+			},
+			"line": "{\"version\":2,\"failed\":[{\"id\":\"ip-set/A/ipv4\",\"stage\":\"apply\",\"message\":\"pfctl: <b>table</b> limit  \\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\"}]}\n"
+		},
+		{
+			"id": "non-ascii-escaped",
+			"description": "The line is ASCII: a character outside it is written as a JSON escape.",
+			"report": {
+				"failed": [
+					{
+						"id": "geo-catalog",
+						"stage": "apply",
+						"message": "café  "
+					}
+				]
+			},
+			"line": "{\"version\":2,\"failed\":[{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"caf\\u00e9\"}]}\n"
+		},
+		{
+			"id": "failed-message-escaped-at-the-bound",
+			"description": "A message of 1,024 bytes of non-ASCII text is cut to 1,024 bytes as escaped.",
+			"report": {
+				"failed": [
+					{
+						"id": "geo-catalog",
+						"stage": "apply",
+						"message": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+					}
+				]
+			},
+			"line": "{\"version\":2,\"failed\":[{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\"}]}\n"
+		},
+		{
+			"id": "failed-message-line-break",
+			"description": "Lines of pfctl stderr stay apart as words.",
+			"report": {
+				"failed": [
+					{
+						"id": "ip-set/A/ipv4",
+						"stage": "apply",
+						"message": "pfctl: line one\nline two\n"
+					}
+				]
+			},
+			"line": "{\"version\":2,\"failed\":[{\"id\":\"ip-set/A/ipv4\",\"stage\":\"apply\",\"message\":\"pfctl: line one line two\"}]}\n"
+		},
+		{
+			"id": "failed-message-cut-after-a-space",
+			"description": "A cut that lands after a space leaves no trailing space.",
+			"report": {
+				"failed": [
+					{
+						"id": "ip-set/A/ipv4",
+						"stage": "apply",
+						"message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \"quoted\""
+					}
+				]
+			},
+			"line": "{\"version\":2,\"failed\":[{\"id\":\"ip-set/A/ipv4\",\"stage\":\"apply\",\"message\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}\n"
+		},
+		{
+			"id": "failed-message-escape-not-split",
+			"description": "A quote that would end past the bound once escaped is left out whole.",
+			"report": {
+				"failed": [
+					{
+						"id": "ip-set/A/ipv4",
+						"stage": "apply",
+						"message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+					}
+				]
+			},
+			"line": "{\"version\":2,\"failed\":[{\"id\":\"ip-set/A/ipv4\",\"stage\":\"apply\",\"message\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}\n"
+		},
+		{
+			"id": "failed-message-cut-keeps-a-character-ending-at-the-bound",
+			"description": "A message cut where its escaped prefix is exactly 1,024 bytes: the emoji that ends at the bound, escaped as a surrogate pair of 12 bytes, is kept.",
+			"report": {
+				"failed": [
+					{
+						"id": "geo-catalog",
+						"stage": "apply",
+						"message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀 more text"
+					}
+				]
+			},
+			"line": "{\"version\":2,\"failed\":[{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\ud83d\\ude00\"}]}\n"
+		},
+		{
+			"id": "failed-2048-non-ascii-messages",
+			"description": "2,048 failures, each message 1,024 bytes of non-ASCII text: too long as one line, so every message is shortened.",
+			"reportJSON": [
+				"{\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"stage\":\"apply\",\"message\":\"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\"},",
+					"times": 2047
+				},
+				"{\"id\":\"ip-set/GLast/ipv4\",\"stage\":\"apply\",\"message\":\"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\"}]}"
+			],
+			"line": [
+				"{\"version\":2,\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"stage\":\"apply\",\"message\":\"left out to fit the result line\"},",
+					"times": 2047
+				},
+				"{\"id\":\"ip-set/GLast/ipv4\",\"stage\":\"apply\",\"message\":\"left out to fit the result line\"}]}\n"
+			]
+		},
+		{
+			"id": "failed-line-at-the-bound",
+			"description": "A line of exactly 524288 bytes, its newline included, is written as it is.",
+			"reportJSON": [
+				"{\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"stage\":\"apply\",\"message\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},",
+					"times": 485
+				},
+				"{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}]}"
+			],
+			"line": [
+				"{\"version\":2,\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"stage\":\"apply\",\"message\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},",
+					"times": 485
+				},
+				"{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}]}\n"
+			]
+		},
+		{
+			"id": "failed-line-one-byte-over",
+			"description": "One byte more, and every failure message is shortened.",
+			"reportJSON": [
+				"{\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"stage\":\"apply\",\"message\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},",
+					"times": 485
+				},
+				"{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}]}"
+			],
+			"line": [
+				"{\"version\":2,\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"stage\":\"apply\",\"message\":\"left out to fit the result line\"},",
+					"times": 485
+				},
+				"{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"left out to fit the result line\"}]}\n"
+			]
+		},
+		{
+			"id": "failed-short-messages-kept-when-shortening",
+			"description": "A line too long: only a message longer than the 31 bytes of the placeholder, as written, is replaced, so shortening never lengthens a line. Of 31 bytes it is kept; of 32, or of six non-ASCII characters escaped to 36, it is not.",
+			"reportJSON": [
+				"{\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"stage\":\"apply\",\"message\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},",
+					"times": 485
+				},
+				"{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},{\"id\":\"ip-set/S/ipv4\",\"stage\":\"fetch\",\"message\":\"timeout\"},{\"id\":\"ip-set/T/ipv4\",\"stage\":\"fetch\",\"message\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},{\"id\":\"ip-set/U/ipv4\",\"stage\":\"fetch\",\"message\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},{\"id\":\"ip-set/V/ipv4\",\"stage\":\"fetch\",\"message\":\"\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\"}]}"
+			],
+			"line": [
+				"{\"version\":2,\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"stage\":\"apply\",\"message\":\"left out to fit the result line\"},",
+					"times": 485
+				},
+				"{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"left out to fit the result line\"},{\"id\":\"ip-set/S/ipv4\",\"stage\":\"fetch\",\"message\":\"timeout\"},{\"id\":\"ip-set/T/ipv4\",\"stage\":\"fetch\",\"message\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},{\"id\":\"ip-set/U/ipv4\",\"stage\":\"fetch\",\"message\":\"left out to fit the result line\"},{\"id\":\"ip-set/V/ipv4\",\"stage\":\"fetch\",\"message\":\"left out to fit the result line\"}]}\n"
+			]
+		},
+		{
+			"id": "lists-at-the-bound",
+			"description": "1,024 entries in applied and in removed, 2,048 in changedAliases: the most a report may name, on one line.",
+			"reportJSON": [
+				"{\"applied\":{",
+				{
+					"repeat": "\"ip-set/G{i}/ipv4\":\"{i}\",",
+					"times": 1023
+				},
+				"\"geo-catalog\":\"1\"},",
+				"\"removed\":[",
+				{
+					"repeat": "\"ip-set/R{i}/ipv6\",",
+					"times": 1023
+				},
+				"\"ip-aggregate/native/ipv6\"],",
+				"\"changedAliases\":[",
+				{
+					"repeat": "\"pfB_G{i}_v4\",",
+					"times": 2047
+				},
+				"\"pfB_Native_Aggregated_v6\"],",
+				"\"ipChanged\":true,\"dnsblChanged\":false,\"reloadLaunched\":true}"
+			],
+			"line": [
+				"{\"version\":2,\"applied\":{",
+				{
+					"repeat": "\"ip-set/G{i}/ipv4\":\"{i}\",",
+					"times": 1023
+				},
+				"\"geo-catalog\":\"1\"},",
+				"\"removed\":[",
+				{
+					"repeat": "\"ip-set/R{i}/ipv6\",",
+					"times": 1023
+				},
+				"\"ip-aggregate/native/ipv6\"],",
+				"\"changedAliases\":[",
+				{
+					"repeat": "\"pfB_G{i}_v4\",",
+					"times": 2047
+				},
+				"\"pfB_Native_Aggregated_v6\"],",
+				"\"ipChanged\":true,\"dnsblChanged\":false,\"reloadLaunched\":true}\n"
+			]
+		},
+		{
+			"id": "request-at-the-bound-half-failed",
+			"description": "A request of 2,048 resources, half applied and half failed with long messages: the messages are shortened, nothing else.",
+			"reportJSON": [
+				"{\"applied\":{",
+				{
+					"repeat": "\"ip-set/G{i}/ipv4\":\"{i}\",",
+					"times": 1023
+				},
+				"\"geo-catalog\":\"1\"},",
+				"\"changedAliases\":[",
+				{
+					"repeat": "\"pfB_G{i}_v4\",",
+					"times": 2047
+				},
+				"\"pfB_GLast_v4\"],",
+				"\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/F{i}/ipv6\",\"stage\":\"fetch\",\"message\":\"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\"},",
+					"times": 1023
+				},
+				"{\"id\":\"ip-set/FLast/ipv6\",\"stage\":\"fetch\",\"message\":\"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\"}]}"
+			],
+			"line": [
+				"{\"version\":2,\"applied\":{",
+				{
+					"repeat": "\"ip-set/G{i}/ipv4\":\"{i}\",",
+					"times": 1023
+				},
+				"\"geo-catalog\":\"1\"},",
+				"\"changedAliases\":[",
+				{
+					"repeat": "\"pfB_G{i}_v4\",",
+					"times": 2047
+				},
+				"\"pfB_GLast_v4\"],",
+				"\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/F{i}/ipv6\",\"stage\":\"fetch\",\"message\":\"left out to fit the result line\"},",
+					"times": 1023
+				},
+				"{\"id\":\"ip-set/FLast/ipv6\",\"stage\":\"fetch\",\"message\":\"left out to fit the result line\"}]}\n"
+			]
+		},
+		{
+			"id": "ids-2049",
+			"description": "One id over the bound on applied, removed and failed together, though each list is under its own.",
+			"reportJSON": [
+				"{\"applied\":{",
+				{
+					"repeat": "\"ip-set/G{i}/ipv4\":\"1\",",
+					"times": 1023
+				},
+				"\"ip-set/GLast/ipv4\":\"1\"},",
+				"\"removed\":[",
+				{
+					"repeat": "\"ip-set/R{i}/ipv6\",",
+					"times": 1023
+				},
+				"\"ip-set/RLast/ipv6\"],",
+				"\"failed\":[{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"m\"}]}"
+			],
+			"refused": "applied, removed and failed hold more than 2048 ids together"
+		},
+		{
+			"id": "applied-4097",
+			"description": "applied with 4,097 entries, one over the bound.",
+			"reportJSON": [
+				"{\"applied\":{",
+				{
+					"repeat": "\"ip-set/G{i}/ipv4\":\"1\",",
+					"times": 4096
+				},
+				"\"geo-catalog\":\"1\"}}"
+			],
+			"refused": "applied holds more than 4096 entries"
+		},
+		{
+			"id": "removed-4097",
+			"description": "removed with 4,097 entries, one over the bound.",
+			"reportJSON": [
+				"{\"removed\":[",
+				{
+					"repeat": "\"ip-set/G{i}/ipv4\",",
+					"times": 4096
+				},
+				"\"geo-catalog\"]}"
+			],
+			"refused": "removed holds more than 4096 entries"
+		},
+		{
+			"id": "changedAliases-2049",
+			"description": "changedAliases with 2,049 entries, one over the bound.",
+			"reportJSON": [
+				"{\"changedAliases\":[",
+				{
+					"repeat": "\"pfB_G{i}_v4\",",
+					"times": 2048
+				},
+				"\"pfB_A_v4\"]}"
+			],
+			"refused": "changedAliases holds more than 2048 entries"
+		},
+		{
+			"id": "failed-4097",
+			"description": "failed with 4,097 entries, one over the bound.",
+			"reportJSON": [
+				"{\"failed\":[",
+				{
+					"repeat": "{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"m\"},",
+					"times": 4096
+				},
+				"{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"m\"}]}"
+			],
+			"refused": "failed holds more than 4096 entries"
+		},
+		{
+			"id": "applied-generation-of-21-characters",
+			"description": "An applied generation of 21 characters.",
+			"report": {
+				"applied": {
+					"geo-catalog": "000000000000000000001"
+				}
+			},
+			"refused": "applied is not a map of resource id to generation"
+		},
+		{
+			"id": "applied-dnsbl-id",
+			"description": "An applied dnsbl id: the apply never applies one.",
+			"report": {
+				"applied": {
+					"dnsbl/ads": "1"
+				}
+			},
+			"refused": "applied is not a map of resource id to generation"
+		},
+		{
+			"id": "applied-id-without-an-alias",
+			"description": "An applied id that maps to no alias.",
+			"report": {
+				"applied": {
+					"ip-set/Foo-Bar/ipv4": "1"
+				}
+			},
+			"refused": "applied is not a map of resource id to generation"
+		},
+		{
+			"id": "removed-dnsbl-id",
+			"description": "A removed dnsbl id.",
+			"report": {
+				"removed": [
+					"dnsbl/ads"
+				]
+			},
+			"refused": "removed is not a list of resource ids"
+		},
+		{
+			"id": "removed-id-without-an-alias",
+			"description": "A removed id whose alias would be an aggregate alias.",
+			"report": {
+				"removed": [
+					"ip-set/Deny_Aggregated/ipv4"
+				]
+			},
+			"refused": "removed is not a list of resource ids"
+		},
+		{
+			"id": "failed-unknown-aggregate-class",
+			"description": "A failure id of an aggregate class that does not exist.",
+			"report": {
+				"failed": [
+					{
+						"id": "ip-aggregate/geo/ipv4",
+						"stage": "apply",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "failed[0].id is not a resource id"
+		},
+		{
+			"id": "failed-dnsbl-id",
+			"description": "A failure id of a dnsbl resource.",
+			"report": {
+				"failed": [
+					{
+						"id": "dnsbl/ads",
+						"stage": "fetch",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "failed[0].id is not a resource id"
+		},
+		{
+			"id": "changed-alias-empty",
+			"description": "An empty alias name.",
+			"report": {
+				"changedAliases": [
+					""
+				]
+			},
+			"refused": "changedAliases is not a list of alias names"
+		},
+		{
+			"id": "changed-alias-without-prefix",
+			"description": "An alias name without the pfB_ prefix.",
+			"report": {
+				"changedAliases": [
+					"Abuse_v4"
+				]
+			},
+			"refused": "changedAliases is not a list of alias names"
+		},
+		{
+			"id": "changed-alias-of-32-characters",
+			"description": "An alias name of 32 characters, one more than pf takes.",
+			"report": {
+				"changedAliases": [
+					"pfB_ABCDEFGHIJKLMNOPQRSTUVWXY_v4"
+				]
+			},
+			"refused": "changedAliases is not a list of alias names"
+		},
+		{
+			"id": "changed-alias-of-31-characters",
+			"description": "An alias name of 31 characters.",
+			"report": {
+				"changedAliases": [
+					"pfB_ABCDEFGHIJKLMNOPQRSTUVWX_v4"
+				]
+			},
+			"line": "{\"version\":2,\"changedAliases\":[\"pfB_ABCDEFGHIJKLMNOPQRSTUVWX_v4\"]}\n"
+		},
+		{
+			"id": "applied-and-failed-one-id",
+			"description": "One id both applied and failed.",
+			"report": {
+				"applied": {
+					"ip-set/A/ipv4": "1"
+				},
+				"failed": [
+					{
+						"id": "ip-set/A/ipv4",
+						"stage": "apply",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "an id appears more than once in applied, removed and failed"
+		},
+		{
+			"id": "applied-and-removed-one-id",
+			"description": "One id both applied and removed.",
+			"report": {
+				"applied": {
+					"geo-catalog": "1"
+				},
+				"removed": [
+					"geo-catalog"
+				]
+			},
+			"refused": "an id appears more than once in applied, removed and failed"
+		},
+		{
+			"id": "removed-and-failed-one-id",
+			"description": "One id both removed and failed.",
+			"report": {
+				"removed": [
+					"ip-aggregate/deny/ipv4"
+				],
+				"failed": [
+					{
+						"id": "ip-aggregate/deny/ipv4",
+						"stage": "fetch",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "an id appears more than once in applied, removed and failed"
+		},
+		{
+			"id": "removed-twice",
+			"description": "One id twice in removed.",
+			"report": {
+				"removed": [
+					"ip-set/A/ipv4",
+					"ip-set/A/ipv4"
+				]
+			},
+			"refused": "an id appears more than once in applied, removed and failed"
+		},
+		{
+			"id": "failed-twice",
+			"description": "One id failed twice, at two stages.",
+			"report": {
+				"failed": [
+					{
+						"id": "geo-catalog",
+						"stage": "fetch",
+						"message": "m"
+					},
+					{
+						"id": "geo-catalog",
+						"stage": "apply",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "an id appears more than once in applied, removed and failed"
+		},
+		{
+			"id": "changed-alias-twice",
+			"description": "One alias twice in changedAliases.",
+			"report": {
+				"changedAliases": [
+					"pfB_A_v4",
+					"pfB_B_v4",
+					"pfB_A_v4"
+				]
+			},
+			"refused": "changedAliases holds an alias more than once"
+		},
+		{
+			"id": "unknown-field",
+			"description": "outcomes belongs to version 1.",
+			"report": {
+				"outcomes": {}
+			},
+			"refused": "the report has the unknown field \"outcomes\""
+		},
+		{
+			"id": "unknown-field-camel",
+			"description": "changedIpAliases is the --run-hooks name, not the result's.",
+			"report": {
+				"changedIpAliases": []
+			},
+			"refused": "the report has the unknown field \"changedIpAliases\""
+		},
+		{
+			"id": "applied-list",
+			"description": "applied as a list of ids.",
+			"report": {
+				"applied": [
+					"ip-set/A/ipv4"
+				]
+			},
+			"refused": "applied is not a map of resource id to generation"
+		},
+		{
+			"id": "applied-bad-id",
+			"description": "An applied id that is not a resource id.",
+			"report": {
+				"applied": {
+					"ip-set/../ipv4": "1"
+				}
+			},
+			"refused": "applied is not a map of resource id to generation"
+		},
+		{
+			"id": "applied-bad-generation",
+			"description": "An applied generation that is not a decimal string.",
+			"report": {
+				"applied": {
+					"ip-set/A/ipv4": "-1"
+				}
+			},
+			"refused": "applied is not a map of resource id to generation"
+		},
+		{
+			"id": "applied-number-generation",
+			"description": "An applied generation as a number.",
+			"report": {
+				"applied": {
+					"ip-set/A/ipv4": 1
+				}
+			},
+			"refused": "applied is not a map of resource id to generation"
+		},
+		{
+			"id": "removed-bad-id",
+			"description": "A removed id that is not a resource id.",
+			"report": {
+				"removed": [
+					"ip-set/A\nB/ipv4"
+				]
+			},
+			"refused": "removed is not a list of resource ids"
+		},
+		{
+			"id": "changed-alias-bad",
+			"description": "A changed alias that is not an alias name.",
+			"report": {
+				"changedAliases": [
+					"pfB_A-B_v4"
+				]
+			},
+			"refused": "changedAliases is not a list of alias names"
+		},
+		{
+			"id": "changed-alias-number",
+			"description": "A changed alias that is a number.",
+			"report": {
+				"changedAliases": [
+					1
+				]
+			},
+			"refused": "changedAliases is not a list of alias names"
+		},
+		{
+			"id": "ip-changed-string",
+			"description": "A flag as a string.",
+			"report": {
+				"ipChanged": "yes"
+			},
+			"refused": "ipChanged is not a boolean"
+		},
+		{
+			"id": "reload-null",
+			"description": "A flag that is null.",
+			"report": {
+				"reloadLaunched": null
+			},
+			"refused": "reloadLaunched is not a boolean"
+		},
+		{
+			"id": "failed-stage",
+			"description": "A failure stage that is neither fetch nor apply.",
+			"report": {
+				"failed": [
+					{
+						"id": "ip-set/A/ipv4",
+						"stage": "parse",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "failed[0].stage is not one of fetch, apply"
+		},
+		{
+			"id": "failed-bad-id",
+			"description": "A failure with an id that is not a resource id.",
+			"report": {
+				"failed": [
+					{
+						"id": "pfB_A_v4",
+						"stage": "apply",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "failed[0].id is not a resource id"
+		},
+		{
+			"id": "failed-no-message",
+			"description": "A failure without its message.",
+			"report": {
+				"failed": [
+					{
+						"id": "ip-set/A/ipv4",
+						"stage": "apply"
+					}
+				]
+			},
+			"refused": "failed[0].message is not a string"
+		},
+		{
+			"id": "failed-unknown-field",
+			"description": "A failure with an unknown field.",
+			"report": {
+				"failed": [
+					{
+						"id": "ip-set/A/ipv4",
+						"stage": "apply",
+						"message": "m",
+						"code": "x"
+					}
+				]
+			},
+			"refused": "failed[0] has the unknown field \"code\""
+		},
+		{
+			"id": "failed-not-object",
+			"description": "A failure that is a string.",
+			"report": {
+				"failed": [
+					"ip-set/A/ipv4"
+				]
+			},
+			"refused": "failed[0] is not an object"
+		}
+	]
+}
