@@ -3,9 +3,9 @@
 package hooks_test
 
 // `pfb-core --run-hooks <pre|post>` (#4035 slice 6c), run as a process of the built binary: the corpus in
-// tests/hooks/fixtures/oneshot (tests/php/HookOneShotCorpusTest.php documents the keys and drives today's PHP callers on
-// it), then the one-shot's refusals, its settings backend, its usage and the locks it leaves alone. The settings backend is
-// an adapter program answering the scenario's rows as the hooks projection holds them.
+// tests/hooks/fixtures/oneshot (tests/php/HookOneShotCorpusTest.php documents the keys and drives today's PHP callers
+// on it), then the one-shot's refusals, its settings backend, its usage and the locks it leaves alone. The settings
+// backend is an adapter program answering the scenario's rows as the hooks projection holds them.
 
 import (
 	"bytes"
@@ -107,8 +107,8 @@ func projected(rows []map[string]any, expand func(string) string) []map[string]a
 // returns its path.
 func adapter(t *testing.T, root string, rows []map[string]any) string {
 	t.Helper()
-	reply, err := json.Marshal(map[string]any{"version": 1, "revision": 1, "settings": map[string]any{"hooks": map[string]any{
-		"rows": rows}}})
+	stored := map[string]any{"hooks": map[string]any{"rows": rows}}
+	reply, err := json.Marshal(map[string]any{"version": 1, "revision": 1, "settings": stored})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,8 @@ func TestOneShotCorpus(t *testing.T) {
 			wantJSON, _ := json.MarshalIndent(want, "", " ")
 			gotJSON, _ := json.MarshalIndent(runs, "", " ")
 			if !bytes.Equal(wantJSON, gotJSON) {
-				t.Errorf("recorded invocations (order, launcher, arguments, PFB_* environment):\n got %s\nwant %s", gotJSON, wantJSON)
+				t.Errorf("recorded invocations (order, launcher, arguments, PFB_* environment):\n got %s\nwant %s", gotJSON,
+					wantJSON)
 			}
 			if want := sc.Expect.Log.bytes(expand); got.stderr != want {
 				t.Errorf("main log (stderr):\n got %s\nwant %s", clip(got.stderr), clip(want))
@@ -206,8 +207,8 @@ func TestOneShotCorpus(t *testing.T) {
 	}
 }
 
-// oneShotRoot stages a hook directory whose hooks record their runs, one pre and one post, and a settings backend listing
-// both enabled.
+// oneShotRoot stages a hook directory whose hooks record their runs, one pre and one post, and a settings backend
+// listing both enabled.
 func oneShotRoot(t *testing.T) (root string, flags []string) {
 	t.Helper()
 	root = t.TempDir()
@@ -221,8 +222,8 @@ func oneShotRoot(t *testing.T) (root string, flags []string) {
 		"--python-wrapper", filepath.Join(root, "wrapper.sh")}
 }
 
-// WHEN pfb-core --run-hooks pre runs with no Core running THEN the configured pre hooks run once, in list order, with the
-// context from stdin, and the exit status is 0 although one of them failed.
+// WHEN pfb-core --run-hooks pre runs with no Core running THEN the configured pre hooks run once, in list order, with
+// the context from stdin, and the exit status is 0 although one of them failed.
 func TestOneShotPreRunsTheConfiguredHooksOnceInOrderAndExitsZeroWhenOneFails(t *testing.T) {
 	root := t.TempDir()
 	expand := func(s string) string { return strings.ReplaceAll(s, "{record}", ". '"+root+"/record.sh'") }
@@ -240,7 +241,8 @@ func TestOneShotPreRunsTheConfiguredHooksOnceInOrderAndExitsZeroWhenOneFails(t *
 	}
 	env := map[string]string{"PFB_WHEN": "pre", "PFB_TRIGGER": "cron", "PFB_POST_INSTALL": "0", "PFB_PRE_UNINSTALL": "0",
 		"PFB_PKG_OP": ""}
-	want := []corpusRun{{Script: "hook_pre_a.sh", Args: []string{}, Env: env}, {Script: "hook_pre_b.sh", Args: []string{}, Env: env}}
+	want := []corpusRun{{Script: "hook_pre_a.sh", Args: []string{}, Env: env},
+		{Script: "hook_pre_b.sh", Args: []string{}, Env: env}}
 	if runs := recordedRuns(t, root); !slices.EqualFunc(runs, want, func(a, b corpusRun) bool {
 		return a.Script == b.Script && maps.Equal(a.Env, b.Env) && len(a.Args) == 0
 	}) {
@@ -308,16 +310,16 @@ func TestOneShotRefusesAContextOutsideItsVocabulary(t *testing.T) {
 	}
 }
 
-// WHEN the settings backend is missing, fails or answers what Core refuses THEN nothing runs and the exit status is 1, as
-// for a Core that cannot read its settings at start.
+// WHEN the settings backend is missing, fails or answers what Core refuses THEN nothing runs and the exit status is 1,
+// as for a Core that cannot read its settings at start.
 func TestOneShotWithoutUsableSettingsRunsNothing(t *testing.T) {
 	runsOnce(t)
 	for _, tc := range []struct{ name, program string }{
 		{"missing", ""},
 		{"failing", "#!/bin/sh\necho broken >&2\nexit 1\n"},
 		{"not a reply", "#!/bin/sh\necho no\n"},
-		{"refused rows", "#!/bin/sh\necho '" + `{"version":1,"revision":1,"settings":{"hooks":{"rows":[{"id":"0","when":"pre",` +
-			`"script":"../hook_pre_a.sh","enabled":true}]}}}` + "'\n"},
+		{"refused rows", "#!/bin/sh\necho '" + `{"version":1,"revision":1,"settings":{"hooks":{"rows":[` +
+			`{"id":"0","when":"pre","script":"../hook_pre_a.sh","enabled":true}]}}}` + "'\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, flags := oneShotRoot(t)
@@ -349,7 +351,9 @@ func TestOneShotUsageErrors(t *testing.T) {
 	}{
 		{"another fire point", func(f []string) []string { return append([]string{"--run-hooks", "start"}, f...) }},
 		{"no fire point", func(f []string) []string { return append(f, "--run-hooks") }},
-		{"an argument after it", func(f []string) []string { return append(append([]string{"--run-hooks", "pre"}, f...), "post") }},
+		{"an argument after it", func(f []string) []string {
+			return append(append([]string{"--run-hooks", "pre"}, f...), "post")
+		}},
 		{"no hook folder", func(f []string) []string { return append([]string{"--run-hooks", "pre"}, f[:2]...) }},
 		{"a relative hook folder", func(f []string) []string {
 			return append([]string{"--run-hooks", "pre", "--hook-dir", "hooks"}, f[:2]...)
@@ -373,8 +377,8 @@ func TestOneShotUsageErrors(t *testing.T) {
 }
 
 // WHEN --run-hooks runs while another process holds the Update lock and Core's own lock in the state directory THEN it
-// neither waits for them nor fails, runs its hooks, and leaves both locks held and the directory as it was. A wait would
-// hang the run until the watchdog kills it.
+// neither waits for them nor fails, runs its hooks, and leaves both locks held and the directory as it was. A wait
+// would hang the run until the watchdog kills it.
 func TestOneShotTakesNoUpdateLock(t *testing.T) {
 	root, flags := oneShotRoot(t)
 	state := filepath.Join(root, "state")
