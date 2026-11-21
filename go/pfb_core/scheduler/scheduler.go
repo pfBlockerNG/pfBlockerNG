@@ -111,16 +111,17 @@ func (s *Scheduler) zone() *time.Location {
 // Tick is one quarter-hour evaluation. It starts nothing and writes nothing when nothing is due, and an Update already
 // running skips it without an error.
 func (s *Scheduler) Tick() error {
-	if err := s.admit(func() error { return s.evaluate("scheduled", false) }); !errors.Is(err, update.ErrRunning) {
+	scheduled := update.Request{Trigger: "scheduled"}
+	if err := s.admit(func() error { return s.evaluate(scheduled, false) }); !errors.Is(err, update.ErrRunning) {
 		return err
 	}
 	return nil
 }
 
-// evaluate plans what is due and asks for an Update with it (always: force), reserving the occurrences only if the gate
-// admits the request. It returns the gate's error unchanged.
-func (s *Scheduler) evaluate(trigger string, force bool) error {
-	cfg := s.cfg
+// evaluate plans what is due and asks for an Update of asked's trigger and package operation with it (always: force),
+// reserving the occurrences only if the gate admits the request. It returns the gate's error unchanged.
+func (s *Scheduler) evaluate(asked update.Request, force bool) error {
+	cfg, trigger := s.cfg, asked.Trigger
 	m, err := cfg.Model() // before the lock: it needs none of the state, and a slow read must not hold up Done
 	if err != nil {
 		cfg.Logf("scheduler: the schedule model is unavailable, nothing started: %v", err)
@@ -143,7 +144,7 @@ func (s *Scheduler) evaluate(trigger string, force bool) error {
 		cfg.Logf("scheduler: the reservation was rejected, nothing started: %v", err)
 		return err
 	}
-	req := update.Request{Trigger: trigger, Scope: "both", Force: "none"}
+	req := update.Request{Trigger: trigger, Scope: "both", Force: "none", Lifecycle: asked.Lifecycle, PkgOp: asked.PkgOp}
 	if m.Scheduled {
 		for _, e := range m.Entries {
 			if e.Enabled && !strings.HasPrefix(e.ID, extraPrefix) && st[e.ID].PendingOccurrence != nil {
@@ -194,10 +195,16 @@ func (s *Scheduler) launch(req update.Request, commit func() (map[string]int64, 
 // "apply" runs without feeds or Extras; "retry" is a quarter-hour evaluation that starts even when nothing is due. Scope
 // and force are the Core's own (both, none) for apply and retry. The gate's refusal, update.ErrRunning, is returned as is.
 func (s *Scheduler) Start(trigger, scope, force string) error {
-	req := update.Request{Trigger: trigger, Scope: "both", Force: "none"}
+	return s.StartWith(update.Request{Trigger: trigger, Scope: scope, Force: force})
+}
+
+// StartWith is Start of asked's trigger, scope and force, whose Lifecycle and PkgOp the Update's request carries.
+func (s *Scheduler) StartWith(asked update.Request) error {
+	trigger, scope, force := asked.Trigger, asked.Scope, asked.Force
+	req := update.Request{Trigger: trigger, Scope: "both", Force: "none", Lifecycle: asked.Lifecycle, PkgOp: asked.PkgOp}
 	switch trigger {
 	case "retry":
-		return s.admit(func() error { return s.evaluate(trigger, true) })
+		return s.admit(func() error { return s.evaluate(req, true) })
 	case "apply":
 	case "manual":
 		if !slices.Contains(scopes, scope) || !slices.Contains(forces, force) {
