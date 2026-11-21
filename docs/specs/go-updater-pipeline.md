@@ -264,7 +264,11 @@ at all. It is JSON Lines in byte order, one row per line:*
 
 *The rows carry what `pfblockerng_get_countries()` writes into the `pfblockerng_<Continent>.php` pages and the Reputation
 page today, as data rather than page source; the Outpost apply renders the pages from them (#4037). The tests read today's
-pages back and compare their digests. ASN choices come with slice 5c.*
+pages back and compare their digests. The rows follow the page source: an ISO listed twice in a list (a country that is
+also a Top Spammer, in the Reputation list) has two rows, and a renderer keys the options by `iso` as today's array literal
+does, so the option keeps its first position and shows its last row. A name is JSON text: the conversion refuses a
+Locations file whose names are not UTF-8, and a control character in a name is escaped, so every line is a valid resource
+member. ASN choices come with slice 5c.*
 
 - **Canonical body:** members sorted and unique in byte order, one per line, the order `pfb_canonical_alias_set` produces
   (`pfb.inc:14880`; `docs/misc/architecture-notes.md:1194-1197`). `digest` is the xxh128 of that body.
