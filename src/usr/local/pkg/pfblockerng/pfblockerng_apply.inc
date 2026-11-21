@@ -1200,6 +1200,55 @@ function pfb_filter_reload_exec(): int {
 	return ($retval === 0) ? 0 : -1;
 }
 
+/**
+ * The apply's entry under the held feed-pass lock: the HA receive-suppression flag ($pfb_sync_absorb), the DNS
+ * listener VIPs under the DNS configuration lock, and the DNSBL policy upgrade. FALSE when that lock is unavailable:
+ * the changes are marked pending and the locks the caller owns are released.
+ */
+function pfb_apply_enter(bool $pfb_feed_pass_owner, bool $pfb_dispatch_owner, ?bool &$pfb_sync_absorb): bool {
+	global $pfb;
+
+	// issue #3674: a pass that starts suppressed applies a received policy; its own writes into synced sections stay unsent.
+	$pfb_sync_absorb = pfb_sync_receive_suppressed();
+
+	if (PfbConfig::read('gen/pfb_dns_listen_vip') === PfbToggle::On
+	    || PfbConfig::read('gen/pfb_dns_listen_added') !== ''
+	    || PfbConfig::read('gen/pfb_dns_listen_auto4') !== ''
+	    || PfbConfig::read('gen/pfb_dns_listen_auto6') !== '') {
+		$pfb_listen_lock = pfb_dns_config_lock();
+		if ($pfb_listen_lock === NULL) {
+			pfb_logger("\n sync aborted: DNS configuration lock unavailable; pending changes retained.\n", 1);
+			pfb_mark_pending_changes();
+			if ($pfb_feed_pass_owner) {
+				pfb_feed_pass_release();
+			}
+			if ($pfb_dispatch_owner) {
+				pfb_schedule_dispatch_release();
+			}
+			return FALSE;
+		}
+		try {
+			if (!pfb_dns_listen_vips_apply()) {
+				pfb_mark_pending_changes();
+				pfb_logger("\n DNS listener advertisements could not be written.\n", 2);
+			}
+		} finally {
+			unlock($pfb_listen_lock);
+		}
+	}
+
+	// issue #3288: opportunistically bring a legacy/still-fresh DNSBL policy
+	// state up to date under the held feed-pass lock, before this pass
+	// resolves any group's effective mechanism -- refresh pfb_global() only
+	// when something actually changed, so its cached policy fields never lag
+	// behind config.xml.
+	if (pfb_dnsbl_policy_upgrade()) {
+		pfb_global();
+	}
+
+	return TRUE;
+}
+
 // Main pfBlockerNG function
 // TEMPORARY SHIM (#4037): deleted by the cutover (#3977). It computes from files what the version 2 apply is handed.
 function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool {
@@ -1291,42 +1340,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		return FALSE;
 	}
 
-	// issue #3674: a pass that starts suppressed applies a received policy; its own writes into synced sections stay unsent.
-	$pfb_sync_absorb = pfb_sync_receive_suppressed();
-
-	if (PfbConfig::read('gen/pfb_dns_listen_vip') === PfbToggle::On
-	    || PfbConfig::read('gen/pfb_dns_listen_added') !== ''
-	    || PfbConfig::read('gen/pfb_dns_listen_auto4') !== ''
-	    || PfbConfig::read('gen/pfb_dns_listen_auto6') !== '') {
-		$pfb_listen_lock = pfb_dns_config_lock();
-		if ($pfb_listen_lock === NULL) {
-			pfb_logger("\n sync aborted: DNS configuration lock unavailable; pending changes retained.\n", 1);
-			pfb_mark_pending_changes();
-			if ($pfb_feed_pass_owner) {
-				pfb_feed_pass_release();
-			}
-			if ($pfb_dispatch_owner) {
-				pfb_schedule_dispatch_release();
-			}
-			return FALSE;
-		}
-		try {
-			if (!pfb_dns_listen_vips_apply()) {
-				pfb_mark_pending_changes();
-				pfb_logger("\n DNS listener advertisements could not be written.\n", 2);
-			}
-		} finally {
-			unlock($pfb_listen_lock);
-		}
-	}
-
-	// issue #3288: opportunistically bring a legacy/still-fresh DNSBL policy
-	// state up to date under the held feed-pass lock, before this pass
-	// resolves any group's effective mechanism -- refresh pfb_global() only
-	// when something actually changed, so its cached policy fields never lag
-	// behind config.xml.
-	if (pfb_dnsbl_policy_upgrade()) {
-		pfb_global();
+	// TEMPORARY SHIM (#4037): deleted by the cutover (#3977).
+	if (!pfb_apply_enter($pfb_feed_pass_owner, $pfb_dispatch_owner, $pfb_sync_absorb)) {
+		return FALSE;
 	}
 
 	// Open the per-run log window for the live viewer (no-op if pfblockerng_sync_cron() already
