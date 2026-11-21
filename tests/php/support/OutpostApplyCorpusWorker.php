@@ -434,8 +434,10 @@ foreach ($sc['steps'] as $step) {
 			'last' => ['time' => $time, 'outcome' => 'changed'], 'apply' => ['time' => $time, 'outcome' => 'waiting']]));
 	}
 	if (!empty($step['received'])) {
-		file_put_contents("{$pfb['dbdir']}/pfb_sync_receive.json", json_encode(['accepted_digest' => 'received',
-			'legacy_digests' => pfb_sync_legacy_digests(['all', 'lists'])]));
+		$file = "{$pfb['dbdir']}/pfb_sync_receive.json";	// merged, so an `openRecord` step keeps its apply record beside the policy
+		$open = is_file($file) ? json_decode((string) file_get_contents($file), TRUE, 8, JSON_THROW_ON_ERROR) : [];
+		file_put_contents($file, json_encode(['accepted_digest' => 'received',
+			'legacy_digests' => pfb_sync_legacy_digests(['all', 'lists'])] + $open));
 	}
 	if (!empty($step['dispatchHeld'])) {
 		pfb_schedule_dispatch_begin();

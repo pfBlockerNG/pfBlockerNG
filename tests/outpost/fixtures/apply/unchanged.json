@@ -1,5 +1,5 @@
 {
-  "description": "Nothing changed and the kernel table is loaded: no pfctl write, no reload, the pass still settles. A third, settings-save pass leaves the pending mark, the due-ledger flag and the apply record unsettled.",
+  "description": "Nothing changed and the kernel table is loaded: no pfctl write, no reload, the pass still settles. A third, settings-save pass leaves the pending mark and the due-ledger flag set and an open apply record waiting.",
   "steps": [
     {
       "pending": true,
@@ -239,6 +239,7 @@
     },
     {
       "pending": true,
+      "openRecord": true,
       "save": true,
       "expect": {
         "returned": true,
@@ -254,7 +255,9 @@
         "hook": "same",
         "pending": true,
         "ledgerPending": true,
-        "applyRecord": "same",
+        "applyRecord": {
+          "outcome": "waiting"
+        },
         "syncStatus": "same",
         "ipUnlock": false,
         "ipCache": false,
