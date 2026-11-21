@@ -29,6 +29,7 @@ const (
 	defaultTimeout = 60 // seconds
 	defaultGrace   = 5 * time.Second
 	bourneShell    = "/bin/sh"
+	signalLag      = 250 * time.Millisecond // how long a hook's signal death waits for that signal to cancel the run
 )
 
 var errTimedOut = errors.New("hook timed out")
@@ -168,12 +169,30 @@ func (r Runner) run(ctx context.Context, when string, index int, h Hook, env []s
 		r.sinks().Line(true, "[ pfB Hook ] %s %s TIMED OUT after %ds (killed); continuing\n", when, label, timeout)
 	case e != ran:
 		return e
+	case status > 128 && cancelledSoon(ctx):
+		return interrupted
 	case status != 0:
 		r.sinks().Line(true, "[ pfB Hook ] %s %s exited non-zero [ %d ]; continuing\n", when, label, status)
 	default:
 		r.sinks().Line(false, "[ pfB Hook ] %s %s completed\n", when, label)
 	}
 	return ran
+}
+
+// cancelledSoon is whether ctx is cancelled, or is within signalLag: a signal sent to the whole process group (a
+// terminal's Ctrl-C) can end a hook before the handler of the same signal has cancelled the run's context.
+func cancelledSoon(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	lag := time.NewTimer(signalLag)
+	defer lag.Stop()
+	select {
+	case <-ctx.Done():
+		return true
+	case <-lag.C:
+		return false
+	}
 }
 
 // vetted is pfb_hook_script_valid(): the absolute path of script when it is a bare hook_<when>_*.sh or .py name and the
