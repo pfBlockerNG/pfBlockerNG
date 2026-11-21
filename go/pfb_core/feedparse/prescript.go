@@ -62,34 +62,43 @@ func RunPreScript(ctx context.Context, script, norm, staged string, log io.Write
 	if err := copyFile(norm, staged); err != nil {
 		return failed(PreScriptStage, 0)
 	}
-	ctx, cancel := context.WithTimeout(ctx, preScriptTimeout)
-	defer cancel()
-	argv := append([]string{staged}, args...)
-	outcome := runProcessGroup(ctx, log, script, argv)
-	if outcome.WatchdogErr == nil && errors.Is(outcome.CommandErr, syscall.ENOEXEC) {
-		outcome = runProcessGroup(ctx, log, bourneShell, append([]string{script}, argv...))
-	}
-	err := errors.Join(outcome.CommandErr, outcome.Interrupted, outcome.WatchdogErr)
-	var exit *exec.ExitError
-	switch {
-	case outcome.Interrupted == nil && outcome.WatchdogErr == nil && (outcome.CommandErr == nil || errors.Is(outcome.CommandErr, exec.ErrWaitDelay)):
-	case ctx.Err() != nil:
-		return failed(PreScriptTimeout, 0)
-	case errors.As(err, &exit):
-		status := exit.ExitCode()
-		if ws, ok := exit.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			status = 128 + int(ws.Signal())
-		}
-		return failed(PreScriptExit, status)
-	case errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.ENOEXEC):
-		return failed(PreScriptExit, 126)
-	default:
-		return failed(PreScriptExit, 127)
+	if reason, status := runScript(ctx, log, script, append([]string{staged}, args...)); reason != "" {
+		return failed(reason, status)
 	}
 	if _, err := os.Stat(staged); err != nil {
 		return failed(PreScriptDeleted, 0)
 	}
 	return PreScriptResult{OK: true, Path: staged}
+}
+
+// runScript runs script with args, as the program named, for at most 300 seconds under the strict policy (RunPreScript's),
+// with its output to out; a file that is no executable format (no #! line) is run by /bin/sh, as execvp() does. reason is ""
+// when it exited 0, else PreScriptExit with the status as PreScriptResult.Status has it, or PreScriptTimeout.
+func runScript(ctx context.Context, out io.Writer, script string, args []string) (reason string, status int) {
+	ctx, cancel := context.WithTimeout(ctx, preScriptTimeout)
+	defer cancel()
+	outcome := runProcessGroup(ctx, out, script, args)
+	if outcome.WatchdogErr == nil && errors.Is(outcome.CommandErr, syscall.ENOEXEC) {
+		outcome = runProcessGroup(ctx, out, bourneShell, append([]string{script}, args...))
+	}
+	err := errors.Join(outcome.CommandErr, outcome.Interrupted, outcome.WatchdogErr)
+	var exit *exec.ExitError
+	switch {
+	case outcome.Interrupted == nil && outcome.WatchdogErr == nil && (outcome.CommandErr == nil || errors.Is(outcome.CommandErr, exec.ErrWaitDelay)):
+		return "", 0
+	case ctx.Err() != nil:
+		return PreScriptTimeout, 0
+	case errors.As(err, &exit):
+		status := exit.ExitCode()
+		if ws, ok := exit.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			status = 128 + int(ws.Signal())
+		}
+		return PreScriptExit, status
+	case errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.ENOEXEC):
+		return PreScriptExit, 126
+	default:
+		return PreScriptExit, 127
+	}
 }
 
 // runProcessGroup delegates group ownership while retaining the pre-script's argv, log and IO-drain budget.
