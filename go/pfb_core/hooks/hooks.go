@@ -67,6 +67,9 @@ func Rows(value map[string]any) []Hook {
 	return rows
 }
 
+// PkgOps are the package operations a Context's PkgOp may name; "" is none.
+var PkgOps = []string{"install", "upgrade", "reinstall", "delete"}
+
 // Context is what a fire point tells its hooks, each set on the child only as a PFB_* environment entry.
 type Context struct {
 	Lifecycle string            // install: PFB_POST_INSTALL=1; uninstall: PFB_PRE_UNINSTALL=1; otherwise both 0
@@ -82,6 +85,10 @@ type Runner struct {
 	Errors     io.Writer     // the error log: skipped or failed hooks, failed output writes, a cancelled run (nil: none)
 	Transcript io.Writer     // the Update transcript: every line and the first 1,048,576 bytes of each hook's output (nil: none)
 	Grace      time.Duration // between TERM and KILL; 0 is 5 s
+	// SignalLag is how long a hook that ends with a status above 128 waits for the run to be cancelled before it counts
+	// as failed rather than cut short: a signal sent to the whole process group can end the hook before its handler has
+	// cancelled ctx. 0 waits not at all: only whether ctx has ended when the hook does counts.
+	SignalLag time.Duration
 }
 
 // Run runs the enabled hooks of when (pre or post) among rows, one after another in list order, and returns when the
@@ -91,10 +98,10 @@ type Runner struct {
 // next one runs: the caller never fails because of a hook. When ctx ends, a running hook gets TERM and KILL the same
 // way, no further hook starts, and one line says the run was cancelled and how many enabled hooks did not run. Output
 // goes to a fresh regular file, sanitized into the logs while the hook runs, and read up to its size sampled after the
-// hook exited (output.Capture).
-func (r Runner) Run(ctx context.Context, when string, rows []Hook, c Context) {
+// hook exited (output.Capture). cut is whether ctx ended the run with an enabled hook unrun or cut short.
+func (r Runner) Run(ctx context.Context, when string, rows []Hook, c Context) (cut bool) {
 	if when != "pre" && when != "post" {
-		return
+		return false
 	}
 	var selected []Hook
 	for _, h := range rows {
@@ -103,10 +110,10 @@ func (r Runner) Run(ctx context.Context, when string, rows []Hook, c Context) {
 		}
 	}
 	if len(selected) == 0 {
-		return
+		return false
 	}
 	env := environ(when, c)
-	python := sync.OnceValue(func() bool { return r.interpreter(ctx) })
+	python := sync.OnceValue(func() bool { return r.interpreter(ctx, env) })
 	for i, h := range selected {
 		e := r.run(ctx, when, i, h, env, python)
 		if e != cancelled && e != interrupted {
@@ -120,8 +127,9 @@ func (r Runner) Run(ctx context.Context, when string, rows []Hook, c Context) {
 			plural = ""
 		}
 		r.sinks().Line(true, "[ pfB Hook ] %s run cancelled; %d enabled hook%s did not run\n", when, left, plural)
-		return
+		return true
 	}
+	return false
 }
 
 func (r Runner) run(ctx context.Context, when string, index int, h Hook, env []string, python func() bool) end {
@@ -166,10 +174,25 @@ func (r Runner) run(ctx context.Context, when string, index int, h Hook, env []s
 		return e
 	case status != 0:
 		r.sinks().Line(true, "[ pfB Hook ] %s %s exited non-zero [ %d ]; continuing\n", when, label, status)
+		if status > 128 && (ctx.Err() != nil || r.SignalLag > 0 && cancelledWithin(ctx, r.SignalLag)) {
+			return interrupted // its status is logged; it still counts as cut short
+		}
 	default:
 		r.sinks().Line(false, "[ pfB Hook ] %s %s completed\n", when, label)
 	}
 	return ran
+}
+
+// cancelledWithin is whether ctx is cancelled now or within lag (Runner.SignalLag). A variable for the tests alone.
+var cancelledWithin = func(ctx context.Context, lag time.Duration) bool {
+	timer := time.NewTimer(lag)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 // vetted is pfb_hook_script_valid(): the absolute path of script when it is a bare hook_<when>_*.sh or .py name and the
@@ -199,14 +222,16 @@ func (r Runner) vetted(script, when string) string {
 	return path
 }
 
-func (r Runner) interpreter(ctx context.Context) bool {
+// interpreter is whether the Python wrapper names an interpreter, asked with env, the environment the hook would get, so
+// that the wrapper's own PFB_* overrides reach neither the probe nor the launch.
+func (r Runner) interpreter(ctx context.Context, env []string) bool {
 	if !filepath.IsAbs(r.Python) { // a relative wrapper would be looked up in PATH
 		return false
 	}
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, r.Python, "--print-interpreter")
-	cmd.WaitDelay = r.grace()
+	cmd.Env, cmd.WaitDelay = env, r.grace()
 	out, err := cmd.Output()
 	first, _, _ := strings.Cut(string(out), "\n")
 	return err == nil && strings.TrimSpace(first) != ""
@@ -269,9 +294,9 @@ func (r Runner) sinks() output.Sinks {
 	return output.Sinks{Log: r.Log, Transcript: r.Transcript, Errors: r.Errors}
 }
 
-// environ is the hooks' environment: the runner's own, then PFB_<NAME> for each context value whose upper-cased name is
-// [A-Z0-9_]+ and that holds no NUL, then PFB_WHEN and the lifecycle entries, which no context name replaces. A PkgOp
-// holding a NUL is no operation: PFB_PKG_OP is set empty, as hooks expect it always set.
+// environ is the hooks' environment: the runner's own without any PFB_* entry, then PFB_<NAME> for each context value
+// whose upper-cased name is [A-Z0-9_]+ and that holds no NUL, then PFB_WHEN and the lifecycle entries, which no context
+// name replaces. A PkgOp holding a NUL is no operation: PFB_PKG_OP is set empty, as hooks expect it always set.
 func environ(when string, c Context) []string {
 	vars := map[string]string{}
 	for _, name := range slices.Sorted(maps.Keys(c.Vars)) {
@@ -298,7 +323,7 @@ func environ(when string, c Context) []string {
 	}
 	vars["WHEN"], vars["PKG_OP"] = when, pkgOp
 	vars["POST_INSTALL"], vars["PRE_UNINSTALL"] = flag(c.Lifecycle == "install"), flag(c.Lifecycle == "uninstall")
-	env := os.Environ()
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "PFB_") })
 	for _, name := range slices.Sorted(maps.Keys(vars)) {
 		env = append(env, "PFB_"+name+"="+vars[name])
 	}

@@ -293,6 +293,24 @@ func TestRunnerHookInheritsTheRunnersEnvironment(t *testing.T) {
 	}
 }
 
+// A PFB_* entry of the runner's own environment never reaches a hook: the hook's PFB_* are the context's and the
+// runner's alone, so an omitted context value is unset rather than inherited. Departure: today's pfb_run_hooks() passes
+// an inherited PFB_* entry through unless a context name replaces it (the corpora clear PFB_* before they run).
+func TestRunnerDropsInheritedPFBEntries(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"PFB_TRIGGER", "PFB_STATUS", "PFB_ANYTHING", "PFB_WHEN"} {
+		t.Setenv(name, "evil")
+	}
+	writeFile(t, filepath.Join(dir, "hook_pre_a.sh"),
+		"#!/bin/sh\nenv | grep '^PFB_' | LC_ALL=C sort > '"+dir+"/env'\n", 0o755)
+	hooks.Runner{Dir: dir, Grace: time.Second}.Run(context.Background(), "pre", pre("hook_pre_a.sh"),
+		hooks.Context{Vars: map[string]string{"IP_CHANGED": "0"}})
+	want := "PFB_IP_CHANGED=0\nPFB_PKG_OP=\nPFB_POST_INSTALL=0\nPFB_PRE_UNINSTALL=0\nPFB_WHEN=pre\n"
+	if got, err := os.ReadFile(filepath.Join(dir, "env")); err != nil || string(got) != want {
+		t.Errorf("PFB_* entries in the hook:\n got %q (%v)\nwant %q", got, err, want)
+	}
+}
+
 // Output is read up to the size the file had when the hook's own process exited: a descendant that writes after that
 // is not read, even while the runner is still reading. The runner removes the capture file once that size is fixed;
 // the test holds the runner inside a log write until the descendant has written.
@@ -537,5 +555,95 @@ func TestRunnerTranscriptCutsInsideAPrintableRun(t *testing.T) {
 		"[ pfB Hook ] pre #0 completed\n"
 	if transcript.String() != want {
 		t.Errorf("transcript %s; want %s", clip(transcript.String()), clip(want))
+	}
+}
+
+// WHEN the runner's environment holds the Python wrapper's own overrides (PFB_PYTHON_DIR, PFB_PKG_BIN,
+// PFB_PYTHON_DEPENDENCIES) THEN neither the wrapper's --print-interpreter probe nor the launch of a .py hook sees them:
+// both get the same environment, so that the probe vouches for the launcher the hook runs through.
+func TestRunnerProbesThePythonWrapperWithTheHooksEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"PFB_PYTHON_DIR", "PFB_PKG_BIN", "PFB_PYTHON_DEPENDENCIES"} {
+		t.Setenv(name, "/inherited")
+	}
+	writeFile(t, filepath.Join(dir, "hook_pre_a.py"), "", 0o644)
+	wrapper := filepath.Join(dir, "wrapper.sh")
+	writeFile(t, wrapper, "#!/bin/sh\nseen=launch\nif [ \"$1\" = --print-interpreter ]; then\n\tseen=probe\n"+
+		"\techo /fixture/interpreter\nfi\nenv | grep '^PFB_' | sort > '"+dir+"/'$seen.env\n", 0o755)
+	var log bytes.Buffer
+	hooks.Runner{Dir: dir, Python: wrapper, Log: &log, Grace: time.Second}.Run(context.Background(), "pre",
+		pre("hook_pre_a.py"), hooks.Context{Vars: map[string]string{"TRIGGER": "cron"}})
+	probe, _ := os.ReadFile(filepath.Join(dir, "probe.env"))
+	launch, _ := os.ReadFile(filepath.Join(dir, "launch.env"))
+	if len(launch) == 0 || string(probe) != string(launch) || strings.Contains(string(probe)+string(launch), "/inherited") {
+		t.Errorf("the probe saw\n%s\nthe launch saw\n%s\nwant the same PFB_* entries, none inherited; log %q", probe,
+			launch, log.String())
+	}
+}
+
+// waitEntered replaces the lag wait for the test: it records each call, and answers cancelled.
+func waitEntered(t *testing.T, cancelled bool) *int {
+	t.Helper()
+	calls, orig := 0, *hooks.CancelledWithin
+	*hooks.CancelledWithin = func(context.Context, time.Duration) bool { calls++; return cancelled }
+	t.Cleanup(func() { *hooks.CancelledWithin = orig })
+	return &calls
+}
+
+// WHEN a Runner without a signal lag (an Update's) runs a hook that exits 255 THEN it never waits for a signal to
+// follow: the hook is a failed hook at once and the next one runs.
+func TestRunnerWithoutASignalLagNeverWaitsAfterAHookExitsAbove128(t *testing.T) {
+	calls := waitEntered(t, true)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "hook_pre_a.sh"), "#!/bin/sh\nexit 255\n", 0o755)
+	writeFile(t, filepath.Join(dir, "hook_pre_b.sh"), "#!/bin/sh\ntouch '"+dir+"/ran'\n", 0o755)
+	var log bytes.Buffer
+	cut := hooks.Runner{Dir: dir, Log: &log, Grace: time.Second}.Run(context.Background(), "pre",
+		pre("hook_pre_a.sh", "hook_pre_b.sh"), hooks.Context{})
+	if *calls != 0 || cut || !exists(filepath.Join(dir, "ran")) {
+		t.Errorf("lag waits %d, cut %v and second hook run %v; want 0, false and true; log %q", *calls, cut,
+			exists(filepath.Join(dir, "ran")), log.String())
+	}
+	if want := "pre #0 exited non-zero [ 255 ]; continuing\n"; !strings.Contains(log.String(), want) {
+		t.Errorf("log %q; want it to hold %q", log.String(), want)
+	}
+}
+
+// WHEN a hook exits 255 and the run is cancelled within the signal lag THEN the hook's own status is still logged, and
+// then the hook counts as cut short: the run is cancelled with no further hook started.
+func TestRunnerLogsTheStatusOfAHookCutShortAfterItsExit(t *testing.T) {
+	calls := waitEntered(t, true)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "hook_pre_a.sh"), "#!/bin/sh\nexit 255\n", 0o755)
+	writeFile(t, filepath.Join(dir, "hook_pre_b.sh"), "#!/bin/sh\ntouch '"+dir+"/ran'\n", 0o755)
+	var log bytes.Buffer
+	cut := hooks.Runner{Dir: dir, Log: &log, Grace: time.Second, SignalLag: time.Hour}.Run(context.Background(), "pre",
+		pre("hook_pre_a.sh", "hook_pre_b.sh"), hooks.Context{})
+	want := "[ pfB Hook ] pre #0 exited non-zero [ 255 ]; continuing\n" +
+		"[ pfB Hook ] pre run cancelled; 1 enabled hook did not run\n"
+	if *calls != 1 || !cut || exists(filepath.Join(dir, "ran")) || !strings.HasSuffix(log.String(), want) {
+		t.Errorf("lag waits %d, cut %v, second hook run %v and log %q; want 1, true, false and a log ending %q", *calls,
+			cut, exists(filepath.Join(dir, "ran")), log.String(), want)
+	}
+}
+
+// The lag wait answers whether the run is cancelled within the lag: true as soon as a cancel comes inside it, false
+// only once the whole lag has passed without one.
+func TestCancelledWithinWaitsOutTheLag(t *testing.T) {
+	wait := *hooks.CancelledWithin
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	timer := time.AfterFunc(50*time.Millisecond, cancel)
+	defer timer.Stop()
+	if !wait(ctx, hang) {
+		t.Error("a cancel 50 ms into the lag: got false, want true")
+	}
+	const lag = 20 * time.Millisecond
+	began := time.Now()
+	if wait(context.Background(), lag) {
+		t.Error("no cancel at all: got true, want false")
+	}
+	if waited := time.Since(began); waited < lag {
+		t.Errorf("no cancel: answered after %v, want it to wait out the lag of %v", waited, lag)
 	}
 }

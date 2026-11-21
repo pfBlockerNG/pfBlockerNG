@@ -1,0 +1,40 @@
+{
+ "description": "A 1 MiB trigger is longer than the kernel takes for one environment entry: the hook cannot be started (E2BIG), which is logged as exit 126, and the one-shot still exits 0.",
+ "departure": "Today proc_open() fails to start the shell, and pfb_script_output_exec() reports that as -1. Today pfb_logger() stamps each line it starts on the console with the date and time, as in the main log; the one-shot copies the main log unstamped.",
+ "caller": "uninstall",
+ "vars": {
+  "TRIGGER": {
+   "repeat": "x",
+   "times": 1048576
+  }
+ },
+ "pkgOp": "delete",
+ "when": "pre",
+ "stdin": {
+  "prefix": "{\"trigger\":\"",
+  "repeat": "x",
+  "times": 1048576,
+  "suffix": "\",\"lifecycle\":\"uninstall\",\"pkgOp\":\"delete\"}"
+ },
+ "rows": [
+  {
+   "script": "hook_pre_a.sh",
+   "when": "pre",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_a.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [],
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ 126 ]; continuing\n",
+  "console": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ 126 ]; continuing\n"
+ },
+ "old_expect": {
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ -1 ]; continuing\n",
+  "console": "\n{stamp} [ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n{stamp} [ pfB Hook ] pre #0 exited non-zero [ -1 ]; continuing\n"
+ }
+}

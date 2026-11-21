@@ -1,0 +1,49 @@
+{
+ "description": "A trigger with line breaks, quotes, $(...) and backticks reaches the hook byte for byte as PFB_TRIGGER and is never evaluated (no canary).",
+ "caller": "runhooks",
+ "argv": [
+  "post",
+  "one\ntwo\r\nit's \"quoted\" $(touch '{root}/canary-subst') `touch '{root}/canary-ticks'`"
+ ],
+ "when": "post",
+ "stdin": "{\"trigger\": \"one\\ntwo\\r\\nit's \\\"quoted\\\" $(touch '{root}/canary-subst') `touch '{root}/canary-ticks'`\", \"ipChanged\": false, \"dnsblChanged\": false, \"changedIpAliases\": \"\", \"changedDnsblGroups\": \"\"}",
+ "rows": [
+  {
+   "script": "hook_post_a.sh",
+   "when": "post",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_post_a.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_post_a.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "post",
+     "PFB_TRIGGER": "one\ntwo\r\nit's \"quoted\" $(touch '{root}/canary-subst') `touch '{root}/canary-ticks'`",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": "",
+     "PFB_IP_CHANGED": "0",
+     "PFB_DNSBL_CHANGED": "0",
+     "PFB_STATUS": "ok",
+     "PFB_CHANGED_IP_ALIASES": "",
+     "PFB_CHANGED_DNSBL_GROUPS": ""
+    }
+   }
+  ],
+  "log": "\n[ pfB Hook ] post #0 (hook_post_a.sh, timeout 60s)\n[ pfB Hook ] post #0 completed\n",
+  "console": "",
+  "absent": [
+   "canary-subst",
+   "canary-ticks"
+  ]
+ }
+}

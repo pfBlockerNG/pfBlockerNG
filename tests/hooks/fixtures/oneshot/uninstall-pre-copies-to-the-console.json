@@ -1,0 +1,65 @@
+{
+ "description": "The uninstall disable pass's pre hooks: PFB_PRE_UNINSTALL=1 and the pkg delete operation. A package lifecycle copies to the console exactly what the main log gets: the runner's lines and each hook's sanitised output, a failure included.",
+ "departure": "Today pfb_logger() stamps each line it starts on the console with the date and time, as in the main log; the one-shot copies the main log unstamped.",
+ "caller": "uninstall",
+ "vars": {
+  "TRIGGER": "update"
+ },
+ "pkgOp": "delete",
+ "when": "pre",
+ "stdin": "{\"trigger\":\"update\",\"lifecycle\":\"uninstall\",\"pkgOp\":\"delete\"}",
+ "rows": [
+  {
+   "script": "hook_pre_a.sh",
+   "when": "pre",
+   "enabled": "on",
+   "description": "Stop proxy"
+  },
+  {
+   "script": "hook_pre_b.sh",
+   "when": "pre",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_a.sh": {
+   "body": "#!/bin/sh\n{record}\nprintf 'stopping haproxy\\n'\nprintf 'esc \\033[31mred\\033[0m bad \\377 end\\n'\n"
+  },
+  "hooks/hook_pre_b.sh": {
+   "body": "#!/bin/sh\n{record}\nprintf 'no newline'\nexit 3\n"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_pre_a.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "update",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "1",
+     "PFB_PKG_OP": "delete"
+    }
+   },
+   {
+    "script": "hook_pre_b.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "update",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "1",
+     "PFB_PKG_OP": "delete"
+    }
+   }
+  ],
+  "log": "\n[ pfB Hook ] pre Stop proxy (hook_pre_a.sh, timeout 60s)\nstopping haproxy\nesc \\x1B[31mred\\x1B[0m bad \\xFF end\n[ pfB Hook ] pre Stop proxy completed\n\n[ pfB Hook ] pre #1 (hook_pre_b.sh, timeout 60s)\nno newline[ pfB Hook ] pre #1 exited non-zero [ 3 ]; continuing\n",
+  "console": "\n[ pfB Hook ] pre Stop proxy (hook_pre_a.sh, timeout 60s)\nstopping haproxy\nesc \\x1B[31mred\\x1B[0m bad \\xFF end\n[ pfB Hook ] pre Stop proxy completed\n\n[ pfB Hook ] pre #1 (hook_pre_b.sh, timeout 60s)\nno newline[ pfB Hook ] pre #1 exited non-zero [ 3 ]; continuing\n"
+ },
+ "old_expect": {
+  "console": "\n{stamp} [ pfB Hook ] pre Stop proxy (hook_pre_a.sh, timeout 60s)\nstopping haproxy\nesc \\x1B[31mred\\x1B[0m bad \\xFF end\n{stamp} [ pfB Hook ] pre Stop proxy completed\n\n{stamp} [ pfB Hook ] pre #1 (hook_pre_b.sh, timeout 60s)\nno newline[ pfB Hook ] pre #1 exited non-zero [ 3 ]; continuing\n"
+ }
+}
