@@ -69,7 +69,9 @@ import (
 	"unicode"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/scheduler"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update"
 )
 
 const shutdownGrace = 3 * time.Second // below the rc script's 5 s before KILL
@@ -150,16 +152,13 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	snap, _ := store.Get(nil) // no ids to refuse: it cannot fail
 	logger.Printf("settings: %s revision %d", kind, snap.Revision)
 	logger.Printf("feed phase: %d local folders, %d script folders, rsync %q, user agent set %t", len(feed.LocalDirs), len(feed.ScriptDirs), feed.RsyncBin, feed.UserAgent != "")
-	methods := productionMethods()
-	maps.Copy(methods, settingsMethods(store))
 	var resourceStore *resources.Store // nil without --resource-dir
 	if resourceDir != "" {
 		resourceStore = resources.Open(resourceDir)
 	}
-	maps.Copy(methods, resourceMethods(resourceStore))
 	lanes := newLaneSettings(store, logger.Printf)
 	sched, gate := newUpdates(*updateCmd, maintenanceCmd, *zoneinfo, *stateDir, store, lanes, logger.Printf) // nil without --update-cmd
-	maps.Copy(methods, updateMethods(sched, gate))
+	methods := coreMethods(*stateDir, store, resourceStore, sched, gate)
 	srv, err := listen(options{socket: *socket, allowUID: allowUID, clientUIDs: clients, socketGroup: group, groupSet: groupSet,
 		methods: methods, logf: logger.Printf})
 	if err != nil {
@@ -195,6 +194,17 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	<-served
 	logger.Printf("stopped")
 	return 0
+}
+
+// coreMethods is every method Core serves, over Core's state directory, its settings, its resource store (nil: none) and
+// its Updates (nil: none).
+func coreMethods(stateDir string, store *settings.Store, resourceStore *resources.Store, sched *scheduler.Scheduler,
+	gate *update.Gate) map[string]method {
+	methods := productionMethods()
+	maps.Copy(methods, settingsMethods(store))
+	maps.Copy(methods, resourceMethods(resourceStore))
+	maps.Copy(methods, updateMethods(sched, gate))
+	return methods
 }
 
 // programFlag is the flag.Func setter of an optional program path (empty: off) that may hold no control character.
