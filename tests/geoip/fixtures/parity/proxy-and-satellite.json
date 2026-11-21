@@ -20,7 +20,7 @@
 			"cc/A2_DE_v4.txt": "14.0.0.0/8\n"
 		},
 		"tree": "11e0b1648f0280db2f9dbf8087c706ac32798a8e4eb0357d501f73e9e66f1402",
-		"catalog": "de0d7e4e8dfdc53151e36fc3e147b6d05459aee3cb011569dbc137242e988b4c"
+		"catalog": "6be408a2dcdc3e583035b0b5bfa834c063969e0a784cb43f0862c2d41ff97e91"
 	},
 	"old_expect": {
 		"ok": true,

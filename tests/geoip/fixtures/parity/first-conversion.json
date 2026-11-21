@@ -18,7 +18,7 @@
 			"cc/A2_DE_v4.txt": "9.9.9.0/24\n"
 		},
 		"tree": "8ff32639e5c9e7c7be741e429691cf645d54620d47078c757026061d41f30ac8",
-		"catalog": "009c4f8f087e4c04b0782cc56b977d5bd110a04eafe06df36f0029a0f6d8044b"
+		"catalog": "fd747a8ddc5fa205e888c00c41fee2edf14b295b2f840276eca1a3049c096361"
 	},
 	"old_expect": {
 		"ok": true,
