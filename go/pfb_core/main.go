@@ -1,7 +1,8 @@
 // pfb-core, the pfBlockerNG Core daemon (map #3813): the platform-neutral business logic behind a versioned HTTP+JSON API
 // that the co-located pfSense layer (PHP, native curl) calls over a Unix socket. docs/misc/core-api-protocol.md is the contract.
 //
-//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
+//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--hook-dir PATH] [--python-wrapper PATH] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
+//	pfb-core --run-hooks pre|post --hook-dir PATH (--settings-backend-cmd PATH | --state-dir DIR) [--python-wrapper PATH]
 //
 //	--socket PATH       the API's Unix socket: its directory is made 0700 and the socket 0600, the server's user's alone
 //	--state-dir DIR     Core's own storage: core.lock, applied.json (the last ReportApplied) and, without
@@ -39,6 +40,13 @@
 //	--script-dir PATH   an absolute folder a group's pre and post scripts are looked up in; repeatable, searched in the order given
 //	--rsync-bin PATH    the absolute path of the rsync program a rsync feed is transferred with
 //	--user-agent STRING what feed hosts are told Core is: no control character
+//	--hook-dir PATH     the absolute folder of the update hooks (hook_pre_*, hook_post_*)
+//	--python-wrapper PATH
+//	                    the absolute path of the program a .py hook runs through (pfb_python.sh); without it a .py hook
+//	                    is skipped
+//	--run-hooks pre|post
+//	                    run the hooks of that fire point once and exit, with the context as one JSON object on stdin
+//	                    (docs/misc/core-api-protocol.md "Hooks outside an Update"): no socket, no lock, nothing published
 //	--allow-uid UID     the privileged caller's uid, read from the kernel's credential of each connection (default 0, root)
 //	--client-uid UID    a further local client's uid also served (pfb-dns's user); repeatable
 //	--socket-group GID  open the socket's directory (0750) and the socket (0660) to this group, so that a client that is
@@ -49,6 +57,8 @@
 // in-flight API requests finish (up to 3 s) and the socket is removed.
 //
 // Exit status: 0 after a clean stop, 1 when it cannot serve (including settings it cannot read at start), 2 for a usage error.
+// With --run-hooks: 0 once the hooks ran, whatever they did; 1 when the settings cannot be read; 2 for a usage error or
+// a context it refuses. Nothing runs unless the status is 0.
 package main
 
 import (
@@ -69,6 +79,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/hooks"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/scheduler"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
@@ -90,12 +101,15 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	fl.Func("counters-cmd", "start this program at the first minute boundary of each local day, with the cadences due", programFlag(&countersCmd))
 	zoneinfo := fl.String("zoneinfo", "", "the host's time zone file the scheduler reads the schedule's zone from")
 	feed := addFeedFlags(fl)
-	var resourceDir string
-	fl.Func("resource-dir", "the resource store's directory (an absolute path)", func(v string) error {
-		if !filepath.IsAbs(v) {
-			return fmt.Errorf("%q is not an absolute path", v)
+	var resourceDir, hookDir, pythonWrapper, runHooksWhen string
+	fl.Func("resource-dir", "the resource store's directory (an absolute path)", absolutePath(&resourceDir))
+	fl.Func("hook-dir", "the folder of the update hooks (an absolute path)", absolutePath(&hookDir))
+	fl.Func("python-wrapper", "the program a .py hook runs through (an absolute path)", absolutePath(&pythonWrapper))
+	fl.Func("run-hooks", "run the pre or post hooks once and exit", func(v string) error {
+		if v != "pre" && v != "post" {
+			return errors.New("must be pre or post")
 		}
-		resourceDir = filepath.Clean(v)
+		runHooksWhen = v
 		return nil
 	})
 	var allowUID uint32
@@ -125,8 +139,18 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	if err := fl.Parse(args); err != nil {
 		return 2
 	}
+	if runHooksWhen != "" {
+		if fl.NArg() != 0 || hookDir == "" || *stateDir == "" && *backendCmd == "" {
+			fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --run-hooks pre|post --hook-dir PATH "+
+				"(--settings-backend-cmd PATH | --state-dir DIR) [--python-wrapper PATH]")
+			return 2
+		}
+		backend, kind := settingsBackend(*stateDir, *backendCmd)
+		runner := hooks.Runner{Dir: hookDir, Python: pythonWrapper}
+		return runHooks(ctx, runHooksWhen, backend, kind, runner, os.Stdin, os.Stdout, stderr)
+	}
 	if *socket == "" || *stateDir == "" || fl.NArg() != 0 {
-		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
+		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--hook-dir PATH] [--python-wrapper PATH] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
 		return 2
 	}
 	logger := log.New(stderr, "pfb_core: ", log.LstdFlags)
@@ -146,11 +170,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	case report != nil:
 		logger.Printf("applied report: %d resources", len(report))
 	}
-	var backend settings.Backend = settings.NewFileBackend(*stateDir)
-	kind := "file"
-	if *backendCmd != "" {
-		backend, kind = &settings.AdapterBackend{Path: *backendCmd}, "adapter"
-	}
+	backend, kind := settingsBackend(*stateDir, *backendCmd)
 	store, err := settings.Load(backend, settings.Production())
 	if err != nil {
 		logger.Printf("cannot read the settings from the %s backend: %v", kind, err)
@@ -213,6 +233,26 @@ func coreMethods(stateDir string, store *settings.Store, resourceStore *resource
 	maps.Copy(methods, updateMethods(sched, gate))
 	maps.Copy(methods, appliedMethods(stateDir))
 	return methods
+}
+
+// settingsBackend is the settings backend the flags name, and its kind: the adapter program cmd, else the state
+// directory's settings.json.
+func settingsBackend(stateDir, cmd string) (settings.Backend, string) {
+	if cmd != "" {
+		return &settings.AdapterBackend{Path: cmd}, "adapter"
+	}
+	return settings.NewFileBackend(stateDir), "file"
+}
+
+// absolutePath is the flag.Func setter of an absolute path, which it cleans; a relative one is a usage error.
+func absolutePath(dst *string) func(string) error {
+	return func(v string) error {
+		if !filepath.IsAbs(v) {
+			return fmt.Errorf("%q is not an absolute path", v)
+		}
+		*dst = filepath.Clean(v)
+		return nil
+	}
 }
 
 // programFlag is the flag.Func setter of an optional program path (empty: off) that may hold no control character.

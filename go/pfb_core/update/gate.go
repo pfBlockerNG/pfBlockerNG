@@ -35,6 +35,9 @@ type Request struct {
 	Force   string   `json:"force,omitempty"` // "none", "parse", "download", "both"
 	Feeds   []string `json:"feeds,omitempty"`
 	Extras  []string `json:"extras,omitempty"`
+	// The package operation the Update runs for (StartUpdate), which its hooks see as PFB_POST_INSTALL and PFB_PKG_OP
+	Lifecycle string `json:"lifecycle,omitempty"` // "install" or ""
+	PkgOp     string `json:"pkgOp,omitempty"`     // "install", "upgrade", "reinstall", "delete" or ""
 }
 
 // Result is what the program reports on fd 3.

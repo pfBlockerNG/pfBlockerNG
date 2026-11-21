@@ -139,6 +139,8 @@ func updateMethods(sched *scheduler.Scheduler, gate *update.Gate) map[string]met
 				Trigger   string  `json:"trigger"`
 				Scope     *string `json:"scope"`
 				Force     *string `json:"force"`
+				Lifecycle *string `json:"lifecycle"`
+				PkgOp     *string `json:"pkgOp"`
 			}
 			if err := decodeParams(params, &p); err != nil {
 				return nil, err
@@ -162,10 +164,17 @@ func updateMethods(sched *scheduler.Scheduler, gate *update.Gate) map[string]met
 			default:
 				bad = []fieldError{{Field: "trigger", Message: "must be one of manual, apply, retry"}}
 			}
+			lifecycle, lifecycleErr := pick("lifecycle", p.Lifecycle, "", "install")
+			pkgOp, pkgOpErr := "", []fieldError(nil)
+			if p.PkgOp == nil || *p.PkgOp != "" {
+				pkgOp, pkgOpErr = pick("pkgOp", p.PkgOp, "", "install", "upgrade", "reinstall", "delete")
+			}
+			bad = append(append(bad, lifecycleErr...), pkgOpErr...)
 			if bad != nil {
 				return nil, newError(codeInvalidArgument, "the Update request is not valid; nothing was started", bad...)
 			}
-			err := sched.Start(p.Trigger, scope, force)
+			err := sched.StartWith(update.Request{Trigger: p.Trigger, Scope: scope, Force: force, Lifecycle: lifecycle,
+				PkgOp: pkgOp})
 			switch {
 			case errors.Is(err, update.ErrRunning):
 				return nil, newError(codeConflict, err.Error())
