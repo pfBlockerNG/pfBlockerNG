@@ -14,6 +14,7 @@ use PHPUnit\Framework\TestCase;
  * continent pages is skipped and reported. Every page is staged beside its target before any target is replaced.
  */
 #[CoversFunction('pfb_geoip_render_catalog')]
+#[CoversFunction('pfb_build_reputation_tab')]
 final class GeoipCatalogRenderTest extends TestCase
 {
 	/** What the renderer returns when every page was written and none was skipped. */
@@ -38,6 +39,8 @@ final class GeoipCatalogRenderTest extends TestCase
 			'log' => "{$this->tmp}/pfblockerng.log",
 			'errlog' => "{$this->tmp}/error.log",
 			'extraslog' => "{$this->tmp}/extras.log",
+			// The Reputation log line goes to the extras log only; the test of that line prints it.
+			'extras_update' => TRUE,
 		]);
 	}
 
@@ -47,6 +50,9 @@ final class GeoipCatalogRenderTest extends TestCase
 			$GLOBALS['pfb'] = $this->originalPfb;
 		} else {
 			unset($GLOBALS['pfb']);
+		}
+		if (in_array(GeoipCatalogTestStream::SCHEME, stream_get_wrappers(), TRUE)) {
+			stream_wrapper_unregister(GeoipCatalogTestStream::SCHEME);
 		}
 		exec('rm -rf ' . escapeshellarg($this->tmp));
 	}
@@ -422,6 +428,225 @@ final class GeoipCatalogRenderTest extends TestCase
 		$this->assertStringContainsString("{$this->tmp}/not-a-folder/www", $error);
 	}
 
+	/** @return list<string> a name a render stages each page it can write under: ".<page file>.<12 lower-case hex digits>" */
+	private static function stagedNames(): array
+	{
+		return array_map(static fn (string $page): string => ".pfblockerng_{$page}.php.0123456789ab", PFB_GEOIP_PAGES);
+	}
+
+	/**
+	 * Given a staged file of each page left in the page folder by an earlier render that died before publishing it, when
+	 * a catalog is rendered, then every one of them is gone, those of pages this catalog does not write included.
+	 */
+	public function testStagedFilesOfAnEarlierRenderAreRemoved(): void
+	{
+		foreach (self::stagedNames() as $name) {
+			$this->assertNotFalse(file_put_contents("{$this->tmp}/www/{$name}", 'stale'));
+		}
+		$this->assertCount(10, self::entries("{$this->tmp}/www"));
+
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($this->namedCatalog('Plain'), "{$this->tmp}/www"));
+
+		$this->assertSame(['pfblockerng_Africa.php', 'pfblockerng_reputation.php'], self::entries("{$this->tmp}/www"));
+	}
+
+	/**
+	 * Given entries that look like staged files but are not of the exact form a render creates (another page name, a
+	 * suffix of another length or case, no leading dot), and entries of that form that are not regular files (a
+	 * directory, a symbolic link), when a catalog is rendered, then each is left as it was, and the link's target too.
+	 */
+	public function testEntriesThatAreNotStagedFilesAreLeftAlone(): void
+	{
+		$www = "{$this->tmp}/www";
+		$files = [
+			'.pfblockerng_Foo.php.0123456789ab', '.pfblockerng_dnsbl.php.0123456789ab', '.pfblockerng_Africa.php.0123456789a',
+			'.pfblockerng_Africa.php.0123456789abc', '.pfblockerng_Africa.php.0123456789AB', 'pfblockerng_Africa.php.0123456789ab',
+			'.pfblockerng_Africa.php.0123456789ab.bak', '.pfblockerng_Africa.php0123456789ab', '.pfblockerng_africa.php.0123456789ab',
+		];
+		foreach ($files as $name) {
+			$this->assertNotFalse(file_put_contents("{$www}/{$name}", $name));
+		}
+		$this->assertTrue(mkdir("{$www}/.pfblockerng_Asia.php.0123456789ab"));
+		$this->assertNotFalse(file_put_contents("{$www}/.pfblockerng_Asia.php.0123456789ab/inside", 'inside'));
+		file_put_contents("{$this->tmp}/outside", 'outside');
+		$this->assertTrue(symlink("{$this->tmp}/outside", "{$www}/.pfblockerng_reputation.php.0123456789ab"));
+		$this->assertTrue(symlink("{$this->tmp}/missing", "{$www}/.pfblockerng_Europe.php.0123456789ab"));
+
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($this->namedCatalog('Plain'), $www));
+
+		$expected = [...$files, '.pfblockerng_Asia.php.0123456789ab', '.pfblockerng_reputation.php.0123456789ab',
+			'.pfblockerng_Europe.php.0123456789ab', 'pfblockerng_Africa.php', 'pfblockerng_reputation.php'];
+		sort($expected, SORT_STRING);
+		$this->assertSame($expected, self::entries($www));
+		foreach ($files as $name) {
+			$this->assertSame($name, file_get_contents("{$www}/{$name}"), "{$name} keeps its bytes");
+		}
+		$this->assertSame('inside', file_get_contents("{$www}/.pfblockerng_Asia.php.0123456789ab/inside"));
+		$this->assertSame("{$this->tmp}/outside", readlink("{$www}/.pfblockerng_reputation.php.0123456789ab"));
+		$this->assertSame('outside', file_get_contents("{$this->tmp}/outside"));
+		$this->assertSame("{$this->tmp}/missing", readlink("{$www}/.pfblockerng_Europe.php.0123456789ab"));
+	}
+
+	/**
+	 * Given a page folder whose writes throw (a stream that fails part way through staging the first page), when a
+	 * catalog is rendered, then the exception reaches the caller and the file staged so far is removed: the folder holds
+	 * the old page alone.
+	 */
+	public function testAnExceptionWhileStagingLeavesNoStagedFile(): void
+	{
+		file_put_contents("{$this->tmp}/www/pfblockerng_Africa.php", 'old Africa');
+		GeoipCatalogTestStream::register($this->tmp, TRUE);
+
+		try {
+			pfb_geoip_render_catalog($this->namedCatalog('Plain'), GeoipCatalogTestStream::SCHEME . '://www');
+			$this->fail('the write failure must reach the caller');
+		} catch (RuntimeException $e) {
+			$this->assertSame(GeoipCatalogTestStream::FAILURE, $e->getMessage());
+		}
+
+		$this->assertSame(['pfblockerng_Africa.php'], self::entries("{$this->tmp}/www"));
+		$this->assertSame('old Africa', file_get_contents("{$this->tmp}/www/pfblockerng_Africa.php"));
+	}
+
+	/**
+	 * Given a page folder whose files can be written but not synced to disk, when a catalog is rendered, then staging
+	 * fails: no page is published, the old page keeps its bytes, no staged file is left, and the failure names the page.
+	 */
+	public function testAStagedPageThatCannotBeSyncedPublishesNothing(): void
+	{
+		file_put_contents("{$this->tmp}/www/pfblockerng_Africa.php", 'old Africa');
+		GeoipCatalogTestStream::register($this->tmp, FALSE);
+
+		['error' => $error, 'skipped' => $skipped] = pfb_geoip_render_catalog($this->namedCatalog('Plain'),
+			GeoipCatalogTestStream::SCHEME . '://www');
+
+		$this->assertIsString($error);
+		$this->assertStringContainsString('pfblockerng_Africa.php cannot be written', $error);
+		$this->assertSame([], $skipped);
+		$this->assertSame(['pfblockerng_Africa.php'], self::entries("{$this->tmp}/www"));
+		$this->assertSame('old Africa', file_get_contents("{$this->tmp}/www/pfblockerng_Africa.php"));
+	}
+
+	/** @return array<string, array{int}> */
+	public static function umasks(): array
+	{
+		return ['umask 022' => [0022], 'umask 077' => [0077]];
+	}
+
+	/**
+	 * Given pages on disk with mode 0640, when a catalog is rendered under $umask, then each replaced page keeps 0640, as
+	 * the old write in place kept it, and a page that did not exist gets the mode file_put_contents() gives a new file.
+	 */
+	#[DataProvider('umasks')]
+	public function testAReplacedPageKeepsItsModeAndANewPageGetsAFreshFilesMode(int $umask): void
+	{
+		$www = "{$this->tmp}/www";
+		foreach (['pfblockerng_Africa.php', 'pfblockerng_reputation.php'] as $page) {
+			file_put_contents("{$www}/{$page}", "old {$page}");
+			$this->assertTrue(chmod("{$www}/{$page}", 0640));
+		}
+		$catalog = $this->catalog([
+			['kind' => 'page', 'page' => 'Africa', 'continent' => 'Africa'],
+			['kind' => 'page', 'page' => 'Asia', 'continent' => 'Asia'],
+		]);
+		$previous = umask($umask);
+		try {
+			$this->assertNotFalse(file_put_contents("{$this->tmp}/fresh", 'fresh'));
+			$result = pfb_geoip_render_catalog($catalog, $www);
+		} finally {
+			umask($previous);
+		}
+		clearstatcache();
+
+		$this->assertSame(self::WRITTEN, $result);
+		$this->assertSame('640', sprintf('%o', fileperms("{$www}/pfblockerng_Africa.php") & 07777));
+		$this->assertSame('640', sprintf('%o', fileperms("{$www}/pfblockerng_reputation.php") & 07777));
+		$this->assertSame(sprintf('%o', fileperms("{$this->tmp}/fresh") & 07777), sprintf('%o', fileperms("{$www}/pfblockerng_Asia.php") & 07777));
+		$this->assertStringNotContainsString('old', (string) file_get_contents("{$www}/pfblockerng_Africa.php"));
+	}
+
+	/**
+	 * Given a page on disk owned by another user and group, when a catalog is rendered, then the replaced page keeps that
+	 * owner and group. Only root can give a file away, so the case needs root (CI runs as root).
+	 */
+	public function testAReplacedPageKeepsItsOwnerAndGroup(): void
+	{
+		if (!function_exists('posix_getuid') || posix_getuid() !== 0) {
+			$this->markTestSkipped('only root can give a page to another owner');
+		}
+		$page = "{$this->tmp}/www/pfblockerng_Africa.php";
+		file_put_contents($page, 'old Africa');
+		$this->assertTrue(chown($page, 4037) && chgrp($page, 4038));
+
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($this->namedCatalog('Plain'), "{$this->tmp}/www"));
+		clearstatcache();
+
+		$this->assertSame([4037, 4038], [fileowner($page), filegroup($page)]);
+		$this->assertNotSame('old Africa', file_get_contents($page));
+	}
+
+	/** Given a page Core names with a name of digits, when it is skipped, then it is reported as the string it is. */
+	public function testASkippedPageNamedWithDigitsIsReportedAsAString(): void
+	{
+		$result = pfb_geoip_render_catalog($this->catalog([['kind' => 'page', 'page' => '123', 'continent' => 'Digits']]),
+			"{$this->tmp}/www");
+
+		$this->assertSame(['error' => NULL, 'skipped' => ['123']], $result);
+	}
+
+	/** @return array<string, array{mixed}> */
+	public static function emptyCountryOptions(): array
+	{
+		return ['NULL' => [NULL], 'an empty array' => [[]], 'the integer 0' => [0], 'the string 0' => ['0'], 'an empty string' => ['']];
+	}
+
+	/**
+	 * Given a value empty() holds empty, when pfb_build_reputation_tab() is given it, then it writes the Reputation page
+	 * without countries, byte for byte the page the function wrote before the catalog renderer shared its page source.
+	 */
+	#[DataProvider('emptyCountryOptions')]
+	public function testAnEmptyValueWritesTheReputationPageWithoutCountries(mixed $options): void
+	{
+		$golden = json_decode((string) file_get_contents(__DIR__ . '/fixtures/geoip_pre_move_golden.json'), TRUE, 512, JSON_THROW_ON_ERROR);
+
+		$this->assertTrue(pfb_build_reputation_tab($options, "{$this->tmp}/www"));
+
+		$this->assertSame($golden['reputation_empty'], hash_file('sha256', "{$this->tmp}/www/pfblockerng_reputation.php"));
+		$this->assertFileDoesNotExist("{$this->tmp}/extras.log", 'a page without countries is not logged');
+	}
+
+	/**
+	 * Given a catalog whose Reputation list has countries, when it is rendered, then the line pfb_build_reputation_tab()
+	 * logs for such a page is written once to the screen and the extras log after the page is published.
+	 */
+	public function testAReputationPageWithCountriesIsLoggedAsToday(): void
+	{
+		unset($GLOBALS['pfb']['extras_update']);
+		$line = '/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d pfBlockerNG Reputation Tab\n$/D';
+		$this->expectOutputRegex($line);
+
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($this->namedCatalog('Plain'), "{$this->tmp}/www"));
+
+		$this->assertFileExists("{$this->tmp}/extras.log");
+		$this->assertMatchesRegularExpression($line, (string) file_get_contents("{$this->tmp}/extras.log"));
+	}
+
+	/**
+	 * Given a catalog whose Reputation list is empty, or whose Reputation page cannot be published, when it is rendered,
+	 * then no Reputation line is logged.
+	 */
+	public function testNoReputationLineIsLoggedWithoutCountriesOrWithoutAPublishedPage(): void
+	{
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($this->catalog([
+			['kind' => 'page', 'page' => 'Africa', 'continent' => 'Africa'],
+		]), "{$this->tmp}/www"));
+		$this->assertFileDoesNotExist("{$this->tmp}/extras.log");
+
+		$this->assertTrue(mkdir("{$this->tmp}/blocked/pfblockerng_reputation.php", 0700, TRUE));
+		$this->assertIsString(pfb_geoip_render_catalog($this->namedCatalog('Plain'), "{$this->tmp}/blocked")['error']);
+		$this->assertFileDoesNotExist("{$this->tmp}/extras.log");
+	}
+
 	/** @return array<string,string> the pages one catalog renders with $name as the continent and the country name */
 	private function renderNamed(string $name, string $dir): array
 	{
@@ -513,5 +738,117 @@ final class GeoipCatalogRenderTest extends TestCase
 			return eval("return {$expression};");
 		}
 		throw new RuntimeException("the page assigns no {$variable}");
+	}
+}
+
+/**
+ * A stream wrapper over a real folder ("<SCHEME>://<path>" is "<root>/<path>") whose files can be opened and written but,
+ * like every userspace stream, not synced; with $failWrites, its first write throws instead.
+ */
+final class GeoipCatalogTestStream
+{
+	public const SCHEME = 'pfbgeoipcatalogtest';
+	public const FAILURE = 'the write fails';
+
+	/** @var resource|null */
+	public $context;
+	private static string $root = '';
+	private static bool $failWrites = FALSE;
+	/** @var resource|false */
+	private $handle = FALSE;
+	/** @var resource|false */
+	private $dir = FALSE;
+
+	public static function register(string $root, bool $failWrites): void
+	{
+		self::$root = $root;
+		self::$failWrites = $failWrites;
+		if (!stream_wrapper_register(self::SCHEME, self::class)) {
+			throw new RuntimeException('the test stream cannot be registered');
+		}
+	}
+
+	private static function real(string $path): string
+	{
+		return self::$root . '/' . substr($path, strlen(self::SCHEME . '://'));
+	}
+
+	public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool
+	{
+		$this->handle = @fopen(self::real($path), $mode);
+		return $this->handle !== FALSE;
+	}
+
+	public function stream_write(string $data): int
+	{
+		if (self::$failWrites) {
+			throw new RuntimeException(self::FAILURE);
+		}
+		return (int) fwrite($this->handle, $data);
+	}
+
+	public function stream_flush(): bool
+	{
+		return fflush($this->handle);
+	}
+
+	public function stream_close(): void
+	{
+		fclose($this->handle);
+	}
+
+	/** @return array<int|string, int>|false */
+	public function url_stat(string $path, int $flags): array|false
+	{
+		return ($flags & STREAM_URL_STAT_LINK) !== 0 ? @lstat(self::real($path)) : @stat(self::real($path));
+	}
+
+	/** @return array<int|string, int>|false */
+	public function stream_stat(): array|false
+	{
+		return fstat($this->handle);
+	}
+
+	public function unlink(string $path): bool
+	{
+		return unlink(self::real($path));
+	}
+
+	public function rename(string $from, string $to): bool
+	{
+		return rename(self::real($from), self::real($to));
+	}
+
+	public function stream_metadata(string $path, int $option, mixed $value): bool
+	{
+		return match ($option) {
+			STREAM_META_ACCESS => chmod(self::real($path), $value),
+			STREAM_META_OWNER, STREAM_META_OWNER_NAME => chown(self::real($path), $value),
+			STREAM_META_GROUP, STREAM_META_GROUP_NAME => chgrp(self::real($path), $value),
+			default => FALSE,
+		};
+	}
+
+	public function dir_opendir(string $path, int $options): bool
+	{
+		$this->dir = opendir(self::real($path));
+		return $this->dir !== FALSE;
+	}
+
+	public function dir_readdir(): string|false
+	{
+		return readdir($this->dir);
+	}
+
+	public function dir_rewinddir(): bool
+	{
+		rewinddir($this->dir);
+		return TRUE;
+	}
+
+	public function dir_closedir(): bool
+	{
+		closedir($this->dir);
+		return TRUE;
 	}
 }
