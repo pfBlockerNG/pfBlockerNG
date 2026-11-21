@@ -199,9 +199,35 @@ The DNSBL resolver settings `pfb-dns` reads from `pfb_unbound.ini` today. `pfb-d
 | `pslFeedPrivatePolicy`, `pslFeedIcannPolicy` | enum `ignore` / `apex` / `honor`, `honor` |
 | `idnMode` | enum `off` / `confusable` / `on`, `off` |
 | `decisionCacheMax` | int 0 to 5000000 (0: unlimited), `10000` |
+| `noAaaa`, `groupPolicy` | bool, `false` |
+| `noAaaaList` | list keyed by `domain`, `[]`: a domain, with a leading `.` for a wildcard entry |
+| `groupPolicyBypassList` | list keyed by `cidr`, `[]`: an IP address or a CIDR |
+
+The noAAAA and Group Policy fields (issue #4036) are what `pfb-dns` takes from the `[noAAAA]` and `[GP_Bypass_List]`
+sections of `pfb_unbound.ini`. The ini carries a section only while its switch is on. Core holds the switch and the
+stored list separately, so a list survives while its switch is off.
+
+- A `noAaaaList` entry is a domain as `pfb-dns` keys its noAAAA table: printable ASCII except `,`, `%`, `#` and upper
+  case, and no second leading dot. A leading dot is the wildcard flag (the ini's `domain,1`). The table keeps one flag
+  per domain, the last row's, so the list names each domain once, plain or as a wildcard, never both.
+- A `groupPolicyBypassList` entry is an IP address without a zone, or an address with a prefix length of digits within
+  its family. Host bits under the prefix and a prefix length with leading zeros are allowed, as `pfb-dns` reads them. The
+  entry is lower case, as the Outpost stores it. Each entry is listed once.
+- The Outpost does not project an entry that `pfb-dns` skips or that can never match a query. Three departures from the ini
+  are deliberate. A noAAAA row holding `%` is not held: today it makes `pfb-dns` refuse the whole ini. A noAAAA name with
+  white space is not held: it matches no query. A bypass entry in netmask form (`10.0.0.0/255.255.255.0`) or with an IPv6
+  zone (`fe80::1%em0`) is not held: `pfb-dns` takes both from the ini, but the DNSBL page never saves either.
+- On a write, the Outpost merges each list into its text area: a line whose entry stays is kept, a line holding no entry
+  Core can hold (a comment, a departure above) is kept, a line whose entry went is dropped, and a new entry is appended.
+  A list is compared as a set, so a write that only reorders it changes nothing.
 
 Parity fixture: `tests/core/fixtures/settings_dns_parity.json`. `CoreSettingsDnsParityTest` (PHPUnit) freezes it against
-today's PHP. `go/pfb_core/settings/parity_test.go` runs Core against it.
+today's PHP. `go/pfb_core/settings/parity_test.go` runs Core against it. Its `refused` rows are values of the noAAAA and
+Group Policy fields that both the Outpost's write and Core refuse, naming the field.
+
+`tests/core/fixtures/dns_ini_projection_parity.json` freezes, for a matrix of stored configurations, the two ini sections
+today's writer produces beside the four fields the Outpost projects (`CoreSettingsDnsIniProjectionParityTest`), so that
+`pfb-dns` can be shown to build the same tables from either input.
 
 ### Projections `feeds/ipv4`, `feeds/ipv6`, `feeds/dnsbl`
 

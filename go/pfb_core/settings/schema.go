@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -80,6 +81,10 @@ func Production() Schema {
 
 func dnsProjection() Projection {
 	policy := []string{"ignore", "apex", "honor"}
+	// A noAAAA entry is a domain as pfB-DNS keys it, a leading dot for its wildcard flag: printable ASCII but for , % # and upper case
+	// (pfB-DNS splits its row at the comma, refuses the ini at a %, and the Outpost cuts a line at # and lowers it), no second leading dot.
+	noAaaa := Field{Name: "noAaaaList", Type: TypeList, Default: []any{}, Key: "domain", CheckList: checkNoAaaaDomains, Items: []Field{
+		{Name: "domain", Type: TypeString, Default: "", Pattern: `^\.?[\x21\x22\x24\x26-\x2b\x2d\x2f-\x40\x5b-\x7e][\x21\x22\x24\x26-\x2b\x2d-\x40\x5b-\x7e]*$`}}}
 	return Projection{ID: "dns", Fields: []Field{
 		{Name: "replyLogging", Type: TypeBool, Default: true},
 		{Name: "tldWildcard", Type: TypeBool, Default: false},
@@ -96,7 +101,42 @@ func dnsProjection() Projection {
 		{Name: "controlLegacy", Type: TypeBool, Default: false, Requires: "control"},
 		{Name: "regexCap", Type: TypeBool, Default: false},
 		{Name: "metricsClientIp", Type: TypeBool, Default: false},
+		{Name: "noAaaa", Type: TypeBool, Default: false},
+		noAaaa,
+		{Name: "groupPolicy", Type: TypeBool, Default: false},
+		{Name: "groupPolicyBypassList", Type: TypeList, Default: []any{}, Key: "cidr", Check: checkBypassEntry,
+			Items: []Field{{Name: "cidr", Type: TypeString, Default: ""}}},
 	}, Retired: []string{"logViaWebserver", "hstsNullBlocking"}} // #4054, #4056
+}
+
+// checkNoAaaaDomains refuses a noAAAA list that names one domain twice, plain and as a wildcard: pfB-DNS keeps one flag per domain.
+func checkNoAaaaDomains(list []any) []FieldError {
+	seen := map[string]bool{}
+	for i, item := range list {
+		d := strings.TrimPrefix(item.(map[string]any)["domain"].(string), ".")
+		if seen[d] {
+			return []FieldError{{Field: fmt.Sprintf("[%d].domain", i), Message: "names the domain of an earlier item"}}
+		}
+		seen[d] = true
+	}
+	return nil
+}
+
+// checkBypassEntry holds a Group Policy bypass entry to what pfB-DNS takes and the Outpost lists: an IP address, or one with a prefix
+// length of digits (leading zeros included, as pfB-DNS reads them) within its family; no zone, no netmask, lower case as the Outpost stores it.
+func checkBypassEntry(item map[string]any) []FieldError {
+	entry := item["cidr"].(string)
+	address, bits, prefixed := strings.Cut(entry, "/")
+	a, err := netip.ParseAddr(address)
+	ok := err == nil && a.Zone() == "" && entry == strings.ToLower(entry)
+	if ok && prefixed {
+		n, err := strconv.Atoi(bits)
+		ok = err == nil && strings.Trim(bits, "0123456789") == "" && n <= a.BitLen()
+	}
+	if !ok {
+		return []FieldError{{Field: "cidr", Message: "must be an IP address or a CIDR"}}
+	}
+	return nil
 }
 
 const (
