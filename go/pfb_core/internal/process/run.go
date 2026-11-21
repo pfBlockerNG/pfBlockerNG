@@ -78,16 +78,16 @@ func RunSurvivor(ctx context.Context, cmd *exec.Cmd, grace time.Duration) Outcom
 	if err := cmd.Start(); err != nil {
 		return Outcome{CommandErr: err}
 	}
-	exited, interrupted := make(chan struct{}), make(chan error, 1)
+	exited, done := make(chan struct{}), make(chan struct{})
+	var interrupted error
 	go func() {
+		defer close(done)
 		select {
 		case <-exited:
-			interrupted <- nil
 			return
 		case <-ctx.Done():
 		}
 		if exitedUnreaped(cmd.Process.Pid) { // it ended on its own as ctx did: keep its status
-			interrupted <- nil
 			return
 		}
 		_ = cmd.Process.Signal(syscall.SIGTERM)
@@ -98,11 +98,12 @@ func RunSurvivor(ctx context.Context, cmd *exec.Cmd, grace time.Duration) Outcom
 		case <-kill.C:
 			_ = cmd.Process.Kill()
 		}
-		interrupted <- fmt.Errorf("command was killed: %w", context.Cause(ctx))
+		interrupted = fmt.Errorf("command was killed: %w", context.Cause(ctx))
 	}()
 	err := cmd.Wait()
 	close(exited)
-	return Outcome{CommandErr: err, Interrupted: <-interrupted}
+	<-done
+	return Outcome{CommandErr: err, Interrupted: interrupted}
 }
 
 // strictCleanup observes kernel exit independently of Wait's descendant-held IO pipes.
