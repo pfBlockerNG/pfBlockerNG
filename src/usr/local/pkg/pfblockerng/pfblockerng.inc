@@ -16335,6 +16335,7 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 
 	$tmpdir = $tmpdir === '' ? sys_get_temp_dir() : $tmpdir;
 	$push   = static function (string $op, array $chunk) use ($table, $pfctl_bin, $tmpdir): bool {
+		global $pfb;
 		$data = implode("\n", $chunk) . "\n";
 		// 'x': a fresh file of this run's own, never one that is already there
 		$path = "{$tmpdir}/pfb_{$op}_" . bin2hex(random_bytes(8));
@@ -16356,7 +16357,10 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 				@unlink($path);
 			}
 		}
-		pfb_logger(" pfb_apply_alias_delta: temporary file failed — dropped {$op} chunk ({$table})\n", 1);
+		$message = " pfb_apply_alias_delta: temporary file failed — dropped {$op} chunk ({$table})";
+		pfb_logger("{$message}\n", 1);
+		// the table is now behind its mirror, as after a failed call: open the entry pfb_pfctl_table_op() opens, for the tick's retry
+		pfb_sync_status_open('ip', $table, 'apply', trim($message) . ': the batch file failed', $pfb['dbdir']);
 		return FALSE;
 	};
 
@@ -16368,6 +16372,12 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 			if ($line === NULL) {
 				// the source refused a line and logged it: the sending stops, the batches sent stay
 				return ['delta' => TRUE, 'ok' => FALSE];
+			}
+			if ($read === $count) {
+				// a file that grew since the count was taken: the line beyond it is not sent, nor any after it
+				pfb_logger(" Updating [ {$table} ]: the {$op} file holds more than {$count} members\n", 1);
+				$ok = FALSE;
+				break;
 			}
 			$chunk[] = $line;
 			$read++;
