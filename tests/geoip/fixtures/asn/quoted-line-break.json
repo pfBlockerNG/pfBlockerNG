@@ -1,0 +1,8 @@
+{
+    "description": "A line break inside a quoted name ends the line: its rest is a row of fewer than three fields.",
+    "csv": "start_ip,end_ip,asn,name,domain\na,b,AS64502,\"Multi\nLine Name\",d\na,b,ASfoo,Name,d\n",
+    "expect": {
+        "table": "AS ]\nAS64502 [ Multi ]\n",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

@@ -8,7 +8,7 @@ package geoip_test
 //	csv          asn.csv: content (see corpusContent), null when there is none, or {"dir": true} for a folder of that
 //	             name.
 //	expect       table (pfblockerng_asn.txt afterwards; it holds "AS0 [ previous ]\n" before the run) and log (what the
-//	             run appends to the Extras log, its time reading "{now}").
+//	             run appends to the Extras log, its time reading "{now}"). Run reports a publication exactly when it logs one.
 
 import (
 	"bytes"
@@ -82,8 +82,11 @@ func TestASNTableCorpus(t *testing.T) {
 			}
 			var log strings.Builder
 			a.Log = &log
-			a.Run(context.Background())
+			ok := a.Run(context.Background())
 
+			if want := sc.Expect.Log != ""; ok != want {
+				t.Errorf("Run = %v, want %v: a run publishes a table exactly when it logs the update", ok, want)
+			}
 			got, _ := os.ReadFile(a.Table)
 			if want := sc.Expect.Table.bytes(t); !bytes.Equal(got, want) {
 				t.Errorf("pfblockerng_asn.txt = %.200q, want %.200q", got, want)

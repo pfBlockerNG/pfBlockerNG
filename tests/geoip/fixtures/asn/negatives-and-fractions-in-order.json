@@ -1,0 +1,8 @@
+{
+    "description": "Negative values sort below zero by size, and fractions by their digits after the point.",
+    "csv": "start_ip,end_ip,asn,name,domain\na,b,AS3,Three,t\na,b,AS-5,MinusFive,m\na,b,AS-10,MinusTen,m\na,b,AS1.5,OneHalf,o\na,b,AS1.25,OneQuarter,o\n",
+    "expect": {
+        "table": "AS-10 [ MinusTen ]\nAS-5 [ MinusFive ]\nAS1.25 [ OneQuarter ]\nAS1.5 [ OneHalf ]\nAS3 [ Three ]\n",
+        "log": "ASN Lookup Table has been updated [ {now} ]\n"
+    }
+}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -63,4 +64,16 @@ func TestARunReportsItsPublication(t *testing.T) {
 	if got, _ := os.ReadFile(a.Table); string(got) != "AS13335 [ Cloudflare ]\n" {
 		t.Errorf("pfblockerng_asn.txt = %q", got)
 	}
+}
+
+// The shell's -f test passes over a FIFO named asn.csv; opening one would wait for a writer that never comes.
+func TestAFIFONamedAsnCSVIsNotRead(t *testing.T) {
+	a := asnRoot(t)
+	os.Remove(a.CSV)
+	if err := syscall.Mkfifo(a.CSV, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var log strings.Builder
+	a.Log = &log
+	assertPreviousTable(t, a, a.Run(context.Background()), log.String())
 }
