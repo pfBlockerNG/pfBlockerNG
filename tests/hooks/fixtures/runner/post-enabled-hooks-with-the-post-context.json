@@ -1,0 +1,83 @@
+{
+ "description": "A post hook sees PFB_WHEN=post and the post context: what changed, the reserved PFB_STATUS, the changed IP aliases and DNSBL groups. The request trigger manual is PFB_TRIGGER=update.",
+ "when": "post",
+ "trigger": "manual",
+ "vars": {
+  "TRIGGER": "update",
+  "IP_CHANGED": "1",
+  "DNSBL_CHANGED": "0",
+  "STATUS": "ok",
+  "CHANGED_IP_ALIASES": "pfB_PRI1_v4 pfB_Africa_v4",
+  "CHANGED_DNSBL_GROUPS": "DNSBL_Ads"
+ },
+ "rows": [
+  {
+   "script": "hook_pre_a.sh",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_post_a.sh",
+   "when": "post",
+   "enabled": "on",
+   "description": "Notify"
+  },
+  {
+   "script": "hook_post_b.sh",
+   "when": "post",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_a.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  },
+  "hooks/hook_post_a.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  },
+  "hooks/hook_post_b.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_post_a.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "post",
+     "PFB_TRIGGER": "update",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": "",
+     "PFB_IP_CHANGED": "1",
+     "PFB_DNSBL_CHANGED": "0",
+     "PFB_STATUS": "ok",
+     "PFB_CHANGED_IP_ALIASES": "pfB_PRI1_v4 pfB_Africa_v4",
+     "PFB_CHANGED_DNSBL_GROUPS": "DNSBL_Ads"
+    }
+   },
+   {
+    "script": "hook_post_b.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "post",
+     "PFB_TRIGGER": "update",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": "",
+     "PFB_IP_CHANGED": "1",
+     "PFB_DNSBL_CHANGED": "0",
+     "PFB_STATUS": "ok",
+     "PFB_CHANGED_IP_ALIASES": "pfB_PRI1_v4 pfB_Africa_v4",
+     "PFB_CHANGED_DNSBL_GROUPS": "DNSBL_Ads"
+    }
+   }
+  ],
+  "log": "\n[ pfB Hook ] post Notify (hook_post_a.sh, timeout 60s)\n[ pfB Hook ] post Notify completed\n\n[ pfB Hook ] post #1 (hook_post_b.sh, timeout 60s)\n[ pfB Hook ] post #1 completed\n",
+  "errors": "",
+  "transcript": "\n[ pfB Hook ] post Notify (hook_post_a.sh, timeout 60s)\n[ pfB Hook ] post Notify completed\n\n[ pfB Hook ] post #1 (hook_post_b.sh, timeout 60s)\n[ pfB Hook ] post #1 completed\n"
+ }
+}

@@ -1,0 +1,50 @@
+{
+ "description": "A post hook that runs past its timeout is ended (TERM) and logged; the next hook runs.",
+ "when": "post",
+ "rows": [
+  {
+   "script": "hook_post_slow.sh",
+   "when": "post",
+   "enabled": "on",
+   "timeout": "1"
+  },
+  {
+   "script": "hook_post_ok.sh",
+   "when": "post",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_post_slow.sh": {
+   "body": "#!/bin/sh\necho $$ > '{root}/hook.pid'\nexec sleep 3600\n"
+  },
+  "hooks/hook_post_ok.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_post_ok.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "post",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   }
+  ],
+  "log": "\n[ pfB Hook ] post #0 (hook_post_slow.sh, timeout 1s)\n[ pfB Hook ] post #0 TIMED OUT after 1s (killed); continuing\n\n[ pfB Hook ] post #1 (hook_post_ok.sh, timeout 60s)\n[ pfB Hook ] post #1 completed\n",
+  "errors": "[ pfB Hook ] post #0 TIMED OUT after 1s (killed); continuing\n",
+  "dead": [
+   "hook.pid"
+  ],
+  "transcript": "\n[ pfB Hook ] post #0 (hook_post_slow.sh, timeout 1s)\n[ pfB Hook ] post #0 TIMED OUT after 1s (killed); continuing\n\n[ pfB Hook ] post #1 (hook_post_ok.sh, timeout 60s)\n[ pfB Hook ] post #1 completed\n"
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}

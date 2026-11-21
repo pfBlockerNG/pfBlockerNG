@@ -1,0 +1,50 @@
+{
+ "description": "When the wrapper reports no interpreter, a .py hook has no launcher: it is logged and skipped, and a .sh hook after it still runs.",
+ "when": "pre",
+ "python": "none",
+ "rows": [
+  {
+   "script": "hook_pre_a.py",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_pre_b.sh",
+   "when": "pre",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_a.py": {
+   "body": "#!/bin/sh\ntouch '{root}/canary-py'\n"
+  },
+  "hooks/hook_pre_b.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_pre_b.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   }
+  ],
+  "log": "[ pfB Hook ] pre #0 script 'hook_pre_a.py' has no usable launcher; skipping\n\n[ pfB Hook ] pre #1 (hook_pre_b.sh, timeout 60s)\n[ pfB Hook ] pre #1 completed\n",
+  "errors": "[ pfB Hook ] pre #0 script 'hook_pre_a.py' has no usable launcher; skipping\n",
+  "absent": [
+   "canary-py"
+  ],
+  "transcript": "[ pfB Hook ] pre #0 script 'hook_pre_a.py' has no usable launcher; skipping\n\n[ pfB Hook ] pre #1 (hook_pre_b.sh, timeout 60s)\n[ pfB Hook ] pre #1 completed\n"
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}

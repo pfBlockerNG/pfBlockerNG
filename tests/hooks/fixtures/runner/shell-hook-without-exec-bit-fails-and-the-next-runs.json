@@ -1,0 +1,55 @@
+{
+ "description": "A .sh hook without its executable bit cannot be run: it is logged as exit 126 and the next hook runs.",
+ "when": "pre",
+ "rows": [
+  {
+   "script": "hook_pre_noexec.sh",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_pre_ok.sh",
+   "when": "pre",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_noexec.sh": {
+   "body": "#!/bin/sh\ntouch '{root}/canary-noexec'\n",
+   "mode": "0644"
+  },
+  "hooks/hook_pre_ok.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_pre_ok.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   }
+  ],
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_noexec.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ 126 ]; continuing\n\n[ pfB Hook ] pre #1 (hook_pre_ok.sh, timeout 60s)\n[ pfB Hook ] pre #1 completed\n",
+  "errors": "[ pfB Hook ] pre #0 exited non-zero [ 126 ]; continuing\n",
+  "absent": [
+   "canary-noexec"
+  ],
+  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_noexec.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ 126 ]; continuing\n\n[ pfB Hook ] pre #1 (hook_pre_ok.sh, timeout 60s)\n[ pfB Hook ] pre #1 completed\n"
+ },
+ "departure": "Today timeout(1) itself reports the failed exec in the hook's output; Go writes no output for a hook that never started.",
+ "old_expect": {
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_noexec.sh, timeout 60s)\ntimeout: failed to run command '{root}/hooks/hook_pre_noexec.sh': Permission denied\n[ pfB Hook ] pre #0 exited non-zero [ 126 ]; continuing\n\n[ pfB Hook ] pre #1 (hook_pre_ok.sh, timeout 60s)\n[ pfB Hook ] pre #1 completed\n",
+  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_noexec.sh, timeout 60s)\ntimeout: failed to run command '{root}/hooks/hook_pre_noexec.sh': Permission denied\n[ pfB Hook ] pre #0 exited non-zero [ 126 ]; continuing\n\n[ pfB Hook ] pre #1 (hook_pre_ok.sh, timeout 60s)\n[ pfB Hook ] pre #1 completed\n"
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}

@@ -1,0 +1,35 @@
+{
+ "description": "A 1 MiB context value is longer than the kernel takes for one environment entry: the hook cannot be started, which is logged as exit 127, and the run goes on.",
+ "when": "pre",
+ "vars": {
+  "TRIGGER": "cron",
+  "BIG": {
+   "repeat": "x",
+   "times": 1048576
+  }
+ },
+ "rows": [
+  {
+   "script": "hook_pre_a.sh",
+   "when": "pre",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_a.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [],
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ 127 ]; continuing\n",
+  "errors": "[ pfB Hook ] pre #0 exited non-zero [ 127 ]; continuing\n",
+  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ 127 ]; continuing\n"
+ },
+ "departure": "Today proc_open() fails to start the shell, and pfb_script_output_exec() reports that as -1.",
+ "old_expect": {
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ -1 ]; continuing\n",
+  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ -1 ]; continuing\n",
+  "errors": "[ pfB Hook ] pre #0 exited non-zero [ -1 ]; continuing\n"
+ }
+}

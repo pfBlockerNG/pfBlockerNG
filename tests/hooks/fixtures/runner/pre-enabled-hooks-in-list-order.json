@@ -1,0 +1,77 @@
+{
+ "description": "Only the enabled pre rows run, one after another in list order; a disabled row and a post row do not. A row without a description is labelled by its place among the selected rows.",
+ "when": "pre",
+ "trigger": "cron",
+ "rows": [
+  {
+   "script": "hook_pre_a.sh",
+   "when": "pre",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_pre_b.sh",
+   "when": "pre",
+   "enabled": ""
+  },
+  {
+   "script": "hook_post_c.sh",
+   "when": "post",
+   "enabled": "on"
+  },
+  {
+   "script": "hook_pre_d.sh",
+   "when": "pre",
+   "enabled": "on",
+   "description": " Second ",
+   "timeout": "30"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_a.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  },
+  "hooks/hook_pre_b.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  },
+  "hooks/hook_post_c.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  },
+  "hooks/hook_pre_d.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_pre_a.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   },
+   {
+    "script": "hook_pre_d.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "pre",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "0",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": ""
+    }
+   }
+  ],
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 completed\n\n[ pfB Hook ] pre Second (hook_pre_d.sh, timeout 30s)\n[ pfB Hook ] pre Second completed\n",
+  "errors": "",
+  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 completed\n\n[ pfB Hook ] pre Second (hook_pre_d.sh, timeout 30s)\n[ pfB Hook ] pre Second completed\n"
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}

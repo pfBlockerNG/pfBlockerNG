@@ -1,0 +1,40 @@
+{
+ "description": "A install pass under pkg reinstall: PFB_POST_INSTALL=1, PFB_PRE_UNINSTALL=0 and PFB_PKG_OP=reinstall.",
+ "when": "post",
+ "lifecycle": "install",
+ "pkgOp": "reinstall",
+ "rows": [
+  {
+   "script": "hook_post_a.sh",
+   "when": "post",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_post_a.sh": {
+   "body": "#!/bin/sh\n{record}\n"
+  }
+ },
+ "expect": {
+  "runs": [
+   {
+    "script": "hook_post_a.sh",
+    "wrapped": false,
+    "args": [],
+    "env": {
+     "PFB_WHEN": "post",
+     "PFB_TRIGGER": "cron",
+     "PFB_POST_INSTALL": "1",
+     "PFB_PRE_UNINSTALL": "0",
+     "PFB_PKG_OP": "reinstall"
+    }
+   }
+  ],
+  "log": "\n[ pfB Hook ] post #0 (hook_post_a.sh, timeout 60s)\n[ pfB Hook ] post #0 completed\n",
+  "errors": "",
+  "transcript": "\n[ pfB Hook ] post #0 (hook_post_a.sh, timeout 60s)\n[ pfB Hook ] post #0 completed\n"
+ },
+ "vars": {
+  "TRIGGER": "cron"
+ }
+}
