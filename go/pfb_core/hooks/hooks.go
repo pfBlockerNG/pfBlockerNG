@@ -37,6 +37,9 @@ const (
 
 var errTimedOut = errors.New("hook timed out")
 
+// beforeTickSize runs once a drain tick is taken, before the size it reads up to is decided; tests widen that gap.
+var beforeTickSize = func() {}
+
 // end is how a hook ended as far as the run goes on.
 type end int
 
@@ -277,6 +280,7 @@ func (r Runner) exec(ctx context.Context, argv, env []string, timeout time.Durat
 			case res = <-exited: // an exit posted during the last read wins over the tick: never read past the cutoff
 				waiting = false
 			default:
+				beforeTickSize()
 				if info, err := output.Stat(); err == nil {
 					d.feed(info.Size(), false)
 				}
