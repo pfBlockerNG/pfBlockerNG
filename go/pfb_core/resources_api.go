@@ -148,7 +148,7 @@ func resourceBody(store *resources.Store, params []byte, client bool) (any, erro
 	case p.ID == nil:
 		bad = append(bad, fieldError{Field: "id", Message: "required"})
 	case !resources.ValidID(*p.ID):
-		bad = append(bad, fieldError{Field: "id", Message: fmt.Sprintf("%q is not a resource id", *p.ID)})
+		bad = append(bad, fieldError{Field: "id", Message: "not a resource id"}) // never quoted: it may be as long as the body
 	}
 	if p.Generation == nil {
 		bad = append(bad, fieldError{Field: "generation", Message: "required"})
@@ -195,8 +195,8 @@ func resourceBody(store *resources.Store, params []byte, client bool) (any, erro
 func parseResourceCursor(id string, c *resourceCursor) (*resources.Cursor, []fieldError) {
 	field := "resources." + id + "."
 	switch {
-	case !resources.ValidID(id):
-		return nil, []fieldError{{Field: "resources", Message: fmt.Sprintf("%q is not a resource id", id)}}
+	case !resources.ValidID(id): // never quoted: a key may be as long as the body
+		return nil, []fieldError{{Field: "resources", Message: "a key is not a resource id"}}
 	case c == nil:
 		return nil, []fieldError{{Field: "resources", Message: fmt.Sprintf("the cursor of %q must be a JSON object", id)}}
 	case c.Generation == nil && c.Digest == nil:

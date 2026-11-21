@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
@@ -65,7 +66,11 @@ func parseApplied(entries map[string]*resourceCursor) (map[string]resources.Curs
 	}
 	report, bad := make(map[string]resources.Cursor, len(entries)), []fieldError(nil)
 	for _, id := range slices.Sorted(maps.Keys(entries)) {
-		if !strings.HasPrefix(id, dnsblPrefix) {
+		switch {
+		case !resources.ValidID(id): // never quoted: a key may be as long as the body
+			bad = append(bad, fieldError{Field: "resources", Message: "a key is not a resource id"})
+			continue
+		case !strings.HasPrefix(id, dnsblPrefix):
 			bad = append(bad, fieldError{Field: "resources", Message: fmt.Sprintf("%q is not a dnsbl/* resource id", id)})
 			continue
 		}
@@ -126,9 +131,13 @@ func readApplied(stateDir string) (map[string]resources.Cursor, error) {
 	return report, nil
 }
 
-// writeApplied replaces appliedFile in stateDir with report: written whole and synced under a temporary name of its own,
-// renamed over the old file (a symlink there is replaced, never followed), then the directory synced. Two reports never
-// share a temporary file, so they need no lock: the later rename wins whole.
+// appliedMu holds one report's write from its open to its rename: reports land in the order they take it, and share the
+// one temporary name.
+var appliedMu sync.Mutex
+
+// writeApplied replaces appliedFile in stateDir with report: written whole and synced under one temporary name (a file a
+// crash left there is taken over, never a symlink followed), renamed over the old file (a symlink there is replaced, never
+// followed), then the directory synced.
 func writeApplied(stateDir string, report map[string]resources.Cursor) error {
 	rec := appliedRecord{Format: 1, Resources: make(map[string]*resourceCursor, len(report))}
 	for id, c := range report {
@@ -139,12 +148,17 @@ func writeApplied(stateDir string, report map[string]resources.Cursor) error {
 	if err != nil {
 		return err
 	}
-	// A new file, never an existing one: CreateTemp makes it 0600, where reusing a file would keep that file's mode.
-	tmp, err := os.CreateTemp(stateDir, appliedFile+".*.tmp")
+	path := filepath.Join(stateDir, appliedFile)
+	appliedMu.Lock()
+	defer appliedMu.Unlock()
+	tmp, err := os.OpenFile(path+".tmp", os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return err
 	}
-	_, err = tmp.Write(raw)
+	err = tmp.Chmod(0o600) // a file a crash left keeps its own mode through O_TRUNC
+	if err == nil {
+		_, err = tmp.Write(raw)
+	}
 	if err == nil {
 		err = tmp.Sync()
 	}
@@ -152,10 +166,10 @@ func writeApplied(stateDir string, report map[string]resources.Cursor) error {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(tmp.Name(), filepath.Join(stateDir, appliedFile))
+		err = os.Rename(path+".tmp", path)
 	}
 	if err != nil {
-		_ = os.Remove(tmp.Name())
+		_ = os.Remove(path + ".tmp")
 		return err
 	}
 	dir, err := os.Open(stateDir)

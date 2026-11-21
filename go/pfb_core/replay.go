@@ -16,7 +16,8 @@ type replayEntry struct {
 	waiters int // duplicates waiting for the first execution (guarded by the cache's mutex)
 }
 
-// replayCache runs each (method, requestId) once and answers every repeat with the first response.
+// replayCache runs each (method, requestId) once and answers every repeat with the first response. The client cache's
+// method is the caller's uid and the method's name, so each client uid has its own requestIds.
 type replayCache struct {
 	mu      sync.Mutex
 	entries map[string]*replayEntry
