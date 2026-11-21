@@ -98,3 +98,26 @@ func TestAResourceThatLeftTheConfigurationGoesOnceTheReportNoLongerListsIt(t *te
 		t.Errorf("the index lost %s, which another consumer settles: %v", ipSet, held)
 	}
 }
+
+func TestNoReportChangesNothingAndAReportOfNothingSettlesEveryRemovedResource(t *testing.T) {
+	s, dir := newStore(t)
+	publish(t, s, id, 1, nil, "a")
+	fold(t, s, map[string]resources.Cursor{id: {Generation: 1, Digest: dg("a")}})
+	if err := s.Remove(id); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshot(t, dir)
+
+	// No report (nil: the consumer never reported) is not a report that it serves nothing
+	fold(t, s, nil)
+	if after := snapshot(t, dir); !maps.Equal(after, before) {
+		t.Errorf("folding no report changed the store:\n before %v\n after  %v", before, after)
+	}
+
+	// A report of nothing (empty, not nil) settles the removed resource
+	fold(t, s, map[string]resources.Cursor{})
+	wantNames(t, dir, "index.json")
+	if _, ok := readIndex(t, dir)["resources"].(map[string]any)[id]; ok {
+		t.Errorf("the index still holds %s after a report of nothing", id)
+	}
+}
