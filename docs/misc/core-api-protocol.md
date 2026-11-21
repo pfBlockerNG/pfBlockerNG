@@ -768,6 +768,81 @@ The cutover imports configuration only, so a Core that finds no state file start
 The worker retains its lock, log and receipt until its transaction completes. A new Core observes a live worker or reconciles its
 terminal receipt; it does not relaunch the same transaction.
 
+### Update command, version 2
+
+**Not used in production yet.** Version 2 is the contract of the Outpost apply (issue #4037; spec
+`docs/specs/go-updater-pipeline.md` section 8). The Outpost validates the request and writes the result lines
+(`pfb_core_update_v2_request()`, `pfb_core_update_v2_result()` in `pfblockerng_extra.inc`), but nothing serves version 2:
+Core's worker writes version 1 until the Core Updater loop (#4038) and the cutover (#3977). The contract is frozen in
+`tests/core/fixtures/apply_contract_v2.json`, which `tests/php/CoreUpdateV2ContractTest.php` runs and #4038 runs from Go.
+
+The invocation is the one above: the same `--update-cmd`, stdin and stdout as regular files, the result lines on fd 3, and the
+same meaning of the exit status (0 success, 75 deferred, 2 a refused request, anything else failure).
+
+**stdin:** one JSON object of at most 1,048,576 bytes and nothing after it but white space, nested at most seven levels deep:
+
+```json
+{"version": 2, "trigger": "scheduled", "scope": "both", "pendingToken": "0123456789abcdef", "pendingOutsideWindow": false,
+ "resources": [{"id": "ip-set/Abuse/ipv4", "generation": "42", "action": "deny", "direction": ["ingress", "egress"], "entries": 15234},
+               {"id": "ip-aggregate/deny/ipv4", "generation": "17", "action": "alias_only", "entries": 90211},
+               {"id": "geo-catalog", "generation": "3"}],
+ "removed": ["ip-set/Old/ipv4"],
+ "dnsbl": {"generation": "88", "groups": [{"name": "Ads", "entries": 120344, "changed": true}]},
+ "issues": [{"resource": "feed/ipv4:Foo_v4", "stage": "download", "code": "curl_incomplete", "message": "..."}]}
+```
+
+The request is validated whole before anything runs. Anything it does not understand refuses it: the program logs the reason,
+writes no result and exits 2. A field that is `null` is absent; an unknown field, at any level, is refused.
+
+| Field | Rule |
+|---|---|
+| `version` | the integer `2` |
+| `trigger` | required: `scheduled`, `manual`, `apply` or `retry` |
+| `scope` | `ip`, `dnsbl` or `both`; `both` when absent |
+| `pendingToken` | 1 to 64 printable ASCII characters other than the space; compared and stored, never parsed |
+| `pendingOutsideWindow` | a boolean; `false` when absent |
+| `resources` | a list of at most 4,096 resources (below) |
+| `removed` | a list of at most 4,096 ids whose resources left the configuration |
+| `dnsbl` | `{"generation", "groups"}`: `groups` a list of at most 4,096 `{"name", "entries", "changed"}`, a name of 1 to 128 letters, digits and underscores, each once |
+| `issues` | a list of at most 4,096 `{"resource", "stage", "code", "message"}` |
+
+- **A resource** is `{"id", "generation", "action", "direction", "entries"}`. The `id` is a [resource id](#resources) the
+  apply handles: an `ip-set`, an `ip-aggregate` or the `geo-catalog`, never a `dnsbl/*` id (pfB-DNS fetches those). Each
+  id appears once across `resources` and `removed`. The `geo-catalog` takes only its `id` and `generation`.
+- **A generation** is a string of ASCII decimal digits that fits 64 bits, kept as the string it is (`"007"` stays `"007"`).
+- **`action`** is `deny`, `permit`, `match` or `alias_only`; every `ip-aggregate` is `alias_only`. **`direction`** is a
+  non-empty list of `ingress` and `egress`, each once, for an `ip-set` whose action is not `alias_only`, and absent
+  otherwise. **`entries`** is a non-negative integer.
+- **An alias.** Each `ip-set` and `ip-aggregate` id maps to the alias the apply loads: `ip-set/<group>/ipv4` (or `ipv6`) is
+  `pfB_<group>_v4` (or `_v6`), and `ip-aggregate/<class>/<family>` is the ADR-11 alias `pfB_<Class>_Aggregated_v4|_v6` of
+  the class `deny`, `permit`, `match` or `native` (lower case in the id). An id that maps to no alias name (another class,
+  a group with `-`) refuses the request, and so do two ids that map to one alias (`ip-set/Deny_Aggregated/ipv4` and
+  `ip-aggregate/deny/ipv4`). The id is never used as a path or a table name; the alias is.
+- **An issue's** `resource` and `code` are strings of 1 to 256 bytes without control characters, and its `stage` is one of
+  the sync-status ledger's: `download`, `script`, `parse`, `dedup` or `apply`. Its `message` is any string: it is kept as
+  text, its control characters removed and its surrounding white space trimmed, and cut to at most 1,024 bytes, never inside
+  a character. Markup in it stays as it is, for the page that shows it to escape.
+
+**fd 3:** result lines, each one JSON object and a newline, in printable ASCII, written as each step finishes. The fields
+appear in this order; a field is left out when the apply has nothing to say in it, and `version` is always present:
+
+```json
+{"version": 2, "applied": {"ip-set/Abuse/ipv4": "42"}, "removed": ["ip-set/Old/ipv4"], "changedAliases": ["pfB_Abuse_v4"],
+ "ipChanged": true, "dnsblChanged": false, "reloadLaunched": true,
+ "failed": [{"id": "ip-set/Big/ipv4", "stage": "apply", "message": "pfctl: table limit"}]}
+```
+
+| Field | Meaning |
+|---|---|
+| `applied` | each resource applied, its id mapped to the generation string the request gave |
+| `removed` | each removal applied, the ids as the request gave them |
+| `changedAliases` | the alias of every table the apply pushed to pf: the `post` hook's `PFB_CHANGED_IP_ALIASES` |
+| `ipChanged`, `dnsblChanged` | the `post` hook's `PFB_IP_CHANGED` and `PFB_DNSBL_CHANGED` |
+| `reloadLaunched` | whether the filter reload was launched |
+| `failed` | `{"id", "stage", "message"}` per resource not applied, `stage` being `fetch` or `apply`, the message bounded as an issue's is |
+
+With `pendingOutsideWindow` true the apply marks the changes pending and applies nothing, so its one line holds no `applied`.
+
 ## Resources
 
 The resource store is a directory (`--resource-dir`) that holds the bodies the Core Updater publishes for the Outpost apply and for
