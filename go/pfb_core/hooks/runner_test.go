@@ -9,6 +9,7 @@ package hooks_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -330,5 +331,176 @@ func TestRunnerReadsOutputOnlyUpToTheHooksExit(t *testing.T) {
 	want := "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\nfirst\ntail\n[ pfB Hook ] pre #0 completed\n"
 	if log.String() != want || transcript.String() != want {
 		t.Errorf("log %q, transcript %q; want both %q (the late line unread)", log, transcript.String(), want)
+	}
+}
+
+// A drain tick never reads past the size the output had when the hook's own process exited, even when that exit is
+// recorded between the tick and its read: the test holds the runner in that gap while the hook exits, the runner
+// removes the capture file once the cutoff is recorded, and a descendant writes a late line.
+func TestRunnerTickNeverReadsPastTheExitCutoff(t *testing.T) {
+	dir, tmp := t.TempDir(), t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	gate, late := fifo(t, filepath.Join(dir, "go")), fifo(t, filepath.Join(dir, "late"))
+	writeFile(t, filepath.Join(dir, "hook_pre_a.sh"), "#!/bin/sh\n"+
+		"( read x < '"+dir+"/late'; echo late; : > '"+dir+"/wrote' ) &\n"+
+		"echo first\nread x < '"+dir+"/go'\n", 0o755)
+	inGap, resume := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	saved := *hooks.BeforeTickSize
+	*hooks.BeforeTickSize = func() { once.Do(func() { close(inGap); <-resume }) }
+	t.Cleanup(func() { *hooks.BeforeTickSize = saved })
+	var log, transcript bytes.Buffer
+	done := start(context.Background(), hooks.Runner{Dir: dir, Log: &log, Transcript: &transcript, Grace: time.Second},
+		pre("hook_pre_a.sh"), hooks.Context{})
+	select {
+	case <-inGap:
+	case <-time.After(hang):
+		release(t, gate)
+		release(t, late)
+		finished(t, done)
+		t.Fatal("hung: no drain tick was taken while the hook ran")
+	}
+	release(t, gate) // the hook exits while the runner is held between the tick and its read
+	await(t, "the runner to record the read cutoff (the capture file removed)", func() bool {
+		left, _ := filepath.Glob(filepath.Join(tmp, "pfb-hook-output-*"))
+		return len(left) == 0
+	})
+	release(t, late)
+	await(t, "the descendant to write after the hook exited", func() bool {
+		return exists(filepath.Join(dir, "wrote"))
+	})
+	close(resume)
+	finished(t, done)
+	want := "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\nfirst\n[ pfB Hook ] pre #0 completed\n"
+	if log.String() != want || transcript.String() != want {
+		t.Errorf("log %q, transcript %q; want both %q (the late line unread)", log.String(), transcript.String(), want)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("no space left on device") }
+
+// A sink that fails to take a hook's output leaves one line in the error log per hook run, the other sink still gets
+// all of it, and the hook's own status is kept.
+func TestRunnerReportsAFailedOutputSinkOncePerHook(t *testing.T) {
+	for _, sink := range []string{"main log", "transcript"} {
+		t.Run(sink, func(t *testing.T) {
+			dir := t.TempDir()
+			gate := fifo(t, filepath.Join(dir, "go"))
+			writeFile(t, filepath.Join(dir, "hook_pre_a.sh"),
+				"#!/bin/sh\necho one\nread x < '"+dir+"/go'\necho two\nexit 3\n", 0o755)
+			writeFile(t, filepath.Join(dir, "hook_pre_b.sh"), "#!/bin/sh\necho three\n", 0o755)
+			healthy := newWatchedLog("one\n", closed())
+			var errs bytes.Buffer
+			r := hooks.Runner{Dir: dir, Log: failingWriter{}, Transcript: healthy, Errors: &errs, Grace: time.Second}
+			if sink == "transcript" {
+				r.Log, r.Transcript = healthy, failingWriter{}
+			}
+			done := start(context.Background(), r, pre("hook_pre_a.sh", "hook_pre_b.sh"), hooks.Context{})
+			select {
+			case <-healthy.seen:
+			case <-time.After(hang):
+				release(t, gate)
+				finished(t, done)
+				t.Fatalf("the hook's first line did not reach the healthy sink while the hook ran: %q", healthy)
+			}
+			release(t, gate) // the hook writes again into the failed sink before it exits
+			finished(t, done)
+			failed := "[ pfB Script Output ] Failed to write script output to " + sink + "; child status is preserved\n"
+			status := "[ pfB Hook ] pre #0 exited non-zero [ 3 ]; continuing\n"
+			if want := failed + status + failed; errs.String() != want {
+				t.Errorf("error log %q; want %q", errs.String(), want)
+			}
+			want := "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\none\ntwo\n" + status +
+				"\n[ pfB Hook ] pre #1 (hook_pre_b.sh, timeout 60s)\nthree\n[ pfB Hook ] pre #1 completed\n"
+			if healthy.String() != want {
+				t.Errorf("healthy sink %q; want %q", healthy, want)
+			}
+		})
+	}
+}
+
+// A hook that exists but cannot be started for a reason other than permission or format is logged as 126, as
+// timeout(1) reports "found but cannot be invoked"; 127 is only for a program that does not exist. Here its #!
+// interpreter path is a symlink loop (ELOOP).
+func TestRunnerLogsAStartFailureOtherThanNotFoundAs126(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Symlink("loop", filepath.Join(dir, "loop")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "hook_pre_a.sh"), "#!"+dir+"/loop\n", 0o755)
+	var log bytes.Buffer
+	hooks.Runner{Dir: dir, Log: &log, Grace: time.Second}.Run(context.Background(), "pre", pre("hook_pre_a.sh"),
+		hooks.Context{})
+	want := "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ 126 ]; continuing\n"
+	if log.String() != want {
+		t.Errorf("log %q; want %q", log.String(), want)
+	}
+}
+
+// liveRun runs one hook that writes, blocks on the FIFO go until the log holds mark, then writes again, and returns
+// the log and the transcript.
+func liveRun(t *testing.T, body, mark string) (log, transcript string) {
+	t.Helper()
+	dir := t.TempDir()
+	gate := fifo(t, filepath.Join(dir, "go"))
+	writeFile(t, filepath.Join(dir, "hook_pre_a.sh"), strings.ReplaceAll(body, "{go}", "'"+dir+"/go'"), 0o755)
+	watched := newWatchedLog(mark, closed())
+	var out bytes.Buffer
+	done := start(context.Background(), hooks.Runner{Dir: dir, Log: watched, Transcript: &out, Grace: time.Second},
+		pre("hook_pre_a.sh"), hooks.Context{})
+	select {
+	case <-watched.seen:
+	case <-time.After(hang):
+		release(t, gate)
+		finished(t, done)
+		t.Fatalf("%q did not reach the log while the hook ran: %s", mark, clip(watched.String()))
+	}
+	release(t, gate)
+	finished(t, done)
+	return watched.String(), out.String()
+}
+
+// A UTF-8 character whose bytes arrive in two reads is kept whole, never escaped byte by byte.
+func TestRunnerKeepsACharacterSplitAcrossReads(t *testing.T) {
+	log, _ := liveRun(t, "#!/bin/sh\nprintf 'MARK\\303'\nread x < {go}\nprintf '\\251'\n", "MARK")
+	if want := "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\nMARKé[ pfB Hook ] pre #0 completed\n"; log != want {
+		t.Errorf("log %q; want %q", log, want)
+	}
+}
+
+// The transcript allowance counts across reads: one notice, after exactly the allowance.
+func TestRunnerTranscriptAllowanceSpansReads(t *testing.T) {
+	const allowance, half = 1 << 20, 700000
+	n := strconv.Itoa(half)
+	log, transcript := liveRun(t, "#!/bin/sh\nhead -c "+n+" /dev/zero | tr '\\000' a\nprintf MARK\nread x < {go}\n"+
+		"head -c "+n+" /dev/zero | tr '\\000' b\n", "MARK")
+	header, footer := "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n", "[ pfB Hook ] pre #0 completed\n"
+	output := strings.Repeat("a", half) + "MARK" + strings.Repeat("b", half)
+	if want := header + output + footer; log != want {
+		t.Errorf("log %s; want %s", clip(log), clip(want))
+	}
+	notice := "\n[ pfBlockerNG ] Script output limit (1,048,576 bytes) reached; remaining output is in the main log.\n"
+	if want := header + output[:allowance] + notice + footer; transcript != want {
+		t.Errorf("transcript %s; want %s", clip(transcript), clip(want))
+	}
+}
+
+// The allowance cut can fall inside a run of printable text: the transcript holds exactly the allowance of sanitized
+// output, then the notice.
+func TestRunnerTranscriptCutsInsideAPrintableRun(t *testing.T) {
+	const allowance = 1 << 20
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "hook_pre_a.sh"),
+		"#!/bin/sh\nprintf '\\001'\nhead -c "+strconv.Itoa(allowance)+" /dev/zero | tr '\\000' a\n", 0o755)
+	var transcript bytes.Buffer
+	hooks.Runner{Dir: dir, Transcript: &transcript, Grace: time.Second}.Run(context.Background(), "pre",
+		pre("hook_pre_a.sh"), hooks.Context{})
+	notice := "\n[ pfBlockerNG ] Script output limit (1,048,576 bytes) reached; remaining output is in the main log.\n"
+	want := "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n" + `\x01` + strings.Repeat("a", allowance-4) + notice +
+		"[ pfB Hook ] pre #0 completed\n"
+	if transcript.String() != want {
+		t.Errorf("transcript %s; want %s", clip(transcript.String()), clip(want))
 	}
 }

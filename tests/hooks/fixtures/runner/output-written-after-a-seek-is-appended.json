@@ -1,0 +1,25 @@
+{
+ "description": "The hook's stdout and stderr are opened for appending: a hook that seeks its stdout ahead before writing still appends, and leaves no hole of NULs in the logs.",
+ "when": "pre",
+ "vars": {
+  "TRIGGER": "cron"
+ },
+ "rows": [
+  {
+   "script": "hook_pre_seek.sh",
+   "when": "pre",
+   "enabled": "on"
+  }
+ ],
+ "files": {
+  "hooks/hook_pre_seek.sh": {
+   "body": "#!/bin/sh\nprintf 'before\\n'\nperl -e 'seek(STDOUT, 2097152, 0) or die \"seek: $!\"; print \"after the seek\\n\"'\n"
+  }
+ },
+ "expect": {
+  "runs": [],
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_seek.sh, timeout 60s)\nbefore\nafter the seek\n[ pfB Hook ] pre #0 completed\n",
+  "errors": "",
+  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_seek.sh, timeout 60s)\nbefore\nafter the seek\n[ pfB Hook ] pre #0 completed\n"
+ }
+}

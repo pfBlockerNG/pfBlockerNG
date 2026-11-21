@@ -1,5 +1,5 @@
 {
- "description": "A 1 MiB context value is longer than the kernel takes for one environment entry: the hook cannot be started, which is logged as exit 127, and the run goes on.",
+ "description": "A 1 MiB context value is longer than the kernel takes for one environment entry: the hook is found but cannot be started (E2BIG), which is logged as exit 126 as timeout(1) reports it, and the run goes on.",
  "when": "pre",
  "vars": {
   "TRIGGER": "cron",
@@ -22,9 +22,9 @@
  },
  "expect": {
   "runs": [],
-  "log": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ 127 ]; continuing\n",
-  "errors": "[ pfB Hook ] pre #0 exited non-zero [ 127 ]; continuing\n",
-  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ 127 ]; continuing\n"
+  "log": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ 126 ]; continuing\n",
+  "errors": "[ pfB Hook ] pre #0 exited non-zero [ 126 ]; continuing\n",
+  "transcript": "\n[ pfB Hook ] pre #0 (hook_pre_a.sh, timeout 60s)\n[ pfB Hook ] pre #0 exited non-zero [ 126 ]; continuing\n"
  },
  "departure": "Today proc_open() fails to start the shell, and pfb_script_output_exec() reports that as -1.",
  "old_expect": {
