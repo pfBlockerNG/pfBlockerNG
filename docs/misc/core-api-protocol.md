@@ -858,8 +858,9 @@ answer is an error envelope, read at most 64 KiB whatever its status; a longer o
 stored cursor only while its mirror on disk is the body that cursor records (the same digest); a mirror edited, missing or
 not a regular file sends `{}`, so a store rebuilt with another body under the same generation cannot answer `unchanged` to
 it. A delta part that does not arrive as `GetResources` described it (over its bound, not plain text, another line count,
-members out of byte order or a line repeated), parts that name one member in both (Core never emits that), or a merge that
-is not the item's `digest` and `entries`, is discarded and the full body asked for; a line that is not a member is not. A part the transport ends part way (the call's
+members out of byte order or a line repeated), parts that name one member in both (Core never emits that), a mirror this host
+cannot open for the merge, or a merge that is not the item's `digest` and `entries`, is discarded and the full body asked
+for; a line that is not a member is not, even in a part that is also out of byte order. A part the transport ends part way (the call's
 deadline, a reset, a connection closed short of its `Content-Length`) is Core not answering: the resource fails as
 unreachable and no full body is asked for under the same deadline. Any failure of the transfer itself, a reply curl cannot frame
 included, counts as unreachable and does not fall back. A part this host cannot write whole (a full disk), or a merged mirror it

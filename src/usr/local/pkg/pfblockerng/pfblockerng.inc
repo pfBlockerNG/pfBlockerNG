@@ -4704,11 +4704,12 @@ function pfb_outpost_member_valid(string $member, ?string $family): bool {
 
 /**
  * Check a fetched part line by line, a line at a time: every line ends in a newline, is a member of the resource
- * (pfb_outpost_member_valid()), and comes strictly after the one before it in byte order (sorted and unique).
+ * (pfb_outpost_member_valid()), and comes strictly after the one before it in byte order (sorted and unique). A line that is
+ * not a member is reported over an ordering fault, wherever it sits: an ordering fault is remembered and the read goes on.
  *
  * @param ?string $family 'ipv4' or 'ipv6' for an IP set or aggregate, NULL for any other resource
- * @return array{entries: int, error: ?string, order?: true} the line count, or why the part is refused whole; order when every
- *   line read is a member but one does not come after the line before it
+ * @return array{entries: int, error: ?string, order?: true} the line count, or why the part is refused whole; order when
+ *   every line is a member but one does not come after the line before it
  */
 function pfb_outpost_part_check(string $path, ?string $family): array {
 	$fh = @fopen($path, 'rb');
@@ -4719,7 +4720,7 @@ function pfb_outpost_part_check(string $path, ?string $family): array {
 	$entries = 0;
 	$prev = NULL;
 	$error = NULL;
-	$order = FALSE;
+	$order = NULL;
 	while ($error === NULL && ($line = fgets($fh, $max + 2)) !== FALSE) {
 		$entries++;
 		$member = substr($line, 0, -1);
@@ -4727,17 +4728,16 @@ function pfb_outpost_part_check(string $path, ?string $family): array {
 			$error = "line {$entries} is longer than a member or ends without a newline";
 		} elseif (!pfb_outpost_member_valid($member, $family)) {
 			$error = "line {$entries} is not a member";
-		} elseif ($prev !== NULL && strcmp($prev, $member) >= 0) {
-			$error = "line {$entries} does not come after the line before it in byte order";
-			$order = TRUE;
+		} elseif ($order === NULL && $prev !== NULL && strcmp($prev, $member) >= 0) {
+			$order = "line {$entries} does not come after the line before it in byte order";
 		}
 		$prev = $member;
 	}
 	fclose($fh);
-	if ($error === NULL) {
+	if ($error === NULL && $order === NULL) {
 		return ['entries' => $entries, 'error' => NULL];
 	}
-	return ['entries' => 0, 'error' => "{$path}: {$error}"] + ($order ? ['order' => TRUE] : []);
+	return ['entries' => 0, 'error' => "{$path}: " . ($error ?? $order)] + ($error === NULL ? ['order' => TRUE] : []);
 }
 
 /**
@@ -4746,7 +4746,8 @@ function pfb_outpost_part_check(string $path, ?string $family): array {
  * a member named by both parts, or an input out of byte order stops the merge, and $out is removed.
  *
  * @return array{entries: int, error: ?string, local?: true} the members written, or why the merge stopped; local when this
- *   host could not open an input or create, write or close $out
+ *   host could not open the add or remove part or create, write or close $out. A mirror it cannot open is not local: a full
+ *   body would rebuild it.
  */
 function pfb_outpost_mirror_merge(string $mirror, string $remove, string $add, string $out): array {
 	$names = ['the mirror', 'the remove part', 'the add part'];
@@ -4754,7 +4755,7 @@ function pfb_outpost_mirror_merge(string $mirror, string $remove, string $add, s
 	@unlink($out);
 	$w = in_array(FALSE, $in, TRUE) ? FALSE : @fopen($out, 'xb');
 	$error = $w === FALSE ? 'an input cannot be read or the result cannot be created' : NULL;
-	$local = $w === FALSE;
+	$local = $in[1] === FALSE || $in[2] === FALSE || ($w === FALSE && $in[0] !== FALSE);
 	$prev = [NULL, NULL, NULL];
 	$next = static function (int $i) use (&$in, &$prev, &$error, $names): ?string {
 		$line = $error === NULL ? fgets($in[$i]) : FALSE;
@@ -4908,9 +4909,10 @@ function pfb_outpost_parts_fetch(string $id, string $generation, array $parts, ?
  * body it records (the same digest); an edited mirror, a missing one, or one that is not a regular file sends none, so Core
  * answers full. A delta's parts are fetched to $workdir/add and $workdir/remove and merged into the mirror. A delta whose part
  * does not arrive as the reply described it (too long, not plain text, another line count, out of byte order or a repeated
- * line), whose parts name one member in both, or whose merge is not the reply's digest and entries, is discarded and the full
- * body fetched instead; a part with a line that is not a member, or that the transport ends part way, or that this host cannot
- * write, is not, nor is a new mirror this host cannot stage. Every part is checked by pfb_outpost_part_check() and the new mirror verified and synced before it replaces the old one by
+ * line), whose parts name one member in both, or whose merge is not the reply's digest and entries, or whose mirror this host
+ * cannot open for the merge, is discarded and the full body fetched instead; a part with a line that is not a member (even
+ * beside one out of order), or that the transport ends part way, or that this host cannot write, is not, nor is a new mirror
+ * this host cannot stage. Every part is checked by pfb_outpost_part_check() and the new mirror verified and synced before it replaces the old one by
  * rename: any failure leaves the old mirror in place.
  *
  * Any failure of the transfer itself, a reply curl cannot frame included, counts as unreachable and does not fall back.
@@ -4918,7 +4920,8 @@ function pfb_outpost_parts_fetch(string $id, string $generation, array $parts, ?
  * failure, when ok is FALSE: unreachable (no whole HTTP reply), core_unavailable (the call answered unavailable), refused (any
  * other error answered to the call; code names it), unavailable (the resource or its body), reply (an answer of the wrong
  * shape, a generation going backwards in a delta included), body (a body longer than its bound, not plain text, refused by
- * an error envelope, or pruned twice), members (a line that is not a member), verify (a body that is not the line
+ * an error envelope, or pruned twice), members (a line that is not a member, or a full body out of byte order or repeating
+ * a line), verify (a body that is not the line
  * count or digest the reply named), mirror (a file beside the mirror, a part, the merged mirror, or the rename could not be
  * written, or the disk took fewer bytes of a part than it was given).
  *
