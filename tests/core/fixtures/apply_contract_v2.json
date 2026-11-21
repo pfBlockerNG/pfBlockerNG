@@ -3075,7 +3075,7 @@
 					}
 				]
 			},
-			"refused": "issues[0].code is not a string of 1 to 256 bytes without control, format, private-use or surrogate characters or line or paragraph separators"
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
 			"id": "issue-resource-line-break",
@@ -3092,7 +3092,7 @@
 					}
 				]
 			},
-			"refused": "issues[0].resource is not a string of 1 to 256 bytes without control, format, private-use or surrogate characters or line or paragraph separators"
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
 			"id": "issue-resource-c1-control",
@@ -3109,7 +3109,7 @@
 					}
 				]
 			},
-			"refused": "issues[0].resource is not a string of 1 to 256 bytes without control, format, private-use or surrogate characters or line or paragraph separators"
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
 			"id": "issue-resource-bidi-override",
@@ -3126,7 +3126,7 @@
 					}
 				]
 			},
-			"refused": "issues[0].resource is not a string of 1 to 256 bytes without control, format, private-use or surrogate characters or line or paragraph separators"
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
 			"id": "issue-code-zero-width",
@@ -3143,7 +3143,7 @@
 					}
 				]
 			},
-			"refused": "issues[0].code is not a string of 1 to 256 bytes without control, format, private-use or surrogate characters or line or paragraph separators"
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
 			"id": "issue-resource-line-separator",
@@ -3160,7 +3160,7 @@
 					}
 				]
 			},
-			"refused": "issues[0].resource is not a string of 1 to 256 bytes without control, format, private-use or surrogate characters or line or paragraph separators"
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
 			"id": "issue-code-paragraph-separator",
@@ -3177,7 +3177,7 @@
 					}
 				]
 			},
-			"refused": "issues[0].code is not a string of 1 to 256 bytes without control, format, private-use or surrogate characters or line or paragraph separators"
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
 			"id": "issue-code-private-use",
@@ -3194,7 +3194,7 @@
 					}
 				]
 			},
-			"refused": "issues[0].code is not a string of 1 to 256 bytes without control, format, private-use or surrogate characters or line or paragraph separators"
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
 			"id": "issue-code-long",
@@ -3211,7 +3211,7 @@
 					}
 				]
 			},
-			"refused": "issues[0].code is not a string of 1 to 256 bytes without control, format, private-use or surrogate characters or line or paragraph separators"
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
 			"id": "issue-fields-of-256-bytes",
@@ -3247,16 +3247,101 @@
 			}
 		},
 		{
-			"id": "issue-unassigned-code-point",
-			"description": "A resource and a code with U+0378, a code point unassigned in every Unicode version: Core and the Outpost refuse named classes, not unassigned ones, whose set depends on the Unicode version.",
+			"id": "issue-non-ascii",
+			"description": "A resource and a code with U+0378: only printable ASCII is accepted, a rule no Unicode version changes.",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
 				"issues": [
 					{
-						"resource": "r͸",
+						"resource": "r\u0378",
 						"stage": "parse",
-						"code": "c͸",
+						"code": "c\u0378",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-resource-del",
+			"description": "A resource with DEL (0x7F), the byte after the printable range.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r\u007f",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-code-tab",
+			"description": "A code with a TAB.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c\tc",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-resource-e-acute",
+			"description": "A resource with a non-ASCII letter.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "café",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-code-zero-width-space",
+			"description": "A code with U+200B.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c\u200bc",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
+		},
+		{
+			"id": "issue-resource-256-printable-ascii",
+			"description": "A resource of exactly 256 printable ASCII bytes.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+						"stage": "parse",
+						"code": "c",
 						"message": "m"
 					}
 				]
@@ -3271,9 +3356,42 @@
 				"dnsbl": null,
 				"issues": [
 					{
-						"resource": "r͸",
+						"resource": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
 						"stage": "parse",
-						"code": "c͸",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-resource-space-and-tilde",
+			"description": "A resource holding a space and a tilde, the first and last printable ASCII bytes besides DEL.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "a b~",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "a b~",
+						"stage": "parse",
+						"code": "c",
 						"message": "m"
 					}
 				]
@@ -3294,7 +3412,7 @@
 					}
 				]
 			},
-			"refused": "issues[0].resource is not a string of 1 to 256 bytes without control, format, private-use or surrogate characters or line or paragraph separators"
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
 			"id": "issue-code-empty",
@@ -3311,7 +3429,7 @@
 					}
 				]
 			},
-			"refused": "issues[0].code is not a string of 1 to 256 bytes without control, format, private-use or surrogate characters or line or paragraph separators"
+			"refused": "issues[0].code is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
 			"id": "issue-resource-missing",
@@ -3327,7 +3445,7 @@
 					}
 				]
 			},
-			"refused": "issues[0].resource is not a string of 1 to 256 bytes without control, format, private-use or surrogate characters or line or paragraph separators"
+			"refused": "issues[0].resource is not a string of 1 to 256 printable ASCII characters"
 		},
 		{
 			"id": "issue-message-missing",
