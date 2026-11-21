@@ -48,10 +48,10 @@ final class OutpostResourceFetchTest extends TestCase
 		return ['status' => 200, 'type' => 'application/json', 'body' => json_encode(['resources' => [$id => $item]])];
 	}
 
-	private static function full(string $generation, string $body, ?string $digest = NULL, ?int $entries = NULL): array
+	private static function full(string $generation, string $body, ?string $digest = NULL, ?int $entries = NULL, string $id = self::ID): array
 	{
 		return self::items(['kind' => 'full', 'generation' => $generation, 'digest' => $digest ?? hash('xxh128', $body),
-			'entries' => $entries ?? substr_count($body, "\n"), 'metadata' => ['action' => 'deny']]);
+			'entries' => $entries ?? substr_count($body, "\n"), 'metadata' => ['action' => 'deny']], $id);
 	}
 
 	private static function delta(string $generation, string $from, string $add, string $remove, string $result): array
@@ -497,7 +497,7 @@ final class OutpostResourceFetchTest extends TestCase
 	public function testAnIPv6SetRefusesAnIPv4Member(): void
 	{
 		$body = "1.1.1.1\n";
-		[$result] = $this->fetch([self::full('3', $body, NULL, NULL), self::text($body)], NULL, 30, 'ip-set/Abuse/ipv6');
+		[$result] = $this->fetch([self::full('3', $body, NULL, NULL, 'ip-set/Abuse/ipv6'), self::text($body)], NULL, 30, 'ip-set/Abuse/ipv6');
 
 		$this->assertFailed($result, 'members');
 		$this->assertFileDoesNotExist($this->mirror);
@@ -506,13 +506,13 @@ final class OutpostResourceFetchTest extends TestCase
 	public function testABodyOfAResourceThatIsNotAnIPSetIsCheckedAgainstCoresMemberRule(): void
 	{
 		$rows = "{\"cc\":\"AD\"}\n{\"cc\":\"AE\"}\n";
-		[$result] = $this->fetch([self::full('3', $rows), self::text($rows)], NULL, 30, 'geo-catalog');
+		[$result] = $this->fetch([self::full('3', $rows, NULL, NULL, 'geo-catalog'), self::text($rows)], NULL, 30, 'geo-catalog');
 		$this->assertTrue($result['ok'], json_encode($result));
 		$this->assertMirror($rows);
 
 		unlink($this->mirror);
 		$bad = "#comment\n{\"cc\":\"AD\"}\n";
-		[$result] = $this->fetch([self::full('4', $bad), self::text($bad)], NULL, 30, 'geo-catalog');
+		[$result] = $this->fetch([self::full('4', $bad, NULL, NULL, 'geo-catalog'), self::text($bad)], NULL, 30, 'geo-catalog');
 		$this->assertFailed($result, 'members');
 		$this->assertFileDoesNotExist($this->mirror);
 	}
