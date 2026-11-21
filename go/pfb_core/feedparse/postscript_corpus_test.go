@@ -2,7 +2,6 @@ package feedparse
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,8 +21,9 @@ import (
 // replays the same file through the two call sites of sync_package_pfblockerng(), verbatim; where Core differs on purpose
 // the case holds today's answer in old_expect, which only that runner asserts.
 //
-// A script that blocks reports through a fifo that it is running, and the runner then cancels the context: the kill is
-// driven by that event. A child the case expects gone holds a fifo open, and its end is the fifo's end of file.
+// A script that blocks reports through a fifo that it is running, and the runner then ends the context as the 300-second
+// limit does (limitOnEvent): the kill is driven by that event. A child the case expects gone holds a fifo open, and its
+// end is the fifo's end of file.
 
 type psDoc struct {
 	Schema *int            `json:"schema"`
@@ -49,20 +49,22 @@ type psExpect struct {
 	Errors     json.RawMessage            `json:"errors"`
 	Transcript json.RawMessage            `json:"transcript"`
 	Failed     *bool                      `json:"failed"`
+	Reason     *string                    `json:"reason"` // Go only: PostScriptResult.Reason
+	Status     *int                       `json:"status"` // Go only: PostScriptResult.Status
 	Alive      json.RawMessage            `json:"alive"`
 }
 
 type psPostCaseRaw struct {
-	ID          *string            `json:"id"`
-	Description *string            `json:"description"`
-	ListType    *string            `json:"list_type"`
-	Name        *string            `json:"name"`
-	Tree        map[string]psEntry `json:"tree"`
-	Feed        map[string]string  `json:"feed"`
-	Blocks      *bool              `json:"blocks"`
-	Expect      *psExpect          `json:"expect"`
-	OldExpect   *psExpect          `json:"old_expect"`
-	Departure   *string            `json:"departure"`
+	ID          *string                    `json:"id"`
+	Description *string                    `json:"description"`
+	ListType    *string                    `json:"list_type"`
+	Name        *string                    `json:"name"`
+	Tree        map[string]psEntry         `json:"tree"`
+	Feed        map[string]json.RawMessage `json:"feed"`
+	Blocks      *bool                      `json:"blocks"`
+	Expect      *psExpect                  `json:"expect"`
+	OldExpect   *psExpect                  `json:"old_expect"`
+	Departure   *string                    `json:"departure"`
 }
 
 func loadPostScript(data []byte) (psDoc, error) {
@@ -80,8 +82,14 @@ func loadPostScript(data []byte) (psDoc, error) {
 		}
 		e := c.Expect
 		if c.ListType == nil || c.Name == nil || c.Tree == nil || c.Feed == nil || c.Blocks == nil || e == nil || e.Files == nil ||
-			e.Seen == nil || e.Log == nil || e.Errors == nil || e.Transcript == nil || e.Failed == nil || e.Alive == nil {
+			e.Seen == nil || e.Log == nil || e.Errors == nil || e.Transcript == nil || e.Failed == nil || e.Reason == nil ||
+			e.Status == nil || e.Alive == nil {
 			return doc, fmt.Errorf("case %s: every key is required", *c.ID)
+		}
+		if !slices.Contains([]string{"", PreScriptStage, PreScriptExit, PreScriptTimeout}, *e.Reason) ||
+			(*e.Reason != "") != *e.Failed || (*e.Status != 0) != (*e.Reason == PreScriptExit) {
+			return doc, fmt.Errorf("case %s: reason \"\", stage, exit or timeout, set exactly when failed; status exactly "+
+				"for exit", *c.ID)
 		}
 		if !slices.Contains([]string{"dnsbl", "_v4", "_v6"}, *c.ListType) || (*c.ListType == "dnsbl") != (e.Between == nil) {
 			return doc, fmt.Errorf("case %s: list_type dnsbl, _v4 or _v6, and between exactly for an IP list", *c.ID)
@@ -233,8 +241,19 @@ func replayPostScript(t *testing.T, doc psDoc, c psPostCaseRaw) {
 		}
 	}
 	feed := filepath.Join(root, "feed")
-	for name, content := range c.Feed {
-		if err := os.WriteFile(filepath.Join(feed, name), []byte(content), 0o644); err != nil {
+	for name, entry := range psState(t, c.Feed) {
+		file := filepath.Join(feed, name)
+		switch {
+		case strings.HasPrefix(entry, "="):
+			err = os.WriteFile(file, []byte(entry[1:]), 0o644)
+		case strings.HasPrefix(entry, "-> "):
+			err = os.Symlink(entry[3:], file)
+		case entry == "<dir>":
+			err = os.Mkdir(file, 0o700)
+		default:
+			t.Fatalf("feed %s: a string, {link} or {type: dir}", name)
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -250,9 +269,9 @@ func replayPostScript(t *testing.T, doc psDoc, c psPostCaseRaw) {
 	t.Setenv("PFB_TEST_ENV", *doc.Env)
 	t.Setenv("PFB_TEST_ALARM", "")
 
-	ctx, cancel := context.WithTimeout(context.Background(), watchdog)
+	ctx, cancel, limit := limitOnEvent()
 	defer cancel()
-	reported, release := blockOnFifo(t, test, cancel)
+	reported, release := blockOnFifo(t, test, limit)
 	defer release()
 	var log, errs, transcript bytes.Buffer
 	p := PostScript{Name: expand(*c.Name), Dirs: []string{filepath.Join(root, "list"), filepath.Join(root, "pkg")},
@@ -310,9 +329,9 @@ func replayPostScript(t *testing.T, doc psDoc, c psPostCaseRaw) {
 		}
 	}
 	wantLog := psText(t, e.Log, expand)
-	if failed := got.Reason != ""; failed != *e.Failed || got.Skipped != !strings.Contains(wantLog, "\nExecuting post-script: ") {
-		t.Errorf("Skipped, Reason, Status = %v, %q, %d; want a failure %v, skipped exactly when nothing is executed",
-			got.Skipped, got.Reason, got.Status, *e.Failed)
+	if got.Reason != *e.Reason || got.Status != *e.Status || got.Skipped != !strings.Contains(wantLog, "\nExecuting post-script: ") {
+		t.Errorf("Skipped, Reason, Status = %v, %q, %d; want %q, %d, skipped exactly when nothing is executed",
+			got.Skipped, got.Reason, got.Status, *e.Reason, *e.Status)
 	}
 	var wantAlive *bool
 	if err := json.Unmarshal(e.Alive, &wantAlive); err != nil {
@@ -365,7 +384,7 @@ func clipVisible(s string) string {
 func TestPostScriptCorpusLoaderIsStrict(t *testing.T) {
 	const ok = `{"id": "a", "description": "d", "list_type": "dnsbl", "name": "s.sh", "tree": {"list/s.sh": {"body": "true", ` +
 		`"mode": "exec"}}, "feed": {}, "blocks": false, "expect": {"files": {}, "seen": null, "log": "", "errors": "", ` +
-		`"transcript": "", "failed": false, "alive": null}}`
+		`"transcript": "", "failed": false, "reason": "", "status": 0, "alive": null}}`
 	doc := func(c string) string {
 		return `{"schema": 1, "prefix": "", "env": "", "header": "h", "cases": [` + c + `]}`
 	}
@@ -379,6 +398,13 @@ func TestPostScriptCorpusLoaderIsStrict(t *testing.T) {
 		"unknown case key":         rep(`"description": "d",`, `"description": "d", "x": 1,`),
 		"unknown expect key":       rep(`"alive": null}`, `"alive": null, "x": 1}`),
 		"missing seen":             rep(`"seen": null, `, ``),
+		"missing reason":           rep(`"reason": "", `, ``),
+		"missing status":           rep(`"status": 0, `, ``),
+		"reason without failed":    rep(`"reason": ""`, `"reason": "stage"`),
+		"failed without reason":    rep(`"failed": false`, `"failed": true`),
+		"unknown reason":           rep(`"failed": false, "reason": ""`, `"failed": true, "reason": "x"`),
+		"status without exit":      rep(`"status": 0`, `"status": 3`),
+		"exit without status":      rep(`"failed": false, "reason": ""`, `"failed": true, "reason": "exit"`),
 		"bad list type":            rep(`"list_type": "dnsbl"`, `"list_type": "x"`),
 		"between for dnsbl":        rep(`"files": {},`, `"files": {}, "between": {},`),
 		"no between for ip":        rep(`"list_type": "dnsbl"`, `"list_type": "_v4"`),

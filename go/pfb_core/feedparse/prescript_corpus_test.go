@@ -173,12 +173,12 @@ func replayPreScript(t *testing.T, c psCase) {
 	canary := filepath.Join(dir, "canary")
 	t.Setenv("PFB_TEST_CANARY", canary)
 
-	ctx, cancel := context.WithTimeout(context.Background(), watchdog)
+	ctx, cancel, limit := limitOnEvent()
 	defer cancel()
 	var reported <-chan struct{}
 	if c.blocks {
 		var release func()
-		reported, release = blockOnFifo(t, dir, cancel)
+		reported, release = blockOnFifo(t, dir, limit)
 		defer release()
 	}
 	got := RunPreScript(ctx, script, norm, staged, io.Discard, c.vtype)
@@ -216,6 +216,14 @@ func replayPreScript(t *testing.T, c psCase) {
 	if _, err := os.Stat(staged); err == nil {
 		t.Error("the staged copy outlives the parse")
 	}
+}
+
+// limitOnEvent is a run's context, which cancel ends and the watchdog bounds, and limit, which ends it as the script's
+// 300-second limit does: a test drives the timeout by an event, not by the clock.
+func limitOnEvent() (ctx context.Context, cancel, limit context.CancelFunc) {
+	parent, end := context.WithCancelCause(context.Background())
+	ctx, stop := context.WithTimeout(parent, watchdog)
+	return ctx, func() { stop(); end(nil) }, func() { end(errScriptTimedOut) }
 }
 
 // blockOnFifo makes the fifos a blocking script uses (PFB_TEST_BLOCK is read and never written, PFB_TEST_READY is where the

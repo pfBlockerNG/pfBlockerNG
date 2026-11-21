@@ -99,7 +99,7 @@ func (r *lifetimeRun) result() PreScriptResult {
 
 func (r *lifetimeRun) files(got PreScriptResult, success bool) {
 	r.t.Helper()
-	want := PreScriptResult{Path: r.norm, Reason: PreScriptTimeout}
+	want := PreScriptResult{Path: r.norm, Reason: PreScriptCancelled}
 	if success {
 		want = PreScriptResult{OK: true, Path: r.staged}
 	}

@@ -28,7 +28,8 @@ final class FeedParsePostScriptCorpusTest extends TestCase
 	private const CORPUS = __DIR__ . '/../../go/pfb_core/feedparse/testdata/postscript.json';
 	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	private const ENTRY = ['body', 'mode', 'shebang', 'link', 'dir'];
-	private const EXPECT = ['files', 'between', 'seen', 'log', 'errors', 'transcript', 'failed', 'alive'];
+	/** reason and status are the Go result's (PostScriptResult): this runner checks only that they are there. */
+	private const EXPECT = ['files', 'between', 'seen', 'log', 'errors', 'transcript', 'failed', 'reason', 'status', 'alive'];
 	/** How long a process the case expects gone may take to go: only a hung case waits this long, and then it fails. */
 	private const GONE_CAP = 30.0;
 
@@ -230,8 +231,14 @@ final class FeedParsePostScriptCorpusTest extends TestCase
 				chmod($file, $entry['mode'] === 'exec' ? 0755 : 0644);
 			}
 		}
-		foreach ($case['feed'] as $name => $content) {
-			file_put_contents("{$this->root}/feed/{$name}", $content);
+		foreach ($case['feed'] as $name => $entry) {
+			$file = "{$this->root}/feed/{$name}";
+			match (TRUE) {
+				is_string($entry) => file_put_contents($file, $entry),
+				is_array($entry) && array_keys($entry) === ['link'] => symlink($entry['link'], $file),
+				$entry === ['type' => 'dir'] => mkdir($file),
+				default => throw new RuntimeException("feed {$name}: a string, {link} or {type: dir}"),
+			};
 		}
 		foreach (['block', 'child', 'alive'] as $f) {
 			$this->assertTrue(posix_mkfifo("{$this->root}/test/{$f}", 0600), "mkfifo {$f}");
