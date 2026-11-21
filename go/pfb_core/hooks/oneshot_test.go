@@ -988,3 +988,17 @@ func TestOneShotRefusesAStateDirectoryThatIsNoDirectory(t *testing.T) {
 		})
 	}
 }
+
+// WHEN a hook fails by itself with 255 and TERM reaches the one-shot right after that hook's exit THEN the log holds the
+// hook's status and then that the run was cancelled, and the exit status is 1: the hook counts as cut short.
+func TestOneShotLogsTheStatusOfAHookThatExitedJustBeforeTERM(t *testing.T) {
+	// a background child waits for the hook to be reaped, then sends TERM to the one-shot, the hook's parent
+	_, flags := hookRoot(t, [2]string{"hook_pre_a.sh", "#!/bin/sh\nme=$$ core=$PPID\n" +
+		"( while kill -0 $me 2>/dev/null; do :; done; kill -TERM $core ) &\nexit 255\n"})
+	got := oneShot(t, `{"trigger":"cron"}`, append([]string{"--run-hooks", "pre"}, flags...)...)
+	want := "[ pfB Hook ] pre #0 exited non-zero [ 255 ]; continuing\n" +
+		"[ pfB Hook ] pre run cancelled; 0 enabled hooks did not run\n"
+	if got.status != 1 || !strings.HasSuffix(got.stderr, want) {
+		t.Errorf("exit status %d and stderr %s, want 1 and a log ending %q", got.status, clip(got.stderr), want)
+	}
+}

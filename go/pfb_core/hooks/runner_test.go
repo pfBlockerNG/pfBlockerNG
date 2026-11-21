@@ -580,3 +580,70 @@ func TestRunnerProbesThePythonWrapperWithTheHooksEnvironment(t *testing.T) {
 			launch, log.String())
 	}
 }
+
+// waitEntered replaces the lag wait for the test: it records each call, and answers cancelled.
+func waitEntered(t *testing.T, cancelled bool) *int {
+	t.Helper()
+	calls, orig := 0, *hooks.CancelledWithin
+	*hooks.CancelledWithin = func(context.Context, time.Duration) bool { calls++; return cancelled }
+	t.Cleanup(func() { *hooks.CancelledWithin = orig })
+	return &calls
+}
+
+// WHEN a Runner without a signal lag (an Update's) runs a hook that exits 255 THEN it never waits for a signal to
+// follow: the hook is a failed hook at once and the next one runs.
+func TestRunnerWithoutASignalLagNeverWaitsAfterAHookExitsAbove128(t *testing.T) {
+	calls := waitEntered(t, true)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "hook_pre_a.sh"), "#!/bin/sh\nexit 255\n", 0o755)
+	writeFile(t, filepath.Join(dir, "hook_pre_b.sh"), "#!/bin/sh\ntouch '"+dir+"/ran'\n", 0o755)
+	var log bytes.Buffer
+	cut := hooks.Runner{Dir: dir, Log: &log, Grace: time.Second}.Run(context.Background(), "pre",
+		pre("hook_pre_a.sh", "hook_pre_b.sh"), hooks.Context{})
+	if *calls != 0 || cut || !exists(filepath.Join(dir, "ran")) {
+		t.Errorf("lag waits %d, cut %v and second hook run %v; want 0, false and true; log %q", *calls, cut,
+			exists(filepath.Join(dir, "ran")), log.String())
+	}
+	if want := "pre #0 exited non-zero [ 255 ]; continuing\n"; !strings.Contains(log.String(), want) {
+		t.Errorf("log %q; want it to hold %q", log.String(), want)
+	}
+}
+
+// WHEN a hook exits 255 and the run is cancelled within the signal lag THEN the hook's own status is still logged, and
+// then the hook counts as cut short: the run is cancelled with no further hook started.
+func TestRunnerLogsTheStatusOfAHookCutShortAfterItsExit(t *testing.T) {
+	calls := waitEntered(t, true)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "hook_pre_a.sh"), "#!/bin/sh\nexit 255\n", 0o755)
+	writeFile(t, filepath.Join(dir, "hook_pre_b.sh"), "#!/bin/sh\ntouch '"+dir+"/ran'\n", 0o755)
+	var log bytes.Buffer
+	cut := hooks.Runner{Dir: dir, Log: &log, Grace: time.Second, SignalLag: time.Hour}.Run(context.Background(), "pre",
+		pre("hook_pre_a.sh", "hook_pre_b.sh"), hooks.Context{})
+	want := "[ pfB Hook ] pre #0 exited non-zero [ 255 ]; continuing\n" +
+		"[ pfB Hook ] pre run cancelled; 1 enabled hook did not run\n"
+	if *calls != 1 || !cut || exists(filepath.Join(dir, "ran")) || !strings.HasSuffix(log.String(), want) {
+		t.Errorf("lag waits %d, cut %v, second hook run %v and log %q; want 1, true, false and a log ending %q", *calls,
+			cut, exists(filepath.Join(dir, "ran")), log.String(), want)
+	}
+}
+
+// The lag wait answers whether the run is cancelled within the lag: true as soon as a cancel comes inside it, false
+// only once the whole lag has passed without one.
+func TestCancelledWithinWaitsOutTheLag(t *testing.T) {
+	wait := *hooks.CancelledWithin
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	timer := time.AfterFunc(50*time.Millisecond, cancel)
+	defer timer.Stop()
+	if !wait(ctx, hang) {
+		t.Error("a cancel 50 ms into the lag: got false, want true")
+	}
+	const lag = 20 * time.Millisecond
+	began := time.Now()
+	if wait(context.Background(), lag) {
+		t.Error("no cancel at all: got true, want false")
+	}
+	if waited := time.Since(began); waited < lag {
+		t.Errorf("no cancel: answered after %v, want it to wait out the lag of %v", waited, lag)
+	}
+}
