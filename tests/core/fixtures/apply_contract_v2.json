@@ -5,7 +5,8 @@
 		"Issue #4037 (slice 8a): the version 2 request the Core Updater writes on the update command's stdin and the result lines the Outpost apply writes on fd 3 (docs/misc/core-api-protocol.md, 'Update command, version 2'). Not used in production yet: Core's worker writes version 1 until #4038.",
 		"tests/php/CoreUpdateV2ContractTest.php runs every row against pfb_core_update_v2_request(), pfb_core_update_v2_alias() and pfb_core_update_v2_result(). #4038 runs the same file from Go when it writes the requests and reads the results: every accepted request must be one its request type writes or decodes, every result line one its reader parses with the same values, and no refused report may be a line it accepts.",
 		"A request row gives its stdin as 'request' (a JSON value, written as JSON) or as 'stdin': a string, or a list of parts joined in order, each a string or {repeat, times}: the string written times times, every '{i}' in it replaced by the repetition's index from 0.",
-		"A request row's verdict is 'accepted' (the normal form the validator returns), 'acceptedCounts' (the lengths of its lists, for a row too large to spell out) or 'refused' (the reason, word for word). A result row gives 'report' and either 'line', the exact bytes written, or 'refused'."
+		"A request row's verdict is 'accepted' (the normal form the validator returns), 'acceptedCounts' (the lengths of its lists, for a row too large to spell out) or 'refused' (the reason, word for word). A result row gives 'report' and either 'line', the exact bytes written, or 'refused'.",
+		"A result row gives its report as 'report' (a JSON value) or as 'reportJSON' (parts as a request row's 'stdin', joined and decoded), and its 'line' as a string or as such parts. No line is longer than limits.resultLineBytes, its newline included: when a report's line would be, every failure message becomes 'left out to fit the result line', and a report whose line is too long even then is refused."
 	],
 	"limits": {
 		"requestBytes": 1048576,
@@ -14,7 +15,8 @@
 		"idBytes": 128,
 		"groupNameBytes": 128,
 		"fieldBytes": 256,
-		"tokenBytes": 64
+		"tokenBytes": 64,
+		"resultLineBytes": 524288
 	},
 	"aliases": [
 		{
@@ -39,7 +41,7 @@
 		},
 		{
 			"id": "ip-set/Deny_Aggregated/ipv4",
-			"alias": "pfB_Deny_Aggregated_v4"
+			"alias": null
 		},
 		{
 			"id": "ip-aggregate/deny/ipv4",
@@ -67,6 +69,30 @@
 		},
 		{
 			"id": "ip-set/Foo-Bar/ipv4",
+			"alias": null
+		},
+		{
+			"id": "ip-set/ABCDEFGHIJKLMNOPQRSTUVWX/ipv4",
+			"alias": "pfB_ABCDEFGHIJKLMNOPQRSTUVWX_v4"
+		},
+		{
+			"id": "ip-set/ABCDEFGHIJKLMNOPQRSTUVWXY/ipv4",
+			"alias": null
+		},
+		{
+			"id": "ip-set/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/ipv6",
+			"alias": null
+		},
+		{
+			"id": "ip-set/Permit_Aggregated/ipv6",
+			"alias": null
+		},
+		{
+			"id": "ip-set/Match_Aggregated/ipv4",
+			"alias": null
+		},
+		{
+			"id": "ip-set/Native_Aggregated/ipv6",
 			"alias": null
 		},
 		{
@@ -551,13 +577,30 @@
 		},
 		{
 			"id": "id-of-128-bytes",
-			"description": "An id of 128 bytes, the longest Core accepts.",
+			"description": "An id of 128 bytes, the longest Core accepts, maps to an alias longer than a pf table name.",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
 				"resources": [
 					{
 						"id": "ip-set/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "alias-of-31-characters",
+			"description": "An ip-set whose alias is 31 characters, the longest pf takes as a table name.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/ABCDEFGHIJKLMNOPQRSTUVWX/ipv4",
 						"generation": "1",
 						"action": "alias_only",
 						"entries": 0
@@ -571,8 +614,8 @@
 				"pendingOutsideWindow": false,
 				"resources": [
 					{
-						"id": "ip-set/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/ipv4",
-						"alias": "pfB_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA_v4",
+						"id": "ip-set/ABCDEFGHIJKLMNOPQRSTUVWX/ipv4",
+						"alias": "pfB_ABCDEFGHIJKLMNOPQRSTUVWX_v4",
 						"generation": "1",
 						"action": "alias_only",
 						"entries": 0
@@ -582,6 +625,52 @@
 				"dnsbl": null,
 				"issues": []
 			}
+		},
+		{
+			"id": "alias-of-32-characters",
+			"description": "An ip-set whose alias would be 32 characters, one more than pf takes.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/ABCDEFGHIJKLMNOPQRSTUVWXY/ipv4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "alias-of-107-characters",
+			"description": "An ip-set of 100 letters: the id is within 128 bytes, the alias far over 31 characters.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/ipv6",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "removed-alias-too-long",
+			"description": "A removed id whose alias would be longer than a pf table name.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"removed": [
+					"ip-set/ABCDEFGHIJKLMNOPQRSTUVWXY/ipv4"
+				]
+			},
+			"refused": "removed[0] maps to no alias"
 		},
 		{
 			"id": "pending-outside-window",
@@ -680,7 +769,7 @@
 						"resource": "feed/ipv4:Foo_v4",
 						"stage": "script",
 						"code": "exit_1",
-						"message": "<script>alert(1)</script> line oneline two&amp;"
+						"message": "<script>alert(1)</script>  line one line two &amp;"
 					}
 				]
 			}
@@ -710,6 +799,171 @@
 						"stage": "parse",
 						"code": "empty",
 						"message": "aééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-message-line-break",
+			"description": "A line break between words becomes one space.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "one\ntwo"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "one two"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-message-control-run",
+			"description": "A run of control characters (CR LF and a tab) becomes one space.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "one\r\n\ttwo"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "one two"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-message-line-separator",
+			"description": "U+2028 and U+2029 become a space.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "one two three"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "one two three"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-message-format-character",
+			"description": "A format character inside a word is removed, not made a space.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "zero​width"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "zerowidth"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-message-cut-after-a-space",
+			"description": "A cut to 1,024 bytes that lands after a space leaves no trailing space.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bcd"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 					}
 				]
 			}
@@ -780,6 +1034,21 @@
 			}
 		},
 		{
+			"id": "duplicate-key",
+			"description": "Of keys that appear twice, the last is read.",
+			"stdin": "{\"version\":2,\"trigger\":\"apply\",\"trigger\":\"manual\"}",
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
 			"id": "empty",
 			"description": "No input.",
 			"stdin": "",
@@ -825,6 +1094,18 @@
 			"id": "nested-too-deep",
 			"description": "Nesting deeper than eight levels.",
 			"stdin": "{\"version\":2,\"trigger\":\"manual\",\"x\":[[[[[[[[1]]]]]]]]}",
+			"refused": "the request is not one JSON object"
+		},
+		{
+			"id": "nested-at-the-bound",
+			"description": "Nesting of seven levels, the deepest a request may be, reaches the field checks.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\",\"x\":[[[[[[]]]]]]}",
+			"refused": "the request has the unknown field \"x\""
+		},
+		{
+			"id": "nested-one-past-the-bound",
+			"description": "Nesting of eight levels.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\",\"x\":[[[[[[[]]]]]]]}",
 			"refused": "the request is not one JSON object"
 		},
 		{
@@ -1002,6 +1283,16 @@
 			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
 		},
 		{
+			"id": "token-trailing-line-feed",
+			"description": "A token that ends in a line feed.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"pendingToken": "abc\n"
+			},
+			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+		},
+		{
 			"id": "token-nul",
 			"description": "A token with a NUL.",
 			"request": {
@@ -1099,6 +1390,21 @@
 				"trigger": "manual",
 				"resources": [
 					"geo-catalog"
+				]
+			},
+			"refused": "resources[0] is not an object"
+		},
+		{
+			"id": "resource-list",
+			"description": "A resource that is a JSON list.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					[
+						"geo-catalog",
+						"1"
+					]
 				]
 			},
 			"refused": "resources[0] is not an object"
@@ -1272,6 +1578,23 @@
 			"refused": "resources[0].id is not a resource id"
 		},
 		{
+			"id": "id-family-ipv5",
+			"description": "A family other than ipv4 and ipv6.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/A/ipv5",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id is not a resource id"
+		},
+		{
 			"id": "id-of-129-bytes",
 			"description": "An id of 129 bytes.",
 			"request": {
@@ -1331,6 +1654,21 @@
 				"resources": [
 					{
 						"id": "dnsbl/manifest",
+						"generation": "1"
+					}
+				]
+			},
+			"refused": "resources[0].id names a dnsbl resource, which pfB-DNS fetches itself"
+		},
+		{
+			"id": "id-dnsbl-with-a-dash",
+			"description": "A dnsbl id with a dash in its segment is still a dnsbl id.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "dnsbl/ads-and-trackers",
 						"generation": "1"
 					}
 				]
@@ -1429,7 +1767,7 @@
 		},
 		{
 			"id": "alias-collision",
-			"description": "Two ids that map to one alias.",
+			"description": "An ip-set named after an aggregate, beside the aggregate: the ip-set maps to no alias.",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
@@ -1451,11 +1789,11 @@
 					}
 				]
 			},
-			"refused": "resources[1].id maps to the alias of another resource: pfB_Deny_Aggregated_v4"
+			"refused": "resources[1].id maps to no alias"
 		},
 		{
 			"id": "alias-collision-across-removed",
-			"description": "A removed id that maps to the alias of a resource.",
+			"description": "An ip-set named after the aggregate a removed id names: the ip-set maps to no alias.",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
@@ -1474,7 +1812,99 @@
 					"ip-aggregate/permit/ipv6"
 				]
 			},
-			"refused": "removed[0] maps to the alias of another resource: pfB_Permit_Aggregated_v6"
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "aggregate-alias-deny",
+			"description": "An ip-set alone whose alias would be the ADR-11 aggregate pfB_Deny_Aggregated_v4.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/Deny_Aggregated/ipv4",
+						"generation": "1",
+						"action": "deny",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "aggregate-alias-permit",
+			"description": "An ip-set alone whose alias would be the ADR-11 aggregate pfB_Permit_Aggregated_v6.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/Permit_Aggregated/ipv6",
+						"generation": "1",
+						"action": "deny",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "aggregate-alias-match",
+			"description": "An ip-set alone whose alias would be the ADR-11 aggregate pfB_Match_Aggregated_v4.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/Match_Aggregated/ipv4",
+						"generation": "1",
+						"action": "deny",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "aggregate-alias-native",
+			"description": "An ip-set alone whose alias would be the ADR-11 aggregate pfB_Native_Aggregated_v6.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "ip-set/Native_Aggregated/ipv6",
+						"generation": "1",
+						"action": "deny",
+						"direction": [
+							"ingress"
+						],
+						"entries": 0
+					}
+				]
+			},
+			"refused": "resources[0].id maps to no alias"
+		},
+		{
+			"id": "aggregate-alias-removed",
+			"description": "A removed ip-set whose alias would be an aggregate alias.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"removed": [
+					"ip-set/Native_Aggregated/ipv4"
+				]
+			},
+			"refused": "removed[0] maps to no alias"
 		},
 		{
 			"id": "generation-missing",
@@ -1609,6 +2039,76 @@
 				]
 			},
 			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "generation-of-20-characters",
+			"description": "A generation of 20 characters with leading zeros, kept as the string it is.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "00000000000000000042"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "00000000000000000042"
+					}
+				],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "generation-of-21-characters",
+			"description": "A generation of 21 characters: leading zeros count.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "000000000000000000042"
+					}
+				]
+			},
+			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "generation-of-900000-zeros",
+			"description": "A generation of 900,000 zeros is not echoed back.",
+			"stdin": [
+				"{\"version\":2,\"trigger\":\"manual\",\"resources\":[{\"id\":\"geo-catalog\",\"generation\":\"",
+				{
+					"repeat": "0",
+					"times": 900000
+				},
+				"\"}]}"
+			],
+			"refused": "resources[0].generation is not a decimal string that fits 64 bits"
+		},
+		{
+			"id": "dnsbl-generation-of-21-characters",
+			"description": "The dnsbl generation follows the same rule.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"dnsbl": {
+					"generation": "000000000000000000001",
+					"groups": []
+				}
+			},
+			"refused": "dnsbl.generation is not a decimal string that fits 64 bits"
 		},
 		{
 			"id": "generation-non-ascii-digit",
@@ -1926,6 +2426,41 @@
 			"refused": "resources[0].entries is not a non-negative integer"
 		},
 		{
+			"id": "entries-max",
+			"description": "9223372036854775807 (2^63-1) is the most entries a resource may hold.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\",\"resources\":[{\"id\":\"ip-set/A/ipv4\",\"generation\":\"1\",\"action\":\"alias_only\",\"entries\":9223372036854775807}]}",
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "ip-set/A/ipv4",
+						"alias": "pfB_A_v4",
+						"generation": "1",
+						"action": "alias_only",
+						"entries": 9223372036854775807
+					}
+				],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
+		},
+		{
+			"id": "entries-over-max",
+			"description": "9223372036854775808 is one more than a signed 64-bit integer holds.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\",\"resources\":[{\"id\":\"ip-set/A/ipv4\",\"generation\":\"1\",\"action\":\"alias_only\",\"entries\":9223372036854775808}]}",
+			"refused": "resources[0].entries is not a non-negative integer"
+		},
+		{
+			"id": "dnsbl-group-entries-over-max",
+			"description": "A DNSBL group follows the same bound.",
+			"stdin": "{\"version\":2,\"trigger\":\"manual\",\"dnsbl\":{\"generation\":\"1\",\"groups\":[{\"name\":\"Ads\",\"entries\":9223372036854775808,\"changed\":true}]}}",
+			"refused": "dnsbl.groups[0].entries is not a non-negative integer"
+		},
+		{
 			"id": "geo-catalog-with-action",
 			"description": "The geo-catalog takes only its id and generation.",
 			"request": {
@@ -1956,6 +2491,36 @@
 				]
 			},
 			"refused": "resources[0] has the field \"entries\", which geo-catalog does not take"
+		},
+		{
+			"id": "geo-catalog-with-a-null-field",
+			"description": "A field that is null is absent, on the geo-catalog too.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "1",
+						"action": null
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "geo-catalog",
+						"generation": "1"
+					}
+				],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
 		},
 		{
 			"id": "removed-object",
@@ -2421,6 +2986,91 @@
 			"refused": "issues[0].resource is not a string of 1 to 256 bytes without control characters"
 		},
 		{
+			"id": "issue-resource-bidi-override",
+			"description": "A resource with a right-to-left override (a format character).",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "feed/ipv4:‮Foo_v4",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 bytes without control characters"
+		},
+		{
+			"id": "issue-code-zero-width",
+			"description": "A code with a zero-width space.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "curl​incomplete",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].code is not a string of 1 to 256 bytes without control characters"
+		},
+		{
+			"id": "issue-resource-line-separator",
+			"description": "A resource with U+2028, the line separator.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "feed x",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 bytes without control characters"
+		},
+		{
+			"id": "issue-code-paragraph-separator",
+			"description": "A code with U+2029, the paragraph separator.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c ",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].code is not a string of 1 to 256 bytes without control characters"
+		},
+		{
+			"id": "issue-code-private-use",
+			"description": "A code with a private-use character.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].code is not a string of 1 to 256 bytes without control characters"
+		},
+		{
 			"id": "issue-code-long",
 			"description": "A code of 257 bytes.",
 			"request": {
@@ -2431,6 +3081,73 @@
 						"resource": "r",
 						"stage": "parse",
 						"code": "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].code is not a string of 1 to 256 bytes without control characters"
+		},
+		{
+			"id": "issue-fields-of-256-bytes",
+			"description": "A resource and a code of exactly 256 bytes.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+						"stage": "parse",
+						"code": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+						"message": "m"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+						"stage": "parse",
+						"code": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+						"message": "m"
+					}
+				]
+			}
+		},
+		{
+			"id": "issue-resource-empty",
+			"description": "A resource of 0 bytes.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "",
+						"stage": "parse",
+						"code": "c",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "issues[0].resource is not a string of 1 to 256 bytes without control characters"
+		},
+		{
+			"id": "issue-code-empty",
+			"description": "A code of 0 bytes.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"issues": [
+					{
+						"resource": "r",
+						"stage": "parse",
+						"code": "",
 						"message": "m"
 					}
 				]
@@ -2584,7 +3301,7 @@
 		},
 		{
 			"id": "failed-message-as-text",
-			"description": "A failure message is text: control characters stripped, markup kept, and at most 1,024 bytes, cut on a character.",
+			"description": "A failure message is text: each run of control characters one space, markup kept, and at most 1,024 bytes once escaped for the line, cut on a character.",
 			"report": {
 				"failed": [
 					{
@@ -2594,7 +3311,7 @@
 					}
 				]
 			},
-			"line": "{\"version\":2,\"failed\":[{\"id\":\"ip-set/A/ipv4\",\"stage\":\"apply\",\"message\":\"pfctl: <b>table</b>limit \\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\"}]}\n"
+			"line": "{\"version\":2,\"failed\":[{\"id\":\"ip-set/A/ipv4\",\"stage\":\"apply\",\"message\":\"pfctl: <b>table</b> limit  \\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\"}]}\n"
 		},
 		{
 			"id": "non-ascii-escaped",
@@ -2609,6 +3326,413 @@
 				]
 			},
 			"line": "{\"version\":2,\"failed\":[{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"caf\\u00e9\"}]}\n"
+		},
+		{
+			"id": "failed-message-escaped-at-the-bound",
+			"description": "A message of 1,024 bytes of non-ASCII text is cut to 1,024 bytes as escaped.",
+			"report": {
+				"failed": [
+					{
+						"id": "geo-catalog",
+						"stage": "apply",
+						"message": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+					}
+				]
+			},
+			"line": "{\"version\":2,\"failed\":[{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\"}]}\n"
+		},
+		{
+			"id": "failed-message-line-break",
+			"description": "Lines of pfctl stderr stay apart as words.",
+			"report": {
+				"failed": [
+					{
+						"id": "ip-set/A/ipv4",
+						"stage": "apply",
+						"message": "pfctl: line one\nline two\n"
+					}
+				]
+			},
+			"line": "{\"version\":2,\"failed\":[{\"id\":\"ip-set/A/ipv4\",\"stage\":\"apply\",\"message\":\"pfctl: line one line two\"}]}\n"
+		},
+		{
+			"id": "failed-message-cut-after-a-space",
+			"description": "A cut that lands after a space leaves no trailing space.",
+			"report": {
+				"failed": [
+					{
+						"id": "ip-set/A/ipv4",
+						"stage": "apply",
+						"message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \"quoted\""
+					}
+				]
+			},
+			"line": "{\"version\":2,\"failed\":[{\"id\":\"ip-set/A/ipv4\",\"stage\":\"apply\",\"message\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}\n"
+		},
+		{
+			"id": "failed-message-escape-not-split",
+			"description": "A quote that would end past the bound once escaped is left out whole.",
+			"report": {
+				"failed": [
+					{
+						"id": "ip-set/A/ipv4",
+						"stage": "apply",
+						"message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+					}
+				]
+			},
+			"line": "{\"version\":2,\"failed\":[{\"id\":\"ip-set/A/ipv4\",\"stage\":\"apply\",\"message\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}\n"
+		},
+		{
+			"id": "failed-4096-non-ascii-messages",
+			"description": "4,096 failures, each message 1,024 bytes of non-ASCII text: too long as one line, so every message is shortened.",
+			"reportJSON": [
+				"{\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"stage\":\"apply\",\"message\":\"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\"},",
+					"times": 4095
+				},
+				"{\"id\":\"ip-set/GLast/ipv4\",\"stage\":\"apply\",\"message\":\"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\"}]}"
+			],
+			"line": [
+				"{\"version\":2,\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"stage\":\"apply\",\"message\":\"left out to fit the result line\"},",
+					"times": 4095
+				},
+				"{\"id\":\"ip-set/GLast/ipv4\",\"stage\":\"apply\",\"message\":\"left out to fit the result line\"}]}\n"
+			]
+		},
+		{
+			"id": "failed-line-at-the-bound",
+			"description": "A line of exactly 524288 bytes, its newline included, is written as it is.",
+			"reportJSON": [
+				"{\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"stage\":\"apply\",\"message\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},",
+					"times": 485
+				},
+				"{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}]}"
+			],
+			"line": [
+				"{\"version\":2,\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"stage\":\"apply\",\"message\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},",
+					"times": 485
+				},
+				"{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}]}\n"
+			]
+		},
+		{
+			"id": "failed-line-one-byte-over",
+			"description": "One byte more, and every failure message is shortened.",
+			"reportJSON": [
+				"{\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"stage\":\"apply\",\"message\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},",
+					"times": 485
+				},
+				"{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}]}"
+			],
+			"line": [
+				"{\"version\":2,\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/G{i}/ipv4\",\"stage\":\"apply\",\"message\":\"left out to fit the result line\"},",
+					"times": 485
+				},
+				"{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"left out to fit the result line\"}]}\n"
+			]
+		},
+		{
+			"id": "lists-at-the-bound",
+			"description": "4,096 entries in applied, removed and changedAliases each, the most each may hold, on one line.",
+			"reportJSON": [
+				"{\"applied\":{",
+				{
+					"repeat": "\"ip-set/G{i}/ipv4\":\"{i}\",",
+					"times": 4095
+				},
+				"\"geo-catalog\":\"1\"},",
+				"\"removed\":[",
+				{
+					"repeat": "\"ip-set/R{i}/ipv6\",",
+					"times": 4095
+				},
+				"\"ip-aggregate/native/ipv6\"],",
+				"\"changedAliases\":[",
+				{
+					"repeat": "\"pfB_G{i}_v4\",",
+					"times": 4095
+				},
+				"\"pfB_Native_Aggregated_v6\"],",
+				"\"ipChanged\":true,\"dnsblChanged\":false,\"reloadLaunched\":true}"
+			],
+			"line": [
+				"{\"version\":2,\"applied\":{",
+				{
+					"repeat": "\"ip-set/G{i}/ipv4\":\"{i}\",",
+					"times": 4095
+				},
+				"\"geo-catalog\":\"1\"},",
+				"\"removed\":[",
+				{
+					"repeat": "\"ip-set/R{i}/ipv6\",",
+					"times": 4095
+				},
+				"\"ip-aggregate/native/ipv6\"],",
+				"\"changedAliases\":[",
+				{
+					"repeat": "\"pfB_G{i}_v4\",",
+					"times": 4095
+				},
+				"\"pfB_Native_Aggregated_v6\"],",
+				"\"ipChanged\":true,\"dnsblChanged\":false,\"reloadLaunched\":true}\n"
+			]
+		},
+		{
+			"id": "request-at-the-bound-half-failed",
+			"description": "A request of 4,096 resources, half applied and half failed with long messages: the messages are shortened, nothing else.",
+			"reportJSON": [
+				"{\"applied\":{",
+				{
+					"repeat": "\"ip-set/G{i}/ipv4\":\"{i}\",",
+					"times": 2047
+				},
+				"\"geo-catalog\":\"1\"},",
+				"\"changedAliases\":[",
+				{
+					"repeat": "\"pfB_G{i}_v4\",",
+					"times": 2048
+				},
+				"\"pfB_GLast_v4\"],",
+				"\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/F{i}/ipv6\",\"stage\":\"fetch\",\"message\":\"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\"},",
+					"times": 2047
+				},
+				"{\"id\":\"ip-set/FLast/ipv6\",\"stage\":\"fetch\",\"message\":\"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\"}]}"
+			],
+			"line": [
+				"{\"version\":2,\"applied\":{",
+				{
+					"repeat": "\"ip-set/G{i}/ipv4\":\"{i}\",",
+					"times": 2047
+				},
+				"\"geo-catalog\":\"1\"},",
+				"\"changedAliases\":[",
+				{
+					"repeat": "\"pfB_G{i}_v4\",",
+					"times": 2048
+				},
+				"\"pfB_GLast_v4\"],",
+				"\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/F{i}/ipv6\",\"stage\":\"fetch\",\"message\":\"left out to fit the result line\"},",
+					"times": 2047
+				},
+				"{\"id\":\"ip-set/FLast/ipv6\",\"stage\":\"fetch\",\"message\":\"left out to fit the result line\"}]}\n"
+			]
+		},
+		{
+			"id": "too-long-for-one-line",
+			"description": "Every list at its bound with the longest ids: too long even with the messages shortened, so refused.",
+			"reportJSON": [
+				"{\"applied\":{",
+				{
+					"repeat": "\"ip-set/ABCDEFGHIJKLMNOPQRST{i}/ipv4\":\"18446744073709551615\",",
+					"times": 4095
+				},
+				"\"geo-catalog\":\"1\"},",
+				"\"removed\":[",
+				{
+					"repeat": "\"ip-set/ABCDEFGHIJKLMNOPQRST{i}/ipv6\",",
+					"times": 4095
+				},
+				"\"geo-catalog\"],",
+				"\"changedAliases\":[",
+				{
+					"repeat": "\"pfB_ABCDEFGHIJKLMNOPQRST{i}_v4\",",
+					"times": 4095
+				},
+				"\"pfB_A_v4\"],",
+				"\"failed\":[",
+				{
+					"repeat": "{\"id\":\"ip-set/ABCDEFGHIJKLMNOPQRST{i}/ipv6\",\"stage\":\"apply\",\"message\":\"m\"},",
+					"times": 4095
+				},
+				"{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"m\"}]}"
+			],
+			"refused": "the report does not fit one result line of 524288 bytes, even with its failure messages shortened"
+		},
+		{
+			"id": "applied-4097",
+			"description": "applied with 4,097 entries, one over the bound.",
+			"reportJSON": [
+				"{\"applied\":{",
+				{
+					"repeat": "\"ip-set/G{i}/ipv4\":\"1\",",
+					"times": 4096
+				},
+				"\"geo-catalog\":\"1\"}}"
+			],
+			"refused": "applied holds more than 4096 entries"
+		},
+		{
+			"id": "removed-4097",
+			"description": "removed with 4,097 entries, one over the bound.",
+			"reportJSON": [
+				"{\"removed\":[",
+				{
+					"repeat": "\"ip-set/G{i}/ipv4\",",
+					"times": 4096
+				},
+				"\"geo-catalog\"]}"
+			],
+			"refused": "removed holds more than 4096 entries"
+		},
+		{
+			"id": "changedAliases-4097",
+			"description": "changedAliases with 4,097 entries, one over the bound.",
+			"reportJSON": [
+				"{\"changedAliases\":[",
+				{
+					"repeat": "\"pfB_G{i}_v4\",",
+					"times": 4096
+				},
+				"\"pfB_A_v4\"]}"
+			],
+			"refused": "changedAliases holds more than 4096 entries"
+		},
+		{
+			"id": "failed-4097",
+			"description": "failed with 4,097 entries, one over the bound.",
+			"reportJSON": [
+				"{\"failed\":[",
+				{
+					"repeat": "{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"m\"},",
+					"times": 4096
+				},
+				"{\"id\":\"geo-catalog\",\"stage\":\"apply\",\"message\":\"m\"}]}"
+			],
+			"refused": "failed holds more than 4096 entries"
+		},
+		{
+			"id": "applied-generation-of-21-characters",
+			"description": "An applied generation of 21 characters.",
+			"report": {
+				"applied": {
+					"geo-catalog": "000000000000000000001"
+				}
+			},
+			"refused": "applied is not a map of resource id to generation"
+		},
+		{
+			"id": "applied-dnsbl-id",
+			"description": "An applied dnsbl id: the apply never applies one.",
+			"report": {
+				"applied": {
+					"dnsbl/ads": "1"
+				}
+			},
+			"refused": "applied is not a map of resource id to generation"
+		},
+		{
+			"id": "applied-id-without-an-alias",
+			"description": "An applied id that maps to no alias.",
+			"report": {
+				"applied": {
+					"ip-set/Foo-Bar/ipv4": "1"
+				}
+			},
+			"refused": "applied is not a map of resource id to generation"
+		},
+		{
+			"id": "removed-dnsbl-id",
+			"description": "A removed dnsbl id.",
+			"report": {
+				"removed": [
+					"dnsbl/ads"
+				]
+			},
+			"refused": "removed is not a list of resource ids"
+		},
+		{
+			"id": "removed-id-without-an-alias",
+			"description": "A removed id whose alias would be an aggregate alias.",
+			"report": {
+				"removed": [
+					"ip-set/Deny_Aggregated/ipv4"
+				]
+			},
+			"refused": "removed is not a list of resource ids"
+		},
+		{
+			"id": "failed-unknown-aggregate-class",
+			"description": "A failure id of an aggregate class that does not exist.",
+			"report": {
+				"failed": [
+					{
+						"id": "ip-aggregate/geo/ipv4",
+						"stage": "apply",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "failed[0].id is not a resource id"
+		},
+		{
+			"id": "failed-dnsbl-id",
+			"description": "A failure id of a dnsbl resource.",
+			"report": {
+				"failed": [
+					{
+						"id": "dnsbl/ads",
+						"stage": "fetch",
+						"message": "m"
+					}
+				]
+			},
+			"refused": "failed[0].id is not a resource id"
+		},
+		{
+			"id": "changed-alias-empty",
+			"description": "An empty alias name.",
+			"report": {
+				"changedAliases": [
+					""
+				]
+			},
+			"refused": "changedAliases is not a list of alias names"
+		},
+		{
+			"id": "changed-alias-without-prefix",
+			"description": "An alias name without the pfB_ prefix.",
+			"report": {
+				"changedAliases": [
+					"Abuse_v4"
+				]
+			},
+			"refused": "changedAliases is not a list of alias names"
+		},
+		{
+			"id": "changed-alias-of-32-characters",
+			"description": "An alias name of 32 characters, one more than pf takes.",
+			"report": {
+				"changedAliases": [
+					"pfB_ABCDEFGHIJKLMNOPQRSTUVWXY_v4"
+				]
+			},
+			"refused": "changedAliases is not a list of alias names"
+		},
+		{
+			"id": "changed-alias-of-31-characters",
+			"description": "An alias name of 31 characters.",
+			"report": {
+				"changedAliases": [
+					"pfB_ABCDEFGHIJKLMNOPQRSTUVWX_v4"
+				]
+			},
+			"line": "{\"version\":2,\"changedAliases\":[\"pfB_ABCDEFGHIJKLMNOPQRSTUVWX_v4\"]}\n"
 		},
 		{
 			"id": "unknown-field",

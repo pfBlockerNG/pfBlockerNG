@@ -15,7 +15,8 @@ use PHPUnit\Framework\TestCase;
  *     message cut to bounded text);
  *   - a resource id maps to an alias by one rule (decision 1 of the issue), and an id that maps to none, or two ids that map
  *     to one alias, refuse the request;
- *   - a result line is written in one fixed shape, and a report the contract does not hold is refused, never written.
+ *   - a result line is written in one fixed shape, never longer than the fixture's resultLineBytes (failure messages are
+ *     shortened first), and a report the contract does not hold, or one that cannot fit, is refused, never written.
  */
 #[CoversFunction('pfb_core_update_v2_request')]
 #[CoversFunction('pfb_core_update_v2_alias')]
@@ -72,31 +73,59 @@ final class CoreUpdateV2ContractTest extends TestCase
 		return $rows;
 	}
 
-	/** The stdin of a request row: its `request` written as JSON, or its `stdin` parts joined (see the fixture's `about`). */
-	private static function stdin(string $id): string
+	/**
+	 * Bytes given as a string, or as a list of parts joined in order, each a string or {repeat, times}: the string written times
+	 * times, every '{i}' in it replaced by the repetition's index from 0 (see the fixture's `about`).
+	 *
+	 * @param string|list<string|stdClass> $parts
+	 */
+	private static function joined(string|array $parts): string
 	{
-		$raw = (string) file_get_contents(self::FIXTURE);
-		foreach (json_decode($raw, FALSE, 512, JSON_THROW_ON_ERROR)->requests as $row) {
-			if ($row->id !== $id) {
+		$bytes = '';
+		foreach (is_array($parts) ? $parts : [$parts] as $part) {
+			if (is_string($part)) {
+				$bytes .= $part;
 				continue;
 			}
-			if (property_exists($row, 'request')) {
-				// decoded as objects, so that {} stays an object and the keys keep their order
-				return json_encode($row->request, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
+			for ($i = 0; $i < $part->times; $i++) {
+				$bytes .= str_replace('{i}', (string) $i, $part->repeat);
 			}
-			$stdin = '';
-			foreach (is_array($row->stdin) ? $row->stdin : [$row->stdin] as $part) {
-				if (is_string($part)) {
-					$stdin .= $part;
-					continue;
-				}
-				for ($i = 0; $i < $part->times; $i++) {
-					$stdin .= str_replace('{i}', (string) $i, $part->repeat);
-				}
-			}
-			return $stdin;
 		}
-		throw new LogicException("no request row {$id}");
+		return $bytes;
+	}
+
+	/** The row $id of $section, decoded as objects, so that {} stays an object and the keys keep their order. */
+	private static function raw(string $section, string $id): stdClass
+	{
+		foreach (json_decode((string) file_get_contents(self::FIXTURE), FALSE, 512, JSON_THROW_ON_ERROR)->{$section} as $row) {
+			if ($row->id === $id) {
+				return $row;
+			}
+		}
+		throw new LogicException("no {$section} row {$id}");
+	}
+
+	/** The stdin of a request row: its `request` written as JSON, or its `stdin` joined. */
+	private static function stdin(string $id): string
+	{
+		$row = self::raw('requests', $id);
+		if (property_exists($row, 'request')) {
+			return json_encode($row->request, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
+		}
+		return self::joined($row->stdin);
+	}
+
+	/**
+	 * The report of a result row: its `report`, or its `reportJSON` joined and decoded; and its `line` joined.
+	 *
+	 * @return array{0: array<string, mixed>, 1: ?string}
+	 */
+	private static function resultRow(string $id): array
+	{
+		$row = self::raw('results', $id);
+		$report = property_exists($row, 'report') ? json_decode(json_encode($row->report, JSON_THROW_ON_ERROR), TRUE, 512, JSON_THROW_ON_ERROR)
+			: json_decode(self::joined($row->reportJSON), TRUE, 512, JSON_THROW_ON_ERROR);
+		return [$report, property_exists($row, 'line') ? self::joined($row->line) : NULL];
 	}
 
 	public function testTheFixtureIsTheVersion2ContractAndHoldsEveryHostileRow(): void
@@ -104,7 +133,7 @@ final class CoreUpdateV2ContractTest extends TestCase
 		$doc = self::fixture();
 		$this->assertSame(1, $doc['schema']);
 		$this->assertSame('update-command-version-2', $doc['contract']);
-		foreach (['requests', 'results'] as $section) {
+		foreach (['requests', 'results', 'aliases'] as $section) {
 			$ids = array_column($doc[$section], 'id');
 			$this->assertSame(array_values(array_unique($ids)), $ids, "{$section}: a row id appears once");
 		}
@@ -121,6 +150,12 @@ final class CoreUpdateV2ContractTest extends TestCase
 		$this->assertSame($doc['limits']['requestBytes'], strlen(self::stdin('issue-message-in-a-request-of-1-mib')), 'the boundary row is exactly at the bound');
 		$this->assertSame($doc['limits']['requestBytes'] + 1, strlen(self::stdin('over-1-mib')), 'the row over the bound is one byte over it');
 		$this->assertSame(PFB_CORE_UPDATE_MAX_REQUEST, $doc['limits']['requestBytes'], 'the bound is the one pfblockerng.inc reads stdin to');
+		$this->assertSame(PFB_CORE_UPDATE_V2_LINE_BYTES, $doc['limits']['resultLineBytes'], 'the bound is the one the result writer keeps to');
+		foreach ($doc['results'] as $row) {
+			$this->assertCount(1, array_intersect(['report', 'reportJSON'], array_keys($row)), "{$row['id']}: one report");
+			$this->assertCount(1, array_intersect(['line', 'refused'], array_keys($row)), "{$row['id']}: one verdict");
+		}
+		$this->assertSame($doc['limits']['resultLineBytes'], strlen((string) self::resultRow('failed-line-at-the-bound')[1]), 'the boundary line is exactly at the bound');
 	}
 
 	/** @param array<string, mixed> $row */
@@ -160,17 +195,25 @@ final class CoreUpdateV2ContractTest extends TestCase
 	#[DataProvider('results')]
 	public function testTheResultWriterGivesTheRowsLine(array $row): void
 	{
+		[$report, $expected] = self::resultRow($row['id']);
 		if (array_key_exists('refused', $row)) {
 			try {
-				$line = pfb_core_update_v2_result($row['report']);
+				$line = pfb_core_update_v2_result($report);
 			} catch (InvalidArgumentException $e) {
 				$this->assertSame($row['refused'], $e->getMessage(), "{$row['id']}: the reason of the refusal");
 				return;
 			}
-			$this->fail("{$row['id']}: written as {$line}, expected the refusal \"{$row['refused']}\"");
+			$this->fail("{$row['id']}: written as a line of " . strlen($line) . " bytes, expected the refusal \"{$row['refused']}\"");
 		}
-		$line = pfb_core_update_v2_result($row['report']);
-		$this->assertSame($row['line'], $line, "{$row['id']}: the line, byte for byte");
+		$line = pfb_core_update_v2_result($report);
+		if (strlen((string) $expected) > 8192) {
+			// a large line is compared by its length and digest, so that a failure does not print megabytes
+			$this->assertSame([strlen((string) $expected), hash('sha256', (string) $expected)], [strlen($line), hash('sha256', $line)],
+				"{$row['id']}: the line, byte for byte; it begins " . substr($line, 0, 300));
+		} else {
+			$this->assertSame($expected, $line, "{$row['id']}: the line, byte for byte");
+		}
+		$this->assertLessThanOrEqual(self::fixture()['limits']['resultLineBytes'], strlen($line), "{$row['id']}: within the bound of a line");
 		$this->assertStringEndsWith("\n", $line);
 		$this->assertSame(1, substr_count($line, "\n"), "{$row['id']}: one line");
 		$this->assertSame(1, preg_match('/^[\x20-\x7e]*\n\z/', $line), "{$row['id']}: printable ASCII and one newline");
