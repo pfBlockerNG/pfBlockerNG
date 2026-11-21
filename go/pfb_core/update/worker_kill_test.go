@@ -364,7 +364,10 @@ func TestWorkerDeathKeepsExclusionUntilTheNativeProgramExits(t *testing.T) {
 		t.Fatal("the killed worker returned a nil error")
 	}
 	cmd.Process = nil
-	if _, err := operationLock(log.Name()); !errors.Is(err, ErrRunning) {
+	if lock, err := operationLock(log.Name()); !errors.Is(err, ErrRunning) {
+		if err == nil {
+			lock.Close() // or the cleanup would wait on this very lock
+		}
 		t.Fatalf("worker death released admission while the native program lived: %v", err)
 	}
 	second, secondDir := program(t, `echo second > "$D/second"`)
