@@ -21,8 +21,8 @@ require_once __DIR__ . '/support/ProcessRunner.php';
  * the main log, the DNS listener's VIPs and advertisements, the locks left held and the named locks taken in order, the
  * XMLRPC sends, the received payload's absorb, the metrics sentinel, and what the pass returned. Each step's `expect` is
  * that record as the code before the cut wrote it, compacted: a member list longer than 8 lines is its count, digest
- * and ends, a kernel table appears only where it differs from its mirror, and a section equal to the previous step's
- * reads "same".
+ * and ends, a kernel table appears only where it differs from its mirror (NULL: its mirror exists and the table does
+ * not), and a section equal to the previous step's reads "same".
  */
 #[CoversFunction('sync_package_pfblockerng')]
 #[CoversFunction('pfb_apply_enter')]
@@ -78,15 +78,23 @@ final class OutpostApplyCorpusTest extends TestCase
 		$this->assertCount(count($sc['steps']), $records, 'one record per pass');
 
 		$kernel = $mirrors = [];
+		$log    = '';
 		foreach ($sc['steps'] as $i => $step) {
 			$this->assertSame($step['expect'], $records[$i], "pass {$i} of " . basename($file) . " no longer does what it recorded");
 			// ADR-40 end state: a kernel table the pass left equals its mirror, unless the scenario makes pfctl fail. The record
-			// holds a kernel table only where it differs from its sorted mirror.
+			// omits a table equal to its sorted mirror, lists one that differs, and holds NULL for a mirror with no table: that
+			// is the end state only of a pass that left the tables to the filter reload, which the double does not perform.
 			$kernel  = $records[$i]['kernel'] === 'same' ? $kernel : $records[$i]['kernel'];
 			$mirrors = $records[$i]['mirrors'] === 'same' ? $mirrors : $records[$i]['mirrors'];
+			$log     = $records[$i]['log'] === 'same' ? $log : $records[$i]['log'];
 			if (empty($step['pfctlFail'])) {
-				foreach (array_keys($kernel) as $table) {
-					$this->assertArrayNotHasKey("{$table}.txt", $mirrors, "pass {$i}: kernel table {$table} differs from its mirror");
+				foreach ($kernel as $table => $members) {
+					if ($members === NULL) {
+						$this->assertStringContainsString('Alias tables: skipped (Filter Reload rebuilds them from the alias files)', $log,
+							"pass {$i}: kernel table {$table} is absent though its mirror exists and the pass did not leave it to the filter reload");
+					} else {
+						$this->assertArrayNotHasKey("{$table}.txt", $mirrors, "pass {$i}: kernel table {$table} differs from its mirror");
+					}
 				}
 			}
 		}

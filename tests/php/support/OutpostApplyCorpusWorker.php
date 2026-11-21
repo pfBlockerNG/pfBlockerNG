@@ -11,10 +11,15 @@ declare(strict_types=1);
  * shell script that appends its PFB_* environment to a file, so the context it records is the one a real hook receives.
  *
  * Everything the pass writes stays under the work directory, so concurrent runs share nothing: TMPDIR (and with it the
- * bootstrap sandbox and every temporary file) is {work}/tmp, and every $pfb path under /usr/local/etc, /var/unbound or
- * /tmp moves under {work}/host. The three host paths the pass names literally (/usr/local/sbin/lighttpd_pfb,
- * /usr/local/etc/rc.d/pfb_dnsbl.sh, /var/tmp/node_exporter/pfblockerng.prom) reach only unlink_if_exists(), which here
- * removes nothing outside the work directory.
+ * bootstrap sandbox and every temporary file) is {work}/tmp, checked after the bootstrap, and every absolute path in
+ * $pfb, at any depth, that lies outside the work directory and the source tree moves under {work}/host, except the
+ * tools of CORPUS_HOST_TOOLS. $pfb is walked again after each pass, and a host path found there fails the run.
+ *
+ * Some host paths the pass names literally rather than through $pfb. Those that reach unlink_if_exists()
+ * (/usr/local/sbin/lighttpd_pfb, /usr/local/etc/rc.d/pfb_dnsbl.sh, /var/tmp/node_exporter/pfblockerng.prom,
+ * /var/unbound/pfb_py_ss.*) are removed under {work}/host instead, as production removes them on the host. Two have no
+ * seam: /var/unbound/pfb_py_ss.raw, written when SafeSearch is on, and /tmp/Error_<feed>_<date>.orig, written when a
+ * DNSBL feed yields no domains; the worker refuses a scenario that enables SafeSearch or configures a feed to download.
  *
  * Seams, all existing: `pfctl` is $pfb['pfctl'], here a shell double that keeps each kernel table as a sorted file and
  * logs every call with the lines of its -f file; a file `pfctl-fail/<table>.<verb>` makes that call fail as pfctl does.
@@ -41,13 +46,18 @@ $host = "{$work}/host";
 foreach (["{$work}/tmp", "{$work}/kernel", "{$work}/pfctl-fail", "{$host}/usr/local/etc", "{$host}/var/unbound", "{$host}/tmp"] as $dir) {
 	@mkdir($dir, 0755, TRUE);
 }
+$GLOBALS['corpus_host'] = $host;
 putenv("TMPDIR={$work}/tmp");	// before anything asks: sys_get_temp_dir() keeps its first answer
 $GLOBALS['corpus_work'] = $work;
 
-// pfSense util.inc, as the shared double, except that nothing outside the work directory is removed.
+// pfSense util.inc, as the shared double, except that a path outside the work directory is removed under {work}/host.
 function unlink_if_exists($fn) {
-	if (!str_starts_with((string) $fn, $GLOBALS['corpus_work'] . '/')) {
-		return FALSE;
+	$fn = (string) $fn;
+	if (!str_starts_with($fn, $GLOBALS['corpus_work'] . '/')) {
+		if (!str_starts_with($fn, '/')) {
+			throw new RuntimeException("unlink_if_exists() got a relative path: {$fn}");
+		}
+		$fn = $GLOBALS['corpus_host'] . $fn;
 	}
 	$to_do = glob($fn);
 	if (is_array($to_do) && count($to_do) > 0) {
@@ -97,8 +107,8 @@ if [ -n "$t" ] && [ -e "$d/pfctl-fail/$t.$op" ]; then
 fi
 case "$op" in
 	show) if [ -f "$k/$t" ]; then cat "$k/$t"; fi ;;
-	replace) sort -u "$f" > "$k/$t.new" && mv "$k/$t.new" "$k/$t" ;;
-	add) cat "$f" "$k/$t" 2>/dev/null | sort -u > "$k/$t.new" && mv "$k/$t.new" "$k/$t" ;;
+	replace) LC_ALL=C sort -u "$f" > "$k/$t.new" && mv "$k/$t.new" "$k/$t" ;;
+	add) cat "$f" "$k/$t" 2>/dev/null | LC_ALL=C sort -u > "$k/$t.new" && mv "$k/$t.new" "$k/$t" ;;
 	delete) if [ -f "$k/$t" ]; then grep -vxF -f "$f" "$k/$t" > "$k/$t.new"; mv "$k/$t.new" "$k/$t"; fi ;;
 	kill) rm -f "$k/$t" ;;
 esac
@@ -123,12 +133,47 @@ foreach (array_keys(getenv()) as $name) {
 require "{$repo}/tests/php/bootstrap.php";
 require_once "{$repo}/tests/php/SyncPrereqSeedTrait.php";
 
-$pfb =& $GLOBALS['pfb'];
-foreach ($pfb as $key => $value) {
-	if (is_string($value) && !str_starts_with($value, "{$work}/") && preg_match('#^(/usr/local/etc|/var/unbound|/tmp)(/|$)#', $value)) {
-		$pfb[$key] = $host . $value;
+// PHP's sys_temp_dir setting overrides TMPDIR: the bootstrap's sandbox must have landed under the work directory.
+if (!str_starts_with($GLOBALS['g']['vardb_path'], "{$work}/tmp/")) {
+	throw new RuntimeException("the bootstrap sandbox {$GLOBALS['g']['vardb_path']} lies outside {$work}/tmp");
+}
+
+// $pfb keys whose host path the pass may keep: executables it runs and never writes.
+const CORPUS_HOST_TOOLS = ['awk', 'cat', 'cut', 'ggrep', 'grep', 'ls', 'sed', 'tar', 'timeout', 'wc'];
+
+/** Whether $value is an absolute path outside the work directory and the source tree (a regex such as $pfb['ipv4'] is not a path). */
+function corpus_is_host_path(mixed $value, string $work, string $repo): bool
+{
+	return is_string($value) && preg_match('#^(/[A-Za-z0-9._@+-]+)+/?$#', $value) === 1
+		&& !str_starts_with("{$value}/", "{$work}/") && !str_starts_with("{$value}/", "{$repo}/");
+}
+
+/** Moves every host path in $values, at any depth, under {work}/host; at the top level the tools keep theirs. */
+function corpus_sandbox_paths(array &$values, string $work, string $repo, bool $top = TRUE): void
+{
+	foreach ($values as $key => &$value) {
+		if (is_array($value)) {
+			corpus_sandbox_paths($value, $work, $repo, FALSE);
+		} elseif (corpus_is_host_path($value, $work, $repo) && !($top && in_array($key, CORPUS_HOST_TOOLS, TRUE))) {
+			$value = "{$work}/host{$value}";
+		}
 	}
 }
+
+/** Throws if any host path is left in $values, at any depth, other than a tool's. */
+function corpus_assert_sandboxed(array $values, string $work, string $repo, string $at = 'pfb'): void
+{
+	foreach ($values as $key => $value) {
+		if (is_array($value)) {
+			corpus_assert_sandboxed($value, $work, $repo, "{$at}[{$key}]");
+		} elseif (corpus_is_host_path($value, $work, $repo) && !($at === 'pfb' && in_array($key, CORPUS_HOST_TOOLS, TRUE))) {
+			throw new RuntimeException("{$at}[{$key}] points at the host: {$value}");
+		}
+	}
+}
+
+$pfb =& $GLOBALS['pfb'];
+corpus_sandbox_paths($pfb, $work, $repo);
 $pfb['schedule_state_dir']    = "{$host}/usr/local/etc";
 $pfb['pfctl']                 = "{$work}/pfctl";
 $pfb['ip_unlock']             = "{$work}/ip_unlock";
@@ -140,6 +185,7 @@ $pfb['domain_clear']          = FALSE;
 $GLOBALS['g']['pfblockerng_install'] = FALSE;
 $GLOBALS['g']['unbound_chroot_path'] = "{$host}/var/unbound";
 $GLOBALS['config'] = [];
+corpus_assert_sandboxed($pfb, $work, $repo);
 
 /** The minimum every test that runs the pass seeds (SyncPrereqSeedTrait), and what this corpus adds to it. */
 final class CorpusSeed
@@ -222,7 +268,7 @@ function corpus_path(string $path, string $work): string
 /** Variable parts of a recorded text: the moved host paths, the sandbox, the work directory, temporary file names, dates and times. */
 function corpus_normal(string $text, string $work): string
 {
-	$text = str_replace(["{$work}/host", dirname($GLOBALS['g']['vardb_path']), "{$work}/tmp", $work], ['', '<sandbox>', '<tmp>', '<work>'], $text);
+	$text = str_replace(["{$work}/host", dirname($GLOBALS['g']['vardb_path']), "{$work}/tmp", $work], ['<host>', '<sandbox>', '<tmp>', '<work>'], $text);
 	$text = (string) preg_replace('/(pfb_(?:add|del)_)[A-Za-z0-9]+/', '$1*', $text);
 	$text = (string) preg_replace('/\b\d{4}-\d{2}-\d{2}\b/', '<d>', $text);
 	$text = (string) preg_replace('/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b|\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b \d{1,2}/', '<t>', $text);
@@ -259,17 +305,29 @@ function corpus_list(array $lines): array
 
 /**
  * The record as a fixture holds it: long member lists folded (corpus_list()), a kernel table only where it differs from
- * its sorted mirror, and an array or text section equal to the previous pass's (compacted) as "same".
+ * its sorted mirror (NULL: a mirror whose kernel table is absent), and an array or text section equal to the previous
+ * pass's (compacted) as "same".
  */
 function corpus_compact(array $record, ?array $previous): array
 {
 	$kernel = [];
-	foreach ($record['kernel'] as $table => $members) {
-		$mirror = $record['mirrors']["{$table}.txt"] ?? NULL;
+	$tables = array_keys($record['kernel']);
+	foreach (array_keys($record['mirrors']) as $name) {
+		if (str_ends_with($name, '.txt')) {
+			$tables[] = substr($name, 0, -4);
+		}
+	}
+	$tables = array_unique($tables);
+	sort($tables, SORT_STRING);
+	foreach ($tables as $table) {
+		$members = $record['kernel'][$table] ?? NULL;
+		$mirror  = $record['mirrors']["{$table}.txt"] ?? NULL;
 		if ($mirror !== NULL) {
 			sort($mirror, SORT_STRING);
 		}
-		if ($mirror !== $members) {
+		if ($members === NULL) {
+			$kernel[$table] = NULL;
+		} elseif ($mirror !== $members) {
 			$kernel[$table] = corpus_list($members);
 		}
 	}
@@ -298,6 +356,27 @@ function corpus_listener(): array
 		'added' => PfbConfig::read('gen/pfb_dns_listen_added')]], JSON_THROW_ON_ERROR);
 	return json_decode(str_replace($ids, array_map(static fn (int $i): string => '<vip' . ($i + 1) . '>', array_keys($ids)), $json),
 		TRUE, 64, JSON_THROW_ON_ERROR);
+}
+
+/** Refuses a configuration that makes the pass write a literal host path no seam moves (see the header). */
+function corpus_refuse_unsandboxed(): void
+{
+	foreach (['ss/safesearch_enable', 'ss/safesearch_youtube', 'ss/safesearch_doh'] as $key) {
+		if (PfbConfig::read($key) !== 'Disable') {	// the test of pfb_global() that turns SafeSearch on
+			throw new RuntimeException("the scenario enables SafeSearch ({$key}): the pass would write /var/unbound/pfb_py_ss.raw on the host");
+		}
+	}
+	foreach (['installedpackages/pfblockernglistsv4/config', 'installedpackages/pfblockernglistsv6/config',
+		'installedpackages/pfblockerngdnsbl/config'] as $path) {
+		foreach (config_get_path($path, []) as $list) {
+			if (!empty($list['row'])) {
+				throw new RuntimeException("the scenario configures a feed to download ({$path}): the pass may write /tmp/Error_*.orig on the host");
+			}
+		}
+	}
+	if (config_get_path('installedpackages/pfblockerngblacklist/blacklist_enable') !== 'Disable') {
+		throw new RuntimeException('the scenario enables the DNSBL blacklist categories, which the pass downloads');
+	}
 }
 
 (new CorpusSeed())->seed();
@@ -361,6 +440,7 @@ foreach ($sc['steps'] as $step) {
 	if (!empty($step['dispatchHeld'])) {
 		pfb_schedule_dispatch_begin();
 	}
+	corpus_refuse_unsandboxed();
 
 	@unlink("{$work}/pfctl.log");
 	@unlink("{$work}/hook_ctx.log");
@@ -375,6 +455,7 @@ foreach ($sc['steps'] as $step) {
 	$GLOBALS['pfb']['save']                      = !empty($step['save']);
 
 	$returned = sync_package_pfblockerng();
+	corpus_assert_sandboxed($pfb, $work, $repo);
 
 	$mirrors = [];
 	foreach (glob("{$pfb['aliasdir']}/*") ?: [] as $file) {
@@ -438,7 +519,8 @@ foreach ($sc['steps'] as $step) {
 			'dnsConfig' => !empty($GLOBALS['pfb_test_lock_held']),
 			'holders'   => array_keys($GLOBALS['pfb_test_lock_holders'] ?? []),
 			'events'    => $GLOBALS['pfb_test_lock_events']],
-		'xmlrpc'       => array_map(static fn (array $call, array $to): array => [$call[0], $to['ip']],
+		// Each XMLRPC call with the connection of the same index; a missing partner is NULL.
+		'xmlrpc'       => array_map(static fn (?array $call, ?array $to): array => [$call[0] ?? NULL, $to['ip'] ?? NULL],
 			$GLOBALS['pfb_test_xmlrpc_calls'], $GLOBALS['pfb_test_xmlrpc_connections']),
 		// Whether the received legacy payload on record is what the node holds now; NULL: no policy accepted.
 		'receivedCurrent' => ($receive['accepted_digest'] ?? NULL) === NULL ? NULL

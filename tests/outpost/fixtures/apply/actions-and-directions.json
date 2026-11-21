@@ -182,7 +182,15 @@
             "lines": []
           }
         ],
-        "kernel": [],
+        "kernel": {
+          "pfB_Abuse_v4": null,
+          "pfB_Allow_v4": null,
+          "pfB_Both_v4": null,
+          "pfB_Out_v4": null,
+          "pfB_Quiet_v4": null,
+          "pfB_Six_v6": null,
+          "pfB_Watch_v4": null
+        },
         "mirrors": {
           "pfB_Abuse_v4.txt": [
             "10.1.0.1",

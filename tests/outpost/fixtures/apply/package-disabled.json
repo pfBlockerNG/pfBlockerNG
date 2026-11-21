@@ -39,7 +39,9 @@
             "lines": []
           }
         ],
-        "kernel": [],
+        "kernel": {
+          "pfB_Abuse_v4": null
+        },
         "mirrors": {
           "pfB_Abuse_v4.txt": {
             "count": 50,
