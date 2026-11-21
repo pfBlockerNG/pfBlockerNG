@@ -159,7 +159,20 @@ it loads.
 
 While the bouncer is enabled (see [When the bouncer runs](#when-the-bouncer-runs)), the **pfBlockerNG** dashboard widget lists `crowdsec_v4` and `crowdsec_v6` after pfBlockerNG's
 own aliases, with the number of entries in each table and the packets matched by its rules. Each name links to the
-Status subtab.
+Status subtab, and each packet count to the table's drops in **Reports > Alerts**.
+
+### Alerts and Reports
+
+With **Log blocked packets** on, each drop by a CrowdSec rule is listed in **Firewall > pfBlockerNG > Reports > Alerts**
+(the Block table and the Unified view), counted in the IP statistics, and sent with the remote syslog events:
+
+- The alias is the table, `crowdsec_v4` or `crowdsec_v6`. The rule column shows the rule's tracker; hover over it for
+  the rule's name.
+- The feed is `CrowdSec` and the evaluated entry `Unknown`: the firewall log does not say which decision matched. The
+  shield icon next to the address opens the Status subtab's lookup for it, which shows the matching decisions with
+  their origin, scenario and expiry.
+- pfBlockerNG's suppress, unlock and whitelist actions are not offered: the decisions belong to the CrowdSec engine,
+  and the CrowdSec rules come before pfBlockerNG's own.
 
 ### Timing
 
@@ -344,8 +357,5 @@ decisions again, so no ban or removal is lost.
 ## Limitations
 
 - Only `ban` decisions on IP addresses and ranges are enforced.
-- Drops by the CrowdSec rules are not yet listed in pfBlockerNG's Alerts and Reports; this is tracked in
-  [#4164](https://github.com/pfBlockerNG/pfBlockerNG/issues/4164). Use the firewall log with **Log blocked packets**,
-  the Status subtab and the dashboard widget instead.
 - The dropped counters count the inbound rules only.
 - Each firewall needs its own key, and the bouncer is not CARP-aware.

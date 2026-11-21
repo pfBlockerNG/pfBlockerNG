@@ -629,13 +629,21 @@ listed only rules on `<pfB_…>` tables, so the filterlog daemon skipped every l
 - **When.** The ruleset carries the rules only while the bouncer should run (D5), so its drops are attributed then.
   A row already written stays a CrowdSec row: the Alerts page recognizes it by the table it names. A `filter.log` line
   the daemon reads after a reload has removed the rules is skipped, as a removed pfB rule's lines are, but its tracker
-  is not kept in the daemon's cache of unresolvable trackers: the rules come back with the same trackers when the
-  bouncer is turned on again, and the filterlog daemon is not restarted then.
+  stays in the daemon's cache of unresolvable trackers for a minute only, not for the daemon's life: the rules come back
+  with the same trackers when the bouncer is turned on again, and the filterlog daemon is not restarted then.
 - **Row.** The alias is the table (`crowdsec_v4`, `crowdsec_v6`), as the dashboard widget names it (#4161); the rule
-  number is the rule's tracker, which names the rule and its direction. The feed is `CrowdSec`. The matched entry is
+  number is the rule's tracker, and the Rule cell's tooltip names the rule (`CrowdSec IPv4`, `CrowdSec IPv4 out`, and
+  the IPv6 pair). The feed is `CrowdSec`. The matched entry is
   `Unknown`: the log does not say which decision matched (an address or a range), and the decision's origin and
   scenario are not in it either. A pfB feed that lists the address too did not drop it, so it is not consulted; the
   host's IP cache entry keeps its pfB attribution for pfB rules' drops.
+- **Direction.** For the bouncer's rules the tracker gives the banned side: the inbound rule's source, the outbound
+  rule's destination. The daemon records that side as the host and the direction, instead of guessing from the local
+  addresses, so a drop toward a routed subnet on no local interface still names the banned address.
+- **Decision origin: considered and declined (owner, 2026-11-21).** The row does not name the decision's origin or
+  scenario. Reading them from files the bouncer would write (a LAPI request from the filterlog daemon would hold up the
+  log) was built and reviewed, then dropped: the bouncer keeps its own logs, so anyone who needs to know why an address
+  was banned can cross-check them, and the Status subtab's lookup, linked from the row, shows the live decision.
 - **Alerts page.** The row renders as logged: the bouncer's tables are no feed or alias table, so the render-time
   re-check does not apply. pfBlockerNG's suppress, unlock and whitelist actions are not offered, because the decisions
   live on the CrowdSec engine and the bouncer's rules come before every pfB rule. Beside the Threat Source lookup, the

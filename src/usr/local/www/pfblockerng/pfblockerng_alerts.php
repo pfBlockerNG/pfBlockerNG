@@ -3426,6 +3426,10 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	} else {
 		$rule = "{$h_rule_alias}<br /><small>({$h_rule_num})</small>";
 	}
+	// The CrowdSec bouncer's rule its tracker identifies (#4164), named in a tooltip
+	if ($crowdsec && ($rule_name = pfb_crowdsec_rule_name((int) $fields[0])) !== NULL) {
+		$rule = '<span title="' . pfb_hsc($rule_name) . "\">{$rule}</span>";
+	}
 
 	$dup_cnt = '';
 	if ($dup[$rtype] != 0) {

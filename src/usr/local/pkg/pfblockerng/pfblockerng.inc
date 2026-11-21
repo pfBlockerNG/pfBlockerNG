@@ -26551,7 +26551,8 @@ function pfb_resolve_tracker(
 	string $tracker,
 	string $type,
 	callable $reparse,
-	?callable $on_reparse = NULL
+	?callable $on_reparse = NULL,
+	?int $now = NULL
 ): bool {
 	// Known pfB tracker of the matching type. Checked before the miss cache so a tracker
 	// that becomes valid (e.g. after a reparse for another tracker) always resolves.
@@ -26561,8 +26562,9 @@ function pfb_resolve_tracker(
 
 	$miss_key = "{$tracker}\0{$type}";
 
-	// Negative cache: a tracker/type the ruleset doesn't list (anchor/trackerless) — never reparse again.
-	if (isset($miss_cache[$miss_key])) {
+	// Negative cache: a tracker/type the ruleset doesn't list (anchor/trackerless) — never reparse again; a CrowdSec bouncer
+	// tracker's miss lasts until its expiry time.
+	if (isset($miss_cache[$miss_key]) && ($miss_cache[$miss_key] === TRUE || $miss_cache[$miss_key] > ($now ?? time()))) {
 		return FALSE;
 	}
 
@@ -26585,12 +26587,9 @@ function pfb_resolve_tracker(
 		return FALSE;
 	}
 
-	// Still unresolved for this tracker/type after a fresh parse — record in the negative cache. Not the CrowdSec bouncer's
-	// fixed trackers (#4164): its rules come back with them when it is turned on again, and its lines come only while they
-	// are loaded or just after
-	if (!in_array((int) $tracker, pfb_crowdsec_tracker_ids(), TRUE)) {
-		$miss_cache[$miss_key] = TRUE;
-	}
+	// Still unresolved for this tracker/type after a fresh parse — record in the negative cache. The CrowdSec bouncer's fixed
+	// trackers (#4164) for a minute only: its rules come back with them when it is turned on again
+	$miss_cache[$miss_key] = in_array((int) $tracker, pfb_crowdsec_tracker_ids(), TRUE) ? ($now ?? time()) + 60 : TRUE;
 	return FALSE;
 }
 
@@ -27352,9 +27351,11 @@ function pfb_daemon_filterlog() {
 						$tcp_flags	= $d[12] == 'tcp' ? $d[20] : '';
 					}
 
-					// Determine if DST IP or SRC IP is the external host
+					// Determine if DST IP or SRC IP is the external host. The CrowdSec bouncer's rules (#4164) say which side is
+					// banned: the inbound rule's source, the outbound rule's destination.
 					// issue #713: port field is selected by IP version -- see pfb_filterlog_port().
-					if (isset($pfb_local[$dstip]) || pfb_local_ip($dstip, $pfb_localsub)) {
+					$crowdsec_dir = pfb_crowdsec_rule_direction((int) $d[3]);
+					if ($crowdsec_dir !== NULL ? $crowdsec_dir === 'in' : (isset($pfb_local[$dstip]) || pfb_local_ip($dstip, $pfb_localsub))) {
 						$dir	= 'in';
 						$host	= $srcip;
 						$client	= $dstip;
