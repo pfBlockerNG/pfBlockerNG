@@ -896,8 +896,9 @@ again, with the byte-identical body, to resolve an unknown outcome such as a tim
   whether its request ran before a restart reads the state it changed instead of repeating it.
 - The privileged uid's requests and the further local clients' (`--client-uid`) are remembered apart, 4096 each, so
   nothing a client sends makes Core forget a privileged `requestId`. The clients share one memory of 4096, but each
-  client uid's `requestId`s are its own: one client uid can neither answer nor conflict with another's. The memory itself is shared, so one client can still
-  make Core forget another client's `requestId`s, and a repeat of a forgotten one runs again.
+  client uid's `requestId`s are its own: one client uid can neither answer nor conflict with another's. The memory
+  itself is shared, so one client can still make Core forget another client's `requestId`s, and a repeat of a
+  forgotten one runs again.
 
 A read-only method takes no `requestId` and is never replayed.
 
