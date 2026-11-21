@@ -59,8 +59,8 @@ func TestTheCatalogCarriesANameAsData(t *testing.T) {
 	}
 }
 
-// The catalog is part of the generation: a conversion that fails after the catalog is built, when its generation cannot be
-// linked into place, leaves the previous one.
+// The catalog is part of the generation: a conversion whose generation cannot be linked into place, its last step, leaves
+// the previous catalog live.
 func TestAFailedConversionKeepsThePreviousCatalog(t *testing.T) {
 	c, _ := conversionRoot(t, testBlocks)
 	if err := os.WriteFile(filepath.Join(filepath.Dir(c.CCDir), previousGeneration, ".geo_catalog"), []byte("previous\n"), 0o600); err != nil {
