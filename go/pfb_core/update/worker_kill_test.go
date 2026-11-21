@@ -337,8 +337,14 @@ func TestWorkerDeathKeepsExclusionUntilTheNativeProgramExits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = release.WriteString("finish\n"); _ = release.Close() })
 	log := independentLog(t)
+	// The released program still writes "finished" into its folder: wait for its exit (the lock it holds) before the
+	// temporary folders go (#4166).
+	t.Cleanup(func() {
+		_, _ = release.WriteString("finish\n")
+		_ = release.Close()
+		awaitUnlocked(t, log.Name()).Close()
+	})
 	cmd, err := startOwnedWorker(t, p.Path, log, false)
 	if err != nil {
 		t.Fatal(err)
