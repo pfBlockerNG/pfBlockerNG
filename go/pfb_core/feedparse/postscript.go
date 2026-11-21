@@ -1,27 +1,22 @@
 package feedparse
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"unicode"
-	"unicode/utf8"
-)
 
-const (
-	scriptAllowance = 1 << 20 // the transcript's share of one script's output (core-api-protocol.md "Update command")
-	scriptNotice    = "\n[ pfBlockerNG ] Script output limit (1,048,576 bytes) reached; remaining output is in the main log.\n"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/output"
 )
 
 // PostScript is a list's post-script, as the two post-script call sites of sync_package_pfblockerng() run it
 // (pfb_list_script_exec()): the vetted file only, as the program named (never through a shell, except that a file with no
 // #! line is run by /bin/sh, as execvp() does), under the pre-script's strict policy: 300 seconds, TERM to its whole
 // process group at the limit or when ctx ends, KILL 5 seconds later, and nothing of the group left when the run returns.
-// Its output goes to a regular file, then sanitized to Log, all of it, and to Transcript, the first 1,048,576 bytes and one
-// notice. Runner lines go to Log and Transcript, and those of a failure to Errors too; a nil writer discards.
+// Its output goes to a regular file, sanitized while it runs to Log, all of it, and to Transcript, the first 1,048,576
+// bytes and one notice; a sink that fails a write is one line in Errors (output.Capture). Runner lines go to Log and
+// Transcript, and those of a failure to Errors too; a nil writer discards.
 type PostScript struct {
 	Name                    string   // the list's script_post: a file name, looked up in Dirs as pfb_resolve_list_script() does
 	Dirs                    []string // the list-script folders, in search order (--script-dir)
@@ -122,17 +117,12 @@ func (p PostScript) vet() (string, bool) {
 	return "", false
 }
 
-// run runs the vetted script with args and logs its output and how it ended.
+// run runs the vetted script with args, its output captured into the logs while it runs (output.Capture), and logs how it
+// ended.
 func (p PostScript) run(ctx context.Context, script string, args ...string) PostScriptResult {
 	r := PostScriptResult{Reason: PreScriptExit, Status: -1}
-	if capture, err := os.CreateTemp("", "pfb-script-output-"); err == nil {
-		defer os.Remove(capture.Name())
-		defer capture.Close()
-		r.Reason, r.Status = runScript(ctx, capture, script, args)
-		// shortcut: the output reaches the logs once the run has returned, not while the script runs; drain it on a tick
-		// as it grows if a live transcript of long scripts is wanted.
-		p.output(capture)
-	}
+	output.Capture("pfb-script-output-", output.Sinks{Log: p.Log, Transcript: p.Transcript, Errors: p.Errors},
+		func(out *os.File) { r.Reason, r.Status = runScript(ctx, out, script, args) })
 	switch r.Reason {
 	case PreScriptTimeout:
 		p.line(true, "\n[ %s ] post-script '%s' TIMED OUT (killed); discarding its output\n", p.Header, p.Name)
@@ -141,68 +131,6 @@ func (p PostScript) run(ctx context.Context, script string, args ...string) Post
 	}
 	return r
 }
-
-// output sanitizes the capture file as pfb_script_output_sanitize_chunk() does, up to the size it has now: a process the
-// script set loose with setsid() may still write to it. Printable ASCII, TAB and LF stay; other ASCII controls, DEL and
-// each byte of malformed UTF-8 become \xNN; Unicode Cc and Cf become \u{HEX}; other characters stay.
-func (p PostScript) output(capture *os.File) {
-	info, err := capture.Stat()
-	if err != nil {
-		return
-	}
-	in := bufio.NewReaderSize(io.NewSectionReader(capture, 0, info.Size()), 64<<10)
-	log, transcript := bufio.NewWriter(orDiscard(p.Log)), bufio.NewWriter(orDiscard(p.Transcript))
-	defer log.Flush()
-	defer transcript.Flush()
-	left, noticed := scriptAllowance, false
-	emit := func(text string, atomic bool) {
-		log.WriteString(text)
-		switch {
-		case noticed:
-		case len(text) <= left:
-			transcript.WriteString(text)
-			left -= len(text)
-		default:
-			if !atomic { // a run of printable ASCII is cut at the allowance
-				transcript.WriteString(text[:left])
-			}
-			transcript.WriteString(scriptNotice)
-			noticed = true
-		}
-	}
-	for {
-		b, _ := in.Peek(utf8.UTFMax)
-		switch {
-		case len(b) == 0:
-			return
-		case printable(b[0]):
-			b, _ = in.Peek(in.Buffered())
-			n := 1
-			for n < len(b) && printable(b[n]) {
-				n++
-			}
-			emit(string(b[:n]), false)
-			in.Discard(n)
-			continue
-		case b[0] < utf8.RuneSelf:
-			emit(fmt.Sprintf(`\x%02X`, b[0]), true)
-			in.Discard(1)
-			continue
-		}
-		ch, size := utf8.DecodeRune(b)
-		switch {
-		case ch == utf8.RuneError && size == 1:
-			emit(fmt.Sprintf(`\x%02X`, b[0]), true)
-		case unicode.In(ch, unicode.Cc, unicode.Cf):
-			emit(fmt.Sprintf(`\u{%X}`, ch), true)
-		default:
-			emit(string(b[:size]), true)
-		}
-		in.Discard(size)
-	}
-}
-
-func printable(b byte) bool { return b >= 0x20 && b <= 0x7e || b == '\t' || b == '\n' }
 
 // line writes one runner line to Log and Transcript, and a failure's to Errors too.
 func (p PostScript) line(failure bool, format string, args ...any) {
