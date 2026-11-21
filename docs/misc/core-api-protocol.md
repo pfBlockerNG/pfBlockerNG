@@ -906,6 +906,7 @@ pfb-core --run-hooks pre|post --hook-dir PATH (--settings-backend-cmd PATH | --s
   that projection is read, as `pfb_run_hooks()` reads only the hook rows: another projection holding a value Core refuses, or
   one Core does not know, does not stop the run, although the daemon refuses to start on it. A state directory without
   `settings.json` is an uninitialized Core, which the daemon serves: one line is logged, no hook runs, and the status is 0.
+  A `--state-dir` that does not exist or is not a directory is not one: one line is logged, no hook runs, and the status is 1.
   `--hook-dir` is the absolute folder the hook files are vetted in and run from; `--python-wrapper` is the absolute path of the
   program a `.py` hook runs through (without it a `.py` hook is logged and skipped). Other daemon flags are accepted and
   ignored. It opens no socket, takes neither `core.lock` nor the Update lock, waits for neither, and publishes nothing.
@@ -921,31 +922,38 @@ pfb-core --run-hooks pre|post --hook-dir PATH (--settings-backend-cmd PATH | --s
 
   A member that is absent sets no variable, except as the table says. `PFB_WHEN` is the fire point, and `post` also gets
   `PFB_STATUS=ok`, the reserved value. A string reaches the hook as the UTF-8 text its JSON decodes to, escapes resolved, as an
-  environment entry, never through a shell. A lone surrogate escape (`"\ud800"`) is refused, unless the input also holds
-  U+FFFD itself, as the character or as an escape: then it becomes U+FFFD. The hook's environment is pfb-core's own without any
-  `PFB_*` entry, plus the variables above, so a `PFB_*` variable of the caller never reaches a hook. This departs from
-  `pfb_run_hooks()`, which passes an inherited `PFB_*` variable through unless the context sets the same name. The `runhooks` verb's context is `{"trigger": "manual-test"}` for `pre` (or the trigger argument it is given) and, for
+  environment entry, never through a shell. A string value may not hold U+FFFD, which is also what invalid UTF-8 and a lone
+  surrogate escape (`"\ud800"`) decode to; a valid surrogate pair is its character. The hook's environment is pfb-core's own
+  without any `PFB_*` entry, plus the variables above, so a `PFB_*` variable of the caller never reaches a hook; the Python
+  wrapper's `--print-interpreter` probe gets the same environment. This departs from `pfb_run_hooks()`, which passes an
+  inherited `PFB_*` variable through unless the context sets the same name: the wrapper's own overrides (`PFB_PYTHON_DIR`,
+  `PFB_PKG_BIN`, `PFB_PYTHON_DEPENDENCIES`) are dropped too. The `runhooks` verb's context is `{"trigger": "manual-test"}`
+  for `pre` (or the trigger argument it is given) and, for
   `post`, the trigger with `"ipChanged": false, "dnsblChanged": false, "changedIpAliases": "", "changedDnsblGroups": ""`.
 - **Refusals.** A member not in the table (names are case-sensitive), a member given twice, a value of another type or outside
-  its values, a `post` member for `pre`, a string holding a NUL or a lone surrogate escape, input that is not UTF-8, input
-  over 16 MiB, and input that is not exactly one JSON object (empty input, `null`, an array, two objects, trailing data)
-  refuse the run: nothing runs, the settings backend is not called, and the exit status is 2.
+  its values, a `post` member for `pre`, a string holding a NUL or U+FFFD (invalid UTF-8 and a lone surrogate escape
+  included), input over 16 MiB, and input that is not exactly one JSON object (empty input, `null`, an array, two objects,
+  trailing data) refuse the run: nothing runs, the settings backend is not called, one line is logged, with any member name
+  it gives quoted, and the exit status is 2.
 - **The run.** The hook runner of the Core Updater runs the enabled rows of the fire point one after another in list order,
   with its vetting, launchers, per-hook timeouts and survivor lifetime. A hook that is skipped, fails or times out is logged
   and the next one runs. TERM, INT or HUP ends a running hook as an Update's cancellation does: no further hook starts, one
-  line says the run was cancelled, and the exit status is 1.
+  line says the run was cancelled, and the exit status is 1. One that comes while the one-shot waits for its context ends
+  the wait: one line is logged, nothing runs, and the status is 1. One that comes before the run leaves the status 0 when
+  the fire point has no enabled hook. A HUP that pfb-core inherited ignored (`nohup`) stays ignored.
 - **Output.** stderr is the main log: every runner line and all of each hook's sanitized output, without time stamps. The
   one-shot's own lines (a refused context, settings it cannot read, an uninitialized Core) carry the `pfb_core:` prefix and
   the date and time, as the daemon's do. With `"lifecycle": "uninstall"` stdout, the package operation's console, gets the
-  same text, each piece after the main log has it; a failed write to stdout, a closed pipe included (SIGPIPE does not end the
-  one-shot), is dropped and never stops the main log. Without a lifecycle stdout stays empty. There is no transcript and no
+  same text, each piece after the main log has it; a failed write to either, a closed pipe included (SIGPIPE does not end the
+  one-shot), is dropped and never stops the other. Without a lifecycle stdout stays empty. There is no transcript and no
   separate error log. Two departures from `pfb_run_hooks()`: while `$pfb['hook_lifecycle']` is set it copies the main log to
   stdout with `pfb_logger()`'s date and time at the start of each runner line, where the one-shot's copy is unstamped; and
   without a lifecycle it still copies the runner's lines to stdout when that is a terminal, where the one-shot copies
   nothing.
 - **Exit status.** 0 once the hooks ran, whatever they did, and for an uninitialized Core; 1 when the hooks did not all run:
-  the settings cannot be read (a missing or failing backend, or hook rows Core refuses, as for a Core that cannot read its
-  settings at start), when nothing runs, or a signal cancelled the run; 2 for a usage error (`--run-hooks` without `pre` or
+  the settings cannot be read (a missing or failing backend, a `--state-dir` that is no directory, or hook rows Core refuses,
+  as for a Core that cannot read its settings at start), when nothing runs, or a signal left an enabled hook unrun or cut it
+  short, or came while the context was read; 2 for a usage error (`--run-hooks` without `pre` or
   `post`, an argument after the flags, no `--hook-dir`, neither backend flag, a relative `--hook-dir` or `--python-wrapper`)
   or a refused context, when nothing runs.
 

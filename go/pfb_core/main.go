@@ -147,13 +147,15 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 			return 2
 		}
 		// SIGPIPE noticed, not ignored: a closed console fails its writes instead of ending the run, and hooks keep the
-		// default action. A hangup cancels the run, so that no hook outlives its timeout.
+		// default action. A hangup cancels the run, so that no hook outlives its timeout, unless it came in ignored (nohup).
 		signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
-		ctx, stop := signal.NotifyContext(ctx, syscall.SIGHUP)
-		defer stop()
-		backend, kind := settingsBackend(*stateDir, *backendCmd)
+		if !signal.Ignored(syscall.SIGHUP) {
+			var stop context.CancelFunc
+			ctx, stop = signal.NotifyContext(ctx, syscall.SIGHUP)
+			defer stop()
+		}
 		runner := hooks.Runner{Dir: hookDir, Python: pythonWrapper}
-		return runHooks(ctx, runHooksWhen, backend, kind, runner, os.Stdin, os.Stdout, stderr)
+		return runHooks(ctx, runHooksWhen, *stateDir, *backendCmd, runner, os.Stdin, os.Stdout, stderr)
 	}
 	if *socket == "" || *stateDir == "" || fl.NArg() != 0 {
 		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
