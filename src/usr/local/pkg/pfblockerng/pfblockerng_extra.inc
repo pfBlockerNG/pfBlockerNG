@@ -8825,10 +8825,10 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 				return $result;
 			}
 
-			// issue #4200: the alias file is the table's last-applied mirror, which a filter reload loads the table from. Add the
-			// IP to it; never create one: without a mirror pfSense loads the whole list from the alias URL.
+			// issue #4200: the alias file is the table's last-applied mirror, which the alias URL serves to a filter reload. Add the
+			// IP to it: a missing mirror is an empty set, and one that exists but cannot be read is left for the next update pass.
 			$mirror = "{$pfb['aliasdir']}/{$table}.txt";
-			$applied = is_file($mirror) ? @file_get_contents($mirror) : FALSE;
+			$applied = file_exists($mirror) ? @file_get_contents($mirror) : '';
 			if ($applied !== FALSE) {
 				pfb_write_canonical_alias($mirror, pfb_canonical_alias_set("{$applied}\n{$ip}"));
 			}

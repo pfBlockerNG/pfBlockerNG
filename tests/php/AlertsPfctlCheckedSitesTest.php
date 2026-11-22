@@ -909,20 +909,19 @@ SH
 	}
 
 	/**
-	 * Issue #4200: with no mirror, pfSense loads the table from the alias URL, which serves the whole list. A mirror holding
-	 * only the added IP would make the next filter reload shrink the table to that IP, so none is created; the next update
-	 * pass writes the mirror from the full set.
+	 * Issue #4200: the alias URL serves the mirror itself (pfblockerng.php), so a missing mirror is an empty set. The add
+	 * writes a mirror holding the IP, so that a filter reload before the next update pass keeps it in the table.
 	 */
-	public function testIpWhiteWithoutAMirrorCreatesNone(): void
+	public function testIpWhiteWithoutAMirrorWritesOneHoldingTheIp(): void
 	{
 		$mirror = "{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt";
 		$clists = ['ipwhitelist4' => ['pfB_Whitelist_v4' => ['base64_idx' => 0, 'data' => []]]];
+		$this->assertFileDoesNotExist($mirror, 'test setup: no mirror before the add');
 
 		$result = pfb_alerts_ip_action('ip_white', '198.51.100.31', 'pfB_Whitelist_v4', '', $clists, []);
 
 		$this->assertStringContainsString('added', $result['savemsg']);
-		$this->assertFileExists("{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v4.update", 'the add itself must still succeed');
-		$this->assertFileDoesNotExist($mirror, 'no one-address mirror may stand in for the whole list');
+		$this->assertSame("198.51.100.31\n", file_get_contents($mirror));
 	}
 
 	public function testIpWhiteV6FailureSkipsAllWrites(): void
