@@ -8829,9 +8829,7 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 			// IP to it: a missing mirror is an empty set, and one that exists but cannot be read is left for the next update pass.
 			$mirror = "{$pfb['aliasdir']}/{$table}.txt";
 			$applied = file_exists($mirror) ? @file_get_contents($mirror) : '';
-			if ($applied !== FALSE) {
-				pfb_write_canonical_alias($mirror, pfb_canonical_alias_set("{$applied}\n{$ip}"));
-			}
+			$mirrored = $applied !== FALSE && pfb_write_canonical_alias($mirror, pfb_canonical_alias_set("{$applied}\n{$ip}"));
 			$whitelist_string = !empty($descr) ? "{$ip} # {$descr}\r\n" : "{$ip}\r\n";
 			$custom = '';
 			foreach ($data as $line) {
@@ -8846,6 +8844,9 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 			$aname = substr(substr($table, 4), 0, -3);
 			touch("{$pfb['permitdir']}/{$aname}_custom_v{$vtype}.update");
 			$result['savemsg'] = "The IP [ {$ip} ] has been added to the [ {$table} ] Permit Alias customlist.";
+			if (!$mirrored) {
+				$result['savemsg'] .= " Its alias file [ {$table}.txt ] could not be updated: run an Update (Run Scope: IP) before a filter reload drops the IP.";
+			}
 			// issue #2670: durable permit replaces the temporary unlock row
 			pfb_unlock('lock', 'ip', $ip_unlock, $ip, $table);
 			return $result;
