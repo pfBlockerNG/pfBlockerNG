@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -106,7 +107,7 @@ type line struct {
 // assume a change and a possible reload), or, when those bytes hold no complete line, is refused whole like a line over MaxLine; a bad unterminated last line (one the apply's death cut
 // short) leaves the lines before it, with the error; any other error returns a zero Result, so nothing of it is settled.
 func ReadResult(f io.ReaderAt, req Request) (Result, error) {
-	b, err := io.ReadAll(io.NewSectionReader(f, 0, MaxResult+1)) // grows with the file, never past the bound
+	b, err := readBounded(io.NewSectionReader(f, 0, MaxResult+1))
 	if err != nil {
 		return Result{}, fmt.Errorf("the apply's result cannot be read: %w", err)
 	}
@@ -148,6 +149,25 @@ func ReadResult(f io.ReaderAt, req Request) (Result, error) {
 		return r.res, ErrCut
 	}
 	return r.res, nil
+}
+
+// readBounded is all of r, which holds at most MaxResult+1 bytes, in a buffer that doubles from 4 KiB and never passes
+// MaxResult+1: an empty file costs 4 KiB, a full one under 3 MiB (io.ReadAll's growth of a full file costs about 5 MiB).
+func readBounded(r io.Reader) ([]byte, error) {
+	b := make([]byte, 0, 4<<10)
+	for {
+		if len(b) == cap(b) {
+			b = slices.Grow(b[:len(b):len(b)], min(len(b), MaxResult+1-len(b)))
+		}
+		n, err := r.Read(b[len(b):min(cap(b), MaxResult+1)])
+		b = b[:len(b)+n]
+		if errors.Is(err, io.EOF) {
+			return b, nil
+		}
+		if err != nil || len(b) > MaxResult {
+			return b, err
+		}
+	}
 }
 
 // reader is ReadResult's state: what the request holds, what the lines read so far named, and their Result.
