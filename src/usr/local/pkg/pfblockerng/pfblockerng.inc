@@ -16150,7 +16150,8 @@ function pfb_alias_delta_batch_resolve(string $raw): int {
  * Apply an alias-table change via forward delta (-T add / -T delete) or full replace.
  *
  * Decision (when $force_replace is FALSE):
- *   - an open ip/<table>/apply ledger entry → -T replace, whatever the mode (issue #4189).
+ *   - an open ip/<table>/apply ledger entry → -T replace, whatever the mode (issue #4189); when that replace fails and
+ *     the run would otherwise have applied a delta, the delta follows it (contract: pfb_apply_alias_delta_files()).
  *   - 'replace' mode → always -T replace.
  *   - 'delta' / 'auto' → compute add/del sets; if churn_ratio < threshold (auto) OR
  *     mode is 'delta', apply delta in batches of $batch_size.  Fall back to -T replace
@@ -16159,7 +16160,8 @@ function pfb_alias_delta_batch_resolve(string $raw): int {
  * ADR-40 contract items satisfied:
  *   (1) End-state == replace: after delta apply, table membership equals $desired_set.
  *   (5) Empty-table: full replace handles initial population (mirrors the content-addressed gate).
- *   (8) Idempotence: identical $desired_set and $last_set → empty delta → zero pfctl calls.
+ *   (8) Idempotence: identical $desired_set and $last_set → empty delta → zero pfctl calls, when no ip/<table>/apply
+ *       ledger entry is open.
  *
  * Failures: a pfctl error is logged; the caller can still verify the table state.
  *
@@ -16204,9 +16206,13 @@ function pfb_apply_alias_delta(
  * reads a line as an interface or a host name. It is checked on both passes. A $family other than 'ipv4' or 'ipv6' refuses the call.
  *
  * A run that finds the ip/<table>/apply ledger entry open replaces the table from its mirror, whatever the mode and the counts
- * say, and logs why: a delta is computed against a mirror the table did not reach. On the delta and auto paths a negative count
- * (any of the four) is refused: nothing is sent; a replace uses no count and goes
- * ahead, logging the four counts. Then the decision is pfb_apply_alias_delta()'s, from counts: replace when
+ * say, and logs why: a delta is computed against a mirror the table did not reach. When that replace fails and the run would
+ * otherwise have applied a delta (not in mode 'replace', not on $force_replace, not on auto mode's own churn decision, and with
+ * no negative count), the run logs so and applies its delta after it, as below, so a table whose replace keeps failing still
+ * moves; the entry stays open and the result is delta TRUE, ok FALSE. Any other failed replace ends the run. A ledger that
+ * cannot be read or is corrupt reads as no open entry, as everywhere the ledger is read. On the delta and auto paths a
+ * negative count (any of the four) is refused: nothing is sent; a replace uses no count and goes ahead, logging the four
+ * counts. Then the decision is pfb_apply_alias_delta()'s, from counts: replace when
  * $force_replace, in mode 'replace', or in mode 'auto' when ($add_entries + $remove_entries) / max($entries, $previous_entries)
  * reaches PFB_DELTA_CHURN_THRESHOLD; otherwise a delta. Counts of zero and zero are nothing to do: no call, and no file is
  * read, so a file is not checked against a count of zero then. Any other delta first reads both files through: a file that
@@ -16216,19 +16222,24 @@ function pfb_apply_alias_delta(
  * with -f, so a member is never an argument; a failed batch leaves the remaining ones sent. The second pass, which feeds
  * pfctl, checks each line again and the count at the end, against a file that changes between the two passes: on a bad line
  * the sending stops, on a wrong count it ends; the batches already sent stay applied and ok is FALSE. A delta never closes the
- * ip/<table>/apply ledger entry, only a replace does; a failed or skipped batch opens it, and so does a run that sent a batch
- * and then stopped on a bad line or ended on a wrong count, naming the reason. A run refused before anything was sent does not
- * touch the ledger. A final line without
- * a newline is accepted; that a file is complete is pfb_outpost_part_check()'s and the digest's job, not this function's.
+ * ip/<table>/apply ledger entry, only a replace does. A failed or skipped batch opens it, naming that failure. A run that
+ * sent a batch and then stopped on a bad line or ended on a wrong count opens it naming the reason, unless a pfctl call or a
+ * batch of the run failed: then the entry keeps naming that failure, and the reason is only logged. An exception after a
+ * batch went out (from the member source, the batch file's name or the ledger) escapes with its own type, after opening the
+ * entry when no failure of the run had. A run refused before anything was sent leaves the ledger alone, so its caller must not
+ * treat ok FALSE as applied: it keeps its cursor and asks for a replace on its next run, since no entry forces one. A final
+ * line without a newline is accepted; that a file is complete is pfb_outpost_part_check()'s and the digest's job, not this
+ * function's.
  *
  * @param string $family 'ipv4' or 'ipv6': the family of the table's members
  * @param string $table_file the table's mirror, what a replace loads
  * @param int    $entries          the members of the table after the change
  * @param int    $previous_entries the members of the table before it
  * @param string $tmpdir where each batch file is written; '' for the system's temporary directory
- * @return array{delta: bool, ok: bool} delta TRUE on the delta path (refused files included), FALSE on a replace, for a
- *   refused negative count and for a refused family (which also makes no call, on a replace too); ok FALSE when anything was
- *   refused, a batch file could not be written or any pfctl call failed
+ * @return array{delta: bool, ok: bool} delta TRUE on the delta path (refused files included, and a delta that follows a failed
+ *   replace the open entry forced), FALSE on a replace, for a refused negative count and for a refused family (which also
+ *   makes no call, on a replace too); ok FALSE when anything was refused, a batch file could not be written or any pfctl
+ *   call failed (the replace before a delta included)
  */
 function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $family, string $table_file, string $add_file,
     int $add_entries, string $remove_file, int $remove_entries, int $entries, int $previous_entries, string $mode, int $batch_size,
@@ -16309,11 +16320,15 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 	$churn      = $add_entries + $remove_entries;
 	$table_size = max($entries, $previous_entries);
 	$replace    = $force_replace || $mode === 'replace';
+	$auto       = $mode === 'auto' && $table_size > 0 && ($churn / $table_size) >= PFB_DELTA_CHURN_THRESHOLD;
 
 	// a delta is computed against the mirror: once an earlier run left the table behind it, only a replace brings the table to it
+	$forced = FALSE;
 	if (!$replace && isset(pfb_sync_status_read_all($pfb['dbdir'])['ip'][$table]['apply'])) {
 		pfb_logger(" Updating [ {$table} ]: the ip/{$table}/apply ledger entry is open, so the table is replaced from its mirror\n", 1);
 		$replace = TRUE;
+		// a replace auto mode makes on its own churn is not the entry's: when it fails, nothing follows it
+		$forced  = !$auto;
 	}
 
 	// a replace reloads the table from its file and uses no count; a delta trusts all four
@@ -16324,15 +16339,23 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 			return ['delta' => FALSE, 'ok' => FALSE];
 		}
 		pfb_logger(" Updating [ {$table} ]: a negative count ({$counts}) does not stop the replace\n", 1);
+		$forced = FALSE;
 	}
 
-	if ($replace || ($mode === 'auto' && $table_size > 0 && ($churn / $table_size) >= PFB_DELTA_CHURN_THRESHOLD)) {
+	// TRUE once a pfctl call of this run failed or a batch was skipped: the entry is open and names that failure
+	$failed = FALSE;
+	if ($replace || $auto) {
 		// issue #722: nothing else on a live box distinguishes the delta path from a
 		// replace (pfb_pfctl_table_op logs only on error) — this line is the sole apply-path
 		// oracle the smoke suite (and a human reading the log) can grep for.
 		pfb_logger(" Updating [ {$table} ]: replace\n", 1);
 		$op = pfb_pfctl_table_op($table, 'replace', '-f ' . escapeshellarg($table_file), $pfctl_bin);
-		return ['delta' => FALSE, 'ok' => !$op['failed']];
+		if (!$op['failed'] || !$forced) {
+			return ['delta' => FALSE, 'ok' => !$op['failed']];
+		}
+		// a replace that keeps failing (pf's table-entries limit) must not freeze the table: its delta still goes out
+		pfb_logger(" Updating [ {$table} ]: the replace failed, so the delta goes out and the ip/{$table}/apply ledger entry stays open\n", 1);
+		$failed = TRUE;
 	}
 
 	// issue #722: log the delta decision (incl. the zero-churn idempotent no-op below) so the
@@ -16341,7 +16364,7 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 
 	// Idempotence: empty delta → zero pfctl calls.
 	if ($churn === 0) {
-		return ['delta' => TRUE, 'ok' => TRUE];
+		return ['delta' => TRUE, 'ok' => !$failed];
 	}
 	$sides = $members();
 	if ($sides === NULL) {
@@ -16351,9 +16374,8 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 	$tmpdir = $tmpdir === '' ? sys_get_temp_dir() : $tmpdir;
 	// a batch never closes the entry, only a replace does: the table may be behind its mirror from an earlier run
 	$pushed = FALSE;
-	$push   = static function (string $op, array $chunk) use ($table, $pfctl_bin, $tmpdir, &$pushed): bool {
+	$push   = static function (string $op, array $chunk) use ($table, $pfctl_bin, $tmpdir, &$pushed, &$failed): void {
 		global $pfb;
-		$pushed = TRUE;
 		$data = implode("\n", $chunk) . "\n";
 		// 'x': a fresh file of this run's own, never one that is already there
 		// the names tempnam() gave these files before: pfb_add_* and pfb_del_*
@@ -16370,7 +16392,10 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 				$written = fwrite($fh, $data) === strlen($data);
 				$written = fclose($fh) && $written;
 				if ($written) {
-					return !pfb_pfctl_table_op($table, $op, '-f ' . escapeshellarg($path), $pfctl_bin, FALSE)['failed'];
+					// a batch went out once pfctl is called, whatever the call then does
+					$pushed = TRUE;
+					$failed = pfb_pfctl_table_op($table, $op, '-f ' . escapeshellarg($path), $pfctl_bin, FALSE)['failed'] || $failed;
+					return;
 				}
 			} finally {
 				@unlink($path);
@@ -16380,51 +16405,59 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 		pfb_logger("{$message}\n", 1);
 		// the table is now behind its mirror, as after a failed call: open the entry pfb_pfctl_table_op() opens, for the tick's retry
 		pfb_sync_status_open('ip', $table, 'apply', trim($message) . ': the batch file failed', $pfb['dbdir']);
-		return FALSE;
+		$failed = TRUE;
 	};
 
-	$ok     = TRUE;
 	$reason = '';
-	foreach (['add' => [$sides[0], $add_entries], 'delete' => [$sides[1], $remove_entries]] as $op => [$lines, $count]) {
-		$chunk = [];
-		$read  = 0;
-		foreach ($lines as $line) {
-			if ($line === NULL) {
-				// the source refused a line and logged it: the sending stops, the batches sent stay
-				if ($pushed) {
-					pfb_sync_status_open('ip', $table, 'apply', "Updating [ {$table} ]: the " . ($op === 'delete' ? 'remove' : 'add')
-					    . ' file line ' . ($read + 1) . ' is not a member', $pfb['dbdir']);
+	try {
+		foreach (['add' => [$sides[0], $add_entries], 'delete' => [$sides[1], $remove_entries]] as $op => [$lines, $count]) {
+			$chunk = [];
+			$read  = 0;
+			foreach ($lines as $line) {
+				if ($line === NULL) {
+					// the source refused a line and logged it: the sending stops, the batches sent stay
+					$reason = "Updating [ {$table} ]: the " . ($op === 'delete' ? 'remove' : 'add') . ' file line ' . ($read + 1)
+					    . ' is not a member';
+					break 2;
 				}
-				return ['delta' => TRUE, 'ok' => FALSE];
+				if ($read === $count) {
+					// a file that grew since the count was taken: the line beyond it is not sent, nor any after it
+					$reason = "Updating [ {$table} ]: the {$op} file holds more than {$count} members";
+					pfb_logger(" {$reason}\n", 1);
+					break;
+				}
+				$chunk[] = $line;
+				$read++;
+				if (count($chunk) === $batch_size) {
+					$push($op, $chunk);
+					$chunk = [];
+				}
 			}
-			if ($read === $count) {
-				// a file that grew since the count was taken: the line beyond it is not sent, nor any after it
-				$reason = "Updating [ {$table} ]: the {$op} file holds more than {$count} members";
+			if ($chunk !== []) {
+				$push($op, $chunk);
+			}
+			if ($read !== $count) {
+				$reason = "Updating [ {$table} ]: {$op} read {$read} members, not {$count}";
 				pfb_logger(" {$reason}\n", 1);
-				$ok = FALSE;
-				break;
-			}
-			$chunk[] = $line;
-			$read++;
-			if (count($chunk) === $batch_size) {
-				$ok    = $push($op, $chunk) && $ok;
-				$chunk = [];
 			}
 		}
-		if ($chunk !== []) {
-			$ok = $push($op, $chunk) && $ok;
+	} catch (Throwable $e) {
+		if ($pushed && !$failed) {
+			try {
+				pfb_sync_status_open('ip', $table, 'apply', "Updating [ {$table} ]: stopped by " . $e::class . ' after a batch went out',
+				    $pfb['dbdir']);
+			} catch (Throwable) {
+				// the ledger write failing too must not hide the exception that stopped the run
+			}
 		}
-		if ($read !== $count) {
-			$reason = "Updating [ {$table} ]: {$op} read {$read} members, not {$count}";
-			pfb_logger(" {$reason}\n", 1);
-			$ok = FALSE;
-		}
+		throw $e;
 	}
-	if ($pushed && $reason !== '') {
-		// batches went out against a count that turned out wrong: the table is not the wanted set
+	// a pfctl failure the entry already names is what the tick's retry and the Sync Status page need, not the later reason
+	if ($pushed && !$failed && $reason !== '') {
+		// batches went out against a source that turned out wrong: the table is not the wanted set
 		pfb_sync_status_open('ip', $table, 'apply', $reason, $pfb['dbdir']);
 	}
-	return ['delta' => TRUE, 'ok' => $ok];
+	return ['delta' => TRUE, 'ok' => !$failed && $reason === ''];
 }
 
 // ---------------------------------------------------------------------------
