@@ -313,11 +313,10 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			}
 			probeKept := regularExists(feedPath(feed, ".probe"))
 			ingested := s.Fetcher.Ingest(ctx, feed, request)
-			// The kept body is consumed whatever the transfer did: its source record goes with it, in the same commit.
-			if probeKept && removeIfExists(feedPath(feed, ProbeSource)) != nil {
-				retire, retireReason, retireStage = slices.Clone(probeFiles), "probe_record_remove_failed", "fetch"
-				return failedFeed(f.ID, "fetch", "probe_record_remove_failed")
-			}
+			// A kept body the transfer consumed takes its source record with it, in the same commit, whatever the transfer
+			// did; a body it never read keeps its record.
+			recordStuck := probeKept && !regularExists(feedPath(feed, ".probe")) &&
+				removeIfExists(feedPath(feed, ProbeSource)) != nil
 			if !ingested.OK {
 				// Force both drops the digests before the transfer, whatever its outcome (pfb_force_clear_validators()).
 				retire, retireReason, retireStage = forcedSuffixes(force), "validators_retire_failed", "fetch"
@@ -342,7 +341,14 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 					_ = file.Close()
 					retire = append(slices.Clone(retire), ".fail")
 				}
+				if recordStuck {
+					reason = "probe_record_remove_failed"
+				}
 				return failedFeed(f.ID, "fetch", reason)
+			}
+			if recordStuck {
+				retire, retireReason, retireStage = slices.Clone(probeFiles), "probe_record_remove_failed", "fetch"
+				return failedFeed(f.ID, "fetch", "probe_record_remove_failed")
 			}
 			sourceChanged, clearFail = ingested.Status != httpStatusNotModified, true
 			if probeKept {
