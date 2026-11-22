@@ -20,6 +20,22 @@
  * limitations under the License.
  */
 
+/** The pages the GeoIP pages write under the page folder: pfblockerng_<page>.php, the nine continent pages and the Reputation page. */
+const PFB_GEOIP_PAGES = [
+	'Top_Spammers', 'Africa', 'Antarctica', 'Asia', 'Europe', 'North_America',
+	'Oceania', 'South_America', 'Proxy_and_Satellite', 'reputation',
+];
+
+// A geo-catalog is about 100 KB (some 250 countries a list); this bounds what json_decode() copies into arrays.
+const PFB_GEOIP_CATALOG_MAX = 16777216;	// 16 MiB
+
+/** Give the staged file $tmp the owner, group and mode in $stat, a stat() of the page it is to replace. */
+function pfb_geoip_take_attributes(string $tmp, array $stat): bool {
+	return (@fileowner($tmp) === $stat['uid'] || @chown($tmp, $stat['uid']))
+		&& (@filegroup($tmp) === $stat['gid'] || @chgrp($tmp, $stat['gid']))
+		&& @chmod($tmp, $stat['mode'] & 07777);
+}
+
 /** Refresh legacy navigation without regenerating country data or populated page options. */
 function pfb_geoip_refresh_navigation(string $output_root = '/usr/local/www/pfblockerng'): bool {
 	$dnsbl_continent = "\n\$tab_array[]\t= array(gettext('DNSBL'),\t\tFALSE,\t'/pfblockerng/pfblockerng_dnsbl.php');\n";
@@ -50,12 +66,8 @@ function pfb_geoip_refresh_navigation(string $output_root = '/usr/local/www/pfbl
 		$dns_continent . $update_continent,
 		$dns_reputation . $update_reputation,
 	];
-	$pages = [
-		'Top_Spammers', 'Africa', 'Antarctica', 'Asia', 'Europe', 'North_America',
-		'Oceania', 'South_America', 'Proxy_and_Satellite', 'reputation',
-	];
 	$success = TRUE;
-	foreach ($pages as $page) {
+	foreach (PFB_GEOIP_PAGES as $page) {
 		$path = "{$output_root}/pfblockerng_{$page}.php";
 		if (is_link($path)) {
 			$success = FALSE;
@@ -91,10 +103,7 @@ function pfb_geoip_refresh_navigation(string $output_root = '/usr/local/www/pfbl
 			&& @fflush($handle) && @fsync($handle);
 		$ok = @fclose($handle) && $ok;
 		if ($ok) {
-			$ok = (fileowner($tmp) === $stat['uid'] || @chown($tmp, $stat['uid']))
-				&& (filegroup($tmp) === $stat['gid'] || @chgrp($tmp, $stat['gid']))
-				&& @chmod($tmp, $stat['mode'] & 07777)
-				&& @rename($tmp, $path);
+			$ok = pfb_geoip_take_attributes($tmp, $stat) && @rename($tmp, $path);
 		}
 		if (!$ok) {
 			@unlink($tmp);
@@ -102,6 +111,32 @@ function pfb_geoip_refresh_navigation(string $output_root = '/usr/local/www/pfbl
 		}
 	}
 	return $success;
+}
+
+/**
+ * The body of a generated PHP array literal holding $options ('"<iso>" => "<label>"' each, already PHP source) one a line, as
+ * the GeoIP pages write it; '' for none.
+ *
+ * @param list<string> $options
+ */
+function pfb_geoip_options_literal(array $options): string {
+	$eoa = count($options);
+	$literal = '';
+	$count = 1;
+	foreach ($options as $option) {
+		if ($count == 1) {
+			$literal .= "\t{$option},\n";
+			$count++;
+			continue;
+		}
+		if ($eoa == $count) {
+			$literal .= "\t\t{$option}\n\t";
+		} else {
+			$literal .= "\t\t{$option},\n";
+		}
+		$count++;
+	}
+	return $literal;
 }
 
 // Function to process Continent txt files and create Country ISO files and to Generate GUI PHP files.
@@ -274,26 +309,9 @@ function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') 
 					sort(${'coptions' . $type}, SORT_STRING);
 				}
 				${'ftotal' . $type} = count(${'coptions' . $type});
-				$count = 1;
-				${'options' . $type} = '';
-
-				foreach (${'coptions' . $type} as $option) {
-
-					// Remove prefixed Country string (Used to sort array)
-					$option = ltrim(strstr($option, '|', FALSE), '|');
-
-					if ($count == 1) {
-						${'options' . $type} .= "\t{$option},\n";
-						$count++;
-						continue;
-					}
-					if (${'ftotal' . $type} == $count) {
-						${'options' . $type} .= "\t\t{$option}\n\t";
-					} else {
-						${'options' . $type} .= "\t\t{$option},\n";
-					}
-					$count++;
-				}
+				// Remove prefixed Country string (Used to sort array)
+				${'options' . $type} = pfb_geoip_options_literal(array_map(
+					static fn (string $option): string => ltrim(strstr($option, '|', FALSE), '|'), ${'coptions' . $type}));
 			}
 			unset(${'coptions' . $type});
 		}
@@ -306,11 +324,50 @@ function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') 
 		$options4 ??= ''; // @phpstan-ignore nullCoalesce.variable (dynamic ${'options4'} unset at the previous continent's tail is invisible to PHPStan)
 		$options6 ??= ''; // @phpstan-ignore nullCoalesce.variable (dynamic ${'options6'} unset at the previous continent's tail is invisible to PHPStan)
 
-		// #3066: this body must start at the "/*" -- prepending ANY line to it
-		// (observed with tree-sitter-php 0.24.1, the grammar code-graph extraction
-		// parses with) makes the grammar emit ERROR nodes here and drop the rest of
-		// the file, so the "<?php" is concatenated on outside instead. Upstream
-		// cause not isolated; tests/test_issue3066_php_grammar_parse.py is the guard.
+		$php_data = pfb_geoip_continent_page($continent, $continent_en, $options4, $options6, $ftotal4, $ftotal6);
+
+		// Update each Continent PHP file.
+		if (!empty(pfb_filter($continent_en, PFB_FILTER_WORD, 'php'))) {
+			$output_ok = @file_put_contents(
+				"{$output_root}/pfblockerng_{$continent_en}.php", $php_data, LOCK_EX
+			) !== FALSE && $output_ok;
+		}
+
+		// Unset Arrays
+		unset(${'options4'}, ${'options6'}, $php_data);
+
+	}	// End foreach 'Six Continents and Proxy/Satellite' update PHP script builder process
+
+	// Sort Countries IPv4 alphabetically and build XML <option> data for Reputation tab (IPv6 not used by ET IQRisk)
+
+	sort($roptions4, SORT_STRING);
+	// Remove prefixed Country string (Used to sort array)
+	$et_options = pfb_geoip_options_literal(array_map(
+		static fn (string $option): string => ltrim(strstr($option, '|', FALSE), '|'), $roptions4));
+
+	//Build Reputation Tab
+	$output_ok = pfb_build_reputation_tab($et_options, $output_root) && $output_ok;
+
+	$log = "Country Code Update Ended\n\n";
+	pfb_logger("{$log}", 4);
+
+	// Unset arrays
+	unset($roptions4, $et_options);
+	return $output_ok;
+}
+
+/**
+ * The source of the continent page pfblockerng_<$continent_en>.php. $continent and $continent_en go into its PHP string
+ * literals as given; $options4 and $options6 are array literal bodies (pfb_geoip_options_literal()) of $ftotal4 and $ftotal6
+ * options.
+ */
+function pfb_geoip_continent_page(string $continent, string $continent_en, string $options4, string $options6, int $ftotal4,
+	int $ftotal6): string {
+	// #3066: this body must start at the "/*" -- prepending ANY line to it
+	// (observed with tree-sitter-php 0.24.1, the grammar code-graph extraction
+	// parses with) makes the grammar emit ERROR nodes here and drop the rest of
+	// the file, so the "<?php" is concatenated on outside instead. Upstream
+	// cause not isolated; tests/test_issue3066_php_grammar_parse.py is the guard.
 $php_data = "<?php\n" . <<<EOF
 /*
  * pfblockerng_{$continent_en}.php
@@ -816,58 +873,26 @@ events.push(function() {
 <?php include('foot.inc');?>
 
 EOF;
-		// Update each Continent PHP file.
-		if (!empty(pfb_filter($continent_en, PFB_FILTER_WORD, 'php'))) {
-			$output_ok = @file_put_contents(
-				"{$output_root}/pfblockerng_{$continent_en}.php", $php_data, LOCK_EX
-			) !== FALSE && $output_ok;
-		}
-
-		// Unset Arrays
-		unset(${'options4'}, ${'options6'}, $php_data);
-
-	}	// End foreach 'Six Continents and Proxy/Satellite' update PHP script builder process
-
-	// Sort Countries IPv4 alphabetically and build XML <option> data for Reputation tab (IPv6 not used by ET IQRisk)
-
-	sort($roptions4, SORT_STRING);
-	$eoa = count($roptions4);
-	$et_options = '';
-	$count = 1;
-
-	foreach ($roptions4 as $option4) {
-
-		// Remove prefixed Country string (Used to sort array)
-		$option4 = ltrim(strstr($option4, '|', FALSE), '|');
-
-		if ($count == 1) {
-			$et_options .= "\t{$option4},\n";
-			$count++;
-			continue;
-		}
-		if ($eoa == $count) {
-			$et_options .= "\t\t{$option4}\n\t";
-		} else {
-			$et_options .= "\t\t{$option4},\n";
-		}
-		$count++;
-	}
-
-	//Build Reputation Tab
-	$output_ok = pfb_build_reputation_tab($et_options, $output_root) && $output_ok;
-
-	$log = "Country Code Update Ended\n\n";
-	pfb_logger("{$log}", 4);
-
-	// Unset arrays
-	unset($roptions4, $et_options);
-	return $output_ok;
+	return $php_data;
 }
 
 
 // Update pfBlockerNG_Reputation.php file with Country Code changes
 function pfb_build_reputation_tab($et_options='', $output_root = '/usr/local/www/pfblockerng') {
 
+	// Any value empty() holds empty (NULL, [], 0, '0') writes the page without countries.
+	$et_options = empty($et_options) ? '' : (string) $et_options;
+	if ($et_options !== '') {
+		$log = " pfBlockerNG Reputation Tab\n";
+		pfb_logger("{$log}", 4);
+	}
+
+	// Save pfBlockerng_reputation.php file
+	return @file_put_contents("{$output_root}/pfblockerng_reputation.php", pfb_geoip_reputation_page($et_options), LOCK_EX) !== FALSE;
+}
+
+/** The source of the Reputation page pfblockerng_reputation.php; $et_options is an array literal body (pfb_geoip_options_literal()), '' for none. */
+function pfb_geoip_reputation_page(string $et_options): string {
 	$php_rep = <<<'EOF'
 <?php
 /*
@@ -923,7 +948,7 @@ $options_ccwhite		= [ 'ignore' => 'Ignore', 'match' => 'Match' ];
 $options_ccblack		= [ 'block' => 'Block', 'match' => 'Match' ];
 
 EOF;
-	if (!empty($et_options)) {
+	if ($et_options !== '') {
 		$php_rep .= <<<EOF
 \$options_ccexclude	= array($et_options);
 
@@ -1220,7 +1245,7 @@ $section->addInput(new Form_Select(
 ))->setHelp('Default: <strong>Block</strong><br />Select the \'Action\' format for ccblack');
 
 EOF;
-	if (!empty($et_options)) {
+	if ($et_options !== '') {
 		$php_rep .= <<<EOF
 
 \$section->addInput(new Form_Select(
@@ -1290,15 +1315,170 @@ print_callout('<p>Saved changes are applied automatically at a schedule check, n
 <?php include('foot.inc');?>
 
 EOF;
+	return $php_rep;
+}
 
-	if (!empty($et_options)) {
-		$log = " pfBlockerNG Reputation Tab\n";
-		pfb_logger("{$log}", 4);
+/**
+ * Write the continent pages and the Reputation page under $output_root from the geo-catalog file $catalog (JSON Lines,
+ * docs/specs/go-updater-pipeline.md §7), as pfblockerng_get_countries() writes them from the continent files. A catalog
+ * cut at a line boundary is not detected here: give this function only a body whose digest the caller verified
+ * (pfb_outpost_fetch()). A body over PFB_GEOIP_CATALOG_MAX, a row of another shape, a page name that is not a plain word,
+ * a page or a list position given twice, a gap in a list's positions, or a country row without its page row refuses the
+ * catalog whole. A page that is not one of the nine continent pages is skipped with its country rows. Every page is staged
+ * beside its target (its content synced, with the owner, group and mode of the page it replaces) before any is published;
+ * a page that cannot be staged publishes none, and nothing staged outlives the call. Staged files an earlier call left
+ * behind are removed first, so the caller holds the apply lock: two renders at once would remove each other's staged
+ * files. It runs as root, as the apply does: a page whose owner or group it cannot give the staged file refuses the
+ * catalog. The renames themselves are not synced to the folder. A continent page the catalog does not name stays as it is.
+ *
+ * @return array{error: ?string, skipped: list<string>} error NULL when every page was written, else why the catalog was
+ *   refused or which pages were not written; skipped the page names left out, in catalog order
+ */
+function pfb_geoip_render_catalog(string $catalog, string $output_root = '/usr/local/www/pfblockerng'): array {
+	$refuse = static fn (string $error): array => ['error' => $error, 'skipped' => []];
+	$body = @file_get_contents($catalog, FALSE, NULL, 0, PFB_GEOIP_CATALOG_MAX + 1);
+	if ($body === FALSE) {
+		return $refuse("{$catalog} cannot be read");
+	}
+	if (strlen($body) > PFB_GEOIP_CATALOG_MAX) {
+		return $refuse("{$catalog} is larger than " . PFB_GEOIP_CATALOG_MAX . ' bytes');
+	}
+	if ($body !== '' && !str_ends_with($body, "\n")) {
+		return $refuse("{$catalog} does not end in a newline");
+	}
+	$fields = [
+		'page' => ['continent', 'kind', 'page'],
+		'country' => ['country', 'family', 'iso', 'kind', 'networks', 'page', 'position'],
+		'reputation' => ['country', 'iso', 'kind', 'networks', 'position'],
+	];
+	$word = '/^[A-Za-z0-9_]+$/D';	// Core's word() (go/pfb_core/geoip/php.go)
+	// A name goes into a double-quoted PHP literal of the generated page: escaped, it is never code or interpolated.
+	$literal = static fn (string $text): string => strtr($text, ['\\' => '\\\\', '"' => '\\"', '$' => '\\$']);
+	$continents = [];
+	$lists = [];		// page => family => position => option source
+	$reputation = [];	// position => option source
+	// Core writes a catalog without rows as one empty line.
+	foreach ($body === '' || $body === "\n" ? [] : explode("\n", substr($body, 0, -1)) as $i => $line) {
+		$at = "{$catalog} line " . ($i + 1);
+		$row = json_decode($line, TRUE, 2);
+		$kind = is_array($row) && is_string($row['kind'] ?? NULL) ? $row['kind'] : '';
+		$keys = is_array($row) ? array_keys($row) : [];
+		sort($keys);
+		if (!isset($fields[$kind]) || $keys !== $fields[$kind]) {
+			return $refuse("{$at} is not a page, country or reputation row");
+		}
+		if ($kind !== 'reputation' && (!is_string($row['page']) || preg_match($word, $row['page']) !== 1)) {
+			return $refuse("{$at} names a page that is not a plain word");
+		}
+		if ($kind === 'page') {
+			if (!is_string($row['continent']) || isset($continents[$row['page']])) {
+				return $refuse("{$at} is a page row of another shape, or one given twice");
+			}
+			$continents[$row['page']] = $row['continent'];
+			continue;
+		}
+		['iso' => $iso, 'country' => $country, 'networks' => $networks, 'position' => $position] = $row;
+		if (($kind === 'country' && !in_array($row['family'], [4, 6], TRUE)) || !is_int($position) || !is_string($iso)
+			|| preg_match($word, $iso) !== 1 || !is_string($country) || !is_int($networks) || $networks < 0) {
+			return $refuse("{$at} is a {$kind} row of another shape");
+		}
+		$option = "\"{$iso}\" => \"" . $literal("{$country} {$iso} ({$networks})") . '"';
+		if ($kind === 'reputation') {
+			$taken = isset($reputation[$position]);
+			$reputation[$position] = $option;
+		} else {
+			$taken = isset($lists[$row['page']][$row['family']][$position]);
+			$lists[$row['page']][$row['family']][$position] = $option;
+		}
+		if ($taken) {
+			return $refuse("{$at} takes a position its list already holds");
+		}
+	}
+	// A list's options in position order as an array literal body, or NULL when its positions are not 1 to its length.
+	$source = static function (array $options): ?string {
+		ksort($options);
+		return $options === [] || array_keys($options) === range(1, count($options))
+			? pfb_geoip_options_literal(array_values($options)) : NULL;
+	};
+	$sources = [];
+	foreach ($lists as $page => $families) {
+		if (!isset($continents[$page])) {
+			return $refuse("{$catalog}: the country rows of {$page} have no page row");
+		}
+		foreach ($families as $family => $options) {
+			$sources[$page][$family] = $source($options);
+			if ($sources[$page][$family] === NULL) {
+				return $refuse("{$catalog}: the positions of the IPv{$family} list of {$page} are not 1 to " . count($options));
+			}
+		}
+	}
+	$reputation_source = $source($reputation);
+	if ($reputation_source === NULL) {
+		return $refuse("{$catalog}: the positions of the Reputation list are not 1 to " . count($reputation));
 	}
 
-	// Save pfBlockerng_reputation.php file
-	$output_ok = @file_put_contents("{$output_root}/pfblockerng_reputation.php", $php_rep, LOCK_EX) !== FALSE;
-	unset($php_rep);
-	return $output_ok;
+	$known = array_diff(PFB_GEOIP_PAGES, ['reputation']);
+	// A page name of digits is an integer array key.
+	$skipped = array_map('strval', array_values(array_diff(array_keys($continents), $known)));
+	$pages = [];
+	foreach (array_intersect_key($continents, array_flip($known)) as $page => $continent) {
+		$pages["pfblockerng_{$page}.php"] = pfb_geoip_continent_page($literal($continent), $page, $sources[$page][4] ?? '',
+			$sources[$page][6] ?? '', count($lists[$page][4] ?? []), count($lists[$page][6] ?? []));
+	}
+	$pages['pfblockerng_reputation.php'] = pfb_geoip_reputation_page($reputation_source);
+
+	if (!is_dir($output_root) && !@mkdir($output_root, 0755, TRUE)) {
+		return ['error' => "{$output_root} cannot be created", 'skipped' => $skipped];
+	}
+	// Files an earlier call staged and never published (it died first): only names of the form staged below, regular files.
+	$stale = '/^\.pfblockerng_(?:' . implode('|', PFB_GEOIP_PAGES) . ')\.php\.[0-9a-f]{12}$/D';
+	foreach (@scandir($output_root) ?: [] as $entry) {
+		$path = "{$output_root}/{$entry}";
+		if (preg_match($stale, $entry) === 1 && !is_link($path) && is_file($path)) {
+			@unlink($path);
+		}
+	}
+	$staged = [];	// temporary file => target
+	$failed = [];
+	try {
+		foreach ($pages as $name => $php_data) {
+			$target = "{$output_root}/{$name}";
+			$tmp = "{$output_root}/.{$name}." . bin2hex(random_bytes(6));
+			// Mode 'x' creates the file as file_put_contents() creates a new page (0666 less the umask), never through a link.
+			$fh = is_dir($target) && !is_link($target) ? FALSE : @fopen($tmp, 'xb');
+			$ok = $fh !== FALSE;
+			if ($ok) {
+				$staged[$tmp] = $target;
+				$fresh = @fileperms($tmp) & 07777;	// the mode a new page gets under this umask
+				// Owner-only while it is written: the page it replaces may be more private than the umask.
+				$ok = @chmod($tmp, 0600) && @fwrite($fh, $php_data) === strlen($php_data) && @fflush($fh) && @fsync($fh);
+				$ok = @fclose($fh) && $ok;
+				// A page replaced keeps its owner, group and mode, as the write in place kept them.
+				$stat = !is_link($target) && is_file($target) ? @stat($target) : FALSE;
+				$ok = $ok && ($stat === FALSE ? @chmod($tmp, $fresh) : pfb_geoip_take_attributes($tmp, $stat));
+			}
+			if (!$ok) {
+				return ['error' => "{$target} cannot be written", 'skipped' => $skipped];
+			}
+		}
+		// shortcut: the pages are renamed one at a time, not in one atomic step, so a request between two renames can see
+		// new pages beside old ones; publish a versioned folder if that shows.
+		foreach ($staged as $tmp => $target) {
+			if (@rename($tmp, $target)) {
+				unset($staged[$tmp]);
+			} else {
+				$failed[] = $target;
+			}
+		}
+	} finally {
+		// Whatever is still staged was not published.
+		foreach (array_keys($staged) as $file) {
+			@unlink($file);
+		}
+	}
+	if ($reputation_source !== '' && !in_array("{$output_root}/pfblockerng_reputation.php", $failed, TRUE)) {
+		pfb_logger(" pfBlockerNG Reputation Tab\n", 4);
+	}
+	return ['error' => $failed === [] ? NULL : implode(', ', $failed) . ' cannot be replaced', 'skipped' => $skipped];
 }
 ?>
