@@ -30,7 +30,7 @@ func newFixture(t *testing.T, url string) *fixture {
 	writeFile(t, base+".orig", "1.2.3.4\n")
 	writeFile(t, base+".orig.xxhash128", digest.Bytes([]byte("1.2.3.4\n")))
 	writeFile(t, base+".parsed.ip", "1.2.3.4\n")
-	fetcher := &feedfetch.Fetcher{Policy: feedfetch.Policy{NoFilter: true}, RetryDelay: 1}
+	fetcher := &feedfetch.Fetcher{Policy: remotePolicy(), RetryDelay: 1}
 	return &fixture{
 		dir:   dir,
 		stage: &feedstage.Stage{Paths: feedstage.Paths{FeedDir: dir}, Fetcher: fetcher},
@@ -96,7 +96,7 @@ func servedBodies(t *testing.T, bodies map[string]string) *httptest.Server {
 // Then the kept body is dropped before the stage runs, and the stage publishes what /new serves.
 func TestKeptProbeOfAnotherSourceIsNeverPublished(t *testing.T) {
 	srv := servedBodies(t, map[string]string{"/old": "9.9.9.9\n", "/new": "5.6.7.8\n"})
-	f := newFixture(t, srv.URL+"/old")
+	f := newFixture(t, remoteURL(srv)+"/old")
 	in := f.input(Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})
 	in.InWindow = false
 	if plan := build(t, in); plan.Decision != Pending {
@@ -106,7 +106,7 @@ func TestKeptProbeOfAnotherSourceIsNeverPublished(t *testing.T) {
 		t.Fatal("before: the changed probe body and the update marker stand")
 	}
 
-	f.setURL(srv.URL + "/new")
+	f.setURL(remoteURL(srv) + "/new")
 	item := onlyItem(t, build(t, f.input(Request{Trigger: "manual", Scope: "both", Force: "none"})))
 	if exists(f.path(".probe")) {
 		t.Fatal("the probe body kept for /old still stands after the work list for /new")
@@ -126,7 +126,7 @@ func TestKeptProbeOfAnotherSourceIsNeverPublished(t *testing.T) {
 func TestKeptProbeOfTheSameSourceIsIngested(t *testing.T) {
 	bodies := map[string]string{"/old": "9.9.9.9\n"}
 	srv := servedBodies(t, bodies)
-	f := newFixture(t, srv.URL+"/old")
+	f := newFixture(t, remoteURL(srv)+"/old")
 	in := f.input(Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})
 	in.InWindow = false
 	build(t, in)
@@ -177,7 +177,7 @@ func TestProbeSourceRecordHoldsNoCredential(t *testing.T) {
 		_, _ = w.Write([]byte("9.9.9.9\n"))
 	}))
 	t.Cleanup(srv.Close)
-	f := newFixture(t, srv.URL+"/list")
+	f := newFixture(t, remoteURL(srv)+"/list")
 	f.group["feeds"].([]any)[0].(map[string]any)["credentials"] = "operator:s3cret-pass"
 	in := f.input(Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})
 	build(t, in)
@@ -188,7 +188,7 @@ func TestProbeSourceRecordHoldsNoCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no source record beside the kept probe body: %v", err)
 	}
-	for _, secret := range []string{"operator", "s3cret-pass", srv.URL} {
+	for _, secret := range []string{"operator", "s3cret-pass", remoteURL(srv)} {
 		if strings.Contains(string(record), secret) {
 			t.Fatalf("the source record %q holds %q", record, secret)
 		}
