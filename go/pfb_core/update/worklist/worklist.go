@@ -96,9 +96,13 @@ type Plan struct {
 	Decision Decision
 	// PendingFeeds are the feeds still pending once this plan is run: the caller's next state (Input.PendingFeeds). A
 	// Pending decision builds nothing, so they are Input.PendingFeeds and the feeds this Update found changed. Any other
-	// decision hands every pending feed it can to the stage, as changed (a held feed with its list is held, and counts as
-	// built); what stays are the feeds it could not build: outside the scope, under a Reload, or stopped. A feed that left
-	// the settings is dropped.
+	// decision hands every pending feed it can to the stage: as changed, unless the walk checked it, whose verdict stands;
+	// a held feed with its list is held, and counts as built, as does a feed its check found unchanged. What stays are the
+	// feeds it could not build and that can be built later without a settings change: outside the scope, under a Reload,
+	// past the retry cap, failed by its check, or stopped for a reason that can clear (its folder unrecoverable, its kept
+	// probe or its fail marker not handled). A feed that can never be built without a settings change is dropped: it left
+	// the settings, its name is no word, or it is a whois or asn feed whose source today's check refuses while its list
+	// stands. A stopped feed stays pending but makes no scheduled Update due by itself.
 	PendingFeeds []string
 }
 
@@ -140,7 +144,8 @@ func Build(ctx context.Context, in Input) (Plan, error) {
 	for _, f := range b.feeds("both") {
 		if !f.Custom {
 			b.configured = append(b.configured, f.ID)
-			b.pending[f.ID] = slices.Contains(in.PendingFeeds, f.ID) || in.GeoIPChanged && f.Format == "geoip"
+			b.pending[f.ID] = feedstage.ValidName(f.Name) &&
+				(slices.Contains(in.PendingFeeds, f.ID) || in.GeoIPChanged && f.Format == "geoip")
 		}
 	}
 	var want func(id string) bool
@@ -168,14 +173,41 @@ func Build(ctx context.Context, in Input) (Plan, error) {
 	return b.settle(plan, cands), nil
 }
 
-// anyPending reports whether a feed of the settings is left to build.
-func (b *builder) anyPending() bool {
-	return slices.ContainsFunc(b.configured, func(id string) bool { return b.pending[id] })
+// buildable reports whether a pending feed of cands can be built now: one stopped already makes no Update due.
+func (b *builder) buildable(cands []candidate) bool {
+	return slices.ContainsFunc(cands, func(c candidate) bool { return b.pending[c.feed.ID] && c.stop == "" && !b.never(c) })
 }
 
-// settle hands every pending feed of a plan that builds to the stage as changed, and sets what stays pending.
+// never reports whether c can never be built without a settings change: a whois or asn feed whose source today's check
+// refuses while its list stands (a name that is no word is never pending).
+func (b *builder) never(c candidate) bool {
+	return (c.feed.Format == "whois" || c.feed.Format == "asn") && !validListSource(c.feed) && c.stop == "" &&
+		feedstage.ListsPublished(c.dir, c.feed)
+}
+
+// stillPending are the feeds of the settings, in walk order, pending or in extra and not done, without those that can
+// never be built.
+func (b *builder) stillPending(cands []candidate, done map[string]bool, extra []string) []string {
+	never := map[string]bool{}
+	for _, c := range cands {
+		never[c.feed.ID] = b.never(c)
+	}
+	var out []string
+	for _, id := range b.configured {
+		if (b.pending[id] || slices.Contains(extra, id)) && !done[id] && !never[id] {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// settle hands every pending feed of a plan that builds to the stage, and sets what stays pending.
 func (b *builder) settle(plan Plan, cands []candidate) Plan {
-	if plan.Decision != Now {
+	switch plan.Decision {
+	case Pending:
+		return plan
+	case Nothing:
+		plan.PendingFeeds = b.stillPending(cands, nil, nil)
 		return plan
 	}
 	items := map[string]Item{}
@@ -183,28 +215,25 @@ func (b *builder) settle(plan Plan, cands []candidate) Plan {
 		items[item.Feed.ID] = item
 	}
 	plan.Items = nil
-	built := map[string]bool{}
+	done := map[string]bool{}
 	for _, c := range cands {
 		item, ok := items[c.feed.ID]
-		if b.pending[c.feed.ID] {
-			item, built[c.feed.ID] = b.build(c, item, ok)
+		if b.pending[c.feed.ID] && !b.never(c) {
+			item, done[c.feed.ID] = b.build(c, item, ok)
 			ok = true
 		}
 		if ok {
 			plan.Items = append(plan.Items, item)
 		}
 	}
-	for _, id := range b.configured {
-		if b.pending[id] && !built[id] {
-			plan.PendingFeeds = append(plan.PendingFeeds, id)
-		}
-	}
+	plan.PendingFeeds = b.stillPending(cands, done, nil)
 	return plan
 }
 
-// build is the item of a pending feed, and whether it builds the change: a feed the plan runs anyway is handed to the
-// stage as changed, unless its force already downloads it or a Reload parses it from the baseline; a held feed with its
-// list is held, as the walk holds it.
+// build is the item of a pending feed, and whether it leaves pending: a feed the plan runs anyway is handed to the stage
+// as changed, unless its force already downloads it, a Reload parses it from the baseline, or the walk checked it, whose
+// verdict stands (past the retry cap or failed, it stays pending); a held feed with its list is held, as the walk holds
+// it.
 func (b *builder) build(c candidate, item Item, planned bool) (Item, bool) {
 	held := c.stop == "" && c.feed.State == "hold" && feedstage.ListsPublished(c.dir, c.feed)
 	switch {
@@ -216,8 +245,14 @@ func (b *builder) build(c candidate, item Item, planned bool) (Item, bool) {
 		return item, item.Stopped == ""
 	case item.Stopped != "" || item.Change.Force == "parse":
 		return item, false
-	case held || item.Change.Force == "download" || item.Change.Force == "both":
+	case held:
+		item = b.consumeFail(c, item)
+		item.Change.Verdict = feedstage.VerdictUnchanged
+		return item, item.Stopped == ""
+	case item.Change.Force == "download" || item.Change.Force == "both":
 		return item, true
+	case item.Checked:
+		return item, item.Change.Verdict != feedstage.VerdictFailed && item.Outcome != OutcomeRetryCapReach
 	}
 	item.Change.Verdict, item.Change.Reason = feedstage.VerdictChanged, ""
 	return item, true
@@ -227,9 +262,13 @@ func (b *builder) build(c candidate, item Item, planned bool) (Item, bool) {
 // after a download, which a held feed never makes, so the walk consumes it for every held feed, as today's does: else the
 // marker would make every later scheduled Update due.
 func (b *builder) hold(c candidate, force string) Item {
-	item := b.prepare(c, feedstage.Change{Verdict: feedstage.VerdictUnchanged, Force: force})
+	return b.consumeFail(c, b.prepare(c, feedstage.Change{Verdict: feedstage.VerdictUnchanged, Force: force}))
+}
+
+// consumeFail removes a held feed's fail marker, and stops the feed when it cannot.
+func (b *builder) consumeFail(c candidate, item Item) Item {
 	if item.Stopped == "" && removeIfExists(c.path(".fail")) != nil {
-		item = Item{Feed: c.feed, Stopped: "fail_marker_remove_failed"}
+		return Item{Feed: c.feed, Stopped: "fail_marker_remove_failed"}
 	}
 	return item
 }
@@ -237,7 +276,7 @@ func (b *builder) hold(c candidate, force string) Item {
 // scheduled is pfb_core_update_scheduled(): a walk when a feed is named, a fail marker or the missing DNSBL manifest asks
 // for one, else the pass of a changed Extra.
 func (b *builder) scheduled(cands []candidate) Plan {
-	due := len(b.in.Feeds) > 0 || b.in.ManifestMissing || b.anyPending() || slices.ContainsFunc(cands, func(c candidate) bool {
+	due := len(b.in.Feeds) > 0 || b.in.ManifestMissing || b.buildable(cands) || slices.ContainsFunc(cands, func(c candidate) bool {
 		return c.walked && c.stop == "" && present(c.path(".fail"))
 	})
 	switch {
@@ -258,12 +297,7 @@ func (b *builder) scheduled(cands []candidate) Plan {
 // deferred makes plan a Pending decision: the feeds of the settings, in walk order, that earlier Updates left pending or this
 // one found changed are left to the apply.
 func (b *builder) deferred(plan Plan, cands []candidate, changed []string) Plan {
-	plan.Decision = Pending
-	for _, id := range b.configured {
-		if b.pending[id] || slices.Contains(changed, id) {
-			plan.PendingFeeds = append(plan.PendingFeeds, id)
-		}
-	}
+	plan.Decision, plan.PendingFeeds = Pending, b.stillPending(cands, nil, changed)
 	return plan
 }
 
@@ -293,8 +327,8 @@ func (b *builder) walk(cands []candidate, forceAll bool, pending map[string]bool
 		force = b.in.Force
 	}
 	var plan Plan
-	found := b.anyPending() // today's $pfb['update_cron']: a check found a change, or feeds are left to build
-	var changed []string    // the feeds today's check marks for an update ({header}.update)
+	found := b.buildable(cands) // today's $pfb['update_cron']: a check found a change, or feeds are left to build
+	var changed []string        // the feeds today's check marks for an update ({header}.update)
 	for _, c := range cands {
 		id := c.feed.ID
 		selected := forceAll || pending[id]
