@@ -356,7 +356,9 @@ func TestTop1MTwoInterruptedPublicationsNeverVouchForAListThatIsNotLive(t *testi
 		t.Cleanup(func() { rename = real })
 	}
 	failAt(3)
-	top1mCommit(stage, target, base, raw)
+	if !top1mCommit(stage, target, base, raw) {
+		t.Fatal("setup: list B, live before its digest, is reported as published")
+	}
 	stage = filepath.Join(dir, top1mStaging+"a")
 	for path, content := range map[string]string{stage: top1mKillOldList, raw: top1mKillOldRaw} {
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -364,22 +366,26 @@ func TestTop1MTwoInterruptedPublicationsNeverVouchForAListThatIsNotLive(t *testi
 		}
 	}
 	failAt(2)
-	top1mCommit(stage, target, base, raw)
+	if top1mCommit(stage, target, base, raw) {
+		t.Fatal("setup: the return to A, stopped before its list, is reported as published")
+	}
 
 	files := folderOf(t, dir)
 	if files["top-1m.csv"] != top1mKillNewList {
 		t.Fatalf("setup: list B is live after both interruptions: %v", files)
 	}
 	probeBody := filepath.Join(t.TempDir(), "probe")
-	os.WriteFile(probeBody, []byte(top1mKillOldRaw), 0o644)
+	if err := os.WriteFile(probeBody, []byte(top1mKillOldRaw), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	x := Extra{Dir: dir, File: "top-1m.csv", Download: "top-1m.csv.zip"}
 	if top1mDecision(transfer{status: 200}, probeBody, base, x, true) == Unchanged {
 		t.Errorf("list B is live while the detector reads source A as unchanged: %v", files)
 	}
 }
 
-// A list PHP set aside that cannot be put back stays where it is: the commit stops before its sweep, which would remove the
-// only copy of the live list.
+// A list PHP set aside that cannot be put back stays where it is, out of the sweep, which would remove the only copy of the
+// live list, and the publication goes on: the new list is live, and the next run sweeps the copy.
 func TestTop1MPublicationKeepsAPHPCopyItCannotPutBack(t *testing.T) {
 	dir := t.TempDir()
 	stage, target, base, raw := seedTop1MKill(t, dir, top1mStaging+"run")
@@ -396,9 +402,43 @@ func TestTop1MPublicationKeepsAPHPCopyItCannotPutBack(t *testing.T) {
 	}
 	t.Cleanup(func() { rename = real })
 
-	top1mCommit(stage, target, base, raw)
+	ok := top1mCommit(stage, target, base, raw)
 
 	if got, err := os.ReadFile(copied); err != nil || string(got) != top1mKillOldList {
 		t.Errorf("the only copy of the live list is gone: %q, %v; folder %v", got, err, folderOf(t, dir))
+	}
+	if got, err := os.ReadFile(target); !ok || err != nil || string(got) != top1mKillNewList {
+		t.Errorf("the new list is not published (reported %v): %q, %v", ok, got, err)
+	}
+}
+
+// A publication that stops early, after putting back a list PHP set aside, leaves no digest: PHP, killed after it renamed
+// the new baseline and its digest in but before its own put-back, left a pair that vouches for a source that is not live.
+func TestTop1MPublicationThatStopsAfterAPutBackLeavesNoDigest(t *testing.T) {
+	dir := t.TempDir()
+	_, target, base, raw := seedTop1MKill(t, dir, top1mStaging+"run")
+	if err := os.Rename(target, filepath.Join(dir, ".pfbtop1m_active_1234567890")); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{base + ".orig": top1mKillNewRaw, base + ".xxhash128": digest.Bytes([]byte(top1mKillNewRaw))} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if top1mCommit(filepath.Join(dir, top1mStaging+"missing"), target, base, raw) {
+		t.Fatal("setup: a publication whose stage is missing is reported as published")
+	}
+
+	if got, _ := os.ReadFile(target); string(got) != top1mKillOldList {
+		t.Fatalf("setup: the old list is put back: %q", got)
+	}
+	probeBody := filepath.Join(t.TempDir(), "probe")
+	if err := os.WriteFile(probeBody, []byte(top1mKillNewRaw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	x := Extra{Dir: dir, File: "top-1m.csv", Download: "top-1m.csv.zip"}
+	if top1mDecision(transfer{status: 200}, probeBody, base, x, true) == Unchanged {
+		t.Errorf("the old list is live while the detector reads the new source as unchanged: %v", folderOf(t, dir))
 	}
 }
