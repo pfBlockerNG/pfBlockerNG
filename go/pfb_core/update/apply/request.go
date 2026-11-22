@@ -32,12 +32,12 @@ func leftOut(n int) Issue {
 }
 
 // Request is the version 2 request: what the apply is to load. Core writes it only through Encode, which refuses anything the
-// apply would refuse and the narrower forms Core never writes (the scope rule, below), except issues: Encode writes those in
-// the form the apply keeps and leaves out what does not fit.
+// apply would refuse and the narrower forms Core never writes (the scope rule, below), except issues and the pending token:
+// Encode writes issues in the form the apply keeps and leaves out what does not fit, and the token as it is.
 type Request struct {
-	Trigger              string // "scheduled", "manual", "apply" or "retry"
-	Scope                string // "ip", "dnsbl" or "both": a dnsbl scope lists no resource or removal, an ip scope no DNSBL
-	PendingToken         string // the marker's token from the snapshot, "" when there is no marker (ValidToken)
+	Trigger              string          // "scheduled", "manual", "apply" or "retry"
+	Scope                string          // "ip", "dnsbl" or "both": a dnsbl scope lists no resource or removal, an ip scope no DNSBL
+	PendingToken         json.RawMessage // the settings store's token, written verbatim and never looked inside; nil or empty for none
 	PendingOutsideWindow bool
 	Resources            []Resource
 	Removed              []string // the ids whose resources left the configuration
@@ -77,15 +77,15 @@ type Issue struct {
 }
 
 type wireRequest struct {
-	Version              int            `json:"version"`
-	Trigger              string         `json:"trigger"`
-	Scope                string         `json:"scope"`
-	PendingToken         string         `json:"pendingToken,omitempty"`
-	PendingOutsideWindow bool           `json:"pendingOutsideWindow,omitempty"`
-	Resources            []wireResource `json:"resources,omitempty"`
-	Removed              []string       `json:"removed,omitempty"`
-	DNSBL                *wireDNSBL     `json:"dnsbl,omitempty"`
-	Issues               []Issue        `json:"issues,omitempty"`
+	Version              int             `json:"version"`
+	Trigger              string          `json:"trigger"`
+	Scope                string          `json:"scope"`
+	PendingToken         json.RawMessage `json:"pendingToken,omitempty"`
+	PendingOutsideWindow bool            `json:"pendingOutsideWindow,omitempty"`
+	Resources            []wireResource  `json:"resources,omitempty"`
+	Removed              []string        `json:"removed,omitempty"`
+	DNSBL                *wireDNSBL      `json:"dnsbl,omitempty"`
+	Issues               []Issue         `json:"issues,omitempty"`
 }
 
 type wireResource struct {
@@ -99,12 +99,6 @@ type wireResource struct {
 type wireDNSBL struct {
 	Generation string  `json:"generation"`
 	Groups     []Group `json:"groups"`
-}
-
-// ValidToken reports whether a pending marker's token is one the apply takes: 1 to 64 printable ASCII characters other than
-// the space.
-func ValidToken(token string) bool {
-	return len(token) >= 1 && len(token) <= 64 && printableASCII(token, 0x21)
 }
 
 // Alias is the alias the apply loads for a resource id (pfb_core_update_v2_alias()): ip-set/<group>/ipv4|ipv6 is
@@ -150,9 +144,10 @@ func SetID(group, family string) (id string, ok bool) {
 	return id, true
 }
 
-// Encode is the request as the apply reads it on stdin: one JSON object of printable ASCII, every field the apply needs and
-// none it would refuse. It refuses a request the apply would refuse, one outside the scope rule, and one whose resources, DNSBL
-// and other fields alone are over 1 MiB. Issues are informational and never refuse it: each is written in the form the apply
+// Encode is the request as the apply reads it on stdin: one JSON object, every field the apply needs and none it would refuse,
+// except the pending token, which it writes as the settings read gave it without looking inside (the token is the platform's).
+// It refuses a request the apply would refuse, one outside the scope rule, one whose token is not a JSON value, and one whose
+// resources, DNSBL, token and other fields alone are over 1 MiB. Issues are informational and never refuse it: each is written in the form the apply
 // keeps; when they are over 4096 or push the request over 1 MiB, the first ones that fit beside everything else are kept and
 // one last issue (leftOut) says how many more were left out; when even that one does not fit, no issue is written.
 func Encode(r Request) ([]byte, error) {
@@ -174,7 +169,11 @@ func Encode(r Request) ([]byte, error) {
 			w.DNSBL.Groups = []Group{}
 		}
 	}
-	if out := w.encode(); len(out) > MaxRequest {
+	out, err := w.encode()
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > MaxRequest {
 		return nil, fmt.Errorf("the request is %d bytes without its issues, over the %d the apply reads", len(out), MaxRequest)
 	}
 	issues := make([]Issue, len(r.Issues))
@@ -182,31 +181,40 @@ func Encode(r Request) ([]byte, error) {
 		issues[i] = Issue{Resource: field(is.Resource), Stage: is.Stage, Code: field(is.Code), Message: BoundedText(is.Message)}
 	}
 	w.Issues = issues
-	if out := w.encode(); len(issues) <= maxEntries && len(out) <= MaxRequest {
+	if out := w.mustEncode(); len(issues) <= maxEntries && len(out) <= MaxRequest {
 		return out, nil
 	}
 	// the first n issues and the count of the rest: the request grows with n, so the largest n that fits is found by bisection
 	with := func(n int) []byte {
 		w.Issues = append(slices.Clip(issues[:n]), leftOut(len(issues)-n))
-		return w.encode()
+		return w.mustEncode()
 	}
 	if n := sort.Search(min(len(issues), maxEntries-1)+1, func(n int) bool { return len(with(n)) > MaxRequest }) - 1; n >= 0 {
 		return with(n), nil
 	}
 	w.Issues = nil
-	return w.encode(), nil
+	return w.mustEncode(), nil
 }
 
-// encode is w as one line of JSON, markup in a message as written, as the apply's json_encode() writes it. It cannot fail:
-// w holds only strings, numbers, booleans and lists of them.
-func (w wireRequest) encode() []byte {
+// encode is w as one line of JSON, markup in a message as written, as the apply's json_encode() writes it. It fails only on a
+// token that is not a JSON value: everything else w holds is strings, numbers, booleans and lists of them.
+func (w wireRequest) encode() ([]byte, error) {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(w); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
+}
+
+// mustEncode is encode once w has been encoded with the same token: it cannot fail.
+func (w wireRequest) mustEncode() []byte {
+	out, err := w.encode()
+	if err != nil {
 		panic(err)
 	}
-	return bytes.TrimSuffix(b.Bytes(), []byte("\n"))
+	return out
 }
 
 // BoundedText is text as the apply keeps it unchanged (pfb_core_update_v2_message() is the identity on it): each run of bytes
@@ -246,8 +254,6 @@ func (r Request) check() error {
 		return fmt.Errorf("the trigger %q is not one of scheduled, manual, apply, retry", r.Trigger)
 	case !slices.Contains([]string{"ip", "dnsbl", "both"}, r.Scope):
 		return fmt.Errorf("the scope %q is not one of ip, dnsbl, both", r.Scope)
-	case r.PendingToken != "" && !ValidToken(r.PendingToken):
-		return errors.New("the pending token is not 1 to 64 printable ASCII characters other than the space")
 	case r.Scope == "dnsbl" && (len(r.Resources) > 0 || len(r.Removed) > 0):
 		return errors.New("a dnsbl scope lists no resource and no removed id")
 	case r.Scope == "ip" && r.DNSBL != nil:
