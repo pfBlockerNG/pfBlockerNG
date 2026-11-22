@@ -41,8 +41,9 @@ func TestVerdictIsReadOnlyForATransfer(t *testing.T) {
 	}
 }
 
-// A kind, a state or a format Run does not know is a settings failure that touches nothing, never run as another.
-func TestUnknownKindStateOrFormatIsRefused(t *testing.T) {
+// A kind or a state Run does not know is a settings failure that touches nothing, never run as another. A format is read
+// as today reads it (TestFormatIsReadAsTodayReadsIt).
+func TestUnknownKindOrStateIsRefused(t *testing.T) {
 	for _, tc := range []struct {
 		kind, state, format, reason string
 	}{
@@ -50,8 +51,6 @@ func TestUnknownKindStateOrFormatIsRefused(t *testing.T) {
 		{"", "enabled", "auto", "feed_kind_invalid"},
 		{"ipv4", "paused", "auto", "feed_state_invalid"},
 		{"ipv4", "", "auto", "feed_state_invalid"},
-		{"ipv4", "enabled", "xml", "feed_format_invalid"},
-		{"ipv4", "enabled", "", "feed_format_invalid"},
 	} {
 		stage := testStage(t)
 		feed := Feed{ID: "custom:ipv4:Test", Kind: tc.kind, Name: "Test_custom_v4", State: tc.state, Format: tc.format,
