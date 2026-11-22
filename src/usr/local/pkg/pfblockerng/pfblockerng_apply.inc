@@ -5336,8 +5336,7 @@ function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $p
 						$mirror_path = "{$pfb['aliasdir']}/{$final}.txt";
 						$desired     = pfb_canonical_alias_set(@file_get_contents($mirror_path) ?: '');
 						$previous    = $pfb_alias_prev_sets[$final] ?? $desired;
-						// Boot / empty-table signal: if the alias was not in the prev-set stash
-						// and the kernel table was empty, force a full replace.
+						// Pending unlock, or boot / empty table (no stashed previous set): full replace.
 						$force_rpl   = $pfb_ip_unlock_forced || empty($pfb_alias_prev_sets[$final] ?? NULL);
 						pfb_apply_alias_delta(
 							$pfb['pfctl'],
