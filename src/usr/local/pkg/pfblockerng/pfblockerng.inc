@@ -17048,9 +17048,13 @@ function pfb_ss_csv(array $hosts, ?callable $resolver = NULL): string {
  * patch goes live only once that backup is in place.
  */
 function pfb_unbound_conf_publish(string $dir): bool {
-	return file_exists("{$dir}/unbound.tmp")
-	    && pfb_stage_publish("{$dir}/unbound.bk", static fn (string $staged): int => @copy("{$dir}/unbound.conf", $staged) ? 0 : 1)
-	    && @rename("{$dir}/unbound.tmp", "{$dir}/unbound.conf");
+	if (!file_exists("{$dir}/unbound.tmp")) {
+		return FALSE;
+	}
+	if (!pfb_stage_publish("{$dir}/unbound.bk", static fn (string $staged): int => @copy("{$dir}/unbound.conf", $staged) ? 0 : 1)) {
+		return FALSE;
+	}
+	return @rename("{$dir}/unbound.tmp", "{$dir}/unbound.conf");
 }
 
 // Define DNSBL Unbound include settings (config.xml)
