@@ -3633,7 +3633,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
                                                                         }
 
 									@file_put_contents("{$pfbfolder}/{$cc_alias}.txt", "{$p_ip}\n", LOCK_EX);
-									pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt");
+									// issue #4191: as above, an unpublished placeholder leaves the change for the next pass
+									if (!pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt")) {
+										unlink_if_exists("{$pfborig}/{$cc_alias}.orig");
+									}
 									$log = "[ {$cc_alias} ] Found no unique IPs, adding '{$p_ip}' to avoid empty file\n";
 									pfb_logger("{$log}", 1);
 								}

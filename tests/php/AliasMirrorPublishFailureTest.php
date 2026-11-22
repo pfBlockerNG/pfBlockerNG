@@ -67,6 +67,39 @@ final class AliasMirrorPublishFailureTest extends TestCase
 		$this->assertFileDoesNotExist("{$this->dir}/orig/pfB_Europe_v4.orig", 'a baseline for unpublished data hides the change from the next pass');
 	}
 
+	/** Runs the GeoIP branch that publishes the placeholder for a continent with no unique IP left, its baseline advanced. */
+	private function publishGeoipPlaceholder(): void
+	{
+		file_put_contents("{$this->dir}/orig/pfB_Europe_v4.orig", "192.0.2.0/24\n");
+		pfb_test_page_eval(
+			pfb_test_page_region(self::APPLY, 'if ($file_chk == 0) {',
+				"\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t}\n\n\t\t\t\t\t\tif (file_exists(\"{\$pfbfolder}/{\$cc_alias}.txt\")) {"),
+			[
+				'file_chk' => 0, 'vtype' => '_v4', 'cc_alias' => 'pfB_Europe_v4',
+				'pfborig' => "{$this->dir}/orig", 'pfbfolder' => "{$this->dir}/folder",
+				'pfb' => ['ip_ph' => '127.1.7.7', 'aliasdir' => "{$this->dir}/alias"],
+			]
+		);
+	}
+
+	public function testAGeoipPlaceholderPublishedKeepsTheBaseline(): void
+	{
+		$this->publishGeoipPlaceholder();
+
+		$this->assertSame("127.1.7.7\n", file_get_contents("{$this->dir}/alias/pfB_Europe_v4.txt"));
+		$this->assertSame("192.0.2.0/24\n", file_get_contents("{$this->dir}/orig/pfB_Europe_v4.orig"));
+	}
+
+	/** The placeholder's own publication keeps a failure detectable too: the next pass retries it. */
+	public function testAGeoipPlaceholderThatCannotBePublishedLeavesItsChangeDetectable(): void
+	{
+		$this->assertTrue(mkdir("{$this->dir}/alias/pfB_Europe_v4.txt"), 'setup: a folder in the mirror\'s place makes its publication fail');
+
+		$this->publishGeoipPlaceholder();
+
+		$this->assertFileDoesNotExist("{$this->dir}/orig/pfB_Europe_v4.orig", 'a baseline for an unpublished placeholder hides the change from the next pass');
+	}
+
 	/** Runs the ADR-40 branch for one alias whose set differs from its mirror. @return array<string, mixed> */
 	private function applyCanonicalSet(string $mirror): array
 	{
