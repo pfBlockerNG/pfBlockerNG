@@ -29,17 +29,14 @@ const (
 // top1mKillRenames is how many renames a publication makes; a kill point past it falls after the last one.
 const top1mKillRenames = 3
 
-// seedTop1MKill lays out a folder as an earlier publication left it, plus this run's staged list and raw download.
-func seedTop1MKill(t *testing.T, dir string) (stage, target, base, raw string) {
+// seedTop1MKill lays out a folder as an earlier publication left it, with that version's validators, plus this run's list
+// staged under stageName (a TOP1M stage's own prefix) and its raw download.
+func seedTop1MKill(t *testing.T, dir, stageName string) (stage, target, base, raw string) {
 	t.Helper()
 	target, base = filepath.Join(dir, "top-1m.csv"), filepath.Join(dir, "top-1m.csv.zip")
-	stage, raw = filepath.Join(dir, ".pfbtop1m_123456"), filepath.Join(dir, "top-1m.csv.zip.raw")
-	oldDigest, err := digestOf(top1mKillOldRaw)
-	if err != nil {
-		t.Fatal(err)
-	}
+	stage, raw = filepath.Join(dir, stageName), filepath.Join(dir, "top-1m.csv.zip.raw")
 	for path, content := range map[string]string{
-		target: top1mKillOldList, base + ".orig": top1mKillOldRaw, base + ".xxhash128": oldDigest, base + ".md5": "legacy",
+		target: top1mKillOldList, base + ".orig": top1mKillOldRaw, base + ".xxhash128": digest.Bytes([]byte(top1mKillOldRaw)), base + ".md5": "legacy", base + ".orig.etag": `"v1"`, base + ".orig.lastmod": "1700000000",
 		stage: top1mKillNewList, raw: top1mKillNewRaw,
 	} {
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -47,17 +44,6 @@ func seedTop1MKill(t *testing.T, dir string) (stage, target, base, raw string) {
 		}
 	}
 	return stage, target, base, raw
-}
-
-func digestOf(content string) (string, error) {
-	f, err := os.CreateTemp("", "digest")
-	if err != nil {
-		return "", err
-	}
-	defer os.Remove(f.Name())
-	f.WriteString(content)
-	f.Close()
-	return digest.File(f.Name())
 }
 
 // folderOf is every file of dir by name, with its content.
@@ -110,14 +96,14 @@ func TestTop1MKillChild(t *testing.T) {
 		return err
 	}
 	target, base := filepath.Join(dir, "top-1m.csv"), filepath.Join(dir, "top-1m.csv.zip")
-	top1mCommit(filepath.Join(dir, ".pfbtop1m_123456"), target, base, filepath.Join(dir, "top-1m.csv.zip.raw"))
+	top1mCommit(filepath.Join(dir, os.Getenv("PFB_TOP1M_KILL_STAGE")), target, base, filepath.Join(dir, "top-1m.csv.zip.raw"))
 	t.Fatal("the publication ran to its end without reaching its kill point")
 }
 
 func TestTop1MPublicationSurvivesAKillAtEveryStep(t *testing.T) {
 	// The uninterrupted run, which every killed one must end like.
 	clean := t.TempDir()
-	stage, target, base, raw := seedTop1MKill(t, clean)
+	stage, target, base, raw := seedTop1MKill(t, clean, top1mStaging+"clean")
 	if !top1mCommit(stage, target, base, raw) {
 		t.Fatal("the uninterrupted publication failed")
 	}
@@ -129,19 +115,24 @@ func TestTop1MPublicationSurvivesAKillAtEveryStep(t *testing.T) {
 	for at := 1; at <= top1mKillRenames+1; at++ {
 		t.Run("kill before rename "+strconv.Itoa(at), func(t *testing.T) {
 			dir := t.TempDir()
-			stage, target, base, raw := seedTop1MKill(t, dir)
+			_, target, base, raw := seedTop1MKill(t, dir, top1mStaging+"killed")
 			before := publishedFiles(folderOf(t, dir))
 
 			cmd := exec.Command(os.Args[0], "-test.run=^TestTop1MKillChild$", "-test.count=1")
-			cmd.Env = append(os.Environ(), "PFB_TOP1M_KILL_DIR="+dir, "PFB_TOP1M_KILL_POINT="+strconv.Itoa(at))
+			cmd.Env = append(os.Environ(), "PFB_TOP1M_KILL_DIR="+dir, "PFB_TOP1M_KILL_POINT="+strconv.Itoa(at), "PFB_TOP1M_KILL_STAGE="+top1mStaging+"killed")
 			out, err := cmd.CombinedOutput()
 			if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
 				t.Fatalf("the child was not killed at its kill point: %v\n%s", err, out)
 			}
 			killed := folderOf(t, dir)
 
-			if at == 1 && !maps.Equal(publishedFiles(killed), before) {
-				t.Errorf("before the first rename the published files changed:\n got %v\nwant %v", publishedFiles(killed), before)
+			if at == 1 {
+				// The old version's validators may already be gone: the list, the baseline and its digest may not change.
+				for _, name := range []string{"top-1m.csv", "top-1m.csv.zip.orig", "top-1m.csv.zip.xxhash128", "top-1m.csv.zip.md5"} {
+					if killed[name] != before[name] {
+						t.Errorf("before the first rename %s changed: %q, was %q", name, killed[name], before[name])
+					}
+				}
 			}
 			list, present := killed["top-1m.csv"]
 			if !present {
@@ -156,7 +147,14 @@ func TestTop1MPublicationSurvivesAKillAtEveryStep(t *testing.T) {
 				}
 			}
 
-			// Recovery and a new run of the same download: the next publication of the same body.
+			if killed["top-1m.csv.zip.orig"] == top1mKillNewRaw {
+				if _, ok := killed["top-1m.csv.zip.orig.etag"]; ok {
+					t.Errorf("the old version's validators sit beside the new baseline, so a server back on it answers 304: %v", killed)
+				}
+			}
+
+			// Recovery and a new run of the same download, staged afresh as a run stages it: the next publication.
+			stage := filepath.Join(dir, top1mStaging+"rerun")
 			for path, content := range map[string]string{stage: top1mKillNewList, raw: top1mKillNewRaw} {
 				if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 					t.Fatal(err)
@@ -169,5 +167,89 @@ func TestTop1MPublicationSurvivesAKillAtEveryStep(t *testing.T) {
 				t.Errorf("after the kill and a new run:\n got %v\nwant %v", got, want)
 			}
 		})
+	}
+}
+
+// A rename that fails at any step leaves the list whole and, unless the new list is live, a baseline that does not vouch for
+// the new source; nothing a run staged for the baseline or its digest is left behind (#4198).
+func TestTop1MPublicationWithARenameThatFailsAtEachStep(t *testing.T) {
+	for at := 1; at <= top1mKillRenames; at++ {
+		t.Run("rename "+strconv.Itoa(at)+" fails", func(t *testing.T) {
+			dir := t.TempDir()
+			stage, target, base, raw := seedTop1MKill(t, dir, top1mStaging+"run")
+			real, n := rename, 0
+			rename = func(from, to string) error {
+				if n++; n == at {
+					return os.ErrPermission
+				}
+				return real(from, to)
+			}
+			t.Cleanup(func() { rename = real })
+
+			ok := top1mCommit(stage, target, base, raw)
+
+			files := folderOf(t, dir)
+			list := files["top-1m.csv"]
+			if list != top1mKillOldList && list != top1mKillNewList {
+				t.Fatalf("the list is not whole after a failed rename %d: %v", at, files)
+			}
+			if ok != (list == top1mKillNewList) {
+				t.Errorf("the commit reported %v while the live list is %q: it reports whether the new list was published", ok, list)
+			}
+			if list != top1mKillNewList {
+				probeBody := filepath.Join(t.TempDir(), "probe")
+				os.WriteFile(probeBody, []byte(top1mKillNewRaw), 0o644)
+				x := Extra{Dir: dir, File: "top-1m.csv", Download: "top-1m.csv.zip"}
+				if top1mDecision(transfer{status: 200}, probeBody, base, x, true) == Unchanged {
+					t.Errorf("the old list is live while the detector reads the new source as unchanged: %v", files)
+				}
+			}
+			for name := range files {
+				if strings.HasPrefix(name, top1mStaging) && name != filepath.Base(stage) {
+					t.Errorf("a staged file is left behind: %s", name)
+				}
+			}
+		})
+	}
+}
+
+// A list that today's PHP set aside (".pfbtop1m_active_") while no list is published is the only copy of the live list: the
+// commit puts it back first, so a publication that then fails still leaves a list in place.
+func TestTop1MPublicationPutsBackAListPHPSetAside(t *testing.T) {
+	dir := t.TempDir()
+	stage, target, base, raw := seedTop1MKill(t, dir, top1mStaging+"run")
+	if err := os.Rename(target, filepath.Join(dir, ".pfbtop1m_active_1234567890")); err != nil {
+		t.Fatal(err)
+	}
+	real := rename
+	rename = func(from, to string) error {
+		if to == target && from == stage {
+			return os.ErrPermission
+		}
+		return real(from, to)
+	}
+	t.Cleanup(func() { rename = real })
+
+	top1mCommit(stage, target, base, raw)
+
+	if got, err := os.ReadFile(target); err != nil || string(got) != top1mKillOldList {
+		t.Errorf("the list PHP set aside is not back in place: %q, %v", got, err)
+	}
+}
+
+// The published list is readable by the readers of the database folder, whatever mode its stage was created with.
+func TestTop1MPublicationPublishesTheListReadable(t *testing.T) {
+	dir := t.TempDir()
+	stage, target, base, raw := seedTop1MKill(t, dir, top1mStaging+"run")
+	if err := os.Chmod(stage, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if !top1mCommit(stage, target, base, raw) {
+		t.Fatal("the publication failed")
+	}
+
+	if info, err := os.Stat(target); err != nil || info.Mode().Perm() != 0o644 {
+		t.Errorf("the list is published with mode %v (%v), want 0644", info.Mode().Perm(), err)
 	}
 }
