@@ -919,6 +919,19 @@ lengthens a line; nothing else is ever shortened or left out. With the bounds ab
 fits: the longest, every one of 2,048 ids of 36 bytes failed and every alias of 31 characters changed, is 286,826 bytes
 once shortened. A report beyond the bounds is refused, and no line is written for it.
 
+Core reads the result file whole and holds the apply (#4037, slice 8e) to three rules of the file, beyond those of each line:
+
+- an id is named on one result line only, across the whole file: an id on two lines (applied on one and failed on another,
+  or applied twice) refuses the result;
+- `changedAliases` names only aliases of ids the request holds, in `resources` or in `removed`: any other alias refuses the
+  result;
+- the file as a whole stays within 1 MiB. When it is longer, Core keeps the complete lines inside the first 1 MiB and reports
+  the rest as cut: what those lines report is settled, and the ids they do not name stay pending.
+
+A line Core refuses (another version, an unknown field, an id outside the request, a failure message holding a control
+character or a line or paragraph separator) refuses the whole result, unless it is the unterminated last line of a file
+within 1 MiB, cut short by the apply's death: then the lines before it count.
+
 With `pendingOutsideWindow` true the apply marks the changes pending and applies nothing, so its one line holds no `applied`.
 
 ### Hooks outside an Update

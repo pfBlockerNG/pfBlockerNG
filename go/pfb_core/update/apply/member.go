@@ -11,12 +11,16 @@ import (
 // without host bits for a prefix). A row that is not one address or prefix of the family (a range, a netmask, a host name, a
 // zone, white space) is refused, and so is one the address guard refuses: today's rule of pfb_sanitize_ipaddr() and
 // pfb_sanitize_ipaddr_v6() (pfblockerng.inc, issue #1922), judged on the network pf loads, so an IPv4 network whose first
-// octet is 0, the IPv6 network ::, and a prefix length of 0 are left out. The caller files an issue for a refused row.
+// octet is 0, the IPv6 network ::, and a prefix length of 0 are left out. A prefix length with leading zeros (/024), which
+// today's parser publishes and pf reads as decimal, is its decimal number (/24). The caller files an issue for a refused row.
 func Member(row, family string) (string, error) {
 	var p netip.Prefix
-	if strings.Contains(row, "/") {
+	if addr, bits, ok := strings.Cut(row, "/"); ok {
+		if bits != "" && strings.Trim(bits, "0123456789") == "" {
+			bits = strings.TrimLeft(bits[:len(bits)-1], "0") + bits[len(bits)-1:] // the last digit stays: /00 is /0
+		}
 		var err error
-		if p, err = netip.ParsePrefix(row); err != nil {
+		if p, err = netip.ParsePrefix(addr + "/" + bits); err != nil {
 			return "", fmt.Errorf("%+q is not one address or prefix", row)
 		}
 	} else {

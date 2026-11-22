@@ -6,11 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
-	"regexp"
-	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -31,10 +29,15 @@ type Result struct {
 }
 
 type Failure struct {
-	ID      string `json:"id"`
-	Stage   string `json:"stage"` // "fetch" or "apply"
-	Message string `json:"message"`
+	ID      string
+	Stage   string // "fetch" or "apply"
+	Message string
 }
+
+// ErrCut is ReadResult's error for a result over MaxResult: the Result it comes with holds the complete lines inside the first
+// MaxResult bytes, and what the apply reported after them is unknown. Those lines are settled as read; the ids they do not
+// name stay pending, as they do after any error, so a caller that treats ErrCut as any other error settles nothing wrong.
+var ErrCut = errors.New("the apply's result is over 1 MiB: only its complete lines inside the first 1 MiB are read")
 
 // Exit is what the apply's exit status means for the Update.
 type Exit int
@@ -90,59 +93,70 @@ type line struct {
 	} `json:"failed"`
 }
 
-var aliasName = regexp.MustCompile(`^pfB_[A-Za-z0-9_]{1,27}$`)
-
 // ReadResult is what the apply wrote to its result file for req: nothing, or lines of version 2, each one JSON object of
 // printable ASCII within MaxLine, holding only ids and aliases of req, an applied id at the generation req gave (1 to 20
-// digits, leading zeros allowed: the apply echoes the request's string), each id once across all lines. The lines add up:
-// applied, removed, failed and aliases of every line, and a flag true when any line says so. A bad unterminated last line (one the apply's death cut short) leaves the lines before it, with the error; any other
-// error returns a zero Result, so nothing of it is settled.
+// digits, leading zeros allowed: the apply echoes the request's string), each id once across all lines, and a failure message
+// without a control character or a line or paragraph separator (the apply writes each as a space). The lines add up: applied,
+// removed, failed and aliases of every line, and a flag true when any line says so. Keys are matched as encoding/json matches
+// them (case-insensitively, the last duplicate winning), which the apply never writes. A result over MaxResult keeps the
+// complete lines inside the first MaxResult bytes, with ErrCut; a bad unterminated last line (one the apply's death cut
+// short) leaves the lines before it, with the error; any other error returns a zero Result, so nothing of it is settled.
 func ReadResult(f io.ReaderAt, req Request) (Result, error) {
-	b, err := io.ReadAll(io.NewSectionReader(f, 0, MaxResult+1))
-	switch {
-	case err != nil:
+	b := make([]byte, MaxResult+1) // read once, never grown
+	n, err := io.ReadFull(io.NewSectionReader(f, 0, MaxResult+1), b)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return Result{}, fmt.Errorf("the apply's result cannot be read: %w", err)
-	case len(b) > MaxResult:
-		return Result{}, errors.New("the apply's result is over 1 MiB")
 	}
-	generation := map[string]uint64{}
-	removable := map[string]bool{}
-	aliases := map[string]bool{}
-	for _, r := range req.Resources {
-		generation[r.ID] = r.Generation
-		if a, ok := Alias(r.ID); ok {
-			aliases[a] = true
+	b = b[:n]
+	cut := len(b) > MaxResult
+	if cut {
+		b = b[:bytes.LastIndexByte(b[:MaxResult], '\n')+1]
+	}
+	r := reader{generation: map[string]uint64{}, removable: map[string]bool{}, aliases: map[string]bool{}, named: map[string]bool{},
+		changed: map[string]bool{}}
+	for _, res := range req.Resources {
+		r.generation[res.ID] = res.Generation
+		if a, ok := Alias(res.ID); ok {
+			r.aliases[a] = true
 		}
 	}
 	for _, id := range req.Removed {
-		removable[id] = true
+		r.removable[id] = true
 		if a, ok := Alias(id); ok {
-			aliases[a] = true
+			r.aliases[a] = true
 		}
 	}
-	var res Result
-	named := map[string]bool{}
-	lines := bytes.Split(b, []byte("\n"))
-	for i, l := range lines {
+	for len(b) > 0 {
+		l, rest, terminated := bytes.Cut(b, []byte("\n"))
+		b = rest
 		if len(bytes.TrimSpace(l)) == 0 {
 			continue
 		}
-		next, err := res.add(l, generation, removable, aliases, named)
-		if err != nil {
-			if i < len(lines)-1 {
+		if err := r.add(l); err != nil {
+			if terminated {
 				return Result{}, err
 			}
-			return res, err
+			return r.res, err
 		}
-		res = next
 	}
-	return res, nil
+	if cut {
+		return r.res, ErrCut
+	}
+	return r.res, nil
 }
 
-// add is res with one line added, or the reason the line is refused.
-func (res Result) add(raw []byte, generation map[string]uint64, removable, aliases, named map[string]bool) (Result, error) {
-	refuse := func(format string, a ...any) (Result, error) {
-		return Result{}, fmt.Errorf("the apply's result line is refused: "+format, a...)
+// reader is ReadResult's state: what the request holds, what the lines read so far named, and their Result.
+type reader struct {
+	generation         map[string]uint64
+	removable, aliases map[string]bool
+	named, changed     map[string]bool // the ids and the changed aliases of the lines read
+	res                Result
+}
+
+// add adds one line to r.res, or leaves r as it was and gives the reason the line is refused: the line is checked whole first.
+func (r *reader) add(raw []byte) error {
+	refuse := func(format string, a ...any) error {
+		return fmt.Errorf("the apply's result line is refused: "+format, a...)
 	}
 	if len(raw)+1 > MaxLine {
 		return refuse("it is over %d bytes", MaxLine)
@@ -165,56 +179,70 @@ func (res Result) add(raw []byte, generation map[string]uint64, removable, alias
 	if len(l.Applied)+len(l.Removed)+len(l.Failed) > MaxIDs || len(l.ChangedAliases) > MaxIDs {
 		return refuse("it names more than %d ids or aliases", MaxIDs)
 	}
+	onLine := map[string]bool{}
 	claim := func(id string) bool {
-		if named[id] || !handled(id) {
+		if r.named[id] || onLine[id] || !handled(id) {
 			return false
 		}
-		named[id] = true
+		onLine[id] = true
 		return true
 	}
-	// a refused line leaves res as it was: the lines before a cut last line still count
-	applied := maps.Clone(res.Applied)
 	for id, g := range l.Applied {
-		want, requested := generation[id]
-		if n, err := strconv.ParseUint(g, 10, 64); !requested || !claim(id) || len(g) > 20 || strings.Trim(g, "0123456789") != "" || err != nil || n != want {
-			return refuse("%q at %q is not a resource of the request at its generation, once", id, g)
+		want, requested := r.generation[id]
+		if !requested || !claim(id) {
+			return refuse("%q is not an id of the request, named once", id)
 		}
-		if applied == nil {
-			applied = map[string]uint64{}
+		if n, err := strconv.ParseUint(g, 10, 64); len(g) > 20 || err != nil || n != want {
+			return refuse("%q at %q is not the generation the request gave", id, g)
 		}
-		applied[id] = want
 	}
 	for _, id := range l.Removed {
-		if !removable[id] || !claim(id) {
-			return refuse("%q is not a removal of the request, once", id)
+		if !r.removable[id] || !claim(id) {
+			return refuse("%q is not an id of the request, named once", id)
 		}
 	}
-	var failed []Failure
 	for _, f := range l.Failed {
-		_, requested := generation[f.ID]
-		if !(requested || removable[f.ID]) || !claim(f.ID) || (f.Stage != "fetch" && f.Stage != "apply") || f.Message == nil {
-			return refuse("the failure of %q is not one of the request's ids, once, with a stage of fetch or apply and a message", f.ID)
+		_, requested := r.generation[f.ID]
+		switch {
+		case !(requested || r.removable[f.ID]) || !claim(f.ID):
+			return refuse("the failure of %q is not an id of the request, named once", f.ID)
+		case f.Stage != "fetch" && f.Stage != "apply":
+			return refuse("the failure of %q has a stage other than fetch or apply", f.ID)
+		case f.Message == nil:
+			return refuse("the failure of %q has no message", f.ID)
+		case strings.ContainsFunc(*f.Message, func(c rune) bool { return unicode.IsControl(c) || c == '\u2028' || c == '\u2029' }):
+			return refuse("the failure message of %q holds a control character or a line or paragraph separator", f.ID)
 		}
-		failed = append(failed, Failure{f.ID, f.Stage, *f.Message})
 	}
-	changed := slices.Clip(res.ChangedAliases)
-	onLine := map[string]bool{}
+	aliasesOnLine := map[string]bool{}
 	for _, a := range l.ChangedAliases {
-		if !aliasName.MatchString(a) || !aliases[a] || onLine[a] {
+		if !r.aliases[a] || aliasesOnLine[a] {
 			return refuse("the changed alias %q is not an alias of the request's ids, once", a)
 		}
-		onLine[a] = true
-		if !slices.Contains(changed, a) {
-			changed = append(changed, a)
+		aliasesOnLine[a] = true
+	}
+
+	for id := range onLine {
+		r.named[id] = true
+	}
+	for id := range l.Applied {
+		if r.res.Applied == nil {
+			r.res.Applied = map[string]uint64{}
+		}
+		r.res.Applied[id] = r.generation[id]
+	}
+	r.res.Removed = append(r.res.Removed, l.Removed...)
+	for _, f := range l.Failed {
+		r.res.Failed = append(r.res.Failed, Failure{f.ID, f.Stage, *f.Message})
+	}
+	for _, a := range l.ChangedAliases {
+		if !r.changed[a] {
+			r.changed[a] = true
+			r.res.ChangedAliases = append(r.res.ChangedAliases, a)
 		}
 	}
-	return Result{
-		Applied:        applied,
-		Removed:        append(slices.Clip(res.Removed), l.Removed...),
-		ChangedAliases: changed,
-		IPChanged:      res.IPChanged || bool(l.IPChanged),
-		DNSBLChanged:   res.DNSBLChanged || bool(l.DNSBLChanged),
-		ReloadLaunched: res.ReloadLaunched || bool(l.ReloadLaunched),
-		Failed:         append(slices.Clip(res.Failed), failed...),
-	}, nil
+	r.res.IPChanged = r.res.IPChanged || bool(l.IPChanged)
+	r.res.DNSBLChanged = r.res.DNSBLChanged || bool(l.DNSBLChanged)
+	r.res.ReloadLaunched = r.res.ReloadLaunched || bool(l.ReloadLaunched)
+	return nil
 }
