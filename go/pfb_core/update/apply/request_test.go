@@ -125,20 +125,22 @@ func issuesOf(t *testing.T, written []byte) []apply.Issue {
 // each run of bytes outside printable ASCII is one space, no space at either end, at most 1024 bytes.
 func TestBoundedText(t *testing.T) {
 	for in, want := range map[string]string{
-		"":                                 "",
-		"plain":                            "plain",
-		" \t\r\n ":                         "",
-		"a\x00\x01\x1f\x7fb":               "a b",
-		"a \x00 b":                         "a   b",
-		"one\u2028two\u2029three":          "one two three",
-		"zero\u200bwidth":                  "zero width",
-		"bad \xff\xfe utf8":                "bad   utf8",
-		"\xc3":                             "",
-		`"<i>" &amp; \`:                    `"<i>" &amp; \`,
-		strings.Repeat("a", 1023) + " b":   strings.Repeat("a", 1023),
-		strings.Repeat("a", 1024) + "b":    strings.Repeat("a", 1024),
-		strings.Repeat("\xff", 5000) + "x": "x",
-		strings.Repeat("ab\x00", 1000):     strings.Repeat("ab ", 341) + "a",
+		"":                                   "",
+		"plain":                              "plain",
+		" \t\r\n ":                           "",
+		"a\x00\x01\x1f\x7fb":                 "a b",
+		"a \x00 b":                           "a   b",
+		"one\u2028two\u2029three":            "one two three",
+		"zero\u200bwidth":                    "zero width",
+		"bad \xff\xfe utf8":                  "bad   utf8",
+		"\xc3":                               "",
+		`"<i>" &amp; \`:                      `"<i>" &amp; \`,
+		strings.Repeat("a", 1023) + " b":     strings.Repeat("a", 1023),
+		strings.Repeat("a", 1024) + "b":      strings.Repeat("a", 1024),
+		strings.Repeat("\xff", 5000) + "x":   "x",
+		strings.Repeat("ab\x00", 1000):       strings.Repeat("ab ", 341) + "a",
+		" " + strings.Repeat("a", 1100):      strings.Repeat("a", 1024), // trimmed before the cut, as the apply does
+		"\x00\t" + strings.Repeat("a", 1100): strings.Repeat("a", 1024),
 	} {
 		if got := apply.BoundedText(in); got != want {
 			t.Errorf("%+.80q: %+.80q, want %+.80q", in, got, want)
