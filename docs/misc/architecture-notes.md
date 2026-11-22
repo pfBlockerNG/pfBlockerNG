@@ -2351,7 +2351,7 @@ sits (owner decision on #4037, 2026-11-22: `RuntimeGatewayReadsStructureTest`, `
    with `pendingOutsideWindow`, or while a GeoIP generation swap is in progress, it marks the changes pending, sets the
    due-ledger flag, writes `{"version":2}` and exits 0 (the GeoIP case exits 1 for a `manual` request, as version 1's
    pass does); the `apply` trigger clears the due-ledger flag and restores it, with the pending mark, when the apply does
-   not succeed, an apply that throws included;
+   not succeed, an apply that throws included, and after a deferral only when it cleared the flag;
 2. runs `pfb_apply_enter()` (DNS configuration lock unavailable: exit 75, every lock it took released), then
    `pfb_apply_settings()`;
 3. unless the scope is `dnsbl`: walks config.xml for the aliases it expects (`pfb_outpost_expected_aliases()`:
@@ -2370,11 +2370,13 @@ sits (owner decision on #4037, 2026-11-22: `RuntimeGatewayReadsStructureTest`, `
    later request without the issue closes it); unless the scope is `ip`: writes the statistics rows of
    `request.dnsbl` (`dnsbl_save_stats()`), runs `pfb_apply_dns()`, `pfb_update_unbound()` when that changed the
    Resolver's configuration (then the #468 archive `pfb_dnsbl_cache('save')` on a RAM-disk `/var`, as the pass does), and
-   `pfb_apply_dns_proxy()`. The reload decision is the pass's `pfb_dnsbl_reload_needed()`: it also runs for a stored
-   temporary unlock and for an `accounting` retry once this apply's statistics were written, and never after a failed
-   statistics step. A reload failure of `pfb_reload_unbound()` is not observed, as in the pass. The `accounting` retry
-   marker is cleared as the pass clears it, once the reload converged (`pfb_dnsbl_converged()`); a failed accounting or a
-   marker that remains keeps the changes pending;
+   `pfb_apply_dns_proxy()`. The reload decision is the pass's `pfb_dnsbl_reload_needed()`: it also runs for an
+   `accounting` retry once this apply's statistics were written, and never after a failed statistics step. A stored
+   temporary unlock alone does not force a reload here (the pass's cadence re-locks it; #4036 question 3 decides any
+   handling), but a reload for another reason re-locks it as the pass does. A reload failure of `pfb_reload_unbound()` is
+   not observed, as in the pass. The `accounting` retry marker is cleared as the pass clears it, once the reload converged
+   (`pfb_dnsbl_converged()`); a failed accounting or a marker that remains keeps the changes pending. A request with no
+   `dnsbl` body cannot reconcile the marker, so the apply neither fails on it nor clears it: the pass reconciles it;
 5. removes what left the configuration (the mirror, then `pfctl -T kill`, then the cursor: a kill that fails keeps its
    ledger entry, and the tick's retry kills a table that has no mirror); a `geo-catalog` body renders the GeoIP pages;
    registers every expected alias with a mirror and runs `pfb_apply_objects()` with a push that sends each changed
@@ -2383,14 +2385,17 @@ sits (owner decision on #4037, 2026-11-22: `RuntimeGatewayReadsStructureTest`, `
    `ip/<alias>/apply` ledger entry is open afterwards, failed; the others advance their cursor;
 6. writes one result line: `applied` (the resources at the requested generation, `unchanged` ones included, and none
    when a needed filter reload was not launched), `removed`, `changedAliases` (the tables pushed, of the request's
-   aliases), `ipChanged`, `dnsblChanged` (DNS steps run), `reloadLaunched` (a reload was needed) and `failed`; settles
+   aliases), `ipChanged`, `dnsblChanged` (DNS steps run, or the Resolver reloaded), `reloadLaunched` (a reload was needed) and `failed`; settles
    the request's `pendingToken` unless something failed (a failed resource or a result line that was not written is the
    apply record's reason); exits 0, or 1 when a resource failed, the reload was not launched, the DNSBL statistics could not
-   be written or the line was not written. A deferral (exit 75: a lock is held or Core does not serve) marks nothing pending
-   and leaves the pending mark alone; a non-zero exit sets the pending mark and the due flag again.
+   be written or the line was not written. A deferral (exit 75: a lock is held or Core does not serve) adds no pending mark,
+   except that `pfb_apply_enter()` marks pending when the DNS configuration lock is unavailable. Core retries a deferred
+   `scheduled` or `retry` Update on its next tick (a deferred Update records nothing, so its occurrences stay pending), and
+   does not retry a `manual` one or the `apply` trigger: a deferral after the locks are held sets the due flag for a
+   `manual` Update, and for the `apply` trigger only when it cleared the flag. A non-zero exit other than 75 sets the pending mark and the due flag again.
 
-Not yet: a change to the DNSBL temporary unlock re-lock (the Resolver reload re-locks them exactly as the update pass
-does; #4036 question 3 owns any change), the empty-set placeholder in a mirror, pruning
+Not yet: a change to the DNSBL temporary unlock handling (a stored unlock alone does not reload the Resolver here, and a
+reload re-locks it exactly as the update pass does; #4036 question 3 owns any change), the empty-set placeholder in a mirror, pruning
 DNSBL statistics rows of removed groups, and `--resource-dir` in the rc script. Behaviour:
 `tests/php/OutpostApplyTest.php` (through corpus A's worker) and `tests/smoke/test_smoke_outpost_apply.py`.
 
