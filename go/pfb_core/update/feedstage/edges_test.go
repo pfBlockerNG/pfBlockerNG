@@ -186,7 +186,8 @@ func TestEmptyCheckReadsThePreScriptOutput(t *testing.T) {
 	}
 }
 
-// The Suppression CIDR Limit: a GeoIP list is never cut, and a group's own IPv4 limit is over the global one.
+// The Suppression CIDR Limit: the global limit never cuts a GeoIP list, a group's own IPv4 limit does, and that limit is over
+// the global one.
 func TestSuppressionCIDRLimits(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
@@ -195,7 +196,8 @@ func TestSuppressionCIDRLimits(t *testing.T) {
 		want            string
 	}{
 		{name: "the global limit cuts a wider prefix", floor: 24, want: "198.51.0.0/32\n"},
-		{name: "a GeoIP list is never cut", floor: 24, geoip: true, want: "198.51.0.0/16\n"},
+		{name: "the global limit never cuts a GeoIP list", floor: 24, geoip: true, want: "198.51.0.0/16\n"},
+		{name: "a group's limit cuts a GeoIP list", groupCut: 24, geoip: true, want: "198.51.0.0/32\n"},
 		{name: "the group's limit applies without a global one", groupCut: 24, want: "198.51.0.0/32\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
