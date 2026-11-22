@@ -97,7 +97,7 @@ final class RuntimeGatewayReadsStructureTest extends TestCase
 
 	/**
 	 * The settings step takes the six registered IP keys it consumes from config.xml through PfbConfig: an absent key is the
-	 * registry default (or its grandfathered value), a stored key is what is stored, and pfb_global()'s raw copy
+	 * registry default, a stored key is what is stored, and pfb_global()'s raw copy
 	 * ($pfb['ipconfig']) never decides either.
 	 */
 	public function testTheSettingsStepTakesTheRegisteredIpKeysFromTheGatewayNotFromARawCopy(): void
@@ -114,6 +114,8 @@ final class RuntimeGatewayReadsStructureTest extends TestCase
 			$run = static function () use ($dir): void {
 				global $pfb;
 				// what pfb_global() leaves, with every path the step may remove inside the test's own directory
+				$pfb['dnsbl']        = PfbToggle::Off;
+				$pfb['dnsblconfig']  = ['action' => 'Disabled', 'top1m_count' => '', 'top1m_inclusion' => '', 'aliaslog' => ''];
 				$pfb['aliasarchive'] = "{$dir}/aliastables";
 				$pfb['dnsblarchive'] = "{$dir}/dnsbl_cache";
 				$pfb['ipconfig']     = ['inbound_deny_action' => 'match', 'outbound_deny_action' => 'match', 'pass_order' => 'order_3',
@@ -122,14 +124,17 @@ final class RuntimeGatewayReadsStructureTest extends TestCase
 			};
 			$GLOBALS['config'] = [];
 			config_set_path("{$ip}/enable_float", '');
+			foreach (['et_update', 'ccwhite', 'ccblack', 'etblock', 'etmatch', 'p24_max_var', 'p24_dmax_var', 'p24_pmax_var', 'ccexclude'] as $key) {
+				config_set_path("installedpackages/pfblockerngreputation/config/0/{$key}", '');
+			}
 			config_set_path('installedpackages/pfblockernglistsv4/config', [['aliasname' => 'Beta', 'action' => 'Deny_Both']]);
 
 			// Given config.xml without the keys
 			$run();
-			$this->assertSame(['block', 'reject', 'order_0', '', '127.1.7.7', [], []],
+			$this->assertSame(['block', 'reject', 'order_0', ' auto rule', '127.1.7.7', [], []],
 				[$pfb['deny_action_inbound'], $pfb['deny_action_outbound'], $pfb['order'], $pfb['suffix'], $pfb['ip_ph'],
 					$pfb['inbound_interfaces'], $pfb['outbound_interfaces']],
-				'absent keys read as the registry defaults (the suffix as its grandfathered "standard"), never as the raw copy');
+				'absent keys read as the registry defaults, never as the raw copy');
 
 			// When config.xml stores each key
 			foreach (['inbound_deny_action' => 'reject', 'outbound_deny_action' => 'block', 'pass_order' => 'order_2',
