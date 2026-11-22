@@ -29,9 +29,9 @@ const (
 
 // recoveredSuffixes are the copies and temporaries a KILL can leave behind a feed stem: feedparse's script copies, their
 // copyFile temporaries, and NormalizeFile's; feedfetch's whois copy (writeAtomic) and FTP validators
-// (writeSidecarAtomically).
+// (writeSidecarAtomically), and the probe's body and validators before they get their names (".probe" itself is stage 6's).
 var recoveredSuffixes = []string{".pre", ".post", ".pre.tmp", ".post.tmp", ".orig.post.tmp", ".norm.tmp", ".orig.tmp",
-	".orig.lastmod.part", ".orig.size.part"}
+	".orig.lastmod.part", ".orig.size.part", ".probe.part", ".probe.lastmod.part", ".probe.size.part"}
 
 // parsedSource names the record of the normalized input a feed's published lists stand for, beside them as a digest sidecar.
 const parsedSource = ".parsed.src"
@@ -315,7 +315,9 @@ func (s *journal) commit() error {
 	if err == nil {
 		err = syncDir(s.dir)
 	}
-	if err != nil {
+	if err == nil {
+		s.committed = true // durable: a later rollback must leave the new files, whatever finishSet leaves behind
+	} else {
 		if removeErr := removeIfExists(marker); removeErr != nil {
 			s.committed = true
 			return errors.Join(err, removeErr)
@@ -348,6 +350,7 @@ func rollbackSet(entries []journalEntry) error {
 		absent[entry.target] = absent[entry.target] || entry.absent
 	}
 	var errs []error
+	kept := map[string]bool{} // targets whose backup entry stays: their absent record stays too, to beat it next time
 	for _, entry := range entries {
 		if entry.absent {
 			continue
@@ -358,18 +361,21 @@ func rollbackSet(entries []journalEntry) error {
 		}
 		if err != nil {
 			errs = append(errs, err) // the entry stays for the next rollback
+			kept[entry.target] = true
 			continue
 		}
 		target, targetErr := os.Lstat(entry.target)
 		// A rename between two links of one file does nothing: such a target holds its backup already.
 		if backup.Mode().IsRegular() && !absent[entry.target] && (targetErr != nil || !os.SameFile(backup, target)) {
-			errs = append(errs, rename(entry.path, entry.target))
-			continue
+			err = rename(entry.path, entry.target)
+		} else {
+			err = removeIfExists(entry.path)
 		}
-		errs = append(errs, removeIfExists(entry.path))
+		kept[entry.target] = kept[entry.target] || err != nil
+		errs = append(errs, err)
 	}
 	for _, entry := range entries {
-		if !entry.absent {
+		if !entry.absent || kept[entry.target] {
 			continue
 		}
 		err := removeIfExists(entry.target)
@@ -411,14 +417,15 @@ func journalEntryOf(dir, name string) (journalEntry, string, bool) {
 
 // finishSets finishes the journal sets in dir, as listed in entries, that hold an entry of the feed stem ("" for every
 // set): forward with a commit marker, back without one. A marker names no feed, so with a stem only the markers of sets
-// with such an entry are reached; without one, a marker whose entries are all gone is removed too.
+// with such an entry are reached, and a marker no entry of any feed names is removed too.
 func finishSets(dir string, entries []os.DirEntry, stem string) error {
-	sets, committed := map[string][]journalEntry{}, map[string]bool{}
+	sets, committed, named := map[string][]journalEntry{}, map[string]bool{}, map[string]bool{}
 	for _, e := range entries {
 		name := e.Name()
 		if id, ok := strings.CutPrefix(name, commitMark); ok && validFeedWord(id) {
 			committed[id] = true
 		} else if entry, id, ok := journalEntryOf(dir, name); ok {
+			named[id] = true
 			if entryStem, _, _ := strings.Cut(filepath.Base(entry.target), "."); stem == "" || entryStem == stem {
 				sets[id] = append(sets[id], entry)
 			}
@@ -431,7 +438,7 @@ func finishSets(dir string, entries []os.DirEntry, stem string) error {
 		}
 	}
 	for id := range committed {
-		if stem == "" || len(sets[id]) > 0 {
+		if len(sets[id]) > 0 || !named[id] {
 			errs = append(errs, finishSet(filepath.Join(dir, commitMark+id), sets[id]))
 		}
 	}

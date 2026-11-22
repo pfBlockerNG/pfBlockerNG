@@ -131,6 +131,9 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 	// Today's per-feed blocks and pfb_download() compare the format with these names case-sensitively, and any other value,
 	// such as the category editor's "Auto" or an empty one, falls through to auto.
 	if !slices.Contains([]string{"auto", "regex", "geoip", "whois", "asn", "rsync"}, f.Format) {
+		if s.Log != nil && f.Format != "" && f.Format != "Auto" {
+			fmt.Fprintf(s.Log, "feed %s: format %q is no known format name; running it as auto\n", f.ID, f.Format)
+		}
 		f.Format = "auto"
 	}
 	if reason := s.validate(f, change); reason != "" {
@@ -190,6 +193,8 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			step("restored")
 		} else if err := backup.commit(); err != nil {
 			_ = backup.rollback() // a commit that is not durable fails the feed (journal.commit)
+			// A marker that could not be removed leaves the new files standing, so the files on disk may be the new ones:
+			// the caller must treat this reason as "may have changed".
 			result = failedFeed(f.ID, "publish", "baseline_commit_failed")
 		}
 	}()
