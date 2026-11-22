@@ -460,6 +460,10 @@ func TestAFailedRetimeOfAnFTPProbeBodyPublishesNothingOfIt(t *testing.T) {
 		b, _ := os.ReadFile(filepath.Join(feed.Dir, feed.Name+suffix))
 		return string(b)
 	}
+	origInfo, err := os.Stat(filepath.Join(feed.Dir, feed.Name+".orig"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	before := map[string]string{}
 	for _, suffix := range []string{".orig", ".orig.xxhash128"} {
 		before[suffix] = read(suffix)
@@ -485,7 +489,16 @@ func TestAFailedRetimeOfAnFTPProbeBodyPublishesNothingOfIt(t *testing.T) {
 			t.Errorf("%s = %q after the failed run, want %q", suffix, got, want)
 		}
 	}
-	if got := read(".orig.lastmod"); got != "" {
-		t.Errorf(".orig.lastmod = %q, want none of the probe's validators beside the old copy", got)
+	// The retime runs before the publication: the probe's body is never moved over the published copy, and the retime,
+	// which acts on the file the published copy may share an inode with, never reached it.
+	after, err := os.Stat(filepath.Join(feed.Dir, feed.Name+".orig"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(origInfo.ModTime()) || !os.SameFile(after, origInfo) {
+		t.Errorf(".orig was replaced or retimed by the failed run (%v, %v), want the published file untouched", after.ModTime(), origInfo.ModTime())
+	}
+	if _, err := os.Stat(filepath.Join(feed.Dir, feed.Name+".probe")); !os.IsNotExist(err) {
+		t.Errorf("the probe body is left after the failed run (%v)", err)
 	}
 }
