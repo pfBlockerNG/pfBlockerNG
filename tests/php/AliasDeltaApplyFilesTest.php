@@ -1505,8 +1505,9 @@ SH
 		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
 		$this->assertSame(['add', 1], $this->shape()[0]);
 		$this->assertSame([self::failedCallEntry('add')], $this->openEntries(), 'the pfctl failure came first and is still named');
-		$this->assertContains(' Updating [ ' . self::TABLE . ' ]: delete read 1000 members, not 2000', self::loggedSince($offset),
-			'the wrong count is still logged');
+		$count = array_filter(self::loggedSince($offset), static fn (string $l): bool => str_ends_with($l, ' Updating [ ' . self::TABLE
+			. ' ]: delete read 1000 members, not 2000'));
+		$this->assertCount(1, $count, 'the wrong count is still logged: ' . implode(' | ', self::loggedSince($offset)));
 	}
 
 	/**
