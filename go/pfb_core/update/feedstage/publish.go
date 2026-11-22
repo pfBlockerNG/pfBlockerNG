@@ -30,7 +30,8 @@ const parsedSource = ".parsed.src"
 // retired are what a failed transfer still publishes: the validators it drops and the probe body it consumes (#2820).
 var retired = slices.Concat([]string{".orig.etag", ".orig.lastmod", ".orig.size"}, probeFiles)
 
-// probeFiles are the change probe's body, its validators and the record of its source (stage 6), which an ingest consumes.
+// probeFiles are the change probe's body, its validators and the record of its source (stage 6), which an ingest consumes;
+// the body comes first.
 var probeFiles = []string{".probe", ".probe.etag", ".probe.lastmod", ".probe.size", ProbeSource}
 
 // ProbeSource is the suffix of the record stage 6 writes beside a kept probe body: the source the body was fetched from.

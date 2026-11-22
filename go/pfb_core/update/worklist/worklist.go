@@ -97,12 +97,15 @@ type Plan struct {
 	// PendingFeeds are the feeds still pending once this plan is run: the caller's next state (Input.PendingFeeds). A
 	// Pending decision builds nothing, so they are Input.PendingFeeds and the feeds this Update found changed. Any other
 	// decision hands every pending feed it can to the stage: as changed, unless the walk checked it, whose verdict stands;
-	// a held feed with its list is held, and counts as built, as does a feed its check found unchanged. What stays are the
-	// feeds it could not build and that can be built later without a settings change: outside the scope, under a Reload,
-	// past the retry cap, failed by its check, or stopped for a reason that can clear (its folder unrecoverable, its kept
-	// probe or its fail marker not handled). A feed that can never be built without a settings change is dropped: it left
-	// the settings, its name is no word, or it is a whois or asn feed whose source today's check refuses while its list
-	// stands. A stopped feed stays pending but makes no scheduled Update due by itself.
+	// a held feed with its list is held, and counts as built, as does a feed its check found unchanged or past the retry
+	// cap (its fail marker consumed, as today, so no later Update builds it past the cap). What stays are the feeds it could
+	// not build and that can be built later without a settings change: outside the scope, under a Reload, failed by its
+	// check, or stopped for a reason that can clear (its folder unrecoverable, its kept probe or its fail marker not
+	// handled). A feed that can never be built without a settings change is dropped: it left the settings, its name is no
+	// word, the stage refuses its source (feed_source_invalid: today's "Invalid URL" and the like; not a refusal of the
+	// stage's own configuration, which clears when the Core Updater's paths change), or it is a whois or asn feed whose
+	// source today's check refuses while its list stands. A stopped feed stays pending but makes no scheduled Update due by
+	// itself.
 	PendingFeeds []string
 }
 
@@ -178,9 +181,24 @@ func (b *builder) buildable(cands []candidate) bool {
 	return slices.ContainsFunc(cands, func(c candidate) bool { return b.pending[c.feed.ID] && c.stop == "" && !b.never(c) })
 }
 
-// never reports whether c can never be built without a settings change: a whois or asn feed whose source today's check
-// refuses while its list stands (a name that is no word is never pending).
+// never reports whether c can never be built without a settings change: the stage refuses its source
+// (feed_source_invalid; a refusal of the stage's own configuration, such as no rsync program or no GeoIP folder, clears
+// when the Core Updater's paths change), or it is a whois or asn feed whose source today's check refuses while its list
+// stands (a name that is no word is never pending).
 func (b *builder) never(c candidate) bool {
+	if c.feed.Custom {
+		return false
+	}
+	if c.feed.Format != "whois" && c.feed.Format != "asn" {
+		_, reason := c.stage.Request(c.feed)
+		return reason == "feed_source_invalid"
+	}
+	return refusedListSource(c)
+}
+
+// refusedListSource reports whether c is a whois or asn feed whose source today's check refuses while its list stands:
+// today's pass reuses the list, which a stage run would resolve again, so the feed is not run.
+func refusedListSource(c candidate) bool {
 	return (c.feed.Format == "whois" || c.feed.Format == "asn") && !validListSource(c.feed) && c.stop == "" &&
 		feedstage.ListsPublished(c.dir, c.feed)
 }
@@ -252,7 +270,7 @@ func (b *builder) build(c candidate, item Item, planned bool) (Item, bool) {
 	case item.Change.Force == "download" || item.Change.Force == "both":
 		return item, true
 	case item.Checked:
-		return item, item.Change.Verdict != feedstage.VerdictFailed && item.Outcome != OutcomeRetryCapReach
+		return item, item.Change.Verdict != feedstage.VerdictFailed
 	}
 	item.Change.Verdict, item.Change.Reason = feedstage.VerdictChanged, ""
 	return item, true
@@ -306,6 +324,14 @@ func (b *builder) deferred(plan Plan, cands []candidate, changed []string) Plan 
 func (b *builder) pass(cands []candidate, force string) Plan {
 	plan := Plan{Decision: Now}
 	for _, c := range cands {
+		switch {
+		case c.stop == "" && c.feed.State == "hold" && feedstage.ListsPublished(c.dir, c.feed):
+			plan.Items = append(plan.Items, b.hold(c, force)) // held, as the walk holds it
+			continue
+		case refusedListSource(c):
+			plan.Items = append(plan.Items, Item{Feed: c.feed, Stopped: "feed_source_invalid"}) // as the check stops it
+			continue
+		}
 		change := feedstage.Change{Force: force}
 		// A custom list compares its own text, and a Reload reads no verdict (feedstage).
 		if !c.feed.Custom && force == "none" {
@@ -409,7 +435,7 @@ func (b *builder) check(c candidate) verdict {
 		switch {
 		case validListSource(f):
 			return changed(OutcomeSuccess)
-		case feedstage.ListsPublished(c.dir, f):
+		case refusedListSource(c):
 			return verdict{stop: "feed_source_invalid"}
 		}
 		return verdict{verdict: feedstage.VerdictChanged, marked: true}
