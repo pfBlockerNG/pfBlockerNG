@@ -289,10 +289,12 @@ var notWrittenByCore = map[string]string{
 }
 
 // The accepted rows Core writes in another normal form than the row's: Core writes an issue's message as BoundedText, which the
-// apply keeps unchanged, and these messages hold text BoundedText writes otherwise than the apply keeps it.
-var writtenOtherwise = map[string]string{
-	"issue-message-cut-on-a-character": "the apply keeps valid UTF-8 text; Core writes printable ASCII, each run of other bytes one space",
-	"issue-message-format-character":   "the apply removes a format character; Core writes it as a space (\\p{Cf} differs by Unicode version between PCRE and Go)",
+// apply keeps unchanged, and these messages hold text BoundedText writes otherwise than the apply keeps it. message is the one
+// field that differs: the exact message Core writes, so the rest of the row is compared in full.
+var writtenOtherwise = map[string]struct{ reason, message string }{
+	"issue-message-cut-on-a-character": {"the apply keeps valid UTF-8 text; Core writes printable ASCII, each run of other bytes one space", "a"},
+	"issue-message-format-character": {"the apply removes a format character; Core writes it as a space (\\p{Cf} differs by Unicode version between PCRE and Go)",
+		"zero width"},
 }
 
 // The rows Core writes byte for byte as the fixture holds them: the rows of #4038 that show what Core writes.
@@ -305,7 +307,8 @@ func TestCoreWritesWhatTheApplyAccepts(t *testing.T) {
 	doc := readContract(t)
 	notWritten := map[string]string{}
 	otherwise := map[string]bool{}
-	byteForByte, tokens := 0, 0
+	tokens := 0
+	byteForByte := map[string]bool{}
 	for _, row := range doc.Requests {
 		if row.Refused != nil {
 			continue
@@ -334,7 +337,7 @@ func TestCoreWritesWhatTheApplyAccepts(t *testing.T) {
 				}
 			}
 			if bytes.Equal(written, stdin) {
-				byteForByte++
+				byteForByte[row.ID] = true
 			} else if slices.Contains(writtenByteForByte, row.ID) {
 				t.Errorf("Core writes\n%s\nthe row holds\n%s", written, stdin)
 			}
@@ -347,12 +350,15 @@ func TestCoreWritesWhatTheApplyAccepts(t *testing.T) {
 				}
 				return
 			}
-			if got, want := normalForm(t, written), decodeAny(t, row.Accepted); reflect.DeepEqual(got, want) == (writtenOtherwise[row.ID] == "") {
+			got, want := normalForm(t, written), decodeAny(t, row.Accepted)
+			other, listed := writtenOtherwise[row.ID]
+			if listed {
+				want.(map[string]any)["issues"].([]any)[0].(map[string]any)["message"] = other.message
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("Core writes %s\nthe validator's normal form of it differs from the expected\n%s", written, row.Accepted)
+			} else if listed {
 				otherwise[row.ID] = true
-			} else if writtenOtherwise[row.ID] != "" {
-				t.Errorf("Core writes %s in the row's normal form; it is listed as written otherwise", written)
-			} else {
-				t.Errorf("Core writes %s\nthe validator's normal form of it differs from the row's\n%s", written, row.Accepted)
 			}
 		})
 	}
@@ -372,13 +378,15 @@ func TestCoreWritesWhatTheApplyAccepts(t *testing.T) {
 			t.Errorf("%s is listed as a row Core writes otherwise, but Core does not write it", id)
 		}
 	}
-	if byteForByte < len(writtenByteForByte) {
-		t.Errorf("%d rows written byte for byte, at least %d expected", byteForByte, len(writtenByteForByte))
+	for _, id := range writtenByteForByte {
+		if !byteForByte[id] {
+			t.Errorf("%s is not written byte for byte", id)
+		}
 	}
 	if tokens < 4 {
 		t.Errorf("%d accepted rows with a token written, at least 4 expected", tokens)
 	}
-	t.Logf("%d accepted rows written byte for byte, %d not written by Core", byteForByte, len(notWritten))
+	t.Logf("%d accepted rows written byte for byte, %d not written by Core", len(byteForByte), len(notWritten))
 }
 
 // The refused rows whose only fault is in their issues: Core writes each issue in the normal form the apply accepts instead of

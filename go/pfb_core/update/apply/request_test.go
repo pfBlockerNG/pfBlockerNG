@@ -309,8 +309,18 @@ func TestTheBoundsOfARequest(t *testing.T) {
 	for i := range 4096 {
 		big.Issues = append(big.Issues, apply.Issue{Resource: fmt.Sprint(i), Stage: "parse", Code: "c", Message: strings.Repeat("m", 1024)})
 	}
-	if b, err := apply.Encode(big); err != nil || len(b) > apply.MaxRequest || len(issuesOf(t, b)) >= 4096 {
-		t.Errorf("4096 issues of 1 KiB: %d bytes written (%v), want them cut to fit", len(b), err)
+	b, err := apply.Encode(big)
+	if err != nil || len(b) > apply.MaxRequest {
+		t.Fatalf("4096 issues of 1 KiB: %d bytes written (%v)", len(b), err)
+	}
+	// the largest prefix that fits, in order, then the count of the rest: dropping every issue or too many must fail
+	got := issuesOf(t, b)
+	kept := len(got) - 1
+	if kept < 1 || kept >= 4096 || !reflect.DeepEqual(got[:kept], big.Issues[:kept]) || got[kept] != summary(4096-kept) {
+		t.Fatalf("Core writes %d issues, want a non-empty prefix of the 4096 in order and a summary of the rest", len(got))
+	}
+	if next, _ := json.Marshal(big.Issues[kept]); len(b)+len(next)+1 <= apply.MaxRequest {
+		t.Errorf("issue %d is left out, although it fits beside the summary", kept)
 	}
 }
 
