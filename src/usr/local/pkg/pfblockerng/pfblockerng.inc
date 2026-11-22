@@ -16067,8 +16067,7 @@ function pfb_alias_mirror_gate(string $alias, string $alias_ips, $pfctlck, array
 	// ADR-40: the previous set before the mirror is overwritten, so the reload site has last_set for its delta. An empty
 	// kernel table (boot, re-enable) gets an empty one, so the reload replaces the table in full (#468: mirror == desired
 	// gives an empty delta and the table would stay empty).
-	$prev_raw = file_exists($alias_mirror) ? @file_get_contents($alias_mirror) : '';
-	$prev_sets[$alias] = empty($pfctlck) ? array() : pfb_canonical_alias_set($prev_raw ?: '');
+	$prev_sets[$alias] = empty($pfctlck) ? array() : pfb_canonical_alias_set((string) @file_get_contents($alias_mirror));
 	// issue #4191: a mirror that still holds the previous set is not reported as updated
 	if (!pfb_write_canonical_alias($alias_mirror, $canonical_set)) {
 		return FALSE;

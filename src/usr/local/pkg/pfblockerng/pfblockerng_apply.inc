@@ -3469,7 +3469,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	}
 
 	$maxmind_run_once = TRUE;
-	$pfb_geoip_mirrors = array();	// continent alias => its member file and GeoIP baseline (issue #4213)
+	$pfb_geoip_changed = $pfb_geoip_prev_sets = array();	// issue #4213: the continents' share of the ADR-40 reload set
 	foreach ($pfb['continents'] as $continent => $pfb_alias) {
 		$cont_key = 'pfblockerng' . strtolower(str_replace(' ', '', $continent));
 		if (!empty(config_get_path("installedpackages/{$cont_key}/config"))) {
@@ -3596,7 +3596,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											}
 										}
 									);
-
 								}
 
 								// Check if file exists and is > 0 in size and save alias file
@@ -3621,8 +3620,15 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						}
 
 						if (file_exists("{$pfbfolder}/{$cc_alias}.txt")) {
-							// issue #4213: its mirror goes through the same ADR-40 gate as the IP lists'
-							$pfb_geoip_mirrors[$cc_alias] = ['members' => "{$pfbfolder}/{$cc_alias}.txt", 'orig' => "{$pfborig}/{$cc_alias}.orig"];
+							// issue #4213: a changed continent (or empty table) goes through the ADR-40 gate the IP lists use, so its
+							// table is reloaded on a pass with no rule change. A mirror not published drops the baseline just
+							// advanced, so the next pass finds the data changed and publishes again (issue #4191).
+							if (in_array($cc_alias, $pfb_alias_lists, TRUE)) {
+								$members = @file_get_contents("{$pfbfolder}/{$cc_alias}.txt");
+								if ($members === FALSE || !pfb_alias_mirror_gate($cc_alias, $members, $pfctlck, $pfb_geoip_prev_sets, $pfb_geoip_changed)) {
+									unlink_if_exists("{$pfborig}/{$cc_alias}.orig");
+								}
+							}
 
 							// Create alias config
 							$new_aliases_list[] = "{$cc_alias}";
@@ -4369,11 +4375,11 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// $pfb_feed_changed: input to the hybrid scope gate; keeps the suppression sub-process
 	// and "read member files" decision anchored to feed-changed aliases.
 	$pfb_feed_changed    = $pfb_alias_lists;
-	$pfb_alias_lists     = array();   // reset: refilled below with content-validated aliases
+	$pfb_alias_lists     = $pfb_geoip_changed;   // reset: refilled below with content-validated aliases (continents' above)
 	// ADR-40: per-alias map from alias name -> previous canonical set (what was in the
 	// mirror BEFORE this pass wrote the new one).  Captured in the write loop (below) so the
 	// no-rule-change reload site can compute add/del deltas without a second file read.
-	$pfb_alias_prev_sets = array();
+	$pfb_alias_prev_sets = $pfb_geoip_prev_sets;
 
 	// ADR-40: hoist cross-list scope and feed-changed alias selection here — both
 	// inputs ($pfb['dup'], $pfb['drep'], $pfb['prep'], $pfb_feed_changed,
@@ -4605,18 +4611,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	}
 	// Clear variables
 	$alias_ips = '';
-
-	// issue #4213: the continent aliases the GeoIP block built go through the same content-addressed gate, under the same
-	// scope, so a changed continent table is reloaded on a pass with no rule change. A mirror that cannot be written drops
-	// the GeoIP baseline, so the next pass finds the data changed again.
-	foreach ($pfb_geoip_mirrors as $alias => $geoip) {
-		$pfctlck = pfb_pfctl_table_count($alias);
-		if ($pfb_cross_list || in_array($alias, $final_alias_old) || empty($pfctlck)) {
-			if (!pfb_alias_mirror_gate($alias, (string) @file_get_contents($geoip['members']), $pfctlck, $pfb_alias_prev_sets, $pfb_alias_lists)) {
-				unlink_if_exists($geoip['orig']);
-			}
-		}
-	}
 
 	#########################################################################
 	#  ADR-11: per-type aggregate ("Uber") Native aliases (opt-in)		#

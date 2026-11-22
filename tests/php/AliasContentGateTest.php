@@ -46,7 +46,6 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_alias_set_different')]
 #[CoversFunction('pfb_write_canonical_alias')]
-#[CoversFunction('pfb_alias_mirror_gate')]
 #[CoversFunction('pfb_cross_list_scope')]
 #[CoversFunction('pfb_supp_update_active')]
 final class AliasContentGateTest extends TestCase
@@ -506,9 +505,7 @@ final class AliasContentGateTest extends TestCase
 		$this->assertSame(['pfB_Full_v4.txt'], array_values(array_diff(scandir($this->tmp), ['.', '..'])));
 	}
 
-
-
-	/** Issue #4191: the apply copies GeoIP lists into the alias folder only through the whole-file helper. */
+	/** Issue #4191: the apply writes no list into the alias folder itself; every mirror goes through pfb_write_canonical_alias(). */
 	public function testTheApplyCopiesNoListIntoTheAliasFolderInPlace(): void
 	{
 		$apply = (string) php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
