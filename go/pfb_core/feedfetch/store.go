@@ -212,6 +212,9 @@ func localDecision(path string, feed Feed) Decision {
 	return Changed
 }
 
+// retimeFile is retime; a test seam.
+var retimeFile = retime
+
 // retime gives path the modification time mtime: in place when the file has one name only, otherwise on a copy renamed
 // over it, as a hard link is never written through.
 func retime(path string, mtime time.Time) error {

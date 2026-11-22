@@ -447,3 +447,45 @@ func TestAnFTPControlByteOtherThanALineFeedIsNeverSent(t *testing.T) {
 		}
 	}
 }
+
+// Scenario: an FTP probe found a changed body and the retime of that body fails at the ingest. The transfer fails with
+// nothing of the new body moved: the published copy and its digests stand, and no validator of the probe is left beside it.
+func TestAFailedRetimeOfAnFTPProbeBodyPublishesNothingOfIt(t *testing.T) {
+	first := newFTPStub(t, nil)
+	f, feed := quickFetcher(t)
+	if res := f.Ingest(context.Background(), feed, ftpFeed(first, "/list.txt")); !res.OK {
+		t.Fatalf("the first ingest failed: %+v", res)
+	}
+	read := func(suffix string) string {
+		b, _ := os.ReadFile(filepath.Join(feed.Dir, feed.Name+suffix))
+		return string(b)
+	}
+	before := map[string]string{}
+	for _, suffix := range []string{".orig", ".orig.xxhash128"} {
+		before[suffix] = read(suffix)
+	}
+	if before[".orig"] != "stub\n" || before[".orig.xxhash128"] == "" {
+		t.Fatalf("the first ingest left %q", before)
+	}
+
+	second := newFTPStub(t, nil)
+	second.replies = map[string]string{"MDTM": "213 20200102030405", "SIZE": "213 12"}
+	second.retr = func(int) (string, bool) { return "second body\n", false }
+	req := ftpFeed(second, "/list.txt")
+	if res := f.Probe(context.Background(), feed, req); res.Decision != feedfetch.Changed {
+		t.Fatalf("the probe = %+v, want Changed", res)
+	}
+	defer feedfetch.SetRetime(func(string, time.Time) error { return errors.New("copy failed") })()
+	res := f.Ingest(context.Background(), feed, req)
+	if res.OK || res.Reason != "published copy could not be retimed" {
+		t.Fatalf("the ingest = %+v, want the retime failure", res)
+	}
+	for suffix, want := range before {
+		if got := read(suffix); got != want {
+			t.Errorf("%s = %q after the failed run, want %q", suffix, got, want)
+		}
+	}
+	if got := read(".orig.lastmod"); got != "" {
+		t.Errorf(".orig.lastmod = %q, want none of the probe's validators beside the old copy", got)
+	}
+}
