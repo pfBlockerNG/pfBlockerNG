@@ -169,7 +169,8 @@ func TestParseFailuresAreOneSummaryLine(t *testing.T) {
 	}
 }
 
-// A custom list whose publication fails leaves no staged file behind.
+// A custom list whose publication fails, as something that is no regular file stands at its download, fails at publish and
+// leaves no staged file behind.
 func TestCustomListPublishFailureLeavesNoStagedFile(t *testing.T) {
 	stage := testStage(t)
 	dir := stage.Paths.FeedDir
@@ -184,7 +185,7 @@ func TestCustomListPublishFailureLeavesNoStagedFile(t *testing.T) {
 	}
 	got := stage.Run(context.Background(), Feed{ID: "custom:ipv4:Test", Kind: "ipv4", Name: "Test_custom_v4", State: "enabled",
 		Format: "auto", Custom: true, CustomText: "203.0.113.21\n"}, Change{Force: "none"})
-	if got.Disposition != "failed" || got.Reason != "custom_source_unavailable" {
+	if got.Disposition != "failed" || got.Stage != "publish" || got.Reason != "parsed_publish_failed" {
 		t.Fatalf("run = %+v, want the publication of the custom list failed", got)
 	}
 	entries, err := os.ReadDir(dir)
@@ -192,7 +193,7 @@ func TestCustomListPublishFailureLeavesNoStagedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), stagePrefix) {
+		if strings.HasPrefix(e.Name(), stagePrefix) || strings.HasPrefix(e.Name(), ".pfbrun-") {
 			t.Errorf("the failed publication left %s", e.Name())
 		}
 	}

@@ -145,16 +145,20 @@ type matrixCall struct {
 	Scenario matrixScenario
 }
 
-// matrixChild runs the call in the child: at the operation it announces "ready <op>" on fd 3 and waits on stdin for the
-// KILL; a call that ends first announces "done <operations>". It never returns.
+// matrixChild runs the call in the child: at the operation it announces "ready <op>" on fd 3, with " after COMMIT" once
+// the run's COMMIT stands, and waits on stdin for the KILL; a call that ends first announces "done <operations>". It never
+// returns.
 func matrixChild(spec string) {
 	var c matrixCall
 	if err := json.Unmarshal([]byte(spec), &c); err != nil {
 		os.Exit(4)
 	}
 	event := os.NewFile(3, "event")
-	count := 0
+	count, phase := 0, ""
 	step = func(name string) {
+		if name == "committed" { // COMMIT stands: from here the run rolls forward
+			phase = " after COMMIT"
+		}
 		if !strings.HasPrefix(name, "op:") {
 			return
 		}
@@ -162,7 +166,7 @@ func matrixChild(spec string) {
 		if count != c.KillAt {
 			return
 		}
-		fmt.Fprintf(event, "ready %s\n", name)
+		fmt.Fprintf(event, "ready %s%s\n", name, phase)
 		_, _ = io.Copy(io.Discard, os.Stdin)
 		os.Exit(3) // the parent went away without the KILL
 	}
@@ -306,7 +310,7 @@ func publishedState(t *testing.T, dir string) map[string]string {
 	return state
 }
 
-// committed reports whether a run folder in the feed folder dir holds its COMMIT: from then on the run rolls forward.
+// committed reports whether a run folder in the feed folder dir holds its COMMIT, which Recover finishes.
 func committed(dir string) bool {
 	found, _ := filepath.Glob(filepath.Join(dir, ".pfbrun-*", "COMMIT"))
 	return len(found) > 0
@@ -401,7 +405,7 @@ func TestKillAtEveryFileOperation(t *testing.T) {
 					t.Fatalf("the run ended before its operation %d of %d", n, total)
 				}
 				where := fmt.Sprintf("%s KILLed at operation %d (%s)", sc.name(), n, op)
-				if dir := filepath.Join(root, "orig"); !committed(dir) {
+				if dir := filepath.Join(root, "orig"); !strings.HasSuffix(op, " after COMMIT") {
 					if got := publishedState(t, dir); !reflect.DeepEqual(got, baseline) {
 						t.Errorf("%s, before COMMIT: the feed folder is\n %q\nwant the baseline\n %q", where, got, baseline)
 					}

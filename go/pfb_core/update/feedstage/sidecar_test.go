@@ -18,9 +18,12 @@ func TestCustomListFailsWhenTheTransferDigestStays(t *testing.T) {
 	sidecar := orig + ".xxhash128"
 	writeFile(t, orig, "203.0.113.1\n")
 	writeFile(t, sidecar, "0123456789abcdef0123456789abcdef")
+	removals := 0
 	withFault(t, func(op, path string) error {
 		if op == "remove" && filepath.Base(path) == filepath.Base(sidecar) {
-			return syscall.EIO
+			if removals++; removals == 1 { // the run's removal of the digest; what deletes the failed run's files may go on
+				return syscall.EIO
+			}
 		}
 		return nil
 	})
