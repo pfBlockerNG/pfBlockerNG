@@ -1322,7 +1322,8 @@ EOF;
  * Write the continent pages and the Reputation page under $output_root from the geo-catalog file $catalog (JSON Lines,
  * docs/specs/go-updater-pipeline.md §7), as pfblockerng_get_countries() writes them from the continent files. A catalog
  * cut at a line boundary is not detected here: give this function only a body whose digest the caller verified
- * (pfb_outpost_fetch()). A body over PFB_GEOIP_CATALOG_MAX, a row of another shape, a page name that is not a plain word,
+ * (pfb_outpost_fetch()). An asn row (an ASN choice: {"kind": "asn", "asn": <0 to 2^32-1>, "name": <text>}) is skipped.
+ * A body over PFB_GEOIP_CATALOG_MAX, a row of another shape, a page name that is not a plain word,
  * a page or a list position given twice, a gap in a list's positions, or a country row without its page row refuses the
  * catalog whole. A page that is not one of the nine continent pages is skipped with its country rows. Every page is staged
  * beside its target (its content synced, with the owner, group and mode of the page it replaces) before any is published;
@@ -1350,6 +1351,7 @@ function pfb_geoip_render_catalog(string $catalog, string $output_root = '/usr/l
 		'page' => ['continent', 'kind', 'page'],
 		'country' => ['country', 'family', 'iso', 'kind', 'networks', 'page', 'position'],
 		'reputation' => ['country', 'iso', 'kind', 'networks', 'position'],
+		'asn' => ['asn', 'kind', 'name'],	// an ASN choice (#4038): no page offers it, so it renders nothing
 	];
 	$word = '/^[A-Za-z0-9_]+$/D';	// Core's word() (go/pfb_core/geoip/php.go)
 	// A name goes into a double-quoted PHP literal of the generated page: escaped, it is never code or interpolated.
@@ -1365,7 +1367,13 @@ function pfb_geoip_render_catalog(string $catalog, string $output_root = '/usr/l
 		$keys = is_array($row) ? array_keys($row) : [];
 		sort($keys);
 		if (!isset($fields[$kind]) || $keys !== $fields[$kind]) {
-			return $refuse("{$at} is not a page, country or reputation row");
+			return $refuse("{$at} is not a page, country, reputation or asn row");
+		}
+		if ($kind === 'asn') {
+			if (!is_int($row['asn']) || $row['asn'] < 0 || $row['asn'] > 4294967295 || !is_string($row['name'])) {
+				return $refuse("{$at} is an asn row of another shape");
+			}
+			continue;
 		}
 		if ($kind !== 'reputation' && (!is_string($row['page']) || preg_match($word, $row['page']) !== 1)) {
 			return $refuse("{$at} names a page that is not a plain word");
