@@ -13,7 +13,7 @@ import (
 // Given a published download and a server that answers 304, so that the transfer leaves the download's file in place,
 // when the IP post-script rewrites the file it is given and the publication then fails, then the download is as it was
 // before the run: the script runs on a copy, never on a file the feed folder shares.
-func TestInPlacePostScriptNeverReachesTheBackup(t *testing.T) {
+func TestInPlacePostScriptNeverReachesTheDownload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotModified)
 	}))

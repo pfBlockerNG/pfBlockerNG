@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-// A transfer that fails drops the validators: put back, they would let the next probe answer 304 for a body that was never
+// A transfer that fails drops the validators: kept, they would let the next probe answer 304 for a body that was never
 // published (#2820).
 func TestFailedIngestDropsTheValidators(t *testing.T) {
 	var fail atomic.Bool
@@ -64,7 +64,7 @@ func TestCustomListFailureKeepsTheLastList(t *testing.T) {
 		t.Fatalf("the run whose pre-script fails = %+v", got)
 	}
 	if got := readFile(t, filepath.Join(stage.Paths.FeedDir, "Test_custom_v4.orig")); got != "203.0.113.21\n" {
-		t.Fatalf("the download after a failed custom run = %q, want the last list put back", got)
+		t.Fatalf("the download after a failed custom run = %q, want the last list kept", got)
 	}
 }
 

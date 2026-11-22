@@ -207,7 +207,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		}
 		if !done {
 			_ = discard(runDir) // what stays is Recover's
-			step("restored")
+			step("discarded")
 		}
 		switch {
 		case err == nil:

@@ -1,15 +1,10 @@
 package feedstage
 
 import (
-	"context"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
 )
@@ -48,8 +43,6 @@ func TestFeedDirectoryThatIsALinkIsRefused(t *testing.T) {
 	}
 }
 
-const killChildEnv = "PFB_FEEDSTAGE_KILL_CHILD"
-
 // killStage is the stage and feed both sides of the kill test use, over the folders below root.
 func killStage(root string) (*Stage, Feed) {
 	stage := &Stage{
@@ -60,109 +53,40 @@ func killStage(root string) (*Stage, Feed) {
 		Source: "file://" + filepath.Join(root, "db", "feed.txt")}
 }
 
-// killChild runs the feed in a child process that announces on fd 3 when its post-script has succeeded, and then waits on
-// stdin for the KILL. It never returns.
-func killChild(root string) {
-	step = func(name string) {
-		if name != "post-script" {
-			return
-		}
-		event := os.NewFile(3, "event")
-		_, _ = event.Write([]byte("ready"))
-		_ = event.Close()
-		_, _ = io.Copy(io.Discard, os.Stdin)
-		os.Exit(3) // the parent went away without the KILL
-	}
-	stage, feed := killStage(root)
-	feed.PostScript = "post.sh"
-	run(stage, feed, "none")
-	os.Exit(2) // the boundary was never reached
-}
-
 // Scenario: KILL right after a successful IP post-script.
 // Given a published baseline and a changed source with a post-script that rewrites its file, when the Updater is killed
 // right after the script, then the feed folder is the baseline byte for byte (the script's output and the new download
 // never reached it), the next entry's recovery leaves the baseline, and the next run publishes the change.
-func TestKillBetweenPostScriptAndRestoreIsRecovered(t *testing.T) {
-	if root := os.Getenv(killChildEnv); root != "" {
-		killChild(root)
+func TestKillAfterThePostScriptIsRecovered(t *testing.T) {
+	if boundary := os.Getenv(killAtEnv); boundary != "" {
+		killChildAt(os.Getenv(killRootEnv), boundary)
 	}
-	root := t.TempDir()
-	for _, d := range []string{"orig", "db", "scripts"} {
-		if err := os.Mkdir(filepath.Join(root, d), 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	stage, feed := killStage(root)
-	source := filepath.Join(root, "db", "feed.txt")
-	writeFile(t, source, "198.51.100.1\n")
-	if r := run(stage, feed, "none"); r.Disposition != "changed" {
-		t.Fatalf("the baseline run = %+v", r)
-	}
-	baseline := publishedState(t, filepath.Join(root, "orig"))
-	writeFile(t, source, "198.51.100.2\n")
-	if err := os.WriteFile(filepath.Join(root, "scripts", "post.sh"), []byte("#!/bin/sh\nprintf 'script output\\n' > \"$1\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	events, eventWriter, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer events.Close()
-	hold, holdWriter, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer holdWriter.Close()
-	// The cap only fails a hung run: on expiry the child is killed, which ends the read below with EOF.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestKillBetweenPostScriptAndRestoreIsRecovered$", "-test.count=1")
-	child.Env = append(os.Environ(), killChildEnv+"="+root)
-	child.ExtraFiles = []*os.File{eventWriter}
-	child.Stdin = hold
-	child.Stdout, child.Stderr = os.Stderr, os.Stderr
-	if err := child.Start(); err != nil {
-		t.Fatal(err)
-	}
-	eventWriter.Close()
-	hold.Close()
-	buf := make([]byte, len("ready"))
-	if _, err := io.ReadFull(events, buf); err != nil {
-		werr := child.Wait()
-		t.Fatalf("the child never reached the post-script boundary: %v (child: %v)", err, werr)
-	}
-	if err := child.Process.Kill(); err != nil {
-		t.Fatal(err)
-	}
-	_ = child.Wait()
-
-	orig := filepath.Join(root, "orig", "Feed_v4.orig")
-	if got := publishedState(t, filepath.Join(root, "orig")); !reflect.DeepEqual(got, baseline) {
+	root := killRoot(t, "198.51.100.1\n")
+	dir := filepath.Join(root, "orig")
+	baseline := publishedState(t, dir)
+	writeFile(t, filepath.Join(root, "db", "feed.txt"), "198.51.100.2\n")
+	killScript(t, root, "post.sh", `printf 'script output\n' > "$1"`)
+	killAt(t, "TestKillAfterThePostScriptIsRecovered", root, "post-script")
+	if got := publishedState(t, dir); !reflect.DeepEqual(got, baseline) {
 		t.Fatalf("at the KILL the feed folder is\n %q\nwant the baseline byte for byte\n %q", got, baseline)
 	}
 
-	if err := Recover(filepath.Join(root, "orig")); err != nil {
+	if err := Recover(dir); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
-	if got := readFile(t, orig); got != "198.51.100.1\n" {
+	if got := readFile(t, filepath.Join(dir, "Feed_v4.orig")); got != "198.51.100.1\n" {
 		t.Fatalf("after recovery the download is %q, want the baseline the published list was parsed from", got)
 	}
-	if got := readFile(t, filepath.Join(root, "orig", "Feed_v4.parsed.ip")); got != "198.51.100.1\n" {
+	if got := readFile(t, filepath.Join(dir, "Feed_v4.parsed.ip")); got != "198.51.100.1\n" {
 		t.Fatalf("after recovery the list is %q, want the baseline's", got)
 	}
-	entries, _ := os.ReadDir(filepath.Join(root, "orig"))
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".orig.post") || strings.Contains(e.Name(), ".pfb") {
-			t.Errorf("recovery left %s", e.Name())
-		}
-	}
+	journalLeftovers(t, dir, "after recovery")
 
+	stage, feed := killStage(root)
 	if r := run(stage, feed, "none"); r.Disposition != "changed" {
 		t.Fatalf("the run after recovery = %+v, want the change published", r)
 	}
-	if got := readFile(t, filepath.Join(root, "orig", "Feed_v4.parsed.ip")); got != "198.51.100.2\n" {
+	if got := readFile(t, filepath.Join(dir, "Feed_v4.parsed.ip")); got != "198.51.100.2\n" {
 		t.Fatalf("the run after recovery published %q, want the changed source", got)
 	}
 }

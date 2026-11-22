@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 )
@@ -104,26 +103,12 @@ func killAt(t *testing.T, test, root, boundary string) {
 	_ = child.Wait()
 }
 
-// noLeftovers fails for any run folder, staged file or restore point left in the feed folder dir.
-func noLeftovers(t *testing.T, dir string) {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".orig.post") || strings.Contains(e.Name(), ".pfb") {
-			t.Errorf("recovery left %s", e.Name())
-		}
-	}
-}
-
 // Scenario: KILL after a failed feed's run is dropped.
 // Given a published baseline and a changed source whose pre-script fails after the new download was normalized, when the
 // Updater is killed right after the failed run is dropped, then the feed folder is the baseline byte for byte: neither the
 // abandoned download nor its normalization reached it. The next run ingests that download again and must parse it, never
 // reuse the baseline's list for it.
-func TestKillAfterRestoreLeavesNoStaleReuse(t *testing.T) {
+func TestKillAfterAFailedRunIsDiscardedLeavesNoStaleReuse(t *testing.T) {
 	if boundary := os.Getenv(killAtEnv); boundary != "" {
 		killChildAt(os.Getenv(killRootEnv), boundary)
 	}
@@ -132,14 +117,14 @@ func TestKillAfterRestoreLeavesNoStaleReuse(t *testing.T) {
 	baseline := publishedState(t, dir)
 	writeFile(t, filepath.Join(root, "db", "feed.txt"), "198.51.100.2\n")
 	killScript(t, root, "pre.sh", "exit 1")
-	killAt(t, "TestKillAfterRestoreLeavesNoStaleReuse", root, "restored")
+	killAt(t, "TestKillAfterAFailedRunIsDiscardedLeavesNoStaleReuse", root, "discarded")
 	if got := publishedState(t, dir); !reflect.DeepEqual(got, baseline) {
 		t.Fatalf("at the KILL the feed folder is\n %q\nwant the baseline byte for byte\n %q", got, baseline)
 	}
 	if err := Recover(dir); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
-	noLeftovers(t, dir)
+	journalLeftovers(t, dir, "after Recover")
 	if err := os.Remove(filepath.Join(root, "scripts", "pre.sh")); err != nil {
 		t.Fatal(err)
 	}
