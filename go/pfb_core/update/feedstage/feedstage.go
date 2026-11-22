@@ -507,14 +507,10 @@ func (s *Stage) dnsblConfig(f Feed) feedparse.DNSBLConfig {
 func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input io.Reader, probePath string,
 	post feedparse.PostScript, source, disposition string, result Result, sink feedparse.Sink) Result {
 	cfg := s.ipConfig(f)
-	var parsed feedparse.IPFeed
-	staged, err := stageOutput(feed.Dir, func(writer io.Writer) error {
-		var err error
-		// The empty check reads the file after the post-script, so the parse counts no content here.
-		parsed, err = feedparse.ParseIPFeed(input, cfg, "", feedparse.NoProbe, writer, sink)
-		return err
-	})
-	if err != nil {
+	list := &lazyFile{path: feedPath(feed, ".parsed.ip")}
+	// The empty check reads the file after the post-script, so the parse counts no content here.
+	parsed, err := feedparse.ParseIPFeed(input, cfg, "", feedparse.NoProbe, list, sink)
+	if errors.Join(err, list.Close()) != nil {
 		return failedFeed(f.ID, "parse", "ip_parse_failed")
 	}
 	// One summary line per feed, today's (pfb_ip_parse_fail_warn()); the records went to ParseErrors.
@@ -549,42 +545,35 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input 
 		again, _ := feedparse.ParseIPFeed(strings.NewReader(""), cfg, "", feedparse.CountContent(probePath), io.Discard, feedparse.Sink{})
 		parsed.Placeholder = again.Placeholder
 	}
-	if parsed.Placeholder != "" {
-		if err := truncate(staged); err != nil {
+	if parsed.Placeholder != "" { // the list is published empty
+		if removeIfExists(list.path) != nil || newFile(list.path, writeLines(nil)) != nil {
 			return failedFeed(f.ID, "parse", "ip_parse_failed")
 		}
 	}
 	result.Disposition, result.Stage = disposition, "parse"
 	result.Entries, result.ParseFailures = parsed.Entries, parsed.ParseFail
 	result.Suppressed, result.Placeholder = parsed.Suppressed, parsed.Placeholder
-	files := []stagedFeedFile{{name: feed.Name + ".parsed.ip", temp: staged}}
 	if parsed.Entries == 0 && parsed.Placeholder == "" {
-		result.Disposition, files = "empty", nil // the last list stays, and stands for this input
+		result.Disposition = "empty" // the parse wrote no list: the last one stays, and stands for this input
 	}
-	return publishResult(feed, files, source, result)
+	return withRecord(feed, source, result)
 }
 
 func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, input io.Reader, post feedparse.PostScript,
 	source, disposition string, result Result, sink feedparse.Sink) Result {
-	var parsed feedparse.DNSBLFeed
-	stagedNDJSON, err := stageOutput(feed.Dir, func(writer io.Writer) error {
-		var err error
-		parsed, err = feedparse.ParseDNSBLFeed(input, s.dnsblConfig(f), writer, sink)
-		return err
-	})
-	if err != nil {
+	// The rows are written only when the parse yields one: rows the run does not publish are never in its folder.
+	rows := &lazyFile{path: feedPath(feed, ".parsed.ndjson")}
+	parsed, err := feedparse.ParseDNSBLFeed(input, s.dnsblConfig(f), rows, sink)
+	if errors.Join(err, rows.Close()) != nil {
 		return failedFeed(f.ID, "parse", "dnsbl_parse_failed")
 	}
-	var files []stagedFeedFile
 	for _, side := range []struct {
 		suffix string
 		lines  []string
 	}{{".parsed.v4.ip", parsed.IP4}, {".parsed.v6.ip", parsed.IP6}} {
-		staged, err := stageOutput(feed.Dir, func(w io.Writer) error { return writeLines(w, side.lines) })
-		if err != nil {
+		if newFile(feedPath(feed, side.suffix), writeLines(side.lines)) != nil {
 			return failedFeed(f.ID, "parse", "dnsbl_parse_failed")
 		}
-		files = append(files, stagedFeedFile{name: feed.Name + side.suffix, temp: staged})
 	}
 
 	// The DNSBL post-script runs on a throwaway copy of the download; nothing reads what it leaves.
@@ -596,22 +585,24 @@ func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, inp
 	result.Disposition, result.Stage = disposition, "parse"
 	result.DNSBLRows, result.IPv4Count, result.IPv6Count = parsed.Rows, len(parsed.IP4), len(parsed.IP6)
 	result.UpdateIP, result.SchemeSkipped, result.HPHostsStop = parsed.UpdateIP, parsed.SchemeSkipped, parsed.Stopped
-	rows := filepath.Join(s.Paths.FeedDir, feed.Name+".parsed.ndjson")
-	if parsed.Rows > 0 {
-		files = append(files, stagedFeedFile{name: feed.Name + ".parsed.ndjson", temp: stagedNDJSON})
-	} else {
+	if parsed.Rows == 0 {
 		// No domain: the last rows stay, or an empty list stands for a feed that never had one; the v4 and v6 side lists are
 		// still replaced, as today's block unlinks them.
 		result.Disposition = "empty"
-		if !regularExists(rows) {
-			files = append(files, stagedFeedFile{name: feed.Name + ".parsed.ndjson", temp: stagedNDJSON})
+		if !regularExists(filepath.Join(s.Paths.FeedDir, feed.Name+".parsed.ndjson")) && newFile(rows.path, writeLines(nil)) != nil {
+			return failedFeed(f.ID, "parse", "dnsbl_parse_failed")
 		}
 	}
-	return publishResult(feed, files, source, result)
+	return withRecord(feed, source, result)
 }
 
-func publishResult(feed feedfetch.Feed, files []stagedFeedFile, source string, result Result) Result {
-	if err := publishParsed(feed, files, source); err != nil {
+// withRecord writes the record of the input the run's lists stand for ("" for none) beside them in the run folder: the
+// commit publishes them together, so that no KILL can pair a list with another download.
+func withRecord(feed feedfetch.Feed, source string, result Result) Result {
+	if newFile(feedPath(feed, parsedSource+"."+digest.XXH128), func(w io.Writer) error {
+		_, err := io.WriteString(w, source)
+		return err
+	}) != nil {
 		result.Disposition, result.Stage, result.Reason = "failed", "publish", "parsed_publish_failed"
 	}
 	return result
@@ -653,13 +644,16 @@ func cleanPath(p string) bool {
 	return filepath.IsAbs(p) && filepath.Clean(p) == p && utf8.ValidString(p) && strings.IndexFunc(p, unicode.IsControl) < 0
 }
 
-func writeLines(w io.Writer, values []string) error {
-	for _, value := range values {
-		if _, err := io.WriteString(w, value+"\n"); err != nil {
-			return err
+// writeLines is the writer of values, one per line.
+func writeLines(values []string) func(io.Writer) error {
+	return func(w io.Writer) error {
+		for _, value := range values {
+			if _, err := io.WriteString(w, value+"\n"); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
-	return nil
 }
 
 func cidrFloor(value int) string {

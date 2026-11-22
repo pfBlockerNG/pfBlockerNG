@@ -10,7 +10,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 )
 
@@ -50,13 +49,8 @@ var retired = []string{".orig.etag", ".orig.lastmod", ".orig.size", ".probe", ".
 var probeTemporaries = []string{".orig.etag.part", ".orig.lastmod.part", ".orig.size.part", ".probe.part",
 	".probe.etag.part", ".probe.lastmod.part", ".probe.size.part"}
 
-type stagedFeedFile struct {
-	name, temp string
-}
-
 // The file operations of a run and of Recover go through these, so that a test can stop at each one (step "op:<name>").
 func link(from, to string) error { step("op:link"); return os.Link(from, to) }
-func truncate(path string) error { step("op:truncate"); return os.Truncate(path, 0) }
 func mkdir(path string) error    { step("op:mkdir"); return os.Mkdir(path, 0o755) }
 func createTemp(dir string) (*os.File, error) {
 	step("op:create")
@@ -479,20 +473,37 @@ func Recover(dir string) error {
 	return errors.Join(errs...)
 }
 
-// publishParsed puts the staged lists of a feed into its run folder under their names, with the record of the input they
-// stand for ("" for none): the commit publishes them together, so that no KILL can pair a list with another download.
-func publishParsed(feed feedfetch.Feed, files []stagedFeedFile, source string) error {
-	record, err := stageOutput(feed.Dir, func(w io.Writer) error {
-		_, err := io.WriteString(w, source)
-		return err
-	})
+// newFile creates path, which must not exist, with what write writes: a file of the run under its final name in the run
+// folder, which the commit syncs before it publishes it.
+func newFile(path string, write func(io.Writer) error) error {
+	file, err := create(path)
 	if err != nil {
 		return err
 	}
-	for _, file := range append(files, stagedFeedFile{name: feed.Name + parsedSource + "." + digest.XXH128, temp: record}) {
-		if err := rename(file.temp, filepath.Join(feed.Dir, file.name)); err != nil {
-			return err
+	return errors.Join(write(file), file.Chmod(0o644), file.Close())
+}
+
+// lazyFile is a file of the run under its final name in the run folder, created as newFile creates one at the first byte
+// written to it: a list that gets none is never there to publish.
+type lazyFile struct {
+	path string
+	file *os.File
+}
+
+func (l *lazyFile) Write(p []byte) (int, error) {
+	if l.file == nil {
+		file, err := create(l.path)
+		if err != nil {
+			return 0, err
 		}
+		l.file = file
 	}
-	return nil
+	return l.file.Write(p)
+}
+
+func (l *lazyFile) Close() error {
+	if l.file == nil {
+		return nil
+	}
+	return errors.Join(l.file.Chmod(0o644), l.file.Close())
 }
