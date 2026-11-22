@@ -363,8 +363,9 @@ func awaitFIFOWriter(t *testing.T, path string) <-chan error {
 		opened <- err
 	}()
 	t.Cleanup(func() {
-		// Without a blocked reader this open fails with ENXIO: the goroutine has ended already.
-		if w, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+		// A read-write open of a FIFO never blocks and counts as a writer, so the reader's open returns whether it
+		// began before or begins after this one.
+		if w, err := os.OpenFile(path, os.O_RDWR, 0); err == nil {
 			<-done
 			w.Close()
 		}
@@ -390,8 +391,8 @@ func releaseFIFO(t *testing.T, path string) {
 			t.Fatal(err)
 		}
 	case <-time.After(stuck):
-		// A reader of our own lets the blocked open return, so the goroutine ends with the test.
-		if r, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
+		// A read-write open never blocks and counts as a reader, so the blocked open returns.
+		if r, err := os.OpenFile(path, os.O_RDWR, 0); err == nil {
 			<-done
 			r.Close()
 		}
