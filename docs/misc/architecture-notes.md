@@ -2370,7 +2370,11 @@ sits (owner decision on #4037, 2026-11-22: `RuntimeGatewayReadsStructureTest`, `
    later request without the issue closes it); unless the scope is `ip`: writes the statistics rows of
    `request.dnsbl` (`dnsbl_save_stats()`), runs `pfb_apply_dns()`, `pfb_update_unbound()` when that changed the
    Resolver's configuration (then the #468 archive `pfb_dnsbl_cache('save')` on a RAM-disk `/var`, as the pass does), and
-   `pfb_apply_dns_proxy()`; a failed reload, a failed accounting or an `accounting` retry marker keeps the changes pending;
+   `pfb_apply_dns_proxy()`. The reload decision is the pass's `pfb_dnsbl_reload_needed()`: it also runs for a stored
+   temporary unlock and for an `accounting` retry once this apply's statistics were written, and never after a failed
+   statistics step. A reload failure of `pfb_reload_unbound()` is not observed, as in the pass. The `accounting` retry
+   marker is cleared as the pass clears it, once the reload converged (`pfb_dnsbl_converged()`); a failed accounting or a
+   marker that remains keeps the changes pending;
 5. removes what left the configuration (the mirror, then `pfctl -T kill`, then the cursor: a kill that fails keeps its
    ledger entry, and the tick's retry kills a table that has no mirror); a `geo-catalog` body renders the GeoIP pages;
    registers every expected alias with a mirror and runs `pfb_apply_objects()` with a push that sends each changed
@@ -2380,8 +2384,10 @@ sits (owner decision on #4037, 2026-11-22: `RuntimeGatewayReadsStructureTest`, `
 6. writes one result line: `applied` (the resources at the requested generation, `unchanged` ones included, and none
    when a needed filter reload was not launched), `removed`, `changedAliases` (the tables pushed, of the request's
    aliases), `ipChanged`, `dnsblChanged` (DNS steps run), `reloadLaunched` (a reload was needed) and `failed`; settles
-   the request's `pendingToken` unless something failed (a failed resource is the apply record's reason); exits 0, or 1
-   when a resource failed, the reload was not launched or the DNSBL statistics could not be written.
+   the request's `pendingToken` unless something failed (a failed resource or a result line that was not written is the
+   apply record's reason); exits 0, or 1 when a resource failed, the reload was not launched, the DNSBL statistics could not
+   be written or the line was not written. A deferral (exit 75: a lock is held or Core does not serve) marks nothing pending
+   and leaves the pending mark alone; a non-zero exit sets the pending mark and the due flag again.
 
 Not yet: a change to the DNSBL temporary unlock re-lock (the Resolver reload re-locks them exactly as the update pass
 does; #4036 question 3 owns any change), the empty-set placeholder in a mirror, pruning
