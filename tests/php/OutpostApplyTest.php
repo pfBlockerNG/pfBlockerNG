@@ -136,6 +136,18 @@ final class OutpostApplyTest extends TestCase
 		return $records;
 	}
 
+	/** One step of today's update pass that builds the groups, then the apply step: the apply's record. */
+	private function applyOnce(array $apply, array $groups = ['Abuse']): array
+	{
+		return $this->runSteps([self::prime(array_map(static fn (string $name): array => self::group($name), $groups)), $apply])[1];
+	}
+
+	/** @return list<array{0: string, 1: string}> the id and stage of each failed resource on the record's result line */
+	private static function failedPairs(array $record): array
+	{
+		return array_map(static fn (array $f): array => [$f['id'], $f['stage']], $record['resultLines'][0]['failed'] ?? []);
+	}
+
 	/** The table-changing pfctl calls of a record, each with the lines of its -f file. */
 	private static function pushes(array $record): array
 	{
@@ -159,7 +171,7 @@ final class OutpostApplyTest extends TestCase
 			'core'    => [self::delta(self::ABUSE, '2', '1', ['203.0.113.9'], ['192.0.2.2'], self::NEW), self::text(['203.0.113.9']),
 				self::text(['192.0.2.2'])],
 		]];
-		[, $r] = $this->runSteps([self::prime([self::group('Abuse')]), $apply]);
+		$r = $this->applyOnce($apply);
 
 		$this->assertSame(0, $r['exit'], $r['log']);
 		$this->assertSame(0, $r['coreServed'], 'Core served the GetResources item and both parts');
@@ -186,7 +198,7 @@ final class OutpostApplyTest extends TestCase
 			'request' => self::request([self::resource(self::ABUSE, '5', 3)]),
 			'core'    => [self::full(self::ABUSE, '5', self::NEW), self::text(self::NEW)],
 		]];
-		[, $r] = $this->runSteps([self::prime([self::group('Abuse')]), $apply]);
+		$r = $this->applyOnce($apply);
 
 		$this->assertSame(0, $r['exit'], $r['log']);
 		$this->assertSame(['resources' => [self::ABUSE => []]], $r['coreRequests'][0]['params'], 'no cursor: the empty cursor');
@@ -205,7 +217,7 @@ final class OutpostApplyTest extends TestCase
 			'request' => self::request([self::resource(self::ABUSE, '2', 3)]),
 			'core'    => [self::unchanged(self::ABUSE, '2')],
 		]];
-		[, $r] = $this->runSteps([self::prime([self::group('Abuse')]), $apply]);
+		$r = $this->applyOnce($apply);
 
 		$this->assertSame(0, $r['exit'], $r['log']);
 		$this->assertCount(1, $r['coreRequests'], 'no GetResourceBody');
@@ -223,39 +235,37 @@ final class OutpostApplyTest extends TestCase
 					self::text(['192.0.2.2']), self::delta(self::BETA, '2', '1', ['203.0.113.9'], ['192.0.2.2'], self::NEW),
 					self::text(['203.0.113.9']), self::text(['192.0.2.2'])],
 			]];
-		[, $r] = $this->runSteps([self::prime([self::group('Abuse'), self::group('Beta')]), $apply]);
+		$r = $this->applyOnce($apply, ['Abuse', 'Beta']);
 
 		$this->assertSame(1, $r['exit'], $r['log']);
 		$this->assertSame([self::ABUSE => '2', self::BETA => '1'], self::generations($r));
 		$this->assertSame([self::ABUSE => '2'], $r['resultLines'][0]['applied']);
-		$this->assertSame([[self::BETA, 'apply']], array_map(static fn (array $f): array => [$f['id'], $f['stage']], $r['resultLines'][0]['failed']));
+		$this->assertSame([[self::BETA, 'apply']], self::failedPairs($r));
 		$this->assertTrue($r['pending'], 'a failed apply settles no pending change');
 	}
 
 	// ---- deferral ------------------------------------------------------------------------------
 
-	/** WHEN the apply lock is held THEN the apply exits 75, writes no result line and moves no cursor. */
-	public function testAHeldApplyLockDefersWithNoResultLine(): void
+	/** @return array<string, array{array<string, mixed>}> an apply step that cannot reach every resource */
+	public static function deferrals(): array
 	{
-		$apply = self::at([self::ABUSE => ['1', self::OLD]]) + ['apply' => [
-			'request' => self::request([self::resource(self::ABUSE, '2', 3)]), 'lockHeld' => TRUE]];
-		[, $r] = $this->runSteps([self::prime([self::group('Abuse')]), $apply]);
+		return [
+			'the apply lock is held'       => [['lockHeld' => TRUE]],
+			'the Core API does not answer' => [[]],
+		];
+	}
+
+	/** WHEN the apply lock is held or the Core API does not answer THEN the apply exits 75, writes no result line and moves nothing. */
+	#[DataProvider('deferrals')]
+	public function testADeferredApplyWritesNoResultLineAndMovesNothing(array $apply): void
+	{
+		$r = $this->applyOnce(self::at([self::ABUSE => ['1', self::OLD]]) + ['apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)])] + $apply]);
 
 		$this->assertSame(PFB_EXIT_LOCKED, $r['exit'], $r['log']);
 		$this->assertSame([], $r['resultLines']);
 		$this->assertSame([self::ABUSE => '1'], self::generations($r));
 		$this->assertSame([], self::pushes($r));
-	}
-
-	/** WHEN the Core API does not answer GetResources THEN the apply exits 75. */
-	public function testCoreNotAnsweringDefers(): void
-	{
-		$apply = self::at([self::ABUSE => ['1', self::OLD]]) + ['apply' => ['request' => self::request([self::resource(self::ABUSE, '2', 3)])]];
-		[, $r] = $this->runSteps([self::prime([self::group('Abuse')]), $apply]);
-
-		$this->assertSame(PFB_EXIT_LOCKED, $r['exit'], $r['log']);
-		$this->assertSame([], $r['resultLines']);
-		$this->assertSame([self::ABUSE => '1'], self::generations($r));
 		$this->assertSame(self::OLD, $r['mirrors']['pfB_Abuse_v4.txt']);
 	}
 
@@ -295,7 +305,7 @@ final class OutpostApplyTest extends TestCase
 			'request' => self::request([self::resource(self::ABUSE, '2', 3)], ['pendingToken' => 'tok-older']),
 			'core'    => [self::unchanged(self::ABUSE, '2')],
 		]];
-		[, $r] = $this->runSteps([self::prime([self::group('Abuse')]), $apply]);
+		$r = $this->applyOnce($apply);
 
 		$this->assertSame(0, $r['exit'], $r['log']);
 		$this->assertTrue($r['pending'], 'the later mark is still pending');
@@ -306,7 +316,7 @@ final class OutpostApplyTest extends TestCase
 	{
 		$apply = self::at([self::ABUSE => ['1', self::OLD]]) + ['apply' => [
 			'request' => self::request([self::resource(self::ABUSE, '2', 3)], ['pendingOutsideWindow' => TRUE])]];
-		[, $r] = $this->runSteps([self::prime([self::group('Abuse')]), $apply]);
+		$r = $this->applyOnce($apply);
 
 		$this->assertSame(0, $r['exit'], $r['log']);
 		$this->assertSame([['version' => 2]], $r['resultLines']);
@@ -359,22 +369,22 @@ final class OutpostApplyTest extends TestCase
 	public function testAResourceOfNoConfiguredAliasFails(): void
 	{
 		$apply = ['apply' => ['request' => self::request([self::resource('ip-set/Ghost/ipv4', '1', 3)])]];
-		[, $r] = $this->runSteps([self::prime([self::group('Abuse')]), $apply]);
+		$r = $this->applyOnce($apply);
 
 		$this->assertSame(1, $r['exit'], $r['log']);
 		$this->assertSame([], $r['coreRequests']);
-		$this->assertSame([['ip-set/Ghost/ipv4', 'apply']], array_map(static fn (array $f): array => [$f['id'], $f['stage']], $r['resultLines'][0]['failed']));
+		$this->assertSame([['ip-set/Ghost/ipv4', 'apply']], self::failedPairs($r));
 	}
 
 	/** A full body that would exceed the firewall's table entries limit is not fetched and fails with stage apply. */
 	public function testAResourceOverTheTableEntriesLimitIsNotFetched(): void
 	{
 		$apply = ['apply' => ['request' => self::request([self::resource(self::ABUSE, '9', 3000000)])]];
-		[, $r] = $this->runSteps([self::prime([self::group('Abuse')]), $apply]);
+		$r = $this->applyOnce($apply);
 
 		$this->assertSame(1, $r['exit'], $r['log']);
 		$this->assertSame([], $r['coreRequests']);
-		$this->assertSame([[self::ABUSE, 'apply']], array_map(static fn (array $f): array => [$f['id'], $f['stage']], $r['resultLines'][0]['failed']));
+		$this->assertSame([[self::ABUSE, 'apply']], self::failedPairs($r));
 		$this->assertStringContainsString('table entries limit', $r['resultLines'][0]['failed'][0]['message']);
 	}
 
@@ -383,11 +393,11 @@ final class OutpostApplyTest extends TestCase
 	{
 		$apply = self::at([self::ABUSE => ['1', self::OLD]]) + ['apply' => [
 			'request' => self::request([self::resource(self::ABUSE, '2', 3, 'permit')])]];
-		[, $r] = $this->runSteps([self::prime([self::group('Abuse')]), $apply]);
+		$r = $this->applyOnce($apply);
 
 		$this->assertSame(1, $r['exit'], $r['log']);
 		$this->assertSame([], $r['coreRequests']);
-		$this->assertSame([[self::ABUSE, 'apply']], array_map(static fn (array $f): array => [$f['id'], $f['stage']], $r['resultLines'][0]['failed']));
+		$this->assertSame([[self::ABUSE, 'apply']], self::failedPairs($r));
 		$this->assertSame([self::ABUSE => '1'], self::generations($r));
 	}
 
@@ -398,7 +408,7 @@ final class OutpostApplyTest extends TestCase
 	{
 		$apply = self::at([self::BETA => ['3', self::OLD]]) + ['config' => ['installedpackages/pfblockernglistsv4/config' => [self::group('Abuse')]],
 			'apply' => ['request' => self::request([], ['removed' => [self::BETA]])]];
-		[, $r] = $this->runSteps([self::prime([self::group('Abuse'), self::group('Beta')]), $apply]);
+		$r = $this->applyOnce($apply, ['Abuse', 'Beta']);
 
 		$this->assertSame(0, $r['exit'], $r['log']);
 		$this->assertArrayNotHasKey('pfB_Beta_v4', $r['kernel']);
@@ -414,7 +424,7 @@ final class OutpostApplyTest extends TestCase
 	public function testARefusedVersionTwoRequestExitsTwoWithItsReason(): void
 	{
 		$apply = ['apply' => ['request' => self::request([]) + ['force' => 'none']]];
-		[, $r] = $this->runSteps([self::prime([self::group('Abuse')]), $apply]);
+		$r = $this->applyOnce($apply);
 
 		$this->assertSame(2, $r['exit'], $r['log']);
 		$this->assertNull($r['resultLines'], 'no result file');
