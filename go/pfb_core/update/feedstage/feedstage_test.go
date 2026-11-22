@@ -51,10 +51,11 @@ func testFeed(kind, state, format, source string) Feed {
 }
 
 // detect is stage 6 for the tests: sub-slice 9d probes a transferred feed before the stage runs and hands Run its verdict.
+// A forced run, a custom list and a whois feed get none: Run reads no verdict there.
 func detect(s *Stage, f Feed, force string) Change {
 	change := Change{Verdict: VerdictChanged, Force: force}
 	if force != "none" || s.validate(f, change) != "" || f.Custom || f.WhoisConvert || f.Format == "whois" || f.Format == "asn" {
-		return change
+		return Change{Force: force}
 	}
 	request, reason := s.request(f)
 	if reason != "" {

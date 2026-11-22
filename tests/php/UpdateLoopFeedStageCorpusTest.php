@@ -33,8 +33,11 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	private const CASE_KEYS = ['id', 'description', 'kind', 'custom', 'baseline', 'source', 'pre', 'post', 'expect'];
 	private const EXPECT = ['outcome', 'stage', 'postFailed', 'entries', 'placeholder', 'orig'];
-	/** Keys a case may add: the row state (hold), the list removed after the baseline pass, a script set but absent. */
-	private const OPTIONAL = ['state', 'dropList', 'unresolved', 'old_expect', 'departure'];
+	/**
+	 * Keys a case may add: the row state (hold), the list or the download removed after the baseline pass, a script set but
+	 * absent, and the force of the case's pass (parse: a Reload).
+	 */
+	private const OPTIONAL = ['state', 'dropList', 'dropOrig', 'unresolved', 'force', 'old_expect', 'departure'];
 	/** Where each block starts (the first variable it needs from the loop is set before it) and the if that ends it. */
 	private const BLOCKS = [
 		'ipv4' => ['$pfb_ip_verbatim_reuse = file_exists(', "if (\$pfb_ip_reuse_decision['verbatim']) {"],
@@ -92,9 +95,10 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 			    || array_key_exists('old_expect', $case) !== array_key_exists('departure', $case)) {
 				throw new RuntimeException("{$w}: kind ipv4 or dnsbl, custom a bool, old_expect only with a departure");
 			}
-			if (($case['state'] ?? 'hold') !== 'hold' || ($case['dropList'] ?? TRUE) !== TRUE
-			    || !in_array($case['unresolved'] ?? 'pre', ['pre', 'post'], TRUE)) {
-				throw new RuntimeException("{$w}: state is hold, dropList is true and unresolved is pre or post when present");
+			if (($case['state'] ?? 'hold') !== 'hold' || ($case['dropList'] ?? TRUE) !== TRUE || ($case['dropOrig'] ?? TRUE) !== TRUE
+			    || !in_array($case['unresolved'] ?? 'pre', ['pre', 'post'], TRUE) || ($case['force'] ?? 'parse') !== 'parse') {
+				throw new RuntimeException("{$w}: state is hold, dropList and dropOrig are true, unresolved is pre or post and force "
+				    . 'is parse when present');
 			}
 			if (array_key_exists('old_expect', $case) && (array_diff(array_keys($case['old_expect']), self::EXPECT) !== []
 			    || !is_string($case['departure']) || $case['departure'] === '')) {
@@ -154,7 +158,7 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 	 * @param array<string, mixed> $case
 	 * @return array<string, mixed> what the pass decided, from the block's own variables
 	 */
-	private function pass(array $case, string $placeholder, bool $scripts, bool $changed): array
+	private function pass(array $case, string $placeholder, bool $scripts, bool $changed, bool $reload = FALSE): array
 	{
 		global $pfb;
 		$ip = $case['kind'] === 'ipv4';
@@ -186,7 +190,7 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 			'whois_convert' => ''];
 		$dirs = ["{$this->root}/scripts"];
 		$resolve = static fn(string $name) => $name === '' ? FALSE : pfb_resolve_list_script($name, $dirs);
-		$pfbreuse = '';
+		$pfbreuse = $reload ? 'on' : '';
 		$scheduled_selected = TRUE;
 		$srcint = '';
 		$logtab = '';
@@ -251,13 +255,18 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 		if ($case['dropList'] ?? FALSE) {
 			unlink("{$this->root}/list/{$header}.txt");
 		}
+		if ($case['dropOrig'] ?? FALSE) {
+			unlink("{$this->root}/orig/{$header}.orig");
+		}
 		@unlink($source);
 		if ($case['source'] !== NULL && !$case['custom']) {
 			file_put_contents($source, $case['source']);
 		}
-		// The change check skips a Hold feed whose list exists, so it leaves no '.update' marker (pfblockerng_cron.inc).
-		$checked = !(($case['state'] ?? '') === 'hold' && file_exists("{$this->root}/list/{$header}.txt"));
-		$got = $this->pass($case, $doc['placeholder'], TRUE, $checked && $case['source'] !== $case['baseline']);
+		// The change check skips a Hold feed whose list exists, so it leaves no '.update' marker (pfblockerng_cron.inc); a
+		// Reload runs no change check.
+		$reload = ($case['force'] ?? '') === 'parse';
+		$checked = !$reload && !(($case['state'] ?? '') === 'hold' && file_exists("{$this->root}/list/{$header}.txt"));
+		$got = $this->pass($case, $doc['placeholder'], TRUE, $checked && $case['source'] !== $case['baseline'], $reload);
 
 		$orig = "{$this->root}/orig/{$header}.orig";
 		$this->assertFalse(is_link($orig), "{$case['id']}: the download is never left a link");

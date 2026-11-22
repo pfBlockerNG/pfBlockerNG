@@ -2,6 +2,7 @@ package feedstage
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -33,6 +34,8 @@ type corpusCase struct {
 	Custom      bool            `json:"custom"`
 	State       string          `json:"state"`      // hold, or absent: enabled
 	DropList    bool            `json:"dropList"`   // the published list is removed after the baseline pass
+	DropOrig    bool            `json:"dropOrig"`   // the download is removed after the baseline pass
+	Force       string          `json:"force"`      // parse (a Reload), or absent: none
 	Unresolved  string          `json:"unresolved"` // pre or post: that script is set but is no file in the folder
 	Baseline    *string         `json:"baseline"`
 	Source      *string         `json:"source"`
@@ -63,9 +66,10 @@ func loadCorpus(t *testing.T) []corpusCase {
 	for _, c := range doc.Cases {
 		if c.ID == "" || c.Description == "" || seen[c.ID] || (c.Kind != "ipv4" && c.Kind != "dnsbl") ||
 			(len(c.OldExpect) != 0) != (c.Departure != "") || c.Expect.Entries == nil || (c.State != "" && c.State != "hold") ||
-			(c.Unresolved != "" && c.Unresolved != "pre" && c.Unresolved != "post") {
+			(c.Unresolved != "" && c.Unresolved != "pre" && c.Unresolved != "post") || (c.Force != "" && c.Force != "parse") ||
+			(c.Custom && c.Source == nil) {
 			t.Fatalf("case %q: a unique id, a description, kind ipv4 or dnsbl, entries, old_expect only with a departure, "+
-				"state hold and unresolved pre or post when present", c.ID)
+				"state hold, unresolved pre or post and force parse when present, and a source for a custom list", c.ID)
 		}
 		seen[c.ID] = true
 	}
@@ -152,6 +156,9 @@ func TestCorpusMatchesTodaysFeedBlock(t *testing.T) {
 					os.Remove(filepath.Join(feedDir, feed.Name+suffix))
 				}
 			}
+			if c.DropOrig {
+				os.Remove(filepath.Join(feedDir, feed.Name+".orig"))
+			}
 			os.Remove(source)
 			if c.Custom {
 				feed.Custom, feed.CustomText, feed.Source = true, *c.Source, ""
@@ -173,7 +180,7 @@ func TestCorpusMatchesTodaysFeedBlock(t *testing.T) {
 					feed.PostScript = name
 				}
 			}
-			r := run(stage, feed, "none")
+			r := run(stage, feed, cmp.Or(c.Force, "none"))
 			if got := logical(t, feedDir, c.Kind, feed.Name, r); !reflect.DeepEqual(got, c.Expect) {
 				t.Fatalf("%s\n got  %+v\n want %+v\n result %+v", c.Description, got, c.Expect, r)
 			}

@@ -55,11 +55,11 @@ func TestCustomListFailureKeepsTheLastList(t *testing.T) {
 	}
 	feed := Feed{ID: "custom:ipv4:Test", Kind: "ipv4", Name: "Test_custom_v4", State: "enabled", Format: "auto", Custom: true,
 		CustomText: "203.0.113.21\n"}
-	if got := stage.Run(context.Background(), feed, Change{Verdict: VerdictChanged, Force: "none"}); got.Disposition != "changed" {
+	if got := stage.Run(context.Background(), feed, Change{Force: "none"}); got.Disposition != "changed" {
 		t.Fatalf("the first run = %+v", got)
 	}
 	feed.CustomText, feed.PreScript = "203.0.113.22\n", "fails.sh"
-	if got := stage.Run(context.Background(), feed, Change{Verdict: VerdictChanged, Force: "none"}); got.Disposition != "failed" {
+	if got := stage.Run(context.Background(), feed, Change{Force: "none"}); got.Disposition != "failed" {
 		t.Fatalf("the run whose pre-script fails = %+v", got)
 	}
 	if got := readFile(t, filepath.Join(stage.Paths.FeedDir, "Test_custom_v4.orig")); got != "203.0.113.21\n" {
@@ -74,7 +74,7 @@ func TestCustomListDropsTheTransferDigest(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "Test_custom_v4.orig"), "203.0.113.1\n")
 	writeFile(t, filepath.Join(dir, "Test_custom_v4.orig.xxhash128"), "0123456789abcdef0123456789abcdef")
 	got := stage.Run(context.Background(), Feed{ID: "custom:ipv4:Test", Kind: "ipv4", Name: "Test_custom_v4", State: "enabled",
-		Format: "auto", Custom: true, CustomText: "203.0.113.21\n"}, Change{Verdict: VerdictChanged, Force: "none"})
+		Format: "auto", Custom: true, CustomText: "203.0.113.21\n"}, Change{Force: "none"})
 	if got.Disposition != "changed" {
 		t.Fatalf("run = %+v", got)
 	}
@@ -156,7 +156,7 @@ func TestHostileFeedNamesAreRefused(t *testing.T) {
 	stage := testStage(t)
 	for _, name := range []string{"a/b", "..", "a\x00b", ".hidden", "-x", "", "a.b"} {
 		got := stage.Run(context.Background(), Feed{ID: "custom:ipv4:Test", Kind: "ipv4", Name: name, State: "enabled", Format: "auto",
-			Custom: true, CustomText: "203.0.113.21\n"}, Change{Verdict: VerdictChanged, Force: "none"})
+			Custom: true, CustomText: "203.0.113.21\n"}, Change{Force: "none"})
 		if got.Disposition != "failed" || got.Stage != "settings" || got.Reason != "feed_name_invalid" {
 			t.Errorf("feed name %q: run = %+v, want feed_name_invalid", name, got)
 		}

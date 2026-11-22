@@ -115,7 +115,7 @@ func TestParseFailureRecordsGoToTheCallersWriter(t *testing.T) {
 	stage.ParseErrors = &records
 	feed := Feed{ID: "custom:ipv4:Test", Kind: "ipv4", Name: "Test_custom_v4", State: "enabled", Format: "auto", Custom: true,
 		CustomText: "203.0.113.21\n1.2.3.4.5\n300.1.1.1\n"}
-	got := stage.Run(context.Background(), feed, Change{Verdict: VerdictChanged, Force: "none"})
+	got := stage.Run(context.Background(), feed, Change{Force: "none"})
 	if got.Disposition != "changed" || got.Entries != 1 || got.ParseFailures != 2 {
 		t.Fatalf("run = %+v, want one entry and two parse failures", got)
 	}

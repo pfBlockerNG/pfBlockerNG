@@ -187,6 +187,20 @@
       "departure": "Hold is download once: Core never transfers a Hold feed whose download exists, and rebuilds a missing list from that download. Today's block transfers again whenever the list is missing."
     },
     {
+      "id": "ip_hold_reload_without_download",
+      "description": "A Reload of a Hold feed whose list stands but whose download is gone transfers the source and publishes it: Hold does not hold a Reload.",
+      "kind": "ipv4",
+      "custom": false,
+      "state": "hold",
+      "dropOrig": true,
+      "force": "parse",
+      "baseline": "198.51.100.1\n",
+      "source": "198.51.100.2\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["198.51.100.2"], "placeholder": "", "orig": "198.51.100.2\n"}
+    },
+    {
       "id": "ip_pre_script_unresolved",
       "description": "A configured pre-script that is not a file in the list-script folders is skipped: the feed is parsed without it.",
       "kind": "ipv4",
@@ -311,6 +325,35 @@
       "pre": null,
       "post": null,
       "expect": {"outcome": "held", "stage": "", "postFailed": false, "entries": ["a.example"], "placeholder": "", "orig": "a.example\n"}
+    },
+    {
+      "id": "dnsbl_hold_download_without_list",
+      "description": "A DNSBL Hold feed whose download exists but whose rows are gone parses the download again and transfers nothing.",
+      "kind": "dnsbl",
+      "custom": false,
+      "state": "hold",
+      "dropList": true,
+      "baseline": "a.example\n",
+      "source": "b.example\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["a.example"], "placeholder": "", "orig": "a.example\n"},
+      "old_expect": {"entries": ["b.example"], "orig": "b.example\n"},
+      "departure": "Hold is download once: Core never transfers a Hold feed whose download exists, and rebuilds a missing list from that download. Today's block transfers again whenever the list is missing."
+    },
+    {
+      "id": "dnsbl_hold_reload_without_download",
+      "description": "A Reload of a DNSBL Hold feed whose rows stand but whose download is gone transfers the source and publishes it: Hold does not hold a Reload.",
+      "kind": "dnsbl",
+      "custom": false,
+      "state": "hold",
+      "dropOrig": true,
+      "force": "parse",
+      "baseline": "a.example\n",
+      "source": "b.example\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["b.example"], "placeholder": "", "orig": "b.example\n"}
     },
     {
       "id": "dnsbl_pre_script_unresolved",

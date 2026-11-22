@@ -152,7 +152,7 @@ func TestParseFailuresAreOneSummaryLine(t *testing.T) {
 	var log, errs strings.Builder
 	stage.Log, stage.Errors = &log, &errs
 	got := stage.Run(context.Background(), Feed{ID: "custom:ipv4:Test", Kind: "ipv4", Name: "Test_custom_v4", State: "enabled",
-		Format: "auto", Custom: true, CustomText: "203.0.113.21\n1.2.3.4.5\n300.1.1.1\n"}, Change{Verdict: VerdictChanged, Force: "none"})
+		Format: "auto", Custom: true, CustomText: "203.0.113.21\n1.2.3.4.5\n300.1.1.1\n"}, Change{Force: "none"})
 	if got.ParseFailures != 2 {
 		t.Fatalf("run = %+v, want two parse failures", got)
 	}
@@ -179,7 +179,7 @@ func TestCustomListPublishFailureLeavesNoStagedFile(t *testing.T) {
 		}
 	}
 	got := stage.Run(context.Background(), Feed{ID: "custom:ipv4:Test", Kind: "ipv4", Name: "Test_custom_v4", State: "enabled",
-		Format: "auto", Custom: true, CustomText: "203.0.113.21\n"}, Change{Verdict: VerdictChanged, Force: "none"})
+		Format: "auto", Custom: true, CustomText: "203.0.113.21\n"}, Change{Force: "none"})
 	if got.Disposition != "failed" || got.Reason != "custom_source_unavailable" {
 		t.Fatalf("run = %+v, want the publication of the custom list failed", got)
 	}
@@ -199,7 +199,7 @@ func TestIdenticalCustomListUnderForceIsReparsed(t *testing.T) {
 	stage := testStage(t)
 	feed := Feed{ID: "custom:ipv4:Test", Kind: "ipv4", Name: "Test_custom_v4", State: "enabled", Format: "auto", Custom: true,
 		CustomText: "203.0.113.21\n"}
-	if got := stage.Run(context.Background(), feed, Change{Verdict: VerdictChanged, Force: "none"}); got.Disposition != "changed" {
+	if got := stage.Run(context.Background(), feed, Change{Force: "none"}); got.Disposition != "changed" {
 		t.Fatalf("the first run = %+v", got)
 	}
 	if got := stage.Run(context.Background(), feed, Change{Force: "download"}); got.Disposition != "reparsed" || got.SourceChanged {
