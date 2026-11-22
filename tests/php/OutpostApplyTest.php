@@ -1145,6 +1145,204 @@ final class OutpostApplyTest extends TestCase
 		$this->assertSame([], self::pushes($r));
 	}
 
+	// ---- what a push, a fetch, a removal and the settlement report -------------------------------
+
+	/** @return array{status: int, type: string, body: string} Core's answer that the store cannot serve what was asked */
+	private static function unavailable(): array
+	{
+		return ['status' => 503, 'type' => 'application/json', 'body' => json_encode(['error' => ['code' => 'unavailable', 'message' => 'the body fails verification']])];
+	}
+
+	/** @return list<array<string, mixed>> Core's delta of Abuse from generation 1 to 2, with both parts */
+	private static function abuseDelta(): array
+	{
+		return [self::delta(self::ABUSE, '2', '1', ['203.0.113.9'], ['192.0.2.2'], self::NEW), self::text(['203.0.113.9']), self::text(['192.0.2.2'])];
+	}
+
+	/** @return list<string> the pfctl verb of each table-changing call of a record, with its table */
+	private static function verbs(array $record): array
+	{
+		return array_map(static fn (array $c): string => (string) preg_replace('/^-t (\S+) -T (\w+).*$/', '$1 $2', $c['call']), self::pushes($record));
+	}
+
+	/** WHEN an IP unlock coincides with a delta THEN the table is replaced from its mirror: the delta alone would leave the unlocked member out. */
+	public function testAnIpUnlockThatCoincidesWithADeltaReplacesTheTable(): void
+	{
+		$apply = self::at([self::ABUSE => ['1', self::OLD]]);
+		$apply['files']['ip_unlock'] = [''];	// the Alerts page's IP unlock
+		$apply['apply'] = ['request' => self::request([self::resource(self::ABUSE, '2', 3)]), 'core' => self::abuseDelta()];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertTrue($r['resultLines'][0]['ipChanged'], 'before: the unlock forced a re-block');
+		$this->assertSame(['pfB_Abuse_v4 replace'], self::verbs($r), 'mode delta, yet a replace from the mirror');
+		$this->assertSame(self::NEW, $r['kernel']['pfB_Abuse_v4']);
+		$this->assertSame([self::ABUSE => '2'], $r['resultLines'][0]['applied']);
+	}
+
+	/** WHEN Core answers a resource but cannot serve its body THEN the apply defers (exit 75): no result line, and no mirror, table or cursor moves. */
+	public function testABodyCoreCannotServeDefersTheApply(): void
+	{
+		$apply = self::at([self::ABUSE => ['1', self::OLD], self::BETA => ['1', self::OLD]]) + ['apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3), self::resource(self::BETA, '2', 3)]),
+			'core'    => [self::full(self::ABUSE, '2', self::NEW), self::text(self::NEW), self::full(self::BETA, '2', self::NEW), self::unavailable()]]];
+		$r = $this->applyOnce($apply, ['Abuse', 'Beta']);
+
+		$this->assertCount(4, $r['coreRequests'], "before: Abuse was fetched whole and Beta's body asked for");
+		$this->assertSame(PFB_EXIT_LOCKED, $r['exit'], $r['log']);
+		$this->assertSame([], $r['resultLines']);
+		$this->assertSame(['pfB_Abuse_v4.txt' => self::OLD, 'pfB_Beta_v4.txt' => self::OLD], $r['mirrors'], 'no mirror moved and none is left staged');
+		$this->assertSame([], self::pushes($r));
+		$this->assertSame([self::ABUSE => '1', self::BETA => '1'], self::generations($r));
+	}
+
+	/** WHEN Core's answer names one resource it cannot serve THEN that resource fails and the others are applied: one unreadable resource does not hide the others. */
+	public function testAResourceCoreAnswersUnavailableFailsAlone(): void
+	{
+		$apply = self::at([self::ABUSE => ['2', self::OLD], self::BETA => ['1', self::OLD]]) + ['apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3), self::resource(self::BETA, '2', 3)]),
+			'core'    => [self::unchanged(self::ABUSE, '2'), self::items(self::BETA, ['error' => ['code' => 'unavailable', 'message' => 'damaged']])]]];
+		$r = $this->applyOnce($apply, ['Abuse', 'Beta']);
+
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertSame([[self::BETA, 'fetch']], self::failedPairs($r));
+		$this->assertSame([self::ABUSE => '2'], $r['resultLines'][0]['applied']);
+	}
+
+	/** @return array<string, array{0: ?list<string>}> a kernel table its resource's mirror is not empty for */
+	public static function lostTables(): array
+	{
+		return ['the table is empty' => [[]], 'the table is gone' => [NULL]];
+	}
+
+	/** WHEN Core answers unchanged but pf lost the table THEN the table is replaced from the verified mirror and the resource is applied. */
+	#[DataProvider('lostTables')]
+	public function testAnUnchangedResourceWhoseTableWasLostIsReplacedFromItsMirror(?array $kernel): void
+	{
+		$apply = self::at([self::ABUSE => ['2', self::OLD]]);
+		$apply['kernel']['pfB_Abuse_v4'] = $kernel;
+		$apply['apply'] = ['request' => self::request([self::resource(self::ABUSE, '2', 3)]), 'core' => [self::unchanged(self::ABUSE, '2')]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertCount(1, $r['coreRequests'], 'before: Core answered unchanged and no body was fetched');
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame(['pfB_Abuse_v4 replace'], self::verbs($r));
+		$this->assertSame(self::OLD, self::pushes($r)[0]['lines'], 'the mirror is what the table is replaced from');
+		$this->assertSame(self::OLD, $r['kernel']['pfB_Abuse_v4'] ?? NULL);
+		$this->assertSame([self::ABUSE => '2'], $r['resultLines'][0]['applied']);
+		$this->assertSame(['pfB_Abuse_v4'], $r['resultLines'][0]['changedAliases'] ?? NULL);
+		$this->assertSame([self::ABUSE => '2'], self::generations($r));
+	}
+
+	/** @return array<string, array{0: array<string, mixed>, 1: int}> an apply that fetched a delta's parts, and its exit status */
+	public static function appliesThatFetchedParts(): array
+	{
+		$both = self::request([self::resource(self::ABUSE, '2', 3), self::resource(self::BETA, '1', 3)]);
+		return [
+			'the apply completes'           => [['request' => self::request([self::resource(self::ABUSE, '2', 3)]), 'core' => self::abuseDelta()], 0],
+			'Core stops serving: deferred'  => [['request' => $both, 'core' => [...self::abuseDelta(), self::unavailable()]], PFB_EXIT_LOCKED],
+			'the next fetch throws'         => [['request' => $both, 'core' => self::abuseDelta(), 'seams' => ['fetchThrowAt' => 2]], 1],
+		];
+	}
+
+	/** WHEN the apply ends, whether it completed, deferred or threw THEN none of the delta parts it fetched is left on disk. */
+	#[DataProvider('appliesThatFetchedParts')]
+	public function testNoDeltaPartIsLeftOnDisk(array $apply, int $exit): void
+	{
+		$r = $this->applyOnce(self::at([self::ABUSE => ['1', self::OLD]]) + ['apply' => $apply], ['Abuse', 'Beta']);
+
+		$this->assertGreaterThanOrEqual(3, count($r['coreRequests']), 'before: both parts of the delta were fetched');
+		$this->assertSame($exit, $r['exit'], $r['log']);
+		$this->assertSame([], $r['workFiles']);
+	}
+
+	/** WHEN the cursor of a removed resource cannot be dropped THEN it is reported failed, not removed; its retry, with the table gone already, drops it. */
+	public function testARemovalWhoseCursorCannotBeDroppedFailsAndItsRetryDropsIt(): void
+	{
+		$removal = ['config' => ['installedpackages/pfblockernglistsv4/config' => [self::group('Abuse')]],
+			'apply' => ['request' => self::request([], ['removed' => [self::BETA]])]];
+		$blocked = self::at([self::BETA => ['3', self::OLD]]);
+		$blocked['files']['{dbdir}/pfb_apply_cursors.json.tmp/blocked'] = [];	// a folder where the cursor file's temporary goes
+		[, $first, $retry] = $this->runSteps([self::prime([self::group('Abuse'), self::group('Beta')]), $blocked + $removal,
+			['files' => ['{dbdir}/pfb_apply_cursors.json.tmp' => NULL]] + $removal]);
+
+		$this->assertArrayNotHasKey('pfB_Beta_v4', $first['kernel'], 'before: the table was killed');
+		$this->assertSame(1, $first['exit'], $first['log']);
+		$this->assertSame([[self::BETA, 'apply']], self::failedPairs($first));
+		$this->assertArrayNotHasKey('removed', $first['resultLines'][0]);
+		$this->assertSame([self::BETA => '3'], self::generations($first), 'the cursor is still recorded');
+		$this->assertSame(0, $retry['exit'], $retry['log']);
+		$this->assertSame([self::BETA], $retry['resultLines'][0]['removed'] ?? NULL);
+		$this->assertSame([], self::generations($retry));
+	}
+
+	/** WHEN a rule change makes the apply replace a table itself and pfctl fails, though no ledger entry records it, THEN the resource fails and keeps its cursor. */
+	public function testARuleChangeReplaceThatFailsKeepsTheCursor(): void
+	{
+		$apply = self::at([self::ABUSE => ['1', self::OLD]]);
+		$apply['files']['{dbdir}/pfb_sync_status.json/unwritable'] = [];	// a folder at the ledger's path: no entry is written
+		$apply += ['pfctlFail' => ['pfB_Abuse_v4.replace'],
+			'config' => ['installedpackages/pfblockernglistsv4/config' => [self::group('Abuse'), self::group('Beta')]],
+			'apply' => ['request' => self::request([self::resource(self::ABUSE, '2', 3), self::resource(self::BETA, '1', 3)]),
+				'core' => [self::full(self::ABUSE, '2', self::NEW), self::text(self::NEW), self::full(self::BETA, '1', self::NEW), self::text(self::NEW)]]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(['pfB_Abuse_v4 replace'], self::verbs($r), 'before: the rule change replaced the loaded table directly');
+		$this->assertArrayNotHasKey('pfb_sync_status.json', $r['syncStatus'], 'before: no ledger entry was written');
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertSame([[self::ABUSE, 'apply']], self::failedPairs($r));
+		$this->assertSame([self::ABUSE => '1', self::BETA => '1'], self::generations($r));
+		$this->assertSame(['pfB_Beta_v4'], $r['resultLines'][0]['changedAliases'], 'the table that failed is not reported changed');
+	}
+
+	/** WHEN one table's push fails THEN changedAliases names only the tables that were pushed. */
+	public function testChangedAliasesNamesOnlyTheTablesPushed(): void
+	{
+		$apply = self::at([self::ABUSE => ['1', self::OLD], self::BETA => ['1', self::OLD]]) + ['pfctlFail' => ['pfB_Beta_v4.add'], 'apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3), self::resource(self::BETA, '2', 3)]),
+			'core'    => [...self::abuseDelta(), self::delta(self::BETA, '2', '1', ['203.0.113.9'], ['192.0.2.2'], self::NEW),
+				self::text(['203.0.113.9']), self::text(['192.0.2.2'])]]];
+		$r = $this->applyOnce($apply, ['Abuse', 'Beta']);
+
+		$this->assertSame([[self::BETA, 'apply']], self::failedPairs($r), 'before: the push of Beta failed');
+		$this->assertSame(['pfB_Abuse_v4'], $r['resultLines'][0]['changedAliases']);
+	}
+
+	/** WHEN the settlement cannot clear the due flag THEN the apply exits 1; the result line still reports what was applied. */
+	public function testASettlementThatCannotClearTheDueFlagFailsTheApply(): void
+	{
+		$apply = self::at([self::ABUSE => ['2', self::OLD]]);
+		$apply['files']['{dbdir}/pfb_due_ledger.json'] = [json_encode(['cron' => ['last_run' => 0, 'next_due' => 0, 'jitter' => 0, 'pending_apply' => TRUE]])];
+		$apply['files']['{dbdir}/pfb_due_ledger.json.lock/blocked'] = [];	// a folder at the ledger's lock: no ledger write succeeds
+		$apply += ['openRecord' => TRUE, 'apply' => ['request' => self::request([self::resource(self::ABUSE, '2', 3)]),
+			'core' => [self::unchanged(self::ABUSE, '2')]]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertTrue($r['ledgerPending'], 'before: the due flag could not be cleared');
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertSame([self::ABUSE => '2'], $r['resultLines'][0]['applied'], 'the resources applied are still reported');
+		$this->assertSame('failed', $r['applyRecord']['outcome'] ?? NULL);
+	}
+
+	/** WHEN Core's reply spells the requested generation otherwise ("7" for "007") THEN applied echoes the request's string and the cursor keeps Core's. */
+	public function testAppliedEchoesTheRequestsGenerationString(): void
+	{
+		$rows = array_map(static fn (array $row): string => json_encode($row, JSON_THROW_ON_ERROR), [
+			['kind' => 'country', 'page' => 'Africa', 'family' => 4, 'position' => 1, 'iso' => 'AA', 'country' => 'Alpha', 'networks' => 2],
+			['kind' => 'page', 'page' => 'Africa', 'continent' => 'Africa']]);
+		$apply = ['apply' => ['request' => self::request([self::resource(self::ABUSE, '007', 3), ['id' => 'geo-catalog', 'generation' => '003']]),
+			'core' => [self::full(self::ABUSE, '7', self::NEW), self::text(self::NEW), self::full('geo-catalog', '3', $rows), self::text($rows)]]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$applied = $r['resultLines'][0]['applied'];
+		ksort($applied);
+		$cursors = self::generations($r);
+		ksort($cursors);
+		$this->assertSame(['geo-catalog' => '003', self::ABUSE => '007'], $applied);
+		$this->assertSame(['geo-catalog' => '3', self::ABUSE => '7'], $cursors);
+	}
+
 	// ---- the version dispatch ------------------------------------------------------------------
 
 	/** A version 2 request the contract refuses runs nothing, writes no result and exits 2, with the version 2 reason. */

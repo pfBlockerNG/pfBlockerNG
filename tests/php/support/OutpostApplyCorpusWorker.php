@@ -48,7 +48,8 @@ declare(strict_types=1);
  * `unlock` (TRUE: a DNSBL temporary-unlock store exists), `retryMarker` (TRUE: the `accounting` retry marker exists),
  * `publishFailed` (TRUE: a stale dnsbl_publish_failed flag), `proxyRunning` (TRUE: the DNS proxy's pid file names a live process) and `statsFail` (TRUE: the DNSBL statistics database cannot be opened).
  * The record adds `seamCalls` and `retryMarker` (the marker's text, NULL: none). Its record is not compacted and adds the exit status, the result lines, the cursor file, the
- * requests Core received, the notices filed, the DNSBL statistics rows and the GeoIP pages.
+ * requests Core received, the notices filed, the DNSBL statistics rows, the GeoIP pages and the files left in the apply's work
+ * folder. A step's `files` entry of NULL removes that file, or that folder with what it holds.
  */
 
 [, $scenarioFile, $work, $resultFile] = $argv;
@@ -497,6 +498,14 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 	}
 	$pages = array_map('basename', glob(dirname($pfb['feeds']) . '/pfblockerng_*.php') ?: []);
 	sort($pages, SORT_STRING);
+	$parts = [];	// what the apply left in its work folder, relative to the database folder
+	foreach (glob("{$pfb['dbdir']}/outpost_apply*") ?: [] as $top) {
+		$found = is_dir($top) ? new RecursiveIteratorIterator(new RecursiveDirectoryIterator($top, FilesystemIterator::SKIP_DOTS)) : [new SplFileInfo($top)];
+		foreach ($found as $file) {
+			$parts[] = substr($file->getPathname(), strlen($pfb['dbdir']) + 1);
+		}
+	}
+	sort($parts, SORT_STRING);
 	return [$status, [
 		'exit'         => $status,
 		'seamCalls'    => $calls,
@@ -511,6 +520,8 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 		// the DNSBL statistics rows, groupname => entries (NULL: no database), and the GeoIP pages in the web folder
 		'dnsblStats'   => $stats,
 		'geoPages'     => $pages,
+		// the files the apply left in its work folder (delta parts, batch files): none once it ended
+		'workFiles'    => $parts,
 	]];
 }
 
@@ -532,7 +543,7 @@ foreach ($sc['steps'] as $step) {
 	foreach ($step['files'] ?? [] as $path => $lines) {
 		$file = corpus_path($path, $work);
 		if ($lines === NULL) {
-			@unlink($file);
+			is_dir($file) && !is_link($file) ? rmdir_recursive($file) : @unlink($file);
 		} else {
 			@mkdir(dirname($file), 0755, TRUE);
 			file_put_contents($file, implode('', array_map(static fn ($l) => "{$l}\n", corpus_expand($lines))));
