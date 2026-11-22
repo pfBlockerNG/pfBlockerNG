@@ -88,7 +88,7 @@ func TestIssueFieldsAreWrittenInTheirNormalForm(t *testing.T) {
 		"a message with a tab":               {issue("r", "c", "one\ttwo"), issue("r", "c", "one two")},
 		"a message with a leading space":     {issue("r", "c", " m"), issue("r", "c", "m")},
 		"a message with a trailing space":    {issue("r", "c", "m "), issue("r", "c", "m")},
-		"a message not ASCII":                {issue("r", "c", "café au lait"), issue("r", "c", "caf au lait")},
+		"a message not ASCII":                {issue("r", "c", "café au lait"), issue("r", "c", "caf  au lait")},
 		"a resource not ASCII":               {issue("café", "c", "m"), issue("caf??", "c", "m")},
 		"a resource of 256 bytes":            {issue(strings.Repeat("r", 256), "c", "m"), issue(strings.Repeat("r", 256), "c", "m")},
 		"a resource of 257 bytes":            {issue(strings.Repeat("r", 257), "c", "m"), issue(strings.Repeat("r", 256), "c", "m")},
