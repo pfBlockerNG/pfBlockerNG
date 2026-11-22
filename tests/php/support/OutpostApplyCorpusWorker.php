@@ -46,7 +46,7 @@ declare(strict_types=1);
  * $pfb['dnsbl_accounting_failed'], `marker` writes the `accounting` retry marker), `cache` (TRUE: the DNSBL archive records
  * its call) and `fetchThrowAt` (the n-th fetch, from 1, throws), `reportFails` (TRUE: the result line cannot be written). Before the apply,
  * `unlock` (TRUE: a DNSBL temporary-unlock store exists), `retryMarker` (TRUE: the `accounting` retry marker exists),
- * `publishFailed` (TRUE: a stale dnsbl_publish_failed flag) and `statsFail` (TRUE: the DNSBL statistics database cannot be opened).
+ * `publishFailed` (TRUE: a stale dnsbl_publish_failed flag), `proxyRunning` (TRUE: the DNS proxy's pid file names a live process) and `statsFail` (TRUE: the DNSBL statistics database cannot be opened).
  * The record adds `seamCalls` and `retryMarker` (the marker's text, NULL: none). Its record is not compacted and adds the exit status, the result lines, the cursor file, the
  * requests Core received, the notices filed, the DNSBL statistics rows and the GeoIP pages.
  */
@@ -430,6 +430,7 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 		file_put_contents("{$pfb['dnsbl_file']}.reload", 'accounting');
 	}
 	$pfb['dnsbl_publish_failed'] = !empty($apply['publishFailed']);
+	$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_PIDFILE] = !empty($apply['proxyRunning']);
 	if (!empty($apply['statsFail'])) {
 		$pfb['dnsbl_info'] = "{$work}/no/such/dir/dnsbl.sqlite";
 	}

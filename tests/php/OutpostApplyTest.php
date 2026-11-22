@@ -996,6 +996,94 @@ final class OutpostApplyTest extends TestCase
 		$this->assertCount(1, $stale['seamCalls']['unbound'], 'the flag of an earlier run is reset: ' . $stale['log']);
 	}
 
+	/** @return array<string, array{0: string}> the DNS step's mode */
+	public static function dnsModes(): array
+	{
+		return ['DNSBL is enabled' => ['enabled'], 'DNSBL is disabled' => ['disabled']];
+	}
+
+	/** WHEN the request has no dnsbl body THEN the apply cannot reconcile a stale accounting marker: it neither fails on it nor clears it. */
+	#[DataProvider('dnsModes')]
+	public function testARequestWithNoDnsblBodyNeitherFailsOnNorClearsTheRetryMarker(string $mode): void
+	{
+		$r = $this->applyOnce(['apply' => ['retryMarker' => TRUE, 'request' => self::request([], ['scope' => 'dnsbl']),
+			'seams' => ['dns' => ['mode' => $mode], 'unbound' => []]]]);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame('accounting', $r['retryMarker'], 'the pass reconciles the marker');
+	}
+
+	/** @return array<string, array{0: bool, 1: int}> the DNS step's report => the Resolver reloads, with a temporary unlock stored */
+	public static function reloadsWithAStoredUnlock(): array
+	{
+		return ['the DNS step reports no change' => [FALSE, 0], 'the DNS step reports a change' => [TRUE, 1]];
+	}
+
+	/** WHEN only a temporary unlock is stored THEN the Resolver is not reloaded; WHEN it reloads for another reason THEN it does, as the pass does. */
+	#[DataProvider('reloadsWithAStoredUnlock')]
+	public function testAStoredTemporaryUnlockAloneDoesNotReloadTheResolver(bool $update, int $reloads): void
+	{
+		$r = $this->applyOnce(['apply' => ['unlock' => TRUE, 'request' => self::request([], ['scope' => 'dnsbl'] + self::dnsblGroups()),
+			'seams' => ['dns' => ['mode' => 'enabled', 'update' => $update], 'unbound' => []]]]);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertCount($reloads, $r['seamCalls']['unbound'], $r['log']);
+	}
+
+	/** @return array<string, array{0: bool, 1: int, 2: ?string}> */
+	public static function proxyStates(): array
+	{
+		return ['the proxy runs: converged' => [TRUE, 0, NULL], 'the proxy is down: not converged' => [FALSE, 1, 'accounting']];
+	}
+
+	/** WHEN the marker is stale and the host hosts DNSBL THEN it is cleared only once the reload converged (the proxy runs); without that it stays. */
+	#[DataProvider('proxyStates')]
+	public function testTheAccountingRetryMarkerIsClearedOnlyWhenTheHostRunsTheConvergedReload(bool $running, int $exit, ?string $marker): void
+	{
+		$r = $this->applyOnce(['config' => ['unbound/custom_options' => base64_encode(PFB_DNS_PROXY_MARKER . "\n"), 'unbound/python_script' => ''],
+			'writeConfigFail' => ['pfBlockerNG: Added DNSBL Unbound upstream observer settings'],
+			'apply' => ['retryMarker' => TRUE, 'proxyRunning' => $running, 'request' => self::request([], ['scope' => 'dnsbl'] + self::dnsblGroups()),
+				'seams' => ['dns' => ['mode' => 'enabled', 'active' => TRUE], 'unbound' => []]]]);
+
+		$this->assertCount(1, $r['seamCalls']['unbound'], 'before: the retry reloads the Resolver: ' . $r['log']);
+		$this->assertSame($exit, $r['exit'], $r['log']);
+		$this->assertSame($marker, $r['retryMarker']);
+	}
+
+	/** WHEN the Resolver reloaded because a retry was recorded THEN the result line says DNSBL changed. */
+	public function testDnsblChangedIsReportedWhenTheResolverReloadedForARetry(): void
+	{
+		$r = $this->applyOnce(['apply' => ['retryMarker' => TRUE, 'request' => self::request([], ['scope' => 'dnsbl'] + self::dnsblGroups()),
+			'seams' => ['dns' => ['mode' => 'enabled'], 'unbound' => []]]]);
+
+		$this->assertCount(1, $r['seamCalls']['unbound'], 'before: the Resolver reloaded: ' . $r['log']);
+		$this->assertTrue($r['resultLines'][0]['dnsblChanged']);
+	}
+
+	/** @return array<string, array{0: string, 1: bool, 2: bool}> trigger, due flag before, due flag after a deferral that marks nothing pending */
+	public static function deferralsAndTheDueFlag(): array
+	{
+		return [
+			'manual: Core does not retry it'               => ['manual', FALSE, TRUE],
+			'apply that cleared the flag: puts it back'    => ['apply', TRUE, TRUE],
+			'apply that found no flag: sets none'          => ['apply', FALSE, FALSE],
+			'scheduled: Core retries it on its next tick'  => ['scheduled', FALSE, FALSE],
+			'retry: Core retries it on its next tick'      => ['retry', FALSE, FALSE],
+		];
+	}
+
+	/** WHEN the Core API does not answer THEN the due flag is set for the triggers Core does not retry, only if the apply cleared it for the apply trigger, and nothing is marked pending. */
+	#[DataProvider('deferralsAndTheDueFlag')]
+	public function testADeferralSetsTheDueFlagOnlyForTheTriggersCoreDoesNotRetry(string $trigger, bool $before, bool $after): void
+	{
+		$r = $this->applyOnce(self::at([self::ABUSE => ['1', self::OLD]]) + ['pending' => $before, 'apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)], ['trigger' => $trigger])]]);
+
+		$this->assertSame(PFB_EXIT_LOCKED, $r['exit'], $r['log']);
+		$this->assertSame($after, $r['ledgerPending']);
+		$this->assertSame($before, $r['pending'], 'the deferral marks no change pending');
+	}
+
 	/** WHEN a scheduled apply defers (a lock is held, Core does not answer) THEN it marks nothing pending: Core's next tick retries it. */
 	#[DataProvider('deferrals')]
 	public function testADeferredApplyLeavesThePendingStateAlone(array $apply): void
