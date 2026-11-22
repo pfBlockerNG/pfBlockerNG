@@ -61,7 +61,7 @@ func TestCorePublishesTheCorpusListsAsTheMemberFixtureSays(t *testing.T) {
 		listed[key] = d
 	}
 	seen := map[string]bool{}
-	bodies := 0
+	bodies, aggregateBodies := 0, 0
 	check := func(c *corpusCase, list, family string, lines []string) {
 		bodies++
 		key := c.ID + " " + list
@@ -122,10 +122,14 @@ func TestCorePublishesTheCorpusListsAsTheMemberFixtureSays(t *testing.T) {
 				var aggregates map[string]struct {
 					Aggregate listExp `json:"aggregate"`
 				}
-				if json.Unmarshal(p.Aggregate, &aggregates) != nil {
-					continue // [] when the pass builds no aggregate
+				if string(p.Aggregate) == "[]" {
+					continue // the pass builds no aggregate
+				}
+				if err := json.Unmarshal(p.Aggregate, &aggregates); err != nil {
+					t.Fatalf("%s passes[%d].aggregate: %v", c.ID, i, err)
 				}
 				for class, a := range aggregates {
+					aggregateBodies++
 					check(c, fmt.Sprintf("passes[%d].aggregate.%s", i, class), aliasFamily(class), a.Aggregate.lines)
 				}
 			}
@@ -136,8 +140,8 @@ func TestCorePublishesTheCorpusListsAsTheMemberFixtureSays(t *testing.T) {
 			t.Errorf("%s: the member fixture names a list the corpus does not publish", key)
 		}
 	}
-	if bodies < 100 {
-		t.Errorf("%d bodies checked", bodies)
+	if bodies < 100 || aggregateBodies < 10 {
+		t.Errorf("%d bodies checked, %d of them a pass's aggregates", bodies, aggregateBodies)
 	}
 }
 

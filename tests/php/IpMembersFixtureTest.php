@@ -12,7 +12,8 @@ use PHPUnit\Framework\TestCase;
  * (go/pfb_core/update/apply, Member) runs it from Go; this test runs it through the Outpost's member check:
  *   - the check gives each member as written the verdict the row records (outpost), the one Go relies on;
  *   - every member Core publishes (canonical) is one the check accepts, so no published body fails the Outpost's check;
- *   - Core never publishes a row the check refuses;
+ *   - Core never publishes a spelling the check refuses: a row the check refuses as written (a prefix length with a leading
+ *     zero) is published, if at all, in another spelling the check accepts;
  *   - every member of a body the ipset corpus departure rows say Core publishes is one the check accepts.
  */
 #[CoversFunction('pfb_outpost_ip_member_valid')]
@@ -59,7 +60,9 @@ final class IpMembersFixtureTest extends TestCase
 		if ($row['canonical'] === NULL) {
 			return;
 		}
-		$this->assertTrue($row['outpost'], json_encode($row['member']) . ': Core never publishes a row the check refuses');
+		if (!$row['outpost']) {
+			$this->assertNotSame($row['member'], $row['canonical'], json_encode($row['member']) . ': Core never publishes the spelling the check refuses');
+		}
 		$this->assertTrue(pfb_outpost_ip_member_valid($row['canonical'], $row['family']),
 			json_encode($row['canonical']) . ": what Core publishes for " . json_encode($row['member']) . ' passes the check');
 	}

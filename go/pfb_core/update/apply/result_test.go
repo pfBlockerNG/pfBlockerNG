@@ -2,7 +2,10 @@ package apply_test
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -83,6 +86,10 @@ func TestAHostileResultLineIsRefused(t *testing.T) {
 		"an id applied and failed":          ok + `{"version":2,"failed":[{"id":"geo-catalog","stage":"apply","message":"m"}]}` + "\n",
 		"an alias twice on a line":          `{"version":2,"changedAliases":["pfB_Abuse_v4","pfB_Abuse_v4"]}` + "\n",
 		"a byte that is not printable":      `{"version":2,"failed":[{"id":"geo-catalog","stage":"apply","message":"caf` + "\xc3\xa9" + `"}]}` + "\n",
+		"an escaped control character":      `{"version":2,"failed":[{"id":"geo-catalog","stage":"apply","message":"\u001b[31m\u0000x"}]}` + "\n",
+		"an escaped C1 control":             `{"version":2,"failed":[{"id":"geo-catalog","stage":"apply","message":"a\u0085b"}]}` + "\n",
+		"an escaped line separator":         `{"version":2,"failed":[{"id":"geo-catalog","stage":"apply","message":"a\u2028b"}]}` + "\n",
+		"an escaped tab":                    `{"version":2,"failed":[{"id":"geo-catalog","stage":"apply","message":"a\tb"}]}` + "\n",
 		"a null flag":                       `{"version":2,"reloadLaunched":null}` + "\n",
 		"a failure without a message":       `{"version":2,"failed":[{"id":"geo-catalog","stage":"apply"}]}` + "\n",
 		"a failure of another stage":        `{"version":2,"failed":[{"id":"geo-catalog","stage":"parse","message":"m"}]}` + "\n",
@@ -106,8 +113,68 @@ func TestTheBoundsOfALineAndOfTheFile(t *testing.T) {
 	if got, err := read(t, file); err != nil || len(got.Failed) != 2 {
 		t.Errorf("two lines of exactly %d bytes are refused: %v", apply.MaxLine, err)
 	}
-	if got, err := read(t, file+"\n"); err == nil || !strings.Contains(err.Error(), "1 MiB") || !reflect.DeepEqual(got, apply.Result{}) {
-		t.Errorf("a result of %d bytes is read: %+v %v", len(file)+1, len(got.Failed), err)
+	if got, err := read(t, file+"\n"); !errors.Is(err, apply.ErrCut) || len(got.Failed) != 2 {
+		t.Errorf("a result of %d bytes whose first 1 MiB is two complete lines: %d failures, %v", len(file)+1, len(got.Failed), err)
+	}
+}
+
+// WHEN the result is over 1 MiB THEN the complete lines inside the first 1 MiB count and the rest is reported as cut (ErrCut);
+// WHEN a line inside the bound is refused THEN the result is refused whole, as it is within the bound.
+func TestAResultOverItsBoundKeepsTheCompleteLinesInsideIt(t *testing.T) {
+	a, b, c := lineOf(t, "geo-catalog", apply.MaxLine), lineOf(t, "ip-set/Top/ipv6", 300000), lineOf(t, "ip-set/Abuse/ipv4", 300000)
+	got, err := read(t, a+b+c)
+	if !errors.Is(err, apply.ErrCut) || len(got.Failed) != 2 || got.Failed[0].ID != "geo-catalog" || got.Failed[1].ID != "ip-set/Top/ipv6" {
+		t.Errorf("%d bytes, the third line crossing 1 MiB: %d failures kept (%v), want the first two and ErrCut", len(a+b+c), len(got.Failed), err)
+	}
+	removal := `{"version":2,"removed":["ip-set/Old/ipv4"]}` + "\n"
+	pad := lineOf(t, "ip-set/Top/ipv6", apply.MaxResult-len(a)-len(removal))
+	if got, err := read(t, a+pad+removal+c); !errors.Is(err, apply.ErrCut) || len(got.Failed) != 2 || !reflect.DeepEqual(got.Removed, []string{"ip-set/Old/ipv4"}) {
+		t.Errorf("a line ending at 1 MiB exactly: %+v (%v), want it kept", trim(got), err)
+	}
+	bad := `{"version":1}` + "\n"
+	for name, file := range map[string]string{
+		"another version":           a + bad + c,
+		"an id outside the request": a + `{"version":2,"applied":{"ip-set/Other/ipv4":"1"}}` + "\n" + c,
+		"an unknown field":          a + `{"version":2,"outcomes":{}}` + "\n" + c,
+	} {
+		if got, err := read(t, file); err == nil || errors.Is(err, apply.ErrCut) || !reflect.DeepEqual(got, apply.Result{}) {
+			t.Errorf("%s inside the bound of a result over it: %+v (%v), want it refused whole", name, trim(got), err)
+		}
+	}
+}
+
+// WHEN the work of reading a hostile result is measured THEN it grows with the lines read, never with the ids already read
+// times the lines: no copy of what is read per line, no slice of every line. Bytes allocated stand for the work: they do not
+// depend on the machine.
+func TestTheWorkOfReadingAResultIsBounded(t *testing.T) {
+	req := apply.Request{Trigger: "scheduled", Scope: "ip"}
+	var applied strings.Builder
+	for i := range apply.MaxIDs {
+		id := fmt.Sprintf("ip-set/G%d/ipv4", i)
+		req.Resources = append(req.Resources, apply.Resource{ID: id, Generation: 1, Action: "alias_only"})
+		fmt.Fprintf(&applied, `,%q:"1"`, id)
+	}
+	head := `{"version":2,"applied":{` + applied.String()[1:] + "}}\n"
+	fill := func(unit string) string { return head + strings.Repeat(unit, (apply.MaxResult-len(head))/len(unit)) }
+	for name, c := range map[string]struct {
+		file  string
+		lines int // the non-empty lines read
+	}{
+		"2048 applied ids, then 60000 empty lines": {head + strings.Repeat("\n", 60000), 1},
+		"only newlines":                        {strings.Repeat("\n", apply.MaxResult), 0},
+		"2048 applied ids, then empty objects": {fill(`{"version":2}` + "\n"), (apply.MaxResult-len(head))/14 + 1},
+	} {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		got, err := apply.ReadResult(strings.NewReader(c.file), req)
+		runtime.ReadMemStats(&after)
+		if err != nil || (c.lines > 0) != (len(got.Applied) == apply.MaxIDs) {
+			t.Fatalf("%s: %d applied, %v", name, len(got.Applied), err)
+		}
+		// the file read once, the ids of the request and of one line held, and a few KiB per line decoded
+		if bound := uint64(4<<20 + 3<<10*c.lines); after.TotalAlloc-before.TotalAlloc > bound {
+			t.Errorf("%s: %d bytes allocated for %d lines, over %d", name, after.TotalAlloc-before.TotalAlloc, c.lines, bound)
+		}
 	}
 }
 

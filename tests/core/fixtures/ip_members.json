@@ -160,8 +160,43 @@
 			"member": "1.2.3.0/024",
 			"family": "ipv4",
 			"outpost": false,
+			"canonical": "1.2.3.0/24",
+			"note": "a prefix length with a leading zero, which pf reads as decimal, is published in canonical decimal; the Outpost refuses the spelling as written"
+		},
+		{
+			"member": "1.2.3.4/032",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": "1.2.3.4",
+			"note": "a host prefix length with a leading zero is the bare address"
+		},
+		{
+			"member": "1.2.3.0/0024",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": "1.2.3.0/24",
+			"note": "leading zeros of any count are dropped"
+		},
+		{
+			"member": "1.2.3.0/033",
+			"family": "ipv4",
+			"outpost": false,
 			"canonical": null,
-			"note": "left out: not one address or prefix: a prefix length with a leading zero"
+			"note": "left out: a prefix length with a leading zero over the family's width"
+		},
+		{
+			"member": "1.2.3.0/00",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out by the address guard: a prefix length of 0, however written"
+		},
+		{
+			"member": "1.2.3.0/+24",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a signed prefix length"
 		},
 		{
 			"member": "1.2.3.0/+24",
@@ -419,8 +454,22 @@
 			"member": "2001:db8::/032",
 			"family": "ipv6",
 			"outpost": false,
+			"canonical": "2001:db8::/32",
+			"note": "a prefix length with a leading zero is published in canonical decimal; the Outpost refuses the spelling as written"
+		},
+		{
+			"member": "2001:db8::1/0128",
+			"family": "ipv6",
+			"outpost": false,
+			"canonical": "2001:db8::1",
+			"note": "a host prefix length with a leading zero is the bare address"
+		},
+		{
+			"member": "2001:db8::/0129",
+			"family": "ipv6",
+			"outpost": false,
 			"canonical": null,
-			"note": "left out: not one address or prefix: a prefix length with a leading zero"
+			"note": "left out: a prefix length with a leading zero over the family's width"
 		},
 		{
 			"member": "2001:db8::/ffff::",

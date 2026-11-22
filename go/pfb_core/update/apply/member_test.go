@@ -29,10 +29,9 @@ func readMembers(t *testing.T) []memberRow {
 		t.Fatal(err)
 	}
 	var doc struct {
-		Schema   int               `json:"schema"`
-		Contract string            `json:"contract"`
-		Members  []memberRow       `json:"members"`
-		Rest     []json.RawMessage `json:"ipset_departures"`
+		Schema   int         `json:"schema"`
+		Contract string      `json:"contract"`
+		Members  []memberRow `json:"members"`
 	}
 	if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&doc); err != nil {
 		t.Fatal(err)
@@ -44,8 +43,8 @@ func readMembers(t *testing.T) []memberRow {
 }
 
 // WHEN each member of the fixture is published THEN Core writes the row's canonical spelling, or leaves the row out; what it
-// writes is its own canonical spelling, a member the store holds (never "#" first, no control character), and Core never
-// publishes a row the Outpost's check refuses.
+// writes is its own canonical spelling, a member the store holds (never "#" first, no control character), and never a spelling
+// the Outpost's check refuses as written (a prefix length with a leading zero is published in canonical decimal).
 func TestCorePublishesEachMemberInOneSpelling(t *testing.T) {
 	for _, row := range readMembers(t) {
 		got, err := apply.Member(row.Member, row.Family)
@@ -54,8 +53,8 @@ func TestCorePublishesEachMemberInOneSpelling(t *testing.T) {
 			t.Errorf("%q (%s): Core publishes %q, the row says it is left out (%s)", row.Member, row.Family, got, row.Note)
 		case row.Canonical != nil && (err != nil || got != *row.Canonical):
 			t.Errorf("%q (%s): Core publishes %q (%v), the row says %q (%s)", row.Member, row.Family, got, err, *row.Canonical, row.Note)
-		case !row.Outpost && row.Canonical != nil:
-			t.Errorf("%q: the row publishes a member the Outpost's check refuses", row.Member)
+		case !row.Outpost && row.Canonical != nil && *row.Canonical == row.Member:
+			t.Errorf("%q: the row publishes the spelling the Outpost's check refuses", row.Member)
 		}
 		if err != nil {
 			continue

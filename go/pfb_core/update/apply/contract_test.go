@@ -275,29 +275,29 @@ func decodeAny(t *testing.T, raw []byte) any {
 // The accepted rows Core does not write, each with what Core writes instead or why it refuses: Core writes a subset of what
 // the validator accepts. A row joining or leaving this list is a change of what Core writes.
 var notWrittenByCore = map[string]string{
-	"generation-strings-kept":             "Core writes a generation as its decimal number",
-	"generation-of-20-characters":         "Core writes a generation as its decimal number",
-	"scope-dnsbl-with-an-ip-set":          "a dnsbl scope lists no resource and no removed id",
-	"scope-ip-with-dnsbl":                 "an ip scope carries no dnsbl object",
-	"issue-message-as-text":               "an issue's message is",
-	"issue-message-cut-on-a-character":    "an issue's message is",
-	"issue-message-line-break":            "an issue's message is",
-	"issue-message-control-run":           "an issue's message is",
-	"issue-message-line-separator":        "an issue's message is",
-	"issue-message-format-character":      "an issue's message is",
-	"issue-message-cut-after-a-space":     "an issue's message is",
-	"issue-message-in-a-request-of-1-mib": "an issue's message is",
+	"generation-strings-kept":     "Core writes a generation as its decimal number",
+	"generation-of-20-characters": "Core writes a generation as its decimal number",
+	"scope-dnsbl-with-an-ip-set":  "a dnsbl scope lists no resource and no removed id",
+	"scope-ip-with-dnsbl":         "an ip scope carries no dnsbl object",
+}
+
+// The accepted rows Core writes in another normal form than the row's: Core writes an issue's message as BoundedText, which the
+// apply keeps unchanged, and these messages hold text BoundedText writes otherwise than the apply keeps it.
+var writtenOtherwise = map[string]string{
+	"issue-message-cut-on-a-character": "the apply keeps valid UTF-8 text; Core writes printable ASCII, each run of other bytes one space",
+	"issue-message-format-character":   "the apply removes a format character; Core writes it as a space (\\p{Cf} differs by Unicode version between PCRE and Go)",
 }
 
 // The rows Core writes byte for byte as the fixture holds them: the rows of #4038 that show what Core writes.
 var writtenByteForByte = []string{"core-writes-scope-ip", "core-writes-scope-dnsbl", "core-writes-dnsbl-without-groups",
-	"core-writes-scope-both", "core-writes-nothing-to-apply"}
+	"core-writes-scope-both", "core-writes-nothing-to-apply", "core-writes-issues-left-out"}
 
 // WHEN Core writes the request of each accepted row THEN the validator's normal form of it is the row's, or the row is one
 // Core does not write, for the reason listed.
 func TestCoreWritesWhatTheApplyAccepts(t *testing.T) {
 	doc := readContract(t)
 	notWritten := map[string]string{}
+	otherwise := map[string]bool{}
 	byteForByte := 0
 	for _, row := range doc.Requests {
 		if row.Refused != nil {
@@ -334,7 +334,11 @@ func TestCoreWritesWhatTheApplyAccepts(t *testing.T) {
 				}
 				return
 			}
-			if got, want := normalForm(t, written), decodeAny(t, row.Accepted); !reflect.DeepEqual(got, want) {
+			if got, want := normalForm(t, written), decodeAny(t, row.Accepted); reflect.DeepEqual(got, want) == (writtenOtherwise[row.ID] == "") {
+				otherwise[row.ID] = true
+			} else if writtenOtherwise[row.ID] != "" {
+				t.Errorf("Core writes %s in the row's normal form; it is listed as written otherwise", written)
+			} else {
 				t.Errorf("Core writes %s\nthe validator's normal form of it differs from the row's\n%s", written, row.Accepted)
 			}
 		})
@@ -350,15 +354,29 @@ func TestCoreWritesWhatTheApplyAccepts(t *testing.T) {
 			t.Errorf("%s is listed as a row Core does not write, but Core writes it", id)
 		}
 	}
+	for id := range writtenOtherwise {
+		if !otherwise[id] {
+			t.Errorf("%s is listed as a row Core writes otherwise, but Core does not write it", id)
+		}
+	}
 	if byteForByte < len(writtenByteForByte) {
 		t.Errorf("%d rows written byte for byte, at least %d expected", byteForByte, len(writtenByteForByte))
 	}
 	t.Logf("%d accepted rows written byte for byte, %d not written by Core", byteForByte, len(notWritten))
 }
 
-// WHEN Core is asked to write the request of each refused row THEN its writer refuses it, or its types cannot hold it.
+// The refused rows whose only fault is in their issues: Core writes each issue in the normal form the apply accepts instead of
+// refusing the request (TestIssueFieldsAreWrittenInTheirNormalForm), and leaves out the issues over the bounds.
+var issuesNormalisedByCore = []string{"issues-4097", "issue-message-of-1-mib", "issue-code-nul", "issue-resource-line-break",
+	"issue-resource-c1-control", "issue-resource-bidi-override", "issue-code-zero-width", "issue-resource-line-separator",
+	"issue-code-paragraph-separator", "issue-code-private-use", "issue-code-long", "issue-non-ascii", "issue-resource-del",
+	"issue-code-tab", "issue-resource-e-acute", "issue-code-unit-separator", "issue-resource-257-bytes", "issue-resource-empty",
+	"issue-code-empty"}
+
+// WHEN Core is asked to write the request of each refused row THEN its writer refuses it, or its types cannot hold it, or the
+// row's fault is only in its issues and Core writes them in the normal form the apply accepts.
 func TestCoreNeverWritesARequestTheApplyRefuses(t *testing.T) {
-	refused := 0
+	refused, encoded := 0, 0
 	for _, row := range readContract(t).Requests {
 		if row.Refused == nil {
 			continue
@@ -369,13 +387,46 @@ func TestCoreNeverWritesARequestTheApplyRefuses(t *testing.T) {
 			if reason != "" {
 				return
 			}
-			if written, err := apply.Encode(req); err == nil {
+			encoded++
+			written, err := apply.Encode(req)
+			switch {
+			case slices.Contains(issuesNormalisedByCore, row.ID) && err != nil:
+				t.Errorf("the issues are written in normal form, but Core refuses the request: %v", err)
+			case slices.Contains(issuesNormalisedByCore, row.ID):
+				issues := issuesOf(t, written)
+				if len(issues) == 0 || len(issues) > 4096 {
+					t.Errorf("Core writes %d issues", len(issues))
+				}
+				for _, is := range issues {
+					field := func(s string) bool { return len(s) >= 1 && len(s) <= 256 && printable([]byte(s)) }
+					if !field(is.Resource) || !field(is.Code) || apply.BoundedText(is.Message) != is.Message {
+						t.Errorf("Core writes the issue %+.300q, not in the apply's normal form", is)
+					}
+				}
+			case err == nil:
 				t.Errorf("the apply refuses it (%s), Core writes %.300s", *row.Refused, written)
 			}
 		})
 	}
-	if refused < 100 {
-		t.Errorf("%d refused rows", refused)
+	if refused < 100 || encoded < 90 {
+		t.Errorf("%d refused rows, %d of them asked of Encode", refused, encoded)
+	}
+}
+
+// WHEN Core writes 5000 issues of 1 KiB of quotes THEN it writes the fixture's row core-writes-issues-left-out byte for byte,
+// which the apply accepts (CoreUpdateV2ContractTest): the first issues that fit and one issue saying how many were left out.
+func TestCoreWritesTheRowOfIssuesLeftOut(t *testing.T) {
+	i := slices.IndexFunc(readContract(t).Requests, func(r contractRow) bool { return r.ID == "core-writes-issues-left-out" })
+	if i < 0 {
+		t.Fatal("the fixture has no row core-writes-issues-left-out")
+	}
+	req := apply.Request{Trigger: "scheduled", Scope: "both"}
+	for range 5000 {
+		req.Issues = append(req.Issues, apply.Issue{Resource: "feed/ipv4:Quotes_v4", Stage: "parse", Code: "quotes", Message: strings.Repeat(`"`, 1024)})
+	}
+	written, err := apply.Encode(req)
+	if row := readContract(t).Requests[i]; err != nil || !bytes.Equal(written, input(t, row)) {
+		t.Errorf("Core writes %d bytes (%v), the row holds %d", len(written), err, len(input(t, row)))
 	}
 }
 
@@ -518,7 +569,30 @@ func TestEveryResultLineTheApplyWritesIsRead(t *testing.T) {
 	}
 }
 
-// WHEN a report the apply refuses to write arrives as a line THEN Core refuses it.
+// The class of Core's refusal of each report the apply refuses, and what Core's reason says for each class.
+var refusalClass = map[string]string{
+	"ids-2049": "bound", "applied-4097": "bound", "removed-4097": "bound", "changedAliases-2049": "bound", "failed-4097": "bound",
+	"applied-generation-of-21-characters": "generation", "applied-bad-generation": "generation",
+	"applied-dnsbl-id": "id", "applied-id-without-an-alias": "id", "removed-dnsbl-id": "id", "removed-id-without-an-alias": "id",
+	"failed-unknown-aggregate-class": "id", "failed-dnsbl-id": "id", "applied-and-failed-one-id": "id",
+	"applied-and-removed-one-id": "id", "removed-and-failed-one-id": "id", "removed-twice": "id", "failed-twice": "id",
+	"applied-bad-id": "id", "removed-bad-id": "id", "failed-bad-id": "id",
+	"changed-alias-empty": "alias", "changed-alias-without-prefix": "alias", "changed-alias-of-32-characters": "alias",
+	"changed-alias-twice": "alias", "changed-alias-bad": "alias",
+	"unknown-field": "shape", "unknown-field-camel": "shape", "applied-list": "shape", "applied-number-generation": "shape",
+	"changed-alias-number": "shape", "ip-changed-string": "shape", "reload-null": "shape", "failed-stage": "shape",
+	"failed-no-message": "shape", "failed-unknown-field": "shape", "failed-not-object": "shape",
+}
+
+var refusalReason = map[string]*regexp.Regexp{
+	"bound":      regexp.MustCompile(`names more than 2048 ids or aliases`),
+	"generation": regexp.MustCompile(`is not the generation the request gave`),
+	"id":         regexp.MustCompile(`is not an id of the request, named once`),
+	"alias":      regexp.MustCompile(`the changed alias .* is not an alias of the request's ids, once`),
+	"shape":      regexp.MustCompile(`is not one JSON object of the contract|a stage other than fetch or apply|has no message`),
+}
+
+// WHEN a report the apply refuses to write arrives as a line THEN Core refuses it, for the reason of the row's class.
 func TestEveryReportTheApplyRefusesIsRefusedAsALine(t *testing.T) {
 	refused := 0
 	for _, row := range readContract(t).Results {
@@ -534,8 +608,15 @@ func TestEveryReportTheApplyRefusesIsRefusedAsALine(t *testing.T) {
 				t.Fatal(err)
 			}
 			line = append(line, '\n')
-			if got, err := apply.ReadResult(bytes.NewReader(line), requestFor(report)); err == nil {
+			got, err := apply.ReadResult(bytes.NewReader(line), requestFor(report))
+			class, listed := refusalClass[row.ID]
+			switch {
+			case err == nil:
 				t.Errorf("the apply refuses it (%s), Core reads %+v", *row.Refused, trim(got))
+			case !listed:
+				t.Errorf("Core refuses it (%v); the test lists no class for it", err)
+			case !refusalReason[class].MatchString(err.Error()):
+				t.Errorf("Core refuses it as %q, not for a reason of the class %s", err, class)
 			}
 		})
 	}
