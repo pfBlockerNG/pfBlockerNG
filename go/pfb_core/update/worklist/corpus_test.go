@@ -53,7 +53,6 @@ type corpusExpect struct {
 	Outcomes map[string]string `json:"outcomes"`
 	Changes  map[string]string `json:"changes"`
 	Fail     []string          `json:"fail"`
-	Update   []string          `json:"update"`
 	Stopped  []string          `json:"stopped"`
 	Apply    string            `json:"apply"`
 }
@@ -330,10 +329,10 @@ func corpusInput(t *testing.T, doc corpusDoc, c corpusCase) (Input, map[string]s
 }
 
 // logical is what Build decided, in the corpus's words: the feeds checked in order, their outcomes, the change each run
-// feed is handed (its force, else its verdict), the markers standing afterwards, the feeds stopped and the decision.
+// feed is handed (its force, else its verdict), the fail markers standing afterwards, the feeds stopped and the decision.
 func logical(c corpusCase, plan Plan, dirs map[string]string) corpusExpect {
 	got := corpusExpect{Checked: []string{}, Outcomes: map[string]string{}, Changes: map[string]string{}, Fail: []string{},
-		Update: []string{}, Stopped: []string{}, Apply: string(plan.Decision)}
+		Stopped: []string{}, Apply: string(plan.Decision)}
 	for _, item := range plan.Items {
 		id := item.Feed.ID
 		switch {
@@ -362,9 +361,6 @@ func logical(c corpusCase, plan Plan, dirs map[string]string) corpusExpect {
 				if _, err := os.Lstat(base + ".fail"); err == nil {
 					got.Fail = append(got.Fail, kind+":"+name)
 				}
-				if _, err := os.Lstat(base + ".update"); err == nil {
-					got.Update = append(got.Update, kind+":"+name)
-				}
 			}
 		}
 	}
@@ -386,12 +382,21 @@ func TestCorpusMatchesTodaysWorkList(t *testing.T) {
 			if !reflect.DeepEqual(got, c.Expect) {
 				t.Fatalf("%s\n got  %+v\n want %+v", c.Description, got, c.Expect)
 			}
-			// Every marker the run left is a whole file under its own name: no temporary stays behind.
-			for _, dir := range dirs {
+			// Every marker the run left is a whole file under its own name: no temporary stays behind. Core keeps no update
+			// marker: one stands only where the case laid it out.
+			seeded := map[string]bool{}
+			for id, files := range c.Files {
+				_, name, _ := strings.Cut(id, ":")
+				seeded[name+".update"] = files.Update
+			}
+			for _, dir := range []string{dirs["ipv4"], dirs["dnsbl"]} { // ipv6 shares the IP folder
 				entries, _ := os.ReadDir(dir)
 				for _, e := range entries {
 					if strings.HasSuffix(e.Name(), ".part") || slices.Contains([]string{".fail", ".update"}, filepath.Ext(e.Name())) && !e.Type().IsRegular() {
 						t.Errorf("%s: %s is left in the feed folder", c.ID, e.Name())
+					}
+					if filepath.Ext(e.Name()) == ".update" && !seeded[e.Name()] {
+						t.Errorf("%s: Build wrote the update marker %s", c.ID, e.Name())
 					}
 				}
 			}
