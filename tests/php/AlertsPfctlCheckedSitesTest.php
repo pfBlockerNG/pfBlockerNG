@@ -897,6 +897,7 @@ SH
 			file_get_contents($mirror),
 			'the mirror must keep its entries and gain the added IP, sorted and deduplicated'
 		);
+		$this->assertStringNotContainsString('could not be updated', $result['savemsg'], 'a written mirror raises no warning');
 		// config_set_path() persistence is observable through the global config on success.
 		$this->assertArrayHasKey('installedpackages', $GLOBALS['config'] ?? [], 'the success path must persist via config_set_path()');
 		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
