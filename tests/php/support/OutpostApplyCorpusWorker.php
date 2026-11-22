@@ -34,8 +34,13 @@ declare(strict_types=1);
  * `received` (TRUE: the node accepted the legacy payload it now holds, so the pass starts suppressed), `reload` ("ok"
  * or "missing"), `dnsConfigLockHeld` (TRUE: another process holds the DNS configuration lock), `dispatchHeld` (TRUE:
  * the caller already holds the scheduler dispatcher lock, as a scheduled tick does), `writeConfigFail` (write_config()
- * descriptions that fail), `save` (TRUE: a settings-save pass). The record of a pass, compacted by corpus_compact(), is
- * what the test compares with the step's `expect`.
+ * descriptions that fail), `save` (TRUE: a settings-save pass), `pendingToken` (the pending mark holds exactly this token). The
+ * record of a pass, compacted by corpus_compact(), is what the test compares with the step's `expect`.
+ *
+ * A step with `apply` runs the version 2 apply of #4037 in place of the pass (OutpostApplyTest): its `request` goes to
+ * pfb_core_update_serve() on stdin, the Core API's socket is served by support/CoreApiStandIn.php from its `core` script
+ * (no `core`: nothing listens), and `lockHeld` (TRUE) holds the apply lock while it runs. Its record is not compacted and
+ * adds the exit status, the result lines, the cursor file, the requests Core received and the notices filed.
  */
 
 [, $scenarioFile, $work, $resultFile] = $argv;
@@ -131,6 +136,7 @@ foreach (array_keys(getenv()) as $name) {
 }
 
 require "{$repo}/tests/php/bootstrap.php";
+require_once "{$repo}/tests/php/support/ProcessRunner.php";
 require_once "{$repo}/tests/php/SyncPrereqSeedTrait.php";
 
 // PHP's sys_temp_dir setting overrides TMPDIR: the bootstrap's sandbox must have landed under the work directory.
@@ -379,6 +385,65 @@ function corpus_refuse_unsandboxed(): void
 	}
 }
 
+/**
+ * Run the version 2 apply for one step: [what pfb_core_update_serve() returned, what the record adds].
+ *
+ * @param array{request: array, core?: list<array>, lockHeld?: bool} $apply
+ * @return array{0: int, 1: array<string, mixed>}
+ */
+function corpus_v2_apply(array $apply, string $work, string $repo): array
+{
+	global $pfb;
+	$socket = "{$work}/api.sock";
+	$pfb['core_socket'] = $socket;
+	foreach ([$socket, "{$work}/core-requests", "{$work}/result"] as $path) {
+		@unlink($path);
+	}
+	$standin = NULL;
+	if (isset($apply['core'])) {
+		file_put_contents("{$work}/core-script.json", json_encode($apply['core'], JSON_THROW_ON_ERROR));
+		$standin = pfb_test_start_process([PHP_BINARY, "{$repo}/tests/php/support/CoreApiStandIn.php", $socket, "{$work}/core-requests",
+			'script', "{$work}/core-script.json"]);
+		$said = '';
+		$deadline = hrtime(TRUE) + 10_000_000_000;
+		while (!str_contains($said, "ready\n")) {
+			if (feof($standin[1][1]) || hrtime(TRUE) > $deadline) {
+				$run = pfb_test_finish_process($standin, 5.0);
+				throw new RuntimeException("STUCK/ENVIRONMENT: the Core stand-in never listened: {$run['stderr']}");
+			}
+			$read = [$standin[1][1]];
+			$write = $except = NULL;
+			stream_select($read, $write, $except, 0, 100_000);
+			$said .= (string) fread($standin[1][1], 64);
+		}
+	}
+	$held = NULL;
+	if (!empty($apply['lockHeld'])) {	// another open file description: flock() refuses this process too
+		$held = fopen("{$pfb['dbdir']}/pfb_feed_pass.lock", 'c');
+		flock($held, LOCK_EX);
+	}
+	$status = pfb_core_update_serve(json_encode($apply['request'], JSON_THROW_ON_ERROR), "{$work}/result");
+	if ($held !== NULL) {
+		flock($held, LOCK_UN);
+		fclose($held);
+	}
+	$served = NULL;
+	if ($standin !== NULL) {
+		$served = pfb_test_finish_process($standin, 30.0)['exit'];
+	}
+	$cursors = "{$pfb['dbdir']}/pfb_apply_cursors.json";
+	return [$status, [
+		'exit'         => $status,
+		'resultLines'  => is_file("{$work}/result") ? array_map(static fn (string $line): mixed => json_decode($line, TRUE),
+			corpus_lines("{$work}/result")) : NULL,
+		'cursors'      => is_file($cursors) ? json_decode((string) file_get_contents($cursors), TRUE) : NULL,
+		'coreRequests' => array_map(static fn (string $line): mixed => json_decode($line, TRUE), corpus_lines("{$work}/core-requests")),
+		// 0: the stand-in served its whole script; NULL: nothing listened
+		'coreServed'   => $served,
+		'notices'      => $GLOBALS['pfb_test_file_notices'],
+	]];
+}
+
 (new CorpusSeed())->seed();
 $records  = [];
 $previous = NULL;
@@ -419,6 +484,9 @@ foreach ($sc['steps'] as $step) {
 	} elseif (!is_file("{$work}/rc.filter_configure_sync")) {
 		corpus_reload_script($work);
 	}
+	if (isset($step['pendingToken'])) {
+		file_put_contents($marker, $step['pendingToken']);
+	}
 	if (!empty($step['pending'])) {
 		pfb_mark_pending_changes();
 		pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
@@ -456,7 +524,12 @@ foreach ($sc['steps'] as $step) {
 	$GLOBALS['pfb_test_xmlrpc_connections']      = [];
 	$GLOBALS['pfb']['save']                      = !empty($step['save']);
 
-	$returned = sync_package_pfblockerng();
+	$v2 = [];
+	if (isset($step['apply'])) {
+		[$returned, $v2] = corpus_v2_apply($step['apply'], $work, $repo);
+	} else {
+		$returned = sync_package_pfblockerng();
+	}
 	corpus_assert_sandboxed($pfb, $work, $repo);
 
 	$mirrors = [];
@@ -532,7 +605,7 @@ foreach ($sc['steps'] as $step) {
 	if (!empty($step['dispatchHeld'])) {
 		pfb_schedule_dispatch_release();
 	}
-	$records[] = corpus_compact($full, $previous);
+	$records[] = $v2 === [] ? corpus_compact($full, $previous) : $full + $v2;
 	$previous  = corpus_compact($full, NULL);
 }
 file_put_contents($resultFile, json_encode($records, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
