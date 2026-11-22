@@ -11,8 +11,9 @@ import (
 // for a valid feed stem only.
 func TestRecoverRemovesTheTransferTemporaries(t *testing.T) {
 	dir := t.TempDir()
-	removed := []string{".pfbstage_123456", "a_v4.orig.tmp", "a_v4.orig.lastmod.part", "a_v4.orig.size.part"}
-	kept := []string{"a_v4.orig", "a.b.orig.tmp", "a.b.orig.size.part", "notes.part", ".pfbstagebak2_a", "pfbstage_1"}
+	removed := []string{".pfbstage_123456", "a_v4.orig.tmp", "a_v4.orig.lastmod.part", "a_v4.orig.size.part",
+		"a_v4.probe.part", "a_v4.probe.lastmod.part", "a_v4.probe.size.part"}
+	kept := []string{"a_v4.orig", "a.b.orig.tmp", "a.b.orig.size.part", "a.b.probe.part", "a_v4.probe", "notes.part", ".pfbstagebak2_a", "pfbstage_1"}
 	for _, name := range append(append([]string{}, removed...), kept...) {
 		writeFile(t, filepath.Join(dir, name), "x\n")
 	}

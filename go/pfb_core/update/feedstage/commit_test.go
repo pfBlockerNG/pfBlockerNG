@@ -168,3 +168,73 @@ func TestRunReportsACommitThatIsNotDurable(t *testing.T) {
 		}
 	}
 }
+
+// Scenario: an absent record beside a backup of the same target, the backup unreadable.
+// Given a set holding a backup and an absent record of one target, when the first rollback cannot read the backup, then the
+// absent record stays beside it: the next rollback must still let the record beat the backup, so that the target ends up
+// absent and the old copy never comes back over it.
+func TestAbsentRecordOutlivesABackupThatFailed(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "Feed_v4.orig.etag")
+	writeFile(t, target, "old\n")
+	set, err := snapshotPaths([]string{target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set.keepAbsent(target)
+	if len(set.entries) != 2 {
+		t.Fatalf("the set holds %d entries, want a backup and an absent record", len(set.entries))
+	}
+	replaceFile(t, target, "new\n")
+	backup, record := set.entries[0].path, set.entries[1].path
+	withFault(t, func(op, path string) error {
+		if op == "lstat" && path == backup {
+			return syscall.EIO
+		}
+		return nil
+	})
+	if err := set.rollback(); err == nil {
+		t.Errorf("the rollback that could not read the backup reported success")
+	}
+	if !regularExists(record) {
+		t.Fatalf("the rollback removed the absent record while its backup stays")
+	}
+	fault = noFault
+	if err := set.rollback(); err != nil {
+		t.Fatalf("the next rollback: %v", err)
+	}
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Errorf("after the next rollback the target exists (%v), want it absent", err)
+	}
+	journalLeftovers(t, dir, "after the next rollback")
+}
+
+// Scenario: a committed set whose entries could not all be removed.
+// Given a commit whose marker is durable but whose finish fails on a backup, when the set is rolled back afterwards, then
+// the rollback does nothing: the new files stay.
+func TestRollbackOfACommittedSetWhoseFinishFailedKeepsTheNewFiles(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "a_v4.orig")
+	writeFile(t, target, "old\n")
+	set, err := snapshotPaths([]string{target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaceFile(t, target, "new\n")
+	backup := set.entries[0].path
+	withFault(t, func(op, path string) error {
+		if op == "remove" && path == backup {
+			return syscall.EIO
+		}
+		return nil
+	})
+	if err := set.commit(); err != nil {
+		t.Fatalf("the commit whose marker is durable: %v", err)
+	}
+	if err := set.rollback(); err != nil {
+		t.Fatalf("the rollback of a committed set: %v", err)
+	}
+	if got := readFile(t, target); got != "new\n" {
+		t.Errorf("after the rollback of a committed set the download is %q, want the new one", got)
+	}
+}

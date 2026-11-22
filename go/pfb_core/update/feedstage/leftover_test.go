@@ -87,3 +87,24 @@ func TestLeftoverSetThatCannotBeFinishedFailsTheFeed(t *testing.T) {
 		}
 	}
 }
+
+// Scenario: a commit marker whose entries are gone.
+// Given a feed folder with a marker no entry names and a marker that an entry of another feed names, when the feed's
+// leftover sets are finished, then the first marker is removed and the second stays for its own feed.
+func TestFinishFeedSetsRemovesAMarkerWithoutEntries(t *testing.T) {
+	dir := t.TempDir()
+	lone, shared := filepath.Join(dir, commitMark+"lone"), filepath.Join(dir, commitMark+"shared")
+	other := filepath.Join(dir, ".b_v4.orig.pfbbackup-shared")
+	for _, path := range []string{lone, shared, other} {
+		writeFile(t, path, "")
+	}
+	if err := finishFeedSets(dir, "a_v4"); err != nil {
+		t.Fatalf("finishFeedSets: %v", err)
+	}
+	if regularExists(lone) {
+		t.Errorf("the marker with no entry is left")
+	}
+	if !regularExists(shared) || !regularExists(other) {
+		t.Errorf("the set of another feed was touched: marker %v, entry %v", regularExists(shared), regularExists(other))
+	}
+}
