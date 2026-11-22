@@ -232,6 +232,7 @@ func TestAnUnterminatedLastLineIsKeptOnlyWhenCutShort(t *testing.T) {
 		"content over the line bound":       `{"version":2,"failed":[{"id":"geo-catalog","stage":"apply","message":"` + strings.Repeat("a", 600000),
 		"spaces over the line bound":        strings.Repeat(" ", 600000),
 		"a stray byte that starts no value": "x",
+		"a syntax error no byte can repair": `{"version":2,}`,
 	} {
 		if got, err := read(t, ok+last); err == nil || errors.Is(err, apply.ErrCut) || !reflect.DeepEqual(got, apply.Result{}) {
 			t.Errorf("%s as an unterminated last line: %+v (%v), want the result refused whole", name, trim(got), err)
