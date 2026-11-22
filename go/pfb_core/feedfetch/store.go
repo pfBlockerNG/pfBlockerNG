@@ -134,7 +134,7 @@ func finish(body string) error {
 	var werr error
 	if info, err := f.Stat(); err == nil && info.Size() > 0 {
 		if _, err := f.ReadAt(last, info.Size()-1); err == nil && last[0] != '\n' {
-			werr = appendNewline(f, body, info.Mode().Perm())
+			werr = replaceByCopy(f, body, info.Mode().Perm(), []byte("\n"), time.Time{})
 		}
 	}
 	serr := f.Sync()
@@ -144,8 +144,9 @@ func finish(body string) error {
 	return nil
 }
 
-// appendNewline replaces path, open as in, by a synced copy of it with a newline at its end.
-func appendNewline(in *os.File, path string, mode os.FileMode) error {
+// replaceByCopy replaces path, open as in, by a synced copy of it with tail at its end and, unless mtime is zero, that
+// modification time: path may be a hard link of a published file, which is never written through.
+func replaceByCopy(in *os.File, path string, mode os.FileMode, tail []byte, mtime time.Time) error {
 	out, err := os.CreateTemp(filepath.Dir(path), ".pfbstage_")
 	if err != nil {
 		return err
@@ -155,9 +156,12 @@ func appendNewline(in *os.File, path string, mode os.FileMode) error {
 		_, err = io.Copy(out, in)
 	}
 	if err == nil {
-		_, err = out.Write([]byte("\n"))
+		_, err = out.Write(tail)
 	}
 	err = errors.Join(err, out.Chmod(mode), out.Sync(), out.Close())
+	if err == nil && !mtime.IsZero() {
+		err = os.Chtimes(out.Name(), mtime, mtime)
+	}
 	if err == nil {
 		err = os.Rename(out.Name(), path)
 	}
@@ -202,4 +206,16 @@ func localDecision(path string, feed Feed) Decision {
 		return Unchanged
 	}
 	return Changed
+}
+
+// retime gives path the modification time mtime on a copy renamed over it.
+func retime(path string, mtime time.Time) {
+	in, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer in.Close()
+	if info, err := in.Stat(); err == nil {
+		replaceByCopy(in, path, info.Mode().Perm(), nil, mtime)
+	}
 }

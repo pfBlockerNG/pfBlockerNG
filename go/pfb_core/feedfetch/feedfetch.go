@@ -280,7 +280,7 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		}
 		if src.ftp != nil && f.Proxy == nil {
 			if lastMod := readFTPMetadata(feed).lastMod; !lastMod.IsZero() {
-				os.Chtimes(published, lastMod, lastMod)
+				retime(published, lastMod) // the body came from the probe's, which may be a hard link of a published file
 			}
 		}
 	} else if src.ftp != nil && f.Proxy == nil {
