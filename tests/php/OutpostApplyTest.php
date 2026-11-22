@@ -898,7 +898,7 @@ final class OutpostApplyTest extends TestCase
 		return [
 			'DNSBL changed on a RAM-disk /var'    => [$changed, $ram, 1],
 			'/var is not a RAM disk'              => [$changed, [], 0],
-			'the Resolver was not reloaded'       => [['active' => TRUE] + $changed + ['update' => FALSE], $ram, 0],
+			'the Resolver was not reloaded'       => [array_replace($changed, ['update' => FALSE]), $ram, 0],
 			'DNSBL is not active'                 => [['active' => FALSE] + $changed, $ram, 0],
 		];
 	}
