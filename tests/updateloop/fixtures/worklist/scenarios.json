@@ -2705,6 +2705,51 @@
       }
     },
     {
+      "id": "invalid_source_without_list_outside_window",
+      "description": "Outside the window a whois or asn feed whose source today's check refuses and that has no list changes nothing: the no-update pass still runs, and runs the feed.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:N_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "N",
+              "state": "enabled",
+              "format": "asn",
+              "source": "AS64-500"
+            }
+          ]
+        }
+      ],
+      "window": "outside",
+      "files": {
+        "ipv4:N_v4": {
+          "list": false
+        }
+      },
+      "expect": {
+        "checked": [
+          "ipv4:N_v4"
+        ],
+        "outcomes": {},
+        "changes": {
+          "ipv4:N_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
       "id": "never_and_disabled_are_not_walked",
       "description": "A group updated Never, a Disabled group and a disabled row are not checked.",
       "request": {
