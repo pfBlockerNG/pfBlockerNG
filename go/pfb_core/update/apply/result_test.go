@@ -316,3 +316,45 @@ func TestReadingAnEmptyResultAllocatesLittle(t *testing.T) {
 		t.Errorf("an empty result allocates %d bytes, over 64 KiB", n)
 	}
 }
+
+// WHEN a result of 1 MiB and one byte ends in a line of exactly MaxLine bytes, its newline the byte past the bound THEN
+// the file is cut, not refused: no line of it is over the line bound, and the complete lines inside the first 1 MiB count.
+func TestALegalLineEndingPastTheFileBoundIsCutNotRefused(t *testing.T) {
+	first := lineOf(t, "ip-set/Abuse/ipv4", 1000)
+	second := lineOf(t, "ip-set/Top/ipv6", apply.MaxLine+1-len(first))
+	file := first + second + lineOf(t, "geo-catalog", apply.MaxLine)
+	if len(file) != apply.MaxResult+1 {
+		t.Fatalf("the probe is %d bytes, want %d", len(file), apply.MaxResult+1)
+	}
+	got, err := read(t, file)
+	if !errors.Is(err, apply.ErrCut) || len(got.Failed) != 2 {
+		t.Errorf("a legal last line ending past the bound: %+v (%v), want ErrCut and the two complete lines", trim(got), err)
+	}
+	// the same tail one byte longer and without its newline is a line over the bound: the writer broke it
+	if got, err := read(t, first+second+strings.Repeat("a", apply.MaxLine)); err == nil || errors.Is(err, apply.ErrCut) ||
+		!reflect.DeepEqual(got, apply.Result{}) {
+		t.Errorf("a tail of MaxLine bytes without a newline: %+v (%v), want it refused whole", trim(got), err)
+	}
+}
+
+// WHEN the unterminated last line is exactly at the line bound, starts no object or holds a byte the contract forbids
+// THEN the apply's death did not cut it short: the result is refused whole. One byte under the bound it still counts as cut.
+func TestAnUnterminatedLastLineIsCutShortOnlyAsAPrefixOfALine(t *testing.T) {
+	ok := `{"version":2,"applied":{"geo-catalog":"3"}}` + "\n"
+	open := `{"version":2,"failed":[{"id":"ip-set/Top/ipv6","stage":"apply","message":"`
+	for name, last := range map[string]string{
+		"a prefix of MaxLine bytes":  open + strings.Repeat("a", apply.MaxLine-len(open)),
+		"a prefix of a list":         `[1,2,`,
+		"a prefix with a UTF-8 byte": open + "café",
+		"a tab":                      "\t",
+		"a CR":                       "\r",
+	} {
+		if got, err := read(t, ok+last); err == nil || !reflect.DeepEqual(got, apply.Result{}) {
+			t.Errorf("%s as an unterminated last line: %+v (%v), want the result refused whole", name, trim(got), err)
+		}
+	}
+	under := open + strings.Repeat("a", apply.MaxLine-1-len(open))
+	if got, err := read(t, ok+under); err == nil || !reflect.DeepEqual(got.Applied, map[string]uint64{"geo-catalog": 3}) {
+		t.Errorf("a prefix of MaxLine-1 bytes: %+v (%v), want the first line's values and an error", trim(got), err)
+	}
+}
