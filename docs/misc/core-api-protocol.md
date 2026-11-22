@@ -787,6 +787,28 @@ The cutover imports configuration only, so a Core that finds no state file start
 The worker retains its lock, log and receipt until its transaction completes. A new Core observes a live worker or reconciles its
 terminal receipt; it does not relaunch the same transaction.
 
+### The Core Updater loop
+
+**Not used in production yet** (issue #4038, spec `docs/specs/go-updater-pipeline.md` section 3). With `--update-loop`,
+which needs `--update-cmd`, each admitted Update runs the Core Updater loop in its worker instead of the `--update-cmd`
+program. Without the flag nothing changes: the worker runs the program as above, and its private state has no `loop`
+member. The rc script does not pass the flag.
+
+- **Paths.** Core copies its path flags into the worker's private state as a `loop` object: `settingsCmd`
+  (`--settings-backend-cmd`; absent means `settings.json` in `--state-dir`), `resourceDir`, `feedLocalDirs`, `scriptDirs`,
+  `rsyncBin`, `hookDir`, `pythonWrapper` and `mainLog` (`--main-log PATH`, the package's main log). Settings never go
+  there. Core refuses to admit, and the worker refuses a state, whose `loop` has an unknown member or a path that is not
+  absolute and clean or holds a control character; the 4 MiB bound of the state still holds.
+- **Snapshot.** Holding `update.log.lock`, the worker reads the settings backend once itself (the Core API's own read
+  before the launch stays) and keeps the settings and `platform.pendingToken` in memory only. A backend that fails, does
+  not answer within its read timeout, answers revision 0, or holds no initialized settings fails the Update before any
+  later stage. A `scheduled` Update ends `skipped` when `ingest.scheduledWorkDisabled` is true, as for exit status 75;
+  other triggers run.
+- **Output.** The loop writes its lines to `update.log` and, with `--main-log`, appends them to the main log too. A main
+  log that is a symbolic link or not a regular file fails the Update before the snapshot.
+- **Stages.** The stages after the snapshot are empty for now, so an Update reports success with an empty result and
+  starts no program.
+
 ### Update command, version 2
 
 **Not used in production yet.** Version 2 is the contract of the Outpost apply (issue #4037; spec

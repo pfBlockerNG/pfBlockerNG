@@ -1,7 +1,7 @@
 // pfb-core, the pfBlockerNG Core daemon (map #3813): the platform-neutral business logic behind a versioned HTTP+JSON API
 // that the co-located pfSense layer (PHP, native curl) calls over a Unix socket. docs/misc/core-api-protocol.md is the contract.
 //
-//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
+//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH [--update-loop]] [--main-log PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
 //	pfb-core --run-hooks pre|post --hook-dir PATH (--settings-backend-cmd PATH | --state-dir DIR) [--python-wrapper PATH]
 //
 //	--socket PATH       the API's Unix socket: its directory is made 0700 and the socket 0600, the server's user's alone
@@ -17,6 +17,11 @@
 //	                    update.log and its result on fd 3. Without it those methods answer unavailable. Stopping Core ends
 //	                    scheduling and observation, not an admitted worker; a restarted Core observes or reconciles its receipt.
 //	                    Exit status 75 means the worker deferred the Update: its result is skipped and nothing is recorded
+//	--update-loop       run each Update through the Core Updater loop (issue #4038) instead of the --update-cmd program; off
+//	                    when absent, and the rc script does not pass it yet. The worker reads the settings itself and is
+//	                    given the path flags (--settings-backend-cmd, --resource-dir, --feed-local-dir, --script-dir,
+//	                    --rsync-bin, --hook-dir, --python-wrapper, --main-log) in its private state. Needs --update-cmd
+//	--main-log PATH     the absolute path of the package's main log, which the loop appends its lines to beside update.log
 //	--maintenance-cmd PATH
 //	                    optional quarter-hour Outpost command, no arguments, in an independent maintenance worker; it uses
 //	                    maintenance.log and separate receipts/lock. Core reads the maintenance settings before each run and
@@ -109,11 +114,13 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	fl.Func("metrics-cmd", "start this program at every minute boundary", programFlag(&metricsCmd))
 	fl.Func("counters-cmd", "start this program at the first minute boundary of each local day, with the cadences due", programFlag(&countersCmd))
 	zoneinfo := fl.String("zoneinfo", "", "the host's time zone file the scheduler reads the schedule's zone from")
+	updateLoop := fl.Bool("update-loop", false, "run each Update through the Core Updater loop instead of the update program")
 	feed := addFeedFlags(fl)
-	var resourceDir, hookDir, pythonWrapper, runHooksWhen string
+	var resourceDir, hookDir, pythonWrapper, mainLog, runHooksWhen string
 	fl.Func("resource-dir", "the resource store's directory (an absolute path)", absolutePath(&resourceDir))
 	fl.Func("hook-dir", "the folder of the update hooks (an absolute path)", absolutePath(&hookDir))
 	fl.Func("python-wrapper", "the program a .py hook runs through (an absolute path)", absolutePath(&pythonWrapper))
+	fl.Func("main-log", "the package's main log the Update loop appends to (an absolute path)", absolutePath(&mainLog))
 	fl.Func("run-hooks", "run the pre or post hooks once and exit", func(v string) error {
 		if v != "pre" && v != "post" {
 			return errors.New("must be pre or post")
@@ -175,8 +182,8 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		runner := hooks.Runner{Dir: hookDir, Python: pythonWrapper, SignalLag: 250 * time.Millisecond}
 		return runHooks(ctx, runHooksWhen, *stateDir, *backendCmd, runner, os.Stdin, os.Stdout, stderr)
 	}
-	if *socket == "" || *stateDir == "" || fl.NArg() != 0 {
-		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
+	if *socket == "" || *stateDir == "" || fl.NArg() != 0 || *updateLoop && *updateCmd == "" {
+		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH [--update-loop]] [--main-log PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
 		return 2
 	}
 	if ownSignals {
@@ -215,7 +222,12 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		resourceStore = resources.Open(resourceDir)
 	}
 	lanes := newLaneSettings(store, logger.Printf)
-	sched, gate := newUpdates(*updateCmd, maintenanceCmd, *zoneinfo, *stateDir, store, lanes, logger.Printf) // nil without --update-cmd
+	var loop *update.Loop // nil: the switch is off and an Update runs the program
+	if *updateLoop {
+		loop = &update.Loop{SettingsCmd: *backendCmd, ResourceDir: resourceDir, FeedLocalDirs: feed.LocalDirs, ScriptDirs: feed.ScriptDirs,
+			RsyncBin: feed.RsyncBin, HookDir: hookDir, PythonWrapper: pythonWrapper, MainLog: mainLog}
+	}
+	sched, gate := newUpdates(*updateCmd, maintenanceCmd, *zoneinfo, *stateDir, loop, store, lanes, logger.Printf) // nil without --update-cmd
 	methods := coreMethods(*stateDir, store, resourceStore, sched, gate)
 	srv, err := listen(options{socket: *socket, allowUID: allowUID, clientUIDs: clients, socketGroup: group, groupSet: groupSet,
 		methods: methods, logf: logger.Printf})
