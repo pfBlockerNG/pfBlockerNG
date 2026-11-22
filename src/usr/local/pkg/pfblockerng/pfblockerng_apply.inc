@@ -3567,7 +3567,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$pfctlck = pfb_pfctl_table_count($cc_alias);
 
 						if (empty($pfctlck) && file_exists("{$pfbfolder}/{$cc_alias}.txt")) {
-							pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt");
+							// issue #4191: a mirror that cannot be published drops the baseline, so the next pass publishes again
+							if (!pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt")) {
+								unlink_if_exists("{$pfborig}/{$cc_alias}.orig");
+							}
 							// Collect updated alias lists ('Reputation' disabled)
 							$pfb_alias_lists[] = "{$cc_alias}";
 						}

@@ -100,6 +100,41 @@ final class AliasMirrorPublishFailureTest extends TestCase
 		$this->assertFileDoesNotExist("{$this->dir}/orig/pfB_Europe_v4.orig", 'a baseline for an unpublished placeholder hides the change from the next pass');
 	}
 
+	/** Runs the GeoIP branch that republishes a continent's list into an empty kernel table, its baseline current. */
+	private function republishGeoipIntoAnEmptyTable(): void
+	{
+		file_put_contents("{$this->dir}/folder/pfB_Europe_v4.txt", "192.0.2.0/24\n");
+		file_put_contents("{$this->dir}/orig/pfB_Europe_v4.orig", "192.0.2.0/24\n");
+		pfb_test_page_eval(
+			pfb_test_page_region(self::APPLY, 'if (empty($pfctlck) && file_exists("{$pfbfolder}/{$cc_alias}.txt")) {', '// Collect active alias lists (Used for pfctl update'),
+			[
+				'pfctlck' => 0, 'cc_alias' => 'pfB_Europe_v4', 'pfb_alias_lists' => [],
+				'pfborig' => "{$this->dir}/orig", 'pfbfolder' => "{$this->dir}/folder", 'pfb' => ['aliasdir' => "{$this->dir}/alias"],
+			]
+		);
+	}
+
+	public function testAGeoipListRepublishedIntoAnEmptyTableKeepsTheBaseline(): void
+	{
+		$this->republishGeoipIntoAnEmptyTable();
+
+		$this->assertSame("192.0.2.0/24\n", file_get_contents("{$this->dir}/alias/pfB_Europe_v4.txt"));
+		$this->assertSame("192.0.2.0/24\n", file_get_contents("{$this->dir}/orig/pfB_Europe_v4.orig"));
+	}
+
+	/**
+	 * A republication into an empty table that fails drops the baseline as the other GeoIP copies do: the next pass then
+	 * finds the data changed and publishes again, whether or not anything loaded the table in between.
+	 */
+	public function testAGeoipListThatCannotBeRepublishedIntoAnEmptyTableLeavesItsChangeDetectable(): void
+	{
+		$this->assertTrue(mkdir("{$this->dir}/alias/pfB_Europe_v4.txt"), 'setup: a folder in the mirror\'s place makes its publication fail');
+
+		$this->republishGeoipIntoAnEmptyTable();
+
+		$this->assertFileDoesNotExist("{$this->dir}/orig/pfB_Europe_v4.orig");
+	}
+
 	/** Runs the ADR-40 branch for one alias whose set differs from its mirror. @return array<string, mixed> */
 	private function applyCanonicalSet(string $mirror): array
 	{
