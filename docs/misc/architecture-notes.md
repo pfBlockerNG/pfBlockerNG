@@ -2359,8 +2359,11 @@ sits (owner decision on #4037, 2026-11-22: `RuntimeGatewayReadsStructureTest`, `
    them). A resource whose alias is not expected, whose action or direction disagrees with config.xml (decision 2), or
    whose request entries exceed `system/maximumtableentries` fails with stage `apply` and is not fetched. The others
    are fetched one by one (`pfb_outpost_fetch()`), each new mirror staged beside the old one: a body whose entries
-   exceed the limit fails and its staged file is removed, and an unreachable or unavailable Core API removes every staged
-   file and exits 75 before anything changed. A `removed` id, or a `not_found` reply, for an alias config.xml still
+   exceed the limit fails and its staged file is removed, and an unreachable or unavailable Core API, or a body
+   `GetResourceBody` answers `unavailable` once its item answered, removes every staged file and exits 75 before anything
+   changed; an item `GetResources` answers `unavailable` fails its resource alone. An `unchanged` reply whose kernel table
+   is empty while its cursor counts members (`pfb_pfctl_table_empty()`, which reads the first line of `pfctl -T show`
+   only) is pushed as a replace from its mirror, which the cursor sent has verified. A `removed` id, or a `not_found` reply, for an alias config.xml still
    holds fails with stage `apply` ("settings changed since the Update's snapshot") and keeps its table, mirror and
    cursor; one for an alias it no longer holds is a removal. Once every resource is fetched, the staged mirrors replace
    the old ones by rename;
@@ -2378,17 +2381,23 @@ sits (owner decision on #4037, 2026-11-22: `RuntimeGatewayReadsStructureTest`, `
    (`pfb_dnsbl_converged()`); a failed accounting or a marker that remains keeps the changes pending. A request with no
    `dnsbl` body cannot reconcile the marker, so the apply neither fails on it nor clears it: the pass reconciles it;
 5. removes what left the configuration (the mirror, then `pfctl -T kill`, then the cursor: a kill that fails keeps its
-   ledger entry, and the tick's retry kills a table that has no mirror); a `geo-catalog` body renders the GeoIP pages;
+   ledger entry, and the tick's retry kills a table that has no mirror; a cursor that cannot be dropped fails the id,
+   and its retry, which finds the table gone, drops it); a `geo-catalog` body renders the GeoIP pages;
    registers every expected alias with a mirror and runs `pfb_apply_objects()` with a push that sends each changed
-   table through `pfb_apply_alias_delta_files()`: a replace from the mirror for a `full` reply, no cursor, an empty
-   kernel table or an IP unlock, else the mode and churn decision of ADR-40. A table whose push failed, or whose
-   `ip/<alias>/apply` ledger entry is open afterwards, failed; the others advance their cursor;
-6. writes one result line: `applied` (the resources at the requested generation, `unchanged` ones included, and none
-   when a needed filter reload was not launched), `removed`, `changedAliases` (the tables pushed, of the request's
-   aliases), `ipChanged`, `dnsblChanged` (DNS steps run, or the Resolver reloaded), `reloadLaunched` (a reload was needed) and `failed`; settles
-   the request's `pendingToken` unless something failed (a failed resource or a result line that was not written is the
-   apply record's reason); exits 0, or 1 when a resource failed, the reload was not launched, the DNSBL statistics could not
-   be written or the line was not written. A deferral (exit 75: a lock is held or Core does not serve) adds no pending mark,
+   table through `pfb_apply_alias_delta_files()`: a replace from the mirror for a `full` or `unchanged` reply, no
+   cursor, an empty kernel table or an IP unlock (with a delta too: the unlocked member is in no delta), else the mode
+   and churn decision of ADR-40. A table whose push failed, whose replace on the path with a rule change failed (the
+   result `pfb_apply_objects()` returns, not the ledger), or whose `ip/<alias>/apply` ledger entry is open afterwards,
+   failed; the others advance their cursor. The work folder of delta parts and batch files is renamed aside and removed
+   when the apply ends, whatever ends it;
+6. writes one result line: `applied` (the resources at the requested generation, the request's generation string,
+   `unchanged` ones included, and none when a needed filter reload was not launched), `removed`, `changedAliases` (the
+   tables pushed successfully, of the request's aliases), `ipChanged`, `dnsblChanged` (DNS steps run, or the Resolver
+   reloaded), `reloadLaunched` (a reload was needed) and `failed`; settles the request's `pendingToken` unless something
+   failed (a failed resource, a reload not launched or a result line that was not written is the apply record's reason,
+   and keeps the due flag); exits 0, or 1 when a resource failed, the reload was not launched, the DNSBL statistics could
+   not be written, the line was not written or the settlement could not clear the due flag (a due ledger that cannot be
+   read is not clear). A deferral (exit 75: a lock is held or Core does not serve) adds no pending mark,
    except that `pfb_apply_enter()` marks pending when the DNS configuration lock is unavailable. Core retries a deferred
    `scheduled` or `retry` Update on its next tick (a deferred Update records nothing, so its occurrences stay pending), and
    does not retry a `manual` one or the `apply` trigger: a deferral after the locks are held sets the due flag for a

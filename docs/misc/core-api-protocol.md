@@ -905,7 +905,7 @@ appear in this order; a field is left out when the apply has nothing to say in i
 |---|---|
 | `applied` | each resource applied, its id mapped to the generation string the request gave |
 | `removed` | each removal applied, the ids as the request gave them |
-| `changedAliases` | the alias of every table the apply pushed to pf: the `post` hook's `PFB_CHANGED_IP_ALIASES` |
+| `changedAliases` | the alias of every table the apply pushed to pf and whose push succeeded: the `post` hook's `PFB_CHANGED_IP_ALIASES` |
 | `ipChanged`, `dnsblChanged` | the `post` hook's `PFB_IP_CHANGED` and `PFB_DNSBL_CHANGED` |
 | `reloadLaunched` | whether the filter reload was launched |
 | `failed` | `{"id", "stage", "message"}` per resource not applied, `stage` being `fetch` or `apply`, the message bounded as an issue's is, except that its 1,024 bytes are counted as written on the line, JSON escapes included |
