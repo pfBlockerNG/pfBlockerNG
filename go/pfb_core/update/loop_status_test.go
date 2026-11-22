@@ -1,7 +1,6 @@
 package update
 
 import (
-	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -22,14 +21,7 @@ func TestTheStatusOfARunningLoopUpdateHasNoLoopMember(t *testing.T) {
 	c, _ := loopCommand(t, &Loop{SettingsCmd: adapter})
 	ran := make(chan error, 1)
 	go func() { _, err := runCmd(t, c, Request{Trigger: "manual"}, log); ran <- err }()
-	opened := make(chan error, 1)
-	go func() {
-		f, err := os.OpenFile(started, os.O_RDONLY, 0) // returns once the adapter, and so the worker, runs
-		if err == nil {
-			f.Close()
-		}
-		opened <- err
-	}()
+	opened := awaitFIFOWriter(t, started) // returns once the adapter, and so the worker, runs
 	select {
 	case err := <-opened:
 		if err != nil {

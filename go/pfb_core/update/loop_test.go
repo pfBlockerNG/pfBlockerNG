@@ -324,14 +324,7 @@ func TestTheSnapshotIsTakenOnlyAfterTheOwnershipHandshake(t *testing.T) {
 	defer cancel()
 	ran := make(chan error, 1)
 	go func() { _, err := c.Run(ctx, Request{Trigger: "manual"}, log); ran <- err }()
-	opened := make(chan error, 1)
-	go func() {
-		f, err := os.OpenFile(started, os.O_RDONLY, 0) // returns once the adapter has opened it: the adapter runs
-		if err == nil {
-			f.Close()
-		}
-		opened <- err
-	}()
+	opened := awaitFIFOWriter(t, started) // returns once the adapter has opened it: the adapter runs
 	select {
 	case err := <-opened:
 		if err != nil {
@@ -353,6 +346,30 @@ func TestTheSnapshotIsTakenOnlyAfterTheOwnershipHandshake(t *testing.T) {
 	}
 	releaseFIFO(t, proceed) // lets the adapter answer
 	waitUnlocked(t, log.Name()+".lock")
+}
+
+// awaitFIFOWriter opens path for reading in a goroutine and sends the open's error once a writer holds the FIFO. When
+// no writer came by the end of the test, a writer of its own lets the blocked open return, so no goroutine outlives
+// the test.
+func awaitFIFOWriter(t *testing.T, path string) <-chan error {
+	t.Helper()
+	opened, done := make(chan error, 1), make(chan struct{})
+	go func() {
+		defer close(done)
+		f, err := os.OpenFile(path, os.O_RDONLY, 0)
+		if err == nil {
+			f.Close()
+		}
+		opened <- err
+	}()
+	t.Cleanup(func() {
+		// Without a blocked reader this open fails with ENXIO: the goroutine has ended already.
+		if w, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+			<-done
+			w.Close()
+		}
+	})
+	return opened
 }
 
 // releaseFIFO opens path for writing, which returns once a reader holds it. When no reader comes (an adapter that died
