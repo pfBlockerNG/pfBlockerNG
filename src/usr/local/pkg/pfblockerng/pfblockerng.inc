@@ -11133,6 +11133,12 @@ function pfb_stage_publish(string $target, callable $extract): bool {
 	if ($staged === FALSE) {
 		return FALSE;
 	}
+	// issue #4191: tempnam() falls back to the system temporary folder when it cannot create the stage beside the target (a
+	// missing or inode-exhausted folder), and a rename from there would be a copy over the target.
+	if (realpath(dirname($staged)) !== realpath(dirname($target))) {
+		unlink_if_exists($staged);
+		return FALSE;
+	}
 	// issue #2169: tempnam() creates at 0600, but published feeds have unprivileged readers.
 	if (!pfb_download_extraction_succeeded((int) $extract($staged)) ||
 	    !@chmod($staged, 0644) || !@rename($staged, $target)) {
