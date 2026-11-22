@@ -291,8 +291,10 @@ final class OutpostApplyTest extends TestCase
 		[, $i, $a] = $this->runSteps([self::prime([self::group('Abuse')]), $incomplete, self::at([self::ABUSE => ['2', self::OLD]]) + $applied]);
 
 		$this->assertSame($exit, $i['exit'], $i['log']);
+		$this->assertFalse($i['fetches']['ledgerPending'], 'the flag is clear before the apply fetches anything');
 		$this->assertTrue($i['ledgerPending'], 'an apply that does not complete keeps the pending apply flag');
 		$this->assertSame(0, $a['exit'], $a['log']);
+		$this->assertFalse($a['fetches']['ledgerPending'], 'the flag is clear before the apply fetches anything');
 		$this->assertFalse($a['ledgerPending'], 'a completed apply clears it');
 	}
 
@@ -320,7 +322,7 @@ final class OutpostApplyTest extends TestCase
 
 		$this->assertSame(0, $r['exit'], $r['log']);
 		$this->assertSame([['version' => 2]], $r['resultLines']);
-		$this->assertSame([], $r['coreRequests']);
+		$this->assertSame(0, $r['fetches']['calls'], 'nothing was fetched');
 		$this->assertSame([], self::pushes($r));
 		$this->assertTrue($r['pending']);
 		$this->assertTrue($r['ledgerPending']);
@@ -372,7 +374,7 @@ final class OutpostApplyTest extends TestCase
 		$r = $this->applyOnce($apply);
 
 		$this->assertSame(1, $r['exit'], $r['log']);
-		$this->assertSame([], $r['coreRequests']);
+		$this->assertSame(0, $r['fetches']['calls'], 'nothing was fetched');
 		$this->assertSame([['ip-set/Ghost/ipv4', 'apply']], self::failedPairs($r));
 	}
 
@@ -383,7 +385,7 @@ final class OutpostApplyTest extends TestCase
 		$r = $this->applyOnce($apply);
 
 		$this->assertSame(1, $r['exit'], $r['log']);
-		$this->assertSame([], $r['coreRequests']);
+		$this->assertSame(0, $r['fetches']['calls'], 'nothing was fetched');
 		$this->assertSame([[self::ABUSE, 'apply']], self::failedPairs($r));
 		$this->assertStringContainsString('table entries limit', $r['resultLines'][0]['failed'][0]['message']);
 	}
@@ -396,7 +398,7 @@ final class OutpostApplyTest extends TestCase
 		$r = $this->applyOnce($apply);
 
 		$this->assertSame(1, $r['exit'], $r['log']);
-		$this->assertSame([], $r['coreRequests']);
+		$this->assertSame(0, $r['fetches']['calls'], 'nothing was fetched');
 		$this->assertSame([[self::ABUSE, 'apply']], self::failedPairs($r));
 		$this->assertSame([self::ABUSE => '1'], self::generations($r));
 	}
@@ -479,7 +481,7 @@ final class OutpostApplyTest extends TestCase
 		$r = $this->runSteps([self::prime([self::group('Abuse', 'Deny_Inbound')]), $apply])[1];
 
 		$this->assertSame(1, $r['exit'], $r['log']);
-		$this->assertSame([], $r['coreRequests']);
+		$this->assertSame(0, $r['fetches']['calls'], 'nothing was fetched');
 		$this->assertSame([[self::ABUSE, 'apply']], self::failedPairs($r));
 		$this->assertSame([self::ABUSE => '1'], self::generations($r));
 	}
@@ -584,7 +586,8 @@ final class OutpostApplyTest extends TestCase
 		$r = $this->applyOnce($apply);
 
 		$this->assertSame(0, $r['exit'], $r['log']);
-		$this->assertCount($ip ? 1 : 0, $r['coreRequests'], 'the IP resources are fetched only in scope ip and both');
+		$this->assertSame($ip ? 1 : 0, $r['fetches']['calls'], 'the IP resources are fetched only in scope ip and both');
+		$this->assertCount($ip ? 1 : 0, $r['coreRequests']);
 		$this->assertSame($ip ? [self::ABUSE => '2'] : NULL, $r['resultLines'][0]['applied'] ?? NULL);
 		$this->assertSame($dnsbl ? ['DNSBL_Ads' => '120', 'DNSBL_Malware' => '7'] : NULL, $r['dnsblStats'], 'the statistics rows of the groups Core published');
 		$this->assertSame($dnsbl ? TRUE : NULL, $r['resultLines'][0]['dnsblChanged'] ?? NULL, 'a group Core changed changes DNSBL');
@@ -723,7 +726,7 @@ final class OutpostApplyTest extends TestCase
 		$r = $this->applyOnce($apply);
 
 		$this->assertSame($exit, $r['exit'], $r['log']);
-		$this->assertSame([], $r['coreRequests']);
+		$this->assertSame(0, $r['fetches']['calls'], 'nothing was fetched');
 		$this->assertSame([['version' => 2]], $r['resultLines']);
 		$this->assertSame([], self::pushes($r));
 		$this->assertSame([self::ABUSE => '1'], self::generations($r));
@@ -744,13 +747,14 @@ final class OutpostApplyTest extends TestCase
 	#[DataProvider('locksHeldElsewhere')]
 	public function testALockThePassTakesDefersTheApply(array $step): void
 	{
+		// nothing listens for Core: the fetch count, not a Core that waits for a request, shows that nothing was asked
 		$apply = array_replace_recursive(self::at([self::ABUSE => ['2', self::OLD]]) + ['apply' => [
-			'request' => self::request([self::resource(self::ABUSE, '2', 3)]), 'core' => [self::unchanged(self::ABUSE, '2')]]], $step);
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)])]], $step);
 		$r = $this->applyOnce($apply);
 
 		$this->assertSame(PFB_EXIT_LOCKED, $r['exit'], $r['log']);
 		$this->assertSame([], $r['resultLines']);
-		$this->assertSame([], $r['coreRequests']);
+		$this->assertSame(0, $r['fetches']['calls'], 'nothing was fetched');
 		$this->assertSame([FALSE, FALSE], [$r['locks']['feedPass'], $r['locks']['dispatch']], 'the apply released what it took');
 	}
 
@@ -767,7 +771,7 @@ final class OutpostApplyTest extends TestCase
 		$this->assertSame([self::ABUSE => '2'], $m['resultLines'][0]['applied'], 'before: a manual apply runs');
 		$this->assertSame(PFB_EXIT_LOCKED, $s['exit'], $s['log']);
 		$this->assertStringContainsString('/.pfb_cron_disable disables scheduled work', $s['log'], 'the sentinel, not the absent Core, defers it');
-		$this->assertSame([], $s['coreRequests']);
+		$this->assertSame(0, $s['fetches']['calls'], 'nothing was fetched');
 		$this->assertSame([], $s['resultLines'] ?? []);
 	}
 

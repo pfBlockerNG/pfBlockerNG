@@ -47,7 +47,8 @@ declare(strict_types=1);
  * its call) and `fetchThrowAt` (the n-th fetch, from 1, throws), `reportFails` (TRUE: the result line cannot be written). Before the apply,
  * `unlock` (TRUE: a DNSBL temporary-unlock store exists), `retryMarker` (TRUE: the `accounting` retry marker exists),
  * `publishFailed` (TRUE: a stale dnsbl_publish_failed flag), `proxyRunning` (TRUE: the DNS proxy's pid file names a live process) and `statsFail` (TRUE: the DNSBL statistics database cannot be opened).
- * The record adds `seamCalls` and `retryMarker` (the marker's text, NULL: none). Its record is not compacted and adds the exit status, the result lines, the cursor file, the
+ * The record adds `seamCalls`, `fetches` (how many fetches the apply made, and the due flag as the first one started) and
+ * `retryMarker` (the marker's text, NULL: none). Its record is not compacted and adds the exit status, the result lines, the cursor file, the
  * requests Core received, the notices filed, the DNSBL statistics rows, the GeoIP pages and the files left in the apply's work
  * folder. A step's `files` entry of NULL removes that file, or that folder with what it holds.
  */
@@ -468,15 +469,18 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 	if (!empty($want['reportFails'])) {
 		$seams['report'] = static fn ($out, array $report): bool => FALSE;
 	}
-	if (isset($want['fetchThrowAt'])) {
-		$fetches = 0;
-		$seams['fetch'] = static function (mixed ...$args) use ($want, &$fetches): array {
-			if (++$fetches === $want['fetchThrowAt']) {
-				throw new RuntimeException('the fetch throws, as the scenario asks');
-			}
-			return pfb_outpost_fetch(...$args);
-		};
-	}
+	// every fetch the apply makes is counted, with the due flag as the first one starts: a fetch with nothing listening is seen too
+	$fetches = ['calls' => 0, 'ledgerPending' => NULL];
+	$seams['fetch'] = static function (mixed ...$args) use ($want, &$fetches): array {
+		global $pfb;
+		if (++$fetches['calls'] === 1) {
+			$fetches['ledgerPending'] = pfb_due_ledger_is_pending('cron', $pfb['dbdir']);
+		}
+		if ($fetches['calls'] === ($want['fetchThrowAt'] ?? 0)) {
+			throw new RuntimeException('the fetch throws, as the scenario asks');
+		}
+		return pfb_outpost_fetch(...$args);
+	};
 	$status = pfb_core_update_serve(json_encode($apply['request'], JSON_THROW_ON_ERROR), "{$work}/result", $seams);
 	foreach ($held as $fh) {
 		flock($fh, LOCK_UN);
@@ -509,6 +513,7 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 	return [$status, [
 		'exit'         => $status,
 		'seamCalls'    => $calls,
+		'fetches'      => $fetches,
 		'retryMarker'  => @file_get_contents("{$pfb['dnsbl_file']}.reload") ?: NULL,
 		'resultLines'  => is_file("{$work}/result") ? array_map(static fn (string $line): mixed => json_decode($line, TRUE),
 			corpus_lines("{$work}/result")) : NULL,
