@@ -19,7 +19,7 @@ use PHPUnit\Framework\TestCase;
  *
  * The update pass's own reads are pinned by behaviour, not by where their text sits (owner decision on #4037, 2026-11-22):
  * its settings step, pfb_apply_settings(), is shared with the version 2 apply, and a raw copy of the IP settings that disagrees
- * with config.xml must not reach what it sets.
+ * with config.xml must not reach what it sets. The scan for raw reads still covers the settings step and the pass itself.
  */
 final class RuntimeGatewayReadsStructureTest extends TestCase
 {
@@ -35,6 +35,12 @@ final class RuntimeGatewayReadsStructureTest extends TestCase
 	/** @return iterable<string,array{0:string,1:?string,2:list<string>}> file, function (NULL = whole file), expected gateway keys */
 	public static function consumerProvider(): iterable
 	{
+		// The update pass's settings step reads the six keys; the pass reads none of the twelve off a raw copy, anywhere in it.
+		yield 'pfb_apply_settings' => ['pkg/pfblockerng/pfblockerng_apply.inc', 'pfb_apply_settings', [
+			'ip/inbound_deny_action', 'ip/outbound_deny_action', 'ip/pass_order', 'ip/autorule_suffix',
+			'ip/ip_placeholder', '"ip/{$type}_interface"',
+		]];
+		yield 'sync_package_pfblockerng' => ['pkg/pfblockerng/pfblockerng_apply.inc', 'sync_package_pfblockerng', []];
 		yield 'pfb_global' => ['pkg/pfblockerng/pfblockerng.inc', 'pfb_global', [
 			'ip/maxmind_locale', 'ip/asn_reporting', 'ip/asn_token', 'ip/maxmind_account', 'ip/maxmind_key',
 		]];
