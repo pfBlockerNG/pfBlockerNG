@@ -4371,13 +4371,14 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// ADR-40: Snapshot the feed-changed set (populated by the download loop above)
 	// before the file-write loop.  The file-write loop will rebuild $pfb_alias_lists
 	// as the content-diff set (aliases whose canonical membership set actually changed),
-	// which is what the pfctl regions and ADR-12 emit consume.
+	// which is what the pfctl regions and ADR-12 emit consume.  The GeoIP block above
+	// already put the changed continents in it (issue #4213).
 	// $pfb_feed_changed: input to the hybrid scope gate; keeps the suppression sub-process
 	// and "read member files" decision anchored to feed-changed aliases.
 	$pfb_feed_changed    = $pfb_alias_lists;
 	$pfb_alias_lists     = $pfb_geoip_changed;   // reset: refilled below with content-validated aliases (continents' above)
 	// ADR-40: per-alias map from alias name -> previous canonical set (what was in the
-	// mirror BEFORE this pass wrote the new one).  Captured in the write loop (below) so the
+	// mirror BEFORE this pass wrote the new one).  Captured by the GeoIP block (above) and the write loop (below) so the
 	// no-rule-change reload site can compute add/del deltas without a second file read.
 	$pfb_alias_prev_sets = $pfb_geoip_prev_sets;
 
@@ -5326,8 +5327,8 @@ function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $p
 					if (file_exists("{$pfb['aliasdir']}/{$final}.txt")) {
 						// ADR-40: compute delta from the stashed previous canonical set.
 						// Two cases always get force_rpl = TRUE here:
-						//   • ip_unlock-widened aliases: not in $pfb_alias_prev_sets (added
-						//     after the write loop), so ?? NULL → empty(NULL) = TRUE.
+						//   • a pending ip_unlock: the unlocked IP is out of the kernel table
+						//     but in both sets, so no delta re-adds it (issue #4213).
 						//   • Empty-kernel aliases: stashed as [] explicitly (M1 fix), so
 						//     empty([]) = TRUE → full -T replace repopulates the kernel.
 						// Content-changed aliases stash their actual previous set (non-empty
@@ -5337,7 +5338,7 @@ function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $p
 						$previous    = $pfb_alias_prev_sets[$final] ?? $desired;
 						// Boot / empty-table signal: if the alias was not in the prev-set stash
 						// and the kernel table was empty, force a full replace.
-						$force_rpl   = empty($pfb_alias_prev_sets[$final] ?? NULL);
+						$force_rpl   = $pfb_ip_unlock_forced || empty($pfb_alias_prev_sets[$final] ?? NULL);
 						pfb_apply_alias_delta(
 							$pfb['pfctl'],
 							$final,
