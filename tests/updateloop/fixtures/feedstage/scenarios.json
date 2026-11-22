@@ -211,14 +211,14 @@
       "expect": {"outcome": "unchanged", "stage": "", "postFailed": false, "entries": ["198.51.100.1"], "placeholder": "", "orig": "198.51.100.1\n"}
     },
     {
-      "id": "ip_failed_post_script_empties",
-      "description": "A failed post-script that emptied the download is undone before the empty check: the download still has content, so no placeholder is added and the last list stays.",
+      "id": "ip_failed_post_script_comments",
+      "description": "A failed post-script that left only a comment in the download is undone before the empty check: the download still has a content line, so no placeholder is added and the last list stays.",
       "kind": "ipv4",
       "custom": false,
       "baseline": "198.51.100.1\n",
       "source": "not an address\n",
       "pre": null,
-      "post": ": > \"$1\"; exit 1",
+      "post": "printf '# nothing listed\\n' > \"$1\"; exit 1",
       "expect": {"outcome": "empty", "stage": "", "postFailed": true, "entries": ["198.51.100.1"], "placeholder": "", "orig": "not an address\n"}
     },
     {

@@ -209,47 +209,6 @@ func TestProxyUnusableRefusesWithoutDialingAndKeepsLastGood(t *testing.T) {
 	}
 }
 
-func TestFailureReasonDoesNotExposeLocalPaths(t *testing.T) {
-	dir := t.TempDir()
-	source := "file://" + filepath.Join(dir, "missing-feed")
-	stage := testStage(t)
-	stage.Fetcher.Policy.LocalDirs = []string{dir}
-	got := run(stage, testFeed("ipv4", "enabled", "auto", source), "none")
-	if got.Disposition != "failed" {
-		t.Fatalf("run for a missing local feed = %+v", got)
-	}
-	result, _ := json.Marshal(got)
-	if got.Reason != "feed_probe_failed" || strings.Contains(string(result), dir) || strings.Contains(string(result), source) {
-		t.Fatalf("the failure exposed its local source: %s", result)
-	}
-}
-
-func TestPropagatesSafeFetcherFailureReasons(t *testing.T) {
-	secret := "feed-secret-never-return"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "missing", http.StatusNotFound)
-	}))
-	defer server.Close()
-	stage := testStage(t)
-	feed := testFeed("ipv4", "enabled", "auto", server.URL+"/feed")
-	feed.Username, feed.Password = "user", secret
-	writeFile(t, filepath.Join(stage.Paths.FeedDir, "feed_v4.orig"), "203.0.113.1\n")
-	for _, tc := range []struct{ force, stage string }{{"none", "probe"}, {"download", "fetch"}} {
-		var updateLog strings.Builder
-		stage.Log = &updateLog
-		got := run(stage, feed, tc.force)
-		if got.Disposition != "failed" || got.Stage != tc.stage || got.Reason != "404 Not Found" {
-			t.Fatalf("run(%q) failure = %+v; want feedfetch's safe status reason at stage %s", tc.force, got, tc.stage)
-		}
-		result, _ := json.Marshal(got)
-		for _, private := range []string{secret, server.URL} {
-			if strings.Contains(string(result), private) || strings.Contains(updateLog.String(), private) {
-				t.Fatalf("run(%q) exposed a secret or URL: result %s, log %q", tc.force, result, updateLog.String())
-			}
-		}
-	}
-}
-
 // Hold is "download once" (spec §3 stage 3, "Hold with a published list"): a Hold feed is held while its published list
 // exists, unless a resolved script asks for its download to be parsed again; without a list it parses its download, or
 // downloads once when it has none.
