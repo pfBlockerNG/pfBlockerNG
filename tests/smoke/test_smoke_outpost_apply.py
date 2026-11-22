@@ -61,13 +61,20 @@ file_put_contents("$dir/index.json", json_encode(['version' => 1, 'resources' =>
 chmod("$dir/index.json", 0600);
 chmod($dir, 0700);
 """
-# The update command's entry with the Core socket of the second Core: argv is the socket, the request file and the
-# result file; the exit status is what the update command exits with.
+# The update command's entry with the Core socket of the second Core: argv is the socket, the request file, the result
+# file and a file that gets one JSON line per fetch (the reply's kind, and whether it fell back to the full body); the
+# exit status is what the update command exits with.
 APPLY_PHP = r"""<?php
 require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
-[, $socket, $request, $result] = $argv;
+[, $socket, $request, $result, $kinds] = $argv;
 $pfb['core_socket'] = $socket;
-exit(pfb_core_update_serve((string) file_get_contents($request), $result));
+$fetch = static function (mixed ...$args) use ($kinds): array {
+    $got = pfb_outpost_fetch(...$args);
+    $line = json_encode(['kind' => $got['kind'], 'fellBack' => $got['fellBack']]);
+    file_put_contents($kinds, "{$line}\n", FILE_APPEND);
+    return $got;
+};
+exit(pfb_core_update_serve((string) file_get_contents($request), $result, ['fetch' => $fetch]));
 """
 
 
@@ -115,14 +122,33 @@ def apply(vm: SmokeVM, api: str, request: dict[str, Any], *, locked: bool = Fals
     wait = f"until grep -q held {WORK}/lock.out 2>/dev/null; do sleep 1; done; " if locked else ""
     release = "; echo >&9" if locked else ""
     run = vm.ssh(
-        f"{pre}{wait}printf %s {shlex.quote(json.dumps(request))} > {WORK}/request.json && rm -f {WORK}/result && "
-        f"{PHP} {WORK}/apply.php {api} {WORK}/request.json {WORK}/result; rc=$?{release}; "
+        f"{pre}{wait}printf %s {shlex.quote(json.dumps(request))} > {WORK}/request.json && "
+        f"rm -f {WORK}/result {WORK}/kinds && "
+        f"{PHP} {WORK}/apply.php {api} {WORK}/request.json {WORK}/result {WORK}/kinds; rc=$?{release}; "
         f"echo; echo RC=$rc; cat {WORK}/result 2>/dev/null",
         timeout=600,
     )
     tail = run.stdout.split("\nRC=", 1)[1]
     status, _, lines = tail.partition("\n")
     return int(status), [json.loads(line) for line in lines.splitlines() if line.strip()]
+
+
+def fetched(vm: SmokeVM) -> list[dict[str, Any]]:
+    """What each fetch of the last apply got: the reply's kind, and whether it fell back to the full body."""
+    out = vm.ssh(f"cat {WORK}/kinds 2>/dev/null", timeout=30).stdout
+    return [json.loads(line) for line in out.splitlines() if line.strip()]
+
+
+def seed_generation_one(vm: SmokeVM) -> None:
+    """The table, its mirror and the cursor file at generation 1."""
+    seeded = vm.ssh(
+        f"printf %s {shlex.quote(body(GEN1))} > {MIRROR} && pfctl -t {ALIAS} -T replace -f {MIRROR} && "
+        f'{PHP} -r \'echo json_encode(["schema" => 1, "resources" => ["{RID}" => ["generation" => "1", '
+        f'"digest" => hash_file("xxh128", "{MIRROR}"), "entries" => {len(GEN1)}]]], JSON_UNESCAPED_SLASHES);\' '
+        f"> {CURSORS}",
+        timeout=60,
+    )
+    assert seeded.returncode == 0, seeded.stdout + seeded.stderr
 
 
 def request(generation: str, entries: int) -> dict[str, Any]:
@@ -156,17 +182,11 @@ def test_with_no_cursor_the_full_body_becomes_the_table(apply_vm: tuple[SmokeVM,
 
 def test_a_cursor_at_generation_one_applies_the_delta(apply_vm: tuple[SmokeVM, str]) -> None:
     vm, api = apply_vm
-    seeded = vm.ssh(
-        f"printf %s {shlex.quote(body(GEN1))} > {MIRROR} && pfctl -t {ALIAS} -T replace -f {MIRROR} && "
-        f'{PHP} -r \'echo json_encode(["schema" => 1, "resources" => ["{RID}" => ["generation" => "1", '
-        f'"digest" => hash_file("xxh128", "{MIRROR}"), "entries" => {len(GEN1)}]]], JSON_UNESCAPED_SLASHES);\' '
-        f"> {CURSORS}",
-        timeout=60,
-    )
-    assert seeded.returncode == 0, seeded.stdout + seeded.stderr
+    seed_generation_one(vm)
     assert sorted(h.pfctl_table_members(vm, ALIAS)) == sorted(GEN1), "before: the table holds generation 1"
     status, lines = apply(vm, api, request("2", len(GEN2)))
     assert status == 0, lines
+    assert fetched(vm) == [{"kind": "delta", "fellBack": False}], "the delta from generation 1, not the full body"
     assert lines[-1].get("applied") == {RID: "2"}, lines
     assert lines[-1].get("changedAliases") == [ALIAS], lines
     assert sorted(h.pfctl_table_members(vm, ALIAS)) == sorted(GEN2), "pfctl -T show equals the canonical set"
@@ -180,8 +200,12 @@ def test_a_cursor_at_generation_one_applies_the_delta(apply_vm: tuple[SmokeVM, s
 
 def test_a_held_apply_lock_defers_with_no_result_line(apply_vm: tuple[SmokeVM, str]) -> None:
     vm, api = apply_vm
+    # a cursor older than the request: an apply that moved it while locked would change it
+    seed_generation_one(vm)
     before = vm.ssh(f"cat {CURSORS} 2>/dev/null", timeout=30).stdout
+    assert json.loads(before)["resources"][RID]["generation"] == "1", "before: the cursor is at generation 1"
     status, lines = apply(vm, api, request("2", len(GEN2)), locked=True)
     assert status == 75, lines
     assert lines == []
     assert vm.ssh(f"cat {CURSORS} 2>/dev/null", timeout=30).stdout == before, "no cursor moved"
+    assert fetched(vm) == [], "nothing was fetched"
