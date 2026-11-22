@@ -15517,7 +15517,9 @@ function pfb_pfctl_op_failed(string $op, int $rc, string $stderr): bool {
 // On failure (non-zero rc or pfctl error output) logs one attributed line via pfb_logger().
 // $pfctl_bin defaults to $pfb['pfctl']; pass explicitly when the binary is a
 // per-call parameter (e.g. pfb_apply_alias_delta, which accepts a mock binary in tests).
-function pfb_pfctl_table_op(string $table, string $op, string $args = '', string $pfctl_bin = ''): array {
+// $close_on_success FALSE leaves an open ip/<table>/apply entry open on success: a run of several calls passes it once
+// one of its calls failed (issue #4189).
+function pfb_pfctl_table_op(string $table, string $op, string $args = '', string $pfctl_bin = '', bool $close_on_success = TRUE): array {
 	global $pfb;
 	if ($pfctl_bin === '') {
 		$pfctl_bin = $pfb['pfctl'];
@@ -15533,7 +15535,7 @@ function pfb_pfctl_table_op(string $table, string $op, string $args = '', string
 		pfb_logger(pfb_pfctl_error_message($table, $op, $rc, $stderr) . "\n", 2);
 		// ADR-61: sync-status ledger -- every $table here is a pfB_* IP alias table.
 		pfb_sync_status_open('ip', $table, 'apply', pfb_pfctl_error_message($table, $op, $rc, $stderr), $pfb['dbdir']);
-	} else {
+	} elseif ($close_on_success) {
 		pfb_sync_status_close('ip', $table, 'apply', $pfb['dbdir']);
 	}
 	return ['out' => $out, 'rc' => $rc, 'failed' => $failed];
@@ -16208,7 +16210,8 @@ function pfb_apply_alias_delta(
  * cannot be opened, holds a line that is not a member of the family (an empty line and a CRLF line included), holds a
  * line longer than an IP set member, or holds another number of lines than its count sends nothing. Then the adds and the
  * deletes go to pfctl in batches of $batch_size (clamped to [64, 4096]), each in a batch file of mode 0600 that pfctl reads
- * with -f, so a member is never an argument; a failed batch leaves the remaining ones sent. The second pass, which feeds
+ * with -f, so a member is never an argument; a failed batch leaves the remaining ones sent, and the ip/<table>/apply ledger
+ * entry open when the run returns, with the last failure's message, whatever later batches did. The second pass, which feeds
  * pfctl, checks each line again and the count at the end, against a file that changes between the two passes: on a bad line
  * the sending stops, on a wrong count it ends; the batches already sent stay applied and ok is FALSE. A final line without
  * a newline is accepted; that a file is complete is pfb_outpost_part_check()'s and the digest's job, not this function's.
@@ -16334,7 +16337,9 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 	}
 
 	$tmpdir = $tmpdir === '' ? sys_get_temp_dir() : $tmpdir;
-	$push   = static function (string $op, array $chunk) use ($table, $pfctl_bin, $tmpdir): bool {
+	// once a batch failed, the entry stays open until the run returns: a later batch that succeeds does not close it
+	$failed = FALSE;
+	$push   = static function (string $op, array $chunk) use ($table, $pfctl_bin, $tmpdir, &$failed): bool {
 		global $pfb;
 		$data = implode("\n", $chunk) . "\n";
 		// 'x': a fresh file of this run's own, never one that is already there
@@ -16352,7 +16357,9 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 				$written = fwrite($fh, $data) === strlen($data);
 				$written = fclose($fh) && $written;
 				if ($written) {
-					return !pfb_pfctl_table_op($table, $op, '-f ' . escapeshellarg($path), $pfctl_bin)['failed'];
+					$sent   = !pfb_pfctl_table_op($table, $op, '-f ' . escapeshellarg($path), $pfctl_bin, !$failed)['failed'];
+					$failed = $failed || !$sent;
+					return $sent;
 				}
 			} finally {
 				@unlink($path);
@@ -16362,6 +16369,7 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 		pfb_logger("{$message}\n", 1);
 		// the table is now behind its mirror, as after a failed call: open the entry pfb_pfctl_table_op() opens, for the tick's retry
 		pfb_sync_status_open('ip', $table, 'apply', trim($message) . ': the batch file failed', $pfb['dbdir']);
+		$failed = TRUE;
 		return FALSE;
 	};
 
