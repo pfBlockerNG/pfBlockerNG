@@ -44,7 +44,10 @@ declare(strict_types=1);
  * what pfb_apply_dns() reports, `active` turns DNSBL, pfB-DNS and the Resolver on in $pfb for the steps after it), `unbound`
  * ({effect}: what the Resolver reload does besides recording its call: `flag` sets
  * $pfb['dnsbl_accounting_failed'], `marker` writes the `accounting` retry marker), `cache` (TRUE: the DNSBL archive records
- * its call) and `fetchThrowAt` (the n-th fetch, from 1, throws). The record adds `seamCalls`. Its record is not compacted and adds the exit status, the result lines, the cursor file, the
+ * its call) and `fetchThrowAt` (the n-th fetch, from 1, throws), `reportFails` (TRUE: the result line cannot be written). Before the apply,
+ * `unlock` (TRUE: a DNSBL temporary-unlock store exists), `retryMarker` (TRUE: the `accounting` retry marker exists),
+ * `publishFailed` (TRUE: a stale dnsbl_publish_failed flag) and `statsFail` (TRUE: the DNSBL statistics database cannot be opened).
+ * The record adds `seamCalls` and `retryMarker` (the marker's text, NULL: none). Its record is not compacted and adds the exit status, the result lines, the cursor file, the
  * requests Core received, the notices filed, the DNSBL statistics rows and the GeoIP pages.
  */
 
@@ -420,6 +423,16 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 		}
 	}
 	$calls = ['unbound' => [], 'cache' => 0];
+	if (!empty($apply['unlock'])) {
+		file_put_contents($pfb['dnsbl_unlock'], "example.com\n");
+	}
+	if (!empty($apply['retryMarker'])) {
+		file_put_contents("{$pfb['dnsbl_file']}.reload", 'accounting');
+	}
+	$pfb['dnsbl_publish_failed'] = !empty($apply['publishFailed']);
+	if (!empty($apply['statsFail'])) {
+		$pfb['dnsbl_info'] = "{$work}/no/such/dir/dnsbl.sqlite";
+	}
 	$want = $apply['seams'] ?? [];
 	$seams = [];
 	if (isset($want['dns'])) {
@@ -449,6 +462,9 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 			$calls['cache']++;
 			$calls['cacheMode'] = $mode;
 		};
+	}
+	if (!empty($want['reportFails'])) {
+		$seams['report'] = static fn ($out, array $report): bool => FALSE;
 	}
 	if (isset($want['fetchThrowAt'])) {
 		$fetches = 0;
@@ -483,6 +499,7 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 	return [$status, [
 		'exit'         => $status,
 		'seamCalls'    => $calls,
+		'retryMarker'  => @file_get_contents("{$pfb['dnsbl_file']}.reload") ?: NULL,
 		'resultLines'  => is_file("{$work}/result") ? array_map(static fn (string $line): mixed => json_decode($line, TRUE),
 			corpus_lines("{$work}/result")) : NULL,
 		'cursors'      => is_file($cursors) ? json_decode((string) file_get_contents($cursors), TRUE) : NULL,

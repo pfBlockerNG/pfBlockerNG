@@ -936,6 +936,92 @@ final class OutpostApplyTest extends TestCase
 		$this->assertSame('failed', $r['applyRecord']['outcome'] ?? NULL);
 	}
 
+	/** @return array{dnsbl: array<string, mixed>} the groups of a DNSBL request, so its statistics are written */
+	private static function dnsblGroups(): array
+	{
+		return ['dnsbl' => ['generation' => '9', 'groups' => [['name' => 'Ads', 'entries' => 120, 'changed' => FALSE]]]];
+	}
+
+	/** @return array<string, array{0: array<string, mixed>, 1: array<string, mixed>}> what is stored before the apply and the DNS step reports => the Resolver reloads */
+	public static function reloadsTheDnsStepDoesNotReport(): array
+	{
+		return [
+			'a temporary unlock is stored'    => [['unlock' => TRUE], ['mode' => 'enabled']],
+			'an accounting retry is recorded' => [['retryMarker' => TRUE], ['mode' => 'enabled']],
+		];
+	}
+
+	/** WHEN a temporary unlock is stored or an accounting retry is recorded THEN the Resolver reloads although the DNS step reports no change. */
+	#[DataProvider('reloadsTheDnsStepDoesNotReport')]
+	public function testTheResolverReloadsForAnUnlockOrARetryTheDnsStepDoesNotReport(array $before, array $dns): void
+	{
+		$r = $this->applyOnce(['apply' => $before + ['request' => self::request([], ['scope' => 'dnsbl'] + self::dnsblGroups()),
+			'seams' => ['dns' => $dns, 'unbound' => []]]]);
+
+		$this->assertSame([['enabled', FALSE, FALSE]], $r['seamCalls']['unbound'], $r['log']);
+	}
+
+	/** WHEN the accounting retry marker is stale and the apply's own accounting succeeded and the reload converged THEN the marker is cleared and the apply exits 0, as does the next one. */
+	public function testTheAccountingRetryMarkerIsClearedOnceTheReloadConverged(): void
+	{
+		$apply = ['apply' => ['request' => self::request([], ['scope' => 'dnsbl'] + self::dnsblGroups()),
+			'seams' => ['dns' => ['mode' => 'disabled'], 'unbound' => []]]];
+		[, $first, $second] = $this->runSteps([self::prime([self::group('Abuse')]),
+			['apply' => ['retryMarker' => TRUE] + $apply['apply']], $apply]);
+
+		$this->assertSame(0, $first['exit'], $first['log']);
+		$this->assertNull($first['retryMarker'], 'the stale marker is cleared');
+		$this->assertSame(0, $second['exit'], $second['log']);
+	}
+
+	/** WHEN the reload did not converge THEN the marker stays and the changes stay pending. */
+	public function testTheAccountingRetryMarkerStaysWhileTheReloadHasNotConverged(): void
+	{
+		$r = $this->applyOnce(['apply' => ['retryMarker' => TRUE, 'request' => self::request([], ['scope' => 'dnsbl'] + self::dnsblGroups()),
+			'seams' => ['dns' => ['mode' => 'enabled'], 'unbound' => []]]]);
+
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertSame('accounting', $r['retryMarker']);
+	}
+
+	/** WHEN the DNSBL statistics cannot be written THEN the Resolver is not reloaded, as in the pass, and the apply exits 1; a stale publish flag does not suppress a reload. */
+	public function testAFailedStatisticsStepSuppressesTheReloadAndAStalePublishFlagDoesNot(): void
+	{
+		$request = self::request([], ['scope' => 'dnsbl'] + self::dnsblGroups());
+		$seams = ['dns' => ['mode' => 'enabled', 'update' => TRUE], 'unbound' => []];
+		$failed = $this->applyOnce(['apply' => ['statsFail' => TRUE, 'request' => $request, 'seams' => $seams]]);
+		$stale = $this->applyOnce(['apply' => ['publishFailed' => TRUE, 'request' => $request, 'seams' => $seams]]);
+
+		$this->assertSame(1, $failed['exit'], $failed['log']);
+		$this->assertSame([], $failed['seamCalls']['unbound'], 'no reload after the failed statistics');
+		$this->assertCount(1, $stale['seamCalls']['unbound'], 'the flag of an earlier run is reset: ' . $stale['log']);
+	}
+
+	/** WHEN the apply defers (a lock is held, Core does not answer) THEN it marks nothing pending. */
+	#[DataProvider('deferrals')]
+	public function testADeferredApplyLeavesThePendingStateAlone(array $apply): void
+	{
+		$r = $this->applyOnce(self::at([self::ABUSE => ['1', self::OLD]]) + ['apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)])] + $apply]);
+
+		$this->assertSame(PFB_EXIT_LOCKED, $r['exit'], $r['log']);
+		$this->assertFalse($r['pending'], 'the deferral does not mark changes pending');
+		$this->assertFalse($r['ledgerPending'], 'nor the due flag');
+	}
+
+	/** WHEN the result line cannot be written THEN the apply record says failed, not applied, and the changes stay pending. */
+	public function testAnUnwrittenResultLineIsNotRecordedAsApplied(): void
+	{
+		$apply = self::at([self::ABUSE => ['2', self::OLD]]) + ['pendingToken' => 'tok-6', 'openRecord' => TRUE, 'apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)], ['pendingToken' => 'tok-6']),
+			'core' => [self::unchanged(self::ABUSE, '2')], 'seams' => ['reportFails' => TRUE]]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertTrue($r['pending']);
+		$this->assertSame('failed', $r['applyRecord']['outcome'] ?? NULL);
+	}
+
 	/** WHEN the apply does not complete THEN the due flag is set again, whatever the trigger. */
 	#[DataProvider('triggersOfAnApply')]
 	public function testAnApplyThatFailsKeepsTheDueFlagForEveryTrigger(string $trigger): void
