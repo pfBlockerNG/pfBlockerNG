@@ -17,11 +17,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedparse"
@@ -50,8 +52,9 @@ type Feed struct {
 	Format string // auto, regex, geoip, whois, asn or rsync
 	Source string // the URL; a geoip feed's country code; a whois or asn feed's list
 
-	Username, Password    string // the source's own credentials
-	PreScript, PostScript string // file names, looked up in Paths.ScriptDirs
+	Username, Password    string     // the source's own credentials
+	BindAddress           netip.Addr // the source address of the transfer (the settings' bindAddress); the zero value is none
+	PreScript, PostScript string     // file names, looked up in Paths.ScriptDirs
 
 	Custom          bool
 	CustomText      string // the custom list, decoded
@@ -90,6 +93,26 @@ type Stage struct {
 	// Log takes the parser's notices and the scripts' runner lines; the post-script's output also goes to Errors and
 	// Transcript as feedparse.PostScript writes it. A nil writer discards.
 	Log, Errors, Transcript io.Writer
+	// ParseErrors takes one record per parse failure, as pfb_parse_fail_log() writes them; the caller owns the file and its
+	// cap. A nil writer discards.
+	ParseErrors io.Writer
+}
+
+// Verdict is stage 6's change detection answer for a transferred feed (sub-slice 9d produces it): Run never probes.
+type Verdict string
+
+const (
+	VerdictChanged   Verdict = "changed"   // Run ingests, which consumes the probe body stage 6 kept
+	VerdictUnchanged Verdict = "unchanged" // Run keeps the download and follows the reuse rule
+	VerdictFailed    Verdict = "failed"    // Run fails the feed at the probe with Change.Reason
+)
+
+// Change is Run's input from stage 6 and the request. The verdict is required when Force is none and read only then, for a
+// transferred feed: a custom list compares its own text and a whois feed is resolved again every run.
+type Change struct {
+	Verdict Verdict
+	Reason  string // a failed verdict's reason, feedfetch's; reported only when it names no path or credential
+	Force   string // none, parse (from the baseline), download, or both (download and drop the digests too)
 }
 
 // step is a test seam: called at the named boundaries of a run. Production never sets it.
@@ -101,11 +124,10 @@ func failedFeed(id, stage, reason string) Result {
 	return Result{ID: id, Disposition: "failed", Stage: stage, Reason: reason}
 }
 
-// Run runs one feed. force is the Update's: none, parse (from the baseline), download or both (download and drop the
-// digests too).
-func (s *Stage) Run(ctx context.Context, f Feed, force string) (result Result) {
+// Run runs one feed with stage 6's verdict and the Update's force.
+func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) {
 	result = Result{ID: f.ID}
-	if reason := s.validate(f); reason != "" {
+	if reason := s.validate(f, change); reason != "" {
 		return failedFeed(f.ID, "settings", reason)
 	}
 	if f.State == "disabled" {
@@ -119,6 +141,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, force string) (result Result) {
 	feed := feedfetch.Feed{Dir: dir, Name: f.Name}
 	origPath := feedPath(feed, ".orig")
 	hasOrig := regularExists(origPath)
+	force := change.Force
 	if force == "parse" && !hasOrig {
 		force = "download"
 	}
@@ -192,11 +215,10 @@ func (s *Stage) Run(ctx context.Context, f Feed, force string) (result Result) {
 				return failedFeed(f.ID, "settings", reason)
 			}
 			if force == "none" {
-				probe := s.Fetcher.Probe(ctx, feed, request)
-				switch {
-				case !probe.OK || probe.Decision == feedfetch.Failed:
-					return failedFeed(f.ID, "probe", s.safeReason(probe.Reason, "feed_probe_failed", f))
-				case probe.Decision == feedfetch.Unchanged:
+				switch change.Verdict {
+				case VerdictFailed:
+					return failedFeed(f.ID, "probe", s.safeReason(change.Reason, "feed_probe_failed", f))
+				case VerdictUnchanged:
 					// NormalizeFile below decides whether the cached artifacts are reusable.
 				default:
 					backup, backupErr = snapshotPaths(feedStatePaths(feed))
@@ -242,9 +264,14 @@ func (s *Stage) Run(ctx context.Context, f Feed, force string) (result Result) {
 	return result
 }
 
-// validate refuses a feed whose folders or name could reach outside what the caller named.
-func (s *Stage) validate(f Feed) string {
+// validate refuses a feed whose folders or name could reach outside what the caller named, and an input Run does not know.
+func (s *Stage) validate(f Feed, change Change) string {
+	known := map[Verdict]bool{VerdictChanged: true, VerdictUnchanged: true, VerdictFailed: true}
 	switch {
+	case change.Force != "none" && change.Force != "parse" && change.Force != "download" && change.Force != "both":
+		return "force_invalid"
+	case !known[change.Verdict] && (change.Force == "none" || change.Verdict != ""):
+		return "verdict_invalid"
 	case s.Fetcher == nil:
 		return "fetcher_missing"
 	case s.Paths.FeedDir == "":
@@ -262,7 +289,7 @@ func (s *Stage) validate(f Feed) string {
 
 func (s *Stage) request(f Feed) (feedfetch.Request, string) {
 	request := feedfetch.Request{Rsync: f.Format == "rsync", Flex: f.State == "flex", Username: f.Username, Password: f.Password,
-		URL: f.Source}
+		URL: f.Source, BindAddr: f.BindAddress}
 	switch {
 	case f.Source == "":
 		return request, "feed_source_invalid"
@@ -350,6 +377,10 @@ func (s *Stage) parseAndPublish(ctx context.Context, f Feed, feed feedfetch.Feed
 		Fail: func(record feedparse.FailRecord) {
 			if s.Log != nil {
 				fmt.Fprintf(s.Log, "feed %s: parse failure at line %d\n", f.ID, record.LineNo)
+			}
+			if s.ParseErrors != nil {
+				fmt.Fprintf(s.ParseErrors, "%s,%s,%s,%s,%d\n", time.Now().Format(time.DateTime), f.Name, record.Line, record.Raw,
+					record.LineNo)
 			}
 		},
 	}
