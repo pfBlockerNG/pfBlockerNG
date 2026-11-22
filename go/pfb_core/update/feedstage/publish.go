@@ -38,20 +38,30 @@ type snapshotItem struct {
 	existed        bool
 }
 
+// The file operations of a run and of Recover go through these, so that a test can stop at each one (step "op:<name>").
+func rename(from, to string) error { step("op:rename"); return os.Rename(from, to) }
+func remove(path string) error     { step("op:remove"); return os.Remove(path) }
+func link(from, to string) error   { step("op:link"); return os.Link(from, to) }
+func truncate(path string) error   { step("op:truncate"); return os.Truncate(path, 0) }
+func createTemp(dir string) (*os.File, error) {
+	step("op:create")
+	return os.CreateTemp(dir, stagePrefix)
+}
+
 func regularExists(path string) bool {
 	info, err := os.Lstat(path)
 	return err == nil && info.Mode().IsRegular()
 }
 
 func removeIfExists(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	return nil
 }
 
 func stageOutput(dir string, write func(io.Writer) error) (string, error) {
-	file, err := os.CreateTemp(dir, stagePrefix)
+	file, err := createTemp(dir)
 	if err != nil {
 		return "", err
 	}
@@ -59,7 +69,7 @@ func stageOutput(dir string, write func(io.Writer) error) (string, error) {
 	ok := false
 	defer func() {
 		if !ok {
-			os.Remove(name)
+			remove(name)
 		}
 	}()
 	if err = write(file); err == nil {
@@ -100,7 +110,7 @@ func publishStaged(dir string, files []stagedFeedFile) error {
 	}
 	committed := 0
 	for i, file := range files {
-		if err := os.Rename(file.temp, filepath.Join(dir, file.name)); err != nil {
+		if err := rename(file.temp, filepath.Join(dir, file.name)); err != nil {
 			return backup.undo(committed, err)
 		}
 		committed = i + 1
@@ -175,16 +185,16 @@ func backupFile(source string, mode fs.FileMode) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(staged)
+	defer remove(staged)
 	step("backup:" + filepath.Base(source))
 	for range 100 {
 		backup := filepath.Join(filepath.Dir(source), "."+filepath.Base(source)+backupMark+strconv.FormatUint(rand.Uint64(), 36))
-		err := os.Link(staged, backup)
+		err := link(staged, backup)
 		if errors.Is(err, fs.ErrExist) {
 			continue
 		}
 		if err != nil { // a folder without hard links: a rename names the whole copy as well
-			if err := os.Rename(staged, backup); err != nil {
+			if err := rename(staged, backup); err != nil {
 				return "", err
 			}
 		}
@@ -197,16 +207,16 @@ func backupFile(source string, mode fs.FileMode) (string, error) {
 // old bytes; a synced copy is the fallback.
 func stagedCopy(source string, mode fs.FileMode) (string, error) {
 	dir := filepath.Dir(source)
-	file, err := os.CreateTemp(dir, stagePrefix)
+	file, err := createTemp(dir)
 	if err != nil {
 		return "", err
 	}
 	name := file.Name()
 	file.Close()
-	if os.Remove(name) == nil && os.Link(source, name) == nil {
+	if remove(name) == nil && link(source, name) == nil {
 		return name, nil
 	}
-	os.Remove(name)
+	remove(name)
 	name, err = stageOutput(dir, func(w io.Writer) error {
 		input, err := os.Open(source)
 		if err != nil {
@@ -218,7 +228,7 @@ func stagedCopy(source string, mode fs.FileMode) (string, error) {
 	})
 	if err == nil {
 		if err = os.Chmod(name, mode); err != nil {
-			os.Remove(name)
+			remove(name)
 		}
 	}
 	return name, err
@@ -240,7 +250,7 @@ func (s *pathSnapshot) keepAbsent(paths ...string) {
 			if item.target == path {
 				item.existed = false
 				if item.backup != "" {
-					os.Remove(item.backup)
+					remove(item.backup)
 					item.backup = ""
 				}
 				break
@@ -254,7 +264,7 @@ func (s *pathSnapshot) restoreThrough(n int) error {
 	for i := n - 1; i >= 0; i-- {
 		item := &s.items[i]
 		if item.existed {
-			if err := os.Rename(item.backup, item.target); err != nil {
+			if err := rename(item.backup, item.target); err != nil {
 				if first == nil {
 					first = err
 				}
@@ -271,7 +281,7 @@ func (s *pathSnapshot) restoreThrough(n int) error {
 func (s *pathSnapshot) discard() {
 	for _, item := range s.items {
 		if item.backup != "" {
-			os.Remove(item.backup)
+			remove(item.backup)
 		}
 	}
 }
@@ -312,9 +322,9 @@ func Recover(dir string) error {
 		if stem, ok := strings.CutSuffix(e.Name(), restorePoint); ok && validFeedWord(stem) {
 			path := filepath.Join(dir, e.Name())
 			if e.Type().IsRegular() {
-				errs = append(errs, os.Rename(path, filepath.Join(dir, stem+".orig")))
+				errs = append(errs, rename(path, filepath.Join(dir, stem+".orig")))
 			} else {
-				errs = append(errs, os.Remove(path))
+				errs = append(errs, remove(path))
 			}
 		}
 	}
@@ -327,10 +337,10 @@ func Recover(dir string) error {
 		}
 		path := filepath.Join(dir, e.Name())
 		if !e.Type().IsRegular() {
-			errs = append(errs, os.Remove(path))
+			errs = append(errs, remove(path))
 			continue
 		}
-		errs = append(errs, os.Rename(path, filepath.Join(dir, target)))
+		errs = append(errs, rename(path, filepath.Join(dir, target)))
 		restored[target], putBack[stem] = true, true
 	}
 	for stem := range putBack {

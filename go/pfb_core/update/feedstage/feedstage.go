@@ -198,7 +198,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 				if err != nil {
 					return failedFeed(f.ID, "fetch", "custom_source_unavailable")
 				}
-				defer os.Remove(staged)
+				defer remove(staged)
 				step("custom-staged")
 				if publishStaged(dir, []stagedFeedFile{{name: f.Name + ".orig", temp: staged}}) != nil {
 					return failedFeed(f.ID, "fetch", "custom_source_unavailable")
@@ -426,7 +426,7 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input 
 	if err != nil {
 		return failedFeed(f.ID, "parse", "ip_parse_failed")
 	}
-	defer os.Remove(staged)
+	defer remove(staged)
 	// One summary line per feed, today's (pfb_ip_parse_fail_warn()); the records went to ParseErrors.
 	if parsed.ParseFail > 0 {
 		s.sinks().Line(true, "\n[!] Parse Errors [ %s ]: %d\n", f.Name, parsed.ParseFail)
@@ -448,7 +448,7 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input 
 		parsed.Placeholder = again.Placeholder
 	}
 	if parsed.Placeholder != "" {
-		if err := os.Truncate(staged, 0); err != nil {
+		if err := truncate(staged); err != nil {
 			return failedFeed(f.ID, "parse", "ip_parse_failed")
 		}
 	}
@@ -475,7 +475,7 @@ func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, inp
 	if err != nil {
 		return failedFeed(f.ID, "parse", "dnsbl_parse_failed")
 	}
-	defer os.Remove(stagedNDJSON)
+	defer remove(stagedNDJSON)
 	var files []stagedFeedFile
 	for _, side := range []struct {
 		suffix string
@@ -485,7 +485,7 @@ func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, inp
 		if err != nil {
 			return failedFeed(f.ID, "parse", "dnsbl_parse_failed")
 		}
-		defer os.Remove(staged)
+		defer remove(staged)
 		files = append(files, stagedFeedFile{name: feed.Name + side.suffix, temp: staged})
 	}
 
@@ -529,7 +529,7 @@ func publishParsed(feed feedfetch.Feed, files []stagedFeedFile, source string) e
 	if err != nil {
 		return err
 	}
-	defer os.Remove(record)
+	defer remove(record)
 	return publishStaged(feed.Dir, append(files, stagedFeedFile{name: feed.Name + parsedSource + "." + digest.XXH128, temp: record}))
 }
 
