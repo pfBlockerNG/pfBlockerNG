@@ -44,7 +44,9 @@ namespace {
 	 * namespace PfbWorklistCorpus, where the pass it ends with (sync_package_pfblockerng()) is recorded instead of run and
 	 * each check is recorded before today's pfb_update_check() makes it. A manual Update without a Force Check and an apply
 	 * go straight to the pass, which is recorded with its scope and force: for them the change of a feed is today's reuse
-	 * rule over its markers (an update or fail marker, or no list: downloaded; else reused), or parse for a Reload. The Go
+	 * rule over its markers (an update or fail marker, or no list: downloaded; else reused; a geoip feed downloaded after a
+	 * GeoIP change, the update marker pfblockerng_apply.inc touches for geoip.update), or parse for a Reload. A pending
+	 * decision leaves the feeds with an update marker to the apply. The Go
 	 * runner (go/pfb_core/update/worklist/corpus_test.go) replays the same file; where Core differs on purpose a case
 	 * holds today's answer in old_expect, which this runner asserts.
 	 */
@@ -166,7 +168,7 @@ namespace {
 		 * stem, its folders and whether today's walk visits it.
 		 *
 		 * @param array<string, mixed> $case
-		 * @return list<array{id: string, kind: string, name: string, list: string, orig: string, walked: bool, run: bool}>
+		 * @return list<array{id: string, kind: string, name: string, format: string, list: string, orig: string, walked: bool, run: bool}>
 		 */
 		private function feeds(array $case): array
 		{
@@ -179,7 +181,7 @@ namespace {
 					foreach ($group['feeds'] as $feed) {
 						$name = $feed['header'] . self::suffix($group);
 						$enabled = $group['action'] !== 'Disabled' && $feed['state'] !== 'disabled';
-						$out[] = ['id' => "{$kind}:{$name}", 'kind' => $kind, 'name' => $name, 'walked' => $enabled && $group['frequency'] !== 'Never',
+						$out[] = ['id' => "{$kind}:{$name}", 'kind' => $kind, 'name' => $name, 'format' => $feed['format'], 'walked' => $enabled && $group['frequency'] !== 'Never',
 							'run' => $enabled, 'list' => $kind === 'dnsbl' ? "{$this->root}/dns" : "{$this->root}/deny",
 							'orig' => $kind === 'dnsbl' ? "{$this->root}/dnsorig" : "{$this->root}/orig"];
 					}
@@ -274,6 +276,9 @@ namespace {
 			if ($case['pendingApply'] ?? FALSE) {
 				pfb_mark_pending_changes();
 			}
+			if ($case['geoipChanged'] ?? FALSE) {
+				touch("{$pfb['dbdir']}/geoip.update");
+			}
 		}
 
 		/** @param array<string, mixed> $case */
@@ -317,19 +322,23 @@ namespace {
 						$changes[$f['id']] = $marker($f, 'update') || !$listed ? 'changed' : ($marker($f, 'fail') ? 'failed' : 'unchanged');
 					}
 				} elseif ($direct !== [] && $f['run'] && $inScope($f)) {
+					$geoip = $f['format'] === 'geoip' && file_exists("{$pfb['dbdir']}/geoip.update");
 					$changes[$f['id']] = $direct[0]['force'] ? 'parse'
-						: ($marker($f, 'update') || $marker($f, 'fail') || !$listed ? 'changed' : 'unchanged');
+						: ($geoip || $marker($f, 'update') || $marker($f, 'fail') || !$listed ? 'changed' : 'unchanged');
 				}
 			}
 			$outcomes = array_filter($pfb['scheduled_outcomes'] ?? [], static fn(string $id): bool => !str_starts_with($id, 'extra:'),
 				ARRAY_FILTER_USE_KEY);
+			$apply = $GLOBALS['pfb_worklist_sync'] !== [] ? 'now' : (pfb_due_ledger_is_pending('cron', $pfb['dbdir']) ? 'pending' : 'nothing');
 			$got = [
 				'checked' => $GLOBALS['pfb_worklist_checked'],
 				'outcomes' => $outcomes,
 				'changes' => $changes,
 				'fail' => array_values(array_map(static fn(array $f): string => $f['id'], array_filter($feeds, static fn(array $f): bool => $marker($f, 'fail')))),
 				'stopped' => [],
-				'apply' => $GLOBALS['pfb_worklist_sync'] !== [] ? 'now' : (pfb_due_ledger_is_pending('cron', $pfb['dbdir']) ? 'pending' : 'nothing'),
+				'apply' => $apply,
+				'pending' => $apply !== 'pending' ? [] : array_values(array_map(static fn(array $f): string => $f['id'],
+					array_filter($feeds, static fn(array $f): bool => $marker($f, 'update')))),
 			];
 			$want = array_merge($case['expect'], $case['old_expect'] ?? []);
 			ksort($got);
