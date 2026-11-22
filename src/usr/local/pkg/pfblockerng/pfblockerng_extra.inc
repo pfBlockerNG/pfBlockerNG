@@ -8825,7 +8825,13 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 				return $result;
 			}
 
-			@file_put_contents("{$pfb['aliasdir']}/{$table}.txt", "\n{$ip}", LOCK_EX);
+			// issue #4200: the alias file is the table's last-applied mirror, which a filter reload loads the table from. Add the
+			// IP to it; never create one: without a mirror pfSense loads the whole list from the alias URL.
+			$mirror = "{$pfb['aliasdir']}/{$table}.txt";
+			$applied = is_file($mirror) ? @file_get_contents($mirror) : FALSE;
+			if ($applied !== FALSE) {
+				pfb_write_canonical_alias($mirror, pfb_canonical_alias_set("{$applied}\n{$ip}"));
+			}
 			$whitelist_string = !empty($descr) ? "{$ip} # {$descr}\r\n" : "{$ip}\r\n";
 			$custom = '';
 			foreach ($data as $line) {
