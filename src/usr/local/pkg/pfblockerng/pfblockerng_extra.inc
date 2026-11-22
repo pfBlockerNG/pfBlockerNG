@@ -7013,6 +7013,445 @@ function pfb_core_update_v2_result(array $report): string
 	return $written;
 }
 
+// issue #4037 (slice 8e): the Outpost apply of a version 2 request. Contract: docs/misc/core-api-protocol.md, "Update command,
+// version 2"; behaviour: OutpostApplyTest.
+const PFB_OUTPOST_CATALOG_FILE = 'pfb_geo_catalog.jsonl';	// the geo-catalog's mirror, in the database folder
+const PFB_OUTPOST_ISSUES_FILE = 'pfb_outpost_issues.json';	// the ledger entries the apply opened for Core's issues
+
+/** The version of the request on stdin; NULL when it is not one JSON object. */
+function pfb_core_update_version(string $stdin): mixed
+{
+	try {
+		return pfb_core_update_object($stdin)['version'] ?? NULL;
+	} catch (InvalidArgumentException) {
+		return NULL;
+	}
+}
+
+/** Serve a version 2 request: validated whole (exit 2, nothing runs and no result is written when it is refused), then applied. */
+function pfb_outpost_apply_serve(string $stdin, string $resultPath): int
+{
+	try {
+		$request = pfb_core_update_v2_request($stdin);
+	} catch (InvalidArgumentException $e) {
+		pfb_logger("\nCore Update request refused: {$e->getMessage()}\n", 2);
+		return 2;
+	}
+	$out = @fopen($resultPath, 'wb');
+	if ($out === FALSE) {
+		pfb_logger("\nCore Update: the result file {$resultPath} cannot be opened\n", 2);
+		return 1;
+	}
+	try {
+		return pfb_outpost_apply($request, $out);
+	} catch (Throwable $e) {
+		pfb_logger("\nOutpost apply failed: {$e->getMessage()}\n", 2);
+		return 1;
+	} finally {
+		fclose($out);
+	}
+}
+
+/** Write one version 2 result line to $out; FALSE when it is refused or not written whole. */
+function pfb_outpost_report($out, array $report): bool
+{
+	try {
+		$line = pfb_core_update_v2_result($report);
+	} catch (InvalidArgumentException $e) {
+		pfb_logger("\nOutpost apply: the result line is refused: {$e->getMessage()}\n", 2);
+		return FALSE;
+	}
+	return fwrite($out, $line) === strlen($line);
+}
+
+/**
+ * Apply a validated version 2 request (pfb_core_update_v2_request()) under the apply lock, the feed-pass lock, and write its
+ * result line to $out. Returns the exit status: 0 when everything was applied; PFB_EXIT_LOCKED with no result line when a lock
+ * is held or the Core API does not serve a resource; 1 when a resource failed, the filter reload was not launched or the line
+ * could not be written. With pendingOutsideWindow the changes are marked pending and nothing is applied. The apply trigger
+ * clears the due-ledger flag first and sets it again, with the pending mark, when the apply does not succeed.
+ *
+ * @param resource $out
+ */
+function pfb_outpost_apply(array $request, $out, ?string $socket = NULL): int
+{
+	global $pfb;
+	$started = time();
+	$owner = !isset($GLOBALS['pfb_feed_pass_lock']);
+	$contended = FALSE;
+	if (!pfb_feed_pass_begin('apply', $contended)) {
+		pfb_logger($contended ? "\n Outpost apply deferred: another process holds the apply lock.\n"
+			: "\n Outpost apply failed: the apply lock could not be acquired.\n", 1);
+		return $contended ? PFB_EXIT_LOCKED : 1;
+	}
+	$held = TRUE;
+	try {
+		pfb_global();
+		$pfb['save'] = FALSE;
+		if ($request['pendingOutsideWindow']) {
+			pfb_mark_pending_changes();
+			pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
+			pfb_logger("\n Outpost apply: outside the apply window, the changes are marked pending.\n", 1);
+			return pfb_outpost_report($out, []) ? 0 : 1;
+		}
+		$cleared = FALSE;
+		if ($request['trigger'] === 'apply') {
+			if (!pfb_core_update_clear_pending_apply()) {
+				pfb_logger("\n Pending apply ledger update failed; the apply was not run.\n", 2);
+				return 1;
+			}
+			$cleared = TRUE;
+		}
+		$absorb = FALSE;
+		if (pfb_apply_enter($owner, FALSE, $absorb)) {
+			$status = pfb_outpost_apply_run($request, $out, $socket, $absorb, $started);
+		} else {
+			$held = !$owner;	// pfb_apply_enter() released the lock it owned
+			$status = PFB_EXIT_LOCKED;
+		}
+		if ($status !== 0 && $cleared) {
+			pfb_mark_pending_changes();
+			pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
+		}
+		return $status;
+	} finally {
+		if ($held && $owner) {
+			pfb_feed_pass_release();
+		}
+	}
+}
+
+/** The apply's steps once it holds its locks (pfb_outpost_apply()). */
+function pfb_outpost_apply_run(array $request, $out, ?string $socket, bool $absorb, int $started): int
+{
+	global $pfb;
+	$pfb['filter_configure'] = FALSE;
+	pfb_outpost_issues($request['issues']);
+	pfb_apply_settings();
+
+	$report = [];
+	$accounting = TRUE;
+	if ($request['scope'] !== 'ip') {
+		if ($request['dnsbl'] !== NULL) {
+			$accounting = pfb_outpost_dnsbl_stats($request['dnsbl']['groups']);
+		}
+		[, $update, $python] = pfb_apply_dns();
+		// shortcut: the re-lock of a DNSBL temporary unlock is not run; it goes here once #4036 question 3 decides how it reaches pfB-DNS
+		pfb_apply_dns_proxy();
+		$report['dnsblChanged'] = $update || $python || in_array(TRUE, array_column($request['dnsbl']['groups'] ?? [], 'changed'), TRUE);
+	}
+
+	$failed = [];
+	$fail = static function (string $id, string $stage, string $message) use (&$failed): void {
+		$failed[] = ['id' => $id, 'stage' => $stage, 'message' => $message];
+		pfb_logger("\n Outpost apply: {$id} is not applied ({$stage}): {$message}\n", 2);
+	};
+	$limit = (int) $pfb['table_limit'];
+	$expected = pfb_outpost_expected_aliases();
+	$cursors = pfb_outpost_cursors_read()['cursors'];
+	$work = "{$pfb['dbdir']}/outpost_apply";
+	$applied = $fetched = $removals = $removed = [];
+	$catalog = NULL;
+	if ($request['scope'] !== 'dnsbl') {
+		foreach ($request['resources'] as $i => $resource) {
+			$id = $resource['id'];
+			$alias = $resource['alias'] ?? NULL;
+			if ($alias === NULL) {
+				$mirror = "{$pfb['dbdir']}/" . PFB_OUTPOST_CATALOG_FILE;
+			} else {
+				$want = $expected[$alias] ?? NULL;
+				$direction = $resource['direction'] ?? NULL;
+				if ($direction !== NULL) {
+					sort($direction);
+				}
+				if ($want === NULL) {
+					$fail($id, 'apply', "{$alias} is not an alias the configuration holds");
+					continue;
+				}
+				// decision 2 on #4037: the rules come from config.xml, so a set is never loaded behind another action's rule
+				if ($want['action'] !== $resource['action'] || $want['direction'] !== $direction) {
+					$fail($id, 'apply', "the action or direction of {$alias} changed since the Update read the settings");
+					continue;
+				}
+				if ($resource['entries'] > $limit) {
+					$fail($id, 'apply', "{$resource['entries']} entries exceed the firewall's table entries limit of {$limit}");
+					continue;
+				}
+				$mirror = "{$pfb['aliasdir']}/{$alias}.txt";
+			}
+			$dir = "{$work}/{$i}";
+			if (!is_dir($dir) && !@mkdir($dir, 0700, TRUE)) {
+				$fail($id, 'fetch', "{$dir} cannot be created");
+				continue;
+			}
+			$got = pfb_outpost_fetch($id, $cursors[$id] ?? NULL, $mirror, $dir, $socket);
+			if (!$got['ok']) {
+				if ($got['failure'] === 'unreachable' || $got['failure'] === 'core_unavailable') {
+					pfb_logger("\n Outpost apply deferred: the Core API did not serve {$id}: {$got['error']}\n", 1);
+					return PFB_EXIT_LOCKED;
+				}
+				$fail($id, 'fetch', (string) $got['error']);
+				continue;
+			}
+			if ($got['kind'] === 'not_found') {	// the resource left the configuration (spec section 8.2)
+				$removals[$id] = $alias;
+				continue;
+			}
+			$current = pfb_outpost_generation_cmp((string) $got['generation'], $resource['generation']) === 0;
+			if ($got['kind'] === 'unchanged') {
+				if ($current) {
+					$applied[$id] = $resource['generation'];
+				}
+			} elseif ($alias === NULL) {
+				$catalog = ['id' => $id, 'current' => $current] + $got;
+			} elseif ($got['entries'] > $limit) {
+				$fail($id, 'apply', "{$got['entries']} entries exceed the firewall's table entries limit of {$limit}");
+			} else {
+				$fetched[$alias] = ['id' => $id, 'current' => $current] + $got;
+			}
+		}
+		foreach ($request['removed'] as $gone) {
+			$removals[$gone['id']] = $gone['alias'] ?? NULL;
+		}
+	}
+
+	foreach ($removals as $id => $alias) {
+		if ($alias !== NULL) {
+			unset($expected[$alias]);
+			unlink_if_exists("{$pfb['aliasdir']}/{$alias}.txt");
+			if (pfb_pfctl_table_op($alias, 'kill')['failed']) {
+				$fail($id, 'apply', "the table {$alias} could not be removed");
+				continue;
+			}
+		}
+		$error = pfb_outpost_cursor_drop($id);
+		if ($error !== NULL) {
+			pfb_logger("\n Outpost apply: {$error}\n", 2);
+		}
+		$removed[] = $id;
+	}
+
+	if ($catalog !== NULL) {
+		$rendered = pfb_geoip_render_catalog($catalog['mirror'], dirname($pfb['feeds']));
+		$error = $rendered['error'] ?? pfb_outpost_cursor_advance($catalog['id'], $catalog['generation'], $catalog['digest'], $catalog['entries']);
+		if ($error !== NULL) {
+			$fail($catalog['id'], 'apply', $error);
+		} elseif ($catalog['current']) {
+			$applied[$catalog['id']] = $catalog['generation'];
+		}
+	}
+
+	// The aliases and rule templates of every expected alias that has a mirror, as the update pass registers them
+	$new_aliases = $new_aliases_list = [];
+	foreach ($expected as $alias => $want) {
+		if (!is_file("{$pfb['aliasdir']}/{$alias}.txt")) {
+			continue;
+		}
+		$new_aliases_list[] = $alias;
+		$new_aliases[] = $want['object'];
+		if ($want['rule'] !== NULL) {
+			pfb_firewall_rule(...$want['rule']);
+		}
+	}
+	$changed = array_values(array_intersect(array_keys($fetched), $new_aliases_list));
+	$pfb['remove'] = $removals !== [];
+	$push = static function (string $alias, string $mode, int $batch) use ($fetched, $cursors, $work): void {
+		global $pfb;
+		$f = $fetched[$alias] ?? NULL;	// NULL: an alias an IP unlock re-blocks, replaced from its mirror
+		$force = $f === NULL || $f['kind'] === 'full' || !isset($cursors[$f['id']]) || pfb_pfctl_table_count($alias) === 0;
+		pfb_apply_alias_delta_files($pfb['pfctl'], $alias, str_ends_with($alias, '_v6') ? 'ipv6' : 'ipv4', "{$pfb['aliasdir']}/{$alias}.txt",
+			(string) ($f['add'] ?? ''), (int) ($f['addEntries'] ?? 0), (string) ($f['remove'] ?? ''), (int) ($f['removeEntries'] ?? 0),
+			(int) ($f['entries'] ?? 0), $f === NULL ? 0 : (int) ($cursors[$f['id']]['entries'] ?? 0), $mode, $batch, $force, $work);
+	};
+	['changedAliases' => $pushed, 'ipUnlockForced' => $unlock, 'reloadUnknown' => $reload_unknown]
+		= pfb_apply_objects($new_aliases, $new_aliases_list, $changed, $new_aliases_list, [], $changed, $absorb, $push);
+
+	// A table is at its mirror once no ip/<alias>/apply entry is open: pfctl opens one for every operation that failed
+	$open = pfb_sync_status_read_all($pfb['dbdir'])['ip'] ?? [];
+	foreach ($fetched as $alias => $f) {
+		if (isset($open[$alias]['apply'])) {
+			$fail($f['id'], 'apply', (string) ($open[$alias]['apply']['message'] ?? "pfctl failed for {$alias}"));
+			continue;
+		}
+		$error = pfb_outpost_cursor_advance($f['id'], $f['generation'], $f['digest'], $f['entries']);
+		if ($error !== NULL) {
+			$fail($f['id'], 'apply', $error);
+		} elseif ($f['current']) {
+			$applied[$f['id']] = $f['generation'];
+		}
+	}
+
+	// "applied" means the pfctl operations succeeded and the reload, when one was needed, was launched (#3813)
+	$reloaded = !empty($pfb['filter_configure']);
+	$aliases = array_filter([...array_column($request['resources'], 'alias'), ...array_column($request['removed'], 'alias')]);
+	$report += [
+		'applied'        => $reloaded && $reload_unknown ? [] : $applied,
+		'removed'        => $removed,
+		'changedAliases' => array_values(array_intersect(array_unique($pushed), $aliases)),
+		'ipChanged'      => $reloaded || $unlock,
+		'failed'         => $failed,
+	];
+	if ($reloaded) {
+		$report['reloadLaunched'] = !$reload_unknown;
+	}
+	$written = pfb_outpost_report($out, $report);
+	$problem = $failed !== [] || $reload_unknown;
+	pfb_apply_settle(!$accounting, $problem, $request['pendingToken'], $started);
+	return !$written || $problem || !$accounting ? 1 : 0;
+}
+
+/**
+ * The aliases config.xml expects at apply time, in the order the update pass registers them (continents, IP groups with the
+ * DNSBL IP group, aggregates): alias => its request action and sorted direction, its alias object, and the arguments of its
+ * pfb_firewall_rule() (NULL for an aggregate, which has no rule). An enabled group whose alias the pass would skip is not one.
+ *
+ * @return array<string, array{action: string, direction: ?list<string>, object: array<string, string>, rule: ?list<mixed>}>
+ */
+function pfb_outpost_expected_aliases(): array
+{
+	global $pfb, $pfbarr;
+	if ($pfb['enable'] !== PfbToggle::On) {
+		return [];
+	}
+	$expected = [];
+	$add = static function (string $alias, string $action, string $vtype, string $descr, mixed $log) use (&$expected): void {
+		global $pfb, $pfbarr;
+		[$verb, $way] = explode('_', $action, 2);
+		$expected[$alias] = [
+			'action'    => $verb === 'Alias' ? 'alias_only' : strtolower($verb),
+			'direction' => ['Inbound' => ['ingress'], 'Outbound' => ['egress'], 'Both' => ['egress', 'ingress']][$way] ?? NULL,
+			'object'    => ['name' => $alias, 'url' => "{$pfb['weblocal']}?pfb={$alias}", 'updatefreq' => '32', 'address' => '',
+				'descr' => $descr, 'type' => 'urltable', 'detail' => 'DO NOT EDIT THIS ALIAS'],
+			'rule'      => [$action, $alias, $vtype, $log, $pfbarr['agateway_in'], $pfbarr['agateway_out'], $pfbarr['aaddrnot_in'],
+				$pfbarr['aaddr_in'], $pfbarr['aports_in'], $pfbarr['aproto_in'], $pfbarr['anot_in'], $pfbarr['aaddrnot_out'],
+				$pfbarr['aaddr_out'], $pfbarr['aports_out'], $pfbarr['aproto_out'], $pfbarr['anot_out']],
+		];
+	};
+
+	foreach ($pfb['continents'] as $continent => $pfb_alias) {
+		$cont_key = 'pfblockerng' . strtolower(str_replace(' ', '', $continent));
+		$cc = config_get_path("installedpackages/{$cont_key}/config/0");
+		if (!is_array($cc) || !pfb_group_action_valid($cc['action'] ?? NULL, 'geoip') || $cc['action'] === 'Disabled') {
+			continue;
+		}
+		$urlvalue = '';	// as the pass builds it, the IPv6 alias's value names the IPv4 countries too
+		foreach (['countries4' => '_v4', 'countries6' => '_v6'] as $c_type => $vtype) {
+			if (empty($cc[$c_type])) {
+				continue;
+			}
+			pfb_determine_list_detail($cc['action'], "{$pfb_alias}{$vtype}", $cont_key, '0');
+			foreach (explode(',', $cc[$c_type]) as $iso) {
+				$urlvalue .= "{$iso},";
+			}
+			$add("{$pfb_alias}{$vtype}", $cc['action'], $vtype, "pfBlockerNG {$pfbarr['descr']} GeoIP Alias [ {$urlvalue} ]", $cc['aliaslog'] ?? NULL);
+		}
+	}
+
+	foreach (['pfblockernglistsv4' => '_v4', 'pfblockernglistsv6' => '_v6'] as $ip_type => $vtype) {
+		$lists = config_get_path("installedpackages/{$ip_type}/config", []);
+		$lists = is_array($lists) ? $lists : [];
+		if (pfb_dnsbl_active() && pfb_group_action_valid($pfb['dnsbl_ip'] ?? NULL, 'ipv4') && $pfb['dnsbl_ip'] != 'Disabled') {
+			$lists[] = ['aliasname' => 'DNSBLIP', 'vtype' => $vtype, 'key' => 0, 'dnsblip' => '', 'action' => $pfb['dnsbl_ip'],
+				'aliaslog' => $pfb['dnsblconfig']['aliaslog'] ?? NULL,
+				'row' => [['format' => 'auto', 'state' => 'Enabled', 'url' => "{$pfb['dbdir']}/DNSBLIP{$vtype}.txt", 'header' => 'DNSBLIP']]];
+		}
+		foreach ($lists as $key => $list) {
+			if (!is_array($list) || !pfb_group_action_valid($list['action'] ?? NULL, 'ipv4') || $list['action'] === 'Disabled') {
+				continue;
+			}
+			$alias = "pfB_{$list['aliasname']}{$vtype}";
+			if (empty(pfb_filter($alias, PFB_FILTER_WORD, 'Outpost apply')) || (empty($list['row'][0]['url']) && empty($list['custom']))) {
+				continue;
+			}
+			pfb_determine_list_detail($list['action'], '', isset($list['dnsblip']) ? 'pfblockerngdnsblsettings' : $ip_type, $list['key'] ?? $key);
+			$urlvalue = '';
+			foreach ($list['row'] ?? [] as $row) {
+				if (!empty($row['url']) && $row['state'] != 'Disabled' && !pfb_reserved_header_skip_active(isset($list['dnsblip']), $row['header'] ?? '')
+					&& !empty(pfb_filter("{$row['header']}{$vtype}", PFB_FILTER_WORD, 'Outpost apply'))) {
+					$urlvalue .= "{$row['header']}{$vtype},";
+				}
+			}
+			if (!empty($list['custom'])) {
+				$urlvalue .= "{$list['aliasname']}_custom{$vtype},";
+			}
+			$adescr = "pfBlockerNG {$pfbarr['descr']} Alias" . (($list['stateremoval'] ?? '') == 'disabled' ? ' [s]' : '');
+			$add($alias, $list['action'], $vtype, "{$adescr} [ {$urlvalue} ]", $list['aliaslog'] ?? NULL);
+		}
+	}
+
+	foreach (PFB_AGGREGATE_TYPES as $type) {
+		if (!in_array($type, is_array($pfb['agg_types'] ?? NULL) ? $pfb['agg_types'] : [], TRUE)) {
+			continue;
+		}
+		foreach (['v4', 'v6'] as $family) {
+			$alias = "pfB_{$type}_Aggregated_{$family}";
+			$expected[$alias] = ['action' => 'alias_only', 'direction' => NULL, 'rule' => NULL, 'object' => ['name' => $alias,
+				'url' => "{$pfb['weblocal']}?pfb={$alias}", 'updatefreq' => '32', 'address' => '',
+				'descr' => "pfBlockerNG {$type} Aggregated Alias [ {$family} ]", 'type' => 'urltable', 'detail' => 'DO NOT EDIT THIS ALIAS']];
+		}
+	}
+	return $expected;
+}
+
+/**
+ * File Core's issues: each one an ADR-61 ledger entry of its stage (facility dnsbl for a DNSBL feed or resource, else ip,
+ * item its resource) and, the first time it appears, a notice. An entry this apply opened that the request no longer names is
+ * closed. The messages are already bounded text (pfb_core_update_v2_message()).
+ *
+ * @param list<array{resource: string, stage: string, code: string, message: string}> $issues
+ */
+function pfb_outpost_issues(array $issues): void
+{
+	global $pfb;
+	$path = "{$pfb['dbdir']}/" . PFB_OUTPOST_ISSUES_FILE;
+	$before = is_file($path) && !is_link($path) ? json_decode((string) @file_get_contents($path, FALSE, NULL, 0, 4194304), TRUE) : NULL;
+	$before = is_array($before) ? $before : [];
+	$now = [];
+	foreach ($issues as $issue) {
+		$facility = str_starts_with($issue['resource'], 'dnsbl/') || str_starts_with($issue['resource'], 'feed/dnsbl:') ? 'dnsbl' : 'ip';
+		$key = "{$facility}|{$issue['stage']}|{$issue['resource']}";
+		pfb_sync_status_open($facility, $issue['resource'], $issue['stage'], "{$issue['code']}: {$issue['message']}", $pfb['dbdir']);
+		if (!isset($before[$key]) && !isset($now[$key])) {
+			file_notice('pfBlockerNG', "pfBlockerNG Update [ {$issue['resource']} ] {$issue['stage']} {$issue['code']}: {$issue['message']}",
+				'pfBlockerNG', '/pfblockerng/pfblockerng_log.php', 2);
+		}
+		$now[$key] = [$facility, $issue['resource'], $issue['stage']];
+	}
+	foreach ($before as $key => $entry) {
+		if (!isset($now[$key]) && is_array($entry) && count($entry) === 3 && array_is_list($entry)
+			&& in_array($entry[0], ['ip', 'dnsbl'], TRUE) && is_string($entry[1]) && is_string($entry[2])) {
+			pfb_sync_status_close($entry[0], $entry[1], $entry[2], $pfb['dbdir']);
+		}
+	}
+	$json = json_encode($now, JSON_UNESCAPED_SLASHES);
+	if ($json === FALSE || @file_put_contents("{$path}.tmp", $json, LOCK_EX) === FALSE || !@rename("{$path}.tmp", $path)) {
+		@unlink("{$path}.tmp");
+		pfb_logger("\n Outpost apply: {$path} cannot be written; the issues filed are not remembered.\n", 2);
+	}
+}
+
+/**
+ * Write the DNSBL statistics rows of the groups Core published, through dnsbl_save_stats(); FALSE (accounting kept pending)
+ * when they cannot be written.
+ *
+ * @param list<array{name: string, entries: int, changed: bool}> $groups
+ */
+function pfb_outpost_dnsbl_stats(array $groups): bool
+{
+	global $pfb;
+	$names = array_map(static fn (array $group): string => "DNSBL_{$group['name']}", $groups);
+	$pfb['dnsbl_info_stats'] = array_map(static fn (array $group): array => ['groupname' => "DNSBL_{$group['name']}",
+		'timestamp' => date('Y-m-d H:i:s'), 'entries' => (string) $group['entries']], $groups);
+	$pfb['alias_dnsbl_all'] = $names;
+	// shortcut: no group is pruned from the statistics (configured NULL); prune once #4038 says how Core names the built-in groups
+	$pfb['alias_dnsbl_configured'] = NULL;
+	if (dnsbl_save_stats()) {
+		return TRUE;
+	}
+	pfb_dnsbl_accounting_failure();
+	return FALSE;
+}
+
 /**
  * Serve one Update: run what Core asked and report what the Outpost saw. Returns the exit status: 0 on success, 2 for a refused
  * request (nothing runs, no result), PFB_EXIT_LOCKED when a lock deferred the work, 1 for anything that failed. While it serves,
@@ -7036,6 +7475,9 @@ function pfb_core_update_serve(string $stdin, string $resultPath = 'php://fd/3',
 	$pfb['scheduled_outcomes'] = [];
 	$result = ['attempted' => [], 'geoipReady' => NULL];
 	try {
+		if (pfb_core_update_version($stdin) === 2) {
+			return pfb_outpost_apply_serve($stdin, $resultPath);
+		}
 		try {
 			$request = pfb_core_update_request($stdin);
 		} catch (InvalidArgumentException $e) {
@@ -7136,6 +7578,21 @@ function pfb_core_update_run(array $request, array &$result, array $seams): int
 	}
 }
 
+/** Clear the due ledger's pending_apply flag; TRUE when it is clear. */
+function pfb_core_update_clear_pending_apply(): bool
+{
+	global $pfb;
+	return !pfb_due_ledger_is_pending('cron', $pfb['dbdir']) || pfb_due_ledger_update_entry(
+		'cron',
+		static function (?array $entry): array {
+			$entry ??= ['last_run' => 0, 'next_due' => 0, 'jitter' => 0];
+			unset($entry['pending_apply']);
+			return $entry;
+		},
+		$pfb['dbdir']
+	);
+}
+
 /** The pending apply Core was asked for (trigger `apply`), under the locks: the tick's pending manual apply. */
 function pfb_core_update_apply(array &$result, callable $sync): int
 {
@@ -7148,15 +7605,7 @@ function pfb_core_update_apply(array &$result, callable $sync): int
 		return 0;
 	}
 	// The flag is cleared first, so a change marked while the apply runs stays pending
-	if (pfb_due_ledger_is_pending('cron', $pfb['dbdir']) && !pfb_due_ledger_update_entry(
-		'cron',
-		static function (?array $entry): array {
-			$entry ??= ['last_run' => 0, 'next_due' => 0, 'jitter' => 0];
-			unset($entry['pending_apply']);
-			return $entry;
-		},
-		$pfb['dbdir']
-	)) {
+	if (!pfb_core_update_clear_pending_apply()) {
 		pfb_logger("\n Pending apply ledger update failed; the apply was not run.\n", 2);
 		return 1;
 	}

@@ -5053,12 +5053,15 @@ function pfb_apply_dns_proxy(): void {
 
 /**
  * The pass's pfSense objects. Returns what the `post` hook and the settle read: the aliases whose table changed,
- * whether an IP unlock forced a re-block, and whether the reload launch failed.
+ * whether an IP unlock forced a re-block, and whether the reload launch failed. $pfb_push, when given, pushes each
+ * changed table that has a mirror on the path without a rule change, in place of the delta from $pfb_alias_prev_sets: it
+ * is called with the alias, the delta mode and the batch size (the version 2 apply, which holds the delta in files).
  *
+ * @param ?callable(string, string, int): mixed $pfb_push
  * @return array{changedAliases:array,ipUnlockForced:bool,reloadUnknown:bool}
  */
 function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $pfb_alias_lists, array $pfb_alias_lists_all,
-    array $pfb_alias_prev_sets, array $pfb_feed_changed, bool $pfb_sync_absorb): array {
+    array $pfb_alias_prev_sets, array $pfb_feed_changed, bool $pfb_sync_absorb, ?callable $pfb_push = NULL): array {
 	global $g, $pfb;
 
 	#########################################
@@ -5338,6 +5341,10 @@ function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $p
 				$pfb_delta_batch = pfb_alias_delta_batch_clamp((string) PfbConfig::read('gen/pfb_alias_delta_batch'));
 
 				foreach ($final_alias as $final) {
+					if ($pfb_push !== NULL && file_exists("{$pfb['aliasdir']}/{$final}.txt")) {
+						$pfb_push($final, $pfb_delta_mode, $pfb_delta_batch);
+						continue;
+					}
 					if (file_exists("{$pfb['aliasdir']}/{$final}.txt")) {
 						// ADR-40: compute delta from the stashed previous canonical set.
 						// Two cases always get force_rpl = TRUE here:
