@@ -313,6 +313,11 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			}
 			probeKept := regularExists(feedPath(feed, ".probe"))
 			ingested := s.Fetcher.Ingest(ctx, feed, request)
+			// The kept body is consumed whatever the transfer did: its source record goes with it, in the same commit.
+			if probeKept && removeIfExists(feedPath(feed, ProbeSource)) != nil {
+				retire, retireReason, retireStage = slices.Clone(probeFiles), "probe_record_remove_failed", "fetch"
+				return failedFeed(f.ID, "fetch", "probe_record_remove_failed")
+			}
 			if !ingested.OK {
 				// Force both drops the digests before the transfer, whatever its outcome (pfb_force_clear_validators()).
 				retire, retireReason, retireStage = forcedSuffixes(force), "validators_retire_failed", "fetch"
@@ -341,8 +346,6 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			}
 			sourceChanged, clearFail = ingested.Status != httpStatusNotModified, true
 			if probeKept {
-				// The record of the consumed body's source goes with it; one left behind is dropped by the next stage 6.
-				_ = removeIfExists(feedPath(feed, ProbeSource))
 				// The ingest consumed the live probe body, which a failure later in the run must not leave to be staged again.
 				retire = slices.Clone(probeFiles)
 			}
@@ -792,6 +795,9 @@ func clearForcedState(feed feedfetch.Feed, force string) error {
 	}
 	return nil
 }
+
+// ValidName reports whether name is a feed's file stem: [A-Za-z0-9_]+, which keeps every path built on it in its folder.
+func ValidName(name string) bool { return validFeedWord(name) }
 
 // validFeedWord is the grammar of a feed's file stem and of a GeoIP country code.
 func validFeedWord(value string) bool {
