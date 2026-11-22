@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -312,7 +313,8 @@ func followUps(t *testing.T, root string, sc matrixScenario, oracle map[string]m
 // KILLed before each of its file operations, the folder recovered (for one variant per kind, Recover itself KILLed before
 // each of its operations and run again), and the stage run again with the changed source and with the old one, then the
 // published lists are always what that source parses to: never a list of the other download, as unchanged or reparsed;
-// and no staged, backup, absent, marker or restore file is left.
+// and no staged, backup, absent, marker or restore file is left. A Recover KILLed and run again must leave the folder an
+// uninterrupted Recover leaves, so the next runs checked on that folder hold for it as well.
 func TestKillAtEveryFileOperation(t *testing.T) {
 	if spec := os.Getenv(matrixEnv); spec != "" {
 		matrixChild(spec)
@@ -345,33 +347,58 @@ func TestKillAtEveryFileOperation(t *testing.T) {
 					t.Fatalf("the run ended before its operation %d of %d", n, total)
 				}
 				where := fmt.Sprintf("%s KILLed at operation %d (%s)", sc.name(), n, op)
+				killed := root
 				if sc.Variant == "none" {
-					killRecoverAtEveryOperation(t, root, sc, oracle, where)
+					killed = copyRoot(t, root)
 				}
 				if err := Recover(filepath.Join(root, "orig")); err != nil {
 					t.Fatalf("%s: Recover: %v", where, err)
 				}
 				followUps(t, root, sc, oracle, where)
+				if sc.Variant == "none" {
+					killRecoverAtEveryOperation(t, killed, folderState(t, filepath.Join(root, "orig")), where)
+				}
 			})
 		}
 	}
 }
 
-// killRecoverAtEveryOperation KILLs Recover over a copy of root before each of its operations, then runs it again whole
-// and checks the follow-up runs.
-func killRecoverAtEveryOperation(t *testing.T, root string, sc matrixScenario, oracle map[string]map[string]string, where string) {
+// folderState is the name, mode and content of each file in dir.
+func folderState(t *testing.T, dir string) map[string]string {
 	t.Helper()
-	_, total := runMatrixCall(t, matrixCall{Mode: "recover", Root: copyRoot(t, root), Scenario: sc})
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := map[string]string{}
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		state[e.Name()] = info.Mode().String() + " " + readFile(t, filepath.Join(dir, e.Name()))
+	}
+	return state
+}
+
+// killRecoverAtEveryOperation KILLs Recover over a copy of the killed folders before each of its operations and runs it
+// again whole: the folder must be the one an uninterrupted Recover leaves (recovered), whose next runs followUps checked.
+func killRecoverAtEveryOperation(t *testing.T, killed string, recovered map[string]string, where string) {
+	t.Helper()
+	_, total := runMatrixCall(t, matrixCall{Mode: "recover", Root: copyRoot(t, killed)})
 	for m := 1; m <= total; m++ {
-		copied := copyRoot(t, root)
-		op, _ := runMatrixCall(t, matrixCall{Mode: "recover", KillAt: m, Root: copied, Scenario: sc})
+		copied := copyRoot(t, killed)
+		op, _ := runMatrixCall(t, matrixCall{Mode: "recover", KillAt: m, Root: copied})
 		if op == "" {
 			t.Fatalf("%s: Recover ended before its operation %d of %d", where, m, total)
 		}
-		again := fmt.Sprintf("%s, Recover KILLed at operation %d (%s)", where, m, op)
-		if err := Recover(filepath.Join(copied, "orig")); err != nil {
-			t.Fatalf("%s: Recover again: %v", again, err)
+		dir := filepath.Join(copied, "orig")
+		if err := Recover(dir); err != nil {
+			t.Fatalf("%s, Recover KILLed at operation %d (%s): Recover again: %v", where, m, op, err)
 		}
-		followUps(t, copied, sc, oracle, again)
+		if got := folderState(t, dir); !reflect.DeepEqual(got, recovered) {
+			t.Errorf("%s, Recover KILLed at operation %d (%s) and run again left\n %q\nwant what Recover leaves whole\n %q",
+				where, m, op, got, recovered)
+		}
 	}
 }

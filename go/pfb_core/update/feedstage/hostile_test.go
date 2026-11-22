@@ -49,25 +49,32 @@ func TestFeedDirectoryThatIsALinkIsRefused(t *testing.T) {
 
 // Scenario: an Update was killed in the middle of a feed.
 // Given leftovers of each kind in the feed folder, when the next Update recovers the folder before its first feed, then a
-// regular IP restore point and every baseline backup are put back, the validators that would describe the abandoned
-// download are dropped, and the staged files are removed.
+// regular IP restore point is put back, a journal set without its commit marker is rolled back (each backup put back, each
+// file recorded absent removed), a set with its marker is finished (its new files stay), and the staged files go.
 func TestRecoverPutsBackTheBaseline(t *testing.T) {
 	dir := t.TempDir()
 	for name, body := range map[string]string{
-		"a_v4.orig":                        "post-script output\n",
-		"a_v4.orig.post":                   "download of a\n",
-		"b_v4.orig":                        "new download of b\n",
-		".b_v4.orig.pfbbackup-123":         "baseline of b\n",
-		"b_v4.orig.etag":                   `"new"`,
-		"b_v4.orig.lastmod":                "today",
-		".b_v4.orig.xxhash128.pfbbackup-9": "baseline digest of b\n",
-		"b_v4.orig.xxhash128":              "new digest of b\n",
-		"c.pre":                            "staged pre-script copy\n",
-		"c.post":                           "staged post-script copy\n",
-		".pfbstage-777":                    "staged parse output\n",
-		"c.orig":                           "untouched download of c\n",
-		"c.orig.etag":                      `"c"`,
-		"c.parsed.ndjson":                  "[\"domain\",\"c.example\"]\n",
+		"a_v4.orig":                             "post-script output\n",
+		"a_v4.orig.post":                        "download of a\n",
+		"b_v4.orig":                             "new download of b\n",
+		".b_v4.orig.pfbbackup-123":              "baseline of b\n",
+		"b_v4.orig.etag":                        `"new"`,
+		".b_v4.orig.etag.pfbabsent-123":         "",
+		"b_v4.orig.lastmod":                     "today",
+		".b_v4.orig.lastmod.pfbabsent-123":      "",
+		".b_v4.orig.xxhash128.pfbbackup-123":    "baseline digest of b\n",
+		"b_v4.orig.xxhash128":                   "new digest of b\n",
+		"e.parsed.ndjson":                       "[\"d\",\"new.example\"]\n",
+		".e.parsed.ndjson.pfbbackup-456":        "[\"d\",\"old.example\"]\n",
+		"e.parsed.src.xxhash128":                "new record\n",
+		".e.parsed.src.xxhash128.pfbabsent-456": "",
+		".pfbcommit-456":                        "",
+		"c.pre":                                 "staged pre-script copy\n",
+		"c.post":                                "staged post-script copy\n",
+		".pfbstage-777":                         "staged parse output\n",
+		"c.orig":                                "untouched download of c\n",
+		"c.orig.etag":                           `"c"`,
+		"c.parsed.ndjson":                       "[\"domain\",\"c.example\"]\n",
 	} {
 		writeFile(t, filepath.Join(dir, name), body)
 	}
@@ -80,13 +87,15 @@ func TestRecoverPutsBackTheBaseline(t *testing.T) {
 		t.Fatalf("Recover: %v", err)
 	}
 	want := map[string]string{
-		"a_v4.orig":           "download of a\n",
-		"b_v4.orig":           "baseline of b\n",
-		"b_v4.orig.xxhash128": "baseline digest of b\n",
-		"c.orig":              "untouched download of c\n",
-		"c.orig.etag":         `"c"`,
-		"c.parsed.ndjson":     "[\"domain\",\"c.example\"]\n",
-		"d_v6.orig":           "download of d\n",
+		"a_v4.orig":              "download of a\n",
+		"b_v4.orig":              "baseline of b\n",
+		"b_v4.orig.xxhash128":    "baseline digest of b\n",
+		"c.orig":                 "untouched download of c\n",
+		"c.orig.etag":            `"c"`,
+		"c.parsed.ndjson":        "[\"domain\",\"c.example\"]\n",
+		"d_v6.orig":              "download of d\n",
+		"e.parsed.ndjson":        "[\"d\",\"new.example\"]\n",
+		"e.parsed.src.xxhash128": "new record\n",
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
