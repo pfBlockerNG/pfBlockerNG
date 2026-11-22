@@ -105,19 +105,19 @@ func regularExists(path string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-// baselineExists reports whether the download path is there, a regular file: only its absence is false, and anything else
-// that stands there, or an error other than absence, is an error, never taken for a download that is missing.
-func baselineExists(path string) (bool, error) {
+// regularFile is the regular file at path, or nil for none: only its absence is nil, and anything else that stands there,
+// or an error other than absence, is an error, never taken for a file that is missing.
+func regularFile(path string) (fs.FileInfo, error) {
 	info, err := lstat(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return false, nil
+		return nil, nil
 	case err != nil:
-		return false, err
+		return nil, err
 	case !info.Mode().IsRegular():
-		return false, errors.New("feed download is not a regular file")
+		return nil, errors.New("feed file is not a regular file")
 	}
-	return true, nil
+	return info, nil
 }
 
 func removeIfExists(path string) error {
@@ -168,12 +168,9 @@ func syncDir(dir string) error {
 }
 
 func sameFileContents(path, want string) (bool, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
+	info, err := regularFile(path)
+	if info == nil {
 		return false, err
-	}
-	if !info.Mode().IsRegular() {
-		return false, errors.New("feed source is not a regular file")
 	}
 	if info.Size() != int64(len(want)) {
 		return false, nil
@@ -194,13 +191,8 @@ func openRun(dir, stem string) (string, error) {
 	}
 	for _, suffix := range seeded {
 		from := filepath.Join(dir, stem+suffix)
-		info, err := lstat(from)
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			continue
-		case err == nil && !info.Mode().IsRegular():
-			err = errors.New("published feed file is not a regular file")
-		case err == nil:
+		info, err := regularFile(from)
+		if info != nil {
 			err = link(from, filepath.Join(run, stem+suffix))
 		}
 		if err != nil {
@@ -289,11 +281,7 @@ func checkOps(dir, run string, ops []commitOp) error {
 			paths = append(paths, filepath.Join(run, op.name))
 		}
 		for _, path := range paths {
-			info, err := lstat(path)
-			if err == nil && !info.Mode().IsRegular() {
-				return errors.New("feed file is not a regular file")
-			}
-			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if _, err := regularFile(path); err != nil {
 				return err
 			}
 		}

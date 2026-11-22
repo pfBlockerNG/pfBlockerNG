@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/netip"
 	"net/url"
 	"os"
@@ -159,10 +158,11 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		return failedFeed(f.ID, "publish", "run_folder_unrecoverable")
 	}
 	live := feedfetch.Feed{Dir: dir, Name: f.Name}
-	hasOrig, err := baselineExists(feedPath(live, ".orig"))
+	baseline, err := regularFile(feedPath(live, ".orig"))
 	if err != nil {
 		return failedFeed(f.ID, "fetch", "baseline_unavailable")
 	}
+	hasOrig := baseline != nil
 	force := change.Force
 	if force == "parse" && !hasOrig {
 		force = "download"
@@ -229,7 +229,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		switch {
 		case f.Custom && !f.WhoisConvert:
 			same, err := sameFileContents(origPath, f.CustomText)
-			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if err != nil {
 				return failedFeed(f.ID, "fetch", "custom_source_unavailable")
 			}
 			if !same {
