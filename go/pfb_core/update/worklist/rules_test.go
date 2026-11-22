@@ -60,8 +60,9 @@ func TestRsyncFeedIsChangedWithoutAProbe(t *testing.T) {
 	}
 }
 
-// The record of a kept probe body names every part of its source: the URL, the user, the password and the rsync
-// transfer. A body kept for any other source is dropped; one kept for the same source stays.
+// The record of a kept probe body names its source: the URL, the user and the rsync transfer. A body kept for any other
+// source is dropped; one kept for the same source stays, whatever the password: a password is no part of a source's
+// identity (CodeQL: no secret in the probe source identity; a password change does not change the source).
 func TestProbeSourceCoversTheWholeRequest(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -71,7 +72,7 @@ func TestProbeSourceCoversTheWholeRequest(t *testing.T) {
 		{"same", func(map[string]any) {}, true},
 		{"url", func(row map[string]any) { row["url"] = "http://feed.example/other" }, false},
 		{"user", func(row map[string]any) { row["credentials"] = "other:secret" }, false},
-		{"password", func(row map[string]any) { row["credentials"] = "user:other" }, false},
+		{"password", func(row map[string]any) { row["credentials"] = "user:other" }, true},
 		{"rsync", func(row map[string]any) { row["format"] = "rsync" }, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -91,6 +92,22 @@ func TestProbeSourceCoversTheWholeRequest(t *testing.T) {
 				t.Fatalf("the kept probe body stands: %v, want %v", present(f.path(".probe")), c.kept)
 			}
 		})
+	}
+}
+
+// The record depends on no secret: the same request with two passwords gives the same record.
+func TestProbeSourceRecordIgnoresThePassword(t *testing.T) {
+	record := func(credentials string) string {
+		f := newFixture(t, "http://feed.example/list")
+		f.row()["credentials"] = credentials
+		source, ok := probeIdentity(candidate{feed: feedFor("ipv4", f.group, f.row()), stage: f.stage, dir: f.dir})
+		if !ok {
+			t.Fatal("no source for a remote feed")
+		}
+		return source
+	}
+	if a, b := record("user:secret"), record("user:other"); a != b {
+		t.Fatalf("record with password secret = %q, with password other = %q; want the same", a, b)
 	}
 }
 
