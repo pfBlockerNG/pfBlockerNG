@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 )
@@ -277,5 +278,59 @@ func TestTop1MPublicationSweepsThePHPSetAsideCopies(t *testing.T) {
 		if strings.HasPrefix(name, ".pfbtop1m_") {
 			t.Errorf("%s is left after the publication", name)
 		}
+	}
+}
+
+// Of the lists today's PHP set aside, the newest one with content is put back: PHP's tempnam() leaves an empty file under
+// the same prefix when it is killed before its unlink, and that file is newer than the list a rename set aside.
+func TestTop1MPublicationPutsBackTheNewestNonEmptyCopy(t *testing.T) {
+	dir := t.TempDir()
+	stage, target, base, raw := seedTop1MKill(t, dir, top1mStaging+"run")
+	os.Remove(target)
+	now := time.Now()
+	for name, copy := range map[string]struct {
+		content string
+		age     time.Duration
+	}{
+		".pfbtop1m_active_older": {"1,older.example\n", 2 * time.Hour},
+		".pfbtop1m_active_newer": {top1mKillOldList, time.Hour},
+		".pfbtop1m_active_empty": {"", 0},
+	} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(copy.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		os.Chtimes(p, now.Add(-copy.age), now.Add(-copy.age))
+	}
+	real := rename
+	rename = func(from, to string) error {
+		if from == raw {
+			return os.ErrPermission // the publication fails before its list goes live
+		}
+		return real(from, to)
+	}
+	t.Cleanup(func() { rename = real })
+
+	top1mCommit(stage, target, base, raw)
+
+	if got, err := os.ReadFile(target); err != nil || string(got) != top1mKillOldList {
+		t.Errorf("the list put back is %q (%v), want the newest copy with content", got, err)
+	}
+}
+
+// The raw download becomes the baseline readable by the database folder's readers, whatever mode it was written with.
+func TestTop1MPublicationPublishesTheBaselineReadable(t *testing.T) {
+	dir := t.TempDir()
+	stage, target, base, raw := seedTop1MKill(t, dir, top1mStaging+"run")
+	if err := os.Chmod(raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if !top1mCommit(stage, target, base, raw) {
+		t.Fatal("the publication failed")
+	}
+
+	if info, err := os.Stat(base + ".orig"); err != nil || info.Mode().Perm() != 0o644 {
+		t.Errorf("the baseline is published with mode %v (%v), want 0644", info.Mode().Perm(), err)
 	}
 }

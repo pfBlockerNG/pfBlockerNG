@@ -427,8 +427,8 @@ func (f *Fetcher) top1mZipStage(ctx context.Context, raw, target string) (string
 	return staged.Name(), list, nil
 }
 
-// top1mStaging prefixes the files a TOP1M publication stages beside their targets: the list and the baseline's digest
-// (#4198). The next commit removes what an interrupted one left.
+// top1mStaging prefixes the files a TOP1M publication stages beside their targets: a plain or zip list and the baseline's
+// digest (#4198; a gzip or tar list is staged by the shared stage()). The next commit removes what an interrupted one left.
 const top1mStaging = ".pfbtop1m_new_"
 
 // top1mCommit publishes stage as target, and raw as its baseline (base.orig, with its xxh128 in base.xxhash128), by renames
@@ -487,23 +487,18 @@ func top1mStaged(dir string, write func(*os.File) error) (string, error) {
 // top1mSettle makes a file about to be published (the staged list, the raw download) readable by the database folder's
 // readers and puts its bytes on disk first: a file renamed in before its data reached the disk could come back empty after
 // a power loss, beside a baseline that vouches for it.
-func top1mSettle(stage string) error {
-	f, err := os.OpenFile(stage, os.O_RDWR, 0)
+func top1mSettle(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
-	err = f.Chmod(0o644)
-	if serr := f.Sync(); err == nil {
-		err = serr
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
+	_, err = finishStaged(f, nil)
 	return err
 }
 
 // top1mRescue puts back the newest list today's PHP set aside (".pfbtop1m_active_") when none is published: a PHP
-// publication interrupted between its two renames leaves that copy as the only one.
+// publication interrupted between its two renames leaves that copy as the only one. An empty file under that prefix is
+// what PHP's tempnam() leaves when killed before its unlink, never a list.
 func top1mRescue(target string) {
 	if _, err := os.Lstat(target); !errors.Is(err, fs.ErrNotExist) {
 		return
@@ -512,7 +507,7 @@ func top1mRescue(target string) {
 	newest, at := "", time.Time{}
 	for _, e := range entries {
 		info, err := e.Info()
-		if err == nil && info.Mode().IsRegular() && strings.HasPrefix(e.Name(), ".pfbtop1m_active_") && info.ModTime().After(at) {
+		if err == nil && info.Mode().IsRegular() && info.Size() > 0 && strings.HasPrefix(e.Name(), ".pfbtop1m_active_") && info.ModTime().After(at) {
 			newest, at = filepath.Join(filepath.Dir(target), e.Name()), info.ModTime()
 		}
 	}
@@ -521,21 +516,20 @@ func top1mRescue(target string) {
 	}
 }
 
-// top1mSweep removes from dirs what an interrupted TOP1M publication left: its staged files (all but keep,
-// this run's own stage),
-// and the copies of the old list and baseline that today's PHP sets aside (".pfbtop1m_active_", ".pfbtop1m_base_"). Nothing
-// in them is restored: the published list and baseline are each whole, and the detector reads a mismatched pair as changed.
+// top1mSweep removes from dirs what an interrupted TOP1M publication left: its staged files (all but keep, this run's own
+// stage), and the copies of the old list and baseline that today's PHP sets aside (".pfbtop1m_active_", ".pfbtop1m_base_").
+// Nothing in them is restored: the published list and baseline are each whole, and the detector reads a mismatched pair as
+// changed.
 func top1mSweep(keep string, dirs ...string) {
 	for _, dir := range dirs {
 		entries, _ := os.ReadDir(dir)
 		for _, e := range entries {
-			path := filepath.Join(dir, e.Name())
-			if path == keep {
+			if e.Name() == filepath.Base(keep) {
 				continue
 			}
 			for _, prefix := range []string{top1mStaging, ".pfbtop1m_active_", ".pfbtop1m_base_"} {
 				if strings.HasPrefix(e.Name(), prefix) {
-					os.RemoveAll(path)
+					os.RemoveAll(filepath.Join(dir, e.Name()))
 				}
 			}
 		}
