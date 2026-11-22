@@ -270,7 +270,8 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 	}
 	if fromProbe && src.ftp != nil && f.Proxy == nil {
 		// The body came from the probe's, which may be a hard link of a published file. It is retimed before anything
-		// is published, so a failure leaves the published copy, its digests and its validators as they were.
+		// is published, so a failure leaves the published copy and its digests as they were. Its validators are dropped, as on
+		// any failed ingest (#2820).
 		if lastMod := readFTPMetadataAt(probe).lastMod; !lastMod.IsZero() {
 			if err := retimeFile(body, lastMod); err != nil {
 				return Result{Status: t.status, Reason: "published copy could not be retimed"}
