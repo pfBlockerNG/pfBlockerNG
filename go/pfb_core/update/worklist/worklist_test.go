@@ -45,11 +45,13 @@ func (f *fixture) setURL(url string) {
 	f.group["feeds"].([]any)[0].(map[string]any)["url"] = url
 }
 
-func (f *fixture) input(req Request) Input {
+// input is the request in, inside the window, with the fixture's group as the only settings and its stage for IPv4.
+func (f *fixture) input(in Input) Input {
 	empty := map[string]any{"groups": []any{}}
-	return Input{Request: req, InWindow: true, Stages: map[string]*feedstage.Stage{"ipv4": f.stage},
-		Settings: map[string]map[string]any{"feeds/ipv4": {"groups": []any{f.group}}, "feeds/ipv6": empty, "feeds/dnsbl": empty,
-			"feeds/geoip": empty}}
+	in.InWindow, in.Stages = true, map[string]*feedstage.Stage{"ipv4": f.stage}
+	in.Settings = map[string]map[string]any{"feeds/ipv4": {"groups": []any{f.group}}, "feeds/ipv6": empty, "feeds/dnsbl": empty,
+		"feeds/geoip": empty}
+	return in
 }
 
 func (f *fixture) path(suffix string) string { return filepath.Join(f.dir, "A_v4"+suffix) }
@@ -97,7 +99,7 @@ func servedBodies(t *testing.T, bodies map[string]string) *httptest.Server {
 func TestKeptProbeOfAnotherSourceIsNeverPublished(t *testing.T) {
 	srv := servedBodies(t, map[string]string{"/old": "9.9.9.9\n", "/new": "5.6.7.8\n"})
 	f := newFixture(t, remoteURL(srv)+"/old")
-	in := f.input(Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})
+	in := f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})
 	in.InWindow = false
 	if plan := build(t, in); plan.Decision != Pending {
 		t.Fatalf("the first Update = %v, want pending", plan.Decision)
@@ -108,7 +110,7 @@ func TestKeptProbeOfAnotherSourceIsNeverPublished(t *testing.T) {
 
 	f.setURL(remoteURL(srv) + "/new")
 	writeFile(t, f.path(".fail"), "")
-	item := onlyItem(t, build(t, f.input(Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})))
+	item := onlyItem(t, build(t, f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})))
 	if exists(f.path(".probe")) {
 		t.Fatal("the probe body kept for /old still stands after the work list for /new")
 	}
@@ -128,7 +130,7 @@ func TestKeptProbeOfTheSameSourceIsIngested(t *testing.T) {
 	bodies := map[string]string{"/old": "9.9.9.9\n"}
 	srv := servedBodies(t, bodies)
 	f := newFixture(t, remoteURL(srv)+"/old")
-	in := f.input(Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})
+	in := f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})
 	in.InWindow = false
 	build(t, in)
 	if !exists(f.path(".probe")) {
@@ -136,7 +138,7 @@ func TestKeptProbeOfTheSameSourceIsIngested(t *testing.T) {
 	}
 	bodies["/old"] = "1.1.1.1\n" // what the server serves now is not what the probe kept
 	writeFile(t, f.path(".fail"), "")
-	item := onlyItem(t, build(t, f.input(Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})))
+	item := onlyItem(t, build(t, f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})))
 	if !exists(f.path(".probe")) {
 		t.Fatal("the probe body of the same source was dropped")
 	}
@@ -160,7 +162,7 @@ func TestProbeWithoutASourceRecordIsDropped(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			build(t, f.input(Request{Trigger: "manual", Scope: "both", Force: "none"}))
+			build(t, f.input(Input{Trigger: "manual", Scope: "both", Force: "none"}))
 			for _, suffix := range []string{".probe", ".probe.etag"} {
 				if exists(f.path(suffix)) {
 					t.Errorf("%s stands, want it dropped with the body of an unknown source", suffix)
@@ -180,7 +182,7 @@ func TestProbeSourceRecordHoldsNoCredential(t *testing.T) {
 	t.Cleanup(srv.Close)
 	f := newFixture(t, remoteURL(srv)+"/list")
 	f.group["feeds"].([]any)[0].(map[string]any)["credentials"] = "operator:s3cret-pass"
-	in := f.input(Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})
+	in := f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})
 	build(t, in)
 	if !asked.Load() {
 		t.Fatal("the feed was not probed")
@@ -188,6 +190,9 @@ func TestProbeSourceRecordHoldsNoCredential(t *testing.T) {
 	record, err := os.ReadFile(f.path(".probe.src"))
 	if err != nil {
 		t.Fatalf("no source record beside the kept probe body: %v", err)
+	}
+	if info, _ := os.Stat(f.path(".probe.src")); info.Mode().Perm() != 0o600 {
+		t.Fatalf("the source record's mode = %v, want 0600: only its owner reads it", info.Mode().Perm())
 	}
 	for _, secret := range []string{"operator", "s3cret-pass", remoteURL(srv)} {
 		if strings.Contains(string(record), secret) {
@@ -201,7 +206,7 @@ func TestRecoverRunsBeforeTheProbe(t *testing.T) {
 	f := newFixture(t, "http://192.0.2.1/list")
 	writeFile(t, f.path(".probe.part"), "half a body")
 	writeFile(t, f.path(".fail"), "") // checked without a probe: no network
-	build(t, f.input(Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}))
+	build(t, f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}))
 	if exists(f.path(".probe.part")) {
 		t.Fatal("the probe's temporary from a killed run stands, want it removed by Recover before the probe")
 	}
@@ -212,7 +217,7 @@ func TestUnrecoverableFolderStopsItsFeeds(t *testing.T) {
 	f := newFixture(t, "http://192.0.2.1/list")
 	writeFile(t, filepath.Join(f.dir, ".pfbrun-A_v4"), "") // a run folder that is no directory
 	writeFile(t, f.path(".fail"), "")
-	item := onlyItem(t, build(t, f.input(Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})))
+	item := onlyItem(t, build(t, f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})))
 	if item.Stopped == "" || item.Outcome != "" || item.Checked {
 		t.Fatalf("item = %+v, want stopped without a check or an outcome", item)
 	}
@@ -226,7 +231,7 @@ func TestSkipFeedPassed(t *testing.T) {
 		want           bool
 	}{{0, 5, false}, {3, 2, false}, {2, 2, true}, {1, 3, true}} {
 		f := newFixture(t, "http://192.0.2.1/list")
-		in := f.input(Request{Trigger: "manual", Scope: "both", Force: "none"})
+		in := f.input(Input{Trigger: "manual", Scope: "both", Force: "none"})
 		in.SkipFeed, in.Failures = c.skip, map[string]int{"A_v4": c.failures}
 		if got := onlyItem(t, build(t, in)).Feed.SkipFeedPassed; got != c.want {
 			t.Errorf("skipfeed %d, failures %d: SkipFeedPassed = %v, want %v", c.skip, c.failures, got, c.want)
@@ -241,13 +246,13 @@ func TestCustomListRunsOnManualOnly(t *testing.T) {
 	f.group["customList"] = "198.51.100.7\n"
 	f.group["whoisConvert"] = true
 	for _, c := range []struct {
-		req  Request
+		req  Input
 		want int
 	}{
-		{Request{Trigger: "manual", Scope: "ip", Force: "parse"}, 2},
-		{Request{Trigger: "apply"}, 0},
-		{Request{Trigger: "manual", Scope: "dnsbl", Force: "none"}, 0},
-		{Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}, 1},
+		{Input{Trigger: "manual", Scope: "ip", Force: "parse"}, 2},
+		{Input{Trigger: "apply"}, 0},
+		{Input{Trigger: "manual", Scope: "dnsbl", Force: "none"}, 0},
+		{Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}, 1},
 	} {
 		writeFile(t, f.path(".fail"), "") // a scheduled check without a probe
 		plan := build(t, f.input(c.req))
@@ -260,17 +265,10 @@ func TestCustomListRunsOnManualOnly(t *testing.T) {
 		custom := plan.Items[1]
 		want := feedstage.Feed{ID: "custom:ipv4:G4", Kind: "ipv4", Name: "G4_custom_v4", State: "enabled", Format: "auto",
 			Custom: true, CustomText: "198.51.100.7\n", WhoisConvert: true}
-		if custom.Feed != want || custom.Change.Force != c.req.forceOrNone() {
-			t.Fatalf("%+v: custom item %+v, want feed %+v with force %s", c.req, custom, want, c.req.forceOrNone())
+		if custom.Feed != want || custom.Change.Force != c.req.Force {
+			t.Fatalf("%+v: custom item %+v, want feed %+v with force %s", c.req, custom, want, c.req.Force)
 		}
 	}
-}
-
-func (r Request) forceOrNone() string {
-	if r.Force == "" {
-		return "none"
-	}
-	return r.Force
 }
 
 // A feed is resolved from its projection rows as the stage reads it.
@@ -280,7 +278,7 @@ func TestFeedResolvedFromTheSettings(t *testing.T) {
 	f.group["suppressionCidr"] = int64(20)
 	row := f.group["feeds"].([]any)[0].(map[string]any)
 	row["state"], row["format"], row["credentials"] = "flex", "regex", "user:p%40ss"
-	got := onlyItem(t, build(t, f.input(Request{Trigger: "manual", Scope: "ip", Force: "parse"}))).Feed
+	got := onlyItem(t, build(t, f.input(Input{Trigger: "manual", Scope: "ip", Force: "parse"}))).Feed
 	want := feedstage.Feed{ID: "ipv4:A_v4", Kind: "ipv4", Name: "A_v4", State: "flex", Format: "regex",
 		Source: "https://feed.example/list", Username: "user", Password: "p@ss", BindAddress: netip.MustParseAddr("192.0.2.7"),
 		PreScript: "pre.sh", PostScript: "post.sh", SuppressionCIDR: 20}
@@ -292,7 +290,7 @@ func TestFeedResolvedFromTheSettings(t *testing.T) {
 // A request the Core API never sends is refused whole: Build decides nothing for it.
 func TestRequestOutsideTheProtocolIsRefused(t *testing.T) {
 	f := newFixture(t, "http://192.0.2.1/list")
-	for _, req := range []Request{{Trigger: "bogus"}, {Trigger: "manual", Scope: "all", Force: "none"},
+	for _, req := range []Input{{Trigger: "bogus"}, {Trigger: "manual", Scope: "all", Force: "none"},
 		{Trigger: "manual", Scope: "ip", Force: "reload"}, {Trigger: ""}} {
 		if _, err := Build(context.Background(), f.input(req)); err == nil {
 			t.Errorf("%+v: accepted, want refused", req)

@@ -61,7 +61,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -101,7 +102,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -167,7 +169,8 @@
           "dnsbl:D"
         ],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -233,12 +236,13 @@
           "dnsbl:D"
         ],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
       "id": "manual_ip_download",
-      "description": "A manual Force download of scope ip hands every feed of the scope to the stage with the force; outside the scope nothing is touched.",
+      "description": "A manual Force download of scope ip hands every feed of the scope to the stage with the force, unchecked; outside the scope nothing is touched.",
       "request": {
         "trigger": "manual",
         "scope": "ip",
@@ -281,17 +285,18 @@
         }
       ],
       "old_expect": {
+        "checked": [
+          "ipv4:A_v4",
+          "ipv4:B_v4"
+        ],
         "changes": {
           "ipv4:A_v4": "changed",
           "ipv4:B_v4": "unchanged"
         }
       },
-      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
+      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core checks none and hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
       "expect": {
-        "checked": [
-          "ipv4:A_v4",
-          "ipv4:B_v4"
-        ],
+        "checked": [],
         "outcomes": {},
         "changes": {
           "ipv4:A_v4": "download",
@@ -299,12 +304,13 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
       "id": "manual_ip_both",
-      "description": "A manual Force both of scope ip hands every feed of the scope to the stage with the force; outside the scope nothing is touched.",
+      "description": "A manual Force both of scope ip hands every feed of the scope to the stage with the force, unchecked; outside the scope nothing is touched.",
       "request": {
         "trigger": "manual",
         "scope": "ip",
@@ -347,17 +353,18 @@
         }
       ],
       "old_expect": {
+        "checked": [
+          "ipv4:A_v4",
+          "ipv4:B_v4"
+        ],
         "changes": {
           "ipv4:A_v4": "changed",
           "ipv4:B_v4": "changed"
         }
       },
-      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
+      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core checks none and hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
       "expect": {
-        "checked": [
-          "ipv4:A_v4",
-          "ipv4:B_v4"
-        ],
+        "checked": [],
         "outcomes": {},
         "changes": {
           "ipv4:A_v4": "both",
@@ -365,7 +372,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -430,7 +438,8 @@
           "dnsbl:D"
         ],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -495,12 +504,13 @@
           "dnsbl:D"
         ],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
       "id": "manual_dnsbl_download",
-      "description": "A manual Force download of scope dnsbl hands every feed of the scope to the stage with the force; outside the scope nothing is touched.",
+      "description": "A manual Force download of scope dnsbl hands every feed of the scope to the stage with the force, unchecked; outside the scope nothing is touched.",
       "request": {
         "trigger": "manual",
         "scope": "dnsbl",
@@ -543,27 +553,29 @@
         }
       ],
       "old_expect": {
+        "checked": [
+          "dnsbl:D"
+        ],
         "changes": {
           "dnsbl:D": "changed"
         }
       },
-      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
+      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core checks none and hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
       "expect": {
-        "checked": [
-          "dnsbl:D"
-        ],
+        "checked": [],
         "outcomes": {},
         "changes": {
           "dnsbl:D": "download"
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
       "id": "manual_dnsbl_both",
-      "description": "A manual Force both of scope dnsbl hands every feed of the scope to the stage with the force; outside the scope nothing is touched.",
+      "description": "A manual Force both of scope dnsbl hands every feed of the scope to the stage with the force, unchecked; outside the scope nothing is touched.",
       "request": {
         "trigger": "manual",
         "scope": "dnsbl",
@@ -606,22 +618,24 @@
         }
       ],
       "old_expect": {
+        "checked": [
+          "dnsbl:D"
+        ],
         "changes": {
           "dnsbl:D": "changed"
         }
       },
-      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
+      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core checks none and hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
       "expect": {
-        "checked": [
-          "dnsbl:D"
-        ],
+        "checked": [],
         "outcomes": {},
         "changes": {
           "dnsbl:D": "both"
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -688,7 +702,8 @@
           "dnsbl:D"
         ],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -755,12 +770,13 @@
           "dnsbl:D"
         ],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
       "id": "manual_both_download",
-      "description": "A manual Force download of scope both hands every feed of the scope to the stage with the force; outside the scope nothing is touched.",
+      "description": "A manual Force download of scope both hands every feed of the scope to the stage with the force, unchecked; outside the scope nothing is touched.",
       "request": {
         "trigger": "manual",
         "scope": "both",
@@ -803,19 +819,20 @@
         }
       ],
       "old_expect": {
+        "checked": [
+          "ipv4:A_v4",
+          "ipv4:B_v4",
+          "dnsbl:D"
+        ],
         "changes": {
           "ipv4:A_v4": "changed",
           "ipv4:B_v4": "unchanged",
           "dnsbl:D": "changed"
         }
       },
-      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
+      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core checks none and hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
       "expect": {
-        "checked": [
-          "ipv4:A_v4",
-          "ipv4:B_v4",
-          "dnsbl:D"
-        ],
+        "checked": [],
         "outcomes": {},
         "changes": {
           "ipv4:A_v4": "download",
@@ -824,12 +841,13 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
       "id": "manual_both_both",
-      "description": "A manual Force both of scope both hands every feed of the scope to the stage with the force; outside the scope nothing is touched.",
+      "description": "A manual Force both of scope both hands every feed of the scope to the stage with the force, unchecked; outside the scope nothing is touched.",
       "request": {
         "trigger": "manual",
         "scope": "both",
@@ -872,19 +890,20 @@
         }
       ],
       "old_expect": {
+        "checked": [
+          "ipv4:A_v4",
+          "ipv4:B_v4",
+          "dnsbl:D"
+        ],
         "changes": {
           "ipv4:A_v4": "changed",
           "ipv4:B_v4": "changed",
           "dnsbl:D": "changed"
         }
       },
-      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
+      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core checks none and hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
       "expect": {
-        "checked": [
-          "ipv4:A_v4",
-          "ipv4:B_v4",
-          "dnsbl:D"
-        ],
+        "checked": [],
         "outcomes": {},
         "changes": {
           "ipv4:A_v4": "both",
@@ -893,12 +912,13 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
       "id": "apply_does_no_feed_work",
-      "description": "An apply Update checks, runs and reports no feed: it applies what is published.",
+      "description": "An apply Update with nothing recorded as pending checks, runs and reports no feed: it applies what is published.",
       "request": {
         "trigger": "apply"
       },
@@ -953,7 +973,7 @@
           "dnsbl:D": "changed"
         }
       },
-      "departure": "Today's pending apply (pfb_core_update_apply(), a pass of scope both) rebuilds the feeds with an update or fail marker or no list when the window opens. Core builds them at the next in-window scheduled Update instead: a change found outside the window was not built, so the feed keeps its baseline's validators and the next probe finds the change again, at most one schedule interval later (spec \u00a73, stage 7).",
+      "departure": "Today's pending apply (pfb_core_update_apply(), a pass of scope both) rebuilds every feed with an update or fail marker or no list. Core's apply builds exactly the feeds an Update outside the window recorded as pending (Plan.PendingFeeds, carried by the Core Updater's state), and nothing else.",
       "expect": {
         "checked": [],
         "outcomes": {},
@@ -962,7 +982,64 @@
           "dnsbl:D"
         ],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "apply_builds_pending_feeds",
+      "description": "An apply Update builds the feeds recorded as pending, unchecked and downloaded, with no outcome; a pending feed that left the settings is skipped.",
+      "request": {
+        "trigger": "apply"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        }
+      ],
+      "pendingFeeds": [
+        "ipv4:Gone_v4",
+        "ipv4:A_v4"
+      ],
+      "files": {
+        "ipv4:A_v4": {
+          "update": true
+        }
+      },
+      "old_expect": {
+        "changes": {
+          "ipv4:A_v4": "changed",
+          "ipv4:B_v4": "unchanged"
+        }
+      },
+      "departure": "Today's pending apply (pfb_core_update_apply(), a pass of scope both) rebuilds every feed with an update or fail marker or no list. Core's apply builds exactly the feeds an Update outside the window recorded as pending (Plan.PendingFeeds, carried by the Core Updater's state), and nothing else.",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1002,7 +1079,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1042,7 +1120,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1086,7 +1165,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1135,7 +1215,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1178,7 +1259,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1221,7 +1303,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1266,7 +1349,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1316,7 +1400,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1356,7 +1441,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1396,7 +1482,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1447,7 +1534,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1502,7 +1590,8 @@
           "ipv4:B_v4"
         ],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1551,7 +1640,8 @@
           "ipv4:B_v4"
         ],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1637,7 +1727,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1702,12 +1793,13 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
       "id": "outside_window_changed",
-      "description": "Outside the apply window a found change is pending: its marker stays for the apply.",
+      "description": "Outside the apply window a found change is pending: the feed is left to the apply.",
       "request": {
         "trigger": "scheduled",
         "feeds": [
@@ -1749,7 +1841,165 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "pending"
+        "apply": "pending",
+        "pending": [
+          "ipv4:A_v4"
+        ]
+      }
+    },
+    {
+      "id": "pending_feeds_carried",
+      "description": "Outside the window the feeds an earlier Update left pending stay pending with the new ones, in walk order.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        }
+      ],
+      "window": "outside",
+      "pendingFeeds": [
+        "ipv4:B_v4"
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "update": true
+        }
+      },
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "pending",
+        "pending": [
+          "ipv4:A_v4",
+          "ipv4:B_v4"
+        ]
+      }
+    },
+    {
+      "id": "hold_unnamed_consumes_fail_marker",
+      "description": "A Hold feed with its list that Core did not name is neither checked nor run, and its stale fail marker goes, so it asks for no later walk.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            },
+            {
+              "header": "H",
+              "state": "hold",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:H_v4": {
+          "fail": true
+        }
+      },
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "geoip_changed_rebuilds_geoip_feeds",
+      "description": "A pass after the GeoIP conversion changed the country lists downloads every geoip feed again (today's geoip.update); other feeds follow the reuse rule.",
+      "request": {
+        "trigger": "manual",
+        "scope": "ip",
+        "force": "none"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            },
+            {
+              "header": "C",
+              "state": "enabled",
+              "format": "geoip",
+              "source": "US"
+            }
+          ]
+        }
+      ],
+      "geoipChanged": true,
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "unchanged",
+          "ipv4:C_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1790,7 +2040,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1832,7 +2083,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "pending"
+        "apply": "pending",
+        "pending": []
       }
     },
     {
@@ -1873,7 +2125,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1933,7 +2186,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -1990,7 +2244,8 @@
         "changes": {},
         "fail": [],
         "stopped": [],
-        "apply": "pending"
+        "apply": "pending",
+        "pending": []
       }
     },
     {
@@ -2042,7 +2297,8 @@
         "changes": {},
         "fail": [],
         "stopped": [],
-        "apply": "nothing"
+        "apply": "nothing",
+        "pending": []
       }
     },
     {
@@ -2084,7 +2340,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "pending"
+        "apply": "pending",
+        "pending": []
       }
     },
     {
@@ -2146,7 +2403,8 @@
           "ipv4:A_v4"
         ],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -2223,7 +2481,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -2264,7 +2523,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -2338,7 +2598,8 @@
         "stopped": [
           "ipv4:A_v4"
         ],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     },
     {
@@ -2390,7 +2651,8 @@
         },
         "fail": [],
         "stopped": [],
-        "apply": "now"
+        "apply": "now",
+        "pending": []
       }
     }
   ],

@@ -55,6 +55,7 @@ type corpusExpect struct {
 	Fail     []string          `json:"fail"`
 	Stopped  []string          `json:"stopped"`
 	Apply    string            `json:"apply"`
+	Pending  []string          `json:"pending"`
 }
 
 type corpusRequest struct {
@@ -74,6 +75,8 @@ type corpusCase struct {
 	Window        string                 `json:"window"`
 	PendingApply  bool                   `json:"pendingApply"`
 	ExtrasChanged bool                   `json:"extrasChanged"`
+	GeoIPChanged  bool                   `json:"geoipChanged"`
+	PendingFeeds  []string               `json:"pendingFeeds"`
 	Continent     string                 `json:"continent"`
 	SkipFeed      int                    `json:"skipfeed"`
 	Failures      map[string]int         `json:"failures"`
@@ -321,18 +324,20 @@ func corpusInput(t *testing.T, doc corpusDoc, c corpusCase) (Input, map[string]s
 		failures[name] = n
 	}
 	in := Input{
-		Request:  Request{Trigger: c.Request.Trigger, Scope: c.Request.Scope, Force: c.Request.Force, Feeds: c.Request.Feeds},
-		Settings: settings, Stages: stages, InWindow: c.Window != "outside", ExtrasChanged: c.ExtrasChanged,
-		PendingApply: c.PendingApply, SkipFeed: c.SkipFeed, Failures: failures,
+		Trigger: c.Request.Trigger, Scope: c.Request.Scope, Force: c.Request.Force, Feeds: c.Request.Feeds,
+		PendingFeeds: c.PendingFeeds, Settings: settings, Stages: stages, InWindow: c.Window != "outside",
+		ExtrasChanged: c.ExtrasChanged, PendingApply: c.PendingApply, GeoIPChanged: c.GeoIPChanged, SkipFeed: c.SkipFeed,
+		Failures: failures,
 	}
 	return in, dirs
 }
 
 // logical is what Build decided, in the corpus's words: the feeds checked in order, their outcomes, the change each run
-// feed is handed (its force, else its verdict), the fail markers standing afterwards, the feeds stopped and the decision.
+// feed is handed (its force, else its verdict), the fail markers standing afterwards, the feeds stopped, the decision and
+// the feeds a pending decision leaves to the apply.
 func logical(c corpusCase, plan Plan, dirs map[string]string) corpusExpect {
 	got := corpusExpect{Checked: []string{}, Outcomes: map[string]string{}, Changes: map[string]string{}, Fail: []string{},
-		Stopped: []string{}, Apply: string(plan.Decision)}
+		Stopped: []string{}, Apply: string(plan.Decision), Pending: append([]string{}, plan.PendingFeeds...)}
 	for _, item := range plan.Items {
 		id := item.Feed.ID
 		switch {
