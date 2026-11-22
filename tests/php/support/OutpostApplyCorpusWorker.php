@@ -40,7 +40,11 @@ declare(strict_types=1);
  * A step with `apply` runs the version 2 apply of #4037 in place of the pass (OutpostApplyTest): its `request` goes to
  * pfb_core_update_serve() on stdin, the Core API's socket is served by support/CoreApiStandIn.php from its `core` script
  * (no `core`: nothing listens), `lockHeld` (TRUE) holds the apply lock and `dispatchLockHeld` (TRUE) the scheduler
- * dispatcher lock while it runs. Its record is not compacted and adds the exit status, the result lines, the cursor file, the
+ * dispatcher lock while it runs. Its `seams` replace the host-reaching steps of the apply: `dns` ({mode, update, python, active}:
+ * what pfb_apply_dns() reports, `active` turns DNSBL, pfB-DNS and the Resolver on in $pfb for the steps after it), `unbound`
+ * ({effect}: what the Resolver reload does besides recording its call: `false` returns FALSE, `flag` sets
+ * $pfb['dnsbl_accounting_failed'], `marker` writes the `accounting` retry marker), `cache` (TRUE: the DNSBL archive records
+ * its call) and `fetchThrowAt` (the n-th fetch, from 1, throws). The record adds `seamCalls`. Its record is not compacted and adds the exit status, the result lines, the cursor file, the
  * requests Core received, the notices filed, the DNSBL statistics rows and the GeoIP pages.
  */
 
@@ -415,7 +419,47 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 			flock($fh, LOCK_EX);
 		}
 	}
-	$status = pfb_core_update_serve(json_encode($apply['request'], JSON_THROW_ON_ERROR), "{$work}/result");
+	$calls = ['unbound' => [], 'cache' => 0];
+	$want = $apply['seams'] ?? [];
+	$seams = [];
+	if (isset($want['dns'])) {
+		$seams['dns'] = static function () use ($want): array {
+			global $pfb;
+			if (!empty($want['dns']['active'])) {
+				$pfb['enable'] = $pfb['pfb_dns'] = $pfb['dnsbl'] = $pfb['unbound_state'] = PfbToggle::On;
+			}
+			return [$want['dns']['mode'] ?? 'enabled', !empty($want['dns']['update']), !empty($want['dns']['python'])];
+		};
+	}
+	if (isset($want['unbound'])) {
+		$seams['unbound'] = static function (string $mode, bool $update, bool $python) use ($want, &$calls): ?bool {
+			global $pfb;
+			$calls['unbound'][] = [$mode, $update, $python];
+			$effect = $want['unbound']['effect'] ?? '';
+			if ($effect === 'flag') {
+				$pfb['dnsbl_accounting_failed'] = TRUE;
+			} elseif ($effect === 'marker') {
+				file_put_contents("{$pfb['dnsbl_file']}.reload", 'accounting');
+			}
+			return $effect === 'false' ? FALSE : NULL;
+		};
+	}
+	if (!empty($want['cache'])) {
+		$seams['cache'] = static function (string $mode) use (&$calls): void {
+			$calls['cache']++;
+			$calls['cacheMode'] = $mode;
+		};
+	}
+	if (isset($want['fetchThrowAt'])) {
+		$fetches = 0;
+		$seams['fetch'] = static function (mixed ...$args) use ($want, &$fetches): array {
+			if (++$fetches === $want['fetchThrowAt']) {
+				throw new RuntimeException('the fetch throws, as the scenario asks');
+			}
+			return pfb_outpost_fetch(...$args);
+		};
+	}
+	$status = pfb_core_update_serve(json_encode($apply['request'], JSON_THROW_ON_ERROR), "{$work}/result", $seams);
 	foreach ($held as $fh) {
 		flock($fh, LOCK_UN);
 		fclose($fh);
@@ -438,6 +482,7 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 	sort($pages, SORT_STRING);
 	return [$status, [
 		'exit'         => $status,
+		'seamCalls'    => $calls,
 		'resultLines'  => is_file("{$work}/result") ? array_map(static fn (string $line): mixed => json_decode($line, TRUE),
 			corpus_lines("{$work}/result")) : NULL,
 		'cursors'      => is_file($cursors) ? json_decode((string) file_get_contents($cursors), TRUE) : NULL,

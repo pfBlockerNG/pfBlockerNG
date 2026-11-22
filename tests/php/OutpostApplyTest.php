@@ -861,6 +861,114 @@ final class OutpostApplyTest extends TestCase
 		$this->assertFalse($r['locks']['feedPass']);
 	}
 
+	// ---- the Resolver reload, its archive and its accounting ---------------------------------------
+
+	/** @return array<string, array{0: array<string, mixed>, 1: int}> what pfb_apply_dns() reports => the Resolver reloads */
+	public static function dnsStepReports(): array
+	{
+		return [
+			'the Unbound configuration changed' => [['mode' => 'enabled', 'update' => TRUE], 1],
+			'the python integration changed'    => [['mode' => 'enabled', 'python' => TRUE], 1],
+			'nothing changed'                   => [['mode' => 'enabled'], 0],
+		];
+	}
+
+	/** WHEN the DNS step reports a change THEN the Resolver is reloaded with its mode; WHEN nothing changed THEN it is not. */
+	#[DataProvider('dnsStepReports')]
+	public function testTheResolverIsReloadedOnlyWhenTheDnsStepReportsAChange(array $dns, int $reloads): void
+	{
+		$r = $this->applyOnce(['apply' => ['request' => self::request([], ['scope' => 'dnsbl']),
+			'seams' => ['dns' => $dns, 'unbound' => []]]]);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertCount($reloads, $r['seamCalls']['unbound']);
+		if ($reloads === 1) {
+			$this->assertSame(['enabled', !empty($dns['update']), !empty($dns['python'])], $r['seamCalls']['unbound'][0]);
+		}
+	}
+
+	/** @return array<string, array{0: array<string, mixed>, 1: array<string, mixed>, 2: int}> */
+	public static function archiveCases(): array
+	{
+		$changed = ['mode' => 'enabled', 'update' => TRUE, 'active' => TRUE];
+		$ram = ['system/use_mfs_tmpvar' => ''];
+		return [
+			'DNSBL changed on a RAM-disk /var'    => [$changed, $ram, 1],
+			'/var is not a RAM disk'              => [$changed, [], 0],
+			'the Resolver was not reloaded'       => [['active' => TRUE] + $changed + ['update' => FALSE], $ram, 0],
+			'DNSBL is not active'                 => [['active' => FALSE] + $changed, $ram, 0],
+		];
+	}
+
+	/** #468, as the update pass: the generated DNSBL state is archived after a reload on a RAM-disk /var, and only then. */
+	#[DataProvider('archiveCases')]
+	public function testTheReloadArchivesTheDnsblStateAsThePassDoes(array $dns, array $config, int $saves): void
+	{
+		$r = $this->applyOnce(['config' => $config, 'apply' => ['request' => self::request([], ['scope' => 'dnsbl']),
+			'seams' => ['dns' => $dns, 'unbound' => [], 'cache' => TRUE]]]);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame($saves, $r['seamCalls']['cache']);
+		if ($saves === 1) {
+			$this->assertSame('save', $r['seamCalls']['cacheMode']);
+		}
+	}
+
+	/** @return array<string, array{0: string}> */
+	public static function failedAccountings(): array
+	{
+		return ['the reload returns FALSE' => ['false'], 'the accounting-failed flag is set' => ['flag'], 'the accounting retry marker is set' => ['marker']];
+	}
+
+	/** WHEN the Resolver step's accounting failed THEN the apply exits 1, keeps the changes pending and records a failure. */
+	#[DataProvider('failedAccountings')]
+	public function testAFailedAccountingIsNotSettledAsApplied(string $effect): void
+	{
+		$apply = ['pendingToken' => 'tok-5', 'apply' => ['request' => self::request([], ['scope' => 'dnsbl', 'pendingToken' => 'tok-5']),
+			'seams' => ['dns' => ['mode' => 'enabled', 'update' => TRUE], 'unbound' => ['effect' => $effect]]]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertTrue($r['pending'], 'the changes stay pending');
+		$this->assertSame('failed', $r['applyRecord']['outcome'] ?? NULL);
+	}
+
+	/** WHEN the apply does not complete THEN the due flag is set again, whatever the trigger. */
+	#[DataProvider('triggersOfAnApply')]
+	public function testAnApplyThatFailsKeepsTheDueFlagForEveryTrigger(string $trigger): void
+	{
+		$apply = self::at([self::ABUSE => ['1', self::OLD]]) + ['pending' => TRUE, 'pfctlFail' => ['pfB_Abuse_v4.add'], 'apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)], ['trigger' => $trigger]),
+			'core'    => [self::delta(self::ABUSE, '2', '1', ['203.0.113.9'], ['192.0.2.2'], self::NEW), self::text(['203.0.113.9']),
+				self::text(['192.0.2.2'])]]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertTrue($r['ledgerPending'], "a failed {$trigger} apply keeps the pending apply flag");
+	}
+
+	/** @return array<string, array{0: string}> */
+	public static function triggersOfAnApply(): array
+	{
+		return ['manual' => ['manual'], 'scheduled' => ['scheduled'], 'apply' => ['apply']];
+	}
+
+	/** WHEN the apply throws part way through the fetch THEN no staged mirror is left beside the old ones and nothing moved. */
+	public function testAnExceptionAfterTheFirstStagedMirrorLeavesNoStagedFile(): void
+	{
+		$apply = self::at([self::ABUSE => ['1', self::OLD], self::BETA => ['1', self::OLD]]) + ['apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3), self::resource(self::BETA, '2', 3)]),
+			'core'    => [self::delta(self::ABUSE, '2', '1', ['203.0.113.9'], ['192.0.2.2'], self::NEW), self::text(['203.0.113.9']),
+				self::text(['192.0.2.2'])],
+			'seams'   => ['fetchThrowAt' => 2]]];
+		$r = $this->applyOnce($apply, ['Abuse', 'Beta']);
+
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertStringContainsString('the fetch throws, as the scenario asks', $r['log']);
+		$this->assertSame(['pfB_Abuse_v4.txt' => self::OLD, 'pfB_Beta_v4.txt' => self::OLD], $r['mirrors'], 'no mirror moved and none is left staged');
+		$this->assertSame([], self::pushes($r));
+	}
+
 	// ---- the version dispatch ------------------------------------------------------------------
 
 	/** A version 2 request the contract refuses runs nothing, writes no result and exits 2, with the version 2 reason. */
