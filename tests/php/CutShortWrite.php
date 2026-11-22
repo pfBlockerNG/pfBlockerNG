@@ -14,7 +14,7 @@ final class CutShortWrite
 		return function_exists('pcntl_fork') && function_exists('posix_setrlimit') && function_exists('posix_kill');
 	}
 
-	/** @return string what $call returned (var_export), or "ERR:" and the message of what it threw */
+	/** @return string what $call returned (var_export), or "ERR:" and the message of what it threw; a child that dies first throws */
 	public static function run(int $bytes, callable $call): string
 	{
 		$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
@@ -38,6 +38,9 @@ final class CutShortWrite
 		fclose($pair[1]);
 		$out = (string) stream_get_contents($pair[0]);
 		pcntl_waitpid($pid, $status);
+		if ($out === '') {
+			throw new RuntimeException('CutShortWrite: the child ended before it returned');
+		}
 		return $out;
 	}
 }
