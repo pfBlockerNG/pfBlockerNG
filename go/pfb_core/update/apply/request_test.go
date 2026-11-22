@@ -10,20 +10,72 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update/apply"
 )
 
-// WHEN a marker's text is checked against the apply's rule THEN only 1 to 64 printable ASCII characters without the space pass:
-// the Updater fails an Update at the snapshot on any other, naming the marker (C row 12 of the #4038 plan).
-func TestThePendingTokenRule(t *testing.T) {
-	for token, valid := range map[string]bool{
-		"0123456789abcdef": true, "~": true, "!": true, strings.Repeat("a", 64): true,
-		"": false, strings.Repeat("a", 65): false, "a b": false, "abc\n": false, "a\x00b": false, "café": false, "a\x7fb": false,
+// WHEN Core writes a request with the settings read's pending token THEN the token's JSON value reaches the request byte for
+// byte, whatever it holds, and no member is written for no token: the token is the platform's and Core never looks inside it.
+func TestThePendingTokenReachesTheRequestUnchanged(t *testing.T) {
+	for name, token := range map[string]json.RawMessage{
+		"a string with escapes":   json.RawMessage(`"a\"b\\c\u0001\n\u00e9"`),
+		"non-ASCII":               json.RawMessage(`"tökén 😀"`),
+		"64 characters":           json.RawMessage(`"` + strings.Repeat("a", 64) + `"`),
+		"65 characters":           json.RawMessage(`"` + strings.Repeat("a", 65) + `"`),
+		"an empty string":         json.RawMessage(`""`),
+		"a number, uninspected":   json.RawMessage(`12`),
+		"null, as the read gave":  json.RawMessage(`null`),
+		"none":                    nil,
+		"an empty value, as none": {},
 	} {
-		if got := apply.ValidToken(token); got != valid {
-			t.Errorf("%q: %v, want %v", token, got, valid)
+		t.Run(name, func(t *testing.T) {
+			written, err := apply.Encode(apply.Request{Trigger: "manual", Scope: "both", PendingToken: token})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var m map[string]json.RawMessage
+			if err := json.Unmarshal(written, &m); err != nil {
+				t.Fatal(err)
+			}
+			got, present := m["pendingToken"]
+			if present != (len(token) > 0) || string(got) != string(token) {
+				t.Errorf("Core writes %s, the token is %q: want it byte for byte, and no member for none", written, token)
+			}
+		})
+	}
+}
+
+// WHEN the token is not a JSON value THEN Encode fails, as for any value it cannot marshal: it writes no broken request.
+func TestATokenThatIsNotJSONIsNotWritten(t *testing.T) {
+	for _, token := range []string{`abc`, `"unterminated`, `{`, `"a" "b"`} {
+		if written, err := apply.Encode(apply.Request{Trigger: "manual", Scope: "both", PendingToken: json.RawMessage(token)}); err == nil {
+			t.Errorf("%q: Core writes %s", token, written)
 		}
-		_, err := apply.Encode(apply.Request{Trigger: "manual", Scope: "both", PendingToken: token})
-		if (err == nil) != (valid || token == "") {
-			t.Errorf("%q: Core writes it: %v, its rule says %v", token, err == nil, valid)
-		}
+	}
+}
+
+// WHEN the token is large THEN the 1 MiB bound holds for the request with the token in it: a token that alone fills it refuses
+// the request, and beside a large token the issues that do not fit are left out.
+func TestTheRequestBoundCountsTheToken(t *testing.T) {
+	huge := json.RawMessage(`"` + strings.Repeat("a", apply.MaxRequest) + `"`)
+	if _, err := apply.Encode(apply.Request{Trigger: "manual", Scope: "both", PendingToken: huge}); err == nil {
+		t.Error("Core writes a request whose token alone is over 1 MiB")
+	}
+	big := json.RawMessage(`"` + strings.Repeat("a", apply.MaxRequest-4096) + `"`)
+	req := apply.Request{Trigger: "manual", Scope: "both", PendingToken: big}
+	for range 100 {
+		req.Issues = append(req.Issues, apply.Issue{Resource: "feed/ipv4:Foo_v4", Stage: "parse", Code: "x", Message: strings.Repeat("m", 1000)})
+	}
+	written, err := apply.Encode(req)
+	if err != nil || len(written) > apply.MaxRequest {
+		t.Fatalf("Core writes %d bytes (%v), want at most %d", len(written), err, apply.MaxRequest)
+	}
+	var m struct {
+		PendingToken json.RawMessage `json:"pendingToken"`
+		Issues       []apply.Issue   `json:"issues"`
+	}
+	if err := json.Unmarshal(written, &m); err != nil {
+		t.Fatal(err)
+	}
+	if string(m.PendingToken) != string(big) || len(m.Issues) == 0 || len(m.Issues) > 4 || m.Issues[len(m.Issues)-1].Code != "issues_left_out" {
+		t.Errorf("Core writes the token of %d bytes and %d issues, want the token whole and the issues that fit, then issues_left_out",
+			len(m.PendingToken), len(m.Issues))
 	}
 }
 

@@ -99,10 +99,12 @@ func TestTheFileBackendHasNoPendingToken(t *testing.T) {
 	}
 }
 
-// Core carries the token and nothing else: only the backend seam, the store and the Core Updater's snapshot (which hands
-// it to the apply, issue #4038) name it, and none of them hands it to a formatter, a logger, a decoder or a comparison.
+// Core carries the token and nothing else: only the backend seam, the store, the Core Updater's snapshot and the request
+// writer that hands it to the apply (issue #4038) name it, and none of them hands it to a formatter, a logger, a decoder
+// or a comparison.
 func TestNoCoreCodeInterpretsThePendingToken(t *testing.T) {
-	holders := map[string]bool{"settings/adapter.go": true, "settings/backend.go": true, "settings/store.go": true, "update/loop.go": true}
+	holders := map[string]bool{"settings/adapter.go": true, "settings/backend.go": true, "settings/store.go": true,
+		"update/loop.go": true, "update/apply/request.go": true}
 	seen := 0
 	err := filepath.WalkDir("..", func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
@@ -120,7 +122,7 @@ func TestNoCoreCodeInterpretsThePendingToken(t *testing.T) {
 			}
 			seen++
 			if !holders[rel] {
-				t.Errorf("%s:%d names the pending token: only the settings backend seam and the store carry it", rel, n+1)
+				t.Errorf("%s:%d names the pending token: only the settings backend seam, the store and the request writer carry it", rel, n+1)
 			}
 			for _, use := range []string{"fmt.", "log.", "slog.", "strconv.", "Unmarshal", "string(", "==", "!=", "bytes.", "strings."} {
 				if strings.Contains(code, use) {
