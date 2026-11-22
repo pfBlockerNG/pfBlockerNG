@@ -2,9 +2,10 @@
 // which feeds stage 6 checks, in which order, what each feed the per-feed stage runs is handed (feedstage.Change), the
 // outcomes stage 17 reports, and whether the pass applies now, is left pending, or does not run. It is today's
 // pfb_core_update_run() routing, pfblockerng_sync_cron() walk and pfb_update_check(), held to the corpus
-// tests/updateloop/fixtures/worklist/scenarios.json. Its only I/O is the feed folders: feedstage.Recover, the probe, and
-// the markers beside each feed: "<name>.fail" (a failed download, retried by every Update), "<name>.update" (a change
-// found and not yet run, which a later Update runs) and "<name>.probe.src" (the source a kept probe body was fetched from).
+// tests/updateloop/fixtures/worklist/scenarios.json. Its only I/O is the feed folders: feedstage.Recover, the probe, the
+// fail marker "<name>.fail" the stage leaves after a failed download (read; removed only where today's walk consumes it),
+// and "<name>.probe.src", the source a kept probe body was fetched from. Core keeps no update marker: a change that is not
+// built leaves the baseline's validators as they were, so the next probe finds it again.
 package worklist
 
 import (
@@ -80,8 +81,8 @@ type Item struct {
 	// Checked: stage 6 checked the feed (pfb_update_check()), with a probe unless its markers or format decided.
 	Checked bool
 	Outcome string // OutcomeSuccess, OutcomeRetryCapReach or "": what stage 17 reports for the feed
-	// Stopped is why the feed is not run this Update (its folder could not be recovered, a marker could not be written):
-	// no change and no outcome, so the occurrence stays pending.
+	// Stopped is why the feed is not run this Update (its folder could not be recovered, or a kept probe or a fail marker
+	// could not be handled): no change and no outcome, so the occurrence stays pending.
 	Stopped string
 }
 
@@ -111,8 +112,8 @@ type builder struct {
 	found     bool // today's $pfb['update_cron']: a check found a change, or asked for the pass
 }
 
-// Build decides the work of one Update, after the lifetime lock and the snapshot. It writes nothing but the markers of the
-// feeds it checks, each by a rename, and it drops a kept probe body whose source is not the feed's now (issue #4038).
+// Build decides the work of one Update, after the lifetime lock and the snapshot. It writes only the record of a kept
+// probe body's source, by a rename, and it drops a kept probe body whose source is not the feed's now (issue #4038).
 func Build(ctx context.Context, in Input) (Plan, error) {
 	r := in.Request
 	b := &builder{ctx: ctx, in: in, recovered: map[string]error{}}
@@ -120,8 +121,8 @@ func Build(ctx context.Context, in Input) (Plan, error) {
 	case r.Trigger == "scheduled" || r.Trigger == "retry":
 		return b.scheduled()
 	case r.Trigger == "apply":
-		// Today's pending apply is a pass of scope both without a check (pfb_core_update_apply()).
-		return b.pass("both", "none")
+		// No feed work and no Extras: the apply applies what is published (spec §3, stage 7).
+		return Plan{Decision: Now}, nil
 	case r.Trigger != "manual":
 		return Plan{}, fmt.Errorf("trigger %q is no Update trigger", r.Trigger)
 	case !slices.Contains([]string{"ip", "dnsbl", "both"}, r.Scope):
@@ -160,7 +161,7 @@ func (b *builder) scheduled() (Plan, error) {
 }
 
 // pass is a pass without a check (today's sync_package_pfblockerng() called directly): every feed of the scope, a feed
-// with a marker or without its lists downloaded, any other reused, or every one parsed again for force parse.
+// with a fail marker or without its lists downloaded, any other reused, or every one parsed again for force parse.
 func (b *builder) pass(scope, force string) (Plan, error) {
 	cands, err := b.candidates(scope, false)
 	if err != nil {
@@ -171,7 +172,7 @@ func (b *builder) pass(scope, force string) (Plan, error) {
 		item, ok := b.prepare(c)
 		if ok && !c.feed.Custom {
 			item.Change.Verdict = feedstage.VerdictUnchanged
-			if present(c.path(".update")) || present(c.path(".fail")) || !feedstage.ListsPublished(c.dir, c.feed) {
+			if present(c.path(".fail")) || !feedstage.ListsPublished(c.dir, c.feed) {
 				item.Change.Verdict = feedstage.VerdictChanged
 			}
 		}
@@ -198,7 +199,9 @@ func (b *builder) walk(scope string, forceAll bool, pending map[string]bool) (Pl
 	for _, c := range cands {
 		id := c.feed.ID
 		if c.feed.State == "hold" && feedstage.ListsPublished(c.dir, c.feed) {
-			// Hold with its list stands: not checked, a stale fail marker goes, and a named feed is a success.
+			// Hold with its list stands: not checked, and a named feed is a success. The stage removes a fail marker only
+			// after a download, which a held feed never makes, so the walk consumes it as today's does: else the marker would
+			// add the feed to every later walk.
 			if !forceAll && !pending[id] {
 				continue
 			}
@@ -271,11 +274,8 @@ func (b *builder) prepare(c candidate) (Item, bool) {
 
 // check is pfb_update_check() for a feed of a scheduled walk, rule by rule in today's order.
 func (b *builder) check(c candidate, item Item) Item {
-	changed := func(outcome string, marker bool) Item {
+	changed := func(outcome string) Item {
 		b.found = true
-		if marker && writeMarker(c.path(".update")) != nil {
-			return Item{Feed: c.feed, Stopped: "update_marker_write_failed"}
-		}
 		item.Change.Verdict, item.Outcome = feedstage.VerdictChanged, outcome
 		return item
 	}
@@ -287,16 +287,10 @@ func (b *builder) check(c candidate, item Item) Item {
 		item.Change.Verdict, item.Change.Reason = feedstage.VerdictFailed, reason
 		return item
 	}
-	hadUpdate := present(c.path(".update"))
-	item = b.verdict(c, changed, unchanged, failed)
-	// An earlier change not yet run keeps its marker, and is downloaded whatever the check said (today's pass reads it).
-	if hadUpdate && item.Stopped == "" {
-		item.Change.Verdict, item.Change.Reason = feedstage.VerdictChanged, ""
-	}
-	return item
+	return b.verdict(c, changed, unchanged, failed)
 }
 
-func (b *builder) verdict(c candidate, changed func(string, bool) Item, unchanged, failed func(string) Item) Item {
+func (b *builder) verdict(c candidate, changed, unchanged, failed func(string) Item) Item {
 	f := c.feed
 	switch f.Format {
 	case "whois", "asn":
@@ -304,32 +298,33 @@ func (b *builder) verdict(c candidate, changed func(string, bool) Item, unchange
 		if !validListSource(f) {
 			return failed("feed_source_invalid")
 		}
-		return changed(OutcomeSuccess, true)
+		return changed(OutcomeSuccess)
 	}
 	request, reason := c.stage.Request(f)
 	if reason != "" {
 		return failed(reason) // today's "Invalid URL": no outcome
 	}
 	if b.in.SkipFeed != 0 && b.in.Failures[f.Name] >= b.in.SkipFeed {
+		// Not downloaded, so no stage run removes the marker: consumed here, as pfb_update_check() does.
 		if removeIfExists(c.path(".fail")) != nil {
 			return Item{Feed: f, Stopped: "fail_marker_remove_failed"}
 		}
 		return unchanged(OutcomeRetryCapReach)
 	}
 	if present(c.path(".fail")) {
-		return changed("", true) // re-attempted, with no outcome until it succeeds
+		return changed("") // re-attempted, with no outcome until it succeeds
 	}
 	if !feedstage.ListsPublished(c.dir, f) {
-		return changed("", false)
+		return changed("")
 	}
 	info, err := os.Lstat(c.path(".orig"))
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return changed(OutcomeSuccess, true)
+		return changed(OutcomeSuccess)
 	case err != nil || !info.Mode().IsRegular():
 		return failed("baseline_unavailable")
 	case f.Format == "rsync":
-		return changed(OutcomeSuccess, true)
+		return changed(OutcomeSuccess)
 	}
 	probe := c.stage.Fetcher.Probe(b.ctx, feedfetch.Feed{Dir: c.dir, Name: f.Name}, request)
 	switch probe.Decision {
@@ -339,11 +334,9 @@ func (b *builder) verdict(c candidate, changed func(string, bool) Item, unchange
 		if source, ok := probeIdentity(c); ok && regularExists(c.path(".probe")) && writeWhole(c.path(probeSource), source) != nil {
 			return Item{Feed: f, Stopped: "probe_source_write_failed"}
 		}
-		return changed(OutcomeSuccess, true)
+		return changed(OutcomeSuccess)
 	}
-	if writeMarker(c.path(".fail")) != nil {
-		return Item{Feed: f, Stopped: "fail_marker_write_failed"}
-	}
+	// No outcome keeps the occurrence pending, so the retry names the feed again; the stage owns the fail marker.
 	return failed(cmp.Or(probe.Reason, "feed_probe_failed"))
 }
 
@@ -493,8 +486,6 @@ func readRecord(path string) (string, error) {
 	return string(data), err
 }
 
-func writeMarker(path string) error { return writeWhole(path, "") }
-
 // writeWhole writes path whole: a temporary beside it, renamed over it.
 func writeWhole(path, content string) error {
 	part := path + ".part"
@@ -510,16 +501,6 @@ func writeWhole(path, content string) error {
 		os.Remove(part)
 	}
 	return err
-}
-
-// ClearUpdate removes the update marker of the feed name in dir once its run consumed the change.
-func ClearUpdate(dir, name string) error {
-	if name == "" || strings.ContainsFunc(name, func(r rune) bool {
-		return (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_'
-	}) {
-		return fmt.Errorf("feed name %q is no word", name)
-	}
-	return removeIfExists(filepath.Join(dir, name+".update"))
 }
 
 func present(path string) bool {
