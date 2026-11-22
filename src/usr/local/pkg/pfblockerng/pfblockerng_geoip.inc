@@ -29,6 +29,13 @@ const PFB_GEOIP_PAGES = [
 // A geo-catalog is about 100 KB (some 250 countries a list); this bounds what json_decode() copies into arrays.
 const PFB_GEOIP_CATALOG_MAX = 16777216;	// 16 MiB
 
+/** Give the staged file $tmp the owner, group and mode in $stat, a stat() of the page it is to replace. */
+function pfb_geoip_take_attributes(string $tmp, array $stat): bool {
+	return (fileowner($tmp) === $stat['uid'] || @chown($tmp, $stat['uid']))
+		&& (filegroup($tmp) === $stat['gid'] || @chgrp($tmp, $stat['gid']))
+		&& @chmod($tmp, $stat['mode'] & 07777);
+}
+
 /** Refresh legacy navigation without regenerating country data or populated page options. */
 function pfb_geoip_refresh_navigation(string $output_root = '/usr/local/www/pfblockerng'): bool {
 	$dnsbl_continent = "\n\$tab_array[]\t= array(gettext('DNSBL'),\t\tFALSE,\t'/pfblockerng/pfblockerng_dnsbl.php');\n";
@@ -96,10 +103,7 @@ function pfb_geoip_refresh_navigation(string $output_root = '/usr/local/www/pfbl
 			&& @fflush($handle) && @fsync($handle);
 		$ok = @fclose($handle) && $ok;
 		if ($ok) {
-			$ok = (fileowner($tmp) === $stat['uid'] || @chown($tmp, $stat['uid']))
-				&& (filegroup($tmp) === $stat['gid'] || @chgrp($tmp, $stat['gid']))
-				&& @chmod($tmp, $stat['mode'] & 07777)
-				&& @rename($tmp, $path);
+			$ok = pfb_geoip_take_attributes($tmp, $stat) && @rename($tmp, $path);
 		}
 		if (!$ok) {
 			@unlink($tmp);
@@ -876,7 +880,9 @@ EOF;
 // Update pfBlockerNG_Reputation.php file with Country Code changes
 function pfb_build_reputation_tab($et_options='', $output_root = '/usr/local/www/pfblockerng') {
 
-	if (!empty($et_options)) {
+	// Any value empty() holds empty (NULL, [], 0, '0') writes the page without countries.
+	$et_options = empty($et_options) ? '' : (string) $et_options;
+	if ($et_options !== '') {
 		$log = " pfBlockerNG Reputation Tab\n";
 		pfb_logger("{$log}", 4);
 	}
@@ -1319,8 +1325,9 @@ EOF;
  * (pfb_outpost_fetch()). A body over PFB_GEOIP_CATALOG_MAX, a row of another shape, a page name that is not a plain word,
  * a page or a list position given twice, a gap in a list's positions, or a country row without its page row refuses the
  * catalog whole. A page that is not one of the nine continent pages is skipped with its country rows. Every page is staged
- * beside its target before any is published; a page that cannot be staged publishes none. A continent page the catalog
- * does not name stays as it is.
+ * beside its target (synced, with the owner, group and mode of the page it replaces) before any is published; a page that
+ * cannot be staged publishes none, and nothing staged outlives the call. Staged files an earlier call left behind are
+ * removed first. A continent page the catalog does not name stays as it is.
  *
  * @return array{error: ?string, skipped: list<string>} error NULL when every page was written, else why the catalog was
  *   refused or which pages were not written; skipped the page names left out, in catalog order
@@ -1409,7 +1416,8 @@ function pfb_geoip_render_catalog(string $catalog, string $output_root = '/usr/l
 	}
 
 	$known = array_diff(PFB_GEOIP_PAGES, ['reputation']);
-	$skipped = array_values(array_diff(array_keys($continents), $known));
+	// A page name of digits is an integer array key.
+	$skipped = array_map('strval', array_values(array_diff(array_keys($continents), $known)));
 	$pages = [];
 	foreach (array_intersect_key($continents, array_flip($known)) as $page => $continent) {
 		$pages["pfblockerng_{$page}.php"] = pfb_geoip_continent_page($literal($continent), $page, $sources[$page][4] ?? '',
@@ -1420,33 +1428,52 @@ function pfb_geoip_render_catalog(string $catalog, string $output_root = '/usr/l
 	if (!is_dir($output_root) && !@mkdir($output_root, 0755, TRUE)) {
 		return ['error' => "{$output_root} cannot be created", 'skipped' => $skipped];
 	}
-	$staged = [];	// temporary file => target
-	foreach ($pages as $name => $php_data) {
-		$target = "{$output_root}/{$name}";
-		$tmp = "{$output_root}/.{$name}." . bin2hex(random_bytes(6));
-		// Mode 'x' creates the file as file_put_contents() creates today's pages (0666 less the umask), never through a link.
-		$fh = is_dir($target) && !is_link($target) ? FALSE : @fopen($tmp, 'xb');
-		$ok = $fh !== FALSE;
-		if ($ok) {
-			$staged[$tmp] = $target;
-			$ok = @fwrite($fh, $php_data) === strlen($php_data);
-			$ok = @fclose($fh) && $ok;
-		}
-		if (!$ok) {
-			foreach (array_keys($staged) as $file) {
-				@unlink($file);
-			}
-			return ['error' => "{$target} cannot be written", 'skipped' => $skipped];
+	// Files an earlier call staged and never published (it died first): only names of the form staged below, regular files.
+	$stale = '/^\.pfblockerng_(?:' . implode('|', PFB_GEOIP_PAGES) . ')\.php\.[0-9a-f]{12}$/D';
+	foreach (@scandir($output_root) ?: [] as $entry) {
+		$path = "{$output_root}/{$entry}";
+		if (preg_match($stale, $entry) === 1 && !is_link($path) && is_file($path)) {
+			@unlink($path);
 		}
 	}
-	// shortcut: the pages are renamed one at a time, not in one atomic step, so a request between two renames can see new
-	// pages beside old ones; publish a versioned folder if that shows.
+	$staged = [];	// temporary file => target
 	$failed = [];
-	foreach ($staged as $tmp => $target) {
-		if (!@rename($tmp, $target)) {
-			@unlink($tmp);
-			$failed[] = $target;
+	try {
+		foreach ($pages as $name => $php_data) {
+			$target = "{$output_root}/{$name}";
+			$tmp = "{$output_root}/.{$name}." . bin2hex(random_bytes(6));
+			// Mode 'x' creates the file as file_put_contents() creates a new page (0666 less the umask), never through a link.
+			$fh = is_dir($target) && !is_link($target) ? FALSE : @fopen($tmp, 'xb');
+			$ok = $fh !== FALSE;
+			if ($ok) {
+				$staged[$tmp] = $target;
+				$ok = @fwrite($fh, $php_data) === strlen($php_data) && @fflush($fh) && @fsync($fh);
+				$ok = @fclose($fh) && $ok;
+				// A page replaced keeps its owner, group and mode, as the write in place kept them.
+				$stat = !is_link($target) && is_file($target) ? @stat($target) : FALSE;
+				$ok = $ok && ($stat === FALSE || pfb_geoip_take_attributes($tmp, $stat));
+			}
+			if (!$ok) {
+				return ['error' => "{$target} cannot be written", 'skipped' => $skipped];
+			}
 		}
+		// shortcut: the pages are renamed one at a time, not in one atomic step, so a request between two renames can see
+		// new pages beside old ones; publish a versioned folder if that shows.
+		foreach ($staged as $tmp => $target) {
+			if (@rename($tmp, $target)) {
+				unset($staged[$tmp]);
+			} else {
+				$failed[] = $target;
+			}
+		}
+	} finally {
+		// Whatever is still staged was not published.
+		foreach (array_keys($staged) as $file) {
+			@unlink($file);
+		}
+	}
+	if ($reputation_source !== '' && !in_array("{$output_root}/pfblockerng_reputation.php", $failed, TRUE)) {
+		pfb_logger(" pfBlockerNG Reputation Tab\n", 4);
 	}
 	return ['error' => $failed === [] ? NULL : implode(', ', $failed) . ' cannot be replaced', 'skipped' => $skipped];
 }
