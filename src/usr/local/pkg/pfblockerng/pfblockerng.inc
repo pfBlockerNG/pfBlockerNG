@@ -5253,18 +5253,14 @@ function pfb_core_revision_key(): string {
 		// an older create left short was never published whole: it goes. The second of two first callers reads the first's key.
 		$lock = @fopen("{$path}.lock", 'c');
 		$written = TRUE;
-		if ($lock !== FALSE && flock($lock, LOCK_EX)) {
+		if ($lock !== FALSE && pfb_flock_bounded($lock, LOCK_EX, 10.0)) {
 			$key = @file_get_contents($path);
 			if (!is_string($key) || strlen($key) < 32) {
-				foreach (glob("{$path}.*") ?: [] as $left) {
-					if (preg_match('/\.[0-9a-f]{12}$/', $left)) {
-						@unlink($left);
-					}
-				}
 				if (is_string($key)) {
 					@unlink($path);
 				}
-				$staged = "{$path}." . bin2hex(random_bytes(6));
+				$staged = "{$path}.new";
+				@unlink($staged);
 				$fh = @fopen($staged, 'x');
 				$written = $fh !== FALSE && chmod($staged, 0600) && fwrite($fh, random_bytes(32)) === 32 && fsync($fh);
 				if ($fh !== FALSE) {

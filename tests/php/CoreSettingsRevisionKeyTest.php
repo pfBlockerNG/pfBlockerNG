@@ -102,7 +102,7 @@ final class CoreSettingsRevisionKeyTest extends TestCase
 	 */
 	public function testAStagedKeyAKilledCreateLeftIsRemovedByTheNextCreate(): void
 	{
-		$staged = "{$this->dir}/one.key.0123456789ab";
+		$staged = "{$this->dir}/one.key.new";
 		file_put_contents($staged, str_repeat("\x03", 32));
 
 		pfb_core_settings_revision(self::settings(''));
@@ -118,12 +118,13 @@ final class CoreSettingsRevisionKeyTest extends TestCase
 		$bytes = str_repeat("\x04", 32) . "\n";
 		file_put_contents($key, $bytes);
 
+		$refusal = '';
 		try {
 			pfb_core_settings_revision(self::settings(''));
-			$this->fail('a 33-byte key must be refused');
 		} catch (RuntimeException $e) {
-			$this->assertStringContainsString('cannot read the settings revision key', $e->getMessage());
+			$refusal = $e->getMessage();
 		}
+		$this->assertStringContainsString('cannot read the settings revision key', $refusal, 'a 33-byte key must be refused');
 		$this->assertSame($bytes, file_get_contents($key), 'the key is left as it was');
 	}
 
@@ -138,6 +139,7 @@ final class CoreSettingsRevisionKeyTest extends TestCase
 			$pairs[$i] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
 			$pid = pcntl_fork();
 			if ($pid === 0) {
+				pcntl_alarm(30);	// a child left waiting (no start signal, a stuck lock) dies without running shutdown handlers
 				fread($pairs[$i][1], 1);	// the start signal
 				try {
 					$out = (string) $call();
