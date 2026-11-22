@@ -1193,11 +1193,14 @@ SH
 	{
 		pfb_sync_status_open('ip', self::TABLE, 'apply', 'an earlier run failed', $this->dir);
 		file_put_contents("{$this->dir}/fail", "1\n");
+		$offset = self::logOffset();
 
 		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $this->apply([], [], 100, 100, 'delta'));
 
 		$this->assertSame([['replace', 1]], $this->shape());
 		$this->assertSame([self::failedCallEntry('replace')], $this->openEntries());
+		$says = array_filter(self::loggedSince($offset), static fn (string $l): bool => str_contains($l, 'the delta goes out'));
+		$this->assertSame([], array_values($says), 'no delta goes out, so no line says one does');
 	}
 
 	/**
@@ -1390,6 +1393,33 @@ SH
 		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
 		$this->assertNotSame([], $this->calls(), 'batches went out before the refused line');
 		$this->assertSame([self::entry("Updating [ " . self::TABLE . " ]: the {$side} file line 1900 is not a member")], $this->openEntries());
+	}
+
+	/**
+	 * Scenario: a batch fails in pfctl and a later line is refused by the member source. Given no open entry, the entry keeps
+	 * naming the pfctl failure, as it does for a wrong count; the refused line is only logged.
+	 */
+	#[DataProvider('rewrittenSides')]
+	public function testARefusedLineAfterAFailedBatchLeavesTheEntryNamingThePfctlFailure(string $side): void
+	{
+		$members = self::addresses(2000, 1);
+		$long = $this->members($side, $members);
+		$short = $this->members($side === 'add' ? 'remove' : 'add', ['10.2.0.1']);
+		$bad = $members;
+		$bad[1899] = 'ae0';
+		file_put_contents("{$this->dir}/rewrite", implode("\n", $bad) . "\n");
+		file_put_contents("{$this->dir}/rewrite.to", $long);
+		file_put_contents("{$this->dir}/fail", "1\n");
+
+		$result = $side === 'add'
+			? pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+				$long, 2000, $short, 1, 100000, 100000, 'delta', 64, FALSE, $this->batchdir)
+			: pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+				$short, 1, $long, 2000, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertSame([self::failedCallEntry('add')], $this->openEntries(),
+			'call 1, an add batch on either side, fails and is named, not the refused line');
 	}
 
 	/**
