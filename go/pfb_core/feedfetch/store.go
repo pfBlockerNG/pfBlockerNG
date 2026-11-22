@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
@@ -211,14 +212,20 @@ func localDecision(path string, feed Feed) Decision {
 	return Changed
 }
 
-// retime gives path the modification time mtime on a copy renamed over it.
-func retime(path string, mtime time.Time) {
+// retime gives path the modification time mtime: in place when the file has one name only, otherwise on a copy renamed
+// over it, as a hard link is never written through.
+func retime(path string, mtime time.Time) error {
 	in, err := os.Open(path)
 	if err != nil {
-		return
+		return err
 	}
 	defer in.Close()
-	if info, err := in.Stat(); err == nil {
-		replaceByCopy(in, path, info.Mode().Perm(), nil, mtime)
+	info, err := in.Stat()
+	if err != nil {
+		return err
 	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+		return replaceByCopy(in, path, info.Mode().Perm(), nil, mtime)
+	}
+	return os.Chtimes(path, mtime, mtime)
 }
