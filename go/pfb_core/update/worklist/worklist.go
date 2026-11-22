@@ -94,8 +94,11 @@ type Item struct {
 type Plan struct {
 	Items    []Item
 	Decision Decision
-	// PendingFeeds, on a Pending decision, are the feeds the apply must build: Input.PendingFeeds and the feeds this Update
-	// found changed. Nil otherwise.
+	// PendingFeeds are the feeds still pending once this plan is run: the caller's next state (Input.PendingFeeds). A
+	// Pending decision builds nothing, so they are Input.PendingFeeds and the feeds this Update found changed. Any other
+	// decision hands every pending feed it can to the stage, as changed (a held feed with its list is held, and counts as
+	// built); what stays are the feeds it could not build: outside the scope, under a Reload, or stopped. A feed that left
+	// the settings is dropped.
 	PendingFeeds []string
 }
 
@@ -110,9 +113,11 @@ type candidate struct {
 }
 
 type builder struct {
-	ctx       context.Context
-	in        Input
-	recovered map[string]error // Recover's answer per feed folder
+	ctx        context.Context
+	in         Input
+	recovered  map[string]error // Recover's answer per feed folder
+	configured []string         // the feed ids of the settings, in walk order
+	pending    map[string]bool  // the feeds to build: Input.PendingFeeds, and every geoip feed after a GeoIP change
 }
 
 // Build decides the work of one Update, after the lifetime lock and the snapshot. It writes only the record of a kept
@@ -131,27 +136,108 @@ func Build(ctx context.Context, in Input) (Plan, error) {
 	} else if !slices.Contains([]string{"scheduled", "retry", "apply"}, in.Trigger) {
 		return Plan{}, fmt.Errorf("trigger %q is no Update trigger", in.Trigger)
 	}
-	cands, err := b.candidates(scope)
+	b.pending = map[string]bool{}
+	for _, f := range b.feeds("both") {
+		if !f.Custom {
+			b.configured = append(b.configured, f.ID)
+			b.pending[f.ID] = slices.Contains(in.PendingFeeds, f.ID) || in.GeoIPChanged && f.Format == "geoip"
+		}
+	}
+	var want func(id string) bool
+	if in.Trigger == "apply" {
+		want = func(id string) bool { return b.pending[id] } // an apply reads the pending feeds' folders only
+	}
+	cands, err := b.candidates(scope, want)
 	if err != nil {
 		return Plan{}, err
 	}
+	var plan Plan
 	switch {
 	case in.Trigger == "scheduled" || in.Trigger == "retry":
-		return b.scheduled(cands), nil
+		plan = b.scheduled(cands)
 	case in.Trigger == "apply":
-		return b.apply(cands), nil
+		plan = Plan{Decision: Now} // exactly the pending feeds, which settle adds: no probe, no outcome, no Extras
 	case in.Force == "none" || in.Force == "parse":
-		return b.pass(cands, in.Force), nil
+		plan = b.pass(cands, in.Force)
+	default:
+		// A Force Check walks every feed of the scope and hands the stage the force, which downloads
+		// (pfblockerng_sync_cron() with $force_all; the stage drops the validators, and for both the digests, as
+		// pfb_force_clear_validators()).
+		plan = b.walk(cands, true, nil)
 	}
-	// A Force Check walks every feed of the scope and hands the stage the force, which downloads (pfblockerng_sync_cron()
-	// with $force_all; the stage drops the validators, and for both the digests, as pfb_force_clear_validators()).
-	return b.walk(cands, true, nil), nil
+	return b.settle(plan, cands), nil
+}
+
+// anyPending reports whether a feed of the settings is left to build.
+func (b *builder) anyPending() bool {
+	return slices.ContainsFunc(b.configured, func(id string) bool { return b.pending[id] })
+}
+
+// settle hands every pending feed of a plan that builds to the stage as changed, and sets what stays pending.
+func (b *builder) settle(plan Plan, cands []candidate) Plan {
+	if plan.Decision != Now {
+		return plan
+	}
+	items := map[string]Item{}
+	for _, item := range plan.Items {
+		items[item.Feed.ID] = item
+	}
+	plan.Items = nil
+	built := map[string]bool{}
+	for _, c := range cands {
+		item, ok := items[c.feed.ID]
+		if b.pending[c.feed.ID] {
+			item, built[c.feed.ID] = b.build(c, item, ok)
+			ok = true
+		}
+		if ok {
+			plan.Items = append(plan.Items, item)
+		}
+	}
+	for _, id := range b.configured {
+		if b.pending[id] && !built[id] {
+			plan.PendingFeeds = append(plan.PendingFeeds, id)
+		}
+	}
+	return plan
+}
+
+// build is the item of a pending feed, and whether it builds the change: a feed the plan runs anyway is handed to the
+// stage as changed, unless its force already downloads it or a Reload parses it from the baseline; a held feed with its
+// list is held, as the walk holds it.
+func (b *builder) build(c candidate, item Item, planned bool) (Item, bool) {
+	held := c.stop == "" && c.feed.State == "hold" && feedstage.ListsPublished(c.dir, c.feed)
+	switch {
+	case !planned && held:
+		item = b.hold(c, "none")
+		return item, item.Stopped == ""
+	case !planned:
+		item = b.prepare(c, feedstage.Change{Verdict: feedstage.VerdictChanged, Force: "none"})
+		return item, item.Stopped == ""
+	case item.Stopped != "" || item.Change.Force == "parse":
+		return item, false
+	case held || item.Change.Force == "download" || item.Change.Force == "both":
+		return item, true
+	}
+	item.Change.Verdict, item.Change.Reason = feedstage.VerdictChanged, ""
+	return item, true
+}
+
+// hold is the walk's rule for a held feed with its list: not checked and not built. The stage removes a fail marker only
+// after a download, which a held feed never makes, so the walk consumes it for every held feed, as today's does: else the
+// marker would make every later scheduled Update due.
+func (b *builder) hold(c candidate, force string) Item {
+	item := b.prepare(c, feedstage.Change{Verdict: feedstage.VerdictUnchanged, Force: force})
+	if item.Stopped == "" && removeIfExists(c.path(".fail")) != nil {
+		item = Item{Feed: c.feed, Stopped: "fail_marker_remove_failed"}
+	}
+	return item
 }
 
 // scheduled is pfb_core_update_scheduled(): a walk when a feed is named, a fail marker or the missing DNSBL manifest asks
 // for one, else the pass of a changed Extra.
 func (b *builder) scheduled(cands []candidate) Plan {
-	due := len(b.in.Feeds) > 0 || b.in.ManifestMissing || slices.ContainsFunc(cands, func(c candidate) bool {
+	due := len(b.in.Feeds) > 0 || b.in.ManifestMissing || b.anyPending() || slices.ContainsFunc(cands, func(c candidate) bool {
 		return c.walked && c.stop == "" && present(c.path(".fail"))
 	})
 	switch {
@@ -164,46 +250,33 @@ func (b *builder) scheduled(cands []candidate) Plan {
 	case !b.in.ExtrasChanged:
 		return Plan{Decision: Nothing}
 	case !b.in.InWindow:
-		return b.pending(Plan{}, cands, nil)
+		return b.deferred(Plan{}, cands, nil)
 	}
 	return b.pass(cands, "none")
 }
 
-// apply builds exactly the feeds earlier Updates left pending, as changed: no probe, no outcome, no Extras. A pending
-// feed that left the settings is skipped.
-func (b *builder) apply(cands []candidate) Plan {
-	plan := Plan{Decision: Now}
-	for _, c := range cands {
-		if slices.Contains(b.in.PendingFeeds, c.feed.ID) {
-			plan.Items = append(plan.Items, b.prepare(c, feedstage.Change{Verdict: feedstage.VerdictChanged, Force: "none"}))
-		}
-	}
-	return plan
-}
-
-// pending makes plan a Pending decision: the feeds of the settings, in walk order, that earlier Updates left pending or this
+// deferred makes plan a Pending decision: the feeds of the settings, in walk order, that earlier Updates left pending or this
 // one found changed are left to the apply.
-func (b *builder) pending(plan Plan, cands []candidate, changed []string) Plan {
+func (b *builder) deferred(plan Plan, cands []candidate, changed []string) Plan {
 	plan.Decision = Pending
-	for _, c := range cands {
-		if slices.Contains(b.in.PendingFeeds, c.feed.ID) || slices.Contains(changed, c.feed.ID) {
-			plan.PendingFeeds = append(plan.PendingFeeds, c.feed.ID)
+	for _, id := range b.configured {
+		if b.pending[id] || slices.Contains(changed, id) {
+			plan.PendingFeeds = append(plan.PendingFeeds, id)
 		}
 	}
 	return plan
 }
 
 // pass is a pass without a check (today's sync_package_pfblockerng() called directly): every feed of the scope, a feed
-// with a fail marker or without its lists downloaded (a geoip feed too after a GeoIP change), any other reused, or every
-// one parsed again for force parse.
+// with a fail marker or without its lists downloaded, any other reused, or every one parsed again for force parse.
 func (b *builder) pass(cands []candidate, force string) Plan {
 	plan := Plan{Decision: Now}
 	for _, c := range cands {
 		change := feedstage.Change{Force: force}
-		if !c.feed.Custom { // a custom list compares its own text (feedstage)
+		// A custom list compares its own text, and a Reload reads no verdict (feedstage).
+		if !c.feed.Custom && force == "none" {
 			change.Verdict = feedstage.VerdictUnchanged
-			if c.stop == "" && (present(c.path(".fail")) || !feedstage.ListsPublished(c.dir, c.feed) ||
-				b.in.GeoIPChanged && c.feed.Format == "geoip") {
+			if c.stop == "" && (present(c.path(".fail")) || !feedstage.ListsPublished(c.dir, c.feed)) {
 				change.Verdict = feedstage.VerdictChanged
 			}
 		}
@@ -220,8 +293,8 @@ func (b *builder) walk(cands []candidate, forceAll bool, pending map[string]bool
 		force = b.in.Force
 	}
 	var plan Plan
-	var found bool       // today's $pfb['update_cron']: a check found a change, or asked for the pass
-	var changed []string // the feeds today's check marks for an update ({header}.update)
+	found := b.anyPending() // today's $pfb['update_cron']: a check found a change, or feeds are left to build
+	var changed []string    // the feeds today's check marks for an update ({header}.update)
 	for _, c := range cands {
 		id := c.feed.ID
 		selected := forceAll || pending[id]
@@ -229,18 +302,12 @@ func (b *builder) walk(cands []candidate, forceAll bool, pending map[string]bool
 		case !c.walked:
 			continue
 		case c.stop == "" && c.feed.State == "hold" && feedstage.ListsPublished(c.dir, c.feed):
-			// Not checked, and a named feed is a success. The stage removes a fail marker only after a download, which a
-			// held feed never makes, so the walk consumes it for every held feed, as today's does: else the marker would
-			// make every later scheduled Update due.
-			item := b.prepare(c, feedstage.Change{Verdict: feedstage.VerdictUnchanged, Force: force})
-			switch {
-			case item.Stopped != "":
-			case removeIfExists(c.path(".fail")) != nil:
-				item = Item{Feed: c.feed, Stopped: "fail_marker_remove_failed"}
-			case pending[id]:
+			// A named feed is a success; a held feed that cannot be prepared is reported, named or not.
+			item := b.hold(c, force)
+			if item.Stopped == "" && pending[id] {
 				item.Outcome = OutcomeSuccess
 			}
-			if selected {
+			if selected || item.Stopped != "" {
 				plan.Items = append(plan.Items, item)
 			}
 			continue
@@ -264,7 +331,7 @@ func (b *builder) walk(cands []candidate, forceAll bool, pending map[string]bool
 	}
 	// An enabled continent asks for the pass as a found change does; outside the window the pass waits for the apply.
 	if !forceAll && !b.in.InWindow && (found || b.continentEnabled() || b.in.ExtrasChanged || b.in.PendingApply) {
-		return b.pending(plan, cands, changed)
+		return b.deferred(plan, cands, changed)
 	}
 	plan.Decision = Now // a change applied, or today's no-update pass
 	return plan
@@ -282,8 +349,8 @@ func (b *builder) prepare(c candidate, change feedstage.Change) Item {
 	return Item{Feed: c.feed, Change: change}
 }
 
-// verdict is what check decided for one feed: stage 6's answer, the outcome, or why the feed stops, and whether today's
-// check sets $pfb['update_cron'] (found) and marks the feed for an update (marked).
+// verdict is what check decided for one feed: stage 6's answer, the outcome, or why the feed stops, whether today's check
+// sets $pfb['update_cron'] (found), and whether the feed is left to the apply when the window defers its build (marked).
 type verdict struct {
 	verdict       feedstage.Verdict
 	reason        string
@@ -302,11 +369,16 @@ func (b *builder) check(c candidate) verdict {
 	f := c.feed
 	switch f.Format {
 	case "whois", "asn":
-		// Resolved again every run (today's "Update found"); an invalid source is today's "Invalid WHOIS" or "Invalid ASN".
-		if !validListSource(f) {
+		// Resolved again every run (today's "Update found"). A source today's check refuses ("Invalid WHOIS", "Invalid
+		// ASN") gives no outcome: today's pass reuses a published list, which a stage run would resolve again, so the feed
+		// is not run; without a list the pass downloads it and fails, as the stage's resolution does.
+		switch {
+		case validListSource(f):
+			return changed(OutcomeSuccess)
+		case feedstage.ListsPublished(c.dir, f):
 			return verdict{stop: "feed_source_invalid"}
 		}
-		return changed(OutcomeSuccess)
+		return verdict{verdict: feedstage.VerdictChanged, marked: true}
 	}
 	request, reason := c.stage.Request(f)
 	if reason != "" {
@@ -323,8 +395,8 @@ func (b *builder) check(c candidate) verdict {
 		return changed("") // re-attempted, with no outcome until it succeeds
 	}
 	if !feedstage.ListsPublished(c.dir, f) {
-		// Today's check marks no update for a missing list: the pass downloads it anyway.
-		return verdict{verdict: feedstage.VerdictChanged, found: true}
+		// Today's check marks no update for a missing list, which its pass and its pending apply download.
+		return verdict{verdict: feedstage.VerdictChanged, found: true, marked: true}
 	}
 	info, err := os.Lstat(c.path(".orig"))
 	switch {
@@ -374,12 +446,18 @@ func (b *builder) continentEnabled() bool {
 	return false
 }
 
-// candidates are the feeds of the scope's kinds in today's walk order: IPv4, IPv6, DNSBL, groups and rows in config order,
+// listed is a feed of the settings, and whether the walk (pfblockerng_sync_cron()) visits it: a feed row of a group not
+// updated Never.
+type listed struct {
+	feedstage.Feed
+	walked bool
+}
+
+// feeds are the feeds of the scope's kinds in today's walk order: IPv4, IPv6, DNSBL, groups and rows in config order,
 // each group's custom list after its rows. A group that is Disabled and a row that is disabled or has no source are left
-// out; a walk (pfblockerng_sync_cron()) also leaves out a group updated Never and the custom lists. Every folder is
-// recovered before any rule reads a file of it.
-func (b *builder) candidates(scope string) ([]candidate, error) {
-	var out []candidate
+// out.
+func (b *builder) feeds(scope string) []listed {
+	var out []listed
 	for _, kind := range kinds {
 		if scope != "both" && (scope == "dnsbl") != (kind == "dnsbl") {
 			continue
@@ -388,37 +466,46 @@ func (b *builder) candidates(scope string) ([]candidate, error) {
 			if action := text(group, "action"); action == "" || action == "Disabled" {
 				continue
 			}
-			var feeds []feedstage.Feed
+			walked := text(group, "updateFrequency") != "Never"
 			for _, row := range list(group, "feeds") {
 				if text(row, "state") != "disabled" && text(row, "url") != "" {
-					feeds = append(feeds, feedFor(kind, group, row))
+					out = append(out, listed{feedFor(kind, group, row), walked})
 				}
 			}
 			if custom := text(group, "customList"); custom != "" {
-				feeds = append(feeds, customFeedFor(kind, group, custom))
-			}
-			stage := b.in.Stages[kind]
-			for _, f := range feeds {
-				if stage == nil || stage.Fetcher == nil {
-					return nil, fmt.Errorf("no feed stage for %s feeds", kind)
-				}
-				f.SkipFeedPassed = b.in.SkipFeed != 0 && b.in.Failures[f.Name] >= b.in.SkipFeed
-				c := candidate{feed: f, stage: stage, dir: stage.Paths.FeedDir,
-					walked: !f.Custom && text(group, "updateFrequency") != "Never"}
-				err, done := b.recovered[c.dir]
-				if !done {
-					err = feedstage.Recover(c.dir)
-					b.recovered[c.dir] = err
-				}
-				switch {
-				case !feedWord(f.Name):
-					c.stop = "feed_name_invalid"
-				case err != nil:
-					c.stop = "feed_folder_unrecoverable"
-				}
-				out = append(out, c)
+				out = append(out, listed{customFeedFor(kind, group, custom), false})
 			}
 		}
+	}
+	return out
+}
+
+// candidates are the feeds of the scope with their stages, all of them or those want names. Every folder is recovered
+// before any rule reads a file of it.
+func (b *builder) candidates(scope string, want func(id string) bool) ([]candidate, error) {
+	var out []candidate
+	for _, f := range b.feeds(scope) {
+		if want != nil && !want(f.ID) {
+			continue
+		}
+		stage := b.in.Stages[f.Kind]
+		if stage == nil || stage.Fetcher == nil {
+			return nil, fmt.Errorf("no feed stage for %s feeds", f.Kind)
+		}
+		f.SkipFeedPassed = b.in.SkipFeed != 0 && b.in.Failures[f.Name] >= b.in.SkipFeed
+		c := candidate{feed: f.Feed, stage: stage, dir: stage.Paths.FeedDir, walked: f.walked}
+		err, done := b.recovered[c.dir]
+		if !done {
+			err = feedstage.Recover(c.dir)
+			b.recovered[c.dir] = err
+		}
+		switch {
+		case !feedstage.ValidName(f.Name):
+			c.stop = "feed_name_invalid"
+		case err != nil:
+			c.stop = "feed_folder_unrecoverable"
+		}
+		out = append(out, c)
 	}
 	return out, nil
 }
@@ -523,13 +610,6 @@ func writeWhole(path, content string) error {
 		os.Remove(part)
 	}
 	return err
-}
-
-// feedWord is the grammar of a feed's file stem, which keeps every path Build makes inside the feed folder.
-func feedWord(name string) bool {
-	return name != "" && !strings.ContainsFunc(name, func(r rune) bool {
-		return (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_'
-	})
 }
 
 func present(path string) bool {
