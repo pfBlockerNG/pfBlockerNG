@@ -446,7 +446,7 @@ func top1mCommit(stage, target, base, raw string) bool {
 	// A digest path that holds no file (a directory) vouches for nothing: the sidecar's rename over it fails, and the
 	// baseline reads as changed.
 	if err := os.Remove(base + ".xxhash128"); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		if info, lerr := os.Lstat(base + ".xxhash128"); lerr == nil && info.Mode().IsRegular() {
+		if info, lerr := os.Lstat(base + ".xxhash128"); lerr != nil || info.Mode().IsRegular() {
 			return false
 		}
 	}
@@ -527,8 +527,8 @@ func top1mRescue(target string) string {
 	return ""
 }
 
-// top1mSweep removes from dirs what an interrupted TOP1M publication left: its staged files (all but keep, this run's own
-// stage), and the copies of the old list and baseline that today's PHP sets aside (".pfbtop1m_active_", ".pfbtop1m_base_").
+// top1mSweep removes from dirs what an interrupted TOP1M publication left: its staged files (all but keep: this run's own
+// stage, and the PHP copy the rescue could not put back, the only copy of the live list), and the copies of the old list and baseline that today's PHP sets aside (".pfbtop1m_active_", ".pfbtop1m_base_").
 // Nothing in them is restored: the published list and baseline are each whole, and the detector reads a mismatched pair as
 // changed.
 func top1mSweep(keep []string, dirs ...string) {
