@@ -126,12 +126,19 @@ func TestRunNeverPublishesAStrayScriptFile(t *testing.T) {
 	root := killRoot(t, "198.51.100.1\n")
 	dir := filepath.Join(root, "orig")
 	writeFile(t, filepath.Join(root, "db", "feed.txt"), "198.51.100.2\n")
-	killScript(t, root, "pre.sh", `printf 'x\n' > "$1.foo"; printf 'x\n' > "$(dirname "$1")/Feed_v4.foo"`)
-	killScript(t, root, "post.sh", `printf 'x\n' > "$1.bar"; printf 'x\n' > "$(dirname "$1")/Feed_v4.bar"`)
+	// Each script writes its witness, outside the feed folder, once its stray files exist.
+	witnesses := t.TempDir()
+	killScript(t, root, "pre.sh", `printf 'x\n' > "$1.foo"; printf 'x\n' > "$(dirname "$1")/Feed_v4.foo"; : > '`+witnesses+`/pre'`)
+	killScript(t, root, "post.sh", `printf 'x\n' > "$1.bar"; printf 'x\n' > "$(dirname "$1")/Feed_v4.bar"; : > '`+witnesses+`/post'`)
 	stage, feed := killStage(root)
 	feed.PreScript, feed.PostScript = "pre.sh", "post.sh"
 	if r := run(stage, feed, "none"); r.Disposition != "changed" {
 		t.Fatalf("the run = %+v, want the change published", r)
+	}
+	for _, name := range []string{"pre", "post"} {
+		if _, err := os.Stat(filepath.Join(witnesses, name)); err != nil {
+			t.Fatalf("the %s-script never left its stray files: %v", name, err)
+		}
 	}
 	if got := readFile(t, filepath.Join(dir, "Feed_v4.parsed.ip")); got != "198.51.100.2\n" {
 		t.Errorf("the run published %q, want the changed source", got)

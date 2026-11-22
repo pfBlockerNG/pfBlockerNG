@@ -23,19 +23,22 @@ func localStage(t *testing.T) (*Stage, Feed, string) {
 	return stage, testFeed("ipv4", "enabled", "auto", "file://"+source), source
 }
 
-// Scenario: the record of an abandoned download survives its failed run.
-// Given a published baseline and a changed source whose pre-script fails after the new download was normalized, when the
-// normalization record of that download is left in place (as a KILL before its removal, or a failed removal, leaves it),
-// then the next run, which ingests the same download again, parses it instead of reusing the baseline's list.
-func TestStaleNormalizationRecordIsNeverReused(t *testing.T) {
+// Scenario: a failed run publishes nothing of the download it normalized.
+// Given a published baseline and a changed source whose pre-script fails after the new download was normalized (the script
+// saves the run's own normalization record, which names the new download), then the failed run leaves the baseline's
+// normalization and its record in the feed folder, so that the next run, which ingests the same download again, parses it
+// instead of reusing the baseline's list.
+func TestAFailedRunPublishesNoNormalizationRecord(t *testing.T) {
 	stage, feed, source := localStage(t)
 	dir := stage.Paths.FeedDir
 	writeFile(t, source, "198.51.100.1\n")
 	if r := run(stage, feed, "none"); r.Disposition != "changed" {
 		t.Fatalf("the baseline run = %+v", r)
 	}
-	record, saved := filepath.Join(dir, "feed_v4.norm.src.xxhash128"), filepath.Join(t.TempDir(), "record")
-	script := fmt.Sprintf("#!/bin/sh\ncp '%s' '%s'\nexit 1\n", record, saved)
+	live, runRecord := filepath.Join(dir, "feed_v4.norm.src.xxhash128"), filepath.Join(t.TempDir(), "record")
+	baselineRecord, baselineNorm := readFile(t, live), readFile(t, filepath.Join(dir, "feed_v4.norm"))
+	// $1 is the run's normalized download; its record is beside it in the run folder.
+	script := fmt.Sprintf("#!/bin/sh\ncp \"$(dirname \"$1\")/feed_v4.norm.src.xxhash128\" '%s'\nexit 1\n", runRecord)
 	if err := os.WriteFile(filepath.Join(stage.Paths.ScriptDirs[0], "pre.sh"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +48,15 @@ func TestStaleNormalizationRecordIsNeverReused(t *testing.T) {
 	if r := run(stage, scripted, "none"); r.Disposition != "failed" || r.Stage != "script" {
 		t.Fatalf("the run whose pre-script fails = %+v", r)
 	}
-	writeFile(t, record, readFile(t, saved))
+	if saved := readFile(t, runRecord); saved == baselineRecord {
+		t.Fatalf("the run's normalization record is the baseline's %q, want one that names the new download", saved)
+	}
+	if got := readFile(t, live); got != baselineRecord {
+		t.Errorf("the failed run left the normalization record %q, want the baseline's %q", got, baselineRecord)
+	}
+	if got := readFile(t, filepath.Join(dir, "feed_v4.norm")); got != baselineNorm {
+		t.Errorf("the failed run left the normalization %q, want the baseline's %q", got, baselineNorm)
+	}
 
 	if r := run(stage, feed, "none"); r.Disposition != "changed" {
 		t.Fatalf("the next run = %+v, want the change parsed, not the baseline's list reused", r)

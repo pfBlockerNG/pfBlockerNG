@@ -19,9 +19,11 @@ func TestInPlacePostScriptNeverReachesTheDownload(t *testing.T) {
 	}))
 	defer server.Close()
 	stage := testStage(t)
-	scripts := t.TempDir()
+	scripts, witness := t.TempDir(), filepath.Join(t.TempDir(), "rewrote")
 	stage.Paths.ScriptDirs = []string{scripts}
-	if err := os.WriteFile(filepath.Join(scripts, "post.sh"), []byte("#!/bin/sh\nprintf '10.9.9.9\\n' > \"$1\"\n"), 0o755); err != nil {
+	// The witness is written once the rewrite succeeded, outside the feed folder.
+	script := "#!/bin/sh\nprintf '10.9.9.9\\n' > \"$1\" && : > '" + witness + "'\n"
+	if err := os.WriteFile(filepath.Join(scripts, "post.sh"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	dir := stage.Paths.FeedDir
@@ -36,6 +38,9 @@ func TestInPlacePostScriptNeverReachesTheDownload(t *testing.T) {
 	got := stage.Run(context.Background(), feed, Change{Verdict: VerdictChanged, Force: "none"})
 	if got.Disposition != "failed" || got.Stage != "publish" {
 		t.Fatalf("the run whose publication fails = %+v, want failed at publish", got)
+	}
+	if _, err := os.Stat(witness); err != nil {
+		t.Fatalf("the post-script never rewrote its file: %v", err)
 	}
 	if body := readFile(t, orig); body != "203.0.113.1\n" {
 		t.Fatalf("after the failed run the download is %q, want the download before the run", body)

@@ -70,6 +70,9 @@ func matrixStage(root string, sc matrixScenario) (*Stage, Feed) {
 	return stage, feed
 }
 
+// postWitness is the file the post variant's script writes once it ran, beside the folders of root, outside the feed folder.
+func postWitness(root string) string { return filepath.Join(root, "post.ran") }
+
 // matrixRoot makes fresh folders for sc with the baseline published from the old source and the changed source in place.
 func matrixRoot(t *testing.T, sc matrixScenario) string {
 	t.Helper()
@@ -80,7 +83,7 @@ func matrixRoot(t *testing.T, sc matrixScenario) string {
 		}
 	}
 	if sc.Variant == "post" {
-		killScript(t, root, "post.sh", `printf '10.9.9.9\n' > "$1"`)
+		killScript(t, root, "post.sh", `printf '10.9.9.9\n' > "$1"; : > '`+postWitness(root)+`'`)
 	}
 	old, changed := sc.contents()
 	writeFile(t, filepath.Join(root, "db", "feed.txt"), old)
@@ -387,7 +390,13 @@ func TestKillAtEveryFileOperation(t *testing.T) {
 		oracle := matrixOracle(t, sc)
 		// The count of the run's operations, from a run that is never stopped; that run is checked as well.
 		root := matrixRoot(t, sc)
+		if err := os.Remove(postWitness(root)); err != nil && !os.IsNotExist(err) { // the baseline run's
+			t.Fatal(err)
+		}
 		_, total := runMatrixCall(t, matrixCall{Mode: "run", Root: root, Scenario: sc})
+		if _, err := os.Stat(postWitness(root)); sc.Variant == "post" && err != nil {
+			t.Fatalf("%s: the uninterrupted run never ran its post-script, so its operation count lacks the script's: %v", sc.name(), err)
+		}
 		if total == 0 {
 			t.Fatalf("%s: the run performed no file operation", sc.name())
 		}
