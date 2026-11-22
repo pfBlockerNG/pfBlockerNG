@@ -355,8 +355,8 @@ func TestTheSnapshotIsTakenOnlyAfterTheOwnershipHandshake(t *testing.T) {
 	waitUnlocked(t, log.Name()+".lock")
 }
 
-// releaseFIFO opens path for writing, which returns once a reader holds it, and fails the test when no reader comes
-// (an adapter that died or timed out) instead of blocking until the suite's timeout.
+// releaseFIFO opens path for writing, which returns once a reader holds it. When no reader comes (an adapter that died
+// or timed out) it fails the test and leaves no goroutine blocked, instead of blocking until the suite's timeout.
 func releaseFIFO(t *testing.T, path string) {
 	t.Helper()
 	done := make(chan error, 1)
@@ -373,6 +373,11 @@ func releaseFIFO(t *testing.T, path string) {
 			t.Fatal(err)
 		}
 	case <-time.After(stuck):
+		// A reader of our own lets the blocked open return, so the goroutine ends with the test.
+		if r, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
+			<-done
+			r.Close()
+		}
 		t.Fatalf("STUCK: nothing read %s within %v", path, stuck)
 	}
 }
