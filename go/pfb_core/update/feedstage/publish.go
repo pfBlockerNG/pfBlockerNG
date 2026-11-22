@@ -4,8 +4,10 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
@@ -165,45 +167,61 @@ func snapshotPaths(paths []string) (*pathSnapshot, error) {
 	return backup, nil
 }
 
-// backupFile keeps source under a name that says what it backs up, so that Recover can put it back after a KILL. Writers
-// replace a target by rename, so a hard link keeps the old bytes; a copy is the fallback.
+// backupFile keeps source under a name that says what it backs up, so that Recover can put it back after a KILL. The copy
+// is built under the staged prefix, which Recover removes, and gets its backup name only once whole: no incomplete file ever
+// carries one.
 func backupFile(source string, mode fs.FileMode) (string, error) {
-	placeholder, err := os.CreateTemp(filepath.Dir(source), "."+filepath.Base(source)+backupMark)
+	staged, err := stagedCopy(source, mode)
 	if err != nil {
 		return "", err
 	}
-	name := placeholder.Name()
-	if err := placeholder.Close(); err != nil {
-		os.Remove(name)
+	defer os.Remove(staged)
+	step("backup:" + filepath.Base(source))
+	for range 100 {
+		backup := filepath.Join(filepath.Dir(source), "."+filepath.Base(source)+backupMark+strconv.FormatUint(rand.Uint64(), 36))
+		err := os.Link(staged, backup)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil { // a folder without hard links: a rename names the whole copy as well
+			if err := os.Rename(staged, backup); err != nil {
+				return "", err
+			}
+		}
+		return backup, nil
+	}
+	return "", errors.New("no free backup name")
+}
+
+// stagedCopy is a whole copy of source under the staged prefix. Writers replace a target by rename, so a hard link keeps the
+// old bytes; a synced copy is the fallback.
+func stagedCopy(source string, mode fs.FileMode) (string, error) {
+	dir := filepath.Dir(source)
+	file, err := os.CreateTemp(dir, stagePrefix)
+	if err != nil {
 		return "", err
 	}
-	if err := os.Remove(name); err != nil {
-		return "", err
-	}
-	if err := os.Link(source, name); err == nil {
+	name := file.Name()
+	file.Close()
+	if os.Remove(name) == nil && os.Link(source, name) == nil {
 		return name, nil
 	}
-	input, err := os.Open(source)
-	if err != nil {
-		return "", err
-	}
-	defer input.Close()
-	output, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-	if err != nil {
-		return "", err
-	}
-	_, err = io.Copy(output, input)
+	os.Remove(name)
+	name, err = stageOutput(dir, func(w io.Writer) error {
+		input, err := os.Open(source)
+		if err != nil {
+			return err
+		}
+		defer input.Close()
+		_, err = io.Copy(w, input)
+		return err
+	})
 	if err == nil {
-		err = output.Sync()
+		if err = os.Chmod(name, mode); err != nil {
+			os.Remove(name)
+		}
 	}
-	if closeErr := output.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		os.Remove(name)
-		return "", err
-	}
-	return name, nil
+	return name, err
 }
 
 func (s *pathSnapshot) restore() error {
@@ -288,12 +306,11 @@ func sameFileContents(path, want string) (bool, error) {
 	return true, nil
 }
 
-// Recover puts back what a run killed in the middle of a feed left in the feed folder dir, before the next run stages
-// anything (issue #4038, cutover item from #4035): a regular IP restore point is renamed back over the download, then every
-// baseline backup over its target, so the download and the published list agree again; the validators and the normalization
-// baseline of a feed whose download was put back are dropped, so its next run transfers and parses again; staged files are
-// removed. A restore point that is
-// no regular file is removed, as feedparse's Restore does. A folder that is a symbolic link is refused, untouched.
+// Recover makes the feed folder dir consistent before the next run stages anything (issue #4038, cutover item from #4035):
+// a KILL leaves restore points, backups and staged files. A regular IP restore point is renamed back over the download, then
+// every backup over its target; the validators of a feed whose files were put back are dropped, so that its next run
+// transfers again; staged files and script copies are removed. A restore point that is no regular file is removed, as
+// feedparse's Restore does. A folder that is a symbolic link is refused, untouched.
 func Recover(dir string) error {
 	if !filepath.IsAbs(dir) {
 		return errors.New("feed folder is not an absolute path")
