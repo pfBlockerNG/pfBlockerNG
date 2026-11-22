@@ -9,9 +9,9 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update/feedstage"
 )
 
-// A pending feed the walk checks keeps the check's verdict: past the retry cap it is not downloaded, a failed check is
-// failed with its reason (the stage's failure path owns the fail marker), and both stay pending; a change found is built,
-// and a source found unchanged has no change left to build.
+// A pending feed the walk checks keeps the check's verdict: past the retry cap it is not downloaded and leaves pending, so
+// no later Update builds it past the cap; a failed check is failed with its reason (the stage's failure path owns the fail
+// marker) and stays pending; a change found is built, and a source found unchanged has no change left to build.
 func TestCheckVerdictOfAPendingFeedStands(t *testing.T) {
 	srv := servedBodies(t, map[string]string{"/changed": "9.9.9.9\n", "/same": "1.2.3.4\n"})
 	for _, c := range []struct {
@@ -21,7 +21,7 @@ func TestCheckVerdictOfAPendingFeedStands(t *testing.T) {
 		outcome    string
 		pending    []string
 	}{
-		{"retry cap", "/same", true, feedstage.VerdictUnchanged, OutcomeRetryCapReach, []string{"ipv4:A_v4"}},
+		{"retry cap", "/same", true, feedstage.VerdictUnchanged, OutcomeRetryCapReach, nil},
 		{"failed check", "/missing", false, feedstage.VerdictFailed, "", []string{"ipv4:A_v4"}},
 		{"changed", "/changed", false, feedstage.VerdictChanged, OutcomeSuccess, nil},
 		{"unchanged", "/same", false, feedstage.VerdictUnchanged, OutcomeSuccess, nil},
