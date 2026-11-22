@@ -409,20 +409,26 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 	foreach ([$socket, "{$work}/core-requests", "{$work}/result"] as $path) {
 		@unlink($path);
 	}
-	$standin = NULL;
-	if (isset($apply['core'])) {
-		file_put_contents("{$work}/core-script.json", json_encode($apply['core'], JSON_THROW_ON_ERROR));
-		$standin = pfb_test_start_process([PHP_BINARY, "{$repo}/tests/php/support/CoreApiStandIn.php", $socket, "{$work}/core-requests",
-			'script', "{$work}/core-script.json"]);
-		pfb_test_await_ready($standin);
+	// a step that holds the dispatcher lock as its caller cannot also hold it as another process: the second flock() would wait on the first
+	if (!empty($apply['dispatchLockHeld']) && is_resource($GLOBALS['pfb_schedule_dispatch_lock'] ?? NULL)) {
+		throw new RuntimeException('the step sets both dispatchHeld and apply.dispatchLockHeld: the fixtures conflict');
 	}
 	$held = [];
 	foreach (['lockHeld' => "{$pfb['dbdir']}/pfb_feed_pass.lock", 'dispatchLockHeld' => "{$pfb['schedule_state_dir']}/pfb_schedule_dispatch.lock"]
 		as $key => $lock) {
 		if (!empty($apply[$key])) {	// another open file description: flock() refuses this process too
 			$held[] = $fh = fopen($lock, 'c');
-			flock($fh, LOCK_EX);
+			if ($fh === FALSE || !flock($fh, LOCK_EX | LOCK_NB)) {
+				throw new RuntimeException("the step's {$key} fixture cannot take {$lock}");
+			}
 		}
+	}
+	$standin = NULL;
+	if (isset($apply['core'])) {
+		file_put_contents("{$work}/core-script.json", json_encode($apply['core'], JSON_THROW_ON_ERROR));
+		$standin = pfb_test_start_process([PHP_BINARY, "{$repo}/tests/php/support/CoreApiStandIn.php", $socket, "{$work}/core-requests",
+			'script', "{$work}/core-script.json"]);
+		pfb_test_await_ready($standin);
 	}
 	$calls = ['unbound' => [], 'cache' => 0];
 	if (!empty($apply['unlock'])) {
