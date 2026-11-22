@@ -104,28 +104,30 @@ function pfb_test_scrubbed_git_env(): array
 }
 
 /**
- * Block until a started process prints "ready" on its stdout (a stand-in that listens). A process that exits first fails at once
- * with what it said; the deadline only salvages a stuck run, reported as STUCK/ENVIRONMENT.
+ * Block until a started process prints "ready" on its stdout (a stand-in that listens). Its stderr is drained meanwhile, so a
+ * process that writes much there before it is ready is not blocked on a full pipe. A process that exits first fails at once
+ * with all it said on stderr; the deadline only salvages a stuck run, reported as STUCK/ENVIRONMENT.
  *
  * @param array{0: resource, 1: array<int, resource>, 2: string} $started
  */
 function pfb_test_await_ready(array $started, float $timeoutSeconds = 10.0): void
 {
-	$stdout = $started[1][1];
-	$said = '';
+	[, [1 => $stdout, 2 => $stderr]] = $started;
+	$said = $complained = '';
 	$deadline = hrtime(TRUE) + (int) ($timeoutSeconds * 1_000_000_000);
 	while (!str_contains($said, "ready\n")) {
 		if (feof($stdout)) {
 			$run = pfb_test_finish_process($started, 5.0);
-			throw new RuntimeException("`{$started[2]}` exited ({$run['exit']}) before it was ready: {$run['stderr']}");
+			throw new RuntimeException("`{$started[2]}` exited ({$run['exit']}) before it was ready: {$complained}{$run['stderr']}");
 		}
 		if (hrtime(TRUE) > $deadline) {
 			$run = pfb_test_finish_process($started, 1.0);
-			throw new RuntimeException("STUCK/ENVIRONMENT: `{$started[2]}` never said it was ready: {$run['stderr']}");
+			throw new RuntimeException("STUCK/ENVIRONMENT: `{$started[2]}` never said it was ready: {$complained}{$run['stderr']}");
 		}
-		$read = [$stdout];
+		$read = [$stdout, $stderr];
 		$write = $except = NULL;
 		stream_select($read, $write, $except, 0, 100_000);
 		$said .= (string) fread($stdout, 64);
+		$complained .= (string) stream_get_contents($stderr);
 	}
 }
