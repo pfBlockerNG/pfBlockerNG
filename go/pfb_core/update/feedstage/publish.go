@@ -195,7 +195,8 @@ type commitOp struct {
 // commit publishes the files of the run folder run whose suffixes are in suffixes, and removes the published ones the run
 // does not hold whose suffixes are in removable. committed reports whether COMMIT was made: without it the feed folder is
 // untouched and the caller deletes the run folder; with it an error leaves the run folder for Recover, which finishes it.
-func commit(dir, run, stem string, suffixes, removable []string) (committed bool, err error) {
+// markerOnly reports that the fail marker is the only operation the commit built.
+func commit(dir, run, stem string, suffixes, removable []string) (committed, markerOnly bool, err error) {
 	var removals, renames []commitOp
 	for _, suffix := range suffixes {
 		name := stem + suffix
@@ -205,27 +206,28 @@ func commit(dir, run, stem string, suffixes, removable []string) (committed bool
 			continue
 		}
 		if !errors.Is(err, fs.ErrNotExist) {
-			return false, err
+			return false, markerOnly, err
 		}
 		if _, err := lstat(filepath.Join(dir, name)); err == nil && slices.Contains(removable, suffix) {
 			removals = append(removals, commitOp{"remove", name})
 		} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return false, err
+			return false, markerOnly, err
 		}
 	}
 	ops := append(removals, renames...)
+	markerOnly = len(ops) > 0 && !slices.ContainsFunc(ops, func(op commitOp) bool { return op.name != stem+".fail" })
 	if len(ops) == 0 {
-		return false, nil // nothing to publish: the feed folder stays as it is and the caller deletes the run folder
+		return false, false, nil // nothing to publish: the feed folder stays as it is and the caller deletes the run folder
 	}
 	if err := checkOps(dir, run, ops); err != nil {
-		return false, err
+		return false, markerOnly, err
 	}
 	// The files the commit renames are on disk before COMMIT is.
 	var text strings.Builder
 	for _, op := range ops {
 		if op.verb == "rename" {
 			if err := syncPath(filepath.Join(run, op.name)); err != nil {
-				return false, err
+				return false, markerOnly, err
 			}
 		}
 		text.WriteString(op.verb + " " + op.name + "\n")
@@ -233,7 +235,7 @@ func commit(dir, run, stem string, suffixes, removable []string) (committed bool
 	staged := filepath.Join(run, commitName+".tmp")
 	file, err := create(staged)
 	if err != nil {
-		return false, err
+		return false, markerOnly, err
 	}
 	_, err = io.WriteString(file, text.String())
 	if err = errors.Join(err, syncFile(file), file.Close()); err == nil {
@@ -243,13 +245,13 @@ func commit(dir, run, stem string, suffixes, removable []string) (committed bool
 		err = rename(staged, filepath.Join(run, commitName))
 	}
 	if err != nil {
-		return false, err
+		return false, markerOnly, err
 	}
 	step("committed") // COMMIT stands: from here the run is committed and rolls forward, whatever fails
 	if err := syncPath(run); err != nil {
-		return true, err
+		return true, markerOnly, err
 	}
-	return true, finishRun(dir, run, ops)
+	return true, markerOnly, finishRun(dir, run, ops)
 }
 
 // syncPath syncs the file or folder at path.

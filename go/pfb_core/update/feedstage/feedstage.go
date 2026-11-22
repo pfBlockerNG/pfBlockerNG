@@ -195,7 +195,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 	feed := feedfetch.Feed{Dir: runDir, Name: f.Name}
 	// What the run publishes when it fails: nothing, but for a failed transfer (retired) and a failed whois (its marker).
 	var retire []string
-	retireReason := ""
+	retireReason, retireStage := "", ""
 	clearFail := false // the run's download succeeded, which removes the fail marker as today (apply.inc:2859, :4276)
 	defer func() {
 		partialWhois := result.Disposition == "failed" && result.Stage == "whois" && result.SourceChanged
@@ -210,9 +210,9 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 				suffixes = append(slices.Clone(suffixes), ".fail")
 			}
 		}
-		done, err := false, error(nil)
+		done, markerOnly, err := false, false, error(nil)
 		if suffixes != nil {
-			done, err = commit(dir, runDir, f.Name, suffixes, removable)
+			done, markerOnly, err = commit(dir, runDir, f.Name, suffixes, removable)
 		}
 		if !done {
 			_ = discard(runDir) // what stays is Recover's
@@ -221,7 +221,11 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		switch {
 		case err == nil:
 		case result.Disposition == "failed" && !partialWhois:
-			if retireReason != "" {
+			// Only the failure the branch itself returned takes its reason; a later stage keeps its own.
+			if retireReason != "" && result.Stage == retireStage {
+				if markerOnly {
+					retireReason = "fail_marker_publish_failed"
+				}
 				result = failedFeed(f.ID, result.Stage, retireReason)
 			}
 		case done:
@@ -268,7 +272,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			}
 			whois := s.Fetcher.Whois(ctx, feed, feedfetch.WhoisRequest{List: list, IPv6: f.Kind == "ipv6"})
 			// A custom WhoisConvert list's marker, left by a failed entry, stands whatever the run does next, as today.
-			retire, retireReason = []string{".fail"}, "fail_marker_publish_failed"
+			retire, retireReason, retireStage = []string{".fail"}, "fail_marker_publish_failed", "whois"
 			// Today's whois and asn formats go through pfb_download(), which succeeds whatever the entries did, and its
 			// caller then unlinks the marker (apply.inc:4276); a custom list's whoisconvert never does.
 			if !f.Custom && ctx.Err() == nil && whois.Reason == "" {
@@ -301,11 +305,15 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			ingested := s.Fetcher.Ingest(ctx, feed, request)
 			if !ingested.OK {
 				// Force both drops the digests before the transfer, whatever its outcome (pfb_force_clear_validators()).
-				retire, retireReason = forcedSuffixes(force), "validators_retire_failed"
+				retire, retireReason, retireStage = forcedSuffixes(force), "validators_retire_failed", "fetch"
 				// A failed transfer touches the marker, or past the skipfeed threshold removes it (pfb_download_failure()). A
-				// cancelled run did not fail the feed: it neither creates nor removes the marker, as the whois branch.
+				// cancelled run did not fail the feed: it neither creates nor removes the marker, as the whois branch. A
+				// deadline that passed is a failed download.
+				cancelled := errors.Is(ctx.Err(), context.Canceled)
+				reason := s.safeReason(ingested.Reason, "feed_fetch_failed", f)
 				switch {
-				case ctx.Err() != nil:
+				case cancelled:
+					reason = "cancelled"
 				case f.SkipFeedPassed:
 					clearFail = true
 				default:
@@ -319,7 +327,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 					_ = file.Close()
 					retire = append(slices.Clone(retire), ".fail")
 				}
-				return failedFeed(f.ID, "fetch", s.safeReason(ingested.Reason, "feed_fetch_failed", f))
+				return failedFeed(f.ID, "fetch", reason)
 			}
 			sourceChanged, clearFail = ingested.Status != httpStatusNotModified, true
 		}

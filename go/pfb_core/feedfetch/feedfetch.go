@@ -274,6 +274,9 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		// any failed ingest (#2820).
 		if lastMod := readFTPMetadataAt(probe).lastMod; !lastMod.IsZero() {
 			if err := retimeFile(body, lastMod); err != nil {
+				for _, v := range [...]string{".etag", ".lastmod", ".size"} {
+					os.Remove(probe + v)
+				}
 				return Result{Status: t.status, Reason: "published copy could not be retimed"}
 			}
 		}
