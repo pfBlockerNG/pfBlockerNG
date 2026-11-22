@@ -110,15 +110,24 @@ func (r PostScriptResult) Restore() {
 	}
 }
 
-// vet is pfb_resolve_list_script() on Name, run at every run: its base name, as a regular file whose real path sits directly
-// in one of Dirs (a symlink may only point inside its folder); the absolute in-folder path, which exec follows: a name
-// without a slash would be looked up on PATH. A set name that fails is logged; "0" is no name, as PHP's empty() reads it.
+// vet is ResolveListScript on Name and Dirs, run at every run; a set name that fails is logged.
 func (p PostScript) vet() (string, bool) {
-	if p.Name == "" || p.Name == "0" {
+	if path, ok := ResolveListScript(p.Name, p.Dirs); ok || p.Name == "" || p.Name == "0" {
+		return path, ok
+	}
+	p.sinks().Line(true, "\n[ %s ] post-script '%s' is not a file in the list-script folders; skipping\n", p.Header, p.Name)
+	return "", false
+}
+
+// ResolveListScript is pfb_resolve_list_script(): name's base name, as a regular file whose real path sits directly in one of
+// dirs, searched in order (a symlink may only point inside its folder). It returns the absolute in-folder path, which exec
+// follows: a name without a slash would be looked up on PATH. "" and "0" are no name, as PHP's empty() reads them.
+func ResolveListScript(name string, dirs []string) (string, bool) {
+	if name == "" || name == "0" {
 		return "", false
 	}
-	name := filepath.Base(p.Name)
-	for _, dir := range p.Dirs {
+	name = filepath.Base(name)
+	for _, dir := range dirs {
 		if dir == "" { // an unset folder, which Abs would make the working folder
 			continue
 		}
@@ -139,7 +148,6 @@ func (p PostScript) vet() (string, bool) {
 			return path, true
 		}
 	}
-	p.sinks().Line(true, "\n[ %s ] post-script '%s' is not a file in the list-script folders; skipping\n", p.Header, p.Name)
 	return "", false
 }
 
