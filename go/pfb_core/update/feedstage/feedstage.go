@@ -596,8 +596,9 @@ func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, inp
 	return withRecord(feed, source, result)
 }
 
-// withRecord writes the record of the input the run's lists stand for ("" for none) beside them in the run folder: the
-// commit publishes them together, so that no KILL can pair a list with another download.
+// withRecord writes the record of the input the run's lists stand for ("" for none) beside them in the run folder. One
+// COMMIT publishes them with the download, and a KILL inside it is finished forward: no list stands beside another
+// download.
 func withRecord(feed feedfetch.Feed, source string, result Result) Result {
 	if newFile(feedPath(feed, parsedSource+"."+digest.XXH128), func(w io.Writer) error {
 		_, err := io.WriteString(w, source)

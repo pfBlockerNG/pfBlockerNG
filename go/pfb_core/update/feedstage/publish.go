@@ -32,9 +32,9 @@ const parsedSource = ".parsed.src"
 var seeded = []string{".orig", ".orig.xxhash128", ".orig.md5", ".orig.etag", ".orig.lastmod", ".orig.size", ".raw", ".bk",
 	".probe", ".probe.etag", ".probe.lastmod", ".probe.size", ".norm", ".norm.src." + digest.XXH128}
 
-// published are the suffixes of every file a commit publishes, in the order it publishes them: the download with its
-// digests and validators first, the lists, and the record of their input last. Any other file a run leaves is never
-// published.
+// published are the suffixes of every file a commit publishes, in the deterministic order its COMMIT lists them: the
+// download with its digests and validators, the lists, and the record of their input. Any other file a run leaves is
+// never published.
 var published = append(slices.Clone(seeded), ".fail", ".parsed.ip", ".parsed.ndjson", ".parsed.v4.ip", ".parsed.v6.ip",
 	parsedSource+"."+digest.XXH128)
 
@@ -337,33 +337,13 @@ func finishRun(dir, run string, ops []commitOp) error {
 	return discard(run)
 }
 
-// discard deletes the run folder run entry by entry, without following a link. COMMIT goes last, so that a committed
-// folder says it is committed for as long as any of its files is left.
+// discard deletes the run folder run, its COMMIT first: a committed folder is discarded only once its operations are done,
+// and a folder whose COMMIT is gone is deleted whole by the next call. os.RemoveAll removes a link, never what it names.
 func discard(run string) error {
-	entries, err := os.ReadDir(run)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
+	if err := removeIfExists(filepath.Join(run, commitName)); err != nil {
 		return err
 	}
-	for _, last := range []bool{false, true} {
-		for _, e := range entries {
-			if (e.Name() == commitName) != last {
-				continue
-			}
-			path := filepath.Join(run, e.Name())
-			if e.IsDir() {
-				err = discard(path)
-			} else {
-				err = removeIfExists(path)
-			}
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return removeIfExists(run)
+	return os.RemoveAll(run)
 }
 
 // readCommit reads the COMMIT of the run folder of the feed stem: ok is false when there is none. Every line must be an
