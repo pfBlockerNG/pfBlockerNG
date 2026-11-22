@@ -99,3 +99,16 @@ func TestPassHoldsAPendingHeldFeed(t *testing.T) {
 			plan.PendingFeeds)
 	}
 }
+
+// A Reload is never held (feedstage): it parses a held feed again from its baseline and leaves its fail marker, which only
+// a pass that holds the feed consumes.
+func TestReloadParsesAHeldFeedAndLeavesItsFailMarker(t *testing.T) {
+	f := newFixture(t, "http://192.0.2.1/list")
+	f.row()["state"] = "hold"
+	writeFile(t, f.path(".fail"), "")
+	item := onlyItem(t, build(t, f.input(Input{Trigger: "manual", Scope: "ip", Force: "parse"})))
+	if item.Stopped != "" || item.Change != (feedstage.Change{Force: "parse"}) || !present(f.path(".fail")) {
+		t.Fatalf("item %+v, fail marker stands %v; want the feed parsed again and its marker left", item,
+			present(f.path(".fail")))
+	}
+}

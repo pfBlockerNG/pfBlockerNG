@@ -143,8 +143,8 @@ func TestForceCheckRunsAHeldFeed(t *testing.T) {
 	}
 }
 
-// A whois or asn source is checked as today's: an asn feed's AS number is letters and digits, a whois feed's list holds no
-// control character, each cut at its first space. Another source stops the feed.
+// A whois or asn source is checked as today's: an asn feed's AS number is letters and digits, a whois feed's domain passes
+// today's domain filter (PFB_FILTER_DOMAIN), each cut at its first space. Another source stops the feed.
 func TestWhoisAndASNSources(t *testing.T) {
 	for _, c := range []struct {
 		format, source string
@@ -152,6 +152,7 @@ func TestWhoisAndASNSources(t *testing.T) {
 	}{
 		{"asn", "AS64500 Example", true}, {"asn", "AS64-500", false}, {"whois", "example.com", true},
 		{"whois", "exa\x01mple.com", false},
+		{"whois", "notadomain", false}, {"whois", "a..example.com", false},
 	} {
 		f := newFixture(t, c.source)
 		f.row()["format"] = c.format

@@ -1,6 +1,7 @@
 package worklist
 
 import (
+	"os"
 	"testing"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update/feedstage"
@@ -8,19 +9,22 @@ import (
 
 // A capped pending feed leaves pending once its cap verdict stands: the next Update, given what this one left pending, does
 // not build it past the cap.
+// Inside the window or outside it, where the build waits for the apply.
 func TestRetryCappedPendingFeedIsNotBuiltLater(t *testing.T) {
-	f := newFixture(t, "http://192.0.2.1/list")
-	writeFile(t, f.path(".fail"), "") // checked without a probe
-	in := f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}, PendingFeeds: []string{"ipv4:A_v4"}})
-	in.SkipFeed, in.Failures = 1, map[string]int{"A_v4": 1}
-	first := build(t, in)
-	if item := onlyItem(t, first); item.Outcome != OutcomeRetryCapReach || present(f.path(".fail")) {
-		t.Fatalf("first Update: item %+v, fail marker stands %v; want the cap reached and its marker consumed", item,
-			present(f.path(".fail")))
-	}
-	next := build(t, f.input(Input{Trigger: "apply", PendingFeeds: first.PendingFeeds}))
-	if len(next.Items) != 0 || len(next.PendingFeeds) != 0 {
-		t.Fatalf("next Update: plan %+v, want the capped feed neither built nor pending", next)
+	for _, inWindow := range []bool{true, false} {
+		f := newFixture(t, "http://192.0.2.1/list")
+		writeFile(t, f.path(".fail"), "") // checked without a probe
+		in := f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}, PendingFeeds: []string{"ipv4:A_v4"}})
+		in.SkipFeed, in.Failures, in.InWindow = 1, map[string]int{"A_v4": 1}, inWindow
+		first := build(t, in)
+		if item := onlyItem(t, first); item.Outcome != OutcomeRetryCapReach || present(f.path(".fail")) {
+			t.Fatalf("in window %v, first Update: item %+v, fail marker stands %v; want the cap reached and its marker "+
+				"consumed", inWindow, item, present(f.path(".fail")))
+		}
+		next := build(t, f.input(Input{Trigger: "apply", PendingFeeds: first.PendingFeeds}))
+		if len(next.Items) != 0 || len(next.PendingFeeds) != 0 {
+			t.Fatalf("in window %v, next Update: plan %+v, want the capped feed neither built nor pending", inWindow, next)
+		}
 	}
 }
 
@@ -36,21 +40,37 @@ func TestRequestRefusedPendingFeedIsDropped(t *testing.T) {
 			t.Errorf("%s: plan %+v, want the refused feed dropped and not run", in.Trigger, plan)
 		}
 	}
-	f := newFixture(t, "rsync://feed.example/module/list")
-	f.row()["format"] = "rsync" // the stage has no rsync program
-	plan := build(t, f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}, PendingFeeds: []string{"ipv4:A_v4"}}))
-	if len(plan.PendingFeeds) != 1 {
-		t.Fatalf("plan %+v, want the feed kept pending while the stage cannot transfer it", plan)
+	for _, in := range []Input{{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}, {Trigger: "apply"}} {
+		f := newFixture(t, "rsync://feed.example/module/list")
+		f.row()["format"] = "rsync" // the stage has no rsync program
+		in.PendingFeeds = []string{"ipv4:A_v4"}
+		if plan := build(t, f.input(in)); len(plan.PendingFeeds) != 1 {
+			t.Errorf("%s: plan %+v, want the feed kept pending while the stage cannot transfer it", in.Trigger, plan)
+		}
 	}
 }
 
 // A pass stops a whois or asn feed whose source today's check refuses while its list stands, as the check does: the
 // stage would resolve the refused source again.
+// A Reload with the baseline saved parses it again without resolving the source, so it runs the feed.
 func TestPassStopsARefusedListSource(t *testing.T) {
-	f := newFixture(t, "AS64-500")
-	f.row()["format"] = "asn"
-	item := onlyItem(t, build(t, f.input(Input{Trigger: "manual", Scope: "ip", Force: "none"})))
-	if item.Stopped != "feed_source_invalid" || item.Change != (feedstage.Change{}) {
-		t.Fatalf("item %+v, want stopped as feed_source_invalid", item)
+	for _, c := range []struct {
+		force    string
+		baseline bool
+		runs     bool
+	}{{"none", true, false}, {"parse", true, true}, {"parse", false, false}} {
+		f := newFixture(t, "AS64-500")
+		f.row()["format"] = "asn"
+		if !c.baseline {
+			if err := os.Remove(f.path(".orig")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		item := onlyItem(t, build(t, f.input(Input{Trigger: "manual", Scope: "ip", Force: c.force})))
+		stopped := item.Stopped == "feed_source_invalid" && item.Change == (feedstage.Change{})
+		run := item.Stopped == "" && item.Change == (feedstage.Change{Force: c.force})
+		if c.runs && !run || !c.runs && !stopped {
+			t.Errorf("force %s, baseline %v: item %+v, want run %v", c.force, c.baseline, item, c.runs)
+		}
 	}
 }
