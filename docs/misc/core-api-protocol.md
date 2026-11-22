@@ -821,9 +821,11 @@ member. The rc script does not pass the flag.
 ### Update command, version 2
 
 **Not used in production yet.** Version 2 is the contract of the Outpost apply (issue #4037; spec
-`docs/specs/go-updater-pipeline.md` section 8). The Outpost validates the request and writes the result lines
-(`pfb_core_update_v2_request()`, `pfb_core_update_v2_result()` in `pfblockerng_extra.inc`), but nothing serves version 2:
-Core's worker writes version 1 until the Core Updater loop (#4038) and the cutover (#3977). The contract is frozen in
+`docs/specs/go-updater-pipeline.md` section 8). The update command hands a request of version 2 to the Outpost apply
+(`pfb_outpost_apply()` in `pfblockerng_extra.inc`; `docs/misc/architecture-notes.md` "The Outpost apply"), which
+validates it and writes the result line (`pfb_core_update_v2_request()`, `pfb_core_update_v2_result()`); a request of
+any other version takes the version 1 path. Core's worker writes version 1 until the Core Updater loop (#4038) and the
+cutover (#3977). The apply writes one result line, at its end. The contract is frozen in
 `tests/core/fixtures/apply_contract_v2.json`, which `tests/php/CoreUpdateV2ContractTest.php` runs and #4038 runs from Go.
 
 The invocation is the one above: the same `--update-cmd`, stdin and stdout as regular files, the result lines on fd 3, and the

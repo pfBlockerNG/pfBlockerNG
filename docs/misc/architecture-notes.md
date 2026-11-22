@@ -2331,12 +2331,49 @@ and the smoke harness (`tests/smoke/helpers.py` `reload()`) call the new API dir
 **The apply functions (#4037).** The parts of the pass that touch pfSense are functions of their own in
 `pfblockerng_apply.inc`, so that the version 2 Outpost apply can call them: `pfb_apply_enter()` (the HA
 receive-suppression flag, the DNS listener VIPs under the DNS configuration lock, the DNSBL policy upgrade; FALSE when
-that lock is unavailable), `pfb_apply_objects()` (alias and rule writes, the pfctl table updates, the saved settings,
-the filter reload, kill states, the XMLRPC sync and the metrics export; it returns the changed aliases, whether an IP
-unlock forced a re-block and whether the reload launch failed) and `pfb_apply_settle()` (the pending mark, the
-due-ledger flag and the apply record). `sync_package_pfblockerng()` calls them in that order and is the temporary
-shim the cutover (#3977) deletes. What the pass does to pfSense is frozen by corpus A
-(`tests/outpost/fixtures/apply/`, run by `tests/php/OutpostApplyCorpusTest.php`).
+that lock is unavailable), `pfb_apply_settings()` (the RAM-disk registrations, the table entries limit, the rule
+options, tracker ids, the auto rule suffix and the rule interfaces), `pfb_apply_dns()` (the Resolver integration, the
+retired block-page objects, then `pfb_apply_dns_redirect()` and `pfb_apply_dot_block()`), `pfb_apply_dns_proxy()`,
+`pfb_apply_objects()` (alias and rule writes, the pfctl table updates, the saved settings, the filter reload, kill
+states, the XMLRPC sync and the metrics export; it returns the changed aliases, whether an IP unlock forced a re-block
+and whether the reload launch failed) and `pfb_apply_settle()` (the pending mark, the due-ledger flag and the apply
+record). `sync_package_pfblockerng()` calls them in that order and is the temporary shim the cutover (#3977) deletes.
+What the pass does to pfSense is frozen by corpus A (`tests/outpost/fixtures/apply/`, run by
+`tests/php/OutpostApplyCorpusTest.php`); the settings and DNS steps are pinned by behaviour, not by where their text
+sits (owner decision on #4037, 2026-11-22: `RuntimeGatewayReadsStructureTest`, `SyncCopiedObjectsTest`).
+
+**The Outpost apply (#4037).** A version 2 request on the update command's stdin goes to `pfb_outpost_apply()`
+(`pfblockerng_extra.inc`); any other version takes the version 1 path. Nothing sends version 2 until the Core Updater
+(#4038) and the cutover (#3977). The apply:
+
+1. validates the request whole (exit 2, no result) and takes the feed-pass lock as the apply lock (held: exit 75);
+   with `pendingOutsideWindow` it marks the changes pending, sets the due-ledger flag, writes `{"version":2}` and
+   exits 0; the `apply` trigger clears the due-ledger flag and restores it, with the pending mark, when it fails;
+2. runs `pfb_apply_enter()` (DNS configuration lock unavailable: exit 75), files Core's issues
+   (`pfb_outpost_issues()`: an ADR-61 entry per issue, facility `dnsbl` for a DNSBL feed or resource, item its
+   resource, and a notice the first time; `pfb_outpost_issues.json` in the database folder remembers what it opened, so
+   a later request without the issue closes it), then `pfb_apply_settings()`;
+3. unless the scope is `ip`: writes the statistics rows of `request.dnsbl` (`dnsbl_save_stats()`), runs
+   `pfb_apply_dns()` and `pfb_apply_dns_proxy()`;
+4. unless the scope is `dnsbl`: walks config.xml for the aliases it expects (`pfb_outpost_expected_aliases()`:
+   continents, IP groups with DNSBLIP, aggregates, with their alias objects and rule templates as the pass builds
+   them). A resource whose alias is not expected, whose action or direction disagrees with config.xml (decision 2), or
+   whose entries exceed `system/maximumtableentries` fails with stage `apply` and is not fetched. The others are fetched
+   one by one (`pfb_outpost_fetch()`); an unreachable or unavailable Core API exits 75. `not_found` and `removed`
+   kill the table, unlink the mirror and drop the cursor. A `geo-catalog` body renders the GeoIP pages;
+5. registers every expected alias with a mirror and runs `pfb_apply_objects()` with a push that sends each changed
+   table through `pfb_apply_alias_delta_files()`: a replace from the mirror for a `full` reply, no cursor, an empty
+   kernel table or an IP unlock, else the mode and churn decision of ADR-40. A table whose `ip/<alias>/apply` ledger
+   entry is open afterwards failed; the others advance their cursor;
+6. writes one result line: `applied` (the resources at the requested generation, `unchanged` ones included, and none
+   when a needed filter reload was not launched), `removed`, `changedAliases` (the tables pushed, of the request's
+   aliases), `ipChanged`, `dnsblChanged` (DNS steps run), `reloadLaunched` (a reload was needed) and `failed`; settles
+   the request's `pendingToken` unless something failed; exits 0, or 1 when a resource failed, the reload was not
+   launched or the DNSBL statistics could not be written.
+
+Not yet: the re-lock of a DNSBL temporary unlock (#4036 question 3), the empty-set placeholder in a mirror, pruning
+DNSBL statistics rows of removed groups, and `--resource-dir` in the rc script. Behaviour:
+`tests/php/OutpostApplyTest.php` (through corpus A's worker) and `tests/smoke/test_smoke_outpost_apply.py`.
 
 **Deprecated-verb migration map** (each old verb still works through an adapter; the deprecation
 line is logged for the three operator-facing verbs):
