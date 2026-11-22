@@ -62,6 +62,9 @@ type Feed struct {
 	CustomText      string // the custom list, decoded
 	WhoisConvert    bool   // a custom list of domains and AS numbers to resolve
 	SuppressionCIDR int    // the group's IPv4 Suppression CIDR Limit, over Config.FloorV4 when set
+	// SkipFeedPassed: the feed's failures today are past the skipfeed threshold, so a failed transfer removes the fail marker
+	// instead of creating it (pfb_download_failure()). The caller counts them, as today from the error log.
+	SkipFeedPassed bool
 }
 
 // Result is what a run did. Disposition is changed (the source changed and the feed was parsed), reparsed (parsed again from
