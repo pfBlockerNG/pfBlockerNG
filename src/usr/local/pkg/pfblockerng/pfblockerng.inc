@@ -16409,8 +16409,11 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 		}
 		$message = " pfb_apply_alias_delta: temporary file failed — dropped {$op} chunk ({$table})";
 		pfb_logger("{$message}\n", 1);
-		// the table is now behind its mirror, as after a failed call: open the entry pfb_pfctl_table_op() opens, for the tick's retry
-		pfb_sync_status_open('ip', $table, 'apply', trim($message) . ': the batch file failed', $pfb['dbdir']);
+		// the table is now behind its mirror, as after a failed call: open the entry pfb_pfctl_table_op() opens, for the tick's retry;
+		// a pfctl failure the entry already names (this run's or the forced replace's) is what the retry needs, not the later reason
+		if (!$failed) {
+			pfb_sync_status_open('ip', $table, 'apply', trim($message) . ': the batch file failed', $pfb['dbdir']);
+		}
 		$failed = TRUE;
 	};
 
