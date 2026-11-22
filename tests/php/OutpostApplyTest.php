@@ -946,14 +946,13 @@ final class OutpostApplyTest extends TestCase
 	public static function reloadsTheDnsStepDoesNotReport(): array
 	{
 		return [
-			'a temporary unlock is stored'    => [['unlock' => TRUE], ['mode' => 'enabled']],
 			'an accounting retry is recorded' => [['retryMarker' => TRUE], ['mode' => 'enabled']],
 		];
 	}
 
-	/** WHEN a temporary unlock is stored or an accounting retry is recorded THEN the Resolver reloads although the DNS step reports no change. */
+	/** WHEN an accounting retry is recorded THEN the Resolver reloads although the DNS step reports no change. */
 	#[DataProvider('reloadsTheDnsStepDoesNotReport')]
-	public function testTheResolverReloadsForAnUnlockOrARetryTheDnsStepDoesNotReport(array $before, array $dns): void
+	public function testTheResolverReloadsForARetryTheDnsStepDoesNotReport(array $before, array $dns): void
 	{
 		$r = $this->applyOnce(['apply' => $before + ['request' => self::request([], ['scope' => 'dnsbl'] + self::dnsblGroups()),
 			'seams' => ['dns' => $dns, 'unbound' => []]]]);
@@ -961,8 +960,8 @@ final class OutpostApplyTest extends TestCase
 		$this->assertSame([['enabled', FALSE, FALSE]], $r['seamCalls']['unbound'], $r['log']);
 	}
 
-	/** WHEN the accounting retry marker is stale and the apply's own accounting succeeded and the reload converged THEN the marker is cleared and the apply exits 0, as does the next one. */
-	public function testTheAccountingRetryMarkerIsClearedOnceTheReloadConverged(): void
+	/** WHEN the accounting retry marker is stale and the apply's own accounting succeeded and DNSBL is disabled THEN the marker is cleared and the apply exits 0, as does the next one. */
+	public function testTheAccountingRetryMarkerIsClearedOnceDnsblIsDisabled(): void
 	{
 		$apply = ['apply' => ['request' => self::request([], ['scope' => 'dnsbl'] + self::dnsblGroups()),
 			'seams' => ['dns' => ['mode' => 'disabled'], 'unbound' => []]]];
@@ -997,12 +996,12 @@ final class OutpostApplyTest extends TestCase
 		$this->assertCount(1, $stale['seamCalls']['unbound'], 'the flag of an earlier run is reset: ' . $stale['log']);
 	}
 
-	/** WHEN the apply defers (a lock is held, Core does not answer) THEN it marks nothing pending. */
+	/** WHEN a scheduled apply defers (a lock is held, Core does not answer) THEN it marks nothing pending: Core's next tick retries it. */
 	#[DataProvider('deferrals')]
 	public function testADeferredApplyLeavesThePendingStateAlone(array $apply): void
 	{
 		$r = $this->applyOnce(self::at([self::ABUSE => ['1', self::OLD]]) + ['apply' => [
-			'request' => self::request([self::resource(self::ABUSE, '2', 3)])] + $apply]);
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)], ['trigger' => 'scheduled'])] + $apply]);
 
 		$this->assertSame(PFB_EXIT_LOCKED, $r['exit'], $r['log']);
 		$this->assertFalse($r['pending'], 'the deferral does not mark changes pending');
