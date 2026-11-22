@@ -250,33 +250,57 @@ func TestPropagatesSafeFetcherFailureReasons(t *testing.T) {
 	}
 }
 
+// Hold is "download once" (spec §3 stage 3, "Hold with a published list"): a Hold feed is held while its published list
+// exists, unless a resolved script asks for its download to be parsed again; without a list it parses its download, or
+// downloads once when it has none.
 func TestHoldsDisabledBaselineAndWithoutBaseline(t *testing.T) {
 	for _, tc := range []struct {
-		name, state, preScript, want string
-		hasOrig                      bool
+		name, state, preScript, postScript, want string
+		hasOrig, hasList                         bool
+		verdict                                  Verdict
+		requests                                 int32
 	}{
-		{name: "held without baseline", state: "hold", want: "held"},
-		{name: "held baseline with script", state: "hold", preScript: "pre.sh", hasOrig: true, want: "reparsed"},
-		{name: "disabled row", state: "disabled", want: "held"},
+		{name: "held with a list", state: "hold", hasList: true, want: "held"},
+		{name: "held with a list and a download", state: "hold", hasList: true, hasOrig: true, want: "held"},
+		{name: "held baseline with a pre-script", state: "hold", preScript: "pre.sh", hasOrig: true, hasList: true, want: "reparsed"},
+		{name: "held baseline with a post-script", state: "hold", postScript: "post.sh", hasOrig: true, hasList: true, want: "reparsed"},
+		{name: "hold without a list parses its download", state: "hold", hasOrig: true, want: "reparsed"},
+		{name: "hold never downloaded downloads once", state: "hold", verdict: VerdictChanged, want: "changed", requests: 1},
+		{name: "disabled row", state: "disabled", hasOrig: true, hasList: true, want: "held"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			var requests atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				t.Error("a held or disabled feed made a network request")
+				requests.Add(1)
+				_, _ = w.Write([]byte("203.0.113.8\n"))
 			}))
 			defer server.Close()
 			stage := testStage(t)
+			dir := stage.Paths.FeedDir
 			feed := testFeed("ipv4", tc.state, "auto", server.URL+"/feed")
-			feed.PreScript = tc.preScript
+			feed.PreScript, feed.PostScript = tc.preScript, tc.postScript
 			if tc.hasOrig {
-				writeFile(t, filepath.Join(stage.Paths.FeedDir, "feed_v4.orig"), "203.0.113.7\n")
-				dir := t.TempDir()
-				stage.Paths.ScriptDirs = []string{dir}
-				if err := os.WriteFile(filepath.Join(dir, tc.preScript), []byte("#!/bin/sh\ntrue\n"), 0o755); err != nil {
-					t.Fatal(err)
+				writeFile(t, filepath.Join(dir, "feed_v4.orig"), "203.0.113.7\n")
+			}
+			if tc.hasList {
+				writeFile(t, filepath.Join(dir, "feed_v4.parsed.ip"), "203.0.113.6\n")
+			}
+			scripts := t.TempDir()
+			stage.Paths.ScriptDirs = []string{scripts}
+			for _, name := range []string{tc.preScript, tc.postScript} {
+				if name != "" {
+					if err := os.WriteFile(filepath.Join(scripts, name), []byte("#!/bin/sh\ntrue\n"), 0o755); err != nil {
+						t.Fatal(err)
+					}
 				}
 			}
-			if got := stage.Run(context.Background(), feed, Change{Verdict: VerdictUnchanged, Force: "none"}); got.Disposition != tc.want {
-				t.Fatalf("run for %s = %+v; want %s", tc.name, got, tc.want)
+			verdict := tc.verdict
+			if verdict == "" {
+				verdict = VerdictUnchanged
+			}
+			got := stage.Run(context.Background(), feed, Change{Verdict: verdict, Force: "none"})
+			if got.Disposition != tc.want || requests.Load() != tc.requests {
+				t.Fatalf("run for %s = %+v after %d requests; want %s after %d", tc.name, got, requests.Load(), tc.want, tc.requests)
 			}
 		})
 	}
@@ -409,18 +433,39 @@ func TestRunsPreScriptAndKeepsOldArtifactsWhenItFails(t *testing.T) {
 
 	bad := testStage(t)
 	bad.Paths.ScriptDirs = []string{scriptDir}
-	feed.PreScript = "missing.sh"
+	if err := os.WriteFile(filepath.Join(scriptDir, "fails.sh"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	feed.PreScript = "fails.sh"
 	badOrig := filepath.Join(bad.Paths.FeedDir, "feed_v4.orig")
 	badParsed := filepath.Join(bad.Paths.FeedDir, "feed_v4.parsed.ip")
 	writeFile(t, badOrig, "203.0.113.5\n")
 	writeFile(t, badParsed, "203.0.113.6\n")
 	if got := run(bad, feed, "parse"); got.Disposition != "failed" || !got.PreScriptFailed || got.Stage != "script" {
-		t.Fatalf("missing pre-script run = %+v", got)
+		t.Fatalf("failing pre-script run = %+v", got)
 	}
 	for path, want := range map[string]string{badOrig: "203.0.113.5\n", badParsed: "203.0.113.6\n"} {
 		if data := readFile(t, path); data != want {
 			t.Fatalf("a pre-script failure changed %s: %q", filepath.Base(path), data)
 		}
+	}
+
+	// A pre-script that is no file in the folders is skipped with one log line, as today (apply.inc:4353): the feed parses
+	// without it.
+	missing := testStage(t)
+	missing.Paths.ScriptDirs = []string{scriptDir}
+	var log strings.Builder
+	missing.Log = &log
+	feed.PreScript = "missing.sh"
+	writeFile(t, filepath.Join(missing.Paths.FeedDir, "feed_v4.orig"), "203.0.113.5\n")
+	if got := run(missing, feed, "parse"); got.Disposition != "reparsed" || got.PreScriptFailed {
+		t.Fatalf("missing pre-script run = %+v, want the feed parsed without it", got)
+	}
+	if data := readFile(t, filepath.Join(missing.Paths.FeedDir, "feed_v4.parsed.ip")); data != "203.0.113.5\n" {
+		t.Fatalf("the list without the missing pre-script = %q, want the download's entry", data)
+	}
+	if strings.Count(log.String(), "missing.sh") != 1 {
+		t.Fatalf("the log = %q, want one line naming the missing pre-script", log.String())
 	}
 }
 

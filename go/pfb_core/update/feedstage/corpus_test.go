@@ -31,6 +31,9 @@ type corpusCase struct {
 	Description string          `json:"description"`
 	Kind        string          `json:"kind"`
 	Custom      bool            `json:"custom"`
+	State       string          `json:"state"`      // hold, or absent: enabled
+	DropList    bool            `json:"dropList"`   // the published list is removed after the baseline pass
+	Unresolved  string          `json:"unresolved"` // pre or post: that script is set but is no file in the folder
 	Baseline    *string         `json:"baseline"`
 	Source      *string         `json:"source"`
 	Pre         *string         `json:"pre"`
@@ -59,8 +62,10 @@ func loadCorpus(t *testing.T) []corpusCase {
 	seen := map[string]bool{}
 	for _, c := range doc.Cases {
 		if c.ID == "" || c.Description == "" || seen[c.ID] || (c.Kind != "ipv4" && c.Kind != "dnsbl") ||
-			(len(c.OldExpect) != 0) != (c.Departure != "") || c.Expect.Entries == nil {
-			t.Fatalf("case %q: a unique id, a description, kind ipv4 or dnsbl, entries, and old_expect only with a departure", c.ID)
+			(len(c.OldExpect) != 0) != (c.Departure != "") || c.Expect.Entries == nil || (c.State != "" && c.State != "hold") ||
+			(c.Unresolved != "" && c.Unresolved != "pre" && c.Unresolved != "post") {
+			t.Fatalf("case %q: a unique id, a description, kind ipv4 or dnsbl, entries, old_expect only with a departure, "+
+				"state hold and unresolved pre or post when present", c.ID)
 		}
 		seen[c.ID] = true
 	}
@@ -130,6 +135,9 @@ func TestCorpusMatchesTodaysFeedBlock(t *testing.T) {
 			}
 			source := filepath.Join(sourceDir, "feed.txt")
 			feed := Feed{ID: c.Kind + ":Feed", Kind: c.Kind, Name: "Feed", State: "enabled", Format: "auto", Source: "file://" + source}
+			if c.State != "" {
+				feed.State = c.State
+			}
 			if c.Kind == "ipv4" {
 				feed.ID, feed.Name = "ipv4:Feed_v4", "Feed_v4"
 			}
@@ -139,6 +147,11 @@ func TestCorpusMatchesTodaysFeedBlock(t *testing.T) {
 					t.Fatalf("the baseline pass = %+v, want changed", r)
 				}
 			}
+			if c.DropList {
+				for _, suffix := range []string{".parsed.ip", ".parsed.ndjson", ".parsed.v4.ip", ".parsed.v6.ip"} {
+					os.Remove(filepath.Join(feedDir, feed.Name+suffix))
+				}
+			}
 			os.Remove(source)
 			if c.Custom {
 				feed.Custom, feed.CustomText, feed.Source = true, *c.Source, ""
@@ -146,11 +159,13 @@ func TestCorpusMatchesTodaysFeedBlock(t *testing.T) {
 				writeFile(t, source, *c.Source)
 			}
 			for name, body := range map[string]*string{"pre.sh": c.Pre, "post.sh": c.Post} {
-				if body == nil {
+				if body == nil && c.Unresolved+".sh" != name {
 					continue
 				}
-				if err := os.WriteFile(filepath.Join(scriptDir, name), []byte("#!/bin/sh\n"+*body+"\n"), 0o755); err != nil {
-					t.Fatal(err)
+				if body != nil {
+					if err := os.WriteFile(filepath.Join(scriptDir, name), []byte("#!/bin/sh\n"+*body+"\n"), 0o755); err != nil {
+						t.Fatal(err)
+					}
 				}
 				if name == "pre.sh" {
 					feed.PreScript = name

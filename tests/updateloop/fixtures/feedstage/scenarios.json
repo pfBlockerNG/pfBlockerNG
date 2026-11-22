@@ -148,6 +148,80 @@
       "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["198.51.100.5", "198.51.100.6"], "placeholder": "", "orig": "198.51.100.5\n198.51.100.6\n"}
     },
     {
+      "id": "ip_hold_with_list",
+      "description": "A Hold feed with a published list is held: nothing is transferred or parsed, and the list stays.",
+      "kind": "ipv4",
+      "custom": false,
+      "state": "hold",
+      "baseline": "198.51.100.1\n",
+      "source": "198.51.100.2\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "held", "stage": "", "postFailed": false, "entries": ["198.51.100.1"], "placeholder": "", "orig": "198.51.100.1\n"}
+    },
+    {
+      "id": "ip_hold_without_list",
+      "description": "A Hold feed that was never downloaded is downloaded once and published.",
+      "kind": "ipv4",
+      "custom": false,
+      "state": "hold",
+      "baseline": null,
+      "source": "198.51.100.2\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["198.51.100.2"], "placeholder": "", "orig": "198.51.100.2\n"}
+    },
+    {
+      "id": "ip_hold_download_without_list",
+      "description": "A Hold feed whose download exists but whose list is gone parses the download again and transfers nothing.",
+      "kind": "ipv4",
+      "custom": false,
+      "state": "hold",
+      "dropList": true,
+      "baseline": "198.51.100.1\n",
+      "source": "198.51.100.2\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["198.51.100.1"], "placeholder": "", "orig": "198.51.100.1\n"},
+      "old_expect": {"entries": ["198.51.100.2"], "orig": "198.51.100.2\n"},
+      "departure": "Hold is download once: Core never transfers a Hold feed whose download exists, and rebuilds a missing list from that download. Today's block transfers again whenever the list is missing."
+    },
+    {
+      "id": "ip_pre_script_unresolved",
+      "description": "A configured pre-script that is not a file in the list-script folders is skipped: the feed is parsed without it.",
+      "kind": "ipv4",
+      "custom": false,
+      "unresolved": "pre",
+      "baseline": "198.51.100.1\n",
+      "source": "198.51.100.2\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["198.51.100.2"], "placeholder": "", "orig": "198.51.100.2\n"}
+    },
+    {
+      "id": "ip_post_script_unresolved",
+      "description": "A configured post-script that does not resolve is no script: an unchanged source reuses the published list.",
+      "kind": "ipv4",
+      "custom": false,
+      "unresolved": "post",
+      "baseline": "198.51.100.1\n",
+      "source": "198.51.100.1\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "unchanged", "stage": "", "postFailed": false, "entries": ["198.51.100.1"], "placeholder": "", "orig": "198.51.100.1\n"}
+    },
+    {
+      "id": "ip_failed_post_script_empties",
+      "description": "A failed post-script that emptied the download is undone before the empty check: the download still has content, so no placeholder is added and the last list stays.",
+      "kind": "ipv4",
+      "custom": false,
+      "baseline": "198.51.100.1\n",
+      "source": "not an address\n",
+      "pre": null,
+      "post": ": > \"$1\"; exit 1",
+      "expect": {"outcome": "empty", "stage": "", "postFailed": true, "entries": ["198.51.100.1"], "placeholder": "", "orig": "not an address\n"}
+    },
+    {
       "id": "dnsbl_success",
       "description": "A changed DNSBL source is transferred, parsed and published.",
       "kind": "dnsbl",
@@ -225,6 +299,30 @@
       "pre": null,
       "post": null,
       "expect": {"outcome": "empty", "stage": "", "postFailed": false, "entries": ["a.example"], "placeholder": "", "orig": "# nothing listed\n"}
+    },
+    {
+      "id": "dnsbl_hold_with_list",
+      "description": "A DNSBL Hold feed with published rows is held: nothing is transferred or parsed, and the rows stay.",
+      "kind": "dnsbl",
+      "custom": false,
+      "state": "hold",
+      "baseline": "a.example\n",
+      "source": "b.example\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "held", "stage": "", "postFailed": false, "entries": ["a.example"], "placeholder": "", "orig": "a.example\n"}
+    },
+    {
+      "id": "dnsbl_pre_script_unresolved",
+      "description": "A configured DNSBL pre-script that does not resolve is skipped: the feed is parsed without it.",
+      "kind": "dnsbl",
+      "custom": false,
+      "unresolved": "pre",
+      "baseline": "a.example\n",
+      "source": "b.example\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["b.example"], "placeholder": "", "orig": "b.example\n"}
     },
     {
       "id": "dnsbl_custom",

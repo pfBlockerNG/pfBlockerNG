@@ -33,6 +33,8 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	private const CASE_KEYS = ['id', 'description', 'kind', 'custom', 'baseline', 'source', 'pre', 'post', 'expect'];
 	private const EXPECT = ['outcome', 'stage', 'postFailed', 'entries', 'placeholder', 'orig'];
+	/** Keys a case may add: the row state (hold), the list removed after the baseline pass, a script set but absent. */
+	private const OPTIONAL = ['state', 'dropList', 'unresolved', 'old_expect', 'departure'];
 	/** Where each block starts (the first variable it needs from the loop is set before it) and the if that ends it. */
 	private const BLOCKS = [
 		'ipv4' => ['$pfb_ip_verbatim_reuse = file_exists(', "if (\$pfb_ip_reuse_decision['verbatim']) {"],
@@ -81,10 +83,15 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 		$out = [];
 		foreach (self::corpus()['cases'] as $case) {
 			$w = 'case ' . ($case['id'] ?? '?');
-			FeedParseCorpusFile::keys($case, array_key_exists('old_expect', $case) ? [...self::CASE_KEYS, 'old_expect', 'departure'] : self::CASE_KEYS, $w);
+			FeedParseCorpusFile::keys($case, [...self::CASE_KEYS, ...array_intersect(self::OPTIONAL, array_keys($case))], $w);
 			FeedParseCorpusFile::keys($case['expect'], self::EXPECT, "{$w} expect");
-			if (!in_array($case['kind'], ['ipv4', 'dnsbl'], TRUE) || !is_bool($case['custom']) || isset($out[$case['id']])) {
-				throw new RuntimeException("{$w}: kind ipv4 or dnsbl, custom a bool, a unique id");
+			if (!in_array($case['kind'], ['ipv4', 'dnsbl'], TRUE) || !is_bool($case['custom']) || isset($out[$case['id']])
+			    || array_key_exists('old_expect', $case) !== array_key_exists('departure', $case)) {
+				throw new RuntimeException("{$w}: kind ipv4 or dnsbl, custom a bool, a unique id, old_expect only with a departure");
+			}
+			if (($case['state'] ?? 'hold') !== 'hold' || ($case['dropList'] ?? TRUE) !== TRUE
+			    || !in_array($case['unresolved'] ?? 'pre', ['pre', 'post'], TRUE)) {
+				throw new RuntimeException("{$w}: state is hold, dropList is true and unresolved is pre or post when present");
 			}
 			if (array_key_exists('old_expect', $case) && (array_diff(array_keys($case['old_expect']), self::EXPECT) !== []
 			    || !is_string($case['departure']) || $case['departure'] === '')) {
@@ -144,7 +151,7 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 	 * @param array<string, mixed> $case
 	 * @return array<string, mixed> what the pass decided, from the block's own variables
 	 */
-	private function pass(array $case, string $placeholder, ?string $pre, ?string $post, bool $changed): array
+	private function pass(array $case, string $placeholder, bool $scripts, bool $changed): array
 	{
 		global $pfb;
 		$ip = $case['kind'] === 'ipv4';
@@ -167,11 +174,15 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 		$source = "{$this->root}/db/feed.txt";
 		$custom = $case['custom'] ? 'on' : '';
 		$encoded = base64_encode((string) $case['source']);
-		$row = ['header' => $header, 'state' => 'Enabled', 'format' => 'auto', 'url' => $source, 'custom' => $encoded];
-		$list = ['vtype' => $ip ? '_v4' : '', 'script_pre' => $pre === NULL ? '' : 'pre.sh', 'script_post' => $post === NULL ? '' : 'post.sh',
-			'custom' => $encoded, 'whois_convert' => ''];
+		$row = ['header' => $header, 'state' => ($case['state'] ?? '') === 'hold' ? 'Hold' : 'Enabled', 'format' => 'auto',
+			'url' => $source, 'custom' => $encoded];
+		// A script is set when the case gives its body or names it unresolved; only a body is written to the folder.
+		$set = static fn(string $which): string => $scripts && ($case[$which] !== NULL || ($case['unresolved'] ?? '') === $which)
+		    ? "{$which}.sh" : '';
+		$list = ['vtype' => $ip ? '_v4' : '', 'script_pre' => $set('pre'), 'script_post' => $set('post'), 'custom' => $encoded,
+			'whois_convert' => ''];
 		$dirs = ["{$this->root}/scripts"];
-		$resolve = static fn(?string $s, string $name) => $s === NULL ? FALSE : pfb_resolve_list_script($name, $dirs);
+		$resolve = static fn(string $name) => $name === '' ? FALSE : pfb_resolve_list_script($name, $dirs);
 		$pfbreuse = '';
 		$scheduled_selected = TRUE;
 		$srcint = '';
@@ -181,16 +192,16 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 		$header_esc = escapeshellarg($header);
 		$elog = '';
 		if ($ip) {
-			$pfb_script_pre = $resolve($pre, 'pre.sh');
-			$pfb_script_post = $resolve($post, 'post.sh');
+			$pfb_script_pre = $resolve($list['script_pre']);
+			$pfb_script_post = $resolve($list['script_post']);
 			$pfbarr = ['aaddrnot_in' => '', 'aaddrnot_out' => ''];
 			$pfbadv = FALSE;
 			$pfbcidr = $pfbcidr_v6 = 'Disabled';
 			$scheduled_family = 'ipv4';
 			$pfb_alias_lists = [];
 		} else {
-			$pfb_row_script_pre = $resolve($pre, 'pre.sh');
-			$pfb_row_script_post = $resolve($post, 'post.sh');
+			$pfb_row_script_pre = $resolve($list['script_pre']);
+			$pfb_row_script_post = $resolve($list['script_post']);
 			$txt_exists = file_exists("{$pfbfolder}/{$header}.txt");
 			$mode = 'deny';
 			$logging_type = 'enabled';
@@ -207,6 +218,7 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 		$outcome = match (TRUE) {
 			$seen['pfb_dl_failed'] => ['failed', 'transfer'],
 			($seen['pfb_pre']['ok'] ?? TRUE) === FALSE => ['failed', 'pre-script'],
+			str_contains($log, 'static hold.') => ['held', ''],
 			$decision['verbatim'] || str_contains($log, 'unchanged after normalization') => ['unchanged', ''],
 			str_contains($log, $ip ? 'No IPs found!' : 'No Domains Found!') => ['empty', ''],
 			default => ['updated', ''],
@@ -230,15 +242,20 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 		$source = "{$this->root}/db/feed.txt";
 		if ($case['baseline'] !== NULL) {
 			file_put_contents($source, $case['baseline']);
-			$this->assertSame('updated', $this->pass($case, $doc['placeholder'], NULL, NULL, FALSE)['outcome'], "the baseline pass publishes; its log:\n{$this->lastLog}");
+			$this->assertSame('updated', $this->pass($case, $doc['placeholder'], FALSE, FALSE)['outcome'], "the baseline pass publishes; its log:\n{$this->lastLog}");
+		}
+		$header = $case['kind'] === 'ipv4' ? 'Feed_v4' : 'Feed';
+		if ($case['dropList'] ?? FALSE) {
+			unlink("{$this->root}/list/{$header}.txt");
 		}
 		@unlink($source);
 		if ($case['source'] !== NULL && !$case['custom']) {
 			file_put_contents($source, $case['source']);
 		}
-		$got = $this->pass($case, $doc['placeholder'], $case['pre'], $case['post'], $case['source'] !== $case['baseline']);
+		// The change check skips a Hold feed whose list exists, so it leaves no '.update' marker (pfblockerng_cron.inc).
+		$checked = !(($case['state'] ?? '') === 'hold' && file_exists("{$this->root}/list/{$header}.txt"));
+		$got = $this->pass($case, $doc['placeholder'], TRUE, $checked && $case['source'] !== $case['baseline']);
 
-		$header = $case['kind'] === 'ipv4' ? 'Feed_v4' : 'Feed';
 		$orig = "{$this->root}/orig/{$header}.orig";
 		$this->assertFalse(is_link($orig), "{$case['id']}: the download is never left a link");
 		$lines = array_values(array_filter(explode("\n", (string) @file_get_contents("{$this->root}/list/{$header}.txt")),
