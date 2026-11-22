@@ -1,0 +1,3158 @@
+{
+  "schema": 1,
+  "baseline": "1.2.3.4\n",
+  "changed": "5.6.7.8\n",
+  "etag": "\"v1\"",
+  "cases": [
+    {
+      "id": "scheduled_names_changed",
+      "description": "A scheduled Update checks the feeds Core named: a changed source is a success and is downloaded.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "retry_names_unchanged",
+      "description": "A retry checks the feeds Core named; an unchanged source (304) is a success and is not downloaded.",
+      "request": {
+        "trigger": "retry",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "manual_ip_none",
+      "description": "A manual Update of scope ip checks nothing: a feed with a fail marker or without its list is downloaded, another follows the reuse rule; feeds outside the scope are left as they are.",
+      "request": {
+        "trigger": "manual",
+        "scope": "ip",
+        "force": "none"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "list": false
+        },
+        "dnsbl:D": {
+          "fail": true
+        }
+      },
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "unchanged",
+          "ipv4:B_v4": "changed"
+        },
+        "fail": [
+          "dnsbl:D"
+        ],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "manual_ip_parse",
+      "description": "A manual Reload of scope ip parses every feed of the scope again; nothing is checked.",
+      "request": {
+        "trigger": "manual",
+        "scope": "ip",
+        "force": "parse"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "list": false
+        },
+        "dnsbl:D": {
+          "fail": true
+        }
+      },
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "parse",
+          "ipv4:B_v4": "parse"
+        },
+        "fail": [
+          "dnsbl:D"
+        ],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "manual_ip_download",
+      "description": "A manual Force download of scope ip hands every feed of the scope to the stage with the force, unchecked; outside the scope nothing is touched.",
+      "request": {
+        "trigger": "manual",
+        "scope": "ip",
+        "force": "download"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "old_expect": {
+        "checked": [
+          "ipv4:A_v4",
+          "ipv4:B_v4"
+        ],
+        "changes": {
+          "ipv4:A_v4": "changed",
+          "ipv4:B_v4": "unchanged"
+        }
+      },
+      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core checks none and hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "download",
+          "ipv4:B_v4": "download"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "manual_ip_both",
+      "description": "A manual Force both of scope ip hands every feed of the scope to the stage with the force, unchecked; outside the scope nothing is touched.",
+      "request": {
+        "trigger": "manual",
+        "scope": "ip",
+        "force": "both"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "old_expect": {
+        "checked": [
+          "ipv4:A_v4",
+          "ipv4:B_v4"
+        ],
+        "changes": {
+          "ipv4:A_v4": "changed",
+          "ipv4:B_v4": "changed"
+        }
+      },
+      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core checks none and hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "both",
+          "ipv4:B_v4": "both"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "manual_dnsbl_none",
+      "description": "A manual Update of scope dnsbl checks nothing: a feed with a fail marker or without its list is downloaded, another follows the reuse rule; feeds outside the scope are left as they are.",
+      "request": {
+        "trigger": "manual",
+        "scope": "dnsbl",
+        "force": "none"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "list": false
+        },
+        "dnsbl:D": {
+          "fail": true
+        }
+      },
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "dnsbl:D": "changed"
+        },
+        "fail": [
+          "dnsbl:D"
+        ],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "manual_dnsbl_parse",
+      "description": "A manual Reload of scope dnsbl parses every feed of the scope again; nothing is checked.",
+      "request": {
+        "trigger": "manual",
+        "scope": "dnsbl",
+        "force": "parse"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "list": false
+        },
+        "dnsbl:D": {
+          "fail": true
+        }
+      },
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "dnsbl:D": "parse"
+        },
+        "fail": [
+          "dnsbl:D"
+        ],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "manual_dnsbl_download",
+      "description": "A manual Force download of scope dnsbl hands every feed of the scope to the stage with the force, unchecked; outside the scope nothing is touched.",
+      "request": {
+        "trigger": "manual",
+        "scope": "dnsbl",
+        "force": "download"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "old_expect": {
+        "checked": [
+          "dnsbl:D"
+        ],
+        "changes": {
+          "dnsbl:D": "changed"
+        }
+      },
+      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core checks none and hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "dnsbl:D": "download"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "manual_dnsbl_both",
+      "description": "A manual Force both of scope dnsbl hands every feed of the scope to the stage with the force, unchecked; outside the scope nothing is touched.",
+      "request": {
+        "trigger": "manual",
+        "scope": "dnsbl",
+        "force": "both"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "old_expect": {
+        "checked": [
+          "dnsbl:D"
+        ],
+        "changes": {
+          "dnsbl:D": "changed"
+        }
+      },
+      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core checks none and hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "dnsbl:D": "both"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "manual_both_none",
+      "description": "A manual Update of scope both checks nothing: a feed with a fail marker or without its list is downloaded, another follows the reuse rule; feeds outside the scope are left as they are.",
+      "request": {
+        "trigger": "manual",
+        "scope": "both",
+        "force": "none"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "list": false
+        },
+        "dnsbl:D": {
+          "fail": true
+        }
+      },
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "unchanged",
+          "ipv4:B_v4": "changed",
+          "dnsbl:D": "changed"
+        },
+        "fail": [
+          "dnsbl:D"
+        ],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "manual_both_parse",
+      "description": "A manual Reload of scope both parses every feed of the scope again; nothing is checked.",
+      "request": {
+        "trigger": "manual",
+        "scope": "both",
+        "force": "parse"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "list": false
+        },
+        "dnsbl:D": {
+          "fail": true
+        }
+      },
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "parse",
+          "ipv4:B_v4": "parse",
+          "dnsbl:D": "parse"
+        },
+        "fail": [
+          "dnsbl:D"
+        ],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "manual_both_download",
+      "description": "A manual Force download of scope both hands every feed of the scope to the stage with the force, unchecked; outside the scope nothing is touched.",
+      "request": {
+        "trigger": "manual",
+        "scope": "both",
+        "force": "download"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "old_expect": {
+        "checked": [
+          "ipv4:A_v4",
+          "ipv4:B_v4",
+          "dnsbl:D"
+        ],
+        "changes": {
+          "ipv4:A_v4": "changed",
+          "ipv4:B_v4": "unchanged",
+          "dnsbl:D": "changed"
+        }
+      },
+      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core checks none and hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "download",
+          "ipv4:B_v4": "download",
+          "dnsbl:D": "download"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "manual_both_both",
+      "description": "A manual Force both of scope both hands every feed of the scope to the stage with the force, unchecked; outside the scope nothing is touched.",
+      "request": {
+        "trigger": "manual",
+        "scope": "both",
+        "force": "both"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "old_expect": {
+        "checked": [
+          "ipv4:A_v4",
+          "ipv4:B_v4",
+          "dnsbl:D"
+        ],
+        "changes": {
+          "ipv4:A_v4": "changed",
+          "ipv4:B_v4": "changed",
+          "dnsbl:D": "changed"
+        }
+      },
+      "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core checks none and hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "both",
+          "ipv4:B_v4": "both",
+          "dnsbl:D": "both"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "apply_does_no_feed_work",
+      "description": "An apply Update with nothing recorded as pending checks, runs and reports no feed: it applies what is published.",
+      "request": {
+        "trigger": "apply"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "list": false
+        },
+        "dnsbl:D": {
+          "fail": true
+        }
+      },
+      "old_expect": {
+        "changes": {
+          "ipv4:A_v4": "unchanged",
+          "ipv4:B_v4": "changed",
+          "dnsbl:D": "changed"
+        }
+      },
+      "departure": "Today's pending apply (pfb_core_update_apply(), a pass of scope both) rebuilds every feed with an update or fail marker or no list. Core's apply builds exactly the feeds an Update outside the window recorded as pending (Plan.PendingFeeds, carried by the Core Updater's state), and nothing else.",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {},
+        "fail": [
+          "dnsbl:D"
+        ],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "apply_builds_pending_feeds",
+      "description": "An apply Update builds the feeds recorded as pending, unchecked and downloaded, with no outcome; a pending feed that left the settings is skipped.",
+      "request": {
+        "trigger": "apply"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        }
+      ],
+      "pendingFeeds": [
+        "ipv4:Gone_v4",
+        "ipv4:A_v4"
+      ],
+      "files": {
+        "ipv4:A_v4": {
+          "update": true
+        }
+      },
+      "old_expect": {
+        "changes": {
+          "ipv4:A_v4": "changed",
+          "ipv4:B_v4": "unchanged"
+        }
+      },
+      "departure": "Today's pending apply (pfb_core_update_apply(), a pass of scope both) rebuilds every feed with an update or fail marker or no list. Core's apply builds exactly the feeds an Update outside the window recorded as pending (Plan.PendingFeeds, carried by the Core Updater's state), and nothing else.",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "outcome_304",
+      "description": "A 304 to the conditional GET is a success, unchanged.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "outcome_same_hash",
+      "description": "A 200 with the bytes of the baseline is a success, unchanged.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:B_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "checked": [
+          "ipv4:B_v4"
+        ],
+        "outcomes": {
+          "ipv4:B_v4": "success"
+        },
+        "changes": {
+          "ipv4:B_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "outcome_failed_fetch",
+      "description": "A failed probe gives no outcome, so the occurrence stays pending, and no fail marker: only the stage's failed download leaves one.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "failed"
+            }
+          ]
+        }
+      ],
+      "old_expect": {
+        "fail": [
+          "ipv4:A_v4"
+        ]
+      },
+      "departure": "Today's check touches the fail marker when its probe fails. In Core the stage owns the marker (feedstage: a failed download creates it, a successful one removes it); a failed probe reports no outcome, so the scheduler keeps the occurrence pending and its retry names the feed again.",
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "failed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "outcome_retry_cap",
+      "description": "Past the skipfeed limit the feed is not probed: retry-cap-reached, and its fail marker goes.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "skipfeed": 2,
+      "failures": {
+        "ipv4:A_v4": 2
+      },
+      "files": {
+        "ipv4:A_v4": {
+          "fail": true
+        }
+      },
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "retry-cap-reached"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "outcome_hold_with_list",
+      "description": "Hold with a published list is not checked: a success, and a stale fail marker goes.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "hold",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:A_v4": {
+          "fail": true
+        }
+      },
+      "expect": {
+        "checked": [],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "outcome_hold_without_list",
+      "description": "Hold without a published list is checked like any feed: the missing list is downloaded, with no outcome.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "hold",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:A_v4": {
+          "list": false
+        }
+      },
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "outcome_no_baseline",
+      "description": "A feed never downloaded is a changed success.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:A_v4": {
+          "orig": false
+        }
+      },
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "outcome_whois_asn",
+      "description": "whois and asn feeds are resolved again every run: success, changed, without a probe.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:W_v4",
+          "ipv4:N_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "W",
+              "state": "enabled",
+              "format": "whois",
+              "source": "example.com"
+            },
+            {
+              "header": "N",
+              "state": "enabled",
+              "format": "asn",
+              "source": "AS64500 Example"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "checked": [
+          "ipv4:W_v4",
+          "ipv4:N_v4"
+        ],
+        "outcomes": {
+          "ipv4:W_v4": "success",
+          "ipv4:N_v4": "success"
+        },
+        "changes": {
+          "ipv4:W_v4": "changed",
+          "ipv4:N_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "outcome_dnsbl_changed",
+      "description": "A DNSBL feed is checked the same way, in its own folder.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "dnsbl:D"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "checked": [
+          "dnsbl:D"
+        ],
+        "outcomes": {
+          "dnsbl:D": "success"
+        },
+        "changes": {
+          "dnsbl:D": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "outcome_ipv6",
+      "description": "An IPv6 feed is checked under its _v6 name.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv6:S_v6"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv6",
+          "name": "G6",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "S",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "checked": [
+          "ipv6:S_v6"
+        ],
+        "outcomes": {
+          "ipv6:S_v6": "success"
+        },
+        "changes": {
+          "ipv6:S_v6": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "update_marker_is_not_read",
+      "description": "An update marker today's pass left is not Core's: the probe's answer decides.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:A_v4": {
+          "update": true
+        }
+      },
+      "old_expect": {
+        "changes": {
+          "ipv4:A_v4": "changed"
+        }
+      },
+      "departure": "Core keeps no update marker. A change found and not built leaves the baseline and its validators as they were, so the next probe finds it again; today's pass downloads a feed whose marker an earlier pass or the Groups page left, whatever its probe answers.",
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "fail_marker_added_though_not_named",
+      "description": "A feed with a fail marker is checked though Core did not name it: re-attempted, no outcome.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "fail": true
+        }
+      },
+      "expect": {
+        "checked": [
+          "ipv4:A_v4",
+          "ipv4:B_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "changed",
+          "ipv4:B_v4": "changed"
+        },
+        "fail": [
+          "ipv4:B_v4"
+        ],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "fail_marker_makes_a_retry_due",
+      "description": "A retry that names no feed still walks when a fail marker asks for it.",
+      "request": {
+        "trigger": "retry",
+        "feeds": []
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "fail": true
+        }
+      },
+      "expect": {
+        "checked": [
+          "ipv4:B_v4"
+        ],
+        "outcomes": {},
+        "changes": {
+          "ipv4:B_v4": "changed"
+        },
+        "fail": [
+          "ipv4:B_v4"
+        ],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "walk_order",
+      "description": "Feeds are checked IPv4, IPv6, DNSBL, groups and feeds in config order, whatever order Core named them in.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "dnsbl:D",
+          "ipv6:S_v6",
+          "ipv4:B_v4",
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            }
+          ]
+        },
+        {
+          "kind": "ipv6",
+          "name": "G6",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "S",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "checked": [
+          "ipv4:A_v4",
+          "ipv4:B_v4",
+          "ipv6:S_v6",
+          "dnsbl:D"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success",
+          "ipv4:B_v4": "success",
+          "ipv6:S_v6": "success",
+          "dnsbl:D": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged",
+          "ipv4:B_v4": "unchanged",
+          "ipv6:S_v6": "unchanged",
+          "dnsbl:D": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "unnamed_feeds_untouched",
+      "description": "A scheduled Update never checks or rebuilds a feed Core did not name, even one without its list.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "dnsbl:D": {
+          "list": false
+        }
+      },
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "outside_window_changed",
+      "description": "Outside the apply window a found change is pending: the feed is left to the apply.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        }
+      ],
+      "window": "outside",
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "pending",
+        "pending": [
+          "ipv4:A_v4"
+        ]
+      }
+    },
+    {
+      "id": "pending_feeds_carried",
+      "description": "Outside the window the feeds an earlier Update left pending stay pending with the new ones, in walk order.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        }
+      ],
+      "window": "outside",
+      "pendingFeeds": [
+        "ipv4:B_v4"
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "update": true
+        }
+      },
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "pending",
+        "pending": [
+          "ipv4:A_v4",
+          "ipv4:B_v4"
+        ]
+      }
+    },
+    {
+      "id": "hold_unnamed_consumes_fail_marker",
+      "description": "A Hold feed with its list that Core did not name is neither checked nor run, and its stale fail marker goes, so it asks for no later walk.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            },
+            {
+              "header": "H",
+              "state": "hold",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:H_v4": {
+          "fail": true
+        }
+      },
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "geoip_changed_rebuilds_geoip_feeds",
+      "description": "A pass after the GeoIP conversion changed the country lists downloads every geoip feed again (today's geoip.update); other feeds follow the reuse rule.",
+      "request": {
+        "trigger": "manual",
+        "scope": "ip",
+        "force": "none"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            },
+            {
+              "header": "C",
+              "state": "enabled",
+              "format": "geoip",
+              "source": "US"
+            }
+          ]
+        }
+      ],
+      "geoipChanged": true,
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "unchanged",
+          "ipv4:C_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "outside_window_unchanged",
+      "description": "Outside the window with nothing found and nothing pending, the pass still runs (today's no-update pass).",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            }
+          ]
+        }
+      ],
+      "window": "outside",
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "outside_window_pending_apply",
+      "description": "Outside the window an earlier pending change stays pending.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            }
+          ]
+        }
+      ],
+      "window": "outside",
+      "pendingApply": true,
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "pending",
+        "pending": []
+      }
+    },
+    {
+      "id": "pending_apply_inside_window",
+      "description": "Inside the window an earlier pending change is applied by the pass.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            }
+          ]
+        }
+      ],
+      "pendingApply": true,
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "extras_changed_no_feeds_inside",
+      "description": "An Extra changed and no feed is due: inside the window the pass runs over every feed, unchecked, as today's pass for a changed Extra does.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [],
+        "extras": [
+          "extra:dcc"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "extrasChanged": true,
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "unchanged",
+          "ipv4:B_v4": "unchanged",
+          "dnsbl:D": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "extras_changed_no_feeds_outside",
+      "description": "An Extra changed and no feed is due: pending outside the window.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [],
+        "extras": [
+          "extra:dcc"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "extrasChanged": true,
+      "window": "outside",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {},
+        "fail": [],
+        "stopped": [],
+        "apply": "pending",
+        "pending": []
+      }
+    },
+    {
+      "id": "nothing_due",
+      "description": "No feed named, no marker, no Extra changed: nothing runs.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": []
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {},
+        "fail": [],
+        "stopped": [],
+        "apply": "nothing",
+        "pending": []
+      }
+    },
+    {
+      "id": "continent_forces_the_pass",
+      "description": "With nothing changed, an enabled continent still asks for the pass (today's continent rule).",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            }
+          ]
+        }
+      ],
+      "continent": "Deny_Inbound",
+      "window": "outside",
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "pending",
+        "pending": []
+      }
+    },
+    {
+      "id": "narrower_scope_leaves_other_work",
+      "description": "A manual Update of scope dnsbl leaves the IP feeds and their markers alone.",
+      "request": {
+        "trigger": "manual",
+        "scope": "dnsbl",
+        "force": "none"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:A_v4": {
+          "fail": true
+        }
+      },
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "dnsbl:D": "unchanged"
+        },
+        "fail": [
+          "ipv4:A_v4"
+        ],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "pending_built_in_window",
+      "description": "An in-window scheduled Update builds the feeds an earlier Update left pending, unchecked and with no outcome, besides the feeds Core named.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        }
+      ],
+      "pendingFeeds": [
+        "ipv4:B_v4"
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "update": true
+        }
+      },
+      "old_expect": {
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        }
+      },
+      "departure": "Today's scheduled pass leaves the update marker of a feed Core did not name to a later manual or apply pass. Core builds the feeds earlier Updates left pending in the first Update that builds at all, so none waits on a trigger that may not come (Plan.PendingFeeds).",
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged",
+          "ipv4:B_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "pending_makes_an_update_due",
+      "description": "Feeds left pending make a scheduled Update that names nothing due: they are built.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": []
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        }
+      ],
+      "pendingFeeds": [
+        "ipv4:A_v4"
+      ],
+      "files": {
+        "ipv4:A_v4": {
+          "update": true
+        }
+      },
+      "old_expect": {
+        "changes": {},
+        "apply": "nothing"
+      },
+      "departure": "Today's scheduled pass leaves the update marker of a feed Core did not name to a later manual or apply pass. Core builds the feeds earlier Updates left pending in the first Update that builds at all, so none waits on a trigger that may not come (Plan.PendingFeeds).",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "pending_outside_scope_carried",
+      "description": "A manual Update builds the pending feeds of its scope and leaves the others pending.",
+      "request": {
+        "trigger": "manual",
+        "scope": "ip",
+        "force": "none"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "pendingFeeds": [
+        "ipv4:B_v4",
+        "dnsbl:D"
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "update": true
+        },
+        "dnsbl:D": {
+          "update": true
+        }
+      },
+      "old_expect": {
+        "pending": []
+      },
+      "departure": "Today keeps the update marker of a feed outside the scope for a later pass; Core carries the feed in Plan.PendingFeeds.",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "unchanged",
+          "ipv4:B_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": [
+          "dnsbl:D"
+        ]
+      }
+    },
+    {
+      "id": "outside_window_missing_list",
+      "description": "Outside the window a named feed without its list is left to the apply, as today's apply rebuilds a feed without a list.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "window": "outside",
+      "files": {
+        "ipv4:A_v4": {
+          "list": false
+        }
+      },
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "pending",
+        "pending": [
+          "ipv4:A_v4"
+        ]
+      }
+    },
+    {
+      "id": "whois_invalid_source",
+      "description": "A whois or asn feed whose source today's check refuses has no outcome. With its list published it is not run; without one it is run, and the stage's failed resolution leaves the fail marker as today's failed download does.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:W_v4",
+          "ipv4:N_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "W",
+              "state": "enabled",
+              "format": "whois",
+              "source": "exa\u0001mple.com"
+            },
+            {
+              "header": "N",
+              "state": "enabled",
+              "format": "asn",
+              "source": "AS64-500"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:N_v4": {
+          "list": false
+        }
+      },
+      "old_expect": {
+        "checked": [
+          "ipv4:W_v4",
+          "ipv4:N_v4"
+        ],
+        "changes": {
+          "ipv4:W_v4": "unchanged",
+          "ipv4:N_v4": "changed"
+        },
+        "stopped": []
+      },
+      "departure": "Today's pass reuses the published list of a feed whose source its check refused. Core's stage resolves every whois and asn feed it runs, so Core does not run such a feed while its list stands: stopped, the list kept.",
+      "expect": {
+        "checked": [
+          "ipv4:N_v4"
+        ],
+        "outcomes": {},
+        "changes": {
+          "ipv4:N_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [
+          "ipv4:W_v4"
+        ],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "invalid_source_without_list_outside_window",
+      "description": "Outside the window a whois or asn feed whose source today's check refuses and that has no list changes nothing: the no-update pass still runs, and runs the feed.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:N_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "N",
+              "state": "enabled",
+              "format": "asn",
+              "source": "AS64-500"
+            }
+          ]
+        }
+      ],
+      "window": "outside",
+      "files": {
+        "ipv4:N_v4": {
+          "list": false
+        }
+      },
+      "expect": {
+        "checked": [
+          "ipv4:N_v4"
+        ],
+        "outcomes": {},
+        "changes": {
+          "ipv4:N_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "pass_holds_held_feeds",
+      "description": "A pass holds a held feed with its list as the walk does: reused, its stale fail marker consumed.",
+      "request": {
+        "trigger": "manual",
+        "scope": "ip",
+        "force": "none"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "hold",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:A_v4": {
+          "fail": true
+        }
+      },
+      "old_expect": {
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [
+          "ipv4:A_v4"
+        ]
+      },
+      "departure": "Today's pass keeps a held feed's fail marker, which the next walk consumes, and its marker rule counts the feed as downloaded though the Hold fast path keeps it. Core's pass consumes the marker as the walk does: the stage never downloads a held feed with its list.",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "never_and_disabled_are_not_walked",
+      "description": "A group updated Never, a Disabled group and a disabled row are not checked.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4",
+          "ipv4:N_v4",
+          "ipv4:X_v4",
+          "ipv4:Y_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            },
+            {
+              "header": "Y",
+              "state": "disabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        },
+        {
+          "kind": "ipv4",
+          "name": "GN",
+          "action": "Deny_Inbound",
+          "frequency": "Never",
+          "feeds": [
+            {
+              "header": "N",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        },
+        {
+          "kind": "ipv4",
+          "name": "GX",
+          "action": "Disabled",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "X",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "request_names_a_feed_that_left",
+      "description": "Core named a feed the settings no longer hold: skipped, no outcome.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:Gone_v4",
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "feed_folder_is_a_symlink",
+      "description": "The IP feed folder is a symbolic link: Core runs no feed of it and reports no outcome.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4",
+          "dnsbl:D"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            }
+          ]
+        }
+      ],
+      "folder": "link",
+      "old_expect": {
+        "checked": [
+          "ipv4:A_v4",
+          "dnsbl:D"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success",
+          "dnsbl:D": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "changed",
+          "dnsbl:D": "unchanged"
+        },
+        "stopped": []
+      },
+      "departure": "Today's pass follows the link. Core refuses a feed folder that is a symbolic link (feedstage.Recover), so no probe or run reads or writes through it.",
+      "expect": {
+        "checked": [
+          "dnsbl:D"
+        ],
+        "outcomes": {
+          "dnsbl:D": "success"
+        },
+        "changes": {
+          "dnsbl:D": "unchanged"
+        },
+        "fail": [],
+        "stopped": [
+          "ipv4:A_v4"
+        ],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "baseline_is_a_directory",
+      "description": "The baseline was replaced by a directory: the feed fails with no outcome and no probe.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:B_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "orig": "dir"
+        }
+      },
+      "old_expect": {
+        "outcomes": {
+          "ipv4:B_v4": "success"
+        },
+        "changes": {
+          "ipv4:B_v4": "unchanged"
+        }
+      },
+      "departure": "Today's check takes any file system entry for the baseline and compares its digest sidecar, so the feed is reported unchanged; Core reads a baseline that is no regular file as unusable and does not settle the occurrence.",
+      "expect": {
+        "checked": [
+          "ipv4:B_v4"
+        ],
+        "outcomes": {},
+        "changes": {
+          "ipv4:B_v4": "failed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    }
+  ],
+  "notValid": [
+    {
+      "trigger": "scheduled",
+      "scope": "ip",
+      "why": "Core plans a scheduled, retry or apply Update without a scope (scheduler.go); the program reads a missing scope as both, and the walk covers both."
+    },
+    {
+      "trigger": "scheduled",
+      "scope": "dnsbl",
+      "why": "Core plans a scheduled, retry or apply Update without a scope (scheduler.go); the program reads a missing scope as both, and the walk covers both."
+    },
+    {
+      "trigger": "scheduled",
+      "scope": "both",
+      "why": "Core plans a scheduled, retry or apply Update without a scope (scheduler.go); the program reads a missing scope as both, and the walk covers both."
+    },
+    {
+      "trigger": "scheduled",
+      "force": "none",
+      "why": "Core plans a scheduled, retry or apply Update without a force; the program reads a missing force as none and never forces those triggers."
+    },
+    {
+      "trigger": "scheduled",
+      "force": "parse",
+      "why": "Core plans a scheduled, retry or apply Update without a force; the program reads a missing force as none and never forces those triggers."
+    },
+    {
+      "trigger": "scheduled",
+      "force": "download",
+      "why": "Core plans a scheduled, retry or apply Update without a force; the program reads a missing force as none and never forces those triggers."
+    },
+    {
+      "trigger": "scheduled",
+      "force": "both",
+      "why": "Core plans a scheduled, retry or apply Update without a force; the program reads a missing force as none and never forces those triggers."
+    },
+    {
+      "trigger": "retry",
+      "scope": "ip",
+      "why": "Core plans a scheduled, retry or apply Update without a scope (scheduler.go); the program reads a missing scope as both, and the walk covers both."
+    },
+    {
+      "trigger": "retry",
+      "scope": "dnsbl",
+      "why": "Core plans a scheduled, retry or apply Update without a scope (scheduler.go); the program reads a missing scope as both, and the walk covers both."
+    },
+    {
+      "trigger": "retry",
+      "scope": "both",
+      "why": "Core plans a scheduled, retry or apply Update without a scope (scheduler.go); the program reads a missing scope as both, and the walk covers both."
+    },
+    {
+      "trigger": "retry",
+      "force": "none",
+      "why": "Core plans a scheduled, retry or apply Update without a force; the program reads a missing force as none and never forces those triggers."
+    },
+    {
+      "trigger": "retry",
+      "force": "parse",
+      "why": "Core plans a scheduled, retry or apply Update without a force; the program reads a missing force as none and never forces those triggers."
+    },
+    {
+      "trigger": "retry",
+      "force": "download",
+      "why": "Core plans a scheduled, retry or apply Update without a force; the program reads a missing force as none and never forces those triggers."
+    },
+    {
+      "trigger": "retry",
+      "force": "both",
+      "why": "Core plans a scheduled, retry or apply Update without a force; the program reads a missing force as none and never forces those triggers."
+    },
+    {
+      "trigger": "apply",
+      "scope": "ip",
+      "why": "Core plans a scheduled, retry or apply Update without a scope (scheduler.go); the program reads a missing scope as both, and the walk covers both."
+    },
+    {
+      "trigger": "apply",
+      "scope": "dnsbl",
+      "why": "Core plans a scheduled, retry or apply Update without a scope (scheduler.go); the program reads a missing scope as both, and the walk covers both."
+    },
+    {
+      "trigger": "apply",
+      "scope": "both",
+      "why": "Core plans a scheduled, retry or apply Update without a scope (scheduler.go); the program reads a missing scope as both, and the walk covers both."
+    },
+    {
+      "trigger": "apply",
+      "force": "none",
+      "why": "Core plans a scheduled, retry or apply Update without a force; the program reads a missing force as none and never forces those triggers."
+    },
+    {
+      "trigger": "apply",
+      "force": "parse",
+      "why": "Core plans a scheduled, retry or apply Update without a force; the program reads a missing force as none and never forces those triggers."
+    },
+    {
+      "trigger": "apply",
+      "force": "download",
+      "why": "Core plans a scheduled, retry or apply Update without a force; the program reads a missing force as none and never forces those triggers."
+    },
+    {
+      "trigger": "apply",
+      "force": "both",
+      "why": "Core plans a scheduled, retry or apply Update without a force; the program reads a missing force as none and never forces those triggers."
+    }
+  ]
+}

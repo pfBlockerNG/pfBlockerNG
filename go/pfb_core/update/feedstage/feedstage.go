@@ -64,8 +64,7 @@ type Feed struct {
 	SuppressionCIDR int    // the group's IPv4 Suppression CIDR Limit, over Config.FloorV4 when set
 	// SkipFeedPassed: the feed's failures today are past the skipfeed threshold, so a failed transfer removes the fail marker
 	// instead of creating it (pfb_download_failure()). The caller computes it from today's failure count: the skipfeed
-	// setting against $pfb['failed'][$header], as pfb_download_failure() does. That caller (sub-slice 9d or 9i) is not
-	// written yet, so nothing sets it outside the tests.
+	// setting against $pfb['failed'][$header], as pfb_download_failure() does (worklist.Build).
 	SkipFeedPassed bool
 }
 
@@ -139,9 +138,7 @@ func failedFeed(id, stage, reason string) Result {
 // when Recover fails, so that no probe reads the feed while a committed run is unfinished.
 func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) {
 	result = Result{ID: f.ID}
-	// Today's per-feed blocks and pfb_download() compare the format with these names case-sensitively, and any other value,
-	// such as the category editor's "Auto" or an empty one, falls through to auto.
-	if !slices.Contains([]string{"auto", "regex", "geoip", "whois", "asn", "rsync"}, f.Format) {
+	if !slices.Contains(formats, f.Format) {
 		if s.Log != nil && f.Format != "" && f.Format != "Auto" {
 			fmt.Fprintf(s.Log, "feed %s: format %q is no known format name; running it as auto\n", f.ID, f.Format)
 		}
@@ -316,6 +313,14 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			}
 			probeKept := regularExists(feedPath(feed, ".probe"))
 			ingested := s.Fetcher.Ingest(ctx, feed, request)
+			// A kept body the transfer consumed takes its validators and its source record with it, in the same commit,
+			// whatever the transfer did; a body it never read keeps them.
+			recordStuck := false
+			if probeKept && !regularExists(feedPath(feed, ".probe")) {
+				for _, suffix := range probeFiles[1:] {
+					recordStuck = removeIfExists(feedPath(feed, suffix)) != nil || recordStuck
+				}
+			}
 			if !ingested.OK {
 				// Force both drops the digests before the transfer, whatever its outcome (pfb_force_clear_validators()).
 				retire, retireReason, retireStage = forcedSuffixes(force), "validators_retire_failed", "fetch"
@@ -340,7 +345,14 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 					_ = file.Close()
 					retire = append(slices.Clone(retire), ".fail")
 				}
+				if recordStuck && !cancelled {
+					reason, retireReason = "probe_record_remove_failed", "probe_record_remove_failed"
+				}
 				return failedFeed(f.ID, "fetch", reason)
+			}
+			if recordStuck {
+				retire, retireReason, retireStage = slices.Clone(probeFiles), "probe_record_remove_failed", "fetch"
+				return failedFeed(f.ID, "fetch", "probe_record_remove_failed")
 			}
 			sourceChanged, clearFail = ingested.Status != httpStatusNotModified, true
 			if probeKept {
@@ -393,6 +405,24 @@ func (s *Stage) validate(f Feed, change Change) string {
 		return "feed_directory_unavailable"
 	}
 	return ""
+}
+
+// Today's per-feed blocks and pfb_download() compare the format with these names case-sensitively, and any other value,
+// such as the category editor's "Auto" or an empty one, falls through to auto.
+var formats = []string{"auto", "regex", "geoip", "whois", "asn", "rsync"}
+
+// Request is the transfer request Run makes for f, which stage 6's probe makes too, and "" or the reason f has none. Run
+// transfers nothing for a whois or asn feed or a custom list, whatever Request answers for them.
+func (s *Stage) Request(f Feed) (feedfetch.Request, string) {
+	if !slices.Contains(formats, f.Format) {
+		f.Format = "auto"
+	}
+	return s.request(f)
+}
+
+// ListsPublished reports whether the feed folder dir holds every list a run of f publishes, each a regular file.
+func ListsPublished(dir string, f Feed) bool {
+	return parsedArtifactsExist(feedfetch.Feed{Dir: dir, Name: f.Name}, f.Kind)
 }
 
 func (s *Stage) request(f Feed) (feedfetch.Request, string) {
@@ -775,6 +805,9 @@ func clearForcedState(feed feedfetch.Feed, force string) error {
 	}
 	return nil
 }
+
+// ValidName reports whether name is a feed's file stem: [A-Za-z0-9_]+, which keeps every path built on it in its folder.
+func ValidName(name string) bool { return validFeedWord(name) }
 
 // validFeedWord is the grammar of a feed's file stem and of a GeoIP country code.
 func validFeedWord(value string) bool {

@@ -24,6 +24,16 @@ func idnToASCIIWildcard(host string) string {
 	return ascii
 }
 
+// DomainOK is pfb_filter($s, PFB_FILTER_DOMAIN): a domain that is not ASCII is checked as its punycode.
+func DomainOK(s string) bool {
+	if strings.ContainsFunc(s, func(r rune) bool { return r >= utf8.RuneSelf }) {
+		if s = idnToASCIIWildcard(s); s == "" {
+			return false
+		}
+	}
+	return domainOK(s)
+}
+
 // pfb_filter($line, PFB_FILTER_DOMAIN): whether the line passes. It always holds ASCII here (the IDN step ran first), so
 // the punycode-candidate branch for non-ASCII input is never taken.
 func domainOK(s string) bool {
