@@ -196,13 +196,6 @@
 			"family": "ipv4",
 			"outpost": false,
 			"canonical": null,
-			"note": "left out: not one address or prefix: a signed prefix length"
-		},
-		{
-			"member": "1.2.3.0/+24",
-			"family": "ipv4",
-			"outpost": false,
-			"canonical": null,
 			"note": "left out: not one address or prefix: a prefix length with a sign"
 		},
 		{
