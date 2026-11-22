@@ -2369,7 +2369,8 @@ sits (owner decision on #4037, 2026-11-22: `RuntimeGatewayReadsStructureTest`, `
    it, and a notice the first time; `pfb_outpost_issues.json` in the database folder remembers what it opened, so a
    later request without the issue closes it); unless the scope is `ip`: writes the statistics rows of
    `request.dnsbl` (`dnsbl_save_stats()`), runs `pfb_apply_dns()`, `pfb_update_unbound()` when that changed the
-   Resolver's configuration, and `pfb_apply_dns_proxy()`;
+   Resolver's configuration (then the #468 archive `pfb_dnsbl_cache('save')` on a RAM-disk `/var`, as the pass does), and
+   `pfb_apply_dns_proxy()`; a failed reload, a failed accounting or an `accounting` retry marker keeps the changes pending;
 5. removes what left the configuration (the mirror, then `pfctl -T kill`, then the cursor: a kill that fails keeps its
    ledger entry, and the tick's retry kills a table that has no mirror); a `geo-catalog` body renders the GeoIP pages;
    registers every expected alias with a mirror and runs `pfb_apply_objects()` with a push that sends each changed
@@ -2382,7 +2383,8 @@ sits (owner decision on #4037, 2026-11-22: `RuntimeGatewayReadsStructureTest`, `
    the request's `pendingToken` unless something failed (a failed resource is the apply record's reason); exits 0, or 1
    when a resource failed, the reload was not launched or the DNSBL statistics could not be written.
 
-Not yet: the re-lock of a DNSBL temporary unlock (#4036 question 3), the empty-set placeholder in a mirror, pruning
+Not yet: a change to the DNSBL temporary unlock re-lock (the Resolver reload re-locks them exactly as the update pass
+does; #4036 question 3 owns any change), the empty-set placeholder in a mirror, pruning
 DNSBL statistics rows of removed groups, and `--resource-dir` in the rc script. Behaviour:
 `tests/php/OutpostApplyTest.php` (through corpus A's worker) and `tests/smoke/test_smoke_outpost_apply.py`.
 
