@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
-	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 )
 
 // The names a run stages beside a feed's files. Recover knows each of them: a staged output (stagePrefix), a baseline backup
@@ -21,9 +20,8 @@ const (
 	restorePoint = ".orig.post"
 )
 
-// normBaseline is feedparse.NormalizeFile's record of the download its .norm was built from; without it the next
-// normalization reports a change, so the list is parsed again.
-const normBaseline = ".norm.src." + digest.XXH128
+// parsedSource names the record of the normalized input a feed's published lists stand for, beside them as a digest sidecar.
+const parsedSource = ".parsed.src"
 
 type stagedFeedFile struct {
 	name, temp string
@@ -335,7 +333,7 @@ func Recover(dir string) error {
 	}
 	for stem := range putBack {
 		feed := feedfetch.Feed{Dir: dir, Name: stem}
-		for _, path := range append(validatorPaths(feed), feedPath(feed, normBaseline)) {
+		for _, path := range validatorPaths(feed) {
 			if !restored[filepath.Base(path)] {
 				errs = append(errs, removeIfExists(path))
 			}

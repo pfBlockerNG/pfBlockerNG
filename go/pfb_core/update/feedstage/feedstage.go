@@ -21,12 +21,17 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedparse"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/output"
 )
 
 // Paths are the folders a run touches, each given by the caller; an unset one is an error, never a default.
@@ -145,12 +150,19 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 	if force == "parse" && !hasOrig {
 		force = "download"
 	}
+	// As today, a script that does not resolve is no script, for reuse as for Hold (apply.inc:4071, :2641).
+	pre, _ := feedparse.ResolveListScript(f.PreScript, s.Paths.ScriptDirs)
+	post, _ := feedparse.ResolveListScript(f.PostScript, s.Paths.ScriptDirs)
 	if f.State == "hold" && force != "parse" {
-		if !hasOrig || f.PreScript == "" && f.PostScript == "" {
+		// Hold is download once: held while its published list stands, unless a script asks for the download to be parsed
+		// again; a list that is gone is parsed again from the download, and a feed never downloaded downloads once.
+		switch {
+		case parsedArtifactsExist(feed, f.Kind) && (!hasOrig || pre == "" && post == ""):
 			result.Disposition, result.Reason = "held", "hold"
 			return result
+		case hasOrig:
+			force = "parse"
 		}
-		force = "parse"
 	}
 
 	var backup *pathSnapshot
@@ -164,8 +176,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			if err := backup.restore(); err != nil {
 				result = failedFeed(f.ID, "publish", "baseline_restore_failed")
 			}
-			// The normalization cache may describe the abandoned download: without its baseline the next run reparses.
-			_ = removeIfExists(feedPath(feed, normBaseline))
+			step("restored")
 		} else {
 			backup.discard()
 		}
@@ -188,7 +199,12 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 					_, err := io.WriteString(w, f.CustomText)
 					return err
 				})
-				if err != nil || publishStaged(dir, []stagedFeedFile{{name: f.Name + ".orig", temp: staged}}) != nil {
+				if err != nil {
+					return failedFeed(f.ID, "fetch", "custom_source_unavailable")
+				}
+				defer os.Remove(staged)
+				step("custom-staged")
+				if publishStaged(dir, []stagedFeedFile{{name: f.Name + ".orig", temp: staged}}) != nil {
 					return failedFeed(f.ID, "fetch", "custom_source_unavailable")
 				}
 				// The digest describes the bytes of the last transfer, which the custom text replaced.
@@ -253,11 +269,11 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		return failedFeed(f.ID, "fetch", "cancelled")
 	}
 	result.SourceChanged = sourceChanged
-	disposition := "changed"
-	if force == "parse" || force == "none" && !sourceChanged {
-		disposition = "reparsed"
+	disposition := "reparsed"
+	if sourceChanged {
+		disposition = "changed"
 	}
-	result = s.parseAndPublish(ctx, f, feed, force, disposition, whoisPartial, result)
+	result = s.parseAndPublish(ctx, f, feed, pre, post, force, disposition, whoisPartial, result)
 	if result.Disposition != "failed" && whoisPartial {
 		result.Disposition, result.Stage, result.Reason = "failed", "whois", "whois_partial"
 	}
@@ -276,10 +292,14 @@ func (s *Stage) validate(f Feed, change Change) string {
 		return "fetcher_missing"
 	case s.Paths.FeedDir == "":
 		return "feed_directory_missing"
-	case !filepath.IsAbs(s.Paths.FeedDir):
+	case !cleanPath(s.Paths.FeedDir):
 		return "feed_directory_invalid"
 	case !validFeedWord(f.Name):
 		return "feed_name_invalid"
+	case s.Paths.GeoIPDir != "" && !cleanPath(s.Paths.GeoIPDir):
+		return "geoip_directory_invalid"
+	case slices.ContainsFunc(s.Paths.ScriptDirs, func(p string) bool { return !cleanPath(p) }):
+		return "script_directory_invalid"
 	}
 	if info, err := os.Lstat(s.Paths.FeedDir); err != nil || !info.IsDir() {
 		return "feed_directory_unavailable"
@@ -300,7 +320,7 @@ func (s *Stage) request(f Feed) (feedfetch.Request, string) {
 		if len(country) == 0 || !validFeedWord(country[0]) {
 			return request, "feed_source_invalid"
 		}
-		if s.Paths.GeoIPDir == "" || !filepath.IsAbs(s.Paths.GeoIPDir) {
+		if s.Paths.GeoIPDir == "" {
 			return request, "geoip_directory_missing"
 		}
 		request.URL = fileURL(filepath.Join(s.Paths.GeoIPDir, country[0]+familySuffix(f.Kind)+".txt"))
@@ -331,33 +351,39 @@ func (s *Stage) safeReason(reason, fallback string, f Feed) string {
 	return reason
 }
 
-func (s *Stage) parseAndPublish(ctx context.Context, f Feed, feed feedfetch.Feed, force, disposition string, whoisPartial bool,
-	result Result) Result {
+func (s *Stage) parseAndPublish(ctx context.Context, f Feed, feed feedfetch.Feed, pre, post, force, disposition string,
+	whoisPartial bool, result Result) Result {
 	result.Stage = "normalize"
 	norm := feedparse.NormalizeFile(feed.Dir, feed.Name)
 	result.NormalizedChanged = norm.Changed
 	if ctx.Err() != nil {
 		return failedFeed(f.ID, "normalize", "cancelled")
 	}
-	// issue #1960: a configured pre- or post-script runs every pass, so only a feed without one reuses its list.
-	if force == "none" && f.PreScript == "" && f.PostScript == "" && parsedArtifactsExist(feed, f.Kind) && norm.Normalized &&
-		!norm.Changed && !whoisPartial {
+	// The input the lists will stand for: the normalized download, when no script takes part (issue #1960: a configured
+	// script runs every pass, so a feed with one is never reused).
+	source := ""
+	if norm.Normalized && pre == "" && post == "" {
+		source, _ = digest.File(norm.Path)
+	}
+	if force == "none" && source != "" && !whoisPartial && parsedArtifactsExist(feed, f.Kind) && recordedSource(feed) == source {
 		result.Disposition, result.Stage, result.Reason = "unchanged", "normalize", "normalized_unchanged"
 		return result
 	}
 	parsePath, probePath := norm.Path, feedPath(feed, ".orig")
-	if f.PreScript != "" {
-		script, ok := feedparse.ResolveListScript(f.PreScript, s.Paths.ScriptDirs)
-		if !ok {
-			result.Disposition, result.Stage, result.Reason, result.PreScriptFailed = "failed", "script", "script_unavailable", true
-			return result
-		}
+	if pre == "" && f.PreScript != "" && f.PreScript != "0" {
+		s.sinks().Line(true, "\n[ %s ] pre-script '%s' is not a file in the list-script folders; skipping\n", f.Name, f.PreScript)
+	}
+	if pre != "" {
 		listType := familySuffix(f.Kind)
 		if f.Kind == "dnsbl" {
 			listType = "dnsbl"
 		}
-		outcome := feedparse.RunPreScript(ctx, script, norm.Path, feedPath(feed, ".pre"), s.Log, listType)
-		if !outcome.OK {
+		outcome := feedparse.RunPreScript(ctx, pre, norm.Path, feedPath(feed, ".pre"), s.Log, listType)
+		switch {
+		case outcome.OK:
+		case outcome.Reason == feedparse.PreScriptCancelled || ctx.Err() != nil:
+			return failedFeed(f.ID, "script", "cancelled")
+		default:
 			result.Disposition, result.Stage, result.Reason, result.PreScriptFailed = "failed", "script", "script_failed", true
 			return result
 		}
@@ -375,25 +401,26 @@ func (s *Stage) parseAndPublish(ctx context.Context, f Feed, feed feedfetch.Feed
 			}
 		},
 		Fail: func(record feedparse.FailRecord) {
-			if s.Log != nil {
-				fmt.Fprintf(s.Log, "feed %s: parse failure at line %d\n", f.ID, record.LineNo)
-			}
 			if s.ParseErrors != nil {
 				fmt.Fprintf(s.ParseErrors, "%s,%s,%s,%s,%d\n", time.Now().Format(time.DateTime), f.Name, record.Line, record.Raw,
 					record.LineNo)
 			}
 		},
 	}
-	post := feedparse.PostScript{Name: f.PostScript, Dirs: s.Paths.ScriptDirs, Header: f.Name, Log: s.Log, Errors: s.Errors,
+	script := feedparse.PostScript{Name: f.PostScript, Dirs: s.Paths.ScriptDirs, Header: f.Name, Log: s.Log, Errors: s.Errors,
 		Transcript: s.Transcript}
 	if f.Kind == "dnsbl" {
-		return s.parseDNSBL(ctx, f, feed, parsePath, post, disposition, result, sink)
+		return s.parseDNSBL(ctx, f, feed, parsePath, script, source, disposition, result, sink)
 	}
-	return s.parseIP(ctx, f, feed, parsePath, probePath, post, disposition, result, sink)
+	return s.parseIP(ctx, f, feed, parsePath, probePath, script, source, disposition, result, sink)
+}
+
+func (s *Stage) sinks() output.Sinks {
+	return output.Sinks{Log: s.Log, Transcript: s.Transcript, Errors: s.Errors}
 }
 
 func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, parsePath, probePath string, post feedparse.PostScript,
-	disposition string, result Result, sink feedparse.Sink) Result {
+	source, disposition string, result Result, sink feedparse.Sink) Result {
 	input, err := os.Open(parsePath)
 	if err != nil {
 		return failedFeed(f.ID, "parse", "normalized_feed_unavailable")
@@ -421,6 +448,10 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, parseP
 		return failedFeed(f.ID, "parse", "ip_parse_failed")
 	}
 	defer os.Remove(staged)
+	// One summary line per feed, today's (pfb_ip_parse_fail_warn()); the records went to ParseErrors.
+	if parsed.ParseFail > 0 {
+		s.sinks().Line(true, "\n[!] Parse Errors [ %s ]: %d\n", f.Name, parsed.ParseFail)
+	}
 
 	// The post-script runs on the download itself, with a restore point put back after the empty check (spec §5).
 	ran := post.RunIP(ctx, feedPath(feed, ".orig"), feedPath(feed, ".orig.post"), cfg.VType)
@@ -445,12 +476,11 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, parseP
 	result.Disposition, result.Stage = disposition, "parse"
 	result.Entries, result.ParseFailures = parsed.Entries, parsed.ParseFail
 	result.Suppressed, result.Placeholder = parsed.Suppressed, parsed.Placeholder
+	files := []stagedFeedFile{{name: feed.Name + ".parsed.ip", temp: staged}}
 	if parsed.Entries == 0 && parsed.Placeholder == "" {
-		result.Disposition = "empty"
-		ran.Restore()
-		return result
+		result.Disposition, files = "empty", nil // the last list stays, and stands for this input
 	}
-	if err := publishStaged(feed.Dir, []stagedFeedFile{{name: feed.Name + ".parsed.ip", temp: staged}}); err != nil {
+	if err := publishParsed(feed, files, source); err != nil {
 		result.Disposition, result.Stage, result.Reason = "failed", "publish", "parsed_publish_failed"
 	}
 	ran.Restore()
@@ -458,7 +488,7 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, parseP
 }
 
 func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, parsePath string, post feedparse.PostScript,
-	disposition string, result Result, sink feedparse.Sink) Result {
+	source, disposition string, result Result, sink feedparse.Sink) Result {
 	input, err := os.Open(parsePath)
 	if err != nil {
 		return failedFeed(f.ID, "parse", "normalized_feed_unavailable")
@@ -510,10 +540,38 @@ func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, par
 			files = append(files, stagedFeedFile{name: feed.Name + ".parsed.ndjson", temp: stagedNDJSON})
 		}
 	}
-	if err := publishStaged(feed.Dir, files); err != nil {
+	if err := publishParsed(feed, files, source); err != nil {
 		result.Disposition, result.Stage, result.Reason = "failed", "publish", "parsed_publish_failed"
 	}
 	return result
+}
+
+// publishParsed publishes the staged lists of a feed with the record of the input they stand for ("" for none) in one
+// commit: reuse needs that record to equal the current input, so no KILL or restore order can pair a list with another
+// download.
+func publishParsed(feed feedfetch.Feed, files []stagedFeedFile, source string) error {
+	record, err := stageOutput(feed.Dir, func(w io.Writer) error {
+		_, err := io.WriteString(w, source)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	defer os.Remove(record)
+	return publishStaged(feed.Dir, append(files, stagedFeedFile{name: feed.Name + parsedSource + "." + digest.XXH128, temp: record}))
+}
+
+func recordedSource(feed feedfetch.Feed) string {
+	if algo, recorded := digest.Read(feedPath(feed, parsedSource)); algo == digest.XXH128 {
+		return recorded
+	}
+	return ""
+}
+
+// cleanPath is the rule the loop applies to its paths (update.CheckPath): absolute and clean, valid UTF-8 without a control
+// character.
+func cleanPath(p string) bool {
+	return filepath.IsAbs(p) && filepath.Clean(p) == p && utf8.ValidString(p) && strings.IndexFunc(p, unicode.IsControl) < 0
 }
 
 func writeLines(w io.Writer, values []string) error {
