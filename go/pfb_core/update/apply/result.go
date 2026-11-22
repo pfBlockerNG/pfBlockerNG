@@ -102,11 +102,14 @@ type line struct {
 // without a control character or a line or paragraph separator (the apply writes each as a space: the check covers the
 // characters that can break a log line and does not repeat every rule of the writer). The lines add up: applied,
 // removed, failed and aliases of every line, and a flag true when any line says so. Keys are matched as encoding/json matches
-// them (case-insensitively, the last duplicate winning), which the apply never writes. A result over MaxResult keeps the
-// complete lines inside the first MaxResult bytes, with ErrCut (the flags and ChangedAliases of that Result are lower bounds:
-// assume a change and a possible reload), or, when those bytes hold no complete line, is refused whole like a line over MaxLine; a bad unterminated last line that is not a complete JSON value
-// (one the apply's death cut short) leaves the lines before it, with the error, while a complete invalid one is refused whole like a
-// terminated line; a blank line counts against MaxLine like any other; any other error returns a zero Result, so nothing of it is settled.
+// them (case-insensitively, the last duplicate winning), which the apply never writes. A line is skipped only when it is empty
+// or holds only spaces and is within MaxLine; any other whitespace is refused as a byte that is not printable ASCII.
+// A result over MaxResult keeps the complete lines inside the first MaxResult bytes, with ErrCut (the flags and ChangedAliases
+// of that Result are lower bounds: assume a change and a possible reload), unless the bytes after the last newline inside
+// those MaxResult bytes number MaxLine or more: a line then broke its bound, and the result is refused whole like a line over
+// MaxLine. A line the apply's death cut short is the unterminated last line of the file, shorter than MaxLine, that is a proper
+// prefix of one JSON value (decoding it ends in io.ErrUnexpectedEOF); only such a line leaves the lines before it, with the
+// error. Any other error, of a terminated or an unterminated line, returns a zero Result, so nothing of it is settled.
 func ReadResult(f io.ReaderAt, req Request) (Result, error) {
 	b, err := readBounded(io.NewSectionReader(f, 0, MaxResult+1))
 	if err != nil {
@@ -114,10 +117,11 @@ func ReadResult(f io.ReaderAt, req Request) (Result, error) {
 	}
 	cut := len(b) > MaxResult
 	if cut {
-		b = b[:bytes.LastIndexByte(b[:MaxResult], '\n')+1]
-		if len(b) == 0 { // one line longer than the file bound: the writer broke the line bound, the file is not merely cut
+		end := bytes.LastIndexByte(b[:MaxResult], '\n') + 1
+		if len(b)-end >= MaxLine { // the dropped tail is itself over the line bound: the writer broke it, the file is not merely cut
 			return Result{}, fmt.Errorf("the apply's result line is refused: it is over %d bytes", MaxLine)
 		}
+		b = b[:end]
 	}
 	r := reader{generation: map[string]uint64{}, removable: map[string]bool{}, aliases: map[string]bool{}, named: map[string]bool{},
 		changed: map[string]bool{}}
@@ -136,14 +140,14 @@ func ReadResult(f io.ReaderAt, req Request) (Result, error) {
 	for len(b) > 0 {
 		l, rest, terminated := bytes.Cut(b, []byte("\n"))
 		b = rest
-		if len(bytes.TrimSpace(l)) == 0 && len(l)+1 <= MaxLine { // a blank line over the bound goes to add, which refuses it
+		if len(bytes.Trim(l, " ")) == 0 && len(l)+1 <= MaxLine { // a blank line over the bound goes to add, which refuses it
 			continue
 		}
 		if err := r.add(l); err != nil {
-			if terminated || json.Valid(l) { // a complete value is no line the apply's death cut short
-				return Result{}, err
+			if !terminated && len(l) < MaxLine && errors.Is(json.NewDecoder(bytes.NewReader(l)).Decode(new(json.RawMessage)), io.ErrUnexpectedEOF) {
+				return r.res, err
 			}
-			return r.res, err
+			return Result{}, err
 		}
 	}
 	if cut {
