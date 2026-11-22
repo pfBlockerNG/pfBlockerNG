@@ -15517,8 +15517,8 @@ function pfb_pfctl_op_failed(string $op, int $rc, string $stderr): bool {
 // On failure (non-zero rc or pfctl error output) logs one attributed line via pfb_logger().
 // $pfctl_bin defaults to $pfb['pfctl']; pass explicitly when the binary is a
 // per-call parameter (e.g. pfb_apply_alias_delta, which accepts a mock binary in tests).
-// $close_on_success FALSE leaves an open ip/<table>/apply entry open on success: a run of several calls passes it once
-// one of its calls failed (issue #4189).
+// $close_on_success FALSE leaves an open ip/<table>/apply entry open on success: a delta passes it on every batch, since only a
+// replace from the mirror leaves the table equal to its mirror (issue #4189).
 function pfb_pfctl_table_op(string $table, string $op, string $args = '', string $pfctl_bin = '', bool $close_on_success = TRUE): array {
 	global $pfb;
 	if ($pfctl_bin === '') {
@@ -16150,6 +16150,7 @@ function pfb_alias_delta_batch_resolve(string $raw): int {
  * Apply an alias-table change via forward delta (-T add / -T delete) or full replace.
  *
  * Decision (when $force_replace is FALSE):
+ *   - an open ip/<table>/apply ledger entry → -T replace, whatever the mode (issue #4189).
  *   - 'replace' mode → always -T replace.
  *   - 'delta' / 'auto' → compute add/del sets; if churn_ratio < threshold (auto) OR
  *     mode is 'delta', apply delta in batches of $batch_size.  Fall back to -T replace
@@ -16202,7 +16203,9 @@ function pfb_apply_alias_delta(
  * Each line must be a member of the table's family (pfb_outpost_ip_member_valid()): one address or one prefix of it, so pf never
  * reads a line as an interface or a host name. It is checked on both passes. A $family other than 'ipv4' or 'ipv6' refuses the call.
  *
- * On the delta and auto paths a negative count (any of the four) is refused: nothing is sent; a replace uses no count and goes
+ * A run that finds the ip/<table>/apply ledger entry open replaces the table from its mirror, whatever the mode and the counts
+ * say, and logs why: a delta is computed against a mirror the table did not reach. On the delta and auto paths a negative count
+ * (any of the four) is refused: nothing is sent; a replace uses no count and goes
  * ahead, logging the four counts. Then the decision is pfb_apply_alias_delta()'s, from counts: replace when
  * $force_replace, in mode 'replace', or in mode 'auto' when ($add_entries + $remove_entries) / max($entries, $previous_entries)
  * reaches PFB_DELTA_CHURN_THRESHOLD; otherwise a delta. Counts of zero and zero are nothing to do: no call, and no file is
@@ -16210,10 +16213,12 @@ function pfb_apply_alias_delta(
  * cannot be opened, holds a line that is not a member of the family (an empty line and a CRLF line included), holds a
  * line longer than an IP set member, or holds another number of lines than its count sends nothing. Then the adds and the
  * deletes go to pfctl in batches of $batch_size (clamped to [64, 4096]), each in a batch file of mode 0600 that pfctl reads
- * with -f, so a member is never an argument; a failed batch leaves the remaining ones sent, and the ip/<table>/apply ledger
- * entry open when the run returns, with the last failure's message, whatever later batches did. The second pass, which feeds
+ * with -f, so a member is never an argument; a failed batch leaves the remaining ones sent. The second pass, which feeds
  * pfctl, checks each line again and the count at the end, against a file that changes between the two passes: on a bad line
- * the sending stops, on a wrong count it ends; the batches already sent stay applied and ok is FALSE. A final line without
+ * the sending stops, on a wrong count it ends; the batches already sent stay applied and ok is FALSE. A delta never closes the
+ * ip/<table>/apply ledger entry, only a replace does; a failed or skipped batch opens it, and so does a run that sent a batch
+ * and then stopped on a bad line or ended on a wrong count, naming the reason. A run refused before anything was sent does not
+ * touch the ledger. A final line without
  * a newline is accepted; that a file is complete is pfb_outpost_part_check()'s and the digest's job, not this function's.
  *
  * @param string $family 'ipv4' or 'ipv6': the family of the table's members
@@ -16299,10 +16304,17 @@ function pfb_apply_alias_delta_files(string $pfctl_bin, string $table, string $f
 function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string $table_file, callable $members, int $add_entries,
     int $remove_entries, int $entries, int $previous_entries, string $mode, int $batch_size, bool $force_replace,
     string $tmpdir): array {
+	global $pfb;
 	$batch_size = pfb_alias_delta_batch_clamp($batch_size);
 	$churn      = $add_entries + $remove_entries;
 	$table_size = max($entries, $previous_entries);
 	$replace    = $force_replace || $mode === 'replace';
+
+	// a delta is computed against the mirror: once an earlier run left the table behind it, only a replace brings the table to it
+	if (!$replace && isset(pfb_sync_status_read_all($pfb['dbdir'])['ip'][$table]['apply'])) {
+		pfb_logger(" Updating [ {$table} ]: the ip/{$table}/apply ledger entry is open, so the table is replaced from its mirror\n", 1);
+		$replace = TRUE;
+	}
 
 	// a replace reloads the table from its file and uses no count; a delta trusts all four
 	if (min($add_entries, $remove_entries, $entries, $previous_entries) < 0) {
@@ -16337,10 +16349,11 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 	}
 
 	$tmpdir = $tmpdir === '' ? sys_get_temp_dir() : $tmpdir;
-	// once a batch failed, the entry stays open until the run returns: a later batch that succeeds does not close it
-	$failed = FALSE;
-	$push   = static function (string $op, array $chunk) use ($table, $pfctl_bin, $tmpdir, &$failed): bool {
+	// a batch never closes the entry, only a replace does: the table may be behind its mirror from an earlier run
+	$pushed = FALSE;
+	$push   = static function (string $op, array $chunk) use ($table, $pfctl_bin, $tmpdir, &$pushed): bool {
 		global $pfb;
+		$pushed = TRUE;
 		$data = implode("\n", $chunk) . "\n";
 		// 'x': a fresh file of this run's own, never one that is already there
 		// the names tempnam() gave these files before: pfb_add_* and pfb_del_*
@@ -16357,9 +16370,7 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 				$written = fwrite($fh, $data) === strlen($data);
 				$written = fclose($fh) && $written;
 				if ($written) {
-					$sent   = !pfb_pfctl_table_op($table, $op, '-f ' . escapeshellarg($path), $pfctl_bin, !$failed)['failed'];
-					$failed = $failed || !$sent;
-					return $sent;
+					return !pfb_pfctl_table_op($table, $op, '-f ' . escapeshellarg($path), $pfctl_bin, FALSE)['failed'];
 				}
 			} finally {
 				@unlink($path);
@@ -16369,22 +16380,27 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 		pfb_logger("{$message}\n", 1);
 		// the table is now behind its mirror, as after a failed call: open the entry pfb_pfctl_table_op() opens, for the tick's retry
 		pfb_sync_status_open('ip', $table, 'apply', trim($message) . ': the batch file failed', $pfb['dbdir']);
-		$failed = TRUE;
 		return FALSE;
 	};
 
-	$ok = TRUE;
+	$ok     = TRUE;
+	$reason = '';
 	foreach (['add' => [$sides[0], $add_entries], 'delete' => [$sides[1], $remove_entries]] as $op => [$lines, $count]) {
 		$chunk = [];
 		$read  = 0;
 		foreach ($lines as $line) {
 			if ($line === NULL) {
 				// the source refused a line and logged it: the sending stops, the batches sent stay
+				if ($pushed) {
+					pfb_sync_status_open('ip', $table, 'apply', "Updating [ {$table} ]: the " . ($op === 'delete' ? 'remove' : 'add')
+					    . ' file line ' . ($read + 1) . ' is not a member', $pfb['dbdir']);
+				}
 				return ['delta' => TRUE, 'ok' => FALSE];
 			}
 			if ($read === $count) {
 				// a file that grew since the count was taken: the line beyond it is not sent, nor any after it
-				pfb_logger(" Updating [ {$table} ]: the {$op} file holds more than {$count} members\n", 1);
+				$reason = "Updating [ {$table} ]: the {$op} file holds more than {$count} members";
+				pfb_logger(" {$reason}\n", 1);
 				$ok = FALSE;
 				break;
 			}
@@ -16399,9 +16415,14 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 			$ok = $push($op, $chunk) && $ok;
 		}
 		if ($read !== $count) {
-			pfb_logger(" Updating [ {$table} ]: {$op} read {$read} members, not {$count}\n", 1);
+			$reason = "Updating [ {$table} ]: {$op} read {$read} members, not {$count}";
+			pfb_logger(" {$reason}\n", 1);
 			$ok = FALSE;
 		}
+	}
+	if ($pushed && $reason !== '') {
+		// batches went out against a count that turned out wrong: the table is not the wanted set
+		pfb_sync_status_open('ip', $table, 'apply', $reason, $pfb['dbdir']);
 	}
 	return ['delta' => TRUE, 'ok' => $ok];
 }
