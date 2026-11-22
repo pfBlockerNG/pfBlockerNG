@@ -443,10 +443,10 @@ const top1mStaging = ".pfbtop1m_new_"
 func top1mCommit(stage, target, base, raw string) bool {
 	unrescued := top1mRescue(target)
 	top1mSweep([]string{stage, unrescued}, filepath.Dir(target), filepath.Dir(base))
-	// A digest path that holds no file (a directory) vouches for nothing: the sidecar's rename over it fails, and the
-	// baseline reads as changed.
+	// A directory at the digest path vouches for nothing: the sidecar's rename over it fails, and the baseline reads as
+	// changed. Anything else that stays (a file, a symlink to one) could still be read as the old digest.
 	if err := os.Remove(base + ".xxhash128"); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		if info, lerr := os.Lstat(base + ".xxhash128"); lerr != nil || info.Mode().IsRegular() {
+		if info, lerr := os.Lstat(base + ".xxhash128"); lerr != nil || !info.IsDir() {
 			return false
 		}
 	}
