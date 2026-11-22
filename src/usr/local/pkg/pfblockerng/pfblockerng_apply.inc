@@ -3567,7 +3567,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$pfctlck = pfb_pfctl_table_count($cc_alias);
 
 						if (empty($pfctlck) && file_exists("{$pfbfolder}/{$cc_alias}.txt")) {
-							@copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt");
+							pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt");
 							// Collect updated alias lists ('Reputation' disabled)
 							$pfb_alias_lists[] = "{$cc_alias}";
 						}
@@ -3612,7 +3612,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 									);
 
 									// Save Continent data to aliastable folder
-									@copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt");
+									pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt");
 								}
 
 								// Check if file exists and is > 0 in size and save alias file
@@ -3630,7 +3630,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
                                                                         }
 
 									@file_put_contents("{$pfbfolder}/{$cc_alias}.txt", "{$p_ip}\n", LOCK_EX);
-									@copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt");
+									pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt");
 									$log = "[ {$cc_alias} ] Found no unique IPs, adding '{$p_ip}' to avoid empty file\n";
 									pfb_logger("{$log}", 1);
 								}

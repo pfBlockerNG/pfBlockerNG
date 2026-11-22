@@ -46,6 +46,7 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_alias_set_different')]
 #[CoversFunction('pfb_write_canonical_alias')]
+#[CoversFunction('pfb_alias_mirror_copy')]
 #[CoversFunction('pfb_cross_list_scope')]
 #[CoversFunction('pfb_supp_update_active')]
 final class AliasContentGateTest extends TestCase
@@ -427,6 +428,61 @@ final class AliasContentGateTest extends TestCase
 			"written file must end with a newline\n" .
 			"written: " . json_encode($written)
 		);
+	}
+
+	/**
+	 * Issue #4191: the mirror is replaced whole, never rewritten in place. pfctl -T replace -f (the tick's retry, outside the
+	 * Update's lock) and the alias URL read it without a lock, so a reader that opened it before a write keeps reading the old
+	 * set whole, and the new set is published only complete, readable by the alias URL's reader (0644).
+	 */
+	public function testWriteCanonicalAliasReplacesTheMirrorWholeUnderAnOpenReader(): void
+	{
+		$path = "{$this->tmp}/pfB_Whole_v4.txt";
+		file_put_contents($path, "10.0.0.1\n10.0.0.2\n10.0.0.3\n");
+		$reader = fopen($path, 'rb');
+
+		$this->assertTrue(pfb_write_canonical_alias($path, ['192.0.2.1']));
+
+		$this->assertSame("10.0.0.1\n10.0.0.2\n10.0.0.3\n", stream_get_contents($reader), 'an open reader still sees the old set whole');
+		fclose($reader);
+		$this->assertSame("192.0.2.1\n", file_get_contents($path));
+		$this->assertSame('0644', sprintf('%04o', fileperms($path) & 0777));
+		$this->assertSame(['pfB_Whole_v4.txt'], array_values(array_diff(scandir($this->tmp), ['.', '..'])), 'no staged file is left');
+	}
+
+	/** Issue #4191: a mirror that cannot be replaced (a folder in its place) is reported, and nothing is left staged. */
+	public function testWriteCanonicalAliasThatCannotReplaceTheMirrorSaysSo(): void
+	{
+		$path = "{$this->tmp}/pfB_Blocked_v4.txt";
+		mkdir($path);
+
+		$this->assertFalse(pfb_write_canonical_alias($path, ['192.0.2.1']));
+		$this->assertDirectoryExists($path);
+		$this->assertSame(['pfB_Blocked_v4.txt'], array_values(array_diff(scandir($this->tmp), ['.', '..'])));
+	}
+
+	/** Issue #4191: a GeoIP list copied in as an alias mirror replaces it whole, as the canonical writer does. */
+	public function testAliasMirrorCopyReplacesTheMirrorWholeUnderAnOpenReader(): void
+	{
+		$path = "{$this->tmp}/pfB_Europe_v4.txt";
+		$source = "{$this->tmp}/source.txt";
+		file_put_contents($path, "10.0.0.1\n");
+		file_put_contents($source, "192.0.2.0/24\n198.51.100.0/24\n");
+		$reader = fopen($path, 'rb');
+
+		$this->assertTrue(pfb_alias_mirror_copy($source, $path));
+
+		$this->assertSame("10.0.0.1\n", stream_get_contents($reader));
+		fclose($reader);
+		$this->assertSame("192.0.2.0/24\n198.51.100.0/24\n", file_get_contents($path));
+		$this->assertSame(['pfB_Europe_v4.txt', 'source.txt'], array_values(array_diff(scandir($this->tmp), ['.', '..'])));
+	}
+
+	/** Issue #4191: the apply copies GeoIP lists into the alias folder only through the whole-file helper. */
+	public function testTheApplyCopiesNoListIntoTheAliasFolderInPlace(): void
+	{
+		$apply = (string) php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$this->assertSame(0, preg_match_all('/\bcopy\s*\([^;]*aliasdir/', $apply));
 	}
 
 	/**
