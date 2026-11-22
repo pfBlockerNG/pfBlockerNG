@@ -22,12 +22,9 @@ final class UnboundInputsPublishedWholeTest extends TestCase
 	{
 		$found = [];
 		foreach (['pfblockerng.inc', 'pfblockerng_apply.inc'] as $file) {
-			$code = self::source($file);
-			foreach (["\$pfb['unbound_py_conf']", "\$pfb['unbound_py_wh']", "\$pfb['unbound_py_ss']", '$ss_file', '/unbound.tmp"'] as $target) {
-				if (preg_match_all('/file_put_contents\(\s*' . preg_quote($target, '/') . '/', $code) > 0
-					|| preg_match_all('/file_put_contents\("\{\$pfb\[\'dnsbldir\'\]\}' . preg_quote($target, '/') . '/', $code) > 0) {
-					$found[] = "{$file}: {$target}";
-				}
+			preg_match_all('/file_put_contents\s*\([^;]*?(?:unbound_py_(?:conf|wh|ss)\b|unbound\.tmp|\$ss_file\b)[^;]*;/', self::source($file), $hits);
+			foreach ($hits[0] as $hit) {
+				$found[] = "{$file}: {$hit}";
 			}
 		}
 		$this->assertSame([], $found, 'every one of these goes through pfb_unbound_py_atomic_write()');

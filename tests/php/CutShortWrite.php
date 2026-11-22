@@ -19,7 +19,11 @@ final class CutShortWrite
 	{
 		$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
 		$pid = pcntl_fork();
+		if ($pid === -1) {
+			throw new RuntimeException('CutShortWrite: fork failed');
+		}
 		if ($pid === 0) {
+			pcntl_alarm(30);	// a child that hangs dies without running shutdown handlers, so the parent's read ends
 			fclose($pair[0]);
 			pcntl_signal(SIGXFSZ, SIG_IGN);
 			posix_setrlimit(POSIX_RLIMIT_FSIZE, $bytes, $bytes);

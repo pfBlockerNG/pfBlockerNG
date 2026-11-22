@@ -2360,7 +2360,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 				}
 
 				// Publish the CSV whole when it changed (issue #4201)
-				if (@file_get_contents($pfb['unbound_py_ss']) !== $ss_rows && pfb_unbound_py_atomic_write($pfb['unbound_py_ss'], $ss_rows)) {
+				if (pfb_ss_publish($ss_rows)) {
 					$safesearch_update = TRUE;
 					touch("{$pfb['dnsbl_file']}.reload");
 				}

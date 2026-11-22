@@ -10175,9 +10175,7 @@ function pfb_package_removal_recover(): array {
 			// The apply pass's own ini inputs, from the settings config.xml stores
 			pfb_dnsbl_ini_inputs();
 			pfb_metrics_client_apply();
-			if (!pfb_unbound_py_atomic_write($pfb['unbound_py_conf'], pfb_unbound_python_ini('enabled'))) {
-				$failed[] = "the DNS proxy's DNSBL settings could not be written";
-			}
+			pfb_unbound_py_atomic_write($pfb['unbound_py_conf'], pfb_unbound_python_ini('enabled'));
 		}
 
 		if ($why === NULL) {
@@ -17016,10 +17014,16 @@ function pfblockerng_ss_refresh() {
 
 	list($out, $changed) = pfb_ss_refresh_lines($lines, 'pfb_ss_resolve_target');
 
-	if ($changed && pfb_unbound_py_atomic_write($ss_file, implode("\n", $out) . "\n")) {
+	if ($changed && pfb_ss_publish(implode("\n", $out) . "\n")) {
 		touch("{$pfb['dnsbl_file']}.reload");
 		pfb_logger("\n SafeSearch CNAME fallback IPs refreshed", 1);
 	}
+}
+
+/** Publish the decider's SafeSearch CSV whole when $rows differ from it (issue #4201). TRUE when it was replaced: the gateway reloads it. */
+function pfb_ss_publish(string $rows): bool {
+	global $pfb;
+	return @file_get_contents($pfb['unbound_py_ss']) !== $rows && pfb_unbound_py_atomic_write($pfb['unbound_py_ss'], $rows);
 }
 
 // Define DNSBL Unbound include settings (config.xml)
@@ -20829,9 +20833,8 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 
 		// Compare previous DNSBL Whitelist to new Whitelist
 		$pfb_py_whitelist_ex = @file_get_contents($pfb['unbound_py_wh']);
-		if ($dnsbl_whitelist !== $pfb_py_whitelist_ex) {
+		if ($dnsbl_whitelist !== $pfb_py_whitelist_ex && pfb_unbound_py_atomic_write($pfb['unbound_py_wh'], $dnsbl_whitelist)) {
 			$pfbpython = TRUE;
-			pfb_unbound_py_atomic_write($pfb['unbound_py_wh'], $dnsbl_whitelist);
 
 			// ADR-06: keep the manifest's config.user_whitelist (the source for the
 			// query-time whiteDB) in sync with a settings-textarea whitelist edit, so
@@ -20848,9 +20851,8 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 		$pfb_py_conf_ex		= @file_get_contents($pfb['unbound_py_conf']);
 		$pfb_py_conf_ex2	= preg_replace("/File created:.* ]/", "File created: {$now} ]", $pfb_py_conf_ex);
 
-		if ($pfb_py_conf !== $pfb_py_conf_ex2) {
+		if ($pfb_py_conf !== $pfb_py_conf_ex2 && pfb_unbound_py_atomic_write($pfb['unbound_py_conf'], $pfb_py_conf)) {
 			$pfbpython = TRUE;
-			pfb_unbound_py_atomic_write($pfb['unbound_py_conf'], $pfb_py_conf);
 		}
 	}
 

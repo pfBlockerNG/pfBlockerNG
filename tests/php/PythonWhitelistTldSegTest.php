@@ -122,7 +122,7 @@ final class PythonWhitelistTldSegTest extends TestCase
 		file_put_contents($GLOBALS['pfb']['unbound_py_wh'], $previous);
 		$this->setWhitelist("new.example.com\r\nanother.example.net\r\n");
 
-		CutShortWrite::run(16, static fn (): mixed => pfb_unbound_python_whitelist('alerts'));
+		$this->assertSame('NULL', CutShortWrite::run(16, static fn (): mixed => pfb_unbound_python_whitelist('alerts')));
 
 		$this->assertSame($previous, file_get_contents($GLOBALS['pfb']['unbound_py_wh']));
 	}

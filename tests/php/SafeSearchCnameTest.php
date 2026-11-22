@@ -46,6 +46,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_ss_csv_rows')]
 #[CoversFunction('pfb_ss_refresh_lines')]
 #[CoversFunction('pfb_ss_resolve_target')]
+#[CoversFunction('pfb_ss_publish')]
 final class SafeSearchCnameTest extends TestCase
 {
 	private string $tmp;
@@ -219,9 +220,53 @@ final class SafeSearchCnameTest extends TestCase
 		$previous = "duckduckgo.com,cname,safe.duckduckgo.com,9.9.9.9,2001:db8::old\n";
 		file_put_contents($csv, $previous);
 
-		CutShortWrite::run(16, static fn (): mixed => pfblockerng_ss_refresh());
+		$this->assertSame('NULL', CutShortWrite::run(16, static fn (): mixed => pfblockerng_ss_refresh()));
 
 		$this->assertSame($previous, file_get_contents($csv), 'the stale baked IPs stay until a whole CSV replaces them');
+	}
+
+	/** Issue #4201: the SafeSearch CSV is published whole when there is none yet. */
+	public function test_publish_writes_a_csv_when_there_is_none(): void
+	{
+		$GLOBALS['pfb']['unbound_py_ss'] = $csv = "{$this->tmp}/pfb_py_ss.txt";
+
+		$this->assertTrue(pfb_ss_publish("a.example,1.2.3.4\n"));
+		$this->assertSame("a.example,1.2.3.4\n", file_get_contents($csv));
+	}
+
+	/** Issue #4201: a CSV that differs is replaced, so changed SafeSearch hosts reach the gateway. */
+	public function test_publish_replaces_a_csv_that_differs(): void
+	{
+		$GLOBALS['pfb']['unbound_py_ss'] = $csv = "{$this->tmp}/pfb_py_ss.txt";
+		file_put_contents($csv, "old.example,9.9.9.9\n");
+
+		$this->assertTrue(pfb_ss_publish("a.example,1.2.3.4\n"));
+		$this->assertSame("a.example,1.2.3.4\n", file_get_contents($csv));
+	}
+
+	/** Issue #4201: the same rows publish nothing and signal nothing: no reload for an unchanged CSV. */
+	public function test_publish_leaves_the_same_csv_alone(): void
+	{
+		$GLOBALS['pfb']['unbound_py_ss'] = $csv = "{$this->tmp}/pfb_py_ss.txt";
+		file_put_contents($csv, "a.example,1.2.3.4\n");
+		$inode = fileinode($csv);
+
+		$this->assertFalse(pfb_ss_publish("a.example,1.2.3.4\n"));
+		clearstatcache();
+		$this->assertSame($inode, fileinode($csv), 'not rewritten');
+	}
+
+	/** Issue #4201: rows whose write is cut short leave the previous CSV whole, and signal nothing. */
+	public function test_publish_cut_short_keeps_the_previous_csv(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		$GLOBALS['pfb']['unbound_py_ss'] = $csv = "{$this->tmp}/pfb_py_ss.txt";
+		file_put_contents($csv, "old.example,9.9.9.9\n");
+
+		$this->assertSame('false', CutShortWrite::run(16, static fn (): bool => pfb_ss_publish("a.example,cname,safe.example,1.2.3.4,2001:db8::1\n")));
+		$this->assertSame("old.example,9.9.9.9\n", file_get_contents($csv));
 	}
 
 	public function test_refresh_no_change_when_target_resolves_to_same_ip(): void

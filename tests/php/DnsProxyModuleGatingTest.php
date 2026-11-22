@@ -301,9 +301,30 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$previous = "; pfb_unbound.ini [ File created: an earlier pass ]\n[MAIN]\ndnsbl_ipv4 = 10.10.10.1\n";
 		file_put_contents($GLOBALS['pfb']['unbound_py_conf'], $previous);
 
-		CutShortWrite::run(16, static fn (): bool => pfb_unbound_python('enabled'));
+		$this->assertStringStartsNotWith('ERR:', CutShortWrite::run(16, static fn (): bool => pfb_unbound_python('enabled')));
 
 		$this->assertSame($previous, file_get_contents($GLOBALS['pfb']['unbound_py_conf']));
+	}
+
+	/**
+	 * Issue #4201: a pass whose only change is a module ini it cannot write signals no restart: the gateway would reload the
+	 * previous ini it still has, on every pass while the disk stays full.
+	 */
+	public function testAModuleIniThatCannotBeRewrittenSignalsNoRestart(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$this->assertTrue(pfb_unbound_python('enabled'), 'setup: the first pass moves the Resolver and writes the ini');
+		$stale = "; pfb_unbound.ini [ File created: a pass with other settings ]\n[MAIN]\n";
+		file_put_contents($GLOBALS['pfb']['unbound_py_conf'], $stale);
+
+		$signalled = CutShortWrite::run(16, static fn (): bool => pfb_unbound_python('enabled'));
+
+		$this->assertSame('false', $signalled, 'no restart for an ini that was not written');
+		$this->assertSame($stale, file_get_contents($GLOBALS['pfb']['unbound_py_conf']));
 	}
 
 	public function testProxyOnTakesUnboundsPythonSlotForTheObserverAsTheModuleDoes(): void
@@ -613,7 +634,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->seedMovedResolver();
 		$this->writeUnboundConf(self::CONF_WITH_MODULE);
 
-		CutShortWrite::run(16, static fn (): bool => pfb_unbound_dnsbl('enabled'));
+		$this->assertSame('false', CutShortWrite::run(16, static fn (): bool => pfb_unbound_dnsbl('enabled')), 'a patch that could not be staged signals no change');
 
 		$this->assertFileDoesNotExist("{$this->tmp}/unbound.tmp", 'no part of a patch may be left to publish');
 		$this->assertSame(self::CONF_WITH_MODULE, file_get_contents("{$this->tmp}/unbound.conf"));
