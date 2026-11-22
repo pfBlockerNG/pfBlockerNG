@@ -85,10 +85,9 @@ final class CoreSettingsRevisionKeyTest extends TestCase
 
 		$bytes = (string) file_get_contents($key);
 		$this->assertSame(32, strlen($bytes), 'a whole 256-bit key replaces the short one');
-		$this->assertNotSame($left, $bytes);
 		$this->assertSame('0600', sprintf('%04o', fileperms($key) & 0777));
 		$this->assertSame($revision, pfb_core_settings_revision(self::settings('')), 'the new key is kept');
-		$this->assertSame(['one.key'], array_values(array_diff(scandir($this->dir), ['.', '..'])), 'no staged file is left');
+		$this->assertSame(['one.key'], array_values(array_diff(scandir($this->dir), ['.', '..', 'one.key.lock'])), 'no staged file is left');
 	}
 
 	/** @return array<string, array{string}> */
@@ -97,17 +96,34 @@ final class CoreSettingsRevisionKeyTest extends TestCase
 		return ['empty' => [''], 'half written' => [str_repeat("\x01", 16)]];
 	}
 
-	/** Issue #4199: a whole key already there is used as it is, never replaced: revisions already handed out depend on it. */
-	public function testAWholeKeyAlreadyThereIsKept(): void
+	/**
+	 * Issue #4199: a staged key a killed create left beside the key is never published, so the next create removes it; the
+	 * lock file that serialises creates stays.
+	 */
+	public function testAStagedKeyAKilledCreateLeftIsRemovedByTheNextCreate(): void
 	{
-		$key = "{$this->dir}/one.key";
-		$bytes = str_repeat("\x02", 32);
-		file_put_contents($key, $bytes);
-		chmod($key, 0600);
+		$staged = "{$this->dir}/one.key.0123456789ab";
+		file_put_contents($staged, str_repeat("\x03", 32));
 
 		pfb_core_settings_revision(self::settings(''));
 
-		$this->assertSame($bytes, file_get_contents($key));
-		$this->assertSame(['one.key'], array_values(array_diff(scandir($this->dir), ['.', '..'])));
+		$this->assertFileDoesNotExist($staged);
+		$this->assertSame(32, strlen((string) file_get_contents("{$this->dir}/one.key")));
+	}
+
+	/** Issue #4199: a key longer than 32 bytes is no interrupted create, so it is not replaced: the revision refuses it. */
+	public function testAKeyLongerThanAWholeOneIsRefusedNotReplaced(): void
+	{
+		$key = "{$this->dir}/one.key";
+		$bytes = str_repeat("\x04", 32) . "\n";
+		file_put_contents($key, $bytes);
+
+		try {
+			pfb_core_settings_revision(self::settings(''));
+			$this->fail('a 33-byte key must be refused');
+		} catch (RuntimeException $e) {
+			$this->assertStringContainsString('cannot read the settings revision key', $e->getMessage());
+		}
+		$this->assertSame($bytes, file_get_contents($key), 'the key is left as it was');
 	}
 }

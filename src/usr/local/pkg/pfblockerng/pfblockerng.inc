@@ -5236,7 +5236,10 @@ function pfb_core_settings_revision(array $settings): int {
 	return (int) hexdec(substr(hash_hmac('sha256', (string) json_encode($settings, JSON_INVALID_UTF8_SUBSTITUTE), pfb_core_revision_key()), 0, 13)) ?: 1;
 }
 
-/** The revision key at $pfb['core_revision_key']: 32 random bytes, created 0600 when missing (issue #3937). Throws when unusable. */
+/**
+ * The revision key at $pfb['core_revision_key']: 32 random bytes, created 0600 when missing (issue #3937), or when shorter, which
+ * only an interrupted create left (issue #4199). Throws when unusable.
+ */
 function pfb_core_revision_key(): string {
 	global $pfb;
 	$path = $pfb['core_revision_key'];
@@ -5244,24 +5247,40 @@ function pfb_core_revision_key(): string {
 		@mkdir(dirname($path), 0755, TRUE);
 	}
 	$key = @file_get_contents($path);
-	if (!is_string($key) || strlen($key) !== 32) {
-		// issue #4199: the key is written whole under a staged name and linked into place, so a create that is killed leaves no
-		// short key. One that an older create left short was never published whole: it goes. link() never replaces a key: of
-		// two first callers, one links and the other reads its key.
-		if (is_string($key)) {
-			@unlink($path);
-		}
-		$staged = "{$path}." . bin2hex(random_bytes(6));
-		$fh = @fopen($staged, 'x');
-		if ($fh !== FALSE) {
-			$whole = chmod($staged, 0600) && fwrite($fh, random_bytes(32)) === 32 && fsync($fh);
-			fclose($fh);
-			if ($whole) {
-				@link($staged, $path);
+	if (!is_string($key) || strlen($key) < 32) {
+		// issue #4199: creates run one at a time under the lock, and each writes the key whole under a staged name before it is
+		// linked into place, so a create that is killed leaves no short key, only a staged one the next create removes. A key
+		// an older create left short was never published whole: it goes. The second of two first callers reads the first's key.
+		$lock = @fopen("{$path}.lock", 'c');
+		$written = TRUE;
+		if ($lock !== FALSE && flock($lock, LOCK_EX)) {
+			$key = @file_get_contents($path);
+			if (!is_string($key) || strlen($key) < 32) {
+				foreach (glob("{$path}.*") ?: [] as $left) {
+					if (preg_match('/\.[0-9a-f]{12}$/', $left)) {
+						@unlink($left);
+					}
+				}
+				if (is_string($key)) {
+					@unlink($path);
+				}
+				$staged = "{$path}." . bin2hex(random_bytes(6));
+				$fh = @fopen($staged, 'x');
+				$written = $fh !== FALSE && chmod($staged, 0600) && fwrite($fh, random_bytes(32)) === 32 && fsync($fh);
+				if ($fh !== FALSE) {
+					fclose($fh);
+				}
+				$written = $written && @link($staged, $path);
+				@unlink($staged);
+				$key = @file_get_contents($path);
 			}
-			@unlink($staged);
 		}
-		$key = @file_get_contents($path);
+		if ($lock !== FALSE) {
+			fclose($lock);
+		}
+		if (!$written) {
+			throw new RuntimeException("cannot write the settings revision key {$path}");
+		}
 	}
 	if (!is_string($key) || strlen($key) !== 32) {
 		throw new RuntimeException("cannot read the settings revision key {$path}");
