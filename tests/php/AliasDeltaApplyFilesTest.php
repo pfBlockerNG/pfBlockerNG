@@ -1186,6 +1186,38 @@ SH
 	}
 
 	/**
+	 * Scenario: given the open entry and nothing to apply, when the forced replace fails, then no call follows it and the run
+	 * reports ok FALSE: an empty delta does not make the table its mirror.
+	 */
+	public function testAFailedForcedReplaceWithNothingToApplyStillFailsTheResult(): void
+	{
+		pfb_sync_status_open('ip', self::TABLE, 'apply', 'an earlier run failed', $this->dir);
+		file_put_contents("{$this->dir}/fail", "1\n");
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $this->apply([], [], 100, 100, 'delta'));
+
+		$this->assertSame([['replace', 1]], $this->shape());
+		$this->assertSame([self::failedCallEntry('replace')], $this->openEntries());
+	}
+
+	/**
+	 * Scenario: given the open entry and a negative count, when the forced replace fails, then nothing follows it: a delta
+	 * trusts its counts, and a negative one is refused.
+	 */
+	public function testAFailedForcedReplaceWithANegativeCountIsTheEndOfTheRun(): void
+	{
+		pfb_sync_status_open('ip', self::TABLE, 'apply', 'an earlier run failed', $this->dir);
+		file_put_contents("{$this->dir}/fail", "1\n");
+
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+			$this->members('add', ['10.1.0.1']), 1, $this->members('remove', []), 0, -1, 100, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => FALSE, 'ok' => FALSE], $result);
+		$this->assertSame([['replace', 1]], $this->shape(), 'no batch follows the failed replace');
+		$this->assertSame([self::failedCallEntry('replace')], $this->openEntries());
+	}
+
+	/**
 	 * @return array<string, array{string, string, bool}> the path, the mode and the force flag of a replace that the open entry
 	 *   did not force: mode replace, a forced replace, and auto mode's own churn decision (130 changes over 129 members)
 	 */
@@ -1552,6 +1584,33 @@ SH
 		} else {
 			$this->assertSame([self::failedCallEntry($named)], $this->openEntries());
 		}
+	}
+
+	/**
+	 * Scenario: the member source throws after a batch went out, and the ledger cannot be written either (its directory is
+	 * gone from $pfb). The exception that stopped the run escapes, not the ledger write's.
+	 */
+	public function testAThrowAfterABatchEscapesWithItsOwnTypeWhenTheLedgerCannotBeWritten(): void
+	{
+		global $pfb;
+		$dbdir = $pfb['dbdir'];
+		$source = static function (): Generator {
+			global $pfb;
+			yield from self::addresses(64, 1);
+			$pfb['dbdir'] = NULL;
+			throw new UnexpectedValueException('the source failed after a batch');
+		};
+
+		try {
+			pfb_apply_alias_delta_members($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+				static fn (): array => [$source(), []], 65, 0, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+			$this->fail('the exception was swallowed');
+		} catch (UnexpectedValueException $e) {
+			$this->assertSame('the source failed after a batch', $e->getMessage());
+		} finally {
+			$pfb['dbdir'] = $dbdir;
+		}
+		$this->assertSame([['add', 64]], $this->shape());
 	}
 
 	/**
