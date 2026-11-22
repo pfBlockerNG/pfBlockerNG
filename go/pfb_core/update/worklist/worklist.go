@@ -610,8 +610,9 @@ func suffix(kind string) string { return map[string]string{"ipv4": "_v4", "ipv6"
 
 func (c candidate) path(suffix string) string { return filepath.Join(c.dir, c.feed.Name+suffix) }
 
-// probeIdentity names the source a kept probe body stands for: the transfer request's URL and credentials, by a digest,
-// so the record beside the body holds no credential. A feed that transfers nothing has none.
+// probeIdentity names the source a kept probe body stands for: the transfer request's URL, user and rsync flag, by a digest.
+// The password is no part of it: no secret is hashed or written, and a body fetched from the same URL as the same user
+// is that source's content whatever the password. A feed that transfers nothing has none.
 func probeIdentity(c candidate) (string, bool) {
 	if c.feed.Custom || c.feed.Format == "whois" || c.feed.Format == "asn" {
 		return "", false
@@ -620,7 +621,7 @@ func probeIdentity(c candidate) (string, bool) {
 	if reason != "" {
 		return "", false
 	}
-	sum := sha256.Sum256([]byte(strings.Join([]string{request.URL, request.Username, request.Password,
+	sum := sha256.Sum256([]byte(strings.Join([]string{request.URL, request.Username,
 		strconv.FormatBool(request.Rsync)}, "\x00")))
 	return hex.EncodeToString(sum[:]), true
 }
