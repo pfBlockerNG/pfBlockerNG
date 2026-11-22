@@ -1274,6 +1274,46 @@ def scheduled_updates_on(vm: SmokeVM) -> Iterator[None]:
         tell_core_the_settings_changed(vm)
 
 
+def stop_core(vm: SmokeVM, pid: str) -> None:
+    """TERM, then KILL after a bounded wait (salvage only); returns once the process is gone."""
+    vm.ssh(
+        f"kill {pid}; for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 {pid} 2>/dev/null || break; sleep 1; done; "
+        f"kill -9 {pid} 2>/dev/null; true",
+        timeout=60,
+    )
+
+
+@contextlib.contextmanager
+def start_core(vm: SmokeVM, command: str, api: str, log: str, *, watchdog: float = 60.0) -> Iterator[str]:
+    """A second pfb-core, ``command`` with its output in ``log``; yields its pid once it answers GetVersion on ``api``.
+
+    A Core that exits first fails at once with the end of its log; the watchdog only salvages a stuck start. The Core is
+    stopped on the way out (stop_core()).
+    """
+    start = vm.ssh(f"nohup {command} </dev/null >{log} 2>&1 & echo $!", timeout=30)
+    pid = start.stdout.strip()
+    if start.returncode != 0 or not pid.isdigit():
+        raise AssertionError(f"the second Core did not start: {start.stdout}{start.stderr}")
+    try:
+        deadline = time.monotonic() + watchdog
+        while True:  # the real condition: the API answers
+            up = vm.ssh(
+                f"/usr/local/bin/curl -s -o /dev/null -w '%{{http_code}}' --unix-socket {api} "
+                "-X POST http://localhost/v1/GetVersion"
+            )
+            if up.stdout.strip() == "200":
+                break
+            if vm.ssh(f"kill -0 {pid}", timeout=30).returncode != 0 or time.monotonic() > deadline:
+                said = vm.ssh(f"tail -n 20 {log}", timeout=30).stdout
+                raise AssertionError(
+                    f"STUCK: the second Core never answered on {api} (curl: {up.stdout}{up.stderr}):\n{said}"
+                )
+            time.sleep(1)
+        yield pid
+    finally:
+        stop_core(vm, pid)
+
+
 def core_update_view(vm: SmokeVM, after: str | None = None) -> dict[str, Any]:
     """``GetUpdate``'s body: ``running``, ``update``, ``log`` and ``next`` (the cursor is an opaque string)."""
     reply = core_call(vm, "GetUpdate", {} if after is None else {"after": after})

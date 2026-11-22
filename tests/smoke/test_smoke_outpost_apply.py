@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -96,28 +95,12 @@ def apply_vm(smoke_vm: SmokeVM) -> Iterator[tuple[SmokeVM, str]]:
     )
     assert setup.returncode == 0, f"the store was not written: {setup.stdout}{setup.stderr}"
     api = f"{WORK}/run/api.sock"
-    start = vm.ssh(
-        f"nohup {CORE_BIN} --socket {api} --state-dir {WORK}/state --resource-dir {WORK}/store "
-        f"</dev/null >{WORK}/core.log 2>&1 & echo $!",
-        timeout=30,
-    )
-    pid = start.stdout.strip()
-    assert start.returncode == 0 and pid.isdigit(), f"the second Core did not start: {start.stdout}{start.stderr}"
     try:
-        deadline = time.monotonic() + READY_WATCHDOG
-        while True:  # the real condition: the API answers; a Core that exited fails at once
-            up = vm.ssh(
-                f"{CURL} -s -o /dev/null -w '%{{http_code}}' --unix-socket {api} -X POST http://localhost/v1/GetVersion"
-            )
-            if up.stdout.strip() == "200":
-                break
-            if vm.ssh(f"kill -0 {pid}", timeout=30).returncode != 0 or time.monotonic() > deadline:
-                said = vm.ssh(f"tail -n 20 {WORK}/core.log", timeout=30).stdout
-                pytest.fail(f"STUCK: the second Core never answered on {api}:\n{said}")
-            time.sleep(1)
-        yield vm, api
+        command = f"{CORE_BIN} --socket {api} --state-dir {WORK}/state --resource-dir {WORK}/store"
+        with h.start_core(vm, command, api, f"{WORK}/core.log", watchdog=READY_WATCHDOG):
+            yield vm, api
     finally:
-        vm.ssh(f"kill {pid}; rm -f {CURSORS}", timeout=30)
+        vm.ssh(f"rm -f {CURSORS}", timeout=30)
 
 
 def apply(vm: SmokeVM, api: str, request: dict[str, Any], *, locked: bool = False) -> tuple[int, list[dict[str, Any]]]:

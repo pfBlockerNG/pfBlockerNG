@@ -102,3 +102,30 @@ function pfb_test_scrubbed_git_env(): array
 
 	return $environment;
 }
+
+/**
+ * Block until a started process prints "ready" on its stdout (a stand-in that listens). A process that exits first fails at once
+ * with what it said; the deadline only salvages a stuck run, reported as STUCK/ENVIRONMENT.
+ *
+ * @param array{0: resource, 1: array<int, resource>, 2: string} $started
+ */
+function pfb_test_await_ready(array $started, float $timeoutSeconds = 10.0): void
+{
+	$stdout = $started[1][1];
+	$said = '';
+	$deadline = hrtime(TRUE) + (int) ($timeoutSeconds * 1_000_000_000);
+	while (!str_contains($said, "ready\n")) {
+		if (feof($stdout)) {
+			$run = pfb_test_finish_process($started, 5.0);
+			throw new RuntimeException("`{$started[2]}` exited ({$run['exit']}) before it was ready: {$run['stderr']}");
+		}
+		if (hrtime(TRUE) > $deadline) {
+			$run = pfb_test_finish_process($started, 1.0);
+			throw new RuntimeException("STUCK/ENVIRONMENT: `{$started[2]}` never said it was ready: {$run['stderr']}");
+		}
+		$read = [$stdout];
+		$write = $except = NULL;
+		stream_select($read, $write, $except, 0, 100_000);
+		$said .= (string) fread($stdout, 64);
+	}
+}

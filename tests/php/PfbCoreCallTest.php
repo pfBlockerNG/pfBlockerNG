@@ -40,38 +40,11 @@ final class PfbCoreCallTest extends TestCase
 	{
 		$socket = "{$this->dir}/api.sock";
 		$started = pfb_test_start_process([PHP_BINARY, __DIR__ . '/support/CoreApiStandIn.php', $socket, "{$this->dir}/request", (string) $status, $body]);
-		$this->awaitListening($started);
+		pfb_test_await_ready($started);
 		$result = $call($socket);
 		$run = pfb_test_finish_process($started, 10.0);
 		$this->assertSame(0, $run['exit'], "stand-in failed: {$run['stderr']}");
 		return [$result, (string) file_get_contents("{$this->dir}/request")];
-	}
-
-	/**
-	 * Block until the stand-in prints "ready" (its socket FILE exists from bind(), before listen()). A stand-in that exits first fails
-	 * at once with what it said; the deadline only salvages a stuck run.
-	 *
-	 * @param array{0: resource, 1: array<int, resource>, 2: string} $started
-	 */
-	private function awaitListening(array $started): void
-	{
-		$stdout = $started[1][1];
-		$said = '';
-		$deadline = hrtime(TRUE) + 10_000_000_000;
-		while (!str_contains($said, "ready\n")) {
-			if (feof($stdout)) {
-				$run = pfb_test_finish_process($started, 5.0);
-				$this->fail("the stand-in exited ({$run['exit']}) before it listened: {$run['stderr']}");
-			}
-			if (hrtime(TRUE) > $deadline) {
-				pfb_test_finish_process($started, 1.0);
-				throw new RuntimeException('STUCK/ENVIRONMENT: the stand-in never listened');
-			}
-			$read = [$stdout];
-			$write = $except = NULL;
-			stream_select($read, $write, $except, 0, 100_000);
-			$said .= (string) fread($stdout, 64);
-		}
 	}
 
 	public function testTheVersionCallPostsAnEmptyObjectToTheVersionedPathAndReturnsTheDecodedReply(): void

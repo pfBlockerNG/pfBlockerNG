@@ -312,7 +312,7 @@ def test_a_socket_group_member_that_is_not_admitted_gets_401(core_vm: SmokeVM) -
         assert json.loads(body)["error"]["code"] == "unauthenticated", f"nobody's reply: {body}"
     finally:
         if pid:
-            stop_core(core_vm, pid)
+            h.stop_core(core_vm, pid)
         core_vm.ssh(f"rm -rf {fence}", timeout=60)
 
 
@@ -639,15 +639,6 @@ def put_script(vm: SmokeVM, path: str, source: str) -> None:
     assert wrote.returncode == 0, f"could not write {path}: {wrote.stderr}"
 
 
-def stop_core(vm: SmokeVM, pid: str) -> None:
-    """TERM, then KILL after a bounded wait (salvage only); returns once the process is gone."""
-    vm.ssh(
-        f"kill {pid}; for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 {pid} 2>/dev/null || break; sleep 1; done; "
-        f"kill -9 {pid} 2>/dev/null; true",
-        timeout=60,
-    )
-
-
 def measure_resource(vm: SmokeVM, work: str, mode: str, digest: str) -> dict[str, Any]:
     """One fresh Core over the store, asked for ``mode`` (full or delta) by curl, then by the PHP caller.
 
@@ -655,25 +646,8 @@ def measure_resource(vm: SmokeVM, work: str, mode: str, digest: str) -> dict[str
     """
     api, log = f"{work}/run/api.sock", f"{work}/log"
     request = json.dumps({"resources": {MEASURE_ID: {"generation": "1", "digest": digest} if mode == "delta" else {}}})
-    start = vm.ssh(
-        f"nohup {CORE_BIN} --socket {api} --state-dir {work}/state --resource-dir {work}/store "
-        f"</dev/null >{log} 2>&1 & echo $!",
-        timeout=30,
-    )
-    pid = start.stdout.strip()
-    assert start.returncode == 0 and pid.isdigit(), f"the {mode} Core did not start: {start.stdout}{start.stderr}"
-    try:
-        deadline = time.monotonic() + READY_WATCHDOG
-        while True:  # the real condition: the API answers; a Core that exited fails at once, the watchdog only salvages
-            up = vm.ssh(
-                f"{CURL} -s -o /dev/null -w '%{{http_code}}' --unix-socket {api} -X POST http://localhost/v1/GetVersion"
-            )
-            if up.stdout.strip() == "200":
-                break
-            if vm.ssh(f"kill -0 {pid}", timeout=30).returncode != 0 or time.monotonic() > deadline:
-                said = vm.ssh(f"tail -n 20 {log}", timeout=30).stdout
-                pytest.fail(f"STUCK: the {mode} Core never answered on {api} (curl: {up.stdout}{up.stderr}):\n{said}")
-            time.sleep(1)
+    command = f"{CORE_BIN} --socket {api} --state-dir {work}/state --resource-dir {work}/store"
+    with h.start_core(vm, command, api, log, watchdog=READY_WATCHDOG) as pid:
         seconds, size = 0.0, 0
         parts = [("add", '"from": "1", '), ("remove", '"from": "1", ')] if mode == "delta" else [("members", "")]
         calls = [("GetResources", request)] + [
@@ -694,8 +668,6 @@ def measure_resource(vm: SmokeVM, work: str, mode: str, digest: str) -> dict[str
         assert held, f"no 'maximum RSS' row from {PROCSTAT} -r {pid}: rc={rss.returncode}\n{rss.stdout}{rss.stderr}"
         vm.ssh(f"mkdir -p -m 700 {work}/fetch-{mode}", timeout=30)
         caller = vm.ssh(f"{PHP} {work}/call.php {api} {mode} {digest} {work}/fetch-{mode} 2>&1", timeout=600)
-    finally:
-        stop_core(vm, pid)
     assert OPEN in caller.stdout and CLOSE in caller.stdout, (
         f"the PHP caller ({mode}) printed no result: rc={caller.returncode}\n{caller.stdout[-2000:]}"
     )

@@ -404,18 +404,7 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 		file_put_contents("{$work}/core-script.json", json_encode($apply['core'], JSON_THROW_ON_ERROR));
 		$standin = pfb_test_start_process([PHP_BINARY, "{$repo}/tests/php/support/CoreApiStandIn.php", $socket, "{$work}/core-requests",
 			'script', "{$work}/core-script.json"]);
-		$said = '';
-		$deadline = hrtime(TRUE) + 10_000_000_000;
-		while (!str_contains($said, "ready\n")) {
-			if (feof($standin[1][1]) || hrtime(TRUE) > $deadline) {
-				$run = pfb_test_finish_process($standin, 5.0);
-				throw new RuntimeException("STUCK/ENVIRONMENT: the Core stand-in never listened: {$run['stderr']}");
-			}
-			$read = [$standin[1][1]];
-			$write = $except = NULL;
-			stream_select($read, $write, $except, 0, 100_000);
-			$said .= (string) fread($standin[1][1], 64);
-		}
+		pfb_test_await_ready($standin);
 	}
 	$held = NULL;
 	if (!empty($apply['lockHeld'])) {	// another open file description: flock() refuses this process too
