@@ -31,8 +31,8 @@ const PFB_GEOIP_CATALOG_MAX = 16777216;	// 16 MiB
 
 /** Give the staged file $tmp the owner, group and mode in $stat, a stat() of the page it is to replace. */
 function pfb_geoip_take_attributes(string $tmp, array $stat): bool {
-	return (fileowner($tmp) === $stat['uid'] || @chown($tmp, $stat['uid']))
-		&& (filegroup($tmp) === $stat['gid'] || @chgrp($tmp, $stat['gid']))
+	return (@fileowner($tmp) === $stat['uid'] || @chown($tmp, $stat['uid']))
+		&& (@filegroup($tmp) === $stat['gid'] || @chgrp($tmp, $stat['gid']))
 		&& @chmod($tmp, $stat['mode'] & 07777);
 }
 
@@ -1325,9 +1325,11 @@ EOF;
  * (pfb_outpost_fetch()). A body over PFB_GEOIP_CATALOG_MAX, a row of another shape, a page name that is not a plain word,
  * a page or a list position given twice, a gap in a list's positions, or a country row without its page row refuses the
  * catalog whole. A page that is not one of the nine continent pages is skipped with its country rows. Every page is staged
- * beside its target (synced, with the owner, group and mode of the page it replaces) before any is published; a page that
- * cannot be staged publishes none, and nothing staged outlives the call. Staged files an earlier call left behind are
- * removed first. A continent page the catalog does not name stays as it is.
+ * beside its target (its content synced, with the owner, group and mode of the page it replaces) before any is published;
+ * a page that cannot be staged publishes none, and nothing staged outlives the call. Staged files an earlier call left
+ * behind are removed first, so the caller holds the apply lock: two renders at once would remove each other's staged
+ * files. It runs as root, as the apply does: a page whose owner or group it cannot give the staged file refuses the
+ * catalog. The renames themselves are not synced to the folder. A continent page the catalog does not name stays as it is.
  *
  * @return array{error: ?string, skipped: list<string>} error NULL when every page was written, else why the catalog was
  *   refused or which pages were not written; skipped the page names left out, in catalog order
@@ -1447,11 +1449,13 @@ function pfb_geoip_render_catalog(string $catalog, string $output_root = '/usr/l
 			$ok = $fh !== FALSE;
 			if ($ok) {
 				$staged[$tmp] = $target;
-				$ok = @fwrite($fh, $php_data) === strlen($php_data) && @fflush($fh) && @fsync($fh);
+				$fresh = @fileperms($tmp) & 07777;	// the mode a new page gets under this umask
+				// Owner-only while it is written: the page it replaces may be more private than the umask.
+				$ok = @chmod($tmp, 0600) && @fwrite($fh, $php_data) === strlen($php_data) && @fflush($fh) && @fsync($fh);
 				$ok = @fclose($fh) && $ok;
 				// A page replaced keeps its owner, group and mode, as the write in place kept them.
 				$stat = !is_link($target) && is_file($target) ? @stat($target) : FALSE;
-				$ok = $ok && ($stat === FALSE || pfb_geoip_take_attributes($tmp, $stat));
+				$ok = $ok && ($stat === FALSE ? @chmod($tmp, $fresh) : pfb_geoip_take_attributes($tmp, $stat));
 			}
 			if (!$ok) {
 				return ['error' => "{$target} cannot be written", 'skipped' => $skipped];
