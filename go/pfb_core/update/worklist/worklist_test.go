@@ -189,18 +189,21 @@ func TestRecoverRunsBeforeTheProbe(t *testing.T) {
 	var probed, recovered atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		probed.Store(true)
-		left, _ := os.ReadFile(f.path(".probe.part")) // the probe's own temporary may stand, empty
-		recovered.Store(!strings.Contains(string(left), "half a body"))
+		recovered.Store(!present(filepath.Join(f.dir, ".pfbrun-A_v4")))
 		_, _ = w.Write([]byte("1.2.3.4\n"))
 	}))
 	t.Cleanup(srv.Close)
 	f = newFixture(t, remoteURL(srv)+"/list")
+	// What a killed run leaves: an uncommitted run folder, which only Recover takes (the probe never touches one), and a
+	// probe temporary.
+	if err := os.Mkdir(filepath.Join(f.dir, ".pfbrun-A_v4"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	writeFile(t, f.path(".probe.part"), "half a body")
 	build(t, f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}))
 	if !probed.Load() || !recovered.Load() || present(f.path(".probe.part")) {
-		t.Fatalf("probed %v, old temporary gone at the probe %v, a temporary stands after %v; want it removed by Recover "+
-			"before the probe",
-			probed.Load(), recovered.Load(), present(f.path(".probe.part")))
+		t.Fatalf("probed %v, run folder gone at the probe %v, temporary stands after %v; want both removed by Recover "+
+			"before the probe", probed.Load(), recovered.Load(), present(f.path(".probe.part")))
 	}
 }
 

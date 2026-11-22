@@ -400,7 +400,9 @@ func TestCorpusMatchesTodaysWorkList(t *testing.T) {
 			if !reflect.DeepEqual(got, c.Expect) {
 				t.Fatalf("%s\n got  %+v\n want %+v", c.Description, got, c.Expect)
 			}
-			// Only a checked feed is probed, and a 304 route checked unchanged was answered 304: its validators were sent.
+			// Only a checked feed is probed, and never one its markers or files decide (a fail marker, the retry cap, a
+			// baseline that is no file, no list, a feed that transfers nothing); a 304 route checked unchanged was answered
+			// 304: its validators were sent.
 			for id := range seen.requested {
 				if !slices.Contains(c.Expect.Checked, id) {
 					t.Errorf("%s: %s was probed, but it is not checked", c.ID, id)
@@ -409,6 +411,12 @@ func TestCorpusMatchesTodaysWorkList(t *testing.T) {
 			for _, g := range c.Groups {
 				for _, f := range g.Feeds {
 					id := g.Kind + ":" + f.Header + suffix(g.Kind)
+					files := c.Files[id]
+					decided := files.Fail || files.Orig == "dir" || files.List != nil && !*files.List || f.Format != "auto" ||
+						c.SkipFeed != 0 && c.Failures[id] >= c.SkipFeed
+					if decided && seen.requested[id] {
+						t.Errorf("%s: %s was probed, though its markers or files decide its check", c.ID, id)
+					}
 					if f.Source == "304" && slices.Contains(c.Expect.Checked, id) && c.Expect.Changes[id] == "unchanged" &&
 						!seen.notModified[id] {
 						t.Errorf("%s: %s was checked unchanged without a 304", c.ID, id)
