@@ -433,6 +433,7 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 	}
 	$pfb['dnsbl_publish_failed'] = !empty($apply['publishFailed']);
 	$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_PIDFILE] = !empty($apply['proxyRunning']);
+	$database = $pfb['dnsbl_info'];	// put back once this step's rows are read: a later step writes to the real one
 	if (!empty($apply['statsFail'])) {
 		$pfb['dnsbl_info'] = "{$work}/no/such/dir/dnsbl.sqlite";
 	}
@@ -500,6 +501,7 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 		}
 		$db->close();
 	}
+	$pfb['dnsbl_info'] = $database;
 	$pages = array_map('basename', glob(dirname($pfb['feeds']) . '/pfblockerng_*.php') ?: []);
 	sort($pages, SORT_STRING);
 	$parts = [];	// what the apply left in its work folder, relative to the database folder

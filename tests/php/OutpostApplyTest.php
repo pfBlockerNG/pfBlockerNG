@@ -1000,6 +1000,23 @@ final class OutpostApplyTest extends TestCase
 		$this->assertCount(1, $stale['seamCalls']['unbound'], 'the flag of an earlier run is reset: ' . $stale['log']);
 	}
 
+	/**
+	 * WHEN a step's DNSBL statistics cannot be written THEN the next step of the same worker writes its rows: the failure ends with
+	 * its step. The next step runs with DNSBL disabled, so the accounting retry its predecessor recorded is reconciled.
+	 */
+	public function testAFailedStatisticsStepDoesNotCarryOverToTheNextApply(): void
+	{
+		$request = self::request([], ['scope' => 'dnsbl'] + self::dnsblGroups());
+		[, $failed, $next] = $this->runSteps([self::prime([self::group('Abuse')]),
+			['apply' => ['statsFail' => TRUE, 'request' => $request, 'seams' => ['dns' => ['mode' => 'enabled'], 'unbound' => []]]],
+			['apply' => ['request' => $request, 'seams' => ['dns' => ['mode' => 'disabled'], 'unbound' => []]]]]);
+
+		$this->assertSame(1, $failed['exit'], 'before: the first step could not write its statistics: ' . $failed['log']);
+		$this->assertNull($failed['dnsblStats']);
+		$this->assertSame(['DNSBL_Ads' => '120'], $next['dnsblStats'], 'the next step writes its rows');
+		$this->assertSame(0, $next['exit'], $next['log']);
+	}
+
 	/** @return array<string, array{0: string}> the DNS step's mode */
 	public static function dnsModes(): array
 	{
