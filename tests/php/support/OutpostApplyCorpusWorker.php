@@ -34,13 +34,14 @@ declare(strict_types=1);
  * `received` (TRUE: the node accepted the legacy payload it now holds, so the pass starts suppressed), `reload` ("ok"
  * or "missing"), `dnsConfigLockHeld` (TRUE: another process holds the DNS configuration lock), `dispatchHeld` (TRUE:
  * the caller already holds the scheduler dispatcher lock, as a scheduled tick does), `writeConfigFail` (write_config()
- * descriptions that fail), `save` (TRUE: a settings-save pass), `pendingToken` (the pending mark holds exactly this token). The
+ * descriptions that fail), `writeConfigThrow` (write_config() descriptions that throw), `save` (TRUE: a settings-save pass), `pendingToken` (the pending mark holds exactly this token). The
  * record of a pass, compacted by corpus_compact(), is what the test compares with the step's `expect`.
  *
  * A step with `apply` runs the version 2 apply of #4037 in place of the pass (OutpostApplyTest): its `request` goes to
  * pfb_core_update_serve() on stdin, the Core API's socket is served by support/CoreApiStandIn.php from its `core` script
- * (no `core`: nothing listens), and `lockHeld` (TRUE) holds the apply lock while it runs. Its record is not compacted and
- * adds the exit status, the result lines, the cursor file, the requests Core received and the notices filed.
+ * (no `core`: nothing listens), `lockHeld` (TRUE) holds the apply lock and `dispatchLockHeld` (TRUE) the scheduler
+ * dispatcher lock while it runs. Its record is not compacted and adds the exit status, the result lines, the cursor file, the
+ * requests Core received, the notices filed, the DNSBL statistics rows and the GeoIP pages.
  */
 
 [, $scenarioFile, $work, $resultFile] = $argv;
@@ -266,8 +267,8 @@ function corpus_write_sorted(string $file, array $lines): void
 function corpus_path(string $path, string $work): string
 {
 	global $pfb;
-	return str_replace(['{aliasdir}', '{dbdir}', '{denydir}', '{permitdir}', '{matchdir}', '{nativedir}'],
-		[$pfb['aliasdir'], $pfb['dbdir'], $pfb['denydir'], $pfb['permitdir'], $pfb['matchdir'], $pfb['nativedir']],
+	return str_replace(['{aliasdir}', '{dbdir}', '{denydir}', '{permitdir}', '{matchdir}', '{nativedir}', '{ccdir}'],
+		[$pfb['aliasdir'], $pfb['dbdir'], $pfb['denydir'], $pfb['permitdir'], $pfb['matchdir'], $pfb['nativedir'], $pfb['ccdir']],
 		str_starts_with($path, '{') ? $path : "{$work}/{$path}");
 }
 
@@ -406,21 +407,35 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 			'script', "{$work}/core-script.json"]);
 		pfb_test_await_ready($standin);
 	}
-	$held = NULL;
-	if (!empty($apply['lockHeld'])) {	// another open file description: flock() refuses this process too
-		$held = fopen("{$pfb['dbdir']}/pfb_feed_pass.lock", 'c');
-		flock($held, LOCK_EX);
+	$held = [];
+	foreach (['lockHeld' => "{$pfb['dbdir']}/pfb_feed_pass.lock", 'dispatchLockHeld' => "{$pfb['schedule_state_dir']}/pfb_schedule_dispatch.lock"]
+		as $key => $lock) {
+		if (!empty($apply[$key])) {	// another open file description: flock() refuses this process too
+			$held[] = $fh = fopen($lock, 'c');
+			flock($fh, LOCK_EX);
+		}
 	}
 	$status = pfb_core_update_serve(json_encode($apply['request'], JSON_THROW_ON_ERROR), "{$work}/result");
-	if ($held !== NULL) {
-		flock($held, LOCK_UN);
-		fclose($held);
+	foreach ($held as $fh) {
+		flock($fh, LOCK_UN);
+		fclose($fh);
 	}
 	$served = NULL;
 	if ($standin !== NULL) {
 		$served = pfb_test_finish_process($standin, 30.0)['exit'];
 	}
 	$cursors = "{$pfb['dbdir']}/pfb_apply_cursors.json";
+	$stats = NULL;
+	if (is_file($pfb['dnsbl_info'])) {
+		$db = new SQLite3($pfb['dnsbl_info'], SQLITE3_OPEN_READONLY);
+		$rows = @$db->query('SELECT groupname, entries FROM dnsbl ORDER BY groupname');
+		while ($rows !== FALSE && ($row = $rows->fetchArray(SQLITE3_ASSOC)) !== FALSE) {
+			$stats[$row['groupname']] = (string) $row['entries'];
+		}
+		$db->close();
+	}
+	$pages = array_map('basename', glob(dirname($pfb['feeds']) . '/pfblockerng_*.php') ?: []);
+	sort($pages, SORT_STRING);
 	return [$status, [
 		'exit'         => $status,
 		'resultLines'  => is_file("{$work}/result") ? array_map(static fn (string $line): mixed => json_decode($line, TRUE),
@@ -430,6 +445,9 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 		// 0: the stand-in served its whole script; NULL: nothing listened
 		'coreServed'   => $served,
 		'notices'      => $GLOBALS['pfb_test_file_notices'],
+		// the DNSBL statistics rows, groupname => entries (NULL: no database), and the GeoIP pages in the web folder
+		'dnsblStats'   => $stats,
+		'geoPages'     => $pages,
 	]];
 }
 
@@ -482,7 +500,11 @@ foreach ($sc['steps'] as $step) {
 	}
 	$GLOBALS['pfb_test_try_lock_fail'] = !empty($step['dnsConfigLockHeld']);	// the DNS configuration lock is held elsewhere
 	$failing = $step['writeConfigFail'] ?? [];
-	$GLOBALS['pfb_test_write_config_hook'] = static function (string $desc) use ($failing): void {
+	$throwing = $step['writeConfigThrow'] ?? [];
+	$GLOBALS['pfb_test_write_config_hook'] = static function (string $desc) use ($failing, $throwing): void {
+		if (in_array($desc, $throwing, TRUE)) {
+			throw new RuntimeException("write_config({$desc}) throws, as the scenario asks");
+		}
 		$GLOBALS['pfb_test_write_config_result'] = !in_array($desc, $failing, TRUE);
 	};
 	if (!empty($step['openRecord'])) {
@@ -544,7 +566,7 @@ foreach ($sc['steps'] as $step) {
 		}
 	}
 	$ledger = [];
-	foreach (glob("{$pfb['dbdir']}/pfb_sync_status*") ?: [] as $file) {
+	foreach (array_filter(glob("{$pfb['dbdir']}/pfb_sync_status*") ?: [], 'is_file') as $file) {
 		$ledger[basename($file)] = (string) preg_replace('/"(first_seen|last_seen)": \d+/', '"$1": "<t>"',
 			corpus_normal((string) file_get_contents($file), $work));
 	}

@@ -418,6 +418,219 @@ final class OutpostApplyTest extends TestCase
 		$this->assertNotContains('pfB_Beta_v4', array_column($r['aliases'], 'name'));
 	}
 
+	// ---- what the apply reaches, against today's update pass ----------------------------------
+
+	/** The alias objects the apply registers for the aliases it holds are the ones today's update pass registers. */
+	public function testTheApplyRegistersTheAliasObjectsThePassRegisters(): void
+	{
+		$apply = self::at([self::ABUSE => ['2', self::OLD], self::BETA => ['4', self::NEW]]) + ['apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3), self::resource(self::BETA, '4', 3)]),
+			'core'    => [self::unchanged(self::ABUSE, '2'), self::unchanged(self::BETA, '4')],
+		]];
+		[$pass, $r] = $this->runSteps([self::prime([self::group('Abuse'), self::group('Beta')]), $apply]);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame(['pfB_Abuse_v4', 'pfB_Beta_v4'], array_column($pass['aliases'], 'name'), 'before: the pass registered both');
+		$this->assertSame($pass['aliases'], $r['aliases']);
+	}
+
+	/** Both today's update pass and the apply end their DNS steps with the DNS proxy's start check, which reports a proxy that cannot start. */
+	public function testThePassAndTheApplyBothRunTheDnsProxyStartCheck(): void
+	{
+		// our block in the Resolver's custom options and no snapshot: pfB-DNS owns the Resolver and its proxy cannot start
+		$owned = ['config' => ['unbound/custom_options' => base64_encode(PFB_DNS_PROXY_MARKER . "\n")]];
+		$apply = $owned + ['apply' => ['request' => self::request([], ['scope' => 'dnsbl'])]];
+		[$pass, $r] = $this->runSteps([array_merge_recursive(self::prime([self::group('Abuse')]), $owned), $apply]);
+
+		$said = 'pfB-DNS: the DNS proxy did not become ready; see the notices';
+		$this->assertStringContainsString($said, $pass['log'], 'the update pass');
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertStringContainsString($said, $r['log'], 'the version 2 apply');
+	}
+
+	/** The DNS step hands the DNS-redirect and DoT/DoQ writers its mode, in that order: with DNSBL off each removes its rows. */
+	public function testTheDnsStepHandsBothWritersItsModeInTodaysOrder(): void
+	{
+		$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
+		$apply = ['config' => ["{$dnsbl}/dnsbl_redir" => 'on', "{$dnsbl}/dnsbl_redir_int" => 'lan', "{$dnsbl}/dnsbl_dot_block" => 'on',
+			"{$dnsbl}/dnsbl_dot_block_int" => 'lan',
+			'nat/rule' => [['descr' => 'pfB_DNS_Redirect_lan_v4', 'interface' => 'lan'], ['descr' => 'pfB_DNS_Redirect_lan_v6', 'interface' => 'lan']],
+			'filter/rule' => [['descr' => 'pfB_DoT_Block_lan', 'interface' => 'lan']]],
+			'apply' => ['request' => self::request([], ['scope' => 'dnsbl'])]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame([], $r['nat'], 'the redirect rows are removed');
+		$this->assertNotContains('pfB_DoT_Block_lan', array_column($r['rules'], 'descr'), 'the DoT/DoQ row is removed');
+		$this->assertSame(['pfBlockerNG: saving DNS-redirect rule changes', 'pfBlockerNG: saving DoT/DoQ block rule changes'],
+			array_values(array_filter(array_map(static fn (mixed $call): string => is_array($call) ? (string) ($call[0] ?? $call['desc'] ?? '') : (string) $call,
+				$r['writeConfig']), static fn (string $desc): bool => str_contains($desc, 'DNS-redirect') || str_contains($desc, 'DoT/DoQ'))));
+	}
+
+	// ---- the coverage matrix, continued ----------------------------------------------------------
+
+	/** Decision 2 on #4037: a resource whose direction disagrees with config.xml is not applied and keeps its cursor. */
+	public function testAResourceWhoseDirectionChangedSinceTheSnapshotFails(): void
+	{
+		$apply = self::at([self::ABUSE => ['1', self::OLD]]) + ['apply' => ['request' => self::request([self::resource(self::ABUSE, '2', 3)])]];
+		$r = $this->runSteps([self::prime([self::group('Abuse', 'Deny_Inbound')]), $apply])[1];
+
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertSame([], $r['coreRequests']);
+		$this->assertSame([[self::ABUSE, 'apply']], self::failedPairs($r));
+		$this->assertSame([self::ABUSE => '1'], self::generations($r));
+	}
+
+	/** #3813: with a reload needed that could not be launched, nothing is reported applied and reloadLaunched is FALSE. */
+	public function testNothingIsAppliedWhenTheNeededReloadIsNotLaunched(): void
+	{
+		$apply = self::at([self::ABUSE => ['2', self::OLD]]) + ['reload' => 'missing',
+			'config' => ['installedpackages/pfblockernglistsv4/config' => [self::group('Abuse'), self::group('Beta')]],
+			'apply' => ['request' => self::request([self::resource(self::ABUSE, '2', 3), self::resource(self::BETA, '1', 3)]),
+				'core' => [self::unchanged(self::ABUSE, '2'), self::full(self::BETA, '1', self::NEW), self::text(self::NEW)]]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertContains('pfB_Beta_v4', array_column($r['aliases'], 'name'), 'before: the new alias and its rule need a reload');
+		$this->assertSame(['version' => 2, 'changedAliases' => ['pfB_Beta_v4'], 'ipChanged' => TRUE, 'reloadLaunched' => FALSE],
+			$r['resultLines'][0], 'no applied: both resources stay pending');
+		$this->assertTrue($r['pending']);
+	}
+
+	/** changedAliases names only aliases of the request: an IP unlock re-blocks every table, and only the request's are reported. */
+	public function testChangedAliasesNamesOnlyTheRequestsAliases(): void
+	{
+		$apply = self::at([self::ABUSE => ['2', self::OLD], self::BETA => ['1', self::OLD]]);
+		$apply['files']['ip_unlock'] = [''];	// the Alerts page's IP unlock: every table is re-blocked
+		$apply['apply'] = ['request' => self::request([self::resource(self::ABUSE, '2', 3)]), 'core' => [self::unchanged(self::ABUSE, '2')]];
+		$r = $this->applyOnce($apply, ['Abuse', 'Beta']);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame(['pfB_Abuse_v4', 'pfB_Beta_v4'], array_values(array_unique(array_map(static fn (array $c): string =>
+			(string) preg_replace('/^-t (\S+) .*$/', '$1', $c['call']), self::pushes($r)))), 'before: the unlock re-blocks both tables');
+		$this->assertSame(['pfB_Abuse_v4'], $r['resultLines'][0]['changedAliases']);
+		$this->assertTrue($r['resultLines'][0]['ipChanged']);
+	}
+
+	/** An empty kernel table is replaced from the mirror, though the cursor would allow a delta. */
+	public function testAnEmptyKernelTableIsReplacedWhateverTheMode(): void
+	{
+		$apply = self::at([self::ABUSE => ['1', self::OLD]]);
+		$apply['kernel']['pfB_Abuse_v4'] = [];
+		$apply['apply'] = ['request' => self::request([self::resource(self::ABUSE, '2', 3)]),
+			'core' => [self::delta(self::ABUSE, '2', '1', ['203.0.113.9'], ['192.0.2.2'], self::NEW), self::text(['203.0.113.9']), self::text(['192.0.2.2'])]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertCount(1, self::pushes($r));
+		$this->assertStringContainsString('-t pfB_Abuse_v4 -T replace -f ', self::pushes($r)[0]['call']);
+		$this->assertSame(self::NEW, $r['kernel']['pfB_Abuse_v4']);
+	}
+
+	/** @return list<string> $count addresses of 10.0.0.0/24 */
+	private static function hosts(int $count, int $from = 1): array
+	{
+		return array_map(static fn (int $i): string => "10.0.0.{$i}", range($from, $from + $count - 1));
+	}
+
+	/** @return array<string, array{0: string, 1: list<string>, 2: list<string>, 3: string}> mode, adds, removes, the pfctl verbs */
+	public static function deltaModes(): array
+	{
+		return [
+			'auto, churn under 5%: a delta' => ['auto', ['10.0.1.1'], [], 'add'],
+			'auto, churn at 5%: a replace'  => ['auto', ['10.0.1.1'], ['10.0.0.1'], 'replace'],
+			'replace: a replace'            => ['replace', ['10.0.1.1'], [], 'replace'],
+			'delta: a delta'                => ['delta', ['10.0.1.1'], ['10.0.0.1'], 'add delete'],
+		];
+	}
+
+	/** The operator's delta mode and the churn decide between a delta and a replace of a table of 40 members. */
+	#[DataProvider('deltaModes')]
+	public function testTheDeltaModeAndTheChurnDecideHowTheTableIsPushed(string $mode, array $add, array $remove, string $verbs): void
+	{
+		$old = self::hosts(40);
+		$new = array_values(array_diff([...$old, ...$add], $remove));
+		$apply = self::at([self::ABUSE => ['1', $old]]) + ['config' => ['installedpackages/pfblockerng/config/0/pfb_alias_delta_mode' => $mode],
+			'apply' => ['request' => self::request([self::resource(self::ABUSE, '2', count($new))]),
+				'core' => [self::delta(self::ABUSE, '2', '1', $add, $remove, $new), self::text($add), self::text($remove)]]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame($verbs, implode(' ', array_map(static fn (array $c): string => (string) preg_replace('/^.* -T (\w+) .*$/', '$1', $c['call']),
+			self::pushes($r))));
+		$sorted = $new;
+		sort($sorted, SORT_STRING);
+		$this->assertSame($sorted, $r['kernel']['pfB_Abuse_v4']);
+		$this->assertSame([self::ABUSE => '2'], $r['resultLines'][0]['applied']);
+	}
+
+	/** @return array<string, array{0: string, 1: bool, 2: bool}> scope, whether the IP resources are fetched, whether DNSBL is applied */
+	public static function scopes(): array
+	{
+		return ['ip' => ['ip', TRUE, FALSE], 'dnsbl' => ['dnsbl', FALSE, TRUE], 'both' => ['both', TRUE, TRUE]];
+	}
+
+	/** The scope decides what the apply acts on: the IP resources, the DNSBL statistics and dnsblChanged, or both. */
+	#[DataProvider('scopes')]
+	public function testTheScopeDecidesWhatIsApplied(string $scope, bool $ip, bool $dnsbl): void
+	{
+		$groups = [['name' => 'Ads', 'entries' => 120, 'changed' => TRUE], ['name' => 'Malware', 'entries' => 7, 'changed' => FALSE]];
+		$apply = self::at([self::ABUSE => ['2', self::OLD]]) + ['apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)], ['scope' => $scope, 'dnsbl' => ['generation' => '9', 'groups' => $groups]]),
+			'core'    => $ip ? [self::unchanged(self::ABUSE, '2')] : []]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertCount($ip ? 1 : 0, $r['coreRequests'], 'the IP resources are fetched only in scope ip and both');
+		$this->assertSame($ip ? [self::ABUSE => '2'] : NULL, $r['resultLines'][0]['applied'] ?? NULL);
+		$this->assertSame($dnsbl ? ['DNSBL_Ads' => '120', 'DNSBL_Malware' => '7'] : NULL, $r['dnsblStats'], 'the statistics rows of the groups Core published');
+		$this->assertSame($dnsbl ? TRUE : NULL, $r['resultLines'][0]['dnsblChanged'] ?? NULL, 'a group Core changed changes DNSBL');
+	}
+
+	/** dnsblChanged is FALSE when no group changed and the Resolver's configuration did not. */
+	public function testDnsblIsUnchangedWhenNoGroupChanged(): void
+	{
+		$r = $this->applyOnce(['apply' => ['request' => self::request([], ['scope' => 'dnsbl', 'dnsbl' => ['generation' => '9',
+			'groups' => [['name' => 'Ads', 'entries' => 120, 'changed' => FALSE]]]])]]);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame(['version' => 2, 'ipChanged' => FALSE, 'dnsblChanged' => FALSE], $r['resultLines'][0]);
+	}
+
+	/** The geo-catalog's body renders the GeoIP pages. */
+	public function testTheGeoCatalogRendersTheGeoipPages(): void
+	{
+		$rows = array_map(static fn (array $row): string => json_encode($row, JSON_THROW_ON_ERROR), [
+			['kind' => 'country', 'page' => 'Africa', 'family' => 4, 'position' => 1, 'iso' => 'AA', 'country' => 'Alpha', 'networks' => 2],
+			['kind' => 'page', 'page' => 'Africa', 'continent' => 'Africa']]);
+		$apply = ['apply' => ['request' => self::request([['id' => 'geo-catalog', 'generation' => '3']]),
+			'core' => [self::full('geo-catalog', '3', $rows), self::text($rows)]]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertContains('pfblockerng_Africa.php', $r['geoPages']);
+		$this->assertSame(['geo-catalog' => '3'], $r['resultLines'][0]['applied']);
+	}
+
+	/** An aggregate and a continent are aliases the configuration expects: each is applied and registered. */
+	public function testAnAggregateAndAContinentAreApplied(): void
+	{
+		$agg = 'ip-aggregate/deny/ipv4';
+		$africa = 'ip-set/Africa/ipv4';
+		$apply = ['config' => ['installedpackages/pfblockerng/config/0/pfb_agg_types' => 'Deny',
+			'installedpackages/pfblockerngafrica/config/0' => ['action' => 'Deny_Both', 'countries4' => 'AA', 'aliaslog' => 'enabled']],
+			'apply' => ['request' => self::request([['id' => $agg, 'generation' => '1', 'action' => 'alias_only', 'entries' => 3],
+				self::resource($africa, '1', 3)]),
+				'core' => [self::full($agg, '1', self::NEW), self::text(self::NEW), self::full($africa, '1', self::OLD), self::text(self::OLD)]]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame([$agg => '1', $africa => '1'], $r['resultLines'][0]['applied']);
+		$this->assertContains('pfB_Deny_Aggregated_v4', array_column($r['aliases'], 'name'));
+		$this->assertContains('pfB_Africa_v4', array_column($r['aliases'], 'name'));
+		$this->assertSame(self::NEW, $r['kernel']['pfB_Deny_Aggregated_v4'] ?? $r['mirrors']['pfB_Deny_Aggregated_v4.txt']);
+	}
+
 	// ---- the version dispatch ------------------------------------------------------------------
 
 	/** A version 2 request the contract refuses runs nothing, writes no result and exits 2, with the version 2 reason. */
