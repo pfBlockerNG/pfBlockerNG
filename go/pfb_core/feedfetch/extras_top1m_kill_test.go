@@ -253,3 +253,29 @@ func TestTop1MPublicationPublishesTheListReadable(t *testing.T) {
 		t.Errorf("the list is published with mode %v (%v), want 0644", info.Mode().Perm(), err)
 	}
 }
+
+// The copies of the old list and baseline that today's PHP sets aside are swept by the next commit, a folder as well as a
+// file: they are stale once a list is published, and nothing restores them.
+func TestTop1MPublicationSweepsThePHPSetAsideCopies(t *testing.T) {
+	dir := t.TempDir()
+	stage, target, base, raw := seedTop1MKill(t, dir, top1mStaging+"run")
+	if err := os.WriteFile(filepath.Join(dir, ".pfbtop1m_active_1234567890"), []byte(top1mKillOldList), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".pfbtop1m_base_1234567890"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".pfbtop1m_base_1234567890", "top-1m.csv.zip.orig"), []byte(top1mKillOldRaw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if !top1mCommit(stage, target, base, raw) {
+		t.Fatal("the publication failed")
+	}
+
+	for name := range folderOf(t, dir) {
+		if strings.HasPrefix(name, ".pfbtop1m_") {
+			t.Errorf("%s is left after the publication", name)
+		}
+	}
+}

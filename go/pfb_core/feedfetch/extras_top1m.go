@@ -158,8 +158,8 @@ const (
 
 // top1m is the TOP1M row of pfblockerng_download_extras() and pfb_download(): under dcc the change detector first (the
 // conditional GET against the stored validators, the source identity and the xxh128 baseline), then the download, whose
-// list is published over File with the downloaded body as the new baseline. A failure keeps the published list and the
-// baseline as they were.
+// list is published over File with the downloaded body as the new baseline. A failure leaves the list whole, the old one
+// or the new one, beside a baseline that reads as changed unless it vouches for the live list (#4198).
 func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Request, res *ExtrasResult) Result {
 	p := top1mProviderOf(x.Provider)
 	req.Headers = top1mAuthHeaders(p, cfg.Top1MToken)
@@ -427,8 +427,8 @@ func (f *Fetcher) top1mZipStage(ctx context.Context, raw, target string) (string
 	return staged.Name(), list, nil
 }
 
-// top1mStaging prefixes the files a TOP1M publication stages beside their targets: the list, the raw baseline and its
-// digest (#4198). The next commit removes what an interrupted one left.
+// top1mStaging prefixes the files a TOP1M publication stages beside their targets: the list and the baseline's digest
+// (#4198). The next commit removes what an interrupted one left.
 const top1mStaging = ".pfbtop1m_new_"
 
 // top1mCommit publishes stage as target, and raw as its baseline (base.orig, with its xxh128 in base.xxhash128), by renames
@@ -444,20 +444,11 @@ func top1mCommit(stage, target, base, raw string) bool {
 	if err := top1mSettle(stage); err != nil {
 		return false
 	}
-	orig, err := top1mStaged(filepath.Dir(base), func(f *os.File) error {
-		in, err := os.Open(raw)
-		if err != nil {
-			return err
-		}
-		defer in.Close()
-		_, err = io.Copy(f, in)
-		return err
-	})
-	if err != nil {
+	// raw, the download beside the baseline, becomes it: made 0644 and synced, it is renamed in as the stage is.
+	if err := top1mSettle(raw); err != nil {
 		return false
 	}
-	defer os.Remove(orig) // gone already once renamed
-	sum, err := digest.File(orig)
+	sum, err := digest.File(raw)
 	if err != nil {
 		return false
 	}
@@ -472,7 +463,7 @@ func top1mCommit(stage, target, base, raw string) bool {
 	// The old version's validators would let a server back on it answer 304 for the new baseline: the caller writes the new.
 	os.Remove(base + ".orig.etag")
 	os.Remove(base + ".orig.lastmod")
-	if rename(orig, base+".orig") != nil || rename(stage, target) != nil {
+	if rename(raw, base+".orig") != nil || rename(stage, target) != nil {
 		return false
 	}
 	rename(sidecar, base+".xxhash128") // without it the baseline reads as changed, and the next run publishes again
@@ -493,9 +484,9 @@ func top1mStaged(dir string, write func(*os.File) error) (string, error) {
 	return finishStaged(f, write(f))
 }
 
-// top1mSettle makes the staged list readable by the database folder's readers and puts its bytes on disk before it is
-// published: a list renamed in before its data reached the disk could come back empty after a power loss, beside a
-// baseline that vouches for it.
+// top1mSettle makes a file about to be published (the staged list, the raw download) readable by the database folder's
+// readers and puts its bytes on disk first: a file renamed in before its data reached the disk could come back empty after
+// a power loss, beside a baseline that vouches for it.
 func top1mSettle(stage string) error {
 	f, err := os.OpenFile(stage, os.O_RDWR, 0)
 	if err != nil {
