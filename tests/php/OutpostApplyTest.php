@@ -891,7 +891,10 @@ final class OutpostApplyTest extends TestCase
 	public static function archiveCases(): array
 	{
 		$changed = ['mode' => 'enabled', 'update' => TRUE, 'active' => TRUE];
-		$ram = ['system/use_mfs_tmpvar' => ''];
+		// the boot registrations are in place, so the apply's own registration steps change nothing
+		$aliastables = '/usr/local/pkg/pfblockerng/pfblockerng.sh aliastables restore';
+		$ram = ['system/use_mfs_tmpvar' => '', 'system/earlyshellcmd' => [$aliastables],
+			'installedpackages/shellcmdsettings/config' => [['cmd' => $aliastables, 'cmdtype' => 'earlyshellcmd', 'description' => 'pfBlockerNG']]];
 		return [
 			'DNSBL changed on a RAM-disk /var'    => [$changed, $ram, 1],
 			'/var is not a RAM disk'              => [$changed, [], 0],
@@ -924,7 +927,7 @@ final class OutpostApplyTest extends TestCase
 	#[DataProvider('failedAccountings')]
 	public function testAFailedAccountingIsNotSettledAsApplied(string $effect): void
 	{
-		$apply = ['pendingToken' => 'tok-5', 'apply' => ['request' => self::request([], ['scope' => 'dnsbl', 'pendingToken' => 'tok-5']),
+		$apply = ['pendingToken' => 'tok-5', 'openRecord' => TRUE, 'apply' => ['request' => self::request([], ['scope' => 'dnsbl', 'pendingToken' => 'tok-5']),
 			'seams' => ['dns' => ['mode' => 'enabled', 'update' => TRUE], 'unbound' => ['effect' => $effect]]]];
 		$r = $this->applyOnce($apply);
 
