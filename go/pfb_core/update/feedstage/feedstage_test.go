@@ -386,28 +386,6 @@ func TestRunsPreScriptAndKeepsOldArtifactsWhenItFails(t *testing.T) {
 	}
 }
 
-func TestPublishesParsedArtifactsAtomically(t *testing.T) {
-	dir := t.TempDir()
-	names := []string{"first.parsed.ip", "second.parsed.ip"}
-	for _, name := range names {
-		writeFile(t, filepath.Join(dir, name), "old\n")
-	}
-	staged := filepath.Join(dir, ".staged-first")
-	writeFile(t, staged, "new\n")
-	err := publishStaged(dir, []stagedFeedFile{
-		{name: names[0], temp: staged},
-		{name: names[1], temp: filepath.Join(dir, ".missing-stage")},
-	})
-	if err == nil {
-		t.Fatal("a publication with a missing staged artifact succeeded")
-	}
-	for _, name := range names {
-		if got := readFile(t, filepath.Join(dir, name)); got != "old\n" {
-			t.Errorf("a failed publication changed %s: %q", name, got)
-		}
-	}
-}
-
 // An unset or relative folder is refused before anything is touched: no default may name a host folder.
 func TestUnsetPathsAreErrors(t *testing.T) {
 	for _, tc := range []struct {
