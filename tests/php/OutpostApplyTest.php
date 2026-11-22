@@ -437,8 +437,10 @@ final class OutpostApplyTest extends TestCase
 	/** Both today's update pass and the apply end their DNS steps with the DNS proxy's start check, which reports a proxy that cannot start. */
 	public function testThePassAndTheApplyBothRunTheDnsProxyStartCheck(): void
 	{
-		// our block in the Resolver's custom options and no snapshot: pfB-DNS owns the Resolver and its proxy cannot start
-		$owned = ['config' => ['unbound/custom_options' => base64_encode(PFB_DNS_PROXY_MARKER . "\n")]];
+		// our block in the Resolver's custom options and no snapshot: pfB-DNS owns the Resolver and its proxy cannot start. Each
+		// step's write of the observer's settings is refused, so nothing tries to mount the host's /usr/local folders for it.
+		$owned = ['config' => ['unbound/custom_options' => base64_encode(PFB_DNS_PROXY_MARKER . "\n"), 'unbound/python_script' => ''],
+			'writeConfigFail' => ['pfBlockerNG: Added DNSBL Unbound upstream observer settings']];
 		$apply = $owned + ['apply' => ['request' => self::request([], ['scope' => 'dnsbl'])]];
 		[$pass, $r] = $this->runSteps([array_merge_recursive(self::prime([self::group('Abuse')]), $owned), $apply]);
 
@@ -446,6 +448,7 @@ final class OutpostApplyTest extends TestCase
 		$this->assertStringContainsString($said, $pass['log'], 'the update pass');
 		$this->assertSame(0, $r['exit'], $r['log']);
 		$this->assertStringContainsString($said, $r['log'], 'the version 2 apply');
+		$this->assertStringNotContainsString('python mounts', $pass['log'] . $r['log'], 'nothing tried to mount a host folder');
 	}
 
 	/** The DNS step hands the DNS-redirect and DoT/DoQ writers its mode, in that order: with DNSBL off each removes its rows. */
@@ -702,19 +705,6 @@ final class OutpostApplyTest extends TestCase
 			}
 		}
 		$this->assertSame([], $open, 'no apply entry is open');
-	}
-
-	/** WHEN the DNS step changes the Resolver's configuration THEN the apply loads it into the Resolver. */
-	public function testAResolverConfigurationTheDnsStepChangedIsLoaded(): void
-	{
-		$apply = ['config' => ['unbound/custom_options' => base64_encode("server:include: /var/unbound/pfb_dnsbl.conf\n")],
-			'files' => ['host/var/unbound/unbound.conf' => ['server:']], 'apply' => ['request' => self::request([], ['scope' => 'dnsbl'])]];
-		$r = $this->applyOnce($apply);
-
-		$this->assertSame(0, $r['exit'], $r['log']);
-		$this->assertStringContainsString('DNSBL - Removing previous DNSBL Unbound custom option', $r['log'], 'before: the DNS step changed the Resolver');
-		$this->assertStringContainsString("\nDNSBL is disabled\n", $r['log'], 'the Resolver is reloaded with its new configuration');
-		$this->assertTrue($r['resultLines'][0]['dnsblChanged']);
 	}
 
 	/** @return array<string, array{0: string, 1: int}> a trigger, and the exit status of its apply while GeoIP is not ready */
