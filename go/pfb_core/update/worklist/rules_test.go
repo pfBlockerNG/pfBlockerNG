@@ -185,10 +185,10 @@ func TestFailMarkerThatCannotBeRemovedStopsTheFeed(t *testing.T) {
 	}
 }
 
-// Groups of a kind are walked in config order, whatever order Core named their feeds in.
+// Groups of a kind are walked in config order, whatever order Core named their feeds in or their names sort in.
 func TestGroupsAreWalkedInConfigOrder(t *testing.T) {
 	f := newFixture(t, "http://192.0.2.1/list")
-	second := map[string]any{"name": "G5", "action": "Deny_Inbound", "updateFrequency": "01hour", "feeds": []any{
+	second := map[string]any{"name": "G0", "action": "Deny_Inbound", "updateFrequency": "01hour", "feeds": []any{
 		map[string]any{"header": "B", "state": "enabled", "format": "auto", "url": "http://192.0.2.1/b", "credentials": ""}}}
 	for _, name := range []string{"A_v4", "B_v4"} {
 		base := filepath.Join(f.dir, name)

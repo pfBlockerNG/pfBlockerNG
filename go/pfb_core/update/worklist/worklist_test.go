@@ -185,12 +185,22 @@ func TestProbeSourceRecordHoldsNoCredential(t *testing.T) {
 
 // Stage 6 finishes what an earlier run left in the feed folder (feedstage.Recover) before it probes.
 func TestRecoverRunsBeforeTheProbe(t *testing.T) {
-	f := newFixture(t, "http://192.0.2.1/list")
+	var f *fixture
+	var probed, recovered atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		probed.Store(true)
+		left, _ := os.ReadFile(f.path(".probe.part")) // the probe's own temporary may stand, empty
+		recovered.Store(!strings.Contains(string(left), "half a body"))
+		_, _ = w.Write([]byte("1.2.3.4\n"))
+	}))
+	t.Cleanup(srv.Close)
+	f = newFixture(t, remoteURL(srv)+"/list")
 	writeFile(t, f.path(".probe.part"), "half a body")
-	writeFile(t, f.path(".fail"), "") // checked without a probe: no network
 	build(t, f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}))
-	if present(f.path(".probe.part")) {
-		t.Fatal("the probe's temporary from a killed run stands, want it removed by Recover before the probe")
+	if !probed.Load() || !recovered.Load() || present(f.path(".probe.part")) {
+		t.Fatalf("probed %v, old temporary gone at the probe %v, a temporary stands after %v; want it removed by Recover "+
+			"before the probe",
+			probed.Load(), recovered.Load(), present(f.path(".probe.part")))
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
@@ -131,9 +132,12 @@ func TestCorpusCoversTheRequestMatrix(t *testing.T) {
 	cases := map[string]bool{}
 	for _, c := range doc.Cases {
 		r := c.Request
-		if r.Trigger == "manual" {
+		switch {
+		case r.Trigger == "manual":
 			cases["manual/"+r.Scope+"/"+r.Force] = true
-		} else {
+		case r.Scope != "" || r.Force != "":
+			t.Errorf("case %s: trigger %s with a scope or a force, which only a manual Update takes", c.ID, r.Trigger)
+		default:
 			cases[r.Trigger] = true
 		}
 	}
@@ -168,20 +172,32 @@ func TestCorpusCoversTheRequestMatrix(t *testing.T) {
 	}
 }
 
+// probes are the requests the probe server took, by feed id, and the feeds it answered 304.
+type probes struct {
+	mu          sync.Mutex
+	requested   map[string]bool
+	notModified map[string]bool
+}
+
 // probeServer answers each feed's path as the case says, with the router semantics of the PHP runner
 // (tests/php/support/FeedFetchCorpusRouter.php): an etag route is a 304 to a matching If-None-Match.
-func probeServer(t *testing.T, doc corpusDoc, c corpusCase) *httptest.Server {
-	answers := map[string]string{}
+func probeServer(t *testing.T, doc corpusDoc, c corpusCase, seen *probes) *httptest.Server {
+	answers, ids := map[string]string{}, map[string]string{}
 	for _, g := range c.Groups {
 		for _, f := range g.Feeds {
 			answers["/"+g.Kind+"_"+f.Header] = f.Source
+			ids["/"+g.Kind+"_"+f.Header] = g.Kind + ":" + f.Header + suffix(g.Kind)
 		}
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.mu.Lock()
+		defer seen.mu.Unlock()
+		seen.requested[ids[r.URL.Path]] = true
 		switch answers[r.URL.Path] {
 		case "304":
 			w.Header().Set("ETag", doc.ETag)
 			if r.Header.Get("If-None-Match") == doc.ETag {
+				seen.notModified[ids[r.URL.Path]] = true
 				w.WriteHeader(http.StatusNotModified)
 				return
 			}
@@ -228,7 +244,7 @@ func listNames(kind, name string) []string {
 }
 
 // corpusInput lays the case's files out in a temporary tree and builds the settings and stages Build reads.
-func corpusInput(t *testing.T, doc corpusDoc, c corpusCase) (Input, map[string]string) {
+func corpusInput(t *testing.T, doc corpusDoc, c corpusCase, seen *probes) (Input, map[string]string) {
 	t.Helper()
 	root := t.TempDir()
 	ipDir, dnsblDir := filepath.Join(root, "ip"), filepath.Join(root, "dnsbl")
@@ -246,7 +262,7 @@ func corpusInput(t *testing.T, doc corpusDoc, c corpusCase) (Input, map[string]s
 		}
 	}
 	dirs := map[string]string{"ipv4": ipDir, "ipv6": ipDir, "dnsbl": dnsblDir}
-	srv := probeServer(t, doc, c)
+	srv := probeServer(t, doc, c, seen)
 	fetcher := &feedfetch.Fetcher{Policy: remotePolicy(), RetryDelay: 1}
 	stages := map[string]*feedstage.Stage{}
 	for kind, dir := range dirs {
@@ -374,7 +390,8 @@ func TestCorpusMatchesTodaysWorkList(t *testing.T) {
 	doc := loadCorpus(t)
 	for _, c := range doc.Cases {
 		t.Run(c.ID, func(t *testing.T) {
-			in, dirs := corpusInput(t, doc, c)
+			seen := &probes{requested: map[string]bool{}, notModified: map[string]bool{}}
+			in, dirs := corpusInput(t, doc, c, seen)
 			plan, err := Build(context.Background(), in)
 			if err != nil {
 				t.Fatalf("Build: %v", err)
@@ -383,12 +400,27 @@ func TestCorpusMatchesTodaysWorkList(t *testing.T) {
 			if !reflect.DeepEqual(got, c.Expect) {
 				t.Fatalf("%s\n got  %+v\n want %+v", c.Description, got, c.Expect)
 			}
+			// Only a checked feed is probed, and a 304 route checked unchanged was answered 304: its validators were sent.
+			for id := range seen.requested {
+				if !slices.Contains(c.Expect.Checked, id) {
+					t.Errorf("%s: %s was probed, but it is not checked", c.ID, id)
+				}
+			}
+			for _, g := range c.Groups {
+				for _, f := range g.Feeds {
+					id := g.Kind + ":" + f.Header + suffix(g.Kind)
+					if f.Source == "304" && slices.Contains(c.Expect.Checked, id) && c.Expect.Changes[id] == "unchanged" &&
+						!seen.notModified[id] {
+						t.Errorf("%s: %s was checked unchanged without a 304", c.ID, id)
+					}
+				}
+			}
 			// Every marker the run left is a whole file under its own name: no temporary stays behind. Core keeps no update
 			// marker: one stands only where the case laid it out.
 			seeded := map[string]bool{}
 			for id, files := range c.Files {
-				_, name, _ := strings.Cut(id, ":")
-				seeded[name+".update"] = files.Update
+				kind, name, _ := strings.Cut(id, ":")
+				seeded[filepath.Join(dirs[kind], name+".update")] = files.Update
 			}
 			for _, dir := range []string{dirs["ipv4"], dirs["dnsbl"]} { // ipv6 shares the IP folder
 				entries, _ := os.ReadDir(dir)
@@ -396,7 +428,7 @@ func TestCorpusMatchesTodaysWorkList(t *testing.T) {
 					if strings.HasSuffix(e.Name(), ".part") || slices.Contains([]string{".fail", ".update"}, filepath.Ext(e.Name())) && !e.Type().IsRegular() {
 						t.Errorf("%s: %s is left in the feed folder", c.ID, e.Name())
 					}
-					if filepath.Ext(e.Name()) == ".update" && !seeded[e.Name()] {
+					if filepath.Ext(e.Name()) == ".update" && !seeded[filepath.Join(dir, e.Name())] {
 						t.Errorf("%s: Build wrote the update marker %s", c.ID, e.Name())
 					}
 				}

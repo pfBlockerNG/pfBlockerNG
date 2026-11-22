@@ -83,7 +83,7 @@ func TestGeoIPChangeBuildsEveryGeoIPFeed(t *testing.T) {
 			"format": "geoip", "url": "US", "credentials": ""})
 		writeFile(t, filepath.Join(f.dir, "C_v4.parsed.ip"), "1.2.3.4\n")
 		f.stage.Paths.GeoIPDir = t.TempDir() // the stage can read country lists
-		writeFile(t, f.path(".fail"), "") // A is checked without a probe
+		writeFile(t, f.path(".fail"), "")    // A is checked without a probe
 		in := f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}, GeoIPChanged: true})
 		in.InWindow = inWindow
 		plan := build(t, in)

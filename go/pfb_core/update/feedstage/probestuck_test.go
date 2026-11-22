@@ -53,8 +53,13 @@ func TestCancelledTransferWithAStuckRecordIsCancelled(t *testing.T) {
 func TestStuckRecordReasonSurvivesAFailedCommit(t *testing.T) {
 	stage, feed, _ := stuckRecord(t)
 	defer func(saved func(op, path string) error) { fault = saved }(fault)
+	commitFailed := false
 	fault = func(op, path string) error {
-		if op == "remove" && recordRemoval(path) || op == "create" && strings.HasSuffix(path, commitName+".tmp") {
+		if op == "create" && strings.HasSuffix(path, commitName+".tmp") {
+			commitFailed = true
+			return errors.New("injected")
+		}
+		if op == "remove" && recordRemoval(path) {
 			return errors.New("injected")
 		}
 		return nil
@@ -62,11 +67,16 @@ func TestStuckRecordReasonSurvivesAFailedCommit(t *testing.T) {
 	if r := stage.Run(t.Context(), feed, Change{Verdict: VerdictChanged, Force: "none"}); r.Reason != "probe_record_remove_failed" {
 		t.Fatalf("run = %+v, want failed as probe_record_remove_failed", r)
 	}
+	if !commitFailed {
+		t.Fatal("the commit never ran, so its failure was never injected")
+	}
 }
 
 // A failed transfer that consumed the kept body takes the body's validators with it: none is published without its body.
 func TestConsumedProbeBodyTakesItsValidators(t *testing.T) {
 	stage, feed, live := stuckRecord(t)
+	writeFile(t, live+".probe.lastmod", "Mon, 01 Jan 2024 00:00:00 GMT")
+	writeFile(t, live+".probe.size", "20")
 	if r := stage.Run(t.Context(), feed, Change{Verdict: VerdictChanged, Force: "none"}); r.Disposition != "failed" {
 		t.Fatalf("run = %+v, want the refused body failed", r)
 	}
