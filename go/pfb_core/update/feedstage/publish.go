@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 )
 
@@ -26,11 +27,14 @@ const (
 // parsedSource names the record of the normalized input a feed's published lists stand for, beside them as a digest sidecar.
 const parsedSource = ".parsed.src"
 
+// retired are what a failed transfer still publishes: the validators it drops and the probe body it consumes (#2820).
+var retired = []string{".orig.etag", ".orig.lastmod", ".orig.size", ".probe", ".probe.etag", ".probe.lastmod", ".probe.size"}
+
 // seeded are the suffixes of a feed's published files that a run reads, replaces or removes: each is hard-linked into the
 // run folder before the run starts, and every writer a run reaches replaces such a file by a rename or removes it, never
 // writes through it. ".fail" is not among them: whois touches it in place.
-var seeded = []string{".orig", ".orig.xxhash128", ".orig.md5", ".orig.etag", ".orig.lastmod", ".orig.size", ".raw", ".bk",
-	".probe", ".probe.etag", ".probe.lastmod", ".probe.size", ".norm", ".norm.src." + digest.XXH128}
+var seeded = slices.Concat([]string{".orig"}, feedfetch.DigestSuffixes(), retired,
+	[]string{".raw", ".bk", ".norm", ".norm.src." + digest.XXH128})
 
 // published are the suffixes of every file a commit publishes, in the deterministic order its COMMIT lists them: the
 // download with its digests and validators, the lists, and the record of their input. Any other file a run leaves is
@@ -40,14 +44,6 @@ var published = append(slices.Clone(seeded), ".fail", ".parsed.ip", ".parsed.ndj
 
 // clearable are the suffixes a commit may remove: the seeded files the run removed, and the fail marker a transfer clears.
 var clearable = append(slices.Clone(seeded), ".fail")
-
-// retired are what a failed transfer still publishes: the validators it drops and the probe body it consumes (#2820).
-var retired = []string{".orig.etag", ".orig.lastmod", ".orig.size", ".probe", ".probe.etag", ".probe.lastmod", ".probe.size"}
-
-// probeTemporaries are what a KILL inside stage 6's change probe, the one writer in the feed folder besides a commit, can
-// leave behind a feed stem: the body before it gets its name, and the validators' temporaries.
-var probeTemporaries = []string{".orig.etag.part", ".orig.lastmod.part", ".orig.size.part", ".probe.part",
-	".probe.etag.part", ".probe.lastmod.part", ".probe.size.part"}
 
 // The file operations of a run and of Recover go through these, so that a test can stop at each one (step "op:<name>").
 func link(from, to string) error { step("op:link"); return os.Link(from, to) }
@@ -420,8 +416,10 @@ func Recover(dir string) error {
 			}
 			continue
 		}
-		for _, suffix := range probeTemporaries {
-			if stem, ok := strings.CutSuffix(name, suffix); ok && validFeedWord(stem) {
+		// What a KILL inside stage 6's change probe, the one writer in the feed folder besides a commit, can leave behind a
+		// feed stem: the probe body and the validators, each under its name with ".part".
+		for _, suffix := range retired {
+			if stem, ok := strings.CutSuffix(name, suffix+".part"); ok && validFeedWord(stem) {
 				errs = append(errs, removeIfExists(filepath.Join(dir, name)))
 			}
 		}
