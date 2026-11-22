@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "The baseline cannot be written (a directory stands at .orig): the new top-1m.csv is taken back and the old one restored.",
+	"description": "The baseline cannot be written (a directory stands at .orig). Today's PHP takes the new top-1m.csv back and restores the old one; Core never publishes it, since the baseline's rename fails first (#4198).",
 	"hosts": {
 		"tranco-list.eu": [
 			"127.0.0.1",

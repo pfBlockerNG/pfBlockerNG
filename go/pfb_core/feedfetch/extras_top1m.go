@@ -10,11 +10,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -156,8 +159,8 @@ const (
 
 // top1m is the TOP1M row of pfblockerng_download_extras() and pfb_download(): under dcc the change detector first (the
 // conditional GET against the stored validators, the source identity and the xxh128 baseline), then the download, whose
-// list is published over File with the downloaded body as the new baseline. A failure keeps the published list and the
-// baseline as they were.
+// list is published over File with the downloaded body as the new baseline. A failure leaves the list whole, the old one
+// or the new one, beside a baseline that reads as changed unless it vouches for the live list (#4198).
 func (f *Fetcher) top1m(ctx context.Context, cfg ExtrasConfig, x Extra, req Request, res *ExtrasResult) Result {
 	p := top1mProviderOf(x.Provider)
 	req.Headers = top1mAuthHeaders(p, cfg.Top1MToken)
@@ -369,7 +372,7 @@ func (f *Fetcher) top1mStage(ctx context.Context, mime, raw, target string) (str
 		// shortcut: no TOP1M provider serves bzip2; refused until a corpus row pins pfb_download()'s path for it.
 		return "", list, errTop1MArchive
 	}
-	staged, err := os.CreateTemp(filepath.Dir(target), ".pfbtop1m_")
+	staged, err := os.CreateTemp(filepath.Dir(target), top1mStaging)
 	if err != nil {
 		return "", list, err
 	}
@@ -402,7 +405,7 @@ func (f *Fetcher) top1mZipStage(ctx context.Context, raw, target string) (string
 		return "", list, errTop1MArchive
 	}
 	list = path.Base(zr.File[0].Name)
-	staged, err := os.CreateTemp(filepath.Dir(target), ".pfbtop1m_")
+	staged, err := os.CreateTemp(filepath.Dir(target), top1mStaging)
 	if err != nil {
 		return "", list, err
 	}
@@ -425,100 +428,121 @@ func (f *Fetcher) top1mZipStage(ctx context.Context, raw, target string) (string
 	return staged.Name(), list, nil
 }
 
-// top1mCommit publishes stage over target and raw as the baseline (base.orig with its xxh128), and puts back the old list
-// and baseline when either step fails.
+// top1mStaging prefixes the files a TOP1M publication stages beside their targets: a plain or zip list and the baseline's
+// digest (#4198; a gzip or tar list is staged by the shared stage()). The next commit removes what an interrupted one left.
+const top1mStaging = ".pfbtop1m_new_"
+
+// top1mCommit publishes stage as target, and raw as its baseline (base.orig, with its xxh128 in base.xxhash128), by renames
+// alone (#4198), and reports whether the new list was published. The old digest goes first; each file is then staged whole
+// beside its target and synced; the old version's validators go; then the baseline, the list and the digest are renamed
+// into place in that order, and the legacy md5 sidecar goes. A run killed or failed at any point leaves the list whole, the
+// old one or the new one, and a baseline whose digest is missing or does not match it reads as changed (top1mDecision), so
+// the next run downloads and publishes again: only a completed publication leaves a digest, so a baseline never vouches for
+// a list that is not live. The price is a full download on the run after a failed one. Nothing is set aside and nothing is
+// ever put back, but for a list today's PHP set aside with none published, which is the only copy.
 func top1mCommit(stage, target, base, raw string) bool {
-	backup, err := os.MkdirTemp(filepath.Dir(base), ".pfbtop1m_base_")
+	unrescued := top1mRescue(target)
+	top1mSweep([]string{stage, unrescued}, filepath.Dir(target), filepath.Dir(base))
+	// A directory at the digest path vouches for nothing: the sidecar's rename over it fails, and the baseline reads as
+	// changed. Anything else that stays (a file, a symlink to one) could still be read as the old digest.
+	if err := os.Remove(base + ".xxhash128"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if info, lerr := os.Lstat(base + ".xxhash128"); lerr != nil || !info.IsDir() {
+			return false
+		}
+	}
+	if err := top1mSettle(stage); err != nil {
+		return false
+	}
+	// raw, the download beside the baseline, becomes it: made 0644 and synced, it is renamed in as the stage is.
+	if err := top1mSettle(raw); err != nil {
+		return false
+	}
+	sum, err := digest.File(raw)
 	if err != nil {
 		return false
 	}
-	defer os.RemoveAll(backup)
-	saved := map[string]string{}
-	for _, suffix := range []string{".orig", ".xxhash128", ".md5"} {
-		path := base + suffix
-		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
-			copyPath := filepath.Join(backup, filepath.Base(path))
-			if copyFile(path, copyPath) != nil {
-				return false
-			}
-			saved[path] = copyPath
-		}
-	}
-	// The old list is set aside beside the target, as PHP's ".pfbtop1m_active_": a copy that cannot be put back stays.
-	held, err := os.CreateTemp(filepath.Dir(target), ".pfbtop1m_active_")
+	sidecar, err := top1mStaged(filepath.Dir(base), func(f *os.File) error {
+		_, err := f.WriteString(sum)
+		return err
+	})
 	if err != nil {
 		return false
 	}
-	active := held.Name()
-	held.Close()
-	os.Remove(active)
-	_, err = os.Lstat(target)
-	hadActive := err == nil
-	if hadActive && rename(target, active) != nil {
+	defer os.Remove(sidecar)
+	// The old version's validators would let a server back on it answer 304 for the new baseline: the caller writes the new.
+	os.Remove(base + ".orig.etag")
+	os.Remove(base + ".orig.lastmod")
+	if rename(raw, base+".orig") != nil || rename(stage, target) != nil {
 		return false
 	}
-	putBack := func() {
-		if hadActive && rename(active, target) != nil {
-			hadActive = false // the old list stays at active
-		}
-	}
-	if rename(stage, target) != nil {
-		putBack()
-		return false
-	}
-	if !top1mPersistBaseline(base, raw) {
-		os.Remove(target)
-		putBack()
-		for _, suffix := range []string{".orig", ".xxhash128", ".md5"} {
-			path := base + suffix
-			if copyPath, ok := saved[path]; ok {
-				copyFile(copyPath, path)
-			} else if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
-				os.Remove(path)
-			}
-		}
-		return false
-	}
-	if hadActive {
-		os.Remove(active)
-	}
-	return true
-}
-
-// top1mPersistBaseline is pfb_top1m_persist_baseline(): raw copied over base.orig by rename, then its xxh128 written
-// beside it and the legacy md5 sidecar dropped.
-func top1mPersistBaseline(base, raw string) bool {
-	tmp, err := os.CreateTemp(filepath.Dir(base), ".pfbtop1m_raw_")
-	if err != nil {
-		return false
-	}
-	tmp.Close()
-	if copyFile(raw, tmp.Name()) != nil || os.Rename(tmp.Name(), base+".orig") != nil {
-		os.Remove(tmp.Name())
-		return false
-	}
-	sum, err := digest.File(base + ".orig")
-	if err != nil || os.WriteFile(base+".xxhash128", []byte(sum), 0o644) != nil {
-		return false
-	}
+	rename(sidecar, base+".xxhash128") // without it the baseline reads as changed, and the next run publishes again
 	os.Remove(base + ".md5")
+	if d, err := os.Open(filepath.Dir(target)); err == nil {
+		d.Sync()
+		d.Close()
+	}
 	return true
 }
 
-// copyFile is PHP's copy(): to's content replaced by from's.
-func copyFile(from, to string) error {
-	in, err := os.Open(from)
+// top1mStaged writes a new file in dir through write, whole and synced, mode 0644, and returns its name.
+func top1mStaged(dir string, write func(*os.File) error) (string, error) {
+	f, err := os.CreateTemp(dir, top1mStaging)
+	if err != nil {
+		return "", err
+	}
+	return finishStaged(f, write(f))
+}
+
+// top1mSettle makes a file about to be published (the staged list, the raw download) readable by the database folder's
+// readers and puts its bytes on disk first: a file renamed in before its data reached the disk could come back empty after
+// a power loss, beside a baseline that vouches for it.
+func top1mSettle(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
-	defer in.Close()
-	out, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(out, in)
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
+	_, err = finishStaged(f, nil)
 	return err
+}
+
+// top1mRescue puts back the newest list today's PHP set aside (".pfbtop1m_active_") when none is published: a PHP
+// publication interrupted between its two renames leaves that copy as the only one. An empty file under that prefix is
+// what PHP's tempnam() leaves when killed before its unlink, never a list. It returns the copy it could not put back, which
+// the sweep then keeps: removed, the only copy of the live list would be gone.
+func top1mRescue(target string) string {
+	if _, err := os.Lstat(target); !errors.Is(err, fs.ErrNotExist) {
+		return ""
+	}
+	entries, _ := os.ReadDir(filepath.Dir(target))
+	newest, at := "", time.Time{}
+	for _, e := range entries {
+		info, err := e.Info()
+		if err == nil && info.Mode().IsRegular() && info.Size() > 0 && strings.HasPrefix(e.Name(), ".pfbtop1m_active_") && info.ModTime().After(at) {
+			newest, at = filepath.Join(filepath.Dir(target), e.Name()), info.ModTime()
+		}
+	}
+	if newest != "" && rename(newest, target) != nil {
+		return newest
+	}
+	return ""
+}
+
+// top1mSweep removes from dirs what an interrupted TOP1M publication left: its staged files (all but keep: this run's own
+// stage, and the PHP copy the rescue could not put back, the only copy of the live list), and the copies of the old list and baseline that today's PHP sets aside (".pfbtop1m_active_", ".pfbtop1m_base_").
+// Nothing in them is restored: the published list and baseline are each whole, and the detector reads a mismatched pair as
+// changed.
+func top1mSweep(keep []string, dirs ...string) {
+	for _, dir := range dirs {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if slices.ContainsFunc(keep, func(k string) bool { return k != "" && e.Name() == filepath.Base(k) }) {
+				continue
+			}
+			for _, prefix := range []string{top1mStaging, ".pfbtop1m_active_", ".pfbtop1m_base_"} {
+				if strings.HasPrefix(e.Name(), prefix) {
+					os.RemoveAll(filepath.Join(dir, e.Name()))
+				}
+			}
+		}
+	}
 }

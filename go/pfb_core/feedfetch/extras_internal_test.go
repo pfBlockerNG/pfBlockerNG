@@ -42,9 +42,9 @@ func TestWriteMemberRefusesANameThatLeavesTheDirectory(t *testing.T) {
 	}
 }
 
-// A TOP1M publication whose new list cannot be renamed into place, and whose old list then cannot be put back, still
-// leaves the old list on disk beside the target, as PHP's ".pfbtop1m_active_" does (#3978 review).
-func TestATop1MListThatCannotBePutBackStaysOnDisk(t *testing.T) {
+// A TOP1M publication whose new list cannot be renamed into place leaves the old list on disk: it is never moved aside, so
+// there is nothing to put back (#3978 review, #4198).
+func TestATop1MListThatCannotBeRenamedInLeavesTheOldListOnDisk(t *testing.T) {
 	dir := t.TempDir()
 	target, base := filepath.Join(dir, "top-1m.csv"), filepath.Join(dir, "top-1m.csv.zip")
 	stage, raw := filepath.Join(dir, "stage"), filepath.Join(dir, "top-1m.csv.zip.raw")
