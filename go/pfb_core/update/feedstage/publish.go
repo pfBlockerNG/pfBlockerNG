@@ -4,61 +4,57 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 )
 
-// The names a run stages beside a feed's files. Recover knows each of them: a staged output (stagePrefix, and feedfetch's
-// fetchStagePrefix), the entries and marker of a journal set (see journal), the pre-script's copy "<name>.pre", the DNSBL
-// post-script's copy "<name>.post", the IP post-script's restore point "<name>.orig.post", and the temporaries of those
-// copies, of the normalization and of the transfer.
+// A run works in a run folder of its own, "<FeedDir>/.pfbrun-<name>", and reaches the feed folder only through its commit:
+// COMMIT, a list of renames and removals written whole under another name and then renamed into place, after which the
+// run rolls forward whatever point a KILL stops it at. Without COMMIT the feed folder is untouched and the run folder is
+// deleted. The feed folder itself holds nothing else of a run.
 const (
-	stagePrefix      = ".pfbstage-"
-	fetchStagePrefix = ".pfbstage_" // feedfetch's extraction, transcoding and ET split, staged in the feed folder
-	backupMark       = ".pfbbackup-"
-	absentMark       = ".pfbabsent-"
-	commitMark       = ".pfbcommit-"
-	restorePoint     = ".orig.post"
+	stagePrefix = ".pfbstage-" // a staged output in the run folder
+	runPrefix   = ".pfbrun-"
+	commitName  = "COMMIT"
 )
-
-// recoveredSuffixes are the copies and temporaries a KILL can leave behind a feed stem: feedparse's script copies, their
-// copyFile temporaries, and NormalizeFile's; feedfetch's whois copy (writeAtomic) and FTP validators
-// (writeSidecarAtomically), and the probe's body and validators before they get their names (".probe" itself is stage 6's).
-var recoveredSuffixes = []string{".pre", ".post", ".pre.tmp", ".post.tmp", ".orig.post.tmp", ".norm.tmp", ".orig.tmp",
-	".orig.lastmod.part", ".orig.size.part", ".probe.part", ".probe.lastmod.part", ".probe.size.part"}
 
 // parsedSource names the record of the normalized input a feed's published lists stand for, beside them as a digest sidecar.
 const parsedSource = ".parsed.src"
+
+// seeded are the suffixes of a feed's published files that a run reads, replaces or removes: each is hard-linked into the
+// run folder before the run starts, and every writer a run reaches replaces such a file by a rename or removes it, never
+// writes through it. ".fail" is not among them: whois touches it in place.
+var seeded = []string{".orig", ".orig.xxhash128", ".orig.md5", ".orig.etag", ".orig.lastmod", ".orig.size", ".raw", ".bk",
+	".probe", ".probe.etag", ".probe.lastmod", ".probe.size", ".norm", ".norm.src." + digest.XXH128}
+
+// published are the suffixes of every file a commit publishes, in the order it publishes them: the download with its
+// digests and validators first, the lists, and the record of their input last. Any other file a run leaves is never
+// published.
+var published = append(slices.Clone(seeded), ".fail", ".parsed.ip", ".parsed.ndjson", ".parsed.v4.ip", ".parsed.v6.ip",
+	parsedSource+"."+digest.XXH128)
+
+// retired are what a failed transfer still publishes: the validators it drops and the probe body it consumes (#2820).
+var retired = []string{".orig.etag", ".orig.lastmod", ".orig.size", ".probe", ".probe.etag", ".probe.lastmod", ".probe.size"}
+
+// probeTemporaries are what a KILL inside stage 6's change probe, the one writer in the feed folder besides a commit, can
+// leave behind a feed stem: the body before it gets its name, and the validators' temporaries.
+var probeTemporaries = []string{".orig.etag.part", ".orig.lastmod.part", ".orig.size.part", ".probe.part",
+	".probe.etag.part", ".probe.lastmod.part", ".probe.size.part"}
 
 type stagedFeedFile struct {
 	name, temp string
 }
 
-// journal is one set of files a run replaces together, recorded on disk so that Recover can finish it after a KILL. Each
-// target that exists is kept as ".<target>.pfbbackup-<id>", whole before it gets that name; each that does not exist is
-// recorded as an empty ".<target>.pfbabsent-<id>". The set commits at one operation, the creation of ".pfbcommit-<id>";
-// its entries are then removed, the marker last. Without the marker the set rolls back (rollbackSet), with it forward
-// (finishSet), whatever point a KILL stopped either at.
-type journal struct {
-	dir, id   string
-	entries   []journalEntry
-	committed bool // a commit that failed left its marker: the set is Recover's to finish forward
-}
-
-type journalEntry struct {
-	target, path string // the file the entry puts back, and the entry
-	absent       bool
-}
-
 // The file operations of a run and of Recover go through these, so that a test can stop at each one (step "op:<name>").
 func link(from, to string) error { step("op:link"); return os.Link(from, to) }
 func truncate(path string) error { step("op:truncate"); return os.Truncate(path, 0) }
+func mkdir(path string) error    { step("op:mkdir"); return os.Mkdir(path, 0o755) }
 func createTemp(dir string) (*os.File, error) {
 	step("op:create")
 	return os.CreateTemp(dir, stagePrefix)
@@ -162,40 +158,6 @@ func stageOutput(dir string, write func(io.Writer) error) (string, error) {
 	return name, nil
 }
 
-// publishStaged renames every staged file over its target in one journal set: all of them, or none.
-func publishStaged(dir string, files []stagedFeedFile) error {
-	for _, file := range files {
-		if filepath.Base(file.name) != file.name || filepath.Dir(file.temp) != dir {
-			return errors.New("invalid staged feed file")
-		}
-		if info, err := os.Lstat(filepath.Join(dir, file.name)); err == nil && !info.Mode().IsRegular() {
-			return errors.New("parsed target is not a regular file")
-		} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-	}
-	paths := make([]string, len(files))
-	for i, file := range files {
-		paths[i] = filepath.Join(dir, file.name)
-	}
-	set, err := snapshotPaths(paths)
-	if err != nil {
-		return err
-	}
-	for _, file := range files {
-		if err := rename(file.temp, filepath.Join(dir, file.name)); err != nil {
-			return errors.Join(err, set.rollback())
-		}
-	}
-	if err := syncDir(dir); err != nil {
-		return errors.Join(err, set.rollback())
-	}
-	if err := set.commit(); err != nil {
-		return errors.Join(err, set.rollback())
-	}
-	return nil
-}
-
 func syncDir(dir string) error {
 	directory, err := os.Open(dir)
 	if err != nil {
@@ -206,219 +168,6 @@ func syncDir(dir string) error {
 		err = closeErr
 	}
 	return err
-}
-
-func validatorPaths(feed feedfetch.Feed) []string {
-	return []string{feedPath(feed, ".orig.etag"), feedPath(feed, ".orig.lastmod"), feedPath(feed, ".orig.size")}
-}
-
-func feedStatePaths(feed feedfetch.Feed) []string {
-	return append([]string{feedPath(feed, ".orig"), feedPath(feed, ".orig.xxhash128"), feedPath(feed, ".orig.md5")},
-		validatorPaths(feed)...)
-}
-
-// snapshotPaths opens a journal set over paths, which share one folder. A path in copies is backed up by a copy, never a
-// hard link: a writer edits that file in place during the run.
-func snapshotPaths(paths []string, copies ...string) (*journal, error) {
-	set := &journal{dir: filepath.Dir(paths[0]), id: strconv.FormatUint(rand.Uint64(), 36)}
-	for _, target := range paths {
-		entry := journalEntry{target: target}
-		info, err := os.Lstat(target)
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			entry.path, entry.absent = set.entryPath(target, absentMark), true
-			err = createEmpty(entry.path)
-		case err == nil && !info.Mode().IsRegular():
-			err = errors.New("feed artifact is not a regular file")
-		case err == nil:
-			entry.path = set.entryPath(target, backupMark)
-			err = backupFile(target, entry.path, info.Mode().Perm(), !slices.Contains(copies, target))
-		}
-		if err != nil {
-			return nil, errors.Join(err, set.rollback())
-		}
-		set.entries = append(set.entries, entry)
-	}
-	// The entries are on disk before any target changes.
-	if err := syncDir(set.dir); err != nil {
-		return nil, errors.Join(err, set.rollback())
-	}
-	return set, nil
-}
-
-func (s *journal) entryPath(target, mark string) string {
-	return filepath.Join(s.dir, "."+filepath.Base(target)+mark+s.id)
-}
-
-func createEmpty(path string) error {
-	file, err := create(path)
-	if err != nil {
-		return err
-	}
-	return file.Close()
-}
-
-// backupFile keeps source as backup, so that a rollback can put it back after a KILL. The copy is built under the staged
-// prefix, which Recover removes, and gets its backup name only once whole: no incomplete file ever carries one.
-func backupFile(source, backup string, mode fs.FileMode, mayLink bool) error {
-	staged, err := stagedCopy(source, mode, mayLink)
-	if err != nil {
-		return err
-	}
-	defer remove(staged)
-	step("backup:" + filepath.Base(source))
-	err = link(staged, backup)
-	if err != nil && !errors.Is(err, fs.ErrExist) { // a folder without hard links: a rename names the whole copy as well
-		err = rename(staged, backup)
-	}
-	return err
-}
-
-// stagedCopy is a whole copy of source under the staged prefix. Writers replace a target by rename, so a hard link keeps
-// the old bytes unless mayLink is false; a synced copy is the fallback.
-func stagedCopy(source string, mode fs.FileMode, mayLink bool) (string, error) {
-	dir := filepath.Dir(source)
-	if mayLink {
-		file, err := createTemp(dir)
-		if err != nil {
-			return "", err
-		}
-		name := file.Name()
-		file.Close()
-		if remove(name) == nil && link(source, name) == nil {
-			return name, nil
-		}
-		remove(name)
-	}
-	name, err := stageOutput(dir, func(w io.Writer) error {
-		input, err := os.Open(source)
-		if err != nil {
-			return err
-		}
-		defer input.Close()
-		_, err = io.Copy(w, input)
-		return err
-	})
-	if err == nil {
-		if err = os.Chmod(name, mode); err != nil {
-			remove(name)
-		}
-	}
-	return name, err
-}
-
-// keepAbsent makes a rollback remove paths instead of putting their old copies back: an absent record beside the backup,
-// which rollbackSet obeys over it. For a record that cannot be written the backup itself is removed, which leaves the
-// rollback nothing to put back; an error means neither could be made, and the old copy comes back with the rollback.
-func (s *journal) keepAbsent(paths ...string) error {
-	var errs []error
-	for _, path := range paths {
-		entry := journalEntry{target: path, path: s.entryPath(path, absentMark), absent: true}
-		if slices.Contains(s.entries, entry) {
-			continue
-		}
-		if createEmpty(entry.path) == nil {
-			s.entries = append(s.entries, entry)
-		} else {
-			errs = append(errs, removeIfExists(s.entryPath(path, backupMark)))
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// rollback rolls the set back, unless a failed commit left its marker: a rollback under a marker would leave a set half
-// rolled back that Recover then finishes forward.
-func (s *journal) rollback() error {
-	if s.committed {
-		return nil
-	}
-	return rollbackSet(s.entries)
-}
-
-// commit commits the set: the marker, synced with the folder, then finishSet. An error means the commit is not durable,
-// and the run fails, one rule for a marker that cannot be created or synced: the entries stay, the caller calls rollback,
-// and the feed fails at publish. With the marker gone again the rollback puts the old files back; a marker that cannot be
-// removed leaves the set committed, the rollback a no-op and the new files to Recover, which finishes the set forward.
-func (s *journal) commit() error {
-	marker := filepath.Join(s.dir, commitMark+s.id)
-	file, err := create(marker)
-	if err != nil {
-		return err
-	}
-	err = errors.Join(syncFile(file), file.Close())
-	if err == nil {
-		err = syncDir(s.dir)
-	}
-	if err == nil {
-		s.committed = true // durable: a later rollback must leave the new files, whatever finishSet leaves behind
-	} else {
-		if removeErr := removeIfExists(marker); removeErr != nil {
-			s.committed = true
-			return errors.Join(err, removeErr)
-		}
-		return err
-	}
-	_ = finishSet(marker, s.entries) // the commit is durable: what stays is finished by Recover or the feed's next run
-	return nil
-}
-
-// finishSet removes the entries of a committed set, then its marker: the marker stays while an entry does, so that no
-// rollback ever reaches a committed set.
-func finishSet(marker string, entries []journalEntry) error {
-	var errs []error
-	for _, entry := range entries {
-		errs = append(errs, removeIfExists(entry.path))
-	}
-	if err := errors.Join(errs...); err != nil {
-		return err
-	}
-	return removeIfExists(marker)
-}
-
-// rollbackSet puts back the files of a set that did not commit: each backup is renamed over its target, each target
-// recorded absent is removed, and an entry goes only once its file is back, so that a rollback stopped anywhere is finished
-// by the next. An absent record beats a backup of the same target, and goes last. The run's restore and Recover share it.
-func rollbackSet(entries []journalEntry) error {
-	absent := map[string]bool{}
-	for _, entry := range entries {
-		absent[entry.target] = absent[entry.target] || entry.absent
-	}
-	var errs []error
-	kept := map[string]bool{} // targets whose backup entry stays: their absent record stays too, to beat it next time
-	for _, entry := range entries {
-		if entry.absent {
-			continue
-		}
-		backup, err := lstat(entry.path)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue // put back already
-		}
-		if err != nil {
-			errs = append(errs, err) // the entry stays for the next rollback
-			kept[entry.target] = true
-			continue
-		}
-		target, targetErr := os.Lstat(entry.target)
-		// A rename between two links of one file does nothing: such a target holds its backup already.
-		if backup.Mode().IsRegular() && !absent[entry.target] && (targetErr != nil || !os.SameFile(backup, target)) {
-			err = rename(entry.path, entry.target)
-		} else {
-			err = removeIfExists(entry.path)
-		}
-		kept[entry.target] = kept[entry.target] || err != nil
-		errs = append(errs, err)
-	}
-	for _, entry := range entries {
-		if !entry.absent || kept[entry.target] {
-			continue
-		}
-		err := removeIfExists(entry.target)
-		if err == nil {
-			err = removeIfExists(entry.path)
-		}
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
 }
 
 func sameFileContents(path, want string) (bool, error) {
@@ -436,99 +185,257 @@ func sameFileContents(path, want string) (bool, error) {
 	return string(data) == want, err
 }
 
-// journalEntryOf reads the name of an entry of a journal set in dir, and its set's id.
-func journalEntryOf(dir, name string) (journalEntry, string, bool) {
-	rest, hidden := strings.CutPrefix(name, ".")
-	for _, mark := range []string{backupMark, absentMark} {
-		target, id, found := strings.Cut(rest, mark)
-		stem, _, _ := strings.Cut(target, ".")
-		if hidden && found && validFeedWord(stem) && validFeedWord(id) {
-			return journalEntry{target: filepath.Join(dir, target), path: filepath.Join(dir, name), absent: mark == absentMark}, id, true
-		}
+// openRun makes the run folder of the feed stem in dir and links into it each published file the run reads (seeded). The
+// caller has finished or deleted any earlier run folder of the stem (recoverFeed).
+func openRun(dir, stem string) (string, error) {
+	run := filepath.Join(dir, runPrefix+stem)
+	if err := mkdir(run); err != nil {
+		return "", err
 	}
-	return journalEntry{}, "", false
-}
-
-// finishSets finishes what runs left in dir, as listed in entries, for the feed stem ("" for every feed). An IP restore
-// point goes back over its download first (a regular one is renamed, anything else removed); then each journal set that
-// holds an entry of the stem is finished: forward with a commit marker, back without one. A set of a feed whose restore
-// point could not go back is not rolled back: its backups must outlive that restore point, which holds the set's own
-// download and would otherwise go over the old download at the next try. A marker names no feed, so with a stem only the
-// markers of sets with such an entry are reached, and a marker no entry of any feed names is removed too.
-func finishSets(dir string, entries []os.DirEntry, stem string) error {
-	var errs []error
-	pending := map[string]bool{} // stems whose restore point stays
-	for _, e := range entries {
-		name := e.Name()
-		owner, ok := strings.CutSuffix(name, restorePoint)
-		if !ok || !validFeedWord(owner) || stem != "" && owner != stem {
+	for _, suffix := range seeded {
+		from := filepath.Join(dir, stem+suffix)
+		info, err := lstat(from)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
 			continue
-		}
-		path := filepath.Join(dir, name)
-		var err error
-		if e.Type().IsRegular() {
-			err = rename(path, filepath.Join(dir, owner+".orig"))
-		} else {
-			err = remove(path)
+		case err == nil && !info.Mode().IsRegular():
+			err = errors.New("published feed file is not a regular file")
+		case err == nil:
+			err = link(from, filepath.Join(run, stem+suffix))
 		}
 		if err != nil {
-			pending[owner] = true
-			errs = append(errs, err)
+			return "", errors.Join(err, discard(run))
 		}
 	}
-	sets, committed, named := map[string][]journalEntry{}, map[string]bool{}, map[string]bool{}
-	for _, e := range entries {
-		name := e.Name()
-		if id, ok := strings.CutPrefix(name, commitMark); ok && validFeedWord(id) {
-			committed[id] = true
-		} else if entry, id, ok := journalEntryOf(dir, name); ok {
-			named[id] = true
-			if stem == "" || entryStem(entry) == stem {
-				sets[id] = append(sets[id], entry)
+	return run, nil
+}
+
+// commitOp is one line of COMMIT: "rename <name>" moves the run's file over the published one, "remove <name>" removes a
+// published file the run removed.
+type commitOp struct {
+	verb, name string
+}
+
+// commit publishes the files of the run folder run whose suffixes are in suffixes, and removes the seeded ones the run
+// removed. committed reports whether COMMIT was made: without it the feed folder is untouched and the caller deletes the
+// run folder; with it an error leaves the run folder for Recover, which finishes it.
+func commit(dir, run, stem string, suffixes []string) (committed bool, err error) {
+	var removals, renames []commitOp
+	for _, suffix := range suffixes {
+		name := stem + suffix
+		_, err := lstat(filepath.Join(run, name))
+		if err == nil {
+			renames = append(renames, commitOp{"rename", name})
+			continue
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return false, err
+		}
+		if _, err := lstat(filepath.Join(dir, name)); err == nil && slices.Contains(seeded, suffix) {
+			removals = append(removals, commitOp{"remove", name})
+		} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return false, err
+		}
+	}
+	ops := append(removals, renames...)
+	if err := checkOps(dir, run, ops); err != nil {
+		return false, err
+	}
+	// The files the commit renames are on disk before COMMIT is.
+	var text strings.Builder
+	for _, op := range ops {
+		if op.verb == "rename" {
+			if err := syncPath(filepath.Join(run, op.name)); err != nil {
+				return false, err
 			}
 		}
+		text.WriteString(op.verb + " " + op.name + "\n")
 	}
-	for id, set := range sets {
-		if committed[id] {
-			continue
-		}
-		if slices.ContainsFunc(set, func(entry journalEntry) bool { return pending[entryStem(entry)] }) {
-			errs = append(errs, errors.New("journal set kept until its feed's restore point is back"))
-			continue
-		}
-		errs = append(errs, rollbackSet(set))
+	staged := filepath.Join(run, commitName+".tmp")
+	file, err := create(staged)
+	if err != nil {
+		return false, err
 	}
-	for id := range committed {
-		if len(sets[id]) > 0 || !named[id] {
-			errs = append(errs, finishSet(filepath.Join(dir, commitMark+id), sets[id]))
+	_, err = io.WriteString(file, text.String())
+	if err = errors.Join(err, syncFile(file), file.Close()); err == nil {
+		err = syncDir(run)
+	}
+	if err == nil {
+		if err = rename(staged, filepath.Join(run, commitName)); err == nil {
+			step("committed")
+			err = syncDir(run)
 		}
 	}
-	return errors.Join(errs...)
+	if err != nil {
+		return false, err
+	}
+	return true, finishRun(dir, run, ops)
 }
 
-// entryStem is the feed stem of a journal entry's target.
-func entryStem(entry journalEntry) string {
-	stem, _, _ := strings.Cut(filepath.Base(entry.target), ".")
-	return stem
-}
-
-// finishFeedSets finishes what an earlier run of the feed stem left in dir (a KILL, a rollback or a finishSet that failed),
-// its restore point and its sets, as Recover would.
-func finishFeedSets(dir, stem string) error {
-	entries, err := os.ReadDir(dir)
+func syncPath(path string) error {
+	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	return finishSets(dir, entries, stem)
+	return errors.Join(syncFile(file), file.Close())
 }
 
-// Recover makes the feed folder dir consistent before the next run stages anything (issue #4038, cutover item from #4035):
-// a KILL leaves restore points, journal sets and staged files. A regular IP restore point is renamed back over the download
-// (a run without a journal set over the download, force parse or reuse, has only that); every journal set with its commit
-// marker is finished, every other one rolled back, after its feed's restore point is back (finishSets); staged files,
-// script copies and temporaries are removed. A restore point that is no regular file is removed, as feedparse's Restore
-// does. Recover stopped anywhere is finished by the next Recover. A path that is not absolute and clean, or a folder that is
-// a symbolic link, is refused, untouched. The caller runs it before stage 6 probes a feed in dir (Stage.Run).
+// checkOps refuses operations that would publish anything but a regular file, or replace or remove anything but one.
+func checkOps(dir, run string, ops []commitOp) error {
+	for _, op := range ops {
+		paths := []string{filepath.Join(dir, op.name)}
+		if op.verb == "rename" {
+			paths = append(paths, filepath.Join(run, op.name))
+		}
+		for _, path := range paths {
+			info, err := lstat(path)
+			if err == nil && !info.Mode().IsRegular() {
+				return errors.New("feed file is not a regular file")
+			}
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// finishRun runs the operations of a committed run folder in their order, then deletes the folder. A rename whose source
+// is gone was done; one whose source is still the published file (the link the run was seeded with) is skipped, as a
+// rename over a link of itself does nothing and leaves its source. Stopped anywhere, it is finished by the next call.
+func finishRun(dir, run string, ops []commitOp) error {
+	if err := checkOps(dir, run, ops); err != nil {
+		return err
+	}
+	for _, op := range ops {
+		target := filepath.Join(dir, op.name)
+		if op.verb == "remove" {
+			if err := removeIfExists(target); err != nil {
+				return err
+			}
+			continue
+		}
+		source := filepath.Join(run, op.name)
+		info, err := lstat(source)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if current, err := lstat(target); err == nil && os.SameFile(info, current) {
+			continue
+		}
+		if err := rename(source, target); err != nil {
+			return err
+		}
+	}
+	if err := syncDir(dir); err != nil {
+		return err
+	}
+	return discard(run)
+}
+
+// discard deletes the run folder run entry by entry, without following a link. COMMIT goes last, so that a committed
+// folder says it is committed for as long as any of its files is left.
+func discard(run string) error {
+	entries, err := os.ReadDir(run)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, last := range []bool{false, true} {
+		for _, e := range entries {
+			if (e.Name() == commitName) != last {
+				continue
+			}
+			path := filepath.Join(run, e.Name())
+			if e.IsDir() {
+				err = discard(path)
+			} else {
+				err = removeIfExists(path)
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return removeIfExists(run)
+}
+
+// readCommit reads the COMMIT of the run folder of the feed stem: ok is false when there is none. Every line must be an
+// operation on one of the feed's published names (a removal on a seeded one); anything else is refused, whole.
+func readCommit(run, stem string) (ops []commitOp, ok bool, err error) {
+	// Opened without following a link or waiting on a FIFO: whatever stands there is checked on the open file.
+	file, err := os.OpenFile(filepath.Join(run, commitName), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	defer file.Close()
+	if info, err := file.Stat(); err != nil || !info.Mode().IsRegular() {
+		return nil, false, errors.Join(err, errors.New("COMMIT is not a regular file"))
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, line := range strings.SplitAfter(string(data), "\n") {
+		if line == "" {
+			continue
+		}
+		verb, name, _ := strings.Cut(strings.TrimSuffix(line, "\n"), " ")
+		suffix, hasStem := strings.CutPrefix(name, stem)
+		allowed := published
+		if verb == "remove" {
+			allowed = seeded
+		}
+		if !strings.HasSuffix(line, "\n") || verb != "rename" && verb != "remove" || !hasStem || !slices.Contains(allowed, suffix) {
+			return nil, false, errors.New("COMMIT names an operation that is no publication of its feed")
+		}
+		ops = append(ops, commitOp{verb, name})
+	}
+	return ops, true, nil
+}
+
+// recoverRun finishes the run folder run of the feed stem when it holds COMMIT, and deletes it otherwise.
+func recoverRun(dir, run, stem string) error {
+	ops, ok, err := readCommit(run, stem)
+	if err != nil {
+		return err
+	}
+	if ok {
+		return finishRun(dir, run, ops)
+	}
+	return discard(run)
+}
+
+// recoverFeed is Recover for the run folder of one feed stem, which Stage.Run calls before it reads the feed's files.
+func recoverFeed(dir, stem string) error {
+	run := filepath.Join(dir, runPrefix+stem)
+	info, err := lstat(run)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("run folder is not a directory")
+	}
+	return recoverRun(dir, run, stem)
+}
+
+// Recover makes the feed folder dir consistent before the next run reads it (issue #4038, cutover item from #4035): every
+// run folder a KILL left is finished when it holds COMMIT and deleted otherwise, and the temporaries of stage 6's probe are
+// removed. Recover stopped anywhere is finished by the next Recover. A run folder that is no directory or names no feed, a
+// COMMIT that is no regular file or names anything but its feed's published files, and a file it would publish that is no
+// regular file are refused, left as they are. A path that is not absolute and clean, or a folder that is a symbolic link,
+// is refused, untouched. The caller runs it before stage 6 probes a feed in dir (Stage.Run).
 func Recover(dir string) error {
 	if !cleanPath(dir) {
 		return errors.New("feed folder is not an absolute clean path")
@@ -540,18 +447,41 @@ func Recover(dir string) error {
 	if err != nil {
 		return err
 	}
-	errs := []error{finishSets(dir, entries, "")}
+	var errs []error
 	for _, e := range entries {
 		name := e.Name()
-		recovered := strings.HasPrefix(name, stagePrefix) || strings.HasPrefix(name, fetchStagePrefix)
-		for _, suffix := range recoveredSuffixes {
-			stem, ok := strings.CutSuffix(name, suffix)
-			recovered = recovered || ok && validFeedWord(stem)
+		if stem, ok := strings.CutPrefix(name, runPrefix); ok {
+			if !validFeedWord(stem) || !e.IsDir() {
+				errs = append(errs, errors.New("run folder is no directory of a feed"))
+			} else {
+				errs = append(errs, recoverRun(dir, filepath.Join(dir, name), stem))
+			}
+			continue
 		}
-		if recovered {
-			errs = append(errs, removeIfExists(filepath.Join(dir, name)))
+		for _, suffix := range probeTemporaries {
+			if stem, ok := strings.CutSuffix(name, suffix); ok && validFeedWord(stem) {
+				errs = append(errs, removeIfExists(filepath.Join(dir, name)))
+			}
 		}
 	}
 	errs = append(errs, syncDir(dir))
 	return errors.Join(errs...)
+}
+
+// publishParsed puts the staged lists of a feed into its run folder under their names, with the record of the input they
+// stand for ("" for none): the commit publishes them together, so that no KILL can pair a list with another download.
+func publishParsed(feed feedfetch.Feed, files []stagedFeedFile, source string) error {
+	record, err := stageOutput(feed.Dir, func(w io.Writer) error {
+		_, err := io.WriteString(w, source)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	for _, file := range append(files, stagedFeedFile{name: feed.Name + parsedSource + "." + digest.XXH128, temp: record}) {
+		if err := rename(file.temp, filepath.Join(feed.Dir, file.name)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -88,7 +88,8 @@ type Result struct {
 	HPHostsStop       bool   `json:"hpHostsStop"`
 }
 
-// Stage runs feeds one at a time: the scripts and the staged files assume no concurrent run on the same feed folder.
+// Stage runs feeds one at a time: a feed has one run folder, and the scripts assume no concurrent run on the same feed
+// folder.
 type Stage struct {
 	Paths   Paths
 	Fetcher *feedfetch.Fetcher
@@ -127,9 +128,11 @@ func failedFeed(id, stage, reason string) Result {
 	return Result{ID: id, Disposition: "failed", Stage: stage, Reason: reason}
 }
 
-// Run runs one feed with stage 6's verdict and the Update's force. Stage 6's change probe reads the files Run journals, the
+// Run runs one feed with stage 6's verdict and the Update's force. The run works in a run folder of its own and reaches the
+// feed folder only through its commit; a failed run leaves the feed folder as it was, but for a failed transfer, which
+// still retires the validators and consumes the probe body (#2820). Stage 6's change probe reads the feed's files, the
 // validators among them: the caller runs Recover on the feed folder before stage 6 probes a feed in it, and stops the feed
-// when Recover fails, so that no probe reads what an unfinished run left.
+// when Recover fails, so that no probe reads the feed while a committed run is unfinished.
 func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) {
 	result = Result{ID: f.ID}
 	// Today's per-feed blocks and pfb_download() compare the format with these names case-sensitively, and any other value,
@@ -151,14 +154,12 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		return failedFeed(f.ID, "probe", "cancelled")
 	}
 	dir := s.Paths.FeedDir
-	// A set an earlier run could not finish is finished before this run reads the feed's files or opens a set of its own:
-	// left to a later Recover beside this run's sets, its backups could put an older download back over a newer one.
-	if finishFeedSets(dir, f.Name) != nil {
-		return failedFeed(f.ID, "publish", "baseline_restore_failed")
+	// A run folder an earlier run of the feed left is finished or deleted before this run reads the feed's files.
+	if recoverFeed(dir, f.Name) != nil {
+		return failedFeed(f.ID, "publish", "run_folder_unrecoverable")
 	}
-	feed := feedfetch.Feed{Dir: dir, Name: f.Name}
-	origPath := feedPath(feed, ".orig")
-	hasOrig, err := baselineExists(origPath)
+	live := feedfetch.Feed{Dir: dir, Name: f.Name}
+	hasOrig, err := baselineExists(feedPath(live, ".orig"))
 	if err != nil {
 		return failedFeed(f.ID, "fetch", "baseline_unavailable")
 	}
@@ -174,7 +175,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		// Hold is download once: held while its published list stands, unless a script asks for the download to be parsed
 		// again; a list that is gone is parsed again from the download, and a feed never downloaded downloads once.
 		switch {
-		case parsedArtifactsExist(feed, f.Kind) && (!hasOrig || pre == "" && post == ""):
+		case parsedArtifactsExist(live, f.Kind) && (!hasOrig || pre == "" && post == ""):
 			result.Disposition, result.Reason = "held", "hold"
 			return result
 		case hasOrig:
@@ -182,42 +183,45 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		}
 	}
 
-	// The download and its sidecars are one journal set, committed when the run stands and rolled back when it fails. The
-	// lists and their record commit in a set of their own first: when this set then rolls back, or a KILL leaves it to
-	// Recover, the new lists stand beside the old download, and the record (the digest of the normalized input they were
-	// parsed from, with the parse settings) differs from the old download's, so reuse parses that download again.
-	var backup *journal
-	var backupErr error
+	runDir, err := openRun(dir, f.Name)
+	if err != nil {
+		return failedFeed(f.ID, "fetch", "run_folder_failed")
+	}
+	feed := feedfetch.Feed{Dir: runDir, Name: f.Name}
+	// What the run publishes when it fails: nothing, but for a failed transfer (retired) and a failed whois (its marker).
+	var retire []string
+	retireReason := ""
 	defer func() {
-		if backup == nil {
-			return
-		}
 		partialWhois := result.Disposition == "failed" && result.Stage == "whois" && result.SourceChanged
-		if result.Disposition == "failed" && !partialWhois {
-			// A restore point that stays holds the run's download: rolled back now, the set would leave it to go over the
-			// baseline later. Recover (or the feed's next run) puts it back first, then rolls the set back.
-			if _, err := os.Lstat(feedPath(feed, restorePoint)); !errors.Is(err, fs.ErrNotExist) {
-				result = failedFeed(f.ID, "publish", "baseline_restore_failed")
-			} else if err := backup.rollback(); err != nil {
-				result = failedFeed(f.ID, "publish", "baseline_restore_failed")
-			}
+		suffixes := retire
+		if result.Disposition != "failed" || partialWhois {
+			suffixes = published
+		}
+		done, err := false, error(nil)
+		if suffixes != nil {
+			done, err = commit(dir, runDir, f.Name, suffixes)
+		}
+		if !done {
+			_ = discard(runDir) // what stays is Recover's
 			step("restored")
-		} else if err := backup.commit(); err != nil {
-			_ = backup.rollback() // a commit that is not durable fails the feed (journal.commit)
-			// A marker that could not be removed leaves the new files standing, so the files on disk may be the new ones:
-			// the caller must treat this reason as "may have changed".
+		}
+		switch {
+		case err == nil:
+		case result.Disposition == "failed" && !partialWhois:
+			if retireReason != "" {
+				result = failedFeed(f.ID, result.Stage, retireReason)
+			}
+		case done:
+			// COMMIT stands and Recover finishes it: the caller must treat this reason as "may have changed".
 			result = failedFeed(f.ID, "publish", "baseline_commit_failed")
+		default:
+			result = failedFeed(f.ID, "publish", "parsed_publish_failed")
 		}
 	}()
-	// The IP post-script rewrites the download in place (feedparse.RunIP), and a 304 transfer leaves that file: its backup
-	// is a copy. The configured name decides: RunIP resolves the script again and runs one installed since.
-	var copies []string
-	if f.Kind != "dnsbl" && f.PostScript != "" {
-		copies = []string{origPath}
-	}
 
 	sourceChanged, whoisPartial := false, false
 	if force != "parse" {
+		origPath := feedPath(feed, ".orig")
 		switch {
 		case f.Custom && !f.WhoisConvert:
 			same, err := sameFileContents(origPath, f.CustomText)
@@ -225,20 +229,15 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 				return failedFeed(f.ID, "fetch", "custom_source_unavailable")
 			}
 			if !same {
-				backup, err = snapshotPaths(feedStatePaths(feed), copies...)
-				if err != nil {
-					return failedFeed(f.ID, "fetch", "baseline_backup_failed")
-				}
-				staged, err := stageOutput(dir, func(w io.Writer) error {
+				staged, err := stageOutput(runDir, func(w io.Writer) error {
 					_, err := io.WriteString(w, f.CustomText)
 					return err
 				})
 				if err != nil {
 					return failedFeed(f.ID, "fetch", "custom_source_unavailable")
 				}
-				defer remove(staged)
 				step("custom-staged")
-				if rename(staged, origPath) != nil { // the journal set above puts the last text back on a failure
+				if rename(staged, origPath) != nil {
 					return failedFeed(f.ID, "fetch", "custom_source_unavailable")
 				}
 				// The digest describes the bytes of the last transfer, which the custom text replaced.
@@ -248,16 +247,13 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 				sourceChanged = true
 			}
 		case f.WhoisConvert || f.Format == "whois" || f.Format == "asn":
-			backup, backupErr = snapshotPaths(feedStatePaths(feed), copies...)
-			if backupErr != nil {
-				return failedFeed(f.ID, "whois", "baseline_backup_failed")
-			}
 			list := s.listSource(f)
 			if f.Custom {
 				list = f.CustomText
 			}
 			whois := s.Fetcher.Whois(ctx, feed, feedfetch.WhoisRequest{List: list, IPv6: f.Kind == "ipv6"})
 			if ctx.Err() != nil || whois.Reason != "" || !whois.Found {
+				retire = []string{".fail"}
 				return failedFeed(f.ID, "whois", "whois_failed")
 			}
 			sourceChanged, whoisPartial = true, whois.Failed
@@ -275,17 +271,12 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			if force == "none" && change.Verdict == VerdictUnchanged {
 				break // the reuse rule below decides whether the published lists stand
 			}
-			if backup, backupErr = snapshotPaths(feedStatePaths(feed), copies...); backupErr != nil {
-				return failedFeed(f.ID, "fetch", "baseline_backup_failed")
-			}
 			if force != "none" && clearForcedState(feed, force) != nil {
 				return failedFeed(f.ID, "fetch", "feed_force_prepare_failed")
 			}
 			ingested := s.Fetcher.Ingest(ctx, feed, request)
 			if !ingested.OK {
-				if backup.keepAbsent(validatorPaths(feed)...) != nil {
-					return failedFeed(f.ID, "fetch", "validators_retire_failed")
-				}
+				retire, retireReason = retired, "validators_retire_failed"
 				return failedFeed(f.ID, "fetch", s.safeReason(ingested.Reason, "feed_fetch_failed", f))
 			}
 			sourceChanged = ingested.Status != httpStatusNotModified
@@ -421,7 +412,8 @@ func (s *Stage) parseAndPublish(ctx context.Context, f Feed, feed feedfetch.Feed
 			source = digest.Bytes([]byte(normalized + "\n" + s.parseSettings(f)))
 		}
 	}
-	if force == "none" && source != "" && !whoisPartial && parsedArtifactsExist(feed, f.Kind) && recordedSource(feed) == source {
+	live := feedfetch.Feed{Dir: s.Paths.FeedDir, Name: f.Name}
+	if force == "none" && source != "" && !whoisPartial && parsedArtifactsExist(live, f.Kind) && recordedSource(live) == source {
 		result.Disposition, result.Stage, result.Reason = "unchanged", "normalize", "normalized_unchanged"
 		return result
 	}
@@ -517,15 +509,26 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input 
 	if err != nil {
 		return failedFeed(f.ID, "parse", "ip_parse_failed")
 	}
-	defer remove(staged)
 	// One summary line per feed, today's (pfb_ip_parse_fail_warn()); the records went to ParseErrors.
 	if parsed.ParseFail > 0 {
 		s.sinks().Line(true, "\n[!] Parse Errors [ %s ]: %d\n", f.Name, parsed.ParseFail)
 	}
 
-	// The post-script runs on the download itself, with a restore point put back after the empty check (spec §5).
-	ran := post.RunIP(ctx, feedPath(feed, ".orig"), feedPath(feed, ".orig.post"), cfg.VType)
-	defer ran.Restore()
+	// The post-script runs on a copy of the download (spec §5), whose output the empty check reads and which the run
+	// folder then drops: the script's output never becomes the download. The configured name decides: RunIP resolves the
+	// script again and runs one installed since.
+	ran := feedparse.PostScriptResult{Skipped: true}
+	if f.PostScript != "" {
+		if copied, err := postCopy(feed); err != nil {
+			s.sinks().Line(true, "\n[ %s ] post-script '%s' could not stage its input; skipping\n", f.Name, f.PostScript)
+			ran.Skipped, ran.Reason = false, feedparse.PreScriptStage
+		} else {
+			ran = post.RunIP(ctx, copied, copied+".post", cfg.VType)
+			if probePath == feedPath(feed, ".orig") {
+				probePath = copied
+			}
+		}
+	}
 	if ran.Reason == feedparse.PreScriptCancelled || ctx.Err() != nil {
 		return failedFeed(f.ID, "post-script", "cancelled")
 	}
@@ -542,11 +545,6 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input 
 		if err := truncate(staged); err != nil {
 			return failedFeed(f.ID, "parse", "ip_parse_failed")
 		}
-	}
-	// The download goes back before the list is published: one that cannot go back may hold the script's output, which
-	// must never become the baseline, so the feed fails and the journal rolls the download back.
-	if ran.Restore() != nil {
-		return failedFeed(f.ID, "post-script", "post_script_restore_failed")
 	}
 	result.Disposition, result.Stage = disposition, "parse"
 	result.Entries, result.ParseFailures = parsed.Entries, parsed.ParseFail
@@ -569,7 +567,6 @@ func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, inp
 	if err != nil {
 		return failedFeed(f.ID, "parse", "dnsbl_parse_failed")
 	}
-	defer remove(stagedNDJSON)
 	var files []stagedFeedFile
 	for _, side := range []struct {
 		suffix string
@@ -579,7 +576,6 @@ func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, inp
 		if err != nil {
 			return failedFeed(f.ID, "parse", "dnsbl_parse_failed")
 		}
-		defer remove(staged)
 		files = append(files, stagedFeedFile{name: feed.Name + side.suffix, temp: staged})
 	}
 
@@ -592,7 +588,7 @@ func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, inp
 	result.Disposition, result.Stage = disposition, "parse"
 	result.DNSBLRows, result.IPv4Count, result.IPv6Count = parsed.Rows, len(parsed.IP4), len(parsed.IP6)
 	result.UpdateIP, result.SchemeSkipped, result.HPHostsStop = parsed.UpdateIP, parsed.SchemeSkipped, parsed.Stopped
-	rows := feedPath(feed, ".parsed.ndjson")
+	rows := filepath.Join(s.Paths.FeedDir, feed.Name+".parsed.ndjson")
 	if parsed.Rows > 0 {
 		files = append(files, stagedFeedFile{name: feed.Name + ".parsed.ndjson", temp: stagedNDJSON})
 	} else {
@@ -613,19 +609,27 @@ func publishResult(feed feedfetch.Feed, files []stagedFeedFile, source string, r
 	return result
 }
 
-// publishParsed publishes the staged lists of a feed with the record of the input they stand for ("" for none) in one
-// commit: reuse needs that record to equal the current input, so no KILL or restore order can pair a list with another
-// download.
-func publishParsed(feed feedfetch.Feed, files []stagedFeedFile, source string) error {
-	record, err := stageOutput(feed.Dir, func(w io.Writer) error {
-		_, err := io.WriteString(w, source)
+// postCopy copies the download of the run folder to "<run>/.post/<name>.orig", the file the IP post-script runs on: the
+// download's name, in a folder of its own, so that no file the script leaves beside it has a published name.
+func postCopy(feed feedfetch.Feed) (string, error) {
+	folder := filepath.Join(feed.Dir, ".post")
+	if err := mkdir(folder); err != nil {
+		return "", err
+	}
+	staged, err := stageOutput(folder, func(w io.Writer) error {
+		in, err := os.Open(feedPath(feed, ".orig"))
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		_, err = io.Copy(w, in)
 		return err
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
-	defer remove(record)
-	return publishStaged(feed.Dir, append(files, stagedFeedFile{name: feed.Name + parsedSource + "." + digest.XXH128, temp: record}))
+	copied := filepath.Join(folder, feed.Name+".orig")
+	return copied, rename(staged, copied)
 }
 
 func recordedSource(feed feedfetch.Feed) string {
