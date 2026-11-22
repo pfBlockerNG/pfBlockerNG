@@ -1371,14 +1371,19 @@ final class OutpostApplyTest extends TestCase
 
 	// ---- the version dispatch ------------------------------------------------------------------
 
-	/** A version 2 request the contract refuses runs nothing, writes no result and exits 2, with the version 2 reason. */
+	/** A version 2 request the contract refuses runs nothing, writes no result and no settings, and exits 2, with the version 2 reason. */
 	public function testARefusedVersionTwoRequestExitsTwoWithItsReason(): void
 	{
-		$apply = ['apply' => ['request' => self::request([]) + ['force' => 'none']]];
-		$r = $this->applyOnce($apply);
+		$unset = ['config' => ['system/maximumtableentries' => '']];	// the settings step writes the table entries limit's default
+		[, $r, $valid] = $this->runSteps([self::prime([self::group('Abuse')]),
+			$unset + ['apply' => ['request' => self::request([]) + ['force' => 'none']]], ['apply' => ['request' => self::request([])]]]);
+		$writes = static fn (array $record): array => array_map(static fn (mixed $call): string => is_array($call)
+			? (string) ($call[0] ?? $call['desc'] ?? '') : (string) $call, $record['writeConfig']);
 
 		$this->assertSame(2, $r['exit'], $r['log']);
 		$this->assertNull($r['resultLines'], 'no result file');
 		$this->assertStringContainsString('the request has the unknown field "force"', $r['log']);
+		$this->assertSame([], $writes($r), 'a refused request writes no settings');
+		$this->assertContains('pfBlockerNG: save max Firewall table entries limit', $writes($valid), 'before: a request that runs writes the default');
 	}
 }
