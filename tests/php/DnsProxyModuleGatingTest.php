@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
 require_once __DIR__ . '/CutShortWrite.php';
 require_once __DIR__ . '/ConfigXmlDiskTrait.php';
+require_once __DIR__ . '/PageStatementLoader.php';
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -342,7 +343,6 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertTrue(pfb_unbound_python('enabled'), 'setup: the first pass writes the whitelist');
 		$stale = "stale.example.com,0\nother-stale.example.net,0\n";
 		file_put_contents($GLOBALS['pfb']['unbound_py_wh'], $stale);
-		$sources = @file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
 
 		$signalled = CutShortWrite::run(16, static fn (): bool => pfb_unbound_python('enabled'));
 
@@ -736,8 +736,25 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertSame('false', CutShortWrite::run(16, static fn (): bool => pfb_unbound_conf_publish($dir)));
 
 		$this->assertSame(self::CONF_WITH_MODULE, file_get_contents("{$this->tmp}/unbound.conf"), 'the patch is not published without its backup');
-		$this->assertSame("previous backup\n", file_get_contents("{$this->tmp}/unbound.bk"), 'no truncated backup replaces the last whole one');
+		$this->assertFileDoesNotExist("{$this->tmp}/unbound.bk", 'a failed start would roll an earlier pass\'s backup over a conf this pass left alone');
 		$this->assertFileDoesNotExist("{$this->tmp}/unbound.tmp", 'a patch left staged reads as a config change to restart for');
+	}
+
+	/**
+	 * Issue #4201: a patch that removes the module but did not go live keeps the python folders mounted: the conf Unbound
+	 * starts from still loads the module.
+	 */
+	public function testAnUnpublishedPatchKeepsThePythonFoldersMounted(): void
+	{
+		file_put_contents("{$this->tmp}/unbound.tmp", self::CONF_WITHOUT_MODULE);	// with no unbound.conf, its backup fails
+
+		$scope = pfb_test_page_eval(
+			pfb_test_page_region('src/usr/local/pkg/pfblockerng/pfblockerng.inc', 'if (!pfb_unbound_conf_publish($pfb[\'dnsbldir\'])) {', '// When pfBlockerNG is disabled'),
+			['pfb' => ['dnsbldir' => $this->tmp, 'dnsbl_python_unmount' => TRUE] + $GLOBALS['pfb']]
+		);
+
+		$this->assertEmpty($scope['pfb']['dnsbl_python_unmount'] ?? NULL, 'Unbound would start a python conf without its python folders');
+		$this->assertFileDoesNotExist("{$this->tmp}/unbound.tmp");
 	}
 
 	public function testUnboundConfGainsNoModuleWithoutASnapshot(): void
