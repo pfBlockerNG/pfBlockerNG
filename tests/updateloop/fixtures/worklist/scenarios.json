@@ -60,9 +60,6 @@
           "ipv4:A_v4": "changed"
         },
         "fail": [],
-        "update": [
-          "ipv4:A_v4"
-        ],
         "stopped": [],
         "apply": "now"
       }
@@ -103,14 +100,13 @@
           "ipv4:A_v4": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
     },
     {
       "id": "manual_ip_none",
-      "description": "A manual Update of scope ip checks nothing: a feed with a marker is downloaded, another follows the reuse rule; feeds outside the scope are left as they are.",
+      "description": "A manual Update of scope ip checks nothing: a feed with a fail marker or without its list is downloaded, another follows the reuse rule; feeds outside the scope are left as they are.",
       "request": {
         "trigger": "manual",
         "scope": "ip",
@@ -154,7 +150,7 @@
       ],
       "files": {
         "ipv4:B_v4": {
-          "update": true
+          "list": false
         },
         "dnsbl:D": {
           "fail": true
@@ -169,9 +165,6 @@
         },
         "fail": [
           "dnsbl:D"
-        ],
-        "update": [
-          "ipv4:B_v4"
         ],
         "stopped": [],
         "apply": "now"
@@ -223,7 +216,7 @@
       ],
       "files": {
         "ipv4:B_v4": {
-          "update": true
+          "list": false
         },
         "dnsbl:D": {
           "fail": true
@@ -238,9 +231,6 @@
         },
         "fail": [
           "dnsbl:D"
-        ],
-        "update": [
-          "ipv4:B_v4"
         ],
         "stopped": [],
         "apply": "now"
@@ -290,15 +280,11 @@
           ]
         }
       ],
-      "files": {},
       "old_expect": {
         "changes": {
           "ipv4:A_v4": "changed",
           "ipv4:B_v4": "unchanged"
-        },
-        "update": [
-          "ipv4:A_v4"
-        ]
+        }
       },
       "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
       "expect": {
@@ -312,7 +298,6 @@
           "ipv4:B_v4": "download"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
@@ -361,16 +346,11 @@
           ]
         }
       ],
-      "files": {},
       "old_expect": {
         "changes": {
           "ipv4:A_v4": "changed",
           "ipv4:B_v4": "changed"
-        },
-        "update": [
-          "ipv4:A_v4",
-          "ipv4:B_v4"
-        ]
+        }
       },
       "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
       "expect": {
@@ -384,14 +364,13 @@
           "ipv4:B_v4": "both"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
     },
     {
       "id": "manual_dnsbl_none",
-      "description": "A manual Update of scope dnsbl checks nothing: a feed with a marker is downloaded, another follows the reuse rule; feeds outside the scope are left as they are.",
+      "description": "A manual Update of scope dnsbl checks nothing: a feed with a fail marker or without its list is downloaded, another follows the reuse rule; feeds outside the scope are left as they are.",
       "request": {
         "trigger": "manual",
         "scope": "dnsbl",
@@ -435,7 +414,7 @@
       ],
       "files": {
         "ipv4:B_v4": {
-          "update": true
+          "list": false
         },
         "dnsbl:D": {
           "fail": true
@@ -449,9 +428,6 @@
         },
         "fail": [
           "dnsbl:D"
-        ],
-        "update": [
-          "ipv4:B_v4"
         ],
         "stopped": [],
         "apply": "now"
@@ -503,7 +479,7 @@
       ],
       "files": {
         "ipv4:B_v4": {
-          "update": true
+          "list": false
         },
         "dnsbl:D": {
           "fail": true
@@ -517,9 +493,6 @@
         },
         "fail": [
           "dnsbl:D"
-        ],
-        "update": [
-          "ipv4:B_v4"
         ],
         "stopped": [],
         "apply": "now"
@@ -569,19 +542,10 @@
           ]
         }
       ],
-      "files": {
-        "ipv4:B_v4": {
-          "update": true
-        }
-      },
       "old_expect": {
         "changes": {
           "dnsbl:D": "changed"
-        },
-        "update": [
-          "ipv4:B_v4",
-          "dnsbl:D"
-        ]
+        }
       },
       "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
       "expect": {
@@ -593,9 +557,6 @@
           "dnsbl:D": "download"
         },
         "fail": [],
-        "update": [
-          "ipv4:B_v4"
-        ],
         "stopped": [],
         "apply": "now"
       }
@@ -644,19 +605,10 @@
           ]
         }
       ],
-      "files": {
-        "ipv4:B_v4": {
-          "update": true
-        }
-      },
       "old_expect": {
         "changes": {
           "dnsbl:D": "changed"
-        },
-        "update": [
-          "ipv4:B_v4",
-          "dnsbl:D"
-        ]
+        }
       },
       "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
       "expect": {
@@ -668,16 +620,13 @@
           "dnsbl:D": "both"
         },
         "fail": [],
-        "update": [
-          "ipv4:B_v4"
-        ],
         "stopped": [],
         "apply": "now"
       }
     },
     {
       "id": "manual_both_none",
-      "description": "A manual Update of scope both checks nothing: a feed with a marker is downloaded, another follows the reuse rule; feeds outside the scope are left as they are.",
+      "description": "A manual Update of scope both checks nothing: a feed with a fail marker or without its list is downloaded, another follows the reuse rule; feeds outside the scope are left as they are.",
       "request": {
         "trigger": "manual",
         "scope": "both",
@@ -721,7 +670,7 @@
       ],
       "files": {
         "ipv4:B_v4": {
-          "update": true
+          "list": false
         },
         "dnsbl:D": {
           "fail": true
@@ -737,9 +686,6 @@
         },
         "fail": [
           "dnsbl:D"
-        ],
-        "update": [
-          "ipv4:B_v4"
         ],
         "stopped": [],
         "apply": "now"
@@ -791,7 +737,7 @@
       ],
       "files": {
         "ipv4:B_v4": {
-          "update": true
+          "list": false
         },
         "dnsbl:D": {
           "fail": true
@@ -807,9 +753,6 @@
         },
         "fail": [
           "dnsbl:D"
-        ],
-        "update": [
-          "ipv4:B_v4"
         ],
         "stopped": [],
         "apply": "now"
@@ -859,17 +802,12 @@
           ]
         }
       ],
-      "files": {},
       "old_expect": {
         "changes": {
           "ipv4:A_v4": "changed",
           "ipv4:B_v4": "unchanged",
           "dnsbl:D": "changed"
-        },
-        "update": [
-          "ipv4:A_v4",
-          "dnsbl:D"
-        ]
+        }
       },
       "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
       "expect": {
@@ -885,7 +823,6 @@
           "dnsbl:D": "download"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
@@ -934,18 +871,12 @@
           ]
         }
       ],
-      "files": {},
       "old_expect": {
         "changes": {
           "ipv4:A_v4": "changed",
           "ipv4:B_v4": "changed",
           "dnsbl:D": "changed"
-        },
-        "update": [
-          "ipv4:A_v4",
-          "ipv4:B_v4",
-          "dnsbl:D"
-        ]
+        }
       },
       "departure": "Today's Force Check clears the validators (and for both the digests), probes every feed and downloads only a changed one; Core hands the force to the stage (feedstage Change.Force), which downloads every feed of the scope and lets its reuse rule decide the parse.",
       "expect": {
@@ -961,14 +892,13 @@
           "dnsbl:D": "both"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
     },
     {
-      "id": "apply_rebuilds_marked_feeds",
-      "description": "An apply Update probes nothing and reports no outcome; as today's pending apply (a manual pass of scope both) it downloads the feeds whose marker asks for it and reuses the others.",
+      "id": "apply_does_no_feed_work",
+      "description": "An apply Update checks, runs and reports no feed: it applies what is published.",
       "request": {
         "trigger": "apply"
       },
@@ -1010,25 +940,26 @@
       ],
       "files": {
         "ipv4:B_v4": {
-          "update": true
+          "list": false
         },
         "dnsbl:D": {
           "fail": true
         }
       },
-      "expect": {
-        "checked": [],
-        "outcomes": {},
+      "old_expect": {
         "changes": {
           "ipv4:A_v4": "unchanged",
           "ipv4:B_v4": "changed",
           "dnsbl:D": "changed"
-        },
+        }
+      },
+      "departure": "Today's pending apply (pfb_core_update_apply(), a pass of scope both) rebuilds the feeds with an update or fail marker or no list when the window opens. Core builds them at the next in-window scheduled Update instead: a change found outside the window was not built, so the feed keeps its baseline's validators and the next probe finds the change again, at most one schedule interval later (spec \u00a73, stage 7).",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {},
         "fail": [
           "dnsbl:D"
-        ],
-        "update": [
-          "ipv4:B_v4"
         ],
         "stopped": [],
         "apply": "now"
@@ -1070,7 +1001,6 @@
           "ipv4:A_v4": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
@@ -1111,14 +1041,13 @@
           "ipv4:B_v4": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
     },
     {
       "id": "outcome_failed_fetch",
-      "description": "A failed probe leaves the fail marker and no outcome: the occurrence stays pending.",
+      "description": "A failed probe gives no outcome, so the occurrence stays pending, and no fail marker: only the stage's failed download leaves one.",
       "request": {
         "trigger": "scheduled",
         "feeds": [
@@ -1141,6 +1070,12 @@
           ]
         }
       ],
+      "old_expect": {
+        "fail": [
+          "ipv4:A_v4"
+        ]
+      },
+      "departure": "Today's check touches the fail marker when its probe fails. In Core the stage owns the marker (feedstage: a failed download creates it, a successful one removes it); a failed probe reports no outcome, so the scheduler keeps the occurrence pending and its retry names the feed again.",
       "expect": {
         "checked": [
           "ipv4:A_v4"
@@ -1149,10 +1084,7 @@
         "changes": {
           "ipv4:A_v4": "failed"
         },
-        "fail": [
-          "ipv4:A_v4"
-        ],
-        "update": [],
+        "fail": [],
         "stopped": [],
         "apply": "now"
       }
@@ -1202,7 +1134,6 @@
           "ipv4:A_v4": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
@@ -1246,7 +1177,6 @@
           "ipv4:A_v4": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
@@ -1290,7 +1220,6 @@
           "ipv4:A_v4": "changed"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
@@ -1336,9 +1265,6 @@
           "ipv4:A_v4": "changed"
         },
         "fail": [],
-        "update": [
-          "ipv4:A_v4"
-        ],
         "stopped": [],
         "apply": "now"
       }
@@ -1389,10 +1315,6 @@
           "ipv4:N_v4": "changed"
         },
         "fail": [],
-        "update": [
-          "ipv4:W_v4",
-          "ipv4:N_v4"
-        ],
         "stopped": [],
         "apply": "now"
       }
@@ -1433,9 +1355,6 @@
           "dnsbl:D": "changed"
         },
         "fail": [],
-        "update": [
-          "dnsbl:D"
-        ],
         "stopped": [],
         "apply": "now"
       }
@@ -1476,14 +1395,13 @@
           "ipv6:S_v6": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
     },
     {
-      "id": "stale_update_marker_stands",
-      "description": "An earlier change left its marker (outside the window): an unchanged answer now does not clear it, and the feed is still downloaded.",
+      "id": "update_marker_is_not_read",
+      "description": "An update marker today's pass left is not Core's: the probe's answer decides.",
       "request": {
         "trigger": "scheduled",
         "feeds": [
@@ -1511,6 +1429,12 @@
           "update": true
         }
       },
+      "old_expect": {
+        "changes": {
+          "ipv4:A_v4": "changed"
+        }
+      },
+      "departure": "Core keeps no update marker. A change found and not built leaves the baseline and its validators as they were, so the next probe finds it again; today's pass downloads a feed whose marker an earlier pass or the Groups page left, whatever its probe answers.",
       "expect": {
         "checked": [
           "ipv4:A_v4"
@@ -1519,12 +1443,9 @@
           "ipv4:A_v4": "success"
         },
         "changes": {
-          "ipv4:A_v4": "changed"
+          "ipv4:A_v4": "unchanged"
         },
         "fail": [],
-        "update": [
-          "ipv4:A_v4"
-        ],
         "stopped": [],
         "apply": "now"
       }
@@ -1580,10 +1501,6 @@
         "fail": [
           "ipv4:B_v4"
         ],
-        "update": [
-          "ipv4:A_v4",
-          "ipv4:B_v4"
-        ],
         "stopped": [],
         "apply": "now"
       }
@@ -1631,9 +1548,6 @@
           "ipv4:B_v4": "changed"
         },
         "fail": [
-          "ipv4:B_v4"
-        ],
-        "update": [
           "ipv4:B_v4"
         ],
         "stopped": [],
@@ -1722,14 +1636,13 @@
           "dnsbl:D": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
     },
     {
       "id": "unnamed_feeds_untouched",
-      "description": "A scheduled Update never checks or rebuilds a feed Core did not name, even one with a marker of an earlier change.",
+      "description": "A scheduled Update never checks or rebuilds a feed Core did not name, even one without its list.",
       "request": {
         "trigger": "scheduled",
         "feeds": [
@@ -1774,7 +1687,7 @@
       ],
       "files": {
         "dnsbl:D": {
-          "update": true
+          "list": false
         }
       },
       "expect": {
@@ -1788,10 +1701,6 @@
           "ipv4:A_v4": "changed"
         },
         "fail": [],
-        "update": [
-          "ipv4:A_v4",
-          "dnsbl:D"
-        ],
         "stopped": [],
         "apply": "now"
       }
@@ -1839,9 +1748,6 @@
           "ipv4:A_v4": "changed"
         },
         "fail": [],
-        "update": [
-          "ipv4:A_v4"
-        ],
         "stopped": [],
         "apply": "pending"
       }
@@ -1883,7 +1789,6 @@
           "ipv4:A_v4": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
@@ -1926,7 +1831,6 @@
           "ipv4:A_v4": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "pending"
       }
@@ -1968,7 +1872,6 @@
           "ipv4:A_v4": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
@@ -2029,7 +1932,6 @@
           "dnsbl:D": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
@@ -2087,7 +1989,6 @@
         "outcomes": {},
         "changes": {},
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "pending"
       }
@@ -2140,7 +2041,6 @@
         "outcomes": {},
         "changes": {},
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "nothing"
       }
@@ -2183,7 +2083,6 @@
           "ipv4:A_v4": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "pending"
       }
@@ -2235,9 +2134,6 @@
       "files": {
         "ipv4:A_v4": {
           "fail": true
-        },
-        "ipv4:B_v4": {
-          "update": true
         }
       },
       "expect": {
@@ -2248,9 +2144,6 @@
         },
         "fail": [
           "ipv4:A_v4"
-        ],
-        "update": [
-          "ipv4:B_v4"
         ],
         "stopped": [],
         "apply": "now"
@@ -2329,7 +2222,6 @@
           "ipv4:A_v4": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
@@ -2371,7 +2263,6 @@
           "ipv4:A_v4": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
@@ -2430,9 +2321,6 @@
           "ipv4:A_v4": "changed",
           "dnsbl:D": "unchanged"
         },
-        "update": [
-          "ipv4:A_v4"
-        ],
         "stopped": []
       },
       "departure": "Today's pass follows the link. Core refuses a feed folder that is a symbolic link (feedstage.Recover), so no probe or run reads or writes through it.",
@@ -2447,7 +2335,6 @@
           "dnsbl:D": "unchanged"
         },
         "fail": [],
-        "update": [],
         "stopped": [
           "ipv4:A_v4"
         ],
@@ -2502,7 +2389,6 @@
           "ipv4:B_v4": "failed"
         },
         "fail": [],
-        "update": [],
         "stopped": [],
         "apply": "now"
       }
