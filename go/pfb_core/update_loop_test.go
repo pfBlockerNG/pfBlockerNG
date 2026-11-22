@@ -77,13 +77,14 @@ func TestWithTheUpdateLoopSwitchOnAnUpdateRunsTheLoopNotTheProgram(t *testing.T)
 	}
 }
 
-// WHEN Core runs without --update-loop, whatever path flags it has THEN the Update runs the program as before and the
-// worker's state has no loop member.
+// WHEN Core runs without --update-loop, whatever other path flags it has THEN the Update runs the program as before and
+// the worker's state has no loop member.
 func TestWithTheUpdateLoopSwitchOffAnUpdateRunsTheProgramAsBefore(t *testing.T) {
 	holdQuarters(t)
 	f := newFakeUpdate(t)
 	f.release()
 	flags, _ := loopFlags(t)
+	flags = flags[:len(flags)-2] // --main-log comes last: it needs the switch
 	c := startCore(t, scratchDir(t), append([]string{"--update-cmd", f.path}, flags...)...)
 	wantJSON(t, c.post("StartUpdate", `{"requestId":"o1","trigger":"manual"}`), http.StatusOK, `{}`)
 	end := c.waitFinished("manual")
