@@ -920,7 +920,7 @@ final class OutpostApplyTest extends TestCase
 	/** @return array<string, array{0: string}> */
 	public static function failedAccountings(): array
 	{
-		return ['the reload returns FALSE' => ['false'], 'the accounting-failed flag is set' => ['flag'], 'the accounting retry marker is set' => ['marker']];
+		return ['the accounting-failed flag is set' => ['flag'], 'the accounting retry marker is set' => ['marker']];
 	}
 
 	/** WHEN the Resolver step's accounting failed THEN the apply exits 1, keeps the changes pending and records a failure. */

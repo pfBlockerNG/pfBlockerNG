@@ -42,7 +42,7 @@ declare(strict_types=1);
  * (no `core`: nothing listens), `lockHeld` (TRUE) holds the apply lock and `dispatchLockHeld` (TRUE) the scheduler
  * dispatcher lock while it runs. Its `seams` replace the host-reaching steps of the apply: `dns` ({mode, update, python, active}:
  * what pfb_apply_dns() reports, `active` turns DNSBL, pfB-DNS and the Resolver on in $pfb for the steps after it), `unbound`
- * ({effect}: what the Resolver reload does besides recording its call: `false` returns FALSE, `flag` sets
+ * ({effect}: what the Resolver reload does besides recording its call: `flag` sets
  * $pfb['dnsbl_accounting_failed'], `marker` writes the `accounting` retry marker), `cache` (TRUE: the DNSBL archive records
  * its call) and `fetchThrowAt` (the n-th fetch, from 1, throws). The record adds `seamCalls`. Its record is not compacted and adds the exit status, the result lines, the cursor file, the
  * requests Core received, the notices filed, the DNSBL statistics rows and the GeoIP pages.
@@ -441,7 +441,7 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 			} elseif ($effect === 'marker') {
 				file_put_contents("{$pfb['dnsbl_file']}.reload", 'accounting');
 			}
-			return $effect === 'false' ? FALSE : NULL;
+			return NULL;
 		};
 	}
 	if (!empty($want['cache'])) {

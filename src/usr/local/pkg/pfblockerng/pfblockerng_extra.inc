@@ -7281,9 +7281,7 @@ function pfb_outpost_apply_run(array $request, $out, ?string $socket, bool $abso
 		if ($update || $python) {
 			// as the update pass loads what its DNS step changed in the Resolver; Core owns the domain statistics, so no domain changed here
 			$pfb['domain_update'] = FALSE;
-			if (($seams['unbound'] ?? 'pfb_update_unbound')($mode, $update, $python) === FALSE) {
-				$accounting = FALSE;
-			}
+			($seams['unbound'] ?? 'pfb_update_unbound')($mode, $update, $python);
 			// #468, as the pass: on a RAM-disk /var the generated DNSBL state is archived once the reload has applied
 			if (pfb_dnsbl_active() && $pfb['unbound_state'] === PfbToggle::On && config_path_enabled('system', 'use_mfs_tmpvar')) {
 				($seams['cache'] ?? 'pfb_dnsbl_cache')('save');
