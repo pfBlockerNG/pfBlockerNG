@@ -927,7 +927,7 @@ final class OutpostApplyTest extends TestCase
 	#[DataProvider('failedAccountings')]
 	public function testAFailedAccountingIsNotSettledAsApplied(string $effect): void
 	{
-		$apply = ['pendingToken' => 'tok-5', 'openRecord' => TRUE, 'apply' => ['request' => self::request([], ['scope' => 'dnsbl', 'pendingToken' => 'tok-5']),
+		$apply = ['pendingToken' => 'tok-5', 'openRecord' => TRUE, 'apply' => ['request' => self::request([], ['scope' => 'dnsbl', 'pendingToken' => 'tok-5'] + self::dnsblGroups()),
 			'seams' => ['dns' => ['mode' => 'enabled', 'update' => TRUE], 'unbound' => ['effect' => $effect]]]];
 		$r = $this->applyOnce($apply);
 
