@@ -2750,6 +2750,56 @@
       }
     },
     {
+      "id": "pass_holds_held_feeds",
+      "description": "A pass holds a held feed with its list as the walk does: reused, its stale fail marker consumed.",
+      "request": {
+        "trigger": "manual",
+        "scope": "ip",
+        "force": "none"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "hold",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:A_v4": {
+          "fail": true
+        }
+      },
+      "old_expect": {
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [
+          "ipv4:A_v4"
+        ]
+      },
+      "departure": "Today's pass keeps a held feed's fail marker, which the next walk consumes, and its marker rule counts the feed as downloaded though the Hold fast path keeps it. Core's pass consumes the marker as the walk does: the stage never downloads a held feed with its list.",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
       "id": "never_and_disabled_are_not_walked",
       "description": "A group updated Never, a Disabled group and a disabled row are not checked.",
       "request": {
