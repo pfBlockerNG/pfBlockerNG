@@ -12,7 +12,9 @@ import (
 // zone, white space) is refused, and so is one the address guard refuses: today's rule of pfb_sanitize_ipaddr() and
 // pfb_sanitize_ipaddr_v6() (pfblockerng.inc, issue #1922), judged on the network pf loads, so an IPv4 network whose first
 // octet is 0, the IPv6 network ::, and a prefix length of 0 are left out. A prefix length with leading zeros (/024), which
-// today's parser publishes and pf reads as decimal, is its decimal number (/24). The caller files an issue for a refused row.
+// today's parser publishes and pf reads as decimal, is its decimal number (/24): pfctl takes the length with strtonum(), which
+// is decimal (FreeBSD sbin/pfctl/pfctl_parser.c host(), checked on main and releng/14.2 in the review of #4185), so /024 is
+// /24, not octal. The caller files an issue for a refused row.
 func Member(row, family string) (string, error) {
 	var p netip.Prefix
 	if addr, bits, ok := strings.Cut(row, "/"); ok {

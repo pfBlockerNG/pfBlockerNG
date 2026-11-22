@@ -149,7 +149,7 @@ func SetID(group, family string) (id string, ok bool) {
 // It refuses a request the apply would refuse, one outside the scope rule, one whose token is not a JSON value, and one whose
 // resources, DNSBL, token and other fields alone are over 1 MiB. Issues are informational and never refuse it: each is written in the form the apply
 // keeps; when they are over 4096 or push the request over 1 MiB, the first ones that fit beside everything else are kept and
-// one last issue (leftOut) says how many more were left out; when even that one does not fit, no issue is written.
+// one last issue (leftOut) says how many more of those given were left out; only the first 4096 are ever normalised or encoded; when even that one does not fit, no issue is written. An issue with a stage outside the contract's refuses the request (check).
 func Encode(r Request) ([]byte, error) {
 	if err := r.check(); err != nil {
 		return nil, err
@@ -176,17 +176,17 @@ func Encode(r Request) ([]byte, error) {
 	if len(out) > MaxRequest {
 		return nil, fmt.Errorf("the request is %d bytes without its issues, over the %d the apply reads", len(out), MaxRequest)
 	}
-	issues := make([]Issue, len(r.Issues))
-	for i, is := range r.Issues {
+	issues := make([]Issue, min(len(r.Issues), maxEntries)) // at most the first maxEntries are normalised: more never fit
+	for i, is := range r.Issues[:len(issues)] {
 		issues[i] = Issue{Resource: field(is.Resource), Stage: is.Stage, Code: field(is.Code), Message: BoundedText(is.Message)}
 	}
 	w.Issues = issues
-	if out := w.mustEncode(); len(issues) <= maxEntries && len(out) <= MaxRequest {
+	if out := w.mustEncode(); len(r.Issues) <= maxEntries && len(out) <= MaxRequest {
 		return out, nil
 	}
 	// the first n issues and the count of the rest: the request grows with n, so the largest n that fits is found by bisection
 	with := func(n int) []byte {
-		w.Issues = append(slices.Clip(issues[:n]), leftOut(len(issues)-n))
+		w.Issues = append(slices.Clip(issues[:n]), leftOut(len(r.Issues)-n))
 		return w.mustEncode()
 	}
 	if n := sort.Search(min(len(issues), maxEntries-1)+1, func(n int) bool { return len(with(n)) > MaxRequest }) - 1; n >= 0 {
@@ -217,8 +217,9 @@ func (w wireRequest) mustEncode() []byte {
 	return out
 }
 
-// BoundedText is text as the apply keeps it unchanged (pfb_core_update_v2_message() is the identity on it): each run of bytes
-// outside printable ASCII made one space, spaces trimmed at both ends, cut to 1024 bytes and trimmed again.
+// BoundedText is text as the apply keeps it unchanged (pfb_core_update_v2_message() is the identity on it). It is the ASCII-only
+// form: a run of non-ASCII bytes becomes one space, where the apply itself would keep valid UTF-8; what it guarantees is that
+// the apply leaves the result unchanged. Each run of bytes outside printable ASCII is made one space, spaces trimmed at both ends, cut to 1024 bytes and trimmed again.
 func BoundedText(s string) string {
 	b := make([]byte, 0, min(len(s), maxMessage+1))
 	run := false // within a run of other bytes, already one space
@@ -248,6 +249,8 @@ func field(s string) string {
 	return string(b)
 }
 
+// check refuses what the apply would refuse. An issue's stage is Core's own word and must be one of the contract's stages: an unknown stage is a programming error and
+// refuses the request, while issue text never does.
 func (r Request) check() error {
 	switch {
 	case !slices.Contains([]string{"scheduled", "manual", "apply", "retry"}, r.Trigger):

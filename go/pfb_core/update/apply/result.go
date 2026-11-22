@@ -36,7 +36,9 @@ type Failure struct {
 
 // ErrCut is ReadResult's error for a result over MaxResult: the Result it comes with holds the complete lines inside the first
 // MaxResult bytes, and what the apply reported after them is unknown. Those lines are settled as read; the ids they do not
-// name stay pending, as they do after any error, so a caller that treats ErrCut as any other error settles nothing wrong.
+// name stay pending, as they do after any error, so a caller that treats ErrCut as any other error settles nothing wrong. The
+// Result holds only the lines read: its flags (IPChanged, DNSBLChanged, ReloadLaunched) and ChangedAliases are lower bounds, so
+// the caller must assume a change and a possible reload.
 var ErrCut = errors.New("the apply's result is over 1 MiB: only its complete lines inside the first 1 MiB are read")
 
 // Exit is what the apply's exit status means for the Update.
@@ -96,21 +98,24 @@ type line struct {
 // ReadResult is what the apply wrote to its result file for req: nothing, or lines of version 2, each one JSON object of
 // printable ASCII within MaxLine, holding only ids and aliases of req, an applied id at the generation req gave (1 to 20
 // digits, leading zeros allowed: the apply echoes the request's string), each id once across all lines, and a failure message
-// without a control character or a line or paragraph separator (the apply writes each as a space). The lines add up: applied,
+// without a control character or a line or paragraph separator (the apply writes each as a space: the check covers the
+// characters that can break a log line and does not repeat every rule of the writer). The lines add up: applied,
 // removed, failed and aliases of every line, and a flag true when any line says so. Keys are matched as encoding/json matches
 // them (case-insensitively, the last duplicate winning), which the apply never writes. A result over MaxResult keeps the
-// complete lines inside the first MaxResult bytes, with ErrCut; a bad unterminated last line (one the apply's death cut
+// complete lines inside the first MaxResult bytes, with ErrCut (the flags and ChangedAliases of that Result are lower bounds:
+// assume a change and a possible reload), or, when those bytes hold no complete line, is refused whole like a line over MaxLine; a bad unterminated last line (one the apply's death cut
 // short) leaves the lines before it, with the error; any other error returns a zero Result, so nothing of it is settled.
 func ReadResult(f io.ReaderAt, req Request) (Result, error) {
-	b := make([]byte, MaxResult+1) // read once, never grown
-	n, err := io.ReadFull(io.NewSectionReader(f, 0, MaxResult+1), b)
-	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+	b, err := io.ReadAll(io.NewSectionReader(f, 0, MaxResult+1)) // grows with the file, never past the bound
+	if err != nil {
 		return Result{}, fmt.Errorf("the apply's result cannot be read: %w", err)
 	}
-	b = b[:n]
 	cut := len(b) > MaxResult
 	if cut {
 		b = b[:bytes.LastIndexByte(b[:MaxResult], '\n')+1]
+		if len(b) == 0 { // one line longer than the file bound: the writer broke the line bound, the file is not merely cut
+			return Result{}, fmt.Errorf("the apply's result line is refused: it is over %d bytes", MaxLine)
+		}
 	}
 	r := reader{generation: map[string]uint64{}, removable: map[string]bool{}, aliases: map[string]bool{}, named: map[string]bool{},
 		changed: map[string]bool{}}
