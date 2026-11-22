@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/CutShortWrite.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
@@ -55,7 +57,7 @@ final class SafeSearchCnameTest extends TestCase
 		// Per-test log + extdns sandbox for the resolve_target boundary assertions.
 		$this->tmp = sys_get_temp_dir() . '/pfb_ss_' . uniqid('', true);
 		mkdir($this->tmp, 0777, true);
-		foreach (['log', 'errlog', 'extdns', 'drill', 'timeout'] as $key) {
+		foreach (['log', 'errlog', 'extdns', 'drill', 'timeout', 'unbound_py_ss'] as $key) {
 			$this->hadPfbKeys[$key]   = array_key_exists($key, $GLOBALS['pfb'] ?? []);
 			$this->savedPfbKeys[$key] = $GLOBALS['pfb'][$key] ?? null;
 		}
@@ -204,6 +206,22 @@ final class SafeSearchCnameTest extends TestCase
 
 		$this->assertTrue($changed);
 		$this->assertSame(['duckduckgo.com,cname,safe.duckduckgo.com,203.0.113.7,2001:db8::7'], $out);
+	}
+
+	/** Issue #4201: a refreshed SafeSearch CSV whose write is cut short leaves the previous CSV whole for the gateway to load. */
+	public function test_refresh_whose_write_is_cut_short_keeps_the_previous_csv(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		$this->installLookupFixtures(FALSE);
+		$GLOBALS['pfb']['unbound_py_ss'] = $csv = "{$this->tmp}/pfb_py_ss.txt";
+		$previous = "duckduckgo.com,cname,safe.duckduckgo.com,9.9.9.9,2001:db8::old\n";
+		file_put_contents($csv, $previous);
+
+		CutShortWrite::run(16, static fn (): mixed => pfblockerng_ss_refresh());
+
+		$this->assertSame($previous, file_get_contents($csv), 'the stale baked IPs stay until a whole CSV replaces them');
 	}
 
 	public function test_refresh_no_change_when_target_resolves_to_same_ip(): void

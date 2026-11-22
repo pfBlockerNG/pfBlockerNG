@@ -2348,6 +2348,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 			// Create the decider's CSV list of SafeSearch hosts
 			if (!empty($safesearch_hosts)) {
+				$ss_rows = '';
 				foreach ($safesearch_hosts as $host => $data) {
 					$v4 = $v6 = '';
 					// CNAME redirect: bake the target's current A/AAAA as the #2
@@ -2355,18 +2356,14 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 					if (($data['A'] ?? '') === 'cname') {
 						list($v4, $v6) = pfb_ss_resolve_target($data['AAAA'] ?? '');
 					}
-					@file_put_contents('/var/unbound/pfb_py_ss.raw', pfb_ss_csv_rows($host, $data, $v4, $v6), FILE_APPEND);
+					$ss_rows .= pfb_ss_csv_rows($host, $data, $v4, $v6);
 				}
 
-				// Copy file if not exists or has been updated
-				if (!file_exists("{$pfb['unbound_py_ss']}") ||
-				    @md5_file("{$pfb['unbound_py_ss']}") !==
-				    @md5_file('/var/unbound/pfb_py_ss.raw')) {
-					@rename('/var/unbound/pfb_py_ss.raw', "{$pfb['unbound_py_ss']}");
+				// Publish the CSV whole when it changed (issue #4201)
+				if (@file_get_contents($pfb['unbound_py_ss']) !== $ss_rows && pfb_unbound_py_atomic_write($pfb['unbound_py_ss'], $ss_rows)) {
 					$safesearch_update = TRUE;
 					touch("{$pfb['dnsbl_file']}.reload");
 				}
-				unlink_if_exists('/var/unbound/pfb_py_ss.raw');
 			}
 			else {
 				// SafeSearch off (no hosts): drop the CSV. If one existed, flag a

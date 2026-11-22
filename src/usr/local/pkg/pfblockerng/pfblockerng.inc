@@ -10175,7 +10175,9 @@ function pfb_package_removal_recover(): array {
 			// The apply pass's own ini inputs, from the settings config.xml stores
 			pfb_dnsbl_ini_inputs();
 			pfb_metrics_client_apply();
-			@file_put_contents($pfb['unbound_py_conf'], pfb_unbound_python_ini('enabled'), LOCK_EX);
+			if (!pfb_unbound_py_atomic_write($pfb['unbound_py_conf'], pfb_unbound_python_ini('enabled'))) {
+				$failed[] = "the DNS proxy's DNSBL settings could not be written";
+			}
 		}
 
 		if ($why === NULL) {
@@ -17014,8 +17016,7 @@ function pfblockerng_ss_refresh() {
 
 	list($out, $changed) = pfb_ss_refresh_lines($lines, 'pfb_ss_resolve_target');
 
-	if ($changed) {
-		@file_put_contents($ss_file, implode("\n", $out) . "\n", LOCK_EX);
+	if ($changed && pfb_unbound_py_atomic_write($ss_file, implode("\n", $out) . "\n")) {
 		touch("{$pfb['dnsbl_file']}.reload");
 		pfb_logger("\n SafeSearch CNAME fallback IPs refreshed", 1);
 	}
@@ -17025,6 +17026,8 @@ function pfblockerng_ss_refresh() {
 function pfb_unbound_dnsbl($mode) {
 	global $g, $pfb;
 	pfb_global();
+	// issue #4201: this pass decides the patch afresh; one an earlier pass left before its rename is not published by this one
+	unlink_if_exists("{$pfb['dnsbldir']}/unbound.tmp");
 
 	// Reload config.xml to get any recent changes
 	config_read_file(FALSE, TRUE);
@@ -17174,10 +17177,8 @@ function pfb_unbound_dnsbl($mode) {
 		// Save changes to unbound.conf
 		if ($u_update) {
 			pfb_logger("\nDNS Resolver ( {$mode} ) unbound.conf modifications:\n{$u_msg}", 1);
-			@file_put_contents("{$pfb['dnsbldir']}/unbound.tmp", $conf, LOCK_EX);
-			@chown("{$pfb['dnsbldir']}/unbound.tmp", 'unbound');
-			@chgrp("{$pfb['dnsbldir']}/unbound.tmp", 'unbound');
-			return TRUE;
+			// issue #4201: unbound.tmp only ever exists whole, as unbound's: the pass renames it over unbound.conf
+			return pfb_unbound_py_atomic_write("{$pfb['dnsbldir']}/unbound.tmp", implode('', $conf));
 		}
 	}
 	else {
@@ -17216,7 +17217,7 @@ function pfb_unbound_python_whitelist($mode='') {
 	}
 
 	if ($mode == 'alerts') {
-		@file_put_contents($pfb['unbound_py_wh'], $dnsbl_whitelist, LOCK_EX);
+		pfb_unbound_py_atomic_write($pfb['unbound_py_wh'], $dnsbl_whitelist);
 	} else {
 		return $dnsbl_whitelist;
 	}
@@ -20830,7 +20831,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 		$pfb_py_whitelist_ex = @file_get_contents($pfb['unbound_py_wh']);
 		if ($dnsbl_whitelist !== $pfb_py_whitelist_ex) {
 			$pfbpython = TRUE;
-			@file_put_contents($pfb['unbound_py_wh'], $dnsbl_whitelist, LOCK_EX);
+			pfb_unbound_py_atomic_write($pfb['unbound_py_wh'], $dnsbl_whitelist);
 
 			// ADR-06: keep the manifest's config.user_whitelist (the source for the
 			// query-time whiteDB) in sync with a settings-textarea whitelist edit, so
@@ -20849,7 +20850,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 
 		if ($pfb_py_conf !== $pfb_py_conf_ex2) {
 			$pfbpython = TRUE;
-			@file_put_contents($pfb['unbound_py_conf'], $pfb_py_conf, LOCK_EX);
+			pfb_unbound_py_atomic_write($pfb['unbound_py_conf'], $pfb_py_conf);
 		}
 	}
 

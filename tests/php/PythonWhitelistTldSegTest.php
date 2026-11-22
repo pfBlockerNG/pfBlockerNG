@@ -5,6 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/CutShortWrite.php';
+
 /** Whitelist output and the Python TLD-segment bridge are runtime behaviour. */
 #[CoversFunction('pfb_unbound_python_whitelist')]
 #[CoversFunction('pfb_unbound_python')]
@@ -108,6 +110,21 @@ final class PythonWhitelistTldSegTest extends TestCase
 			"example.com,0\nwild.org,1\nstripme.net,0\n",
 			pfb_unbound_python_whitelist()
 		);
+	}
+
+	/** Issue #4201: the Alerts whitelist write that is cut short leaves the previous whitelist whole for the gateway to load. */
+	public function testAnAlertsWhitelistWriteCutShortKeepsThePreviousWhitelist(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		$previous = "kept.example.com,0\nalso-kept.example.org,1\n";
+		file_put_contents($GLOBALS['pfb']['unbound_py_wh'], $previous);
+		$this->setWhitelist("new.example.com\r\nanother.example.net\r\n");
+
+		CutShortWrite::run(16, static fn (): mixed => pfb_unbound_python_whitelist('alerts'));
+
+		$this->assertSame($previous, file_get_contents($GLOBALS['pfb']['unbound_py_wh']));
 	}
 
 	public function testLeadingDotWildcardEntryGetsSuffixOne(): void

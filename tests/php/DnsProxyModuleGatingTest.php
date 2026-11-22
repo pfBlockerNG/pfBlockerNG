@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
+require_once __DIR__ . '/CutShortWrite.php';
 require_once __DIR__ . '/ConfigXmlDiskTrait.php';
 
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -287,6 +288,22 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// ... and the module's own inputs are still produced, because the proxy loads the module from them.
 		$this->assertFileExists($GLOBALS['pfb']['unbound_py_conf']);
 		$this->assertFileExists($GLOBALS['pfb']['unbound_py_wh']);
+	}
+
+	/** Issue #4201: a module ini whose write is cut short leaves the previous ini whole for the gateway to load. */
+	public function testAModuleIniWriteCutShortKeepsThePreviousIni(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$previous = "; pfb_unbound.ini [ File created: an earlier pass ]\n[MAIN]\ndnsbl_ipv4 = 10.10.10.1\n";
+		file_put_contents($GLOBALS['pfb']['unbound_py_conf'], $previous);
+
+		CutShortWrite::run(16, static fn (): bool => pfb_unbound_python('enabled'));
+
+		$this->assertSame($previous, file_get_contents($GLOBALS['pfb']['unbound_py_conf']));
 	}
 
 	public function testProxyOnTakesUnboundsPythonSlotForTheObserverAsTheModuleDoes(): void
@@ -585,6 +602,33 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertStringContainsString('python-script: pfb_upstream_observer.py', $patched);
 		$this->assertStringNotContainsString('pfb_unbound.py', $patched);
 		$this->assertStringContainsString('interface: 127.0.0.1', $patched, 'unrelated lines survive');
+	}
+
+	/** Issue #4201: a patch of unbound.conf whose write is cut short leaves no unbound.tmp, which the pass would rename over unbound.conf. */
+	public function testAnUnboundConfPatchCutShortLeavesNoUnboundTmp(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		$this->seedMovedResolver();
+		$this->writeUnboundConf(self::CONF_WITH_MODULE);
+
+		CutShortWrite::run(16, static fn (): bool => pfb_unbound_dnsbl('enabled'));
+
+		$this->assertFileDoesNotExist("{$this->tmp}/unbound.tmp", 'no part of a patch may be left to publish');
+		$this->assertSame(self::CONF_WITH_MODULE, file_get_contents("{$this->tmp}/unbound.conf"));
+	}
+
+	/** Issue #4201: an unbound.tmp an earlier pass left (killed before its rename) is not published by a pass that patches nothing. */
+	public function testAnUnboundTmpAnEarlierPassLeftIsDroppedByAPassThatPatchesNothing(): void
+	{
+		$this->writeUnboundConf(self::CONF_WITHOUT_MODULE);
+		file_put_contents("{$this->tmp}/unbound.tmp", self::CONF_WITH_MODULE);
+
+		$changed = pfb_unbound_dnsbl('enabled');
+
+		$this->assertFalse($changed, 'this pass has nothing to patch');
+		$this->assertFileDoesNotExist("{$this->tmp}/unbound.tmp", 'the rename after the pass must find no stale patch');
 	}
 
 	public function testUnboundConfGainsNoModuleWithoutASnapshot(): void
