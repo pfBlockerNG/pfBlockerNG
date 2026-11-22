@@ -348,7 +348,24 @@ final class DnsProxyModuleGatingTest extends TestCase
 
 		$this->assertSame('false', $signalled, 'no restart for a whitelist that was not written');
 		$this->assertSame($stale, file_get_contents($GLOBALS['pfb']['unbound_py_wh']));
-		$this->assertSame($sources, @file_get_contents($GLOBALS['pfb']['unbound_py_sources']), 'the manifest whitelist is not synced to it');
+	}
+
+	/** Issue #4201: a whitelist that cannot be published is not synced into the manifest's whitelist either. */
+	public function testAWhitelistThatCannotBePublishedIsNotSyncedIntoTheManifest(): void
+	{
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		PfbConfig::writeSystem('dnsbl/whitelist', base64_encode("allowed.example.com\r\n"));
+		$this->assertTrue(pfb_unbound_python('enabled'), 'setup: the first pass writes the whitelist');
+		$sources = json_encode(['config' => ['user_whitelist' => ['allowed.example.com']]], JSON_THROW_ON_ERROR);
+		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], $sources);
+		PfbConfig::writeSystem('dnsbl/whitelist', base64_encode("allowed.example.com\r\nnewly-allowed.example.org\r\n"));
+		unlink($GLOBALS['pfb']['unbound_py_wh']);
+		$this->assertTrue(mkdir($GLOBALS['pfb']['unbound_py_wh']), 'setup: a folder in the whitelist\'s place makes its publication fail');
+
+		$this->assertFalse(pfb_unbound_python('enabled'), 'no restart for a whitelist that was not published');
+
+		$this->assertSame($sources, (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), 'the manifest whitelist was synced to it');
 	}
 
 	public function testProxyOnTakesUnboundsPythonSlotForTheObserverAsTheModuleDoes(): void
@@ -690,20 +707,21 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertNotSame(fileinode("{$this->tmp}/unbound.conf"), fileinode("{$this->tmp}/unbound.bk"));
 	}
 
-	/** Issue #4201: with no patch staged there is nothing to publish, and no backup is made. */
+	/** Issue #4201: with no patch staged there is nothing to publish, which is no failure, and no backup is made. */
 	public function testUnboundConfPublishWithoutAPatchChangesNothing(): void
 	{
 		file_put_contents("{$this->tmp}/unbound.conf", self::CONF_WITH_MODULE);
 		@unlink("{$this->tmp}/unbound.tmp");
 
-		$this->assertFalse(pfb_unbound_conf_publish($this->tmp));
+		$this->assertTrue(pfb_unbound_conf_publish($this->tmp));
 		$this->assertSame(self::CONF_WITH_MODULE, file_get_contents("{$this->tmp}/unbound.conf"));
 		$this->assertFileDoesNotExist("{$this->tmp}/unbound.bk");
 	}
 
 	/**
 	 * Issue #4201: a backup cut short by a full disk is never kept, and the patch then stays out: a rollback must never put a
-	 * truncated unbound.conf in place.
+	 * truncated unbound.conf in place. The patch is dropped, so the pass does not restart Unbound for a conf it did not
+	 * change; the next pass builds it again from the unchanged conf.
 	 */
 	public function testUnboundConfPublishWhoseBackupIsCutShortKeepsTheConf(): void
 	{
@@ -719,6 +737,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 
 		$this->assertSame(self::CONF_WITH_MODULE, file_get_contents("{$this->tmp}/unbound.conf"), 'the patch is not published without its backup');
 		$this->assertSame("previous backup\n", file_get_contents("{$this->tmp}/unbound.bk"), 'no truncated backup replaces the last whole one');
+		$this->assertFileDoesNotExist("{$this->tmp}/unbound.tmp", 'a patch left staged reads as a config change to restart for');
 	}
 
 	public function testUnboundConfGainsNoModuleWithoutASnapshot(): void

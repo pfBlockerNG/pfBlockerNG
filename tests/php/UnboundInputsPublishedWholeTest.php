@@ -18,11 +18,27 @@ final class UnboundInputsPublishedWholeTest extends TestCase
 		return (string) php_strip_whitespace(dirname(__DIR__, 2) . "/src/usr/local/pkg/pfblockerng/{$relative}");
 	}
 
+	private const IN_PLACE_WRITE = '/file_put_contents\s*\([^;]*?(?:unbound_py_(?:conf|wh|ss)\b|unbound\.tmp|\$ss_file\b)[^;]*;/';
+
+	/** The detector below finds each in-place write it exists to forbid. */
+	public function testTheInPlaceWriteDetectorFindsEachForbiddenWrite(): void
+	{
+		foreach ([
+			"@file_put_contents(\$pfb['unbound_py_conf'], \$pfb_py_conf, LOCK_EX);",
+			"@file_put_contents(\$pfb['unbound_py_wh'], \$dnsbl_whitelist, LOCK_EX);",
+			"file_put_contents(\$pfb['unbound_py_ss'], \$rows);",
+			"@file_put_contents(\$ss_file, \$csv, FILE_APPEND);",
+			"@file_put_contents(\"{\$pfb['dnsbldir']}/unbound.tmp\", \$conf, LOCK_EX);",
+		] as $write) {
+			$this->assertSame(1, preg_match(self::IN_PLACE_WRITE, $write), $write);
+		}
+	}
+
 	public function testNoWriterRewritesTheDecidersInputsOrUnboundTmpInPlace(): void
 	{
 		$found = [];
 		foreach (['pfblockerng.inc', 'pfblockerng_apply.inc'] as $file) {
-			preg_match_all('/file_put_contents\s*\([^;]*?(?:unbound_py_(?:conf|wh|ss)\b|unbound\.tmp|\$ss_file\b)[^;]*;/', self::source($file), $hits);
+			preg_match_all(self::IN_PLACE_WRITE, self::source($file), $hits);
 			foreach ($hits[0] as $hit) {
 				$found[] = "{$file}: {$hit}";
 			}
@@ -60,7 +76,8 @@ final class UnboundInputsPublishedWholeTest extends TestCase
 		$code = self::source('pfblockerng.inc');
 		$update = substr($code, (int) strpos($code, 'function pfb_update_unbound('));
 		$update = substr($update, 0, (int) strpos($update, 'function ', 1));
-		$this->assertStringContainsString("pfb_unbound_conf_publish(\$pfb['dnsbldir'])", $update);
+		$this->assertMatchesRegularExpression('/if\s*\(\s*!\s*pfb_unbound_conf_publish\(\$pfb\[\'dnsbldir\'\]\)\s*\)\s*\{\s*pfb_logger\(/', $update,
+			'a patch that did not go live is reported, not passed over');
 		$this->assertStringNotContainsString('unbound.bk"', $update, 'no backup of its own beside the helper');
 	}
 }

@@ -112,6 +112,22 @@ final class UnboundPyPublishTest extends TestCase
 		);
 	}
 
+	/**
+	 * tempnam() falls back to the system temporary folder when it cannot create the stage beside the target; a rename from
+	 * there would be a copy over the target. Such a stage is refused before anything is written to it.
+	 */
+	public function testAtomicWriteRefusesAStageOutsideTheTargetsFolder(): void
+	{
+		$written = [];
+		$write = static function ($stream, string $bytes) use (&$written) {
+			$written[] = $bytes;
+			return strlen($bytes);
+		};
+
+		$this->assertFalse(pfb_unbound_py_atomic_write("{$this->tmp}/nope/manifest.json", 'x', ['write' => $write]));
+		$this->assertSame([], $written, 'a stage outside the target\'s folder was written');
+	}
+
 	public function testStreamSyncRejectsShortWriteFlushAndFsyncFailures(): void
 	{
 		$fh = tmpfile();
