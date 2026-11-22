@@ -41,6 +41,8 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 		'dnsbl' => ["\$reuse_unset\t= \$pfbreuse == '';", "if (\$pfb_dnsbl_reuse_decision['verbatim']) {"],
 	];
 
+	/** @var array<string, mixed>|null the corpus, read once */
+	private static ?array $doc = NULL;
 	private string $root;
 	/** The main log of the last pass, for the failure message. */
 	private string $lastLog = '';
@@ -69,12 +71,13 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 	/** @return array<string, mixed> */
 	private static function corpus(): array
 	{
-		$doc = json_decode((string) file_get_contents(self::CORPUS), TRUE, 64, JSON_THROW_ON_ERROR);
-		FeedParseCorpusFile::keys($doc, ['schema', 'placeholder', 'cases'], 'scenarios.json');
-		if ($doc['schema'] !== 1 || !is_string($doc['placeholder']) || !is_array($doc['cases']) || $doc['cases'] === []) {
-			throw new RuntimeException('scenarios.json: schema 1, a placeholder string and a non-empty case list');
+		if (self::$doc === NULL) {
+			self::$doc = FeedParseCorpusFile::load(self::CORPUS, ['cases'], ['placeholder']);
+			if (!is_string(self::$doc['placeholder'])) {
+				throw new RuntimeException('scenarios.json: a placeholder string');
+			}
 		}
-		return $doc;
+		return self::$doc;
 	}
 
 	/** @return array<string, array{array<string, mixed>}> */
@@ -85,9 +88,9 @@ final class UpdateLoopFeedStageCorpusTest extends TestCase
 			$w = 'case ' . ($case['id'] ?? '?');
 			FeedParseCorpusFile::keys($case, [...self::CASE_KEYS, ...array_intersect(self::OPTIONAL, array_keys($case))], $w);
 			FeedParseCorpusFile::keys($case['expect'], self::EXPECT, "{$w} expect");
-			if (!in_array($case['kind'], ['ipv4', 'dnsbl'], TRUE) || !is_bool($case['custom']) || isset($out[$case['id']])
+			if (!in_array($case['kind'], ['ipv4', 'dnsbl'], TRUE) || !is_bool($case['custom'])
 			    || array_key_exists('old_expect', $case) !== array_key_exists('departure', $case)) {
-				throw new RuntimeException("{$w}: kind ipv4 or dnsbl, custom a bool, a unique id, old_expect only with a departure");
+				throw new RuntimeException("{$w}: kind ipv4 or dnsbl, custom a bool, old_expect only with a departure");
 			}
 			if (($case['state'] ?? 'hold') !== 'hold' || ($case['dropList'] ?? TRUE) !== TRUE
 			    || !in_array($case['unresolved'] ?? 'pre', ['pre', 'post'], TRUE)) {

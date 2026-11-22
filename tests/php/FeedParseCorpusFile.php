@@ -10,19 +10,21 @@ declare(strict_types=1);
 final class FeedParseCorpusFile
 {
 	/**
-	 * A corpus file: {"schema": 1} plus the non-empty case lists $lists, each case with a unique id and a non-empty description.
+	 * A corpus file: {"schema": 1} plus the non-empty case lists $lists, each case with a unique id and a non-empty description,
+	 * and the other top-level keys $extra, which the caller checks.
 	 *
 	 * @param list<string> $lists
+	 * @param list<string> $extra
 	 * @return array<string, mixed>
 	 */
-	public static function load(string $file, array $lists): array
+	public static function load(string $file, array $lists, array $extra = []): array
 	{
 		$json = file_get_contents($file);
 		if ($json === FALSE) {
 			throw new RuntimeException("corpus unreadable: {$file}");
 		}
 		$doc = json_decode($json, TRUE, 64, JSON_THROW_ON_ERROR);
-		self::keys($doc, array_merge(['schema'], $lists), basename($file));
+		self::keys($doc, array_merge(['schema'], $lists, $extra), basename($file));
 		if ($doc['schema'] !== 1) {
 			throw new RuntimeException(basename($file) . ': schema must be 1');
 		}

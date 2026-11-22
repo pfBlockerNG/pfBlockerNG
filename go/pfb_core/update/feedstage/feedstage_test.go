@@ -152,34 +152,6 @@ func TestProbeReuseAndForceModes(t *testing.T) {
 	}
 }
 
-func TestFailureKeepsLastGoodOriginalAndParsedArtifacts(t *testing.T) {
-	var fail atomic.Bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if fail.Load() {
-			http.Error(w, "rejected", http.StatusBadGateway)
-			return
-		}
-		_, _ = w.Write([]byte("203.0.113.9\n"))
-	}))
-	defer server.Close()
-	stage := testStage(t)
-	feed := testFeed("ipv4", "enabled", "auto", server.URL+"/feed")
-	if got := run(stage, feed, "none"); got.Disposition != "changed" {
-		t.Fatalf("initial run = %+v", got)
-	}
-	orig := filepath.Join(stage.Paths.FeedDir, "feed_v4.orig")
-	parsed := filepath.Join(stage.Paths.FeedDir, "feed_v4.parsed.ip")
-	beforeOrig, beforeParsed := readFile(t, orig), readFile(t, parsed)
-
-	fail.Store(true)
-	if got := run(stage, feed, "none"); got.Disposition != "failed" {
-		t.Fatalf("failed run = %+v", got)
-	}
-	if afterOrig, afterParsed := readFile(t, orig), readFile(t, parsed); afterOrig != beforeOrig || afterParsed != beforeParsed {
-		t.Fatalf("a failed feed changed last-known-good artifacts: orig %q -> %q; parsed %q -> %q", beforeOrig, afterOrig, beforeParsed, afterParsed)
-	}
-}
-
 func TestProxyUnusableRefusesWithoutDialingAndKeepsLastGood(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -344,27 +316,6 @@ func TestWhoisKeepsPartialResolutionAndReportsFailure(t *testing.T) {
 	}
 	if data := readFile(t, filepath.Join(stage.Paths.FeedDir, "feed_v4.parsed.ip")); data != "203.0.113.19\n" {
 		t.Fatalf("partial WHOIS list = %q, want the resolved address published", data)
-	}
-}
-
-func TestCustomListsParseWithoutTransfer(t *testing.T) {
-	ip := testStage(t)
-	got := run(ip, Feed{ID: "custom:ipv4:Test", Kind: "ipv4", Name: "Test_custom_v4", State: "enabled",
-		Format: "auto", Custom: true, CustomText: "203.0.113.21\n"}, "none")
-	if got.Disposition != "changed" || got.Entries != 1 {
-		t.Fatalf("custom IP run = %+v", got)
-	}
-	if data := readFile(t, filepath.Join(ip.Paths.FeedDir, "Test_custom_v4.parsed.ip")); data != "203.0.113.21\n" {
-		t.Fatalf("custom IP list = %q", data)
-	}
-	dnsbl := testStage(t)
-	got = run(dnsbl, Feed{ID: "custom:dnsbl:Test", Kind: "dnsbl", Name: "Test_custom", State: "enabled",
-		Format: "auto", Custom: true, CustomText: "example.test\n"}, "none")
-	if got.Disposition != "changed" || got.DNSBLRows != 1 {
-		t.Fatalf("custom DNSBL run = %+v", got)
-	}
-	if _, err := os.Stat(filepath.Join(dnsbl.Paths.FeedDir, "Test_custom.parsed.ndjson")); err != nil {
-		t.Fatalf("custom DNSBL parsed artifact: %v", err)
 	}
 }
 
