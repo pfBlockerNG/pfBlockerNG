@@ -727,7 +727,7 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
 
 ### Update command
 
-`--update-cmd PATH` names the program an independent worker runs for each admitted Update; the path comes only from the flag.
+`--update-cmd PATH` names the program an independent worker runs for each admitted Update; the path comes only from the flag. Core refuses to start (exit status 2, a line naming the flag) when it is not valid UTF-8 or holds a control character, with or without `--update-loop`.
 The worker receives this request on stdin and reports progress and results as follows:
 
 - **stdin:** one JSON object, `{"version": 1, "trigger": "scheduled|manual|apply|retry", "scope": "ip|dnsbl|both",
@@ -797,7 +797,7 @@ member. The rc script does not pass the flag.
 - **Paths.** Core copies its path flags into the worker's request as a `loop` object: `settingsCmd`
   (`--settings-backend-cmd`; absent means `settings.json` in `--state-dir`), `resourceDir`, `feedLocalDirs`, `scriptDirs`,
   `rsyncBin`, `hookDir`, `pythonWrapper` and `mainLog` (`--main-log PATH`, the package's main log, which needs
-  `--update-loop`). Settings never go there. A path must be absolute and clean and hold no control character; an empty
+  `--update-loop`). Settings never go there. A path must be absolute, clean, valid UTF-8 and free of control characters; an empty
   single path means none, an empty list item is refused. With the switch on, Core refuses to start (exit status 2, a line
   naming the flag) when a flag, `--settings-backend-cmd` among them, gives such a path. An Update whose loop holds one is
   refused at admission, before the schedule occurrence is committed or `update.log` is replaced, and the worker refuses a

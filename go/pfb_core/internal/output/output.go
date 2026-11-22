@@ -194,7 +194,7 @@ func sanitize(in *bufio.Reader, final bool, emit func(text string, atomic bool))
 	}
 }
 
-// OneLine is text sanitized as program output is, with TAB and LF escaped as well, cut to at most max bytes without
+// OneLine is text sanitized as program output is, with TAB, LF, U+2028 and U+2029 escaped as well, cut to at most max bytes without
 // splitting an escape or a character: one line for a log or a receipt.
 func OneLine(text string, max int) string {
 	var b strings.Builder
@@ -210,6 +210,9 @@ func OneLine(text string, max int) string {
 		return false
 	}
 	sanitize(bufio.NewReader(strings.NewReader(text)), true, func(s string, atomic bool) {
+		if s == "\u2028" || s == "\u2029" { // a viewer breaks the line at these; sanitize keeps them for program output
+			s = fmt.Sprintf(`\u{%X}`, []rune(s)[0])
+		}
 		for !full && s != "" {
 			i := strings.IndexAny(s, "\t\n")
 			if atomic || i < 0 {

@@ -20,10 +20,10 @@
 //	--update-loop       run each Update through the Core Updater loop (issue #4038) instead of the --update-cmd program; off
 //	                    when absent, and the rc script does not pass it yet. The worker reads the settings itself and is
 //	                    given the path flags (--settings-backend-cmd, --resource-dir, --feed-local-dir, --script-dir,
-//	                    --rsync-bin, --hook-dir, --python-wrapper, --main-log) in its private state. Needs --update-cmd
+//	                    --rsync-bin, --hook-dir, --python-wrapper, --main-log) in its request (update.log.request). Needs --update-cmd
 //	--main-log PATH     the absolute path of the package's main log, which the loop appends its lines to beside update.log.
 //	                    Needs --update-loop. With the switch on, every path the loop is given (--settings-backend-cmd too)
-//	                    must be absolute and clean and hold no control character
+//	                    must be absolute, clean, valid UTF-8 and hold no control character
 //	--maintenance-cmd PATH
 //	                    optional quarter-hour Outpost command, no arguments, in an independent maintenance worker; it uses
 //	                    maintenance.log and separate receipts/lock. Core reads the maintenance settings before each run and
@@ -90,6 +90,7 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/hooks"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
@@ -110,8 +111,8 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	socket := fl.String("socket", "", "the API's Unix socket (required)")
 	stateDir := fl.String("state-dir", "", "Core's storage directory (required)")
 	backendCmd := fl.String("settings-backend-cmd", "", "keep the settings in this program instead of the state directory's file")
-	updateCmd := fl.String("update-cmd", "", "run the scheduler and the Updates through this program")
-	var maintenanceCmd, metricsCmd, countersCmd string
+	var updateCmd, maintenanceCmd, metricsCmd, countersCmd string
+	fl.Func("update-cmd", "run the scheduler and the Updates through this program", programFlag(&updateCmd))
 	fl.Func("maintenance-cmd", "run independent quarter-hour maintenance through this program", programFlag(&maintenanceCmd))
 	fl.Func("metrics-cmd", "start this program at every minute boundary", programFlag(&metricsCmd))
 	fl.Func("counters-cmd", "start this program at the first minute boundary of each local day, with the cadences due", programFlag(&countersCmd))
@@ -186,7 +187,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	}
 	reason := ""
 	switch {
-	case *updateLoop && *updateCmd == "":
+	case *updateLoop && updateCmd == "":
 		reason = "--update-loop needs --update-cmd"
 	case mainLog != "" && !*updateLoop:
 		reason = "--main-log needs --update-loop"
@@ -252,7 +253,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		loop = &update.Loop{SettingsCmd: *backendCmd, ResourceDir: resourceDir, FeedLocalDirs: feed.LocalDirs, ScriptDirs: feed.ScriptDirs,
 			RsyncBin: feed.RsyncBin, HookDir: hookDir, PythonWrapper: pythonWrapper, MainLog: mainLog}
 	}
-	sched, gate := newUpdates(*updateCmd, maintenanceCmd, *zoneinfo, *stateDir, loop, store, lanes, logger.Printf) // nil without --update-cmd
+	sched, gate := newUpdates(updateCmd, maintenanceCmd, *zoneinfo, *stateDir, loop, store, lanes, logger.Printf) // nil without --update-cmd
 	methods := coreMethods(*stateDir, store, resourceStore, sched, gate)
 	srv, err := listen(options{socket: *socket, allowUID: allowUID, clientUIDs: clients, socketGroup: group, groupSet: groupSet,
 		methods: methods, logf: logger.Printf})
@@ -323,11 +324,15 @@ func absolutePath(dst *string) func(string) error {
 	}
 }
 
-// programFlag is the flag.Func setter of an optional program path (empty: off) that may hold no control character.
+// programFlag is the flag.Func setter of an optional program path (empty: off) that is valid UTF-8 and holds no control
+// character: the Update request is JSON, which would write an invalid byte as U+FFFD.
 func programFlag(dst *string) func(string) error {
 	return func(v string) error {
 		if i := strings.IndexFunc(v, unicode.IsControl); i >= 0 {
 			return fmt.Errorf("holds a control character at byte %d", i)
+		}
+		if !utf8.ValidString(v) {
+			return errors.New("is not valid UTF-8")
 		}
 		*dst = v
 		return nil

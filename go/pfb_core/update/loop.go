@@ -11,13 +11,14 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/output"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
 )
 
 // Loop selects the Core Updater loop (docs/specs/go-updater-pipeline.md section 3, issue #4038) for an Update and holds the
-// paths it needs, copied by the Core API from its flags into the worker's state. It holds no setting: the loop reads the
+// paths it needs, copied by the Core API from its flags into the worker's request (update.log.request), never its status. It holds no setting: the loop reads the
 // settings itself. A Command without one runs its program as before. Every path is absolute and clean, or empty.
 type Loop struct {
 	SettingsCmd   string   `json:"settingsCmd,omitempty"` // the settings adapter; empty: settings.json in the state directory
@@ -30,10 +31,11 @@ type Loop struct {
 	MainLog       string   `json:"mainLog,omitempty"` // the package's main log the loop's lines are appended to; empty: none
 }
 
-// CheckPath refuses a path the loop cannot be given: one that is not absolute and clean or holds a control character.
+// CheckPath refuses a path the loop cannot be given: one that is not absolute and clean, is not valid UTF-8 (the request is
+// JSON, which would write each invalid byte as U+FFFD and give the worker another path) or holds a control character.
 func CheckPath(p string) error {
-	if !filepath.IsAbs(p) || filepath.Clean(p) != p || hasControl(p) {
-		return errors.New("is not an absolute and clean path free of control characters")
+	if !filepath.IsAbs(p) || filepath.Clean(p) != p || !utf8.ValidString(p) || hasControl(p) {
+		return errors.New("is not an absolute and clean UTF-8 path free of control characters")
 	}
 	return nil
 }
@@ -134,7 +136,8 @@ func runLoop(dir string, state *workerState, log *os.File) error {
 	if state.Loop.MainLog != "" {
 		main, err := openMainLog(state.Loop.MainLog)
 		if err != nil {
-			fmt.Fprintf(log, "Core Updater: the main log cannot be used: %v\n", err)
+			err = fmt.Errorf("the main log cannot be used: %s", output.OneLine(err.Error(), maxFailure))
+			fmt.Fprintf(log, "Core Updater: %v\n", err)
 			return err
 		}
 		defer main.Close()
@@ -152,7 +155,7 @@ func runLoop(dir string, state *workerState, log *os.File) error {
 }
 
 // openMainLog opens path for appending, refusing a symbolic link, anything but a regular file and a file with another
-// hard link before writing. A missing log is created as pfb_logger's file_put_contents() creates it: 0666 less the umask.
+// hard link (a file unlinked since the open has none, and is taken) before writing. A missing log is created as pfb_logger's file_put_contents() creates it: 0666 less the umask.
 func openMainLog(path string) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o666)
 	if err != nil {
@@ -163,7 +166,7 @@ func openMainLog(path string) (*os.File, error) {
 		f.Close()
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
-	if st, ok := info.Sys().(*syscall.Stat_t); !ok || st.Nlink != 1 {
+	if st, ok := info.Sys().(*syscall.Stat_t); !ok || st.Nlink > 1 {
 		f.Close()
 		return nil, fmt.Errorf("%s has more than one hard link", path)
 	}
