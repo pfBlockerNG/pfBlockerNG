@@ -112,9 +112,14 @@ func TestTheUpdateLoopFlagsAreRefusedAsUsageErrorsWhenTheyCannotWork(t *testing.
 	}{
 		{"loop without update-cmd", "--update-cmd", []string{"--update-loop"}},
 		{"main log without the loop", "--update-loop", []string{"--update-cmd", "/bin/true", "--main-log", filepath.Join(dir, "main.log")}},
-		{"relative main log", "-main-log", append(slices.Clone(loop), "--main-log", "pfblockerng.log")},
+		{"relative main log", `invalid value "pfblockerng.log" for flag -main-log`, append(slices.Clone(loop), "--main-log", "pfblockerng.log")},
 		{"relative settings program", "--settings-backend-cmd", append(slices.Clone(loop), "--settings-backend-cmd", "adapter.sh")},
 		{"unclean settings program", "--settings-backend-cmd", append(slices.Clone(loop), "--settings-backend-cmd", dir+"/bin/../adapter.sh")},
+		{"main log that is not UTF-8", "--main-log", append(slices.Clone(loop), "--main-log", dir+"/\xe9.log")},
+		{"control character in the update program", "for flag -update-cmd", []string{"--update-cmd", dir + "/update\x01.sh"}},
+		{"update program that is not UTF-8", "for flag -update-cmd", []string{"--update-cmd", dir + "/update\xe9.sh"}},
+		{"control character in the update program with the loop", "for flag -update-cmd", []string{"--update-cmd", dir + "/update\n.sh", "--update-loop"}},
+		{"update program that is not UTF-8 with the loop", "for flag -update-cmd", []string{"--update-cmd", dir + "/update\xe9.sh", "--update-loop"}},
 		{"control character in the resource folder", "--resource-dir", append(slices.Clone(loop), "--resource-dir", dir+"/store\x01")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
