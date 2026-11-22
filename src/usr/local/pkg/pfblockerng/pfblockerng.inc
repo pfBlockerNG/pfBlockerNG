@@ -16173,7 +16173,7 @@ function pfb_alias_delta_batch_resolve(string $raw): int {
  * @param string   $mode         PfbAliasDeltaMode stored value ('auto'|'delta'|'replace').
  * @param int      $batch_size   Max entries per pfctl call (clamped to [64,4096]).
  * @param bool     $force_replace Force -T replace regardless of mode (boot/enable-disable path).
- * @return bool TRUE = delta path taken; FALSE = replace path taken.
+ * @return bool TRUE = delta path taken (also when a replace forced by an open entry failed and the delta went out); FALSE = replace path taken.
  */
 function pfb_apply_alias_delta(
 	string $pfctl_bin,
@@ -16209,7 +16209,8 @@ function pfb_apply_alias_delta(
  * say, and logs why: a delta is computed against a mirror the table did not reach. When that replace fails and the run would
  * otherwise have applied a delta (not in mode 'replace', not on $force_replace, not on auto mode's own churn decision, and with
  * no negative count), the run logs so and applies its delta after it, as below, so a table whose replace keeps failing still
- * moves; the entry stays open and the result is delta TRUE, ok FALSE. Any other failed replace ends the run. A ledger that
+ * moves; the entry stays open and the result is delta TRUE, ok FALSE. That fallback applies only when the caller passes neither
+ * $force_replace nor mode 'replace': a table a caller replaces by force gets none. Any other failed replace ends the run. A ledger that
  * cannot be read or is corrupt reads as no open entry, as everywhere the ledger is read. On the delta and auto paths a
  * negative count (any of the four) is refused: nothing is sent; a replace uses no count and goes ahead, logging the four
  * counts. Then the decision is pfb_apply_alias_delta()'s, from counts: replace when
@@ -16226,8 +16227,9 @@ function pfb_apply_alias_delta(
  * sent a batch and then stopped on a bad line or ended on a wrong count opens it naming the reason, unless a pfctl call or a
  * batch of the run failed: then the entry keeps naming that failure, and the reason is only logged. An exception after a
  * batch went out (from the member source, the batch file's name or the ledger) escapes with its own type, after opening the
- * entry when no failure of the run had. A run refused before anything was sent leaves the ledger alone, so its caller must not
- * treat ok FALSE as applied: it keeps its cursor and asks for a replace on its next run, since no entry forces one. A final
+ * entry when no failure of the run had. A run refused before anything was sent leaves the ledger alone: no entry is written, so
+ * its caller must not treat the run as applied. Whether it then replaces or retries the delta is its choice, and a table it
+ * replaces by force gets no fallback to a delta. A final
  * line without a newline is accepted; that a file is complete is pfb_outpost_part_check()'s and the digest's job, not this
  * function's.
  *
@@ -16354,7 +16356,6 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 			return ['delta' => FALSE, 'ok' => !$op['failed']];
 		}
 		// a replace that keeps failing (pf's table-entries limit) must not freeze the table: its delta still goes out
-		pfb_logger(" Updating [ {$table} ]: the replace failed, so the delta goes out and the ip/{$table}/apply ledger entry stays open\n", 1);
 		$failed = TRUE;
 	}
 
@@ -16370,9 +16371,14 @@ function pfb_apply_alias_delta_members(string $pfctl_bin, string $table, string 
 	if ($sides === NULL) {
 		return ['delta' => TRUE, 'ok' => FALSE];
 	}
+	if ($failed) {
+		// only the forced replace's failure sets $failed here, and only now is a delta really sent
+		pfb_logger(" Updating [ {$table} ]: the replace failed, so the delta goes out and the ip/{$table}/apply ledger entry stays open\n", 1);
+	}
 
 	$tmpdir = $tmpdir === '' ? sys_get_temp_dir() : $tmpdir;
 	// a batch never closes the entry, only a replace does: the table may be behind its mirror from an earlier run
+	// set before pfb_pfctl_table_op() is entered, so a throw before pfctl runs counts too: this errs towards opening the entry
 	$pushed = FALSE;
 	$push   = static function (string $op, array $chunk) use ($table, $pfctl_bin, $tmpdir, &$pushed, &$failed): void {
 		global $pfb;
