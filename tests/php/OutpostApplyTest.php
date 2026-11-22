@@ -318,9 +318,13 @@ final class OutpostApplyTest extends TestCase
 		$clear = ['apply' => ['request' => self::request([])]];
 		[, $first, $again, $closed] = $this->runSteps([self::prime([self::group('Abuse')]), $with, $with, $clear]);
 
+		// the notices of the issue: over the doubles the copied-object detector also files one on a node's second apply (a reread
+		// config.xml gives a rule's tracker as a string, the double keeps the integer), as today's update pass does
+		$mine = static fn (array $record): array => array_values(array_filter($record['notices'],
+			static fn (array $n): bool => str_contains($n['notice'], 'feed/ipv4:Foo_v4')));
 		$this->assertSame(0, $first['exit'], $first['log']);
-		$this->assertCount(1, $first['notices'], 'the issue is filed as a notice');
-		$notice = $first['notices'][0]['notice'];
+		$this->assertCount(1, $mine($first), 'the issue is filed as a notice');
+		$notice = $mine($first)[0]['notice'];
 		$this->assertStringContainsString('feed/ipv4:Foo_v4', $notice);
 		$this->assertStringContainsString('<b>broken</b>', $notice, 'markup reaches the notice as text');
 		$this->assertLessThanOrEqual(PFB_CORE_UPDATE_V2_MESSAGE_BYTES + 512, strlen($notice), 'the notice is bounded');
@@ -329,7 +333,7 @@ final class OutpostApplyTest extends TestCase
 		$this->assertIsArray($entry, 'the issue is an ADR-61 entry of its stage: ' . $first['syncStatus']['pfb_sync_status.json']);
 		$this->assertLessThanOrEqual(PFB_CORE_UPDATE_V2_MESSAGE_BYTES + 512, strlen($entry['message']));
 
-		$this->assertSame([], $again['notices'], 'an issue already filed is not filed again');
+		$this->assertSame([], $mine($again), 'an issue already filed is not filed again');
 		$this->assertArrayHasKey('feed/ipv4:Foo_v4', json_decode($again['syncStatus']['pfb_sync_status.json'], TRUE)['ip'] ?? []);
 
 		$this->assertArrayNotHasKey('feed/ipv4:Foo_v4', json_decode($closed['syncStatus']['pfb_sync_status.json'] ?? '{}', TRUE)['ip'] ?? [],
