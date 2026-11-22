@@ -4903,7 +4903,8 @@ function pfb_outpost_parts_fetch(string $id, string $generation, array $parts, ?
  * cannot open for the merge, is discarded and the full body fetched instead; a part with a line that is not a member (even
  * beside one out of order), or that the transport ends part way, or that this host cannot write, is not, nor is a new mirror
  * this host cannot stage. Every part is checked by pfb_outpost_part_check() and the new mirror verified and synced before it replaces the old one by
- * rename: any failure leaves the old mirror in place.
+ * rename: any failure leaves the old mirror in place. With $stage the rename is the caller's: the new mirror is left synced
+ * beside the old one, at `staged`, for the caller to check and then rename over the mirror, or remove.
  *
  * Any failure of the transfer itself, a reply curl cannot frame included, counts as unreachable and does not fall back.
  *
@@ -4919,12 +4920,14 @@ function pfb_outpost_parts_fetch(string $id, string $generation, array $parts, ?
  * @param string $workdir a directory of this resource's own for the delta parts
  * @return array{ok: bool, kind: ?string, failure: ?string, code: ?string, error: ?string, fellBack: bool, generation: ?string,
  *   digest: ?string, entries: ?int, metadata: ?array<mixed>, addEntries: int, removeEntries: int, add: ?string, remove: ?string,
- *   mirror: string} kind unchanged, delta, full, or not_found (the resource left the configuration)
+ *   mirror: string, staged: ?string} kind unchanged, delta, full, or not_found (the resource left the configuration); staged the
+ *   new mirror a $stage fetch of a delta or a full body left beside the old one
  */
-function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $workdir, ?string $socket = NULL, int $timeout = 30): array {
+function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $workdir, ?string $socket = NULL, int $timeout = 30,
+    bool $stage = FALSE): array {
 	$empty = ['ok' => FALSE, 'kind' => NULL, 'failure' => NULL, 'code' => NULL, 'error' => NULL, 'fellBack' => FALSE,
 		'generation' => NULL, 'digest' => NULL, 'entries' => NULL, 'metadata' => NULL, 'addEntries' => 0, 'removeEntries' => 0,
-		'add' => NULL, 'remove' => NULL, 'mirror' => $mirror];
+		'add' => NULL, 'remove' => NULL, 'mirror' => $mirror, 'staged' => NULL];
 	$result = $empty;
 	$fail = static function (string $failure, string $error, ?string $code = NULL) use (&$result, $mirror): array {
 		return ['failure' => $failure, 'error' => "{$mirror}: {$error}", 'code' => $code] + $result;
@@ -5010,11 +5013,11 @@ function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $w
 		if ($fh !== FALSE) {
 			fclose($fh);
 		}
-		if (!$synced || !@rename($staged, $mirror)) {
+		if (!$synced || (!$stage && !@rename($staged, $mirror))) {
 			$discard();
 			return $fail('mirror', 'the new mirror cannot replace the old one');
 		}
-		return ['ok' => TRUE, 'kind' => $kind] + ($kind === 'full' ? [] : ['addEntries' => $item['addEntries'],
+		return ['ok' => TRUE, 'kind' => $kind, 'staged' => $stage ? $staged : NULL] + ($kind === 'full' ? [] : ['addEntries' => $item['addEntries'],
 			'removeEntries' => $item['removeEntries'], 'add' => $add, 'remove' => $remove]) + $result;
 	}
 }

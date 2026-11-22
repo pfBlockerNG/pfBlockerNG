@@ -5534,25 +5534,17 @@ function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $p
 	return ['changedAliases' => $pfb_alias_lists, 'ipUnlockForced' => $pfb_ip_unlock_forced, 'reloadUnknown' => $pfb_filter_reload_unknown];
 }
 
-/** Settles what a real Update pass applied; $pfb_pending_seen is the pending mark it saw at its start. */
+/**
+ * Settles what a real Update pass applied; $pfb_pending_seen is the pending mark it saw at its start. $pfb_failure, when given,
+ * is why the apply did not complete (the version 2 apply's failed resources), recorded as the apply record's reason.
+ */
 function pfb_apply_settle(bool $pfb_accounting_pending, bool $pfb_filter_reload_unknown, ?string $pfb_pending_seen,
-    int $pfb_pass_started): void {
+    int $pfb_pass_started, ?string $pfb_failure = NULL): void {
 	global $pfb;
 
 	if (!$pfb['save']) {
-		$pending_cleared = !$pfb_accounting_pending && (
-			!pfb_due_ledger_is_pending('cron', $pfb['dbdir'])
-			|| pfb_due_ledger_update_entry(
-				'cron',
-				static function (?array $entry): array {
-					$entry ??= ['last_run' => 0, 'next_due' => 0, 'jitter' => 0];
-					unset($entry['pending_apply']);
-					return $entry;
-				},
-				$pfb['dbdir']
-			)
-		);
-		if ($pending_cleared && !$pfb_filter_reload_unknown) {
+		$pending_cleared = !$pfb_accounting_pending && pfb_core_update_clear_pending_apply();
+		if ($pending_cleared && !$pfb_filter_reload_unknown && $pfb_failure === NULL) {
 			pfb_settle_pending_changes($pfb_pending_seen);
 			pfb_sync_apply_record('applied', $pfb['filter_configure'] ? 'update pass completed; firewall reload started' : 'update pass completed', $pfb['dbdir'], FALSE, $pfb_pass_started);
 			if (pfb_sync_receive_state_read($pfb['dbdir'])['accepted_digest'] !== NULL) {	// only a node holding an accepted policy reports what of it cannot take effect
@@ -5560,7 +5552,7 @@ function pfb_apply_settle(bool $pfb_accounting_pending, bool $pfb_filter_reload_
 			}
 		} else {
 			$reason = $pfb_accounting_pending ? 'DNSBL accounting or reload not confirmed; pending changes kept'
-				: 'firewall reload not confirmed; pending changes kept';
+				: ($pfb_filter_reload_unknown || $pfb_failure === NULL ? 'firewall reload not confirmed; pending changes kept' : $pfb_failure);
 			pfb_sync_apply_record('failed', $reason, $pfb['dbdir'], FALSE, $pfb_pass_started);
 		}
 	}

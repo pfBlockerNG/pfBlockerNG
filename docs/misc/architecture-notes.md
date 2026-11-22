@@ -2346,30 +2346,41 @@ sits (owner decision on #4037, 2026-11-22: `RuntimeGatewayReadsStructureTest`, `
 (`pfblockerng_extra.inc`); any other version takes the version 1 path. Nothing sends version 2 until the Core Updater
 (#4038) and the cutover (#3977). The apply:
 
-1. validates the request whole (exit 2, no result) and takes the feed-pass lock as the apply lock (held: exit 75);
-   with `pendingOutsideWindow` it marks the changes pending, sets the due-ledger flag, writes `{"version":2}` and
-   exits 0; the `apply` trigger clears the due-ledger flag and restores it, with the pending mark, when it fails;
-2. runs `pfb_apply_enter()` (DNS configuration lock unavailable: exit 75), files Core's issues
-   (`pfb_outpost_issues()`: an ADR-61 entry per issue, facility `dnsbl` for a DNSBL feed or resource, item its
-   resource, and a notice the first time; `pfb_outpost_issues.json` in the database folder remembers what it opened, so
-   a later request without the issue closes it), then `pfb_apply_settings()`;
-3. unless the scope is `ip`: writes the statistics rows of `request.dnsbl` (`dnsbl_save_stats()`), runs
-   `pfb_apply_dns()` and `pfb_apply_dns_proxy()`;
-4. unless the scope is `dnsbl`: walks config.xml for the aliases it expects (`pfb_outpost_expected_aliases()`:
+1. validates the request whole (exit 2, no result); a `scheduled` request while the cron-disable sentinel exists exits 75;
+   takes the scheduler dispatcher lock and the feed-pass lock as the apply lock, as the update pass does (held: exit 75);
+   with `pendingOutsideWindow`, or while a GeoIP generation swap is in progress, it marks the changes pending, sets the
+   due-ledger flag, writes `{"version":2}` and exits 0 (the GeoIP case exits 1 for a `manual` request, as version 1's
+   pass does); the `apply` trigger clears the due-ledger flag and restores it, with the pending mark, when the apply does
+   not succeed, an apply that throws included;
+2. runs `pfb_apply_enter()` (DNS configuration lock unavailable: exit 75, every lock it took released), then
+   `pfb_apply_settings()`;
+3. unless the scope is `dnsbl`: walks config.xml for the aliases it expects (`pfb_outpost_expected_aliases()`:
    continents, IP groups with DNSBLIP, aggregates, with their alias objects and rule templates as the pass builds
    them). A resource whose alias is not expected, whose action or direction disagrees with config.xml (decision 2), or
-   whose entries exceed `system/maximumtableentries` fails with stage `apply` and is not fetched. The others are fetched
-   one by one (`pfb_outpost_fetch()`); an unreachable or unavailable Core API exits 75. `not_found` and `removed`
-   kill the table, unlink the mirror and drop the cursor. A `geo-catalog` body renders the GeoIP pages;
-5. registers every expected alias with a mirror and runs `pfb_apply_objects()` with a push that sends each changed
+   whose request entries exceed `system/maximumtableentries` fails with stage `apply` and is not fetched. The others
+   are fetched one by one (`pfb_outpost_fetch()`), each new mirror staged beside the old one: a body whose entries
+   exceed the limit fails and its staged file is removed, and an unreachable or unavailable Core API removes every staged
+   file and exits 75 before anything changed. A `removed` id, or a `not_found` reply, for an alias config.xml still
+   holds fails with stage `apply` ("settings changed since the Update's snapshot") and keeps its table, mirror and
+   cursor; one for an alias it no longer holds is a removal. Once every resource is fetched, the staged mirrors replace
+   the old ones by rename;
+4. files Core's issues (`pfb_outpost_issues()`: an ADR-61 entry per issue, facility `dnsbl` for a DNSBL feed or
+   resource, item its resource, stage `core` for Core's stage `apply` so that the tick's reconciler does not act on
+   it, and a notice the first time; `pfb_outpost_issues.json` in the database folder remembers what it opened, so a
+   later request without the issue closes it); unless the scope is `ip`: writes the statistics rows of
+   `request.dnsbl` (`dnsbl_save_stats()`), runs `pfb_apply_dns()`, `pfb_update_unbound()` when that changed the
+   Resolver's configuration, and `pfb_apply_dns_proxy()`;
+5. removes what left the configuration (the mirror, then `pfctl -T kill`, then the cursor: a kill that fails keeps its
+   ledger entry, and the tick's retry kills a table that has no mirror); a `geo-catalog` body renders the GeoIP pages;
+   registers every expected alias with a mirror and runs `pfb_apply_objects()` with a push that sends each changed
    table through `pfb_apply_alias_delta_files()`: a replace from the mirror for a `full` reply, no cursor, an empty
-   kernel table or an IP unlock, else the mode and churn decision of ADR-40. A table whose `ip/<alias>/apply` ledger
-   entry is open afterwards failed; the others advance their cursor;
+   kernel table or an IP unlock, else the mode and churn decision of ADR-40. A table whose push failed, or whose
+   `ip/<alias>/apply` ledger entry is open afterwards, failed; the others advance their cursor;
 6. writes one result line: `applied` (the resources at the requested generation, `unchanged` ones included, and none
    when a needed filter reload was not launched), `removed`, `changedAliases` (the tables pushed, of the request's
    aliases), `ipChanged`, `dnsblChanged` (DNS steps run), `reloadLaunched` (a reload was needed) and `failed`; settles
-   the request's `pendingToken` unless something failed; exits 0, or 1 when a resource failed, the reload was not
-   launched or the DNSBL statistics could not be written.
+   the request's `pendingToken` unless something failed (a failed resource is the apply record's reason); exits 0, or 1
+   when a resource failed, the reload was not launched or the DNSBL statistics could not be written.
 
 Not yet: the re-lock of a DNSBL temporary unlock (#4036 question 3), the empty-set placeholder in a mirror, pruning
 DNSBL statistics rows of removed groups, and `--resource-dir` in the rc script. Behaviour:
