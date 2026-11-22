@@ -28,7 +28,10 @@ const (
 const parsedSource = ".parsed.src"
 
 // retired are what a failed transfer still publishes: the validators it drops and the probe body it consumes (#2820).
-var retired = []string{".orig.etag", ".orig.lastmod", ".orig.size", ".probe", ".probe.etag", ".probe.lastmod", ".probe.size"}
+var retired = slices.Concat([]string{".orig.etag", ".orig.lastmod", ".orig.size"}, probeFiles)
+
+// probeFiles are the change probe's body and its validators, which an ingest consumes.
+var probeFiles = []string{".probe", ".probe.etag", ".probe.lastmod", ".probe.size"}
 
 // seeded are the suffixes of a feed's published files that a run reads, replaces or removes: each is hard-linked into the
 // run folder before the run starts, and every writer a run reaches replaces such a file by a rename or removes it, never

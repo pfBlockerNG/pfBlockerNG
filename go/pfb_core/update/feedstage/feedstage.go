@@ -197,7 +197,12 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 	var retire []string
 	retireReason, retireStage := "", ""
 	clearFail := false // the run's download succeeded, which removes the fail marker as today (apply.inc:2859, :4276)
+	returned := false  // Run is returning normally; a panic unwinding leaves it false
 	defer func() {
+		if !returned {
+			_ = discard(runDir) // an abnormal unwind publishes nothing: what stays is Recover's
+			return
+		}
 		partialWhois := result.Disposition == "failed" && result.Stage == "whois" && result.SourceChanged
 		suffixes, removable := retire, seeded
 		if result.Disposition != "failed" || partialWhois {
@@ -234,6 +239,13 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		default:
 			result = failedFeed(f.ID, "publish", "parsed_publish_failed")
 		}
+	}()
+	// Registered last, so it runs first: it sees a panic, which it passes on, and marks a normal return otherwise.
+	defer func() {
+		if r := recover(); r != nil {
+			panic(r)
+		}
+		returned = true
 	}()
 
 	sourceChanged, whoisPartial := false, false
@@ -302,6 +314,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			if force != "none" && clearForcedState(feed, force) != nil {
 				return failedFeed(f.ID, "fetch", "feed_force_prepare_failed")
 			}
+			probeKept := regularExists(feedPath(feed, ".probe"))
 			ingested := s.Fetcher.Ingest(ctx, feed, request)
 			if !ingested.OK {
 				// Force both drops the digests before the transfer, whatever its outcome (pfb_force_clear_validators()).
@@ -330,6 +343,10 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 				return failedFeed(f.ID, "fetch", reason)
 			}
 			sourceChanged, clearFail = ingested.Status != httpStatusNotModified, true
+			if probeKept {
+				// The ingest consumed the live probe body, which a failure later in the run must not leave to be staged again.
+				retire = slices.Clone(probeFiles)
+			}
 		}
 	}
 	if ctx.Err() != nil {
@@ -564,7 +581,7 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input 
 	// folder then drops: the script's output never becomes the download. The configured name decides: RunIP resolves the
 	// script again and runs one installed since.
 	ran := feedparse.PostScriptResult{Skipped: true}
-	if f.PostScript != "" {
+	if f.PostScript != "" && f.PostScript != "0" { // "0" is no name: a name that resolves to no file still gets the copy
 		if copied, err := postCopy(feed); err != nil {
 			s.sinks().Line(true, "\n[ %s ] post-script '%s' could not stage its input; skipping\n", f.Name, f.PostScript)
 			ran.Skipped, ran.Reason = false, feedparse.PreScriptStage
@@ -579,6 +596,9 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input 
 		return failedFeed(f.ID, "post-script", "cancelled")
 	}
 	result.PostScriptFailed = ran.Reason != ""
+	if !ran.Skipped {
+		source = "" // a script shaped the list, one that RunIP found though the first lookup did not: nothing is reused
+	}
 	if !ran.Skipped && ran.Reason == "" {
 		step("post-script")
 	}
@@ -624,6 +644,9 @@ func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, inp
 		return failedFeed(f.ID, "post-script", "cancelled")
 	}
 	result.PostScriptFailed = ran.Reason != ""
+	if !ran.Skipped {
+		source = "" // as for an IP feed: a script that took part leaves no reuse record
+	}
 	result.Disposition, result.Stage = disposition, "parse"
 	result.DNSBLRows, result.IPv4Count, result.IPv6Count = parsed.Rows, len(parsed.IP4), len(parsed.IP6)
 	result.UpdateIP, result.SchemeSkipped, result.HPHostsStop = parsed.UpdateIP, parsed.SchemeSkipped, parsed.Stopped
