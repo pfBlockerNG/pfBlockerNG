@@ -63,7 +63,9 @@ type Feed struct {
 	WhoisConvert    bool   // a custom list of domains and AS numbers to resolve
 	SuppressionCIDR int    // the group's IPv4 Suppression CIDR Limit, over Config.FloorV4 when set
 	// SkipFeedPassed: the feed's failures today are past the skipfeed threshold, so a failed transfer removes the fail marker
-	// instead of creating it (pfb_download_failure()). The caller counts them, as today from the error log.
+	// instead of creating it (pfb_download_failure()). The caller computes it from today's failure count: the skipfeed
+	// setting against $pfb['failed'][$header], as pfb_download_failure() does. That caller (sub-slice 9d or 9i) is not
+	// written yet, so nothing sets it outside the tests.
 	SkipFeedPassed bool
 }
 
@@ -265,7 +267,8 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 				list = f.CustomText
 			}
 			whois := s.Fetcher.Whois(ctx, feed, feedfetch.WhoisRequest{List: list, IPv6: f.Kind == "ipv6"})
-			retire = []string{".fail"} // the marker a failed entry left stands whatever the run does next, as today
+			// A custom WhoisConvert list's marker, left by a failed entry, stands whatever the run does next, as today.
+			retire, retireReason = []string{".fail"}, "fail_marker_publish_failed"
 			// Today's whois and asn formats go through pfb_download(), which succeeds whatever the entries did, and its
 			// caller then unlinks the marker (apply.inc:4276); a custom list's whoisconvert never does.
 			if !f.Custom && ctx.Err() == nil && whois.Reason == "" {
@@ -299,13 +302,21 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			if !ingested.OK {
 				// Force both drops the digests before the transfer, whatever its outcome (pfb_force_clear_validators()).
 				retire, retireReason = forcedSuffixes(force), "validators_retire_failed"
-				// A failed transfer touches the marker, or past the skipfeed threshold removes it (pfb_download_failure()).
-				if f.SkipFeedPassed {
+				// A failed transfer touches the marker, or past the skipfeed threshold removes it (pfb_download_failure()). A
+				// cancelled run did not fail the feed: it neither creates nor removes the marker, as the whois branch.
+				switch {
+				case ctx.Err() != nil:
+				case f.SkipFeedPassed:
 					clearFail = true
-				} else {
-					if file, err := create(feedPath(feed, ".fail")); err == nil {
-						_ = file.Close()
+				default:
+					file, err := create(feedPath(feed, ".fail"))
+					if err != nil {
+						if s.Log != nil {
+							fmt.Fprintf(s.Log, "feed %s: fail marker could not be created: %v\n", f.ID, err)
+						}
+						break
 					}
+					_ = file.Close()
 					retire = append(slices.Clone(retire), ".fail")
 				}
 				return failedFeed(f.ID, "fetch", s.safeReason(ingested.Reason, "feed_fetch_failed", f))
