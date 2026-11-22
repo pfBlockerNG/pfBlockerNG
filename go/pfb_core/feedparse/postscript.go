@@ -38,10 +38,11 @@ type PostScriptResult struct {
 }
 
 // restorePoint is one RunIP run's restore point; done once it is back over the download or gone, so that no later Restore
-// acts on what another run staged at that name.
+// acts on what another run staged at that name. err is why a restore point that is gone never came back.
 type restorePoint struct {
 	orig, path string
 	done       bool
+	err        error
 }
 
 // RunDNSBL is the DNSBL post-script: orig is copied to staged, the script runs on staged with the argument dnsbl, and
@@ -90,24 +91,36 @@ func (p PostScript) RunIP(ctx context.Context, orig, restore, vtype string) Post
 	return r
 }
 
-// Restore renames RunIP's restore point back over the download; it does nothing for another result, and nothing once the
-// restore point is back or gone, on this result or any copy of it. A restore point the script replaced with anything but a
-// regular file is removed instead, so that no symlink or FIFO takes the download's place. A rename that fails (the script
-// left a folder at orig) leaves both as they are, and a later Restore tries again.
-func (r PostScriptResult) Restore() {
+// Restore renames RunIP's restore point back over the download; it does nothing for another result, and nothing more once
+// the restore point is back or gone, on this result or any copy of it. A restore point the script replaced with anything but
+// a regular file is removed instead, so that no symlink or FIFO takes the download's place. A rename that fails (the script
+// left a folder at orig) leaves both as they are, and a later Restore tries again. The error says the download is not back:
+// the rename failed, or the restore point is gone or was no regular file, so orig may hold the script's output.
+func (r PostScriptResult) Restore() error {
 	rp := r.restore
-	if rp == nil || rp.done {
-		return
+	if rp == nil {
+		return nil
+	}
+	if rp.done {
+		return rp.err
 	}
 	info, err := os.Lstat(rp.path)
 	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		rp.done, rp.err = true, errors.New("the post-script's restore point is gone")
+		return rp.err
 	case err != nil:
-		rp.done = errors.Is(err, fs.ErrNotExist)
+		return err
 	case info.Mode().IsRegular():
-		rp.done = os.Rename(rp.path, rp.orig) == nil
-	default:
-		rp.done = os.Remove(rp.path) == nil
+		err = os.Rename(rp.path, rp.orig)
+		rp.done = err == nil
+		return err
 	}
+	if err = os.Remove(rp.path); err != nil {
+		return err
+	}
+	rp.done, rp.err = true, errors.New("the post-script's restore point is no regular file")
+	return rp.err
 }
 
 // vet is ResolveListScript on Name and Dirs, run at every run; a set name that fails is logged.

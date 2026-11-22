@@ -51,7 +51,9 @@ type Feed struct {
 	Name   string // the file stem in the feed folder: [A-Za-z0-9_]+
 	State  string // enabled, disabled, hold or flex
 	Format string // auto, regex, geoip, whois, asn or rsync; any other value is auto, as today
-	Source string // the URL; a geoip feed's country code; a whois or asn feed's list
+	// Source is the URL; a geoip feed's country code; a whois feed's list. An asn feed's is its AS number, "AS<digits>":
+	// anything after the first space (the description the Groups editor keeps, "AS64500 Example") is cut off, as today.
+	Source string
 
 	Username, Password    string     // the source's own credentials
 	BindAddress           netip.Addr // the source address of the transfer (the settings' bindAddress); the zero value is none
@@ -125,7 +127,9 @@ func failedFeed(id, stage, reason string) Result {
 	return Result{ID: id, Disposition: "failed", Stage: stage, Reason: reason}
 }
 
-// Run runs one feed with stage 6's verdict and the Update's force.
+// Run runs one feed with stage 6's verdict and the Update's force. Stage 6's change probe reads the files Run journals, the
+// validators among them: the caller runs Recover on the feed folder before stage 6 probes a feed in it, and stops the feed
+// when Recover fails, so that no probe reads what an unfinished run left.
 func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) {
 	result = Result{ID: f.ID}
 	// Today's per-feed blocks and pfb_download() compare the format with these names case-sensitively, and any other value,
@@ -154,7 +158,10 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 	}
 	feed := feedfetch.Feed{Dir: dir, Name: f.Name}
 	origPath := feedPath(feed, ".orig")
-	hasOrig := regularExists(origPath)
+	hasOrig, err := baselineExists(origPath)
+	if err != nil {
+		return failedFeed(f.ID, "fetch", "baseline_unavailable")
+	}
 	force := change.Force
 	if force == "parse" && !hasOrig {
 		force = "download"
@@ -187,7 +194,11 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		}
 		partialWhois := result.Disposition == "failed" && result.Stage == "whois" && result.SourceChanged
 		if result.Disposition == "failed" && !partialWhois {
-			if err := backup.rollback(); err != nil {
+			// A restore point that stays holds the run's download: rolled back now, the set would leave it to go over the
+			// baseline later. Recover (or the feed's next run) puts it back first, then rolls the set back.
+			if _, err := os.Lstat(feedPath(feed, restorePoint)); !errors.Is(err, fs.ErrNotExist) {
+				result = failedFeed(f.ID, "publish", "baseline_restore_failed")
+			} else if err := backup.rollback(); err != nil {
 				result = failedFeed(f.ID, "publish", "baseline_restore_failed")
 			}
 			step("restored")
@@ -199,9 +210,9 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		}
 	}()
 	// The IP post-script rewrites the download in place (feedparse.RunIP), and a 304 transfer leaves that file: its backup
-	// is a copy.
+	// is a copy. The configured name decides: RunIP resolves the script again and runs one installed since.
 	var copies []string
-	if f.Kind != "dnsbl" && post != "" {
+	if f.Kind != "dnsbl" && f.PostScript != "" {
 		copies = []string{origPath}
 	}
 
@@ -231,7 +242,9 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 					return failedFeed(f.ID, "fetch", "custom_source_unavailable")
 				}
 				// The digest describes the bytes of the last transfer, which the custom text replaced.
-				_ = removeIfExists(feedPath(feed, ".orig.xxhash128"))
+				if removeIfExists(feedPath(feed, ".orig.xxhash128")) != nil {
+					return failedFeed(f.ID, "fetch", "custom_source_unavailable")
+				}
 				sourceChanged = true
 			}
 		case f.WhoisConvert || f.Format == "whois" || f.Format == "asn":
@@ -239,7 +252,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			if backupErr != nil {
 				return failedFeed(f.ID, "whois", "baseline_backup_failed")
 			}
-			list := f.Source
+			list := s.listSource(f)
 			if f.Custom {
 				list = f.CustomText
 			}
@@ -270,7 +283,9 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			}
 			ingested := s.Fetcher.Ingest(ctx, feed, request)
 			if !ingested.OK {
-				backup.keepAbsent(validatorPaths(feed)...)
+				if backup.keepAbsent(validatorPaths(feed)...) != nil {
+					return failedFeed(f.ID, "fetch", "validators_retire_failed")
+				}
 				return failedFeed(f.ID, "fetch", s.safeReason(ingested.Reason, "feed_fetch_failed", f))
 			}
 			sourceChanged = ingested.Status != httpStatusNotModified
@@ -331,16 +346,38 @@ func (s *Stage) request(f Feed) (feedfetch.Request, string) {
 	case f.Format == "rsync" && s.Fetcher.RsyncBin == "":
 		return request, "rsync_unavailable"
 	case f.Format == "geoip":
-		country := strings.Fields(f.Source)
-		if len(country) == 0 || !validFeedWord(country[0]) {
+		list := s.listSource(f)
+		if list == "" {
 			return request, "feed_source_invalid"
 		}
 		if s.Paths.GeoIPDir == "" {
 			return request, "geoip_directory_missing"
 		}
-		request.URL = fileURL(filepath.Join(s.Paths.GeoIPDir, country[0]+familySuffix(f.Kind)+".txt"))
+		request.URL = fileURL(list)
 	}
 	return request, ""
+}
+
+// listSource is f.Source as today's feed block rewrites it, before the transfer and the parser's choice, for a feed that is
+// no custom list (pfblockerng_apply.inc, "Adjust 'geoip' format" and "Remove 'whois' source field description"): a GeoIP
+// feed's country code becomes its country list's path ("" for a code that is no word), and an asn feed's source is cut at
+// its first space and trimmed, as pfb_download() trims it.
+func (s *Stage) listSource(f Feed) string {
+	if f.Custom {
+		return f.Source
+	}
+	switch f.Format {
+	case "geoip":
+		country, _, _ := strings.Cut(f.Source, " ")
+		if !validFeedWord(country) {
+			return ""
+		}
+		return filepath.Join(s.Paths.GeoIPDir, country+familySuffix(f.Kind)+".txt")
+	case "asn":
+		number, _, _ := strings.Cut(f.Source, " ")
+		return strings.Trim(number, " \t\n\r\x00\x0b")
+	}
+	return f.Source
 }
 
 // safeReason keeps feedfetch's reason when it is short printable text that names no path or credential.
@@ -458,7 +495,7 @@ func (s *Stage) ipConfig(f Feed) feedparse.IPConfig {
 		floorV4 = f.SuppressionCIDR
 	}
 	return feedparse.IPConfig{
-		VType: familySuffix(f.Kind), PFType: feedparse.IPParseType(f.Format, f.Source), Custom: f.Custom,
+		VType: familySuffix(f.Kind), PFType: feedparse.IPParseType(f.Format, s.listSource(f)), Custom: f.Custom,
 		FloorV4: cidrFloor(floorV4), FloorV6: cidrFloor(floorV6), Suppression: s.Config.Suppression,
 	}
 }
@@ -506,6 +543,11 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input 
 			return failedFeed(f.ID, "parse", "ip_parse_failed")
 		}
 	}
+	// The download goes back before the list is published: one that cannot go back may hold the script's output, which
+	// must never become the baseline, so the feed fails and the journal rolls the download back.
+	if ran.Restore() != nil {
+		return failedFeed(f.ID, "post-script", "post_script_restore_failed")
+	}
 	result.Disposition, result.Stage = disposition, "parse"
 	result.Entries, result.ParseFailures = parsed.Entries, parsed.ParseFail
 	result.Suppressed, result.Placeholder = parsed.Suppressed, parsed.Placeholder
@@ -513,7 +555,7 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input 
 	if parsed.Entries == 0 && parsed.Placeholder == "" {
 		result.Disposition, files = "empty", nil // the last list stays, and stands for this input
 	}
-	return publishResult(feed, files, source, result) // the deferred Restore puts the download back after the publication
+	return publishResult(feed, files, source, result)
 }
 
 func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, input io.Reader, post feedparse.PostScript,

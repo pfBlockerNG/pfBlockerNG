@@ -112,6 +112,21 @@ func regularExists(path string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
+// baselineExists reports whether the download path is there, a regular file: only its absence is false, and anything else
+// that stands there, or an error other than absence, is an error, never taken for a download that is missing.
+func baselineExists(path string) (bool, error) {
+	info, err := lstat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, err
+	case !info.Mode().IsRegular():
+		return false, errors.New("feed download is not a regular file")
+	}
+	return true, nil
+}
+
 func removeIfExists(path string) error {
 	if err := remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
@@ -293,15 +308,22 @@ func stagedCopy(source string, mode fs.FileMode, mayLink bool) (string, error) {
 }
 
 // keepAbsent makes a rollback remove paths instead of putting their old copies back: an absent record beside the backup,
-// which rollbackSet obeys over it. A record that cannot be written leaves the old copy to the rollback, which describes
-// the download put back with it.
-func (s *journal) keepAbsent(paths ...string) {
+// which rollbackSet obeys over it. For a record that cannot be written the backup itself is removed, which leaves the
+// rollback nothing to put back; an error means neither could be made, and the old copy comes back with the rollback.
+func (s *journal) keepAbsent(paths ...string) error {
+	var errs []error
 	for _, path := range paths {
 		entry := journalEntry{target: path, path: s.entryPath(path, absentMark), absent: true}
-		if !slices.Contains(s.entries, entry) && createEmpty(entry.path) == nil {
+		if slices.Contains(s.entries, entry) {
+			continue
+		}
+		if createEmpty(entry.path) == nil {
 			s.entries = append(s.entries, entry)
+		} else {
+			errs = append(errs, removeIfExists(s.entryPath(path, backupMark)))
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // rollback rolls the set back, unless a failed commit left its marker: a rollback under a marker would leave a set half
@@ -427,10 +449,33 @@ func journalEntryOf(dir, name string) (journalEntry, string, bool) {
 	return journalEntry{}, "", false
 }
 
-// finishSets finishes the journal sets in dir, as listed in entries, that hold an entry of the feed stem ("" for every
-// set): forward with a commit marker, back without one. A marker names no feed, so with a stem only the markers of sets
-// with such an entry are reached, and a marker no entry of any feed names is removed too.
+// finishSets finishes what runs left in dir, as listed in entries, for the feed stem ("" for every feed). An IP restore
+// point goes back over its download first (a regular one is renamed, anything else removed); then each journal set that
+// holds an entry of the stem is finished: forward with a commit marker, back without one. A set of a feed whose restore
+// point could not go back is not rolled back: its backups must outlive that restore point, which holds the set's own
+// download and would otherwise go over the old download at the next try. A marker names no feed, so with a stem only the
+// markers of sets with such an entry are reached, and a marker no entry of any feed names is removed too.
 func finishSets(dir string, entries []os.DirEntry, stem string) error {
+	var errs []error
+	pending := map[string]bool{} // stems whose restore point stays
+	for _, e := range entries {
+		name := e.Name()
+		owner, ok := strings.CutSuffix(name, restorePoint)
+		if !ok || !validFeedWord(owner) || stem != "" && owner != stem {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		var err error
+		if e.Type().IsRegular() {
+			err = rename(path, filepath.Join(dir, owner+".orig"))
+		} else {
+			err = remove(path)
+		}
+		if err != nil {
+			pending[owner] = true
+			errs = append(errs, err)
+		}
+	}
 	sets, committed, named := map[string][]journalEntry{}, map[string]bool{}, map[string]bool{}
 	for _, e := range entries {
 		name := e.Name()
@@ -438,16 +483,20 @@ func finishSets(dir string, entries []os.DirEntry, stem string) error {
 			committed[id] = true
 		} else if entry, id, ok := journalEntryOf(dir, name); ok {
 			named[id] = true
-			if entryStem, _, _ := strings.Cut(filepath.Base(entry.target), "."); stem == "" || entryStem == stem {
+			if stem == "" || entryStem(entry) == stem {
 				sets[id] = append(sets[id], entry)
 			}
 		}
 	}
-	var errs []error
 	for id, set := range sets {
-		if !committed[id] {
-			errs = append(errs, rollbackSet(set))
+		if committed[id] {
+			continue
 		}
+		if slices.ContainsFunc(set, func(entry journalEntry) bool { return pending[entryStem(entry)] }) {
+			errs = append(errs, errors.New("journal set kept until its feed's restore point is back"))
+			continue
+		}
+		errs = append(errs, rollbackSet(set))
 	}
 	for id := range committed {
 		if len(sets[id]) > 0 || !named[id] {
@@ -457,8 +506,14 @@ func finishSets(dir string, entries []os.DirEntry, stem string) error {
 	return errors.Join(errs...)
 }
 
-// finishFeedSets finishes the sets an earlier run of the feed stem left in dir (a rollback or a finishSet that failed),
-// as Recover would.
+// entryStem is the feed stem of a journal entry's target.
+func entryStem(entry journalEntry) string {
+	stem, _, _ := strings.Cut(filepath.Base(entry.target), ".")
+	return stem
+}
+
+// finishFeedSets finishes what an earlier run of the feed stem left in dir (a KILL, a rollback or a finishSet that failed),
+// its restore point and its sets, as Recover would.
 func finishFeedSets(dir, stem string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -470,12 +525,13 @@ func finishFeedSets(dir, stem string) error {
 // Recover makes the feed folder dir consistent before the next run stages anything (issue #4038, cutover item from #4035):
 // a KILL leaves restore points, journal sets and staged files. A regular IP restore point is renamed back over the download
 // (a run without a journal set over the download, force parse or reuse, has only that); every journal set with its commit
-// marker is finished, every other one rolled back; staged files, script copies and temporaries are removed. A restore point
-// that is no regular file is removed, as feedparse's Restore does. Recover stopped anywhere is finished by the next Recover.
-// A folder that is a symbolic link is refused, untouched.
+// marker is finished, every other one rolled back, after its feed's restore point is back (finishSets); staged files,
+// script copies and temporaries are removed. A restore point that is no regular file is removed, as feedparse's Restore
+// does. Recover stopped anywhere is finished by the next Recover. A path that is not absolute and clean, or a folder that is
+// a symbolic link, is refused, untouched. The caller runs it before stage 6 probes a feed in dir (Stage.Run).
 func Recover(dir string) error {
-	if !filepath.IsAbs(dir) {
-		return errors.New("feed folder is not an absolute path")
+	if !cleanPath(dir) {
+		return errors.New("feed folder is not an absolute clean path")
 	}
 	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
 		return errors.New("feed folder is not a directory")
@@ -484,19 +540,7 @@ func Recover(dir string) error {
 	if err != nil {
 		return err
 	}
-	var errs []error
-	for _, e := range entries {
-		name := e.Name()
-		if stem, ok := strings.CutSuffix(name, restorePoint); ok && validFeedWord(stem) {
-			path := filepath.Join(dir, name)
-			if e.Type().IsRegular() {
-				errs = append(errs, rename(path, filepath.Join(dir, stem+".orig")))
-			} else {
-				errs = append(errs, remove(path))
-			}
-		}
-	}
-	errs = append(errs, finishSets(dir, entries, ""))
+	errs := []error{finishSets(dir, entries, "")}
 	for _, e := range entries {
 		name := e.Name()
 		recovered := strings.HasPrefix(name, stagePrefix) || strings.HasPrefix(name, fetchStagePrefix)
