@@ -218,7 +218,36 @@ final class GeoipCatalogRenderTest extends TestCase
 			'a page name ending in a newline' => ["{\"kind\":\"page\",\"page\":\"Africa\\n\",\"continent\":\"Africa\"}\n"],
 			'a page name that is a number' => ["{\"kind\":\"page\",\"page\":5,\"continent\":\"Africa\"}\n"],
 			'an empty page name' => ["{\"kind\":\"page\",\"page\":\"\",\"continent\":\"Africa\"}\n"],
+			'an asn row with the number as a string' => ["{$page}\n{\"kind\":\"asn\",\"asn\":\"13335\",\"name\":\"Cloudflare\"}\n"],
+			'an asn row with a negative number' => ["{$page}\n{\"kind\":\"asn\",\"asn\":-1,\"name\":\"Cloudflare\"}\n"],
+			'an asn row over 32 bits' => ["{$page}\n{\"kind\":\"asn\",\"asn\":4294967296,\"name\":\"Cloudflare\"}\n"],
+			'an asn row without a name' => ["{$page}\n{\"kind\":\"asn\",\"asn\":13335}\n"],
+			'an asn row with a name that is not a string' => ["{$page}\n{\"kind\":\"asn\",\"asn\":13335,\"name\":null}\n"],
+			'an asn row with a page' => ["{$page}\n{\"kind\":\"asn\",\"asn\":13335,\"name\":\"Cloudflare\",\"page\":\"Africa\"}\n"],
 		];
+	}
+
+	/**
+	 * Given a page, a country and a Reputation row with the ASN choices Core carries in the same body (an asn row per line
+	 * of the ASN table, #4038 sub-slice 9f), when it is rendered, then it writes the same pages as without them: the pages
+	 * offer no AS choice.
+	 */
+	public function testASNRowsAreAcceptedAndRenderNothing(): void
+	{
+		$rows = [
+			['kind' => 'page', 'page' => 'Africa', 'continent' => 'Africa'],
+			['kind' => 'country', 'page' => 'Africa', 'family' => 4, 'position' => 1, 'iso' => 'ZA', 'country' => 'South Africa', 'networks' => 2],
+			['kind' => 'reputation', 'position' => 1, 'iso' => 'ZA', 'country' => 'South Africa', 'networks' => 2],
+		];
+		$this->assertTrue(mkdir("{$this->tmp}/plain", 0700));
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($this->catalog($rows), "{$this->tmp}/plain"));
+		$asn = [
+			['kind' => 'asn', 'asn' => 0, 'name' => ''],
+			['kind' => 'asn', 'asn' => 13335, 'name' => 'Cloudflare, Inc.'],
+			['kind' => 'asn', 'asn' => 4294967295, 'name' => "Ctl\u{7f}Name"],
+		];
+		$this->assertSame(self::WRITTEN, pfb_geoip_render_catalog($this->catalog([...$rows, ...$asn]), "{$this->tmp}/www"));
+		$this->assertSame($this->contents("{$this->tmp}/plain"), $this->contents("{$this->tmp}/www"));
 	}
 
 	/**

@@ -1,0 +1,300 @@
+{
+  "schema": 1,
+  "description": "Stage 11 of the Core Updater (#4038, sub-slice 9f): each enabled GeoIP continent's IPv4 and IPv6 set, the concatenation of its selected countries' lists in the country folder. Frozen through today's continent block of sync_package_pfblockerng() (src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc:3471-3661) by tests/php/GeoipContinentSetCorpusTest.php, and run through go/pfb_core/update (geosets.go). A case's files are every file under the list folders afterwards (original, deny, permit, match, native), absent ones left out; changed lists the sets rebuilt, in the order they were built; log the 'Could not open ISO' lines. old_expect is today's answer where Core departs from it, with the departure named. Aggregation is off in every case: ipset.CIDRAggregate has its own corpus.",
+  "cases": [
+    {
+      "id": "a-country-builds-its-continent-set",
+      "description": "One selected country: the set is its list, published as the baseline (.orig) and the list (.txt) in the folder of the continent's action.",
+      "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
+      "cc": {"ZA_v4.txt": "41.0.0.0/11\n102.0.0.0/8\n"},
+      "expect": {
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n102.0.0.0/8\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n102.0.0.0/8\n"},
+        "changed": ["pfB_Africa_v4"],
+        "log": []
+      }
+    },
+    {
+      "id": "countries-in-selection-order",
+      "description": "Countries are concatenated in the order the continent selects them, not sorted.",
+      "groups": [{"name": "pfB_Europe", "action": "Deny_Both", "listClass": "deny", "countriesV4": ["FR", "DE"], "countriesV6": []}],
+      "cc": {"DE_v4.txt": "5.0.0.0/16\n", "FR_v4.txt": "2.0.0.0/12\n"},
+      "expect": {
+        "files": {"original/pfB_Europe_v4.orig": "2.0.0.0/12\n5.0.0.0/16\n", "deny/pfB_Europe_v4.txt": "2.0.0.0/12\n5.0.0.0/16\n"},
+        "changed": ["pfB_Europe_v4"],
+        "log": []
+      }
+    },
+    {
+      "id": "both-families",
+      "description": "The IPv4 set reads the countries' _v4 lists and the IPv6 set their _v6 lists; IPv4 is built first.",
+      "groups": [{"name": "pfB_NAmerica", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["US"], "countriesV6": ["US"]}],
+      "cc": {"US_v4.txt": "3.0.0.0/8\n", "US_v6.txt": "2600::/12\n"},
+      "expect": {
+        "files": {
+          "original/pfB_NAmerica_v4.orig": "3.0.0.0/8\n", "deny/pfB_NAmerica_v4.txt": "3.0.0.0/8\n",
+          "original/pfB_NAmerica_v6.orig": "2600::/12\n", "deny/pfB_NAmerica_v6.txt": "2600::/12\n"
+        },
+        "changed": ["pfB_NAmerica_v4", "pfB_NAmerica_v6"],
+        "log": []
+      }
+    },
+    {
+      "id": "an-unchanged-set-is-left-as-it-is",
+      "description": "A set equal to its baseline, with its list in place, is not rebuilt: the list keeps what it holds.",
+      "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
+      "cc": {"ZA_v4.txt": "41.0.0.0/11\n"},
+      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "kept\n"},
+      "expect": {
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "kept\n"},
+        "changed": [],
+        "log": []
+      }
+    },
+    {
+      "id": "a-changed-set-replaces-baseline-and-list",
+      "description": "A set that differs from its baseline replaces the baseline and the list.",
+      "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
+      "cc": {"ZA_v4.txt": "41.0.0.0/11\n"},
+      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/12\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/12\n"},
+      "expect": {
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
+        "changed": ["pfB_Africa_v4"],
+        "log": []
+      }
+    },
+    {
+      "id": "a-missing-list-rebuilds-the-set",
+      "description": "A set equal to its baseline whose list is gone is rebuilt.",
+      "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
+      "cc": {"ZA_v4.txt": "41.0.0.0/11\n"},
+      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n"},
+      "expect": {
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
+        "changed": ["pfB_Africa_v4"],
+        "log": []
+      }
+    },
+    {
+      "id": "a-geoip-change-rebuilds-an-unchanged-set",
+      "description": "After a GeoIP conversion changed the country lists (today's geoip.update marker), every set is rebuilt, even one equal to its baseline.",
+      "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
+      "cc": {"ZA_v4.txt": "41.0.0.0/11\n"},
+      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "kept\n"},
+      "geoipChanged": true,
+      "expect": {
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
+        "changed": ["pfB_Africa_v4"],
+        "log": []
+      }
+    },
+    {
+      "id": "a-forced-reload-rebuilds-an-unchanged-set",
+      "description": "A forced reload (today's reuse switch) rebuilds a set equal to its baseline.",
+      "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
+      "cc": {"ZA_v4.txt": "41.0.0.0/11\n"},
+      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "kept\n"},
+      "force": true,
+      "expect": {
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
+        "changed": ["pfB_Africa_v4"],
+        "log": []
+      }
+    },
+    {
+      "id": "a-missing-country-list-is-logged-and-skipped",
+      "description": "A selected country without a list is logged and contributes nothing; the others still build the set.",
+      "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA", "XX"], "countriesV6": []}],
+      "cc": {"ZA_v4.txt": "41.0.0.0/11\n"},
+      "expect": {
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
+        "changed": ["pfB_Africa_v4"],
+        "log": ["Could not open ISO [ XX_v4 ]"]
+      }
+    },
+    {
+      "id": "an-ipv4-set-without-networks-is-empty",
+      "description": "A continent whose countries hold no networks builds an empty set.",
+      "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["XX"], "countriesV6": []}],
+      "cc": {},
+      "expect": {
+        "files": {"original/pfB_Africa_v4.orig": "", "deny/pfB_Africa_v4.txt": ""},
+        "changed": ["pfB_Africa_v4"],
+        "log": ["Could not open ISO [ XX_v4 ]"]
+      },
+      "old_expect": {
+        "files": {"original/pfB_Africa_v4.orig": "", "deny/pfB_Africa_v4.txt": "127.1.7.7\n"},
+        "changed": ["pfB_Africa_v4"],
+        "log": ["Could not open ISO [ XX_v4 ]"]
+      },
+      "departure": "Core writes no placeholder address into an empty set: docs/specs/go-updater-pipeline.md section 7 makes an empty set a valid desired state and the placeholder an Outpost detail (#4038, owner question 1)."
+    },
+    {
+      "id": "an-ipv6-set-without-networks-is-empty",
+      "description": "The same for IPv6, where today's placeholder is the IPv4 placeholder behind '::'.",
+      "groups": [{"name": "pfB_Asia", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": [], "countriesV6": ["XX"]}],
+      "cc": {},
+      "expect": {
+        "files": {"original/pfB_Asia_v6.orig": "", "deny/pfB_Asia_v6.txt": ""},
+        "changed": ["pfB_Asia_v6"],
+        "log": ["Could not open ISO [ XX_v6 ]"]
+      },
+      "old_expect": {
+        "files": {"original/pfB_Asia_v6.orig": "", "deny/pfB_Asia_v6.txt": "::127.1.7.7\n"},
+        "changed": ["pfB_Asia_v6"],
+        "log": ["Could not open ISO [ XX_v6 ]"]
+      },
+      "departure": "Core writes no placeholder address into an empty set (docs/specs/go-updater-pipeline.md section 7; #4038, owner question 1)."
+    },
+    {
+      "id": "a-set-of-comments-only-is-kept-as-it-is",
+      "description": "Lines that are not networks are carried as they are: the canonical set of the publication (#4038, 9h) leaves them out.",
+      "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
+      "cc": {"ZA_v4.txt": "# no networks\n"},
+      "expect": {
+        "files": {"original/pfB_Africa_v4.orig": "# no networks\n", "deny/pfB_Africa_v4.txt": "# no networks\n"},
+        "changed": ["pfB_Africa_v4"],
+        "log": []
+      },
+      "old_expect": {
+        "files": {"original/pfB_Africa_v4.orig": "# no networks\n", "deny/pfB_Africa_v4.txt": "127.1.7.7\n"},
+        "changed": ["pfB_Africa_v4"],
+        "log": []
+      },
+      "departure": "Core writes no placeholder address into a set without networks (docs/specs/go-updater-pipeline.md section 7; #4038, owner question 1)."
+    },
+    {
+      "id": "a-last-line-without-newline-is-terminated",
+      "description": "A set whose last line has no newline gets one, in the baseline and the list.",
+      "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
+      "cc": {"ZA_v4.txt": "41.0.0.0/11"},
+      "expect": {
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
+        "changed": ["pfB_Africa_v4"],
+        "log": []
+      }
+    },
+    {
+      "id": "an-unterminated-set-equal-to-its-baseline-is-unchanged",
+      "description": "A set is compared with its baseline as it would be stored, its last line terminated: an unterminated country list equal to the baseline is no change.",
+      "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
+      "cc": {"ZA_v4.txt": "41.0.0.0/11"},
+      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "kept\n"},
+      "expect": {
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "kept\n"},
+        "changed": [],
+        "log": []
+      },
+      "old_expect": {
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
+        "changed": ["pfB_Africa_v4"],
+        "log": []
+      },
+      "departure": "Today's PHP compares the md5 of the set before its newline is added with the stored baseline, so an unterminated set is a change at every pass; Core compares the set as it stores it."
+    },
+    {
+      "id": "unterminated-lists-run-together",
+      "description": "Country lists are concatenated byte for byte, as today: a list without a final newline runs into the next one's first line.",
+      "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA", "NG"], "countriesV6": []}],
+      "cc": {"ZA_v4.txt": "41.0.0.0/11", "NG_v4.txt": "102.0.0.0/8\n"},
+      "expect": {
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11102.0.0.0/8\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11102.0.0.0/8\n"},
+        "changed": ["pfB_Africa_v4"],
+        "log": []
+      }
+    },
+    {
+      "id": "a-disabled-continent-builds-nothing",
+      "description": "A continent whose action is Disabled builds no set and leaves its files as they are.",
+      "groups": [{"name": "pfB_Africa", "action": "Disabled", "listClass": "none", "countriesV4": ["ZA"], "countriesV6": []}],
+      "cc": {"ZA_v4.txt": "41.0.0.0/11\n"},
+      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/12\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/12\n"},
+      "expect": {
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/12\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/12\n"},
+        "changed": [],
+        "log": []
+      }
+    },
+    {
+      "id": "pfblockerng-disabled-builds-nothing",
+      "description": "With pfBlockerNG disabled no continent builds a set.",
+      "enabled": false,
+      "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
+      "cc": {"ZA_v4.txt": "41.0.0.0/11\n"},
+      "expect": {"files": {}, "changed": [], "log": []}
+    },
+    {
+      "id": "a-family-without-countries-builds-nothing",
+      "description": "A family that selects no country builds no set; the other family still does.",
+      "groups": [{"name": "pfB_NAmerica", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": [], "countriesV6": ["US"]}],
+      "cc": {"US_v4.txt": "3.0.0.0/8\n", "US_v6.txt": "2600::/12\n"},
+      "expect": {
+        "files": {"original/pfB_NAmerica_v6.orig": "2600::/12\n", "deny/pfB_NAmerica_v6.txt": "2600::/12\n"},
+        "changed": ["pfB_NAmerica_v6"],
+        "log": []
+      }
+    },
+    {
+      "id": "a-permit-continent-uses-the-permit-folder",
+      "description": "A Permit action lists the set in the permit folder; the baseline is in the original folder as for every class.",
+      "groups": [{"name": "pfB_Asia", "action": "Permit_Outbound", "listClass": "permit", "countriesV4": ["JP"], "countriesV6": []}],
+      "cc": {"JP_v4.txt": "1.0.16.0/20\n"},
+      "expect": {
+        "files": {"original/pfB_Asia_v4.orig": "1.0.16.0/20\n", "permit/pfB_Asia_v4.txt": "1.0.16.0/20\n"},
+        "changed": ["pfB_Asia_v4"],
+        "log": []
+      }
+    },
+    {
+      "id": "a-match-continent-uses-the-match-folder",
+      "description": "A Match action lists the set in the match folder.",
+      "groups": [{"name": "pfB_Oceania", "action": "Match_Both", "listClass": "match", "countriesV4": ["AU"], "countriesV6": []}],
+      "cc": {"AU_v4.txt": "1.0.0.0/24\n"},
+      "expect": {
+        "files": {"original/pfB_Oceania_v4.orig": "1.0.0.0/24\n", "match/pfB_Oceania_v4.txt": "1.0.0.0/24\n"},
+        "changed": ["pfB_Oceania_v4"],
+        "log": []
+      }
+    },
+    {
+      "id": "an-alias-native-continent-uses-the-native-folder",
+      "description": "Alias_Native lists the set in the native folder.",
+      "groups": [{"name": "pfB_SAmerica", "action": "Alias_Native", "listClass": "native", "countriesV4": ["BR"], "countriesV6": []}],
+      "cc": {"BR_v4.txt": "131.0.0.0/16\n"},
+      "expect": {
+        "files": {"original/pfB_SAmerica_v4.orig": "131.0.0.0/16\n", "native/pfB_SAmerica_v4.txt": "131.0.0.0/16\n"},
+        "changed": ["pfB_SAmerica_v4"],
+        "log": []
+      }
+    },
+    {
+      "id": "an-alias-deny-continent-uses-the-deny-folder",
+      "description": "Alias_Deny lists the set in the deny folder, as the Deny actions do.",
+      "groups": [{"name": "pfB_Antarctica", "action": "Alias_Deny", "listClass": "deny", "countriesV4": ["AQ"], "countriesV6": []}],
+      "cc": {"AQ_v4.txt": "185.121.168.0/24\n"},
+      "expect": {
+        "files": {"original/pfB_Antarctica_v4.orig": "185.121.168.0/24\n", "deny/pfB_Antarctica_v4.txt": "185.121.168.0/24\n"},
+        "changed": ["pfB_Antarctica_v4"],
+        "log": []
+      }
+    },
+    {
+      "id": "every-enabled-continent-is-built-in-continent-order",
+      "description": "Each enabled continent builds its sets, in the package's continent order (Top Spammers first, Proxy and Satellite last), whatever order the groups come in.",
+      "groups": [
+        {"name": "pfB_PS", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["A1"], "countriesV6": []},
+        {"name": "pfB_Asia", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["JP"], "countriesV6": []},
+        {"name": "pfB_Top", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["US"], "countriesV6": []}
+      ],
+      "cc": {"A1_v4.txt": "2.56.0.0/14\n", "JP_v4.txt": "1.0.16.0/20\n", "US_v4.txt": "3.0.0.0/8\n"},
+      "expect": {
+        "files": {
+          "original/pfB_Top_v4.orig": "3.0.0.0/8\n", "deny/pfB_Top_v4.txt": "3.0.0.0/8\n",
+          "original/pfB_Asia_v4.orig": "1.0.16.0/20\n", "deny/pfB_Asia_v4.txt": "1.0.16.0/20\n",
+          "original/pfB_PS_v4.orig": "2.56.0.0/14\n", "deny/pfB_PS_v4.txt": "2.56.0.0/14\n"
+        },
+        "changed": ["pfB_Top_v4", "pfB_Asia_v4", "pfB_PS_v4"],
+        "log": []
+      }
+    }
+  ]
+}
