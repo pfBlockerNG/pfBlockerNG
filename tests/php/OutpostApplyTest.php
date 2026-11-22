@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/support/ProcessRunner.php';
@@ -85,7 +86,7 @@ final class OutpostApplyTest extends TestCase
 
 	private static function request(array $resources, array $more = []): array
 	{
-		return ['version' => 2, 'trigger' => 'manual', 'scope' => 'ip', 'resources' => $resources] + $more;
+		return array_replace(['version' => 2, 'trigger' => 'manual', 'scope' => 'ip', 'resources' => $resources], $more);
 	}
 
 	private static function resource(string $id, string $generation, int $entries, string $action = 'deny'): array
@@ -258,17 +259,29 @@ final class OutpostApplyTest extends TestCase
 		$this->assertSame(self::OLD, $r['mirrors']['pfB_Abuse_v4.txt']);
 	}
 
-	/** The apply trigger clears the due-ledger flag first and puts it back when the apply does not complete. */
-	public function testTheApplyTriggerClearsTheDueFlagAndRestoresItWhenTheApplyDefers(): void
+	/** @return array<string, array{0: array<string, mixed>, 1: int}> a step of the apply trigger that does not complete, and its exit status */
+	public static function applyTriggersThatDoNotComplete(): array
 	{
-		$cursor = self::at([self::ABUSE => ['2', self::OLD]]);
-		$deferred = $cursor + ['pending' => TRUE, 'apply' => ['request' => self::request([self::resource(self::ABUSE, '2', 3)], ['trigger' => 'apply'])]];
+		$request = self::request([self::resource(self::ABUSE, '2', 3)], ['trigger' => 'apply']);
+		return [
+			'deferred: Core does not answer' => [['apply' => ['request' => $request]], PFB_EXIT_LOCKED],
+			'failed: pfctl fails for the table' => [['pfctlFail' => ['pfB_Abuse_v4.add'], 'apply' => ['request' => $request,
+				'core' => [self::delta(self::ABUSE, '2', '1', ['203.0.113.9'], ['192.0.2.2'], self::NEW), self::text(['203.0.113.9']),
+					self::text(['192.0.2.2'])]]], 1],
+		];
+	}
+
+	/** The apply trigger clears the due-ledger flag first and puts it back when the apply does not complete. */
+	#[DataProvider('applyTriggersThatDoNotComplete')]
+	public function testTheApplyTriggerClearsTheDueFlagAndRestoresItWhenTheApplyDoesNotComplete(array $step, int $exit): void
+	{
+		$incomplete = self::at([self::ABUSE => ['1', self::OLD]]) + ['pending' => TRUE] + $step;
 		$applied = ['pending' => TRUE, 'apply' => ['request' => self::request([self::resource(self::ABUSE, '2', 3)], ['trigger' => 'apply']),
 			'core' => [self::unchanged(self::ABUSE, '2')]]];
-		[, $d, $a] = $this->runSteps([self::prime([self::group('Abuse')]), $deferred, $applied]);
+		[, $i, $a] = $this->runSteps([self::prime([self::group('Abuse')]), $incomplete, self::at([self::ABUSE => ['2', self::OLD]]) + $applied]);
 
-		$this->assertSame(PFB_EXIT_LOCKED, $d['exit'], $d['log']);
-		$this->assertTrue($d['ledgerPending'], 'a deferred apply keeps the pending apply flag');
+		$this->assertSame($exit, $i['exit'], $i['log']);
+		$this->assertTrue($i['ledgerPending'], 'an apply that does not complete keeps the pending apply flag');
 		$this->assertSame(0, $a['exit'], $a['log']);
 		$this->assertFalse($a['ledgerPending'], 'a completed apply clears it');
 	}
