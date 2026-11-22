@@ -296,8 +296,9 @@ func TestDNSBLPublishesBothEmptyFamilySignalsAndRetainsThemOnFailure(t *testing.
 		}
 	}
 	fail.Store(true)
-	if got := run(stage, feed, "none"); got.Disposition != "failed" {
-		t.Fatalf("failed DNSBL run = %+v", got)
+	// The transfer fails inside the run: stage 6's verdict is changed, so the run reaches its ingest and not its probe.
+	if got := stage.Run(context.Background(), feed, Change{Verdict: VerdictChanged, Force: "none"}); got.Disposition != "failed" || got.Stage != "fetch" {
+		t.Fatalf("failed DNSBL run = %+v, want failed at the transfer", got)
 	}
 	for _, name := range names {
 		if got := readFile(t, filepath.Join(stage.Paths.FeedDir, name)); got != before[name] {
