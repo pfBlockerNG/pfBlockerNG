@@ -17,6 +17,7 @@ use PHPUnit\Framework\TestCase;
  * file it was handed with -f.
  */
 #[CoversFunction('pfb_apply_alias_delta_files')]
+#[CoversFunction('pfb_apply_alias_delta')]
 final class AliasDeltaApplyFilesTest extends TestCase
 {
 	private const TABLE = 'pfB_Files_v4';
@@ -935,6 +936,155 @@ SH
 		$this->apply(['10.1.0.1'], [], 40, 40, 'replace');
 		$this->assertSame([], array_values(array_filter(self::loggedSince($offset), static fn (string $l): bool => str_contains($l, 'negative count'))),
 			'sound counts log no such line');
+	}
+
+	// ---------------------------------------------------------------------------------------------------------------
+	// The ledger after a run (issue #4189): a run in which any batch failed leaves ip/<table>/apply open
+	// ---------------------------------------------------------------------------------------------------------------
+
+	/**
+	 * Apply $add and $remove to the table on the given path: 'files' through pfb_apply_alias_delta_files(), 'arrays' through
+	 * pfb_apply_alias_delta() with the table holding $remove before and $add after. Returns whether every call succeeded, or
+	 * NULL on the array path, which does not say.
+	 *
+	 * @param list<string> $add
+	 * @param list<string> $remove
+	 */
+	private function applyOn(string $path, array $add, array $remove, string $mode = 'delta', bool $force = FALSE): ?bool
+	{
+		if ($path === 'files') {
+			return $this->apply($add, $remove, max(count($add), 1), max(count($remove), 1), $mode, 64, $force)['ok'];
+		}
+		pfb_apply_alias_delta($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']), $add, $remove, $mode, 64, $force);
+		return NULL;
+	}
+
+	/** @return list<array{facility: string, item: string, stage: string, message: string}> the open entries of the ledger, without their times */
+	private function openEntries(): array
+	{
+		return array_map(static fn (array $e): array => ['facility' => $e['facility'], 'item' => $e['item'], 'stage' => $e['stage'],
+			'message' => $e['message']], pfb_sync_status_list_open($this->dir));
+	}
+
+	/** @return array{facility: string, item: string, stage: string, message: string} the open apply entry a failed $op call leaves */
+	private static function failedCallEntry(string $op): array
+	{
+		return ['facility' => 'ip', 'item' => self::TABLE, 'stage' => 'apply',
+			'message' => pfb_pfctl_error_message(self::TABLE, $op, 1, "pfctl: Cannot {$op} table: Operation not permitted")];
+	}
+
+	/**
+	 * @return array<string, array{string, int, int, list<int>, list<array{0: string, 1: int}>, string}> the path, the members to add
+	 *   and to remove, the calls that fail, the calls pfctl sees, and the verb of the last failed call
+	 */
+	public static function runsWithAFailedBatchAndALaterSuccess(): array
+	{
+		$rows = [];
+		foreach (['files', 'arrays'] as $path) {
+			$rows["{$path}: the add batch fails, the delete batch succeeds"] = [$path, 1, 1, [1], [['add', 1], ['delete', 1]], 'add'];
+			$rows["{$path}: the first of three add batches fails"] = [$path, 129, 1, [1], [['add', 64], ['add', 64], ['add', 1], ['delete', 1]], 'add'];
+			$rows["{$path}: a middle batch fails"] = [$path, 129, 1, [2], [['add', 64], ['add', 64], ['add', 1], ['delete', 1]], 'add'];
+			$rows["{$path}: an add and a delete batch fail, the last delete succeeds"] = [$path, 129, 65, [1, 4],
+				[['add', 64], ['add', 64], ['add', 1], ['delete', 64], ['delete', 1]], 'delete'];
+		}
+		return $rows;
+	}
+
+	/**
+	 * Scenario: a delta goes out in several batches and one fails. Given no open entry, when a later batch of the same run
+	 * succeeds, then the entry the failed batch opened is still open when the run returns, holding the last failure's message:
+	 * the kernel table is behind its mirror, so the tick's retry must find it. Every batch is still sent.
+	 *
+	 * @param list<int> $failing
+	 * @param list<array{0: string, 1: int}> $shape
+	 */
+	#[DataProvider('runsWithAFailedBatchAndALaterSuccess')]
+	public function testAFailedBatchLeavesTheApplyEntryOpenWhateverLaterBatchesDid(string $path, int $adds, int $removes, array $failing,
+	    array $shape, string $last_failed): void
+	{
+		$add = self::addresses($adds, 1);
+		$remove = self::addresses($removes, 2);
+		$this->assertSame([], $this->openEntries(), 'before: no entry is open');
+		file_put_contents("{$this->dir}/fail", implode("\n", $failing) . "\n");
+
+		$ok = $this->applyOn($path, $add, $remove);
+
+		$this->assertNotTrue($ok);
+		$this->assertSame($shape, $this->shape(), 'every batch is sent after a failure');
+		$this->assertSame([self::failedCallEntry($last_failed)], $this->openEntries(), 'the failed batch keeps the entry open');
+	}
+
+	/**
+	 * Scenario: a batch whose file cannot be written is skipped. Given no open entry, when the next batch is written and
+	 * succeeds, then the entry the skipped batch opened is still open when the run returns. The member source swaps the
+	 * batch directory for a regular file while the first batch is written, and puts it back for the second.
+	 */
+	public function testASkippedBatchLeavesTheApplyEntryOpenWhenALaterBatchSucceeds(): void
+	{
+		$batchdir = $this->batchdir;
+		$source = static function () use ($batchdir): Generator {
+			rename($batchdir, "{$batchdir}.away");
+			file_put_contents($batchdir, '');
+			yield from self::addresses(64, 1);
+			// resumed after the first batch was pushed
+			unlink($batchdir);
+			rename("{$batchdir}.away", $batchdir);
+			yield '10.1.1.0';
+		};
+		$this->assertSame([], $this->openEntries(), 'before: no entry is open');
+
+		$result = pfb_apply_alias_delta_members($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+			static fn (): array => [$source(), []], 65, 0, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertSame([['add', 1]], $this->shape(), 'the skipped batch is not sent, the next one is');
+		$open = $this->openEntries();
+		$this->assertCount(1, $open, 'the skipped batch keeps the entry open: ' . json_encode($open));
+		$this->assertSame(['ip', self::TABLE, 'apply'], [$open[0]['facility'], $open[0]['item'], $open[0]['stage']]);
+		$this->assertStringContainsString('batch file', $open[0]['message']);
+	}
+
+	/** @return array<string, array{string}> */
+	public static function bothPaths(): array
+	{
+		return ['members from files' => ['files'], 'members from arrays' => ['arrays']];
+	}
+
+	/**
+	 * Scenario: the tick's retry clears an entry by a run that succeeds. Given an entry an earlier run left open, when every
+	 * batch of the next run succeeds, then the entry is closed.
+	 */
+	#[DataProvider('bothPaths')]
+	public function testARunInWhichEveryBatchSucceedsClosesTheEntryAnEarlierRunLeftOpen(string $path): void
+	{
+		pfb_sync_status_open('ip', self::TABLE, 'apply', 'an earlier run failed', $this->dir);
+		$this->assertCount(1, $this->openEntries(), 'before: the earlier run left the entry open');
+
+		$ok = $this->applyOn($path, self::addresses(129, 1), self::addresses(1, 2));
+
+		$this->assertNotFalse($ok);
+		$this->assertSame([['add', 64], ['add', 64], ['add', 1], ['delete', 1]], $this->shape());
+		$this->assertSame([], $this->openEntries(), 'the successful run closes the entry');
+	}
+
+	/**
+	 * Scenario: a replace is one call. Given no open entry, a replace that fails opens the entry; given that open entry, a
+	 * replace that succeeds closes it.
+	 */
+	#[DataProvider('bothPaths')]
+	public function testAFailedReplaceOpensTheEntryAndASuccessfulOneClosesIt(string $path): void
+	{
+		$this->assertSame([], $this->openEntries(), 'before: no entry is open');
+		file_put_contents("{$this->dir}/fail", "1\n");
+
+		$this->assertNotTrue($this->applyOn($path, ['10.1.0.1'], [], 'replace'));
+		$this->assertSame([self::failedCallEntry('replace')], $this->openEntries(), 'the failed replace opens the entry');
+
+		unlink("{$this->dir}/fail");
+		unlink("{$this->dir}/log");
+		$this->assertNotFalse($this->applyOn($path, ['10.1.0.1'], [], 'delta', TRUE));
+		$this->assertSame([['replace', 1]], $this->shape());
+		$this->assertSame([], $this->openEntries(), 'the successful replace closes it');
 	}
 
 	// ---------------------------------------------------------------------------------------------------------------
