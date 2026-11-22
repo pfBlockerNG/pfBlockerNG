@@ -15601,6 +15601,20 @@ function pfb_pfctl_table_count(string $table): int {
 }
 
 
+// Whether pf table $table holds no entry (a table that does not exist holds none), as pfb_pfctl_table_count() reads it but from
+// the first line of `pfctl -T show` only: the listing of a large table never reaches PHP.
+function pfb_pfctl_table_empty(string $table): bool {
+	global $pfb;
+	$fh = @popen("{$pfb['pfctl']} -t " . escapeshellarg($table) . " -T show 2>/dev/null", 'r');
+	if ($fh === FALSE) {
+		return TRUE;
+	}
+	$line = fgets($fh, 128);
+	pclose($fh);
+	return $line === FALSE;
+}
+
+
 // Parse the numeric match count out of `pfctl -t <table> -T test <ip> 2>&1` output --
 // "N/1 addresses match." on a normal run, or (because of the merged 2>&1) an error
 // string such as "pfctl: Table does not exist." when the table is absent. (int) casts

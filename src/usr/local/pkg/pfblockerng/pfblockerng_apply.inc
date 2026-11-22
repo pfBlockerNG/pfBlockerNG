@@ -5053,12 +5053,13 @@ function pfb_apply_dns_proxy(): void {
 
 /**
  * The pass's pfSense objects. Returns what the `post` hook and the settle read: the aliases whose table changed,
- * whether an IP unlock forced a re-block, and whether the reload launch failed. $pfb_push, when given, pushes each
- * changed table that has a mirror on the path without a rule change, in place of the delta from $pfb_alias_prev_sets: it
- * is called with the alias, the delta mode and the batch size (the version 2 apply, which holds the delta in files).
+ * whether an IP unlock forced a re-block, whether the reload launch failed, and the loaded tables whose replace failed on
+ * the path with a rule change. $pfb_push, when given, pushes each changed table that has a mirror on the path without a
+ * rule change, in place of the delta from $pfb_alias_prev_sets: it is called with the alias, the delta mode, the batch size
+ * and whether an IP unlock forced the re-block (the version 2 apply, which holds the delta in files).
  *
- * @param ?callable(string, string, int): mixed $pfb_push
- * @return array{changedAliases:array,ipUnlockForced:bool,reloadUnknown:bool}
+ * @param ?callable(string, string, int, bool): mixed $pfb_push
+ * @return array{changedAliases:array,ipUnlockForced:bool,reloadUnknown:bool,tableFailed:list<string>}
  */
 function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $pfb_alias_lists, array $pfb_alias_lists_all,
     array $pfb_alias_prev_sets, array $pfb_feed_changed, bool $pfb_sync_absorb, ?callable $pfb_push = NULL): array {
@@ -5236,6 +5237,7 @@ function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $p
 	// If 'Rule Changes' are found, utilize the 'filter_configure()' function, if not, utilize 'pfctl replace' command
 	// Captured here (before the if/else) so it is always defined at the post-hook emit.
 	$pfb_ip_unlock_forced = FALSE;
+	$pfb_table_failed = [];
 	if ($pfb['autorules'] && ($orig_rules_nocreated ?? []) != ($new_rules_nocreated ?? []) || $pfb['enable'] !== PfbToggle::On || $pfb['remove']) {
 
 		if (!$pfb['save']) {
@@ -5284,7 +5286,9 @@ function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $p
 					if (in_array($pfb_table, $final_alias)) {
 						// Active + changed: full -T replace so the kernel table is in sync
 						// before filter_configure() rebuilds the ruleset from the aliasdir file.
-						pfb_pfctl_table_op($pfb_table, 'replace', "-f {$pfb_table_path_esc}");
+						if (pfb_pfctl_table_op($pfb_table, 'replace', "-f {$pfb_table_path_esc}")['failed']) {
+							$pfb_table_failed[] = $pfb_table;
+						}
 					}
 				} elseif (in_array($pfb_table, $pfb_table_keep_aliases, TRUE)) {
 					// Aggregates are urltable aliases, so ADR-11 deliberately gives them no rule.
@@ -5342,7 +5346,7 @@ function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $p
 
 				foreach ($final_alias as $final) {
 					if ($pfb_push !== NULL && file_exists("{$pfb['aliasdir']}/{$final}.txt")) {
-						$pfb_push($final, $pfb_delta_mode, $pfb_delta_batch);
+						$pfb_push($final, $pfb_delta_mode, $pfb_delta_batch, $pfb_ip_unlock_forced);
 						continue;
 					}
 					if (file_exists("{$pfb['aliasdir']}/{$final}.txt")) {
@@ -5531,29 +5535,33 @@ function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $p
 	// Core runs every schedule; this pass only retires the crontab entries earlier versions installed, after the metrics lock is released.
 	pfblockerng_retire_cron_jobs();
 
-	return ['changedAliases' => $pfb_alias_lists, 'ipUnlockForced' => $pfb_ip_unlock_forced, 'reloadUnknown' => $pfb_filter_reload_unknown];
+	return ['changedAliases' => $pfb_alias_lists, 'ipUnlockForced' => $pfb_ip_unlock_forced, 'reloadUnknown' => $pfb_filter_reload_unknown,
+		'tableFailed' => $pfb_table_failed];
 }
 
 /**
  * Settles what a real Update pass applied; $pfb_pending_seen is the pending mark it saw at its start. $pfb_failure, when given,
- * is why the apply did not complete (the version 2 apply's failed resources), recorded as the apply record's reason.
+ * is why the apply did not complete (the version 2 apply's failures), recorded as the apply record's reason; it keeps the
+ * due-ledger flag. Returns TRUE when the apply is settled as applied (or for a settings save), FALSE when it is recorded failed.
  */
 function pfb_apply_settle(bool $pfb_accounting_pending, bool $pfb_filter_reload_unknown, ?string $pfb_pending_seen,
-    int $pfb_pass_started, ?string $pfb_failure = NULL): void {
+    int $pfb_pass_started, ?string $pfb_failure = NULL): bool {
 	global $pfb;
 
 	if (!$pfb['save']) {
-		$pending_cleared = !$pfb_accounting_pending && pfb_core_update_clear_pending_apply();
-		if ($pending_cleared && !$pfb_filter_reload_unknown && $pfb_failure === NULL) {
+		$pending_cleared = !$pfb_accounting_pending && $pfb_failure === NULL && pfb_core_update_clear_pending_apply();
+		if ($pending_cleared && !$pfb_filter_reload_unknown) {
 			pfb_settle_pending_changes($pfb_pending_seen);
 			pfb_sync_apply_record('applied', $pfb['filter_configure'] ? 'update pass completed; firewall reload started' : 'update pass completed', $pfb['dbdir'], FALSE, $pfb_pass_started);
 			if (pfb_sync_receive_state_read($pfb['dbdir'])['accepted_digest'] !== NULL) {	// only a node holding an accepted policy reports what of it cannot take effect
 				pfb_sync_findings_record(pfb_sync_effective_findings(pfb_sync_effective_facts()), $pfb['dbdir']);
 			}
-		} else {
-			$reason = $pfb_accounting_pending ? 'DNSBL accounting or reload not confirmed; pending changes kept'
-				: ($pfb_filter_reload_unknown || $pfb_failure === NULL ? 'firewall reload not confirmed; pending changes kept' : $pfb_failure);
-			pfb_sync_apply_record('failed', $reason, $pfb['dbdir'], FALSE, $pfb_pass_started);
+			return TRUE;
 		}
+		$reason = $pfb_accounting_pending ? 'DNSBL accounting or reload not confirmed; pending changes kept'
+			: ($pfb_filter_reload_unknown || $pfb_failure === NULL ? 'firewall reload not confirmed; pending changes kept' : $pfb_failure);
+		pfb_sync_apply_record('failed', $reason, $pfb['dbdir'], FALSE, $pfb_pass_started);
+		return FALSE;
 	}
+	return TRUE;
 }
