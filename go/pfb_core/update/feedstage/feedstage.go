@@ -179,7 +179,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			}
 			step("restored")
 		} else if err := backup.commit(); err != nil {
-			_ = backup.rollback()
+			_ = backup.rollback() // a commit that is not durable fails the feed (journal.commit)
 			result = failedFeed(f.ID, "publish", "baseline_commit_failed")
 		}
 	}()

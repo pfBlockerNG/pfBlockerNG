@@ -42,8 +42,9 @@ type stagedFeedFile struct {
 // its entries are then removed, the marker last. Without the marker the set rolls back (rollbackSet), with it forward
 // (finishSet), whatever point a KILL stopped either at.
 type journal struct {
-	dir, id string
-	entries []journalEntry
+	dir, id   string
+	entries   []journalEntry
+	committed bool // a commit that failed left its marker: the set is Recover's to finish forward
 }
 
 type journalEntry struct {
@@ -287,10 +288,19 @@ func (s *journal) keepAbsent(paths ...string) {
 	}
 }
 
-func (s *journal) rollback() error { return rollbackSet(s.entries) }
+// rollback rolls the set back, unless a failed commit left its marker: a rollback under a marker would leave a set half
+// rolled back that Recover then finishes forward.
+func (s *journal) rollback() error {
+	if s.committed {
+		return nil
+	}
+	return rollbackSet(s.entries)
+}
 
-// commit commits the set: the marker, synced with the folder, then finishSet. On an error the set is not committed (the
-// marker is gone) and the caller rolls it back; a marker that cannot be removed again leaves it committed.
+// commit commits the set: the marker, synced with the folder, then finishSet. An error means the commit is not durable,
+// and the run fails, one rule for a marker that cannot be created or synced: the entries stay, the caller calls rollback,
+// and the feed fails at publish. With the marker gone again the rollback puts the old files back; a marker that cannot be
+// removed leaves the set committed, the rollback a no-op and the new files to Recover, which finishes the set forward.
 func (s *journal) commit() error {
 	marker := filepath.Join(s.dir, commitMark+s.id)
 	file, err := create(marker)
@@ -301,10 +311,14 @@ func (s *journal) commit() error {
 	if err == nil {
 		err = syncDir(s.dir)
 	}
-	if err != nil && remove(marker) == nil {
+	if err != nil {
+		if removeErr := removeIfExists(marker); removeErr != nil {
+			s.committed = true
+			return errors.Join(err, removeErr)
+		}
 		return err
 	}
-	_ = finishSet(marker, s.entries) // what stays is finished by Recover
+	_ = finishSet(marker, s.entries) // the commit is durable: what stays is finished by Recover or the feed's next run
 	return nil
 }
 
@@ -338,9 +352,13 @@ func rollbackSet(entries []journalEntry) error {
 		if errors.Is(err, fs.ErrNotExist) {
 			continue // put back already
 		}
+		if err != nil {
+			errs = append(errs, err) // the entry stays for the next rollback
+			continue
+		}
 		target, targetErr := os.Lstat(entry.target)
 		// A rename between two links of one file does nothing: such a target holds its backup already.
-		if err == nil && backup.Mode().IsRegular() && !absent[entry.target] && (targetErr != nil || !os.SameFile(backup, target)) {
+		if backup.Mode().IsRegular() && !absent[entry.target] && (targetErr != nil || !os.SameFile(backup, target)) {
 			errs = append(errs, rename(entry.path, entry.target))
 			continue
 		}
