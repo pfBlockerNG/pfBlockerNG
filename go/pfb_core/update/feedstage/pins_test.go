@@ -110,8 +110,8 @@ func TestDownloadThatIsNoRegularFileIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := stage.Run(context.Background(), feed, Change{Verdict: VerdictChanged, Force: "none"})
-	if got.Disposition != "failed" || got.Stage != "fetch" || got.Reason != "baseline_backup_failed" {
-		t.Fatalf("a run over a linked download = %+v, want failed/fetch/baseline_backup_failed", got)
+	if got.Disposition != "failed" || got.Stage != "fetch" || got.Reason != "baseline_unavailable" {
+		t.Fatalf("a run over a linked download = %+v, want failed/fetch/baseline_unavailable", got)
 	}
 	if info, err := os.Lstat(orig); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Errorf("the linked download is left %v (%v), want the link untouched", info, err)
