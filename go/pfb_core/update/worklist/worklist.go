@@ -102,15 +102,11 @@ type Plan struct {
 
 var kinds = []string{"ipv4", "ipv6", "dnsbl"}
 
-// probeFiles are a kept probe body and its validators (feedfetch), and the record of its source.
-var probeFiles = []string{".probe", ".probe.etag", ".probe.lastmod", ".probe.size", probeSource}
-
-const probeSource = ".probe.src"
-
 type candidate struct {
 	feed  feedstage.Feed
 	stage *feedstage.Stage
 	dir   string
+	stop  string // why the feed is stopped before any file of it is read: its folder or its name
 }
 
 type builder struct {
@@ -129,8 +125,7 @@ func Build(ctx context.Context, in Input) (Plan, error) {
 	case r.Trigger == "scheduled" || r.Trigger == "retry":
 		return b.scheduled()
 	case r.Trigger == "apply":
-		// No feed work and no Extras: the apply applies what is published (spec §3, stage 7).
-		return Plan{Decision: Now}, nil
+		return b.apply()
 	case r.Trigger != "manual":
 		return Plan{}, fmt.Errorf("trigger %q is no Update trigger", r.Trigger)
 	case !slices.Contains([]string{"ip", "dnsbl", "both"}, r.Scope):
@@ -152,7 +147,8 @@ func (b *builder) scheduled() (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	due := len(b.in.Feeds) > 0 || slices.ContainsFunc(cands, func(c candidate) bool { return present(c.path(".fail")) })
+	due := len(b.in.Feeds) > 0 || b.in.ManifestMissing ||
+		slices.ContainsFunc(cands, func(c candidate) bool { return c.stop == "" && present(c.path(".fail")) })
 	switch {
 	case due:
 		pending := map[string]bool{}
@@ -163,9 +159,45 @@ func (b *builder) scheduled() (Plan, error) {
 	case !b.in.ExtrasChanged:
 		return Plan{Decision: Nothing}, nil
 	case !b.in.InWindow:
-		return Plan{Decision: Pending}, nil
+		return b.pending(Plan{Decision: Pending}, nil)
 	}
 	return b.pass("both", "none")
+}
+
+// apply builds exactly the feeds earlier Updates left pending, as changed: no probe, no outcome, no Extras. A pending
+// feed that left the settings is skipped.
+func (b *builder) apply() (Plan, error) {
+	cands, err := b.candidates("both", false)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan := Plan{Decision: Now}
+	for _, c := range cands {
+		if !slices.Contains(b.in.PendingFeeds, c.feed.ID) {
+			continue
+		}
+		item, ok := b.prepare(c)
+		if ok {
+			item.Change = feedstage.Change{Verdict: feedstage.VerdictChanged, Force: "none"}
+		}
+		plan.Items = append(plan.Items, item)
+	}
+	return plan, nil
+}
+
+// pending sets plan.PendingFeeds: the feeds of the settings, in walk order, that earlier Updates left pending or this one
+// found changed.
+func (b *builder) pending(plan Plan, changed []string) (Plan, error) {
+	cands, err := b.candidates("both", false)
+	if err != nil {
+		return Plan{}, err
+	}
+	for _, c := range cands {
+		if slices.Contains(b.in.PendingFeeds, c.feed.ID) || slices.Contains(changed, c.feed.ID) {
+			plan.PendingFeeds = append(plan.PendingFeeds, c.feed.ID)
+		}
+	}
+	return plan, nil
 }
 
 // pass is a pass without a check (today's sync_package_pfblockerng() called directly): every feed of the scope, a feed
@@ -180,7 +212,8 @@ func (b *builder) pass(scope, force string) (Plan, error) {
 		item, ok := b.prepare(c)
 		if ok && !c.feed.Custom {
 			item.Change.Verdict = feedstage.VerdictUnchanged
-			if present(c.path(".fail")) || !feedstage.ListsPublished(c.dir, c.feed) {
+			if present(c.path(".fail")) || !feedstage.ListsPublished(c.dir, c.feed) ||
+				b.in.GeoIPChanged && c.feed.Format == "geoip" {
 				item.Change.Verdict = feedstage.VerdictChanged
 			}
 		}
@@ -204,15 +237,14 @@ func (b *builder) walk(scope string, forceAll bool, pending map[string]bool) (Pl
 		force = b.in.Force
 	}
 	var plan Plan
+	var changed []string // the feeds today's check marks for an update
 	for _, c := range cands {
 		id := c.feed.ID
-		if c.feed.State == "hold" && feedstage.ListsPublished(c.dir, c.feed) {
+		selected := forceAll || pending[id]
+		if c.stop == "" && c.feed.State == "hold" && feedstage.ListsPublished(c.dir, c.feed) {
 			// Hold with its list stands: not checked, and a named feed is a success. The stage removes a fail marker only
-			// after a download, which a held feed never makes, so the walk consumes it as today's does: else the marker would
-			// add the feed to every later walk.
-			if !forceAll && !pending[id] {
-				continue
-			}
+			// after a download, which a held feed never makes, so the walk consumes it for every held feed, as today's
+			// does: else the marker would make every later scheduled Update due.
 			item, ok := b.prepare(c)
 			if ok {
 				if err := removeIfExists(c.path(".fail")); err != nil {
@@ -224,21 +256,25 @@ func (b *builder) walk(scope string, forceAll bool, pending map[string]bool) (Pl
 					}
 				}
 			}
-			plan.Items = append(plan.Items, item)
+			if selected {
+				plan.Items = append(plan.Items, item)
+			}
 			continue
 		}
-		if !forceAll && !pending[id] && !present(c.path(".fail")) {
+		if !selected && (c.stop != "" || !present(c.path(".fail"))) {
 			continue
 		}
 		item, ok := b.prepare(c)
-		if ok {
-			item.Checked = true
-			if !forceAll {
-				item = b.check(c, item)
+		if ok && !forceAll {
+			var marked bool
+			item, marked = b.check(c, item)
+			item.Checked = item.Stopped == ""
+			if marked {
+				changed = append(changed, id)
 			}
-			if item.Stopped == "" {
-				item.Change.Force = force
-			}
+		}
+		if item.Stopped == "" {
+			item.Change.Force = force
 		}
 		plan.Items = append(plan.Items, item)
 	}
@@ -250,27 +286,19 @@ func (b *builder) walk(scope string, forceAll bool, pending map[string]bool) (Pl
 		b.found = b.continentEnabled()
 	}
 	switch {
-	case b.found && !b.in.InWindow:
+	case b.found && !b.in.InWindow, !b.found && (b.in.ExtrasChanged || b.in.PendingApply) && !b.in.InWindow:
 		plan.Decision = Pending
-	case !b.found && (b.in.ExtrasChanged || b.in.PendingApply) && !b.in.InWindow:
-		plan.Decision = Pending
-	default:
-		plan.Decision = Now // a change applied, or today's no-update pass
+		return b.pending(plan, changed)
 	}
+	plan.Decision = Now // a change applied, or today's no-update pass
 	return plan, nil
 }
 
 // prepare makes the feed's folder and kept probe safe to read: the folder recovered (feedstage.Recover, once per folder)
 // and a probe body kept for another source dropped. A feed it cannot prepare is stopped.
 func (b *builder) prepare(c candidate) (Item, bool) {
-	item := Item{Feed: c.feed}
-	err, done := b.recovered[c.dir]
-	if !done {
-		err = feedstage.Recover(c.dir)
-		b.recovered[c.dir] = err
-	}
-	if err != nil {
-		item.Stopped = "feed_folder_unrecoverable"
+	item := Item{Feed: c.feed, Stopped: c.stop}
+	if c.stop != "" {
 		return item, false
 	}
 	if source, ok := probeIdentity(c); ok && dropStaleProbe(c, source) != nil {
@@ -280,11 +308,14 @@ func (b *builder) prepare(c candidate) (Item, bool) {
 	return item, true
 }
 
-// check is pfb_update_check() for a feed of a scheduled walk, rule by rule in today's order.
-func (b *builder) check(c candidate, item Item) Item {
+// check is pfb_update_check() for a feed of a scheduled walk, rule by rule in today's order, and whether today's check
+// marks the feed for an update ({header}.update): every change but a missing list.
+func (b *builder) check(c candidate, item Item) (Item, bool) {
+	marked := false
 	changed := func(outcome string) Item {
 		b.found = true
 		item.Change.Verdict, item.Outcome = feedstage.VerdictChanged, outcome
+		marked = true
 		return item
 	}
 	unchanged := func(outcome string) Item {
@@ -295,16 +326,22 @@ func (b *builder) check(c candidate, item Item) Item {
 		item.Change.Verdict, item.Change.Reason = feedstage.VerdictFailed, reason
 		return item
 	}
-	return b.verdict(c, changed, unchanged, failed)
+	missing := func() Item {
+		b.found = true
+		item.Change.Verdict = feedstage.VerdictChanged
+		return item
+	}
+	item = b.verdict(c, changed, unchanged, failed, missing)
+	return item, marked && item.Stopped == ""
 }
 
-func (b *builder) verdict(c candidate, changed, unchanged, failed func(string) Item) Item {
+func (b *builder) verdict(c candidate, changed, unchanged, failed func(string) Item, missing func() Item) Item {
 	f := c.feed
 	switch f.Format {
 	case "whois", "asn":
 		// Resolved again every run: valid source, a change (today's "Update found").
 		if !validListSource(f) {
-			return failed("feed_source_invalid")
+			return Item{Feed: f, Stopped: "feed_source_invalid"} // today's "Invalid WHOIS" or "Invalid ASN": no outcome
 		}
 		return changed(OutcomeSuccess)
 	}
@@ -323,7 +360,7 @@ func (b *builder) verdict(c candidate, changed, unchanged, failed func(string) I
 		return changed("") // re-attempted, with no outcome until it succeeds
 	}
 	if !feedstage.ListsPublished(c.dir, f) {
-		return changed("")
+		return missing() // today's check marks no update for a missing list: the pass downloads it anyway
 	}
 	info, err := os.Lstat(c.path(".orig"))
 	switch {
@@ -339,7 +376,7 @@ func (b *builder) verdict(c candidate, changed, unchanged, failed func(string) I
 	case feedfetch.Unchanged:
 		return unchanged(OutcomeSuccess)
 	case feedfetch.Changed:
-		if source, ok := probeIdentity(c); ok && regularExists(c.path(".probe")) && writeWhole(c.path(probeSource), source) != nil {
+		if source, ok := probeIdentity(c); ok && regularExists(c.path(".probe")) && writeWhole(c.path(feedstage.ProbeSource), source) != nil {
 			return Item{Feed: f, Stopped: "probe_source_write_failed"}
 		}
 		return changed(OutcomeSuccess)
@@ -402,7 +439,20 @@ func (b *builder) candidates(scope string, cron bool) ([]candidate, error) {
 					return nil, fmt.Errorf("no feed stage for %s feeds", kind)
 				}
 				f.SkipFeedPassed = b.in.SkipFeed != 0 && b.in.Failures[f.Name] >= b.in.SkipFeed
-				out = append(out, candidate{feed: f, stage: stage, dir: stage.Paths.FeedDir})
+				c := candidate{feed: f, stage: stage, dir: stage.Paths.FeedDir}
+				err, done := b.recovered[c.dir]
+				if !done {
+					// Every folder is recovered before any rule reads a file of it.
+					err = feedstage.Recover(c.dir)
+					b.recovered[c.dir] = err
+				}
+				switch {
+				case !feedWord(f.Name):
+					c.stop = "feed_name_invalid"
+				case err != nil:
+					c.stop = "feed_folder_unrecoverable"
+				}
+				out = append(out, c)
 			}
 		}
 	}
@@ -468,13 +518,13 @@ func probeIdentity(c candidate) (string, bool) {
 // ingest publishes a kept body without fetching (feedfetch), so a body fetched for another source must never reach it.
 func dropStaleProbe(c candidate, source string) error {
 	if !present(c.path(".probe")) {
-		return removeIfExists(c.path(probeSource))
+		return removeIfExists(c.path(feedstage.ProbeSource))
 	}
-	if recorded, err := readRecord(c.path(probeSource)); err == nil && recorded == source {
+	if recorded, err := readRecord(c.path(feedstage.ProbeSource)); err == nil && recorded == source {
 		return nil
 	}
 	var errs []error
-	for _, suffix := range probeFiles {
+	for _, suffix := range feedstage.ProbeFiles() {
 		errs = append(errs, removeIfExists(c.path(suffix)))
 	}
 	return errors.Join(errs...)
@@ -497,7 +547,7 @@ func readRecord(path string) (string, error) {
 // writeWhole writes path whole: a temporary beside it, renamed over it.
 func writeWhole(path, content string) error {
 	part := path + ".part"
-	file, err := os.OpenFile(part, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o644)
+	file, err := os.OpenFile(part, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
 		return err
 	}
@@ -509,6 +559,13 @@ func writeWhole(path, content string) error {
 		os.Remove(part)
 	}
 	return err
+}
+
+// feedWord is the grammar of a feed's file stem, which keeps every path Build makes inside the feed folder.
+func feedWord(name string) bool {
+	return name != "" && !strings.ContainsFunc(name, func(r rune) bool {
+		return (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_'
+	})
 }
 
 func present(path string) bool {

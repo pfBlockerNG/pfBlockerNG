@@ -341,6 +341,8 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			}
 			sourceChanged, clearFail = ingested.Status != httpStatusNotModified, true
 			if probeKept {
+				// The record of the consumed body's source goes with it; one left behind is dropped by the next stage 6.
+				_ = removeIfExists(feedPath(feed, ProbeSource))
 				// The ingest consumed the live probe body, which a failure later in the run must not leave to be staged again.
 				retire = slices.Clone(probeFiles)
 			}
@@ -396,8 +398,8 @@ func (s *Stage) validate(f Feed, change Change) string {
 // such as the category editor's "Auto" or an empty one, falls through to auto.
 var formats = []string{"auto", "regex", "geoip", "whois", "asn", "rsync"}
 
-// Request is the transfer request Run makes for f, and stage 6's probe with it: "" or the reason f has none. A whois or asn
-// feed, and a custom list, transfer nothing.
+// Request is the transfer request Run makes for f, which stage 6's probe makes too, and "" or the reason f has none. Run
+// transfers nothing for a whois or asn feed or a custom list, whatever Request answers for them.
 func (s *Stage) Request(f Feed) (feedfetch.Request, string) {
 	if !slices.Contains(formats, f.Format) {
 		f.Format = "auto"
