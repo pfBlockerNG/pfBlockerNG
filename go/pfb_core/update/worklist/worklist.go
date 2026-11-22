@@ -46,17 +46,16 @@ const (
 	OutcomeRetryCapReach = "retry-cap-reached"
 )
 
-// Request is the Update's request (update.Request): trigger scheduled, retry, manual or apply; a manual one's scope (ip,
-// dnsbl, both) and force (none, parse, download, both). The other triggers' scope and force are not read: Core never sends
-// them, and today's program reads them as both and none.
-type Request struct {
-	Trigger, Scope, Force string
-	Feeds                 []string // the feed ids a scheduled or retry Update names
-}
-
 // Input is what Build reads. Every path is the stages'.
 type Input struct {
-	Request Request
+	// Trigger, Scope, Force and Feeds are the Update's request (update.Request): trigger scheduled, retry, manual or apply;
+	// a manual one's scope (ip, dnsbl, both) and force (none, parse, download, both). The other triggers' scope and force
+	// are not read: Core never sends them, and today's program reads them as both and none.
+	Trigger, Scope, Force string
+	Feeds                 []string // the feed ids a scheduled or retry Update names
+	// PendingFeeds are the feeds earlier Updates left to the apply (Plan.PendingFeeds), which the Core Updater's state
+	// carries (sub-slice 9i).
+	PendingFeeds []string
 	// Settings are the projections as Store.GetClear answers them: feeds/ipv4, feeds/ipv6, feeds/dnsbl and feeds/geoip.
 	Settings map[string]map[string]any
 	// Stages are the per-feed stages by kind (ipv4, ipv6, dnsbl): their Paths.FeedDir is the kind's feed folder, their
@@ -68,6 +67,12 @@ type Input struct {
 	// ExtrasChanged: an Extra of this Update changed its data (today's $dcc_changed). PendingApply: the Outpost holds a
 	// change that waits for an apply (pfb_core_update_pending_apply()).
 	ExtrasChanged, PendingApply bool
+	// GeoIPChanged: this Update's GeoIP conversion changed the country lists (the Extras stage, sub-slice 9f; today's
+	// geoip.update).
+	GeoIPChanged bool
+	// ManifestMissing: the DNSBL manifest is absent while the DNSBL hosts module is on, as pfb_core_update_retry_due()
+	// reads it; supplied by the Core Updater (sub-slice 9i) from the DNSBL publication (sub-slice 9g).
+	ManifestMissing bool
 	// SkipFeed is the skipfeed limit (0: none) and Failures the failed downloads of each feed today, by its name, before
 	// this Update: the caller's, as neither is in a projection (pfb_failures() counts the error log's FAIL lines).
 	SkipFeed int
@@ -90,6 +95,9 @@ type Item struct {
 type Plan struct {
 	Items    []Item
 	Decision Decision
+	// PendingFeeds, on a Pending decision, are the feeds the apply must build: Input.PendingFeeds and the feeds this Update
+	// found changed. Nil otherwise.
+	PendingFeeds []string
 }
 
 var kinds = []string{"ipv4", "ipv6", "dnsbl"}
@@ -115,7 +123,7 @@ type builder struct {
 // Build decides the work of one Update, after the lifetime lock and the snapshot. It writes only the record of a kept
 // probe body's source, by a rename, and it drops a kept probe body whose source is not the feed's now (issue #4038).
 func Build(ctx context.Context, in Input) (Plan, error) {
-	r := in.Request
+	r := in
 	b := &builder{ctx: ctx, in: in, recovered: map[string]error{}}
 	switch {
 	case r.Trigger == "scheduled" || r.Trigger == "retry":
@@ -144,11 +152,11 @@ func (b *builder) scheduled() (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	due := len(b.in.Request.Feeds) > 0 || slices.ContainsFunc(cands, func(c candidate) bool { return present(c.path(".fail")) })
+	due := len(b.in.Feeds) > 0 || slices.ContainsFunc(cands, func(c candidate) bool { return present(c.path(".fail")) })
 	switch {
 	case due:
 		pending := map[string]bool{}
-		for _, id := range b.in.Request.Feeds {
+		for _, id := range b.in.Feeds {
 			pending[id] = true
 		}
 		return b.walk("both", false, pending)
@@ -193,7 +201,7 @@ func (b *builder) walk(scope string, forceAll bool, pending map[string]bool) (Pl
 	}
 	force := "none"
 	if forceAll {
-		force = b.in.Request.Force
+		force = b.in.Force
 	}
 	var plan Plan
 	for _, c := range cands {
