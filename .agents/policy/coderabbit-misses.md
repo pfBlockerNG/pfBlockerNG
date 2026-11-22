@@ -13,6 +13,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 16,384-byte budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `dab470ffc`  core: publish the settings revision key whole  (#4204) — two quota notices, the second from an early re-ask; Codex unavailable
 - `43d7e5ddf`  smoke: end-to-end CrowdSec bouncer tests against a stub LAPI  (#4121) — reviewed `a17a700fd` only; Codex at its limit
 - `5dacd18fe`  crowdsec: write the status file on its own timer  (#4120) — quota notice; Codex at its limit; three review rounds
 - `c7a5a0d4e`  crowdsec: take the bouncer off the update pass and run it the way Core is run  (#4143) — quota notice; Codex at its limit; three review rounds
