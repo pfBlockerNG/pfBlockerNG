@@ -27,6 +27,7 @@ import (
 	"syscall"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedparse"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update/feedstage"
 )
 
@@ -95,7 +96,8 @@ type Plan struct {
 	Items    []Item
 	Decision Decision
 	// PendingFeeds are the feeds still pending once this plan is run: the caller's next state (Input.PendingFeeds). A
-	// Pending decision builds nothing, so they are Input.PendingFeeds and the feeds this Update found changed. Any other
+	// Pending decision builds nothing, so they are Input.PendingFeeds and the feeds this Update found changed, but for the
+	// feeds it settled as an applied pass would: held, or checked unchanged or past the retry cap. Any other
 	// decision hands every pending feed it can to the stage: as changed, unless the walk checked it, whose verdict stands;
 	// a held feed with its list is held, and counts as built, as does a feed its check found unchanged or past the retry
 	// cap (its fail marker consumed, as today, so no later Update builds it past the cap). What stays are the feeds it could
@@ -258,6 +260,13 @@ func (b *builder) build(c candidate, item Item, planned bool) (Item, bool) {
 	case !planned && held:
 		item = b.hold(c, "none")
 		return item, item.Stopped == ""
+	case !planned && transfers(c.feed):
+		// A refusal of the stage's own configuration (no rsync program) fails the feed, as the walk's check does, and
+		// keeps it pending until the configuration clears (a refused source is never pending here).
+		if _, reason := c.stage.Request(c.feed); reason != "" {
+			return b.prepare(c, feedstage.Change{Verdict: feedstage.VerdictFailed, Reason: reason, Force: "none"}), false
+		}
+		fallthrough
 	case !planned:
 		item = b.prepare(c, feedstage.Change{Verdict: feedstage.VerdictChanged, Force: "none"})
 		return item, item.Stopped == ""
@@ -307,15 +316,15 @@ func (b *builder) scheduled(cands []candidate) Plan {
 	case !b.in.ExtrasChanged:
 		return Plan{Decision: Nothing}
 	case !b.in.InWindow:
-		return b.deferred(Plan{}, cands, nil)
+		return b.deferred(Plan{}, cands, nil, nil)
 	}
 	return b.pass(cands, "none")
 }
 
 // deferred makes plan a Pending decision: the feeds of the settings, in walk order, that earlier Updates left pending or this
-// one found changed are left to the apply.
-func (b *builder) deferred(plan Plan, cands []candidate, changed []string) Plan {
-	plan.Decision, plan.PendingFeeds = Pending, b.stillPending(cands, nil, changed)
+// one found changed are left to the apply, but for those done: settled by this Update as an applied pass would settle them.
+func (b *builder) deferred(plan Plan, cands []candidate, changed []string, done map[string]bool) Plan {
+	plan.Decision, plan.PendingFeeds = Pending, b.stillPending(cands, done, changed)
 	return plan
 }
 
@@ -325,10 +334,11 @@ func (b *builder) pass(cands []candidate, force string) Plan {
 	plan := Plan{Decision: Now}
 	for _, c := range cands {
 		switch {
-		case c.stop == "" && c.feed.State == "hold" && feedstage.ListsPublished(c.dir, c.feed):
-			plan.Items = append(plan.Items, b.hold(c, force)) // held, as the walk holds it
+		case force != "parse" && c.stop == "" && c.feed.State == "hold" && feedstage.ListsPublished(c.dir, c.feed):
+			plan.Items = append(plan.Items, b.hold(c, force)) // held, as the walk holds it; a Reload is never held
 			continue
-		case refusedListSource(c):
+		case refusedListSource(c) && (force != "parse" || !regularExists(c.path(".orig"))):
+			// A Reload parses a saved baseline again without resolving the source.
 			plan.Items = append(plan.Items, Item{Feed: c.feed, Stopped: "feed_source_invalid"}) // as the check stops it
 			continue
 		}
@@ -391,7 +401,13 @@ func (b *builder) walk(cands []candidate, forceAll bool, pending map[string]bool
 	}
 	// An enabled continent asks for the pass as a found change does; outside the window the pass waits for the apply.
 	if !forceAll && !b.in.InWindow && (found || b.continentEnabled() || b.in.ExtrasChanged || b.in.PendingApply) {
-		return b.deferred(plan, cands, changed)
+		// A feed held, or checked unchanged or past the retry cap (its fail marker consumed), is settled as an applied
+		// pass settles it: the apply must not build it past the cap.
+		done := map[string]bool{}
+		for _, item := range plan.Items {
+			done[item.Feed.ID] = item.Stopped == "" && item.Change.Verdict == feedstage.VerdictUnchanged
+		}
+		return b.deferred(plan, cands, changed, done)
 	}
 	plan.Decision = Now // a change applied, or today's no-update pass
 	return plan
@@ -482,7 +498,8 @@ func (b *builder) check(c candidate) verdict {
 	return verdict{verdict: feedstage.VerdictFailed, reason: cmp.Or(probe.Reason, "feed_probe_failed")}
 }
 
-// validListSource is today's check of a whois feed's domain or an asn feed's AS number, cut at its first space.
+// validListSource is today's check of a whois feed's domain (PFB_FILTER_DOMAIN) or an asn feed's AS number, cut at its
+// first space.
 func validListSource(f feedstage.Feed) bool {
 	source, _, _ := strings.Cut(f.Source, " ")
 	source = strings.Trim(source, " \t\n\r\x00\x0b")
@@ -494,7 +511,12 @@ func validListSource(f feedstage.Feed) bool {
 			return (r < '0' || r > '9') && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z')
 		})
 	}
-	return true
+	return feedparse.DomainOK(source)
+}
+
+// transfers reports whether the stage transfers f's source: not a custom list, a whois or an asn feed.
+func transfers(f feedstage.Feed) bool {
+	return !f.Custom && f.Format != "whois" && f.Format != "asn"
 }
 
 func (b *builder) continentEnabled() bool {
