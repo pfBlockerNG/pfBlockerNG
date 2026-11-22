@@ -631,6 +631,246 @@ final class OutpostApplyTest extends TestCase
 		$this->assertSame(self::NEW, $r['kernel']['pfB_Deny_Aggregated_v4'] ?? $r['mirrors']['pfB_Deny_Aggregated_v4.txt']);
 	}
 
+	// ---- the first review round's findings -------------------------------------------------------
+
+	/** A table whose push fails, though no ledger entry records it (the ledger cannot be written), fails and keeps its cursor. */
+	public function testATableWhosePushFailsKeepsItsCursorWithoutALedgerEntry(): void
+	{
+		$apply = self::at([self::ABUSE => ['1', self::OLD], self::BETA => ['1', self::OLD]]);
+		$apply['files']['{dbdir}/pfb_sync_status.json/unwritable'] = [];	// a folder at the ledger's path: no entry is written
+		$apply += ['pfctlFail' => ['pfB_Beta_v4.add'], 'apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3), self::resource(self::BETA, '2', 3)]),
+			'core'    => [self::delta(self::ABUSE, '2', '1', ['203.0.113.9'], ['192.0.2.2'], self::NEW), self::text(['203.0.113.9']),
+				self::text(['192.0.2.2']), self::delta(self::BETA, '2', '1', ['203.0.113.9'], ['192.0.2.2'], self::NEW),
+				self::text(['203.0.113.9']), self::text(['192.0.2.2'])]]];
+		$r = $this->applyOnce($apply, ['Abuse', 'Beta']);
+
+		$this->assertArrayNotHasKey('pfb_sync_status.json', $r['syncStatus'], 'before: no ledger entry was written');
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertSame([self::ABUSE => '2', self::BETA => '1'], self::generations($r));
+		$this->assertSame([self::ABUSE => '2'], $r['resultLines'][0]['applied']);
+		$this->assertSame([[self::BETA, 'apply']], self::failedPairs($r));
+	}
+
+	/**
+	 * WHEN the Core API stops serving part way through the fetch THEN the apply exits 75 having changed nothing: no mirror, no
+	 * table, no cursor, no NAT rule, no DNSBL statistics row and no issue filed.
+	 */
+	public function testADeferralPartWayThroughTheFetchChangesNothing(): void
+	{
+		$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
+		$nat = [['descr' => 'pfB_DNS_Redirect_lan_v4', 'interface' => 'lan']];
+		$apply = self::at([self::ABUSE => ['1', self::OLD], self::BETA => ['1', self::OLD]]) + ['config' => ['nat/rule' => $nat,
+			"{$dnsbl}/dnsbl_redir" => 'on', "{$dnsbl}/dnsbl_redir_int" => 'lan'], 'apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3), self::resource(self::BETA, '2', 3)], ['scope' => 'both',
+				'dnsbl' => ['generation' => '9', 'groups' => [['name' => 'Ads', 'entries' => 120, 'changed' => TRUE]]],
+				'issues' => [['resource' => 'feed/ipv4:Foo_v4', 'stage' => 'download', 'code' => 'curl_incomplete', 'message' => 'cut']]]),
+			'core'    => [self::delta(self::ABUSE, '2', '1', ['203.0.113.9'], ['192.0.2.2'], self::NEW), self::text(['203.0.113.9']),
+				self::text(['192.0.2.2']), ['status' => 503, 'type' => 'application/json',
+				'body' => json_encode(['error' => ['code' => 'unavailable', 'message' => 'the store is not open']])]]]];
+		$r = $this->applyOnce($apply, ['Abuse', 'Beta']);
+
+		$this->assertSame(PFB_EXIT_LOCKED, $r['exit'], $r['log']);
+		$this->assertCount(4, $r['coreRequests'], 'before: Abuse was fetched whole and Beta asked for');
+		$this->assertSame([], $r['resultLines']);
+		$this->assertSame(['pfB_Abuse_v4.txt' => self::OLD, 'pfB_Beta_v4.txt' => self::OLD], $r['mirrors'], 'no mirror moved and none is left staged');
+		$this->assertSame([], self::pushes($r));
+		$this->assertSame([self::ABUSE => '1', self::BETA => '1'], self::generations($r));
+		$this->assertSame($nat, $r['nat'], 'the DNS step did not run');
+		$this->assertNull($r['dnsblStats'], 'no DNSBL statistics row was written');
+		$this->assertSame([], array_filter($r['notices'], static fn (array $n): bool => str_contains($n['notice'], 'feed/ipv4:Foo_v4')));
+		$this->assertStringNotContainsString('feed/ipv4:Foo_v4', $r['syncStatus']['pfb_sync_status.json'] ?? '');
+	}
+
+	/** Core's issue of stage apply is filed where the tick's reconciler, which re-applies every open ip and dnsbl apply entry, does not act. */
+	public function testCoresApplyIssueIsNoEntryTheTickReconcilerActsOn(): void
+	{
+		$issue = ['resource' => self::ABUSE, 'stage' => 'apply', 'code' => 'publish_failed', 'message' => 'the store refused the body'];
+		$r = $this->applyOnce(['apply' => ['request' => self::request([], ['issues' => [$issue]])]]);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertCount(1, array_filter($r['notices'], static fn (array $n): bool => str_contains($n['notice'], self::ABUSE . ' ] apply publish_failed')),
+			'the notice names Core\'s stage');
+		$ledger = json_decode($r['syncStatus']['pfb_sync_status.json'] ?? '{}', TRUE);
+		$this->assertSame(['core'], array_keys($ledger['ip'][self::ABUSE] ?? []), 'the entry is of stage core');
+		$open = [];
+		foreach ($ledger as $facility => $items) {
+			foreach ($items as $item => $stages) {
+				if (isset($stages['apply'])) {
+					$open[] = "{$facility}/{$item}";
+				}
+			}
+		}
+		$this->assertSame([], $open, 'no apply entry is open');
+	}
+
+	/** WHEN the DNS step changes the Resolver's configuration THEN the apply loads it into the Resolver. */
+	public function testAResolverConfigurationTheDnsStepChangedIsLoaded(): void
+	{
+		$apply = ['config' => ['unbound/custom_options' => base64_encode("server:include: /var/unbound/pfb_dnsbl.conf\n")],
+			'files' => ['host/var/unbound/unbound.conf' => ['server:']], 'apply' => ['request' => self::request([], ['scope' => 'dnsbl'])]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertStringContainsString('DNSBL - Removing previous DNSBL Unbound custom option', $r['log'], 'before: the DNS step changed the Resolver');
+		$this->assertStringContainsString("\nDNSBL is disabled\n", $r['log'], 'the Resolver is reloaded with its new configuration');
+		$this->assertTrue($r['resultLines'][0]['dnsblChanged']);
+	}
+
+	/** @return array<string, array{0: string, 1: int}> a trigger, and the exit status of its apply while GeoIP is not ready */
+	public static function triggersWhileGeoipIsNotReady(): array
+	{
+		return ['scheduled' => ['scheduled', 0], 'retry' => ['retry', 0], 'apply' => ['apply', 0], 'manual' => ['manual', 1]];
+	}
+
+	/** WHILE a GeoIP generation swap is in progress the apply applies nothing and keeps the changes pending, exiting as version 1 does. */
+	#[DataProvider('triggersWhileGeoipIsNotReady')]
+	public function testWhileGeoipIsNotReadyNothingIsAppliedAndTheChangesStayPending(string $trigger, int $exit): void
+	{
+		$apply = self::at([self::ABUSE => ['1', self::OLD]]);
+		$apply['files']['{ccdir}/.pfb_generation_swapping'] = [];
+		$apply['apply'] = ['request' => self::request([self::resource(self::ABUSE, '2', 3)], ['trigger' => $trigger])];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame($exit, $r['exit'], $r['log']);
+		$this->assertSame([], $r['coreRequests']);
+		$this->assertSame([['version' => 2]], $r['resultLines']);
+		$this->assertSame([], self::pushes($r));
+		$this->assertSame([self::ABUSE => '1'], self::generations($r));
+		$this->assertTrue($r['pending']);
+		$this->assertTrue($r['ledgerPending']);
+	}
+
+	/** @return array<string, array{array<string, mixed>}> a lock another process holds */
+	public static function locksHeldElsewhere(): array
+	{
+		return [
+			'the scheduler dispatcher lock' => [['apply' => ['dispatchLockHeld' => TRUE]]],
+			'the DNS configuration lock'    => [['dnsConfigLockHeld' => TRUE, 'config' => ['installedpackages/pfblockerng/config/0/pfb_dns_listen_vip' => 'on']]],
+		];
+	}
+
+	/** WHEN a lock the update pass takes is held elsewhere THEN the apply defers with no result line and leaves no lock of its own held. */
+	#[DataProvider('locksHeldElsewhere')]
+	public function testALockThePassTakesDefersTheApply(array $step): void
+	{
+		$apply = array_replace_recursive(self::at([self::ABUSE => ['2', self::OLD]]) + ['apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)]), 'core' => [self::unchanged(self::ABUSE, '2')]]], $step);
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(PFB_EXIT_LOCKED, $r['exit'], $r['log']);
+		$this->assertSame([], $r['resultLines']);
+		$this->assertSame([], $r['coreRequests']);
+		$this->assertSame([FALSE, FALSE], [$r['locks']['feedPass'], $r['locks']['dispatch']], 'the apply released what it took');
+	}
+
+	/** The cron-disable sentinel stops a scheduled apply (exit 75, nothing fetched) and leaves a manual one alone. */
+	public function testTheCronDisableSentinelStopsOnlyAScheduledApply(): void
+	{
+		$sentinel = self::at([self::ABUSE => ['2', self::OLD]]);
+		$sentinel['files']['{dbdir}/.pfb_cron_disable'] = [];
+		$manual = $sentinel + ['apply' => ['request' => self::request([self::resource(self::ABUSE, '2', 3)]), 'core' => [self::unchanged(self::ABUSE, '2')]]];
+		$scheduled = $sentinel + ['apply' => ['request' => self::request([self::resource(self::ABUSE, '2', 3)], ['trigger' => 'scheduled'])]];
+		[, $m, $s] = $this->runSteps([self::prime([self::group('Abuse')]), $manual, $scheduled]);
+
+		$this->assertSame(0, $m['exit'], $m['log']);
+		$this->assertSame([self::ABUSE => '2'], $m['resultLines'][0]['applied'], 'before: a manual apply runs');
+		$this->assertSame(PFB_EXIT_LOCKED, $s['exit'], $s['log']);
+		$this->assertStringContainsString('/.pfb_cron_disable disables scheduled work', $s['log'], 'the sentinel, not the absent Core, defers it');
+		$this->assertSame([], $s['coreRequests']);
+		$this->assertSame([], $s['resultLines'] ?? []);
+	}
+
+	/** A removal whose kill fails keeps the resource's cursor and its ledger entry, with no mirror: the tick's retry kills the table. */
+	public function testARemovalWhoseKillFailsIsRetriedAsAKill(): void
+	{
+		$apply = self::at([self::BETA => ['3', self::OLD]]) + ['pfctlFail' => ['pfB_Beta_v4.kill'],
+			'config' => ['installedpackages/pfblockernglistsv4/config' => [self::group('Abuse')]],
+			'apply' => ['request' => self::request([], ['removed' => [self::BETA]])]];
+		$r = $this->applyOnce($apply, ['Abuse', 'Beta']);
+
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertSame([[self::BETA, 'apply']], self::failedPairs($r));
+		$this->assertSame([self::BETA => '3'], self::generations($r));
+		$this->assertArrayHasKey('pfB_Beta_v4', $r['kernel'], 'the table is still loaded');
+		$this->assertArrayNotHasKey('pfB_Beta_v4.txt', $r['mirrors'], 'no mirror: pfb_ip_apply_retry() kills a table that has none');
+		$this->assertArrayHasKey('apply', json_decode($r['syncStatus']['pfb_sync_status.json'], TRUE)['ip']['pfB_Beta_v4'] ?? []);
+	}
+
+	/** A failed resource is recorded on the received policy's apply record as a resource failure, not as an unconfirmed reload. */
+	public function testAFailedResourceIsRecordedAsSuch(): void
+	{
+		$apply = self::at([self::ABUSE => ['1', self::OLD]]) + ['openRecord' => TRUE, 'pfctlFail' => ['pfB_Abuse_v4.add'], 'apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)]),
+			'core'    => [self::delta(self::ABUSE, '2', '1', ['203.0.113.9'], ['192.0.2.2'], self::NEW), self::text(['203.0.113.9']), self::text(['192.0.2.2'])]]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertSame(['outcome' => 'failed', 'reason' => 'a resource was not applied; pending changes kept'], $r['applyRecord']);
+	}
+
+	/** A body over the table entries limit fails its resource and never reaches the mirror, which keeps the generation it holds. */
+	public function testABodyOverTheTableEntriesLimitNeverReachesTheMirror(): void
+	{
+		$four = [...self::NEW, '203.0.113.10'];
+		$apply = self::at([self::ABUSE => ['1', self::OLD]]) + ['config' => ['system/maximumtableentries' => '3'], 'apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)]),
+			'core'    => [self::full(self::ABUSE, '2', $four), self::text($four)]]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertCount(2, $r['coreRequests'], 'before: the body was fetched');
+		$this->assertSame([[self::ABUSE, 'apply']], self::failedPairs($r));
+		$this->assertStringContainsString('table entries limit', $r['resultLines'][0]['failed'][0]['message']);
+		$this->assertSame(['pfB_Abuse_v4.txt' => self::OLD], $r['mirrors'], 'the mirror is untouched and nothing is left staged');
+		$this->assertSame([self::ABUSE => '1'], self::generations($r));
+		$this->assertSame([], self::pushes($r));
+	}
+
+	/** @return array<string, array{array<string, mixed>}> what tells the apply a resource left, for a group config.xml still holds */
+	public static function removalsOfAGroupTheConfigurationHolds(): array
+	{
+		return [
+			'the request removes it' => [['request' => self::request([], ['removed' => [self::BETA]])]],
+			'Core answers not_found' => [['request' => self::request([self::resource(self::BETA, '4', 3)]),
+				'core' => [self::items(self::BETA, ['error' => ['code' => 'not_found', 'message' => 'no such resource']])]]],
+		];
+	}
+
+	/**
+	 * The first review round's decision on #4037: a resource that left Core's configuration while config.xml still holds its
+	 * group is not applied. It fails with stage apply and keeps its table, mirror, cursor and alias.
+	 */
+	#[DataProvider('removalsOfAGroupTheConfigurationHolds')]
+	public function testARemovalOfAGroupTheConfigurationHoldsIsNotApplied(array $request): void
+	{
+		$r = $this->applyOnce(self::at([self::ABUSE => ['2', self::OLD], self::BETA => ['3', self::OLD]]) + ['apply' => $request], ['Abuse', 'Beta']);
+
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertSame([[self::BETA, 'apply']], self::failedPairs($r));
+		$this->assertStringContainsString("settings changed since the Update's snapshot", $r['resultLines'][0]['failed'][0]['message']);
+		$this->assertArrayNotHasKey('removed', $r['resultLines'][0]);
+		$this->assertSame(self::OLD, $r['kernel']['pfB_Beta_v4'] ?? NULL);
+		$this->assertSame(self::OLD, $r['mirrors']['pfB_Beta_v4.txt'] ?? NULL);
+		$this->assertSame([self::ABUSE => '2', self::BETA => '3'], self::generations($r));
+		$this->assertContains('pfB_Beta_v4', array_column($r['aliases'], 'name'));
+	}
+
+	/** WHEN the apply throws THEN the apply trigger still puts the due-ledger flag back. */
+	public function testTheApplyTriggerRestoresTheDueFlagWhenTheApplyThrows(): void
+	{
+		$apply = self::at([self::ABUSE => ['2', self::OLD]]) + ['pending' => TRUE, 'config' => ['system/maximumtableentries' => ''],
+			'writeConfigThrow' => ['pfBlockerNG: save max Firewall table entries limit'],
+			'apply' => ['request' => self::request([self::resource(self::ABUSE, '2', 3)], ['trigger' => 'apply'])]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(1, $r['exit'], $r['log']);
+		$this->assertStringContainsString('throws, as the scenario asks', $r['log'], 'before: the apply threw');
+		$this->assertTrue($r['ledgerPending']);
+		$this->assertTrue($r['pending']);
+		$this->assertFalse($r['locks']['feedPass']);
+	}
+
 	// ---- the version dispatch ------------------------------------------------------------------
 
 	/** A version 2 request the contract refuses runs nothing, writes no result and exits 2, with the version 2 reason. */
