@@ -268,6 +268,15 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		defer os.Remove(et)
 		body = et
 	}
+	if fromProbe && src.ftp != nil && f.Proxy == nil {
+		// The body came from the probe's, which may be a hard link of a published file. It is retimed before anything
+		// is published, so a failure leaves the published copy, its digests and its validators as they were.
+		if lastMod := readFTPMetadataAt(probe).lastMod; !lastMod.IsZero() {
+			if err := retimeFile(body, lastMod); err != nil {
+				return Result{Status: t.status, Reason: "published copy could not be retimed"}
+			}
+		}
+	}
 	if err := publish(feed, body, sum, t.lastMod); err != nil {
 		return Result{Status: t.status, Reason: err.Error()}
 	}
@@ -277,14 +286,6 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		for _, v := range [...]string{".etag", ".lastmod", ".size"} {
 			os.Remove(published + v)
 			os.Rename(probe+v, published+v)
-		}
-		if src.ftp != nil && f.Proxy == nil {
-			if lastMod := readFTPMetadata(feed).lastMod; !lastMod.IsZero() {
-				// the body came from the probe's, which may be a hard link of a published file
-				if err := retime(published, lastMod); err != nil {
-					return Result{Status: t.status, Reason: "published copy could not be retimed"}
-				}
-			}
 		}
 	} else if src.ftp != nil && f.Proxy == nil {
 		writeFTPMetadataAt(published, ftpMetadataFor(t))
