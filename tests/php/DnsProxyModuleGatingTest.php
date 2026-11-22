@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
+require_once __DIR__ . '/CutShortWrite.php';
 require_once __DIR__ . '/ConfigXmlDiskTrait.php';
+require_once __DIR__ . '/PageStatementLoader.php';
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -287,6 +289,83 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// ... and the module's own inputs are still produced, because the proxy loads the module from them.
 		$this->assertFileExists($GLOBALS['pfb']['unbound_py_conf']);
 		$this->assertFileExists($GLOBALS['pfb']['unbound_py_wh']);
+	}
+
+	/** Issue #4201: a module ini whose write is cut short leaves the previous ini whole for the gateway to load. */
+	public function testAModuleIniWriteCutShortKeepsThePreviousIni(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$previous = "; pfb_unbound.ini [ File created: an earlier pass ]\n[MAIN]\ndnsbl_ipv4 = 10.10.10.1\n";
+		file_put_contents($GLOBALS['pfb']['unbound_py_conf'], $previous);
+
+		$this->assertStringStartsNotWith('ERR:', CutShortWrite::run(16, static fn (): bool => pfb_unbound_python('enabled')));
+
+		$this->assertSame($previous, file_get_contents($GLOBALS['pfb']['unbound_py_conf']));
+	}
+
+	/**
+	 * Issue #4201: a pass whose only change is a module ini it cannot write signals no restart: the gateway would reload the
+	 * previous ini it still has, on every pass while the disk stays full.
+	 */
+	public function testAModuleIniThatCannotBeRewrittenSignalsNoRestart(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$this->assertTrue(pfb_unbound_python('enabled'), 'setup: the first pass moves the Resolver and writes the ini');
+		$stale = "; pfb_unbound.ini [ File created: a pass with other settings ]\n[MAIN]\n";
+		file_put_contents($GLOBALS['pfb']['unbound_py_conf'], $stale);
+
+		$signalled = CutShortWrite::run(16, static fn (): bool => pfb_unbound_python('enabled'));
+
+		$this->assertSame('false', $signalled, 'no restart for an ini that was not written');
+		$this->assertSame($stale, file_get_contents($GLOBALS['pfb']['unbound_py_conf']));
+	}
+
+	/**
+	 * Issue #4201: a pass whose only change is a whitelist it cannot write signals no restart and leaves the manifest's
+	 * whitelist as it was.
+	 */
+	public function testAWhitelistThatCannotBeRewrittenSignalsNoRestart(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		PfbConfig::writeSystem('dnsbl/whitelist', base64_encode("allowed.example.com\r\nalso-allowed.example.org\r\n"));
+		$this->assertTrue(pfb_unbound_python('enabled'), 'setup: the first pass writes the whitelist');
+		$stale = "stale.example.com,0\nother-stale.example.net,0\n";
+		file_put_contents($GLOBALS['pfb']['unbound_py_wh'], $stale);
+
+		$signalled = CutShortWrite::run(16, static fn (): bool => pfb_unbound_python('enabled'));
+
+		$this->assertSame('false', $signalled, 'no restart for a whitelist that was not written');
+		$this->assertSame($stale, file_get_contents($GLOBALS['pfb']['unbound_py_wh']));
+	}
+
+	/** Issue #4201: a whitelist that cannot be published is not synced into the manifest's whitelist either. */
+	public function testAWhitelistThatCannotBePublishedIsNotSyncedIntoTheManifest(): void
+	{
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		PfbConfig::writeSystem('dnsbl/whitelist', base64_encode("allowed.example.com\r\n"));
+		$this->assertTrue(pfb_unbound_python('enabled'), 'setup: the first pass writes the whitelist');
+		$sources = json_encode(['config' => ['user_whitelist' => ['allowed.example.com']]], JSON_THROW_ON_ERROR);
+		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], $sources);
+		PfbConfig::writeSystem('dnsbl/whitelist', base64_encode("allowed.example.com\r\nnewly-allowed.example.org\r\n"));
+		unlink($GLOBALS['pfb']['unbound_py_wh']);
+		$this->assertTrue(mkdir($GLOBALS['pfb']['unbound_py_wh']), 'setup: a folder in the whitelist\'s place makes its publication fail');
+
+		$this->assertFalse(pfb_unbound_python('enabled'), 'no restart for a whitelist that was not published');
+
+		$this->assertSame($sources, (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), 'the manifest whitelist was synced to it');
 	}
 
 	public function testProxyOnTakesUnboundsPythonSlotForTheObserverAsTheModuleDoes(): void
@@ -585,6 +664,97 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertStringContainsString('python-script: pfb_upstream_observer.py', $patched);
 		$this->assertStringNotContainsString('pfb_unbound.py', $patched);
 		$this->assertStringContainsString('interface: 127.0.0.1', $patched, 'unrelated lines survive');
+	}
+
+	/** Issue #4201: a patch of unbound.conf whose write is cut short leaves no unbound.tmp, which the pass would rename over unbound.conf. */
+	public function testAnUnboundConfPatchCutShortLeavesNoUnboundTmp(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		$this->seedMovedResolver();
+		$this->writeUnboundConf(self::CONF_WITH_MODULE);
+
+		$this->assertSame('false', CutShortWrite::run(16, static fn (): bool => pfb_unbound_dnsbl('enabled')), 'a patch that could not be staged signals no change');
+
+		$this->assertFileDoesNotExist("{$this->tmp}/unbound.tmp", 'no part of a patch may be left to publish');
+		$this->assertSame(self::CONF_WITH_MODULE, file_get_contents("{$this->tmp}/unbound.conf"));
+	}
+
+	/** Issue #4201: an unbound.tmp an earlier pass left (killed before its rename) is not published by a pass that patches nothing. */
+	public function testAnUnboundTmpAnEarlierPassLeftIsDroppedByAPassThatPatchesNothing(): void
+	{
+		$this->writeUnboundConf(self::CONF_WITHOUT_MODULE);
+		file_put_contents("{$this->tmp}/unbound.tmp", self::CONF_WITH_MODULE);
+
+		$changed = pfb_unbound_dnsbl('enabled');
+
+		$this->assertFalse($changed, 'this pass has nothing to patch');
+		$this->assertFileDoesNotExist("{$this->tmp}/unbound.tmp", 'the rename after the pass must find no stale patch');
+	}
+
+	/** Issue #4201: the patch goes live with the conf it replaces kept whole as unbound.bk, a file of its own, for the rollback. */
+	public function testUnboundConfPublishKeepsTheReplacedConfAsAWholeBackup(): void
+	{
+		file_put_contents("{$this->tmp}/unbound.conf", self::CONF_WITH_MODULE);
+		file_put_contents("{$this->tmp}/unbound.tmp", self::CONF_WITHOUT_MODULE);
+
+		$this->assertTrue(pfb_unbound_conf_publish($this->tmp));
+
+		$this->assertSame(self::CONF_WITHOUT_MODULE, file_get_contents("{$this->tmp}/unbound.conf"));
+		$this->assertSame(self::CONF_WITH_MODULE, file_get_contents("{$this->tmp}/unbound.bk"));
+		$this->assertFileDoesNotExist("{$this->tmp}/unbound.tmp");
+		$this->assertNotSame(fileinode("{$this->tmp}/unbound.conf"), fileinode("{$this->tmp}/unbound.bk"));
+	}
+
+	/** Issue #4201: with no patch staged there is nothing to publish, which is no failure, and no backup is made. */
+	public function testUnboundConfPublishWithoutAPatchChangesNothing(): void
+	{
+		file_put_contents("{$this->tmp}/unbound.conf", self::CONF_WITH_MODULE);
+		@unlink("{$this->tmp}/unbound.tmp");
+
+		$this->assertTrue(pfb_unbound_conf_publish($this->tmp));
+		$this->assertSame(self::CONF_WITH_MODULE, file_get_contents("{$this->tmp}/unbound.conf"));
+		$this->assertFileDoesNotExist("{$this->tmp}/unbound.bk");
+	}
+
+	/**
+	 * Issue #4201: a backup cut short by a full disk is never kept, and the patch then stays out: a rollback must never put a
+	 * truncated unbound.conf in place. The patch is dropped with any backup, so a failed start cannot roll an old backup over
+	 * the unchanged conf; the next pass builds the patch again from it.
+	 */
+	public function testUnboundConfPublishWhoseBackupIsCutShortKeepsTheConf(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		file_put_contents("{$this->tmp}/unbound.conf", self::CONF_WITH_MODULE);
+		file_put_contents("{$this->tmp}/unbound.tmp", self::CONF_WITHOUT_MODULE);
+		file_put_contents("{$this->tmp}/unbound.bk", "previous backup\n");
+		$dir = $this->tmp;
+
+		$this->assertSame('false', CutShortWrite::run(16, static fn (): bool => pfb_unbound_conf_publish($dir)));
+
+		$this->assertSame(self::CONF_WITH_MODULE, file_get_contents("{$this->tmp}/unbound.conf"), 'the patch is not published without its backup');
+		$this->assertFileDoesNotExist("{$this->tmp}/unbound.bk", 'a failed start would roll an earlier pass\'s backup over a conf this pass left alone');
+		$this->assertFileDoesNotExist("{$this->tmp}/unbound.tmp", 'a patch left staged reads as a config change to restart for');
+	}
+
+	/**
+	 * Issue #4201: a patch that removes the module but did not go live keeps the python folders mounted: the conf Unbound
+	 * starts from still loads the module.
+	 */
+	public function testAnUnpublishedPatchKeepsThePythonFoldersMounted(): void
+	{
+		file_put_contents("{$this->tmp}/unbound.tmp", self::CONF_WITHOUT_MODULE);	// with no unbound.conf, its backup fails
+
+		$scope = pfb_test_page_eval(
+			pfb_test_page_region('src/usr/local/pkg/pfblockerng/pfblockerng.inc', 'if (!pfb_unbound_conf_publish($pfb[\'dnsbldir\'])) {', '// When pfBlockerNG is disabled'),
+			['pfb' => ['dnsbldir' => $this->tmp, 'dnsbl_python_unmount' => TRUE] + $GLOBALS['pfb']]
+		);
+
+		$this->assertEmpty($scope['pfb']['dnsbl_python_unmount'] ?? NULL, 'Unbound would start a python conf without its python folders');
+		$this->assertFileDoesNotExist("{$this->tmp}/unbound.tmp");
 	}
 
 	public function testUnboundConfGainsNoModuleWithoutASnapshot(): void

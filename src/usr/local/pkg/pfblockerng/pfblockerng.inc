@@ -10175,7 +10175,7 @@ function pfb_package_removal_recover(): array {
 			// The apply pass's own ini inputs, from the settings config.xml stores
 			pfb_dnsbl_ini_inputs();
 			pfb_metrics_client_apply();
-			@file_put_contents($pfb['unbound_py_conf'], pfb_unbound_python_ini('enabled'), LOCK_EX);
+			pfb_unbound_py_atomic_write($pfb['unbound_py_conf'], pfb_unbound_python_ini('enabled'));
 		}
 
 		if ($why === NULL) {
@@ -17014,17 +17014,60 @@ function pfblockerng_ss_refresh() {
 
 	list($out, $changed) = pfb_ss_refresh_lines($lines, 'pfb_ss_resolve_target');
 
-	if ($changed) {
-		@file_put_contents($ss_file, implode("\n", $out) . "\n", LOCK_EX);
+	if ($changed && pfb_ss_publish(implode("\n", $out) . "\n")) {
 		touch("{$pfb['dnsbl_file']}.reload");
 		pfb_logger("\n SafeSearch CNAME fallback IPs refreshed", 1);
 	}
+}
+
+/** Publish the decider's SafeSearch CSV whole when $rows differ from it (issue #4201). TRUE when it was replaced: the gateway reloads it. */
+function pfb_ss_publish(string $rows): bool {
+	global $pfb;
+	return @file_get_contents($pfb['unbound_py_ss']) !== $rows && pfb_unbound_py_atomic_write($pfb['unbound_py_ss'], $rows);
+}
+
+/**
+ * The decider's SafeSearch CSV for $hosts (domain => rewrite): each host's rows, a CNAME host's target resolved by $resolver
+ * to bake its #2 fallback IPs (issue #149), which the freshness cron keeps current.
+ *
+ * @param array<string, array<string, string>> $hosts
+ */
+function pfb_ss_csv(array $hosts, ?callable $resolver = NULL): string {
+	$resolver ??= 'pfb_ss_resolve_target';
+	$rows = '';
+	foreach ($hosts as $host => $data) {
+		[$v4, $v6] = ($data['A'] ?? '') === 'cname' ? $resolver($data['AAAA'] ?? '') : ['', ''];
+		$rows .= pfb_ss_csv_rows($host, $data, $v4, $v6);
+	}
+	return $rows;
+}
+
+/**
+ * Make the staged unbound.tmp the live unbound.conf, keeping the conf it replaces as unbound.bk for the failed-start rollback
+ * (issue #4201). The backup is a whole copy of its own (pfSense rewrites unbound.conf in place, so never a hard link), and the
+ * patch goes live only once that backup is in place. TRUE when there is no patch; FALSE when the patch could not go live: it
+ * is then dropped, so it does not hold the pass on the restart path, with any backup (a failed start must not roll one over
+ * the conf it left alone), and the next pass builds it again from the unchanged conf.
+ */
+function pfb_unbound_conf_publish(string $dir): bool {
+	if (!file_exists("{$dir}/unbound.tmp")) {
+		return TRUE;
+	}
+	if (!pfb_stage_publish("{$dir}/unbound.bk", static fn (string $staged): int => @copy("{$dir}/unbound.conf", $staged) ? 0 : 1)
+	    || !@rename("{$dir}/unbound.tmp", "{$dir}/unbound.conf")) {
+		unlink_if_exists("{$dir}/unbound.tmp");
+		unlink_if_exists("{$dir}/unbound.bk");
+		return FALSE;
+	}
+	return TRUE;
 }
 
 // Define DNSBL Unbound include settings (config.xml)
 function pfb_unbound_dnsbl($mode) {
 	global $g, $pfb;
 	pfb_global();
+	// issue #4201: this pass decides the patch afresh; one an earlier pass left before its rename is not published by this one
+	unlink_if_exists("{$pfb['dnsbldir']}/unbound.tmp");
 
 	// Reload config.xml to get any recent changes
 	config_read_file(FALSE, TRUE);
@@ -17174,10 +17217,8 @@ function pfb_unbound_dnsbl($mode) {
 		// Save changes to unbound.conf
 		if ($u_update) {
 			pfb_logger("\nDNS Resolver ( {$mode} ) unbound.conf modifications:\n{$u_msg}", 1);
-			@file_put_contents("{$pfb['dnsbldir']}/unbound.tmp", $conf, LOCK_EX);
-			@chown("{$pfb['dnsbldir']}/unbound.tmp", 'unbound');
-			@chgrp("{$pfb['dnsbldir']}/unbound.tmp", 'unbound');
-			return TRUE;
+			// issue #4201: unbound.tmp only ever exists whole, as unbound's: the pass renames it over unbound.conf
+			return pfb_unbound_py_atomic_write("{$pfb['dnsbldir']}/unbound.tmp", implode('', $conf));
 		}
 	}
 	else {
@@ -17216,7 +17257,7 @@ function pfb_unbound_python_whitelist($mode='') {
 	}
 
 	if ($mode == 'alerts') {
-		@file_put_contents($pfb['unbound_py_wh'], $dnsbl_whitelist, LOCK_EX);
+		pfb_unbound_py_atomic_write($pfb['unbound_py_wh'], $dnsbl_whitelist);
 	} else {
 		return $dnsbl_whitelist;
 	}
@@ -18047,7 +18088,11 @@ function pfb_unbound_py_stream_sync($fh, string $content, $write_fn=NULL, $flush
 function pfb_unbound_py_atomic_write($path, $content, array $stream_ops=array()) {
 	$dir = dirname($path);
 	$tmp = @tempnam($dir, '.pfbpub_');
-	if ($tmp === FALSE) {
+	// tempnam() falls back to the system temporary folder; a rename from there would be a copy over the target
+	if ($tmp === FALSE || realpath(dirname($tmp)) !== realpath($dir)) {
+		if ($tmp !== FALSE) {
+			@unlink($tmp);
+		}
 		pfb_logger("\nADR-10: failed to stage atomic write for [ {$path} ]", 2);
 		return FALSE;
 	}
@@ -20828,9 +20873,8 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 
 		// Compare previous DNSBL Whitelist to new Whitelist
 		$pfb_py_whitelist_ex = @file_get_contents($pfb['unbound_py_wh']);
-		if ($dnsbl_whitelist !== $pfb_py_whitelist_ex) {
+		if ($dnsbl_whitelist !== $pfb_py_whitelist_ex && pfb_unbound_py_atomic_write($pfb['unbound_py_wh'], $dnsbl_whitelist)) {
 			$pfbpython = TRUE;
-			@file_put_contents($pfb['unbound_py_wh'], $dnsbl_whitelist, LOCK_EX);
 
 			// ADR-06: keep the manifest's config.user_whitelist (the source for the
 			// query-time whiteDB) in sync with a settings-textarea whitelist edit, so
@@ -20847,9 +20891,8 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 		$pfb_py_conf_ex		= @file_get_contents($pfb['unbound_py_conf']);
 		$pfb_py_conf_ex2	= preg_replace("/File created:.* ]/", "File created: {$now} ]", $pfb_py_conf_ex);
 
-		if ($pfb_py_conf !== $pfb_py_conf_ex2) {
+		if ($pfb_py_conf !== $pfb_py_conf_ex2 && pfb_unbound_py_atomic_write($pfb['unbound_py_conf'], $pfb_py_conf)) {
 			$pfbpython = TRUE;
-			@file_put_contents($pfb['unbound_py_conf'], $pfb_py_conf, LOCK_EX);
 		}
 	}
 
@@ -21869,9 +21912,10 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	}
 
 	// Backup existing unbound.conf and rename new unbound.conf file
-	if (file_exists("{$pfb['dnsbldir']}/unbound.tmp")) {
-		@copy("{$pfb['dnsbldir']}/unbound.conf", "{$pfb['dnsbldir']}/unbound.bk");
-		@rename("{$pfb['dnsbldir']}/unbound.tmp", "{$pfb['dnsbldir']}/unbound.conf");
+	if (!pfb_unbound_conf_publish($pfb['dnsbldir'])) {
+		pfb_logger("\nDNS Resolver unbound.conf could not be backed up and replaced; the next update applies its changes\n", 2);
+		// the conf Unbound starts from may still load the python module: its folders stay mounted until a patch goes live
+		$pfb['dnsbl_python_unmount'] = FALSE;
 	}
 
 	// When pfBlockerNG is disabled and 'keep blocklists' is disabled.

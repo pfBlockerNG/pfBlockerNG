@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/CutShortWrite.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
@@ -44,6 +46,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_ss_csv_rows')]
 #[CoversFunction('pfb_ss_refresh_lines')]
 #[CoversFunction('pfb_ss_resolve_target')]
+#[CoversFunction('pfb_ss_publish')]
+#[CoversFunction('pfb_ss_csv')]
 final class SafeSearchCnameTest extends TestCase
 {
 	private string $tmp;
@@ -55,7 +59,7 @@ final class SafeSearchCnameTest extends TestCase
 		// Per-test log + extdns sandbox for the resolve_target boundary assertions.
 		$this->tmp = sys_get_temp_dir() . '/pfb_ss_' . uniqid('', true);
 		mkdir($this->tmp, 0777, true);
-		foreach (['log', 'errlog', 'extdns', 'drill', 'timeout'] as $key) {
+		foreach (['log', 'errlog', 'extdns', 'drill', 'timeout', 'unbound_py_ss'] as $key) {
 			$this->hadPfbKeys[$key]   = array_key_exists($key, $GLOBALS['pfb'] ?? []);
 			$this->savedPfbKeys[$key] = $GLOBALS['pfb'][$key] ?? null;
 		}
@@ -179,6 +183,44 @@ final class SafeSearchCnameTest extends TestCase
 		);
 	}
 
+	/**
+	 * Issue #4201: the CSV the apply publishes holds every SafeSearch host's rows, in order, and resolves only a CNAME
+	 * host's target to bake its fallback IPs.
+	 */
+	public function test_csv_holds_every_hosts_rows_and_resolves_only_cname_targets(): void
+	{
+		$asked = [];
+		$resolver = static function (string $target) use (&$asked): array {
+			$asked[] = $target;
+			return ['203.0.113.7', '2001:db8::7'];
+		};
+
+		$csv = pfb_ss_csv([
+			'forcesafe.example.com' => ['A' => '1.2.3.4', 'AAAA' => ''],
+			'duckduckgo.com'        => ['A' => 'cname', 'AAAA' => 'safe.duckduckgo.com'],
+		], $resolver);
+
+		$this->assertSame(
+			"forcesafe.example.com,1.2.3.4,\nwww.forcesafe.example.com,1.2.3.4,\n"
+			. "duckduckgo.com,cname,safe.duckduckgo.com,203.0.113.7,2001:db8::7\n"
+			. "www.duckduckgo.com,cname,safe.duckduckgo.com,203.0.113.7,2001:db8::7\n",
+			$csv
+		);
+		$this->assertSame(['safe.duckduckgo.com'], $asked);
+	}
+
+	/** Issue #4201: without a resolver given, the apply's CSV resolves a CNAME target through drill (pfb_ss_resolve_target). */
+	public function test_csv_resolves_a_cname_target_through_drill_by_default(): void
+	{
+		$this->installLookupFixtures(FALSE);
+
+		$this->assertSame(
+			"duckduckgo.com,cname,safe.duckduckgo.com,192.0.2.10,2001:db8::10\n"
+			. "www.duckduckgo.com,cname,safe.duckduckgo.com,192.0.2.10,2001:db8::10\n",
+			pfb_ss_csv(['duckduckgo.com' => ['A' => 'cname', 'AAAA' => 'safe.duckduckgo.com']])
+		);
+	}
+
 	public function test_csv_rows_cname_without_baked_ips_keeps_empty_columns(): void
 	{
 		// The without-baked side: a CNAME row is still 5 columns, with empty baked
@@ -204,6 +246,66 @@ final class SafeSearchCnameTest extends TestCase
 
 		$this->assertTrue($changed);
 		$this->assertSame(['duckduckgo.com,cname,safe.duckduckgo.com,203.0.113.7,2001:db8::7'], $out);
+	}
+
+	/** Issue #4201: a refreshed SafeSearch CSV whose write is cut short leaves the previous CSV whole for the gateway to load. */
+	public function test_refresh_whose_write_is_cut_short_keeps_the_previous_csv(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		$this->installLookupFixtures(FALSE);
+		$GLOBALS['pfb']['unbound_py_ss'] = $csv = "{$this->tmp}/pfb_py_ss.txt";
+		$previous = "duckduckgo.com,cname,safe.duckduckgo.com,9.9.9.9,2001:db8::old\n";
+		file_put_contents($csv, $previous);
+
+		$this->assertSame('NULL', CutShortWrite::run(16, static fn (): mixed => pfblockerng_ss_refresh()));
+
+		$this->assertSame($previous, file_get_contents($csv), 'the stale baked IPs stay until a whole CSV replaces them');
+	}
+
+	/** Issue #4201: the SafeSearch CSV is published whole when there is none yet. */
+	public function test_publish_writes_a_csv_when_there_is_none(): void
+	{
+		$GLOBALS['pfb']['unbound_py_ss'] = $csv = "{$this->tmp}/pfb_py_ss.txt";
+
+		$this->assertTrue(pfb_ss_publish("a.example,1.2.3.4\n"));
+		$this->assertSame("a.example,1.2.3.4\n", file_get_contents($csv));
+	}
+
+	/** Issue #4201: a CSV that differs is replaced, so changed SafeSearch hosts reach the gateway. */
+	public function test_publish_replaces_a_csv_that_differs(): void
+	{
+		$GLOBALS['pfb']['unbound_py_ss'] = $csv = "{$this->tmp}/pfb_py_ss.txt";
+		file_put_contents($csv, "old.example,9.9.9.9\n");
+
+		$this->assertTrue(pfb_ss_publish("a.example,1.2.3.4\n"));
+		$this->assertSame("a.example,1.2.3.4\n", file_get_contents($csv));
+	}
+
+	/** Issue #4201: the same rows publish nothing and signal nothing: no reload for an unchanged CSV. */
+	public function test_publish_leaves_the_same_csv_alone(): void
+	{
+		$GLOBALS['pfb']['unbound_py_ss'] = $csv = "{$this->tmp}/pfb_py_ss.txt";
+		file_put_contents($csv, "a.example,1.2.3.4\n");
+		$inode = fileinode($csv);
+
+		$this->assertFalse(pfb_ss_publish("a.example,1.2.3.4\n"));
+		clearstatcache();
+		$this->assertSame($inode, fileinode($csv), 'not rewritten');
+	}
+
+	/** Issue #4201: rows whose write is cut short leave the previous CSV whole, and signal nothing. */
+	public function test_publish_cut_short_keeps_the_previous_csv(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		$GLOBALS['pfb']['unbound_py_ss'] = $csv = "{$this->tmp}/pfb_py_ss.txt";
+		file_put_contents($csv, "old.example,9.9.9.9\n");
+
+		$this->assertSame('false', CutShortWrite::run(16, static fn (): bool => pfb_ss_publish("a.example,cname,safe.example,1.2.3.4,2001:db8::1\n")));
+		$this->assertSame("old.example,9.9.9.9\n", file_get_contents($csv));
 	}
 
 	public function test_refresh_no_change_when_target_resolves_to_same_ip(): void
