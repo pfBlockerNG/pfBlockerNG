@@ -794,20 +794,29 @@ which needs `--update-cmd`, each admitted Update runs the Core Updater loop in i
 program. Without the flag nothing changes: the worker runs the program as above, and its private state has no `loop`
 member. The rc script does not pass the flag.
 
-- **Paths.** Core copies its path flags into the worker's private state as a `loop` object: `settingsCmd`
+- **Paths.** Core copies its path flags into the worker's request as a `loop` object: `settingsCmd`
   (`--settings-backend-cmd`; absent means `settings.json` in `--state-dir`), `resourceDir`, `feedLocalDirs`, `scriptDirs`,
-  `rsyncBin`, `hookDir`, `pythonWrapper` and `mainLog` (`--main-log PATH`, the package's main log). Settings never go
-  there. Core refuses to admit, and the worker refuses a state, whose `loop` has an unknown member or a path that is not
-  absolute and clean or holds a control character; the 4 MiB bound of the state still holds.
-- **Snapshot.** Holding `update.log.lock`, the worker reads the settings backend once itself (the Core API's own read
-  before the launch stays) and keeps the settings and `platform.pendingToken` in memory only. A backend that fails, does
-  not answer within its read timeout, answers revision 0, or holds no initialized settings fails the Update before any
-  later stage. A `scheduled` Update ends `skipped` when `ingest.scheduledWorkDisabled` is true, as for exit status 75;
-  other triggers run.
-- **Output.** The loop writes its lines to `update.log` and, with `--main-log`, appends them to the main log too. A main
-  log that is a symbolic link or not a regular file fails the Update before the snapshot.
+  `rsyncBin`, `hookDir`, `pythonWrapper` and `mainLog` (`--main-log PATH`, the package's main log, which needs
+  `--update-loop`). Settings never go there. A path must be absolute and clean and hold no control character; an empty
+  single path means none, an empty list item is refused. With the switch on, Core refuses to start (exit status 2, a line
+  naming the flag) when a flag, `--settings-backend-cmd` among them, gives such a path. An Update whose loop holds one is
+  refused at admission, before the schedule occurrence is committed or `update.log` is replaced, and the worker refuses a
+  request whose `loop` has an unknown member or such a path. Only the request carries `loop`: the status the worker
+  publishes never does, so a Core that does not know the member still reads it.
+- **Snapshot.** Once it has completed the ownership handshake with Core and holds `update.log.lock`, the worker reads the
+  settings backend once itself (the Core API's own read before the launch stays) and keeps the settings and
+  `platform.pendingToken` in memory only. A backend that fails, does not answer within its read timeout, answers revision
+  0, or holds no initialized settings fails the Update before any later stage. A `scheduled` Update ends `skipped` when
+  `ingest.scheduledWorkDisabled` is true, as for exit status 75; other triggers run.
+- **Output.** The loop writes its lines to `update.log` and, with `--main-log`, appends them to the main log too. A stage
+  that fails writes one line, sanitized as program output is (control characters, TAB and LF escaped) and cut to 300
+  bytes of reason; the same text is the receipt's failure. A missing main log is created as the PHP logger creates it:
+  mode 0666 less the umask. A main log that is a symbolic link, not a regular file (a FIFO is refused without waiting
+  for a reader) or a file with more than one hard link fails the Update before the snapshot.
 - **Stages.** The stages after the snapshot are empty for now, so an Update reports success with an empty result and
   starts no program.
+- **Lock.** In loop mode the worker itself holds the Update lock, so killing the worker frees the lock while processes
+  it started may still run. The limit stays until sub-slices 9i and 9j-2 of issue #4038.
 
 ### Update command, version 2
 

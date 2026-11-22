@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -29,15 +30,33 @@ type Loop struct {
 	MainLog       string   `json:"mainLog,omitempty"` // the package's main log the loop's lines are appended to; empty: none
 }
 
+// CheckPath refuses a path the loop cannot be given: one that is not absolute and clean or holds a control character.
+func CheckPath(p string) error {
+	if !filepath.IsAbs(p) || filepath.Clean(p) != p || hasControl(p) {
+		return errors.New("is not an absolute and clean path free of control characters")
+	}
+	return nil
+}
+
+// validate refuses a loop with a path CheckPath refuses; empty means none for a single path, never for a list item.
 func (l *Loop) validate() error {
-	paths := append([]string{l.SettingsCmd, l.ResourceDir, l.RsyncBin, l.HookDir, l.PythonWrapper, l.MainLog}, l.FeedLocalDirs...)
-	for _, p := range append(paths, l.ScriptDirs...) {
-		if p != "" && (!filepath.IsAbs(p) || filepath.Clean(p) != p || strings.IndexFunc(p, unicode.IsControl) >= 0) {
-			return fmt.Errorf("the loop path %q is not absolute and clean", p)
+	for _, p := range []string{l.SettingsCmd, l.ResourceDir, l.RsyncBin, l.HookDir, l.PythonWrapper, l.MainLog} {
+		if err := CheckPath(p); p != "" && err != nil {
+			return fmt.Errorf("the loop path %q %w", p, err)
+		}
+	}
+	for _, p := range slices.Concat(l.FeedLocalDirs, l.ScriptDirs) {
+		if err := CheckPath(p); err != nil {
+			return fmt.Errorf("the loop path %q %w", p, err)
 		}
 	}
 	return nil
 }
+
+func hasControl(s string) bool { return strings.IndexFunc(s, unicode.IsControl) >= 0 }
+
+// maxFailure bounds the failure line of a stage: an adapter's stderr tail may run to 4 KiB.
+const maxFailure = 300
 
 // boundary is the fault-injection seam: called at every stage boundary with the name of the stage about to run, and with
 // "end" after the last. Production never sets it.
@@ -75,7 +94,8 @@ func (u *updater) run() error {
 		}
 		if err := s.run(u); err != nil {
 			if !errors.Is(err, ErrDeferred) {
-				u.sinks.Line(true, "Core Updater: %s failed: %v\n", s.name, err)
+				err = fmt.Errorf("%s failed: %s", s.name, output.OneLine(err.Error(), maxFailure))
+				u.sinks.Line(true, "Core Updater: %v\n", err)
 			}
 			return err
 		}
@@ -131,15 +151,21 @@ func runLoop(dir string, state *workerState, log *os.File) error {
 	return err
 }
 
-// openMainLog opens path for appending, refusing a link and anything but a regular file before writing.
+// openMainLog opens path for appending, refusing a symbolic link, anything but a regular file and a file with another
+// hard link before writing. A missing log is created as pfb_logger's file_put_contents() creates it: 0666 less the umask.
 func openMainLog(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o666)
 	if err != nil {
 		return nil, err
 	}
-	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
 		f.Close()
 		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); !ok || st.Nlink != 1 {
+		f.Close()
+		return nil, fmt.Errorf("%s has more than one hard link", path)
 	}
 	return f, nil
 }

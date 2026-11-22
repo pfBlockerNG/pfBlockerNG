@@ -21,7 +21,9 @@
 //	                    when absent, and the rc script does not pass it yet. The worker reads the settings itself and is
 //	                    given the path flags (--settings-backend-cmd, --resource-dir, --feed-local-dir, --script-dir,
 //	                    --rsync-bin, --hook-dir, --python-wrapper, --main-log) in its private state. Needs --update-cmd
-//	--main-log PATH     the absolute path of the package's main log, which the loop appends its lines to beside update.log
+//	--main-log PATH     the absolute path of the package's main log, which the loop appends its lines to beside update.log.
+//	                    Needs --update-loop. With the switch on, every path the loop is given (--settings-backend-cmd too)
+//	                    must be absolute and clean and hold no control character
 //	--maintenance-cmd PATH
 //	                    optional quarter-hour Outpost command, no arguments, in an independent maintenance worker; it uses
 //	                    maintenance.log and separate receipts/lock. Core reads the maintenance settings before each run and
@@ -182,7 +184,30 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		runner := hooks.Runner{Dir: hookDir, Python: pythonWrapper, SignalLag: 250 * time.Millisecond}
 		return runHooks(ctx, runHooksWhen, *stateDir, *backendCmd, runner, os.Stdin, os.Stdout, stderr)
 	}
-	if *socket == "" || *stateDir == "" || fl.NArg() != 0 || *updateLoop && *updateCmd == "" {
+	reason := ""
+	switch {
+	case *updateLoop && *updateCmd == "":
+		reason = "--update-loop needs --update-cmd"
+	case mainLog != "" && !*updateLoop:
+		reason = "--main-log needs --update-loop"
+	case *updateLoop:
+		for _, f := range []struct {
+			flag  string
+			paths []string
+		}{{"--settings-backend-cmd", []string{*backendCmd}}, {"--resource-dir", []string{resourceDir}}, {"--feed-local-dir", feed.LocalDirs},
+			{"--script-dir", feed.ScriptDirs}, {"--rsync-bin", []string{feed.RsyncBin}}, {"--hook-dir", []string{hookDir}},
+			{"--python-wrapper", []string{pythonWrapper}}, {"--main-log", []string{mainLog}}} {
+			for _, p := range f.paths {
+				if err := update.CheckPath(p); p != "" && err != nil && reason == "" {
+					reason = fmt.Sprintf("%s %q %v", f.flag, p, err)
+				}
+			}
+		}
+	}
+	if reason != "" {
+		fmt.Fprintln(stderr, "pfb-core: "+reason)
+	}
+	if *socket == "" || *stateDir == "" || fl.NArg() != 0 || reason != "" {
 		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH [--update-loop]] [--main-log PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
 		return 2
 	}

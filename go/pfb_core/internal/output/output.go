@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -191,6 +192,35 @@ func sanitize(in *bufio.Reader, final bool, emit func(text string, atomic bool))
 		}
 		in.Discard(size)
 	}
+}
+
+// OneLine is text sanitized as program output is, with TAB and LF escaped as well, cut to at most max bytes without
+// splitting an escape or a character: one line for a log or a receipt.
+func OneLine(text string, max int) string {
+	var b strings.Builder
+	full := false
+	add := func(s string, atomic bool) bool { // false once the line is full
+		if b.Len()+len(s) <= max {
+			b.WriteString(s)
+			return true
+		}
+		if !atomic {
+			b.WriteString(s[:max-b.Len()])
+		}
+		return false
+	}
+	sanitize(bufio.NewReader(strings.NewReader(text)), true, func(s string, atomic bool) {
+		for !full && s != "" {
+			i := strings.IndexAny(s, "\t\n")
+			if atomic || i < 0 {
+				full = !add(s, atomic)
+				return
+			}
+			full = !add(s[:i], false) || !add(fmt.Sprintf(`\x%02X`, s[i]), true)
+			s = s[i+1:]
+		}
+	})
+	return b.String()
 }
 
 func printable(b byte) bool { return b >= 0x20 && b <= 0x7e || b == '\t' || b == '\n' }
