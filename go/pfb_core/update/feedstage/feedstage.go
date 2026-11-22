@@ -161,7 +161,11 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		}
 	}
 
-	var backup *pathSnapshot
+	// The download and its sidecars are one journal set, committed when the run stands and rolled back when it fails. The
+	// lists and their record commit in a set of their own first: when this set then rolls back, or a KILL leaves it to
+	// Recover, the new lists stand beside the old download, and the record (the digest of the normalized input they were
+	// parsed from) differs from the old download's, so reuse parses that download again.
+	var backup *journal
 	var backupErr error
 	defer func() {
 		if backup == nil {
@@ -169,14 +173,21 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		}
 		partialWhois := result.Disposition == "failed" && result.Stage == "whois" && result.SourceChanged
 		if result.Disposition == "failed" && !partialWhois {
-			if err := backup.restore(); err != nil {
+			if err := backup.rollback(); err != nil {
 				result = failedFeed(f.ID, "publish", "baseline_restore_failed")
 			}
 			step("restored")
-		} else {
-			backup.discard()
+		} else if err := backup.commit(); err != nil {
+			_ = backup.rollback()
+			result = failedFeed(f.ID, "publish", "baseline_commit_failed")
 		}
 	}()
+	// The IP post-script rewrites the download in place (feedparse.RunIP), and a 304 transfer leaves that file: its backup
+	// is a copy.
+	var copies []string
+	if f.Kind != "dnsbl" && post != "" {
+		copies = []string{origPath}
+	}
 
 	sourceChanged, whoisPartial := false, false
 	if force != "parse" {
@@ -187,7 +198,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 				return failedFeed(f.ID, "fetch", "custom_source_unavailable")
 			}
 			if !same {
-				backup, err = snapshotPaths(feedStatePaths(feed))
+				backup, err = snapshotPaths(feedStatePaths(feed), copies...)
 				if err != nil {
 					return failedFeed(f.ID, "fetch", "baseline_backup_failed")
 				}
@@ -200,7 +211,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 				}
 				defer remove(staged)
 				step("custom-staged")
-				if publishStaged(dir, []stagedFeedFile{{name: f.Name + ".orig", temp: staged}}) != nil {
+				if rename(staged, origPath) != nil { // the journal set above puts the last text back on a failure
 					return failedFeed(f.ID, "fetch", "custom_source_unavailable")
 				}
 				// The digest describes the bytes of the last transfer, which the custom text replaced.
@@ -208,7 +219,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 				sourceChanged = true
 			}
 		case f.WhoisConvert || f.Format == "whois" || f.Format == "asn":
-			backup, backupErr = snapshotPaths(feedStatePaths(feed))
+			backup, backupErr = snapshotPaths(feedStatePaths(feed), copies...)
 			if backupErr != nil {
 				return failedFeed(f.ID, "whois", "baseline_backup_failed")
 			}
@@ -232,7 +243,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			if force == "none" && change.Verdict == VerdictUnchanged {
 				break // the reuse rule below decides whether the published lists stand
 			}
-			if backup, backupErr = snapshotPaths(feedStatePaths(feed)); backupErr != nil {
+			if backup, backupErr = snapshotPaths(feedStatePaths(feed), copies...); backupErr != nil {
 				return failedFeed(f.ID, "fetch", "baseline_backup_failed")
 			}
 			if force != "none" && clearForcedState(feed, force) != nil {
