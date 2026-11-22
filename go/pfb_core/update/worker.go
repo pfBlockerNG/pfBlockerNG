@@ -12,10 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/process"
@@ -44,6 +42,7 @@ type workerState struct {
 	CoreDumped  bool             `json:"coreDumped,omitempty"`
 	Failure     string           `json:"failure,omitempty"`
 	Result      Result           `json:"result"`
+	Loop        *Loop            `json:"loop,omitempty"` // absent: the program runs, as before the loop
 }
 
 type workerObservation struct {
@@ -206,8 +205,13 @@ func decodeWorkerState(r io.Reader) (workerState, error) {
 		return state, errors.New("the worker state has trailing data")
 	}
 	nonce, err := hex.DecodeString(state.Nonce)
-	if err != nil || len(nonce) != 32 || hex.EncodeToString(nonce) != state.Nonce || state.Version != workerVersion || state.StartedAt <= 0 || state.Path == "" || strings.IndexFunc(state.Path, unicode.IsControl) >= 0 {
+	if err != nil || len(nonce) != 32 || hex.EncodeToString(nonce) != state.Nonce || state.Version != workerVersion || state.StartedAt <= 0 || state.Path == "" || hasControl(state.Path) {
 		return state, errors.New("the worker state has an invalid identity or version")
+	}
+	if state.Loop != nil {
+		if err := state.Loop.validate(); err != nil {
+			return state, err
+		}
 	}
 	for id, outcome := range state.Result.Outcomes {
 		if id == "" || outcome != "success" && outcome != "retry-cap-reached" {
@@ -379,6 +383,11 @@ func (a *Admission) Close() error {
 }
 
 func (c *Command) Admit(logPath string) (*Admission, error) {
+	if c.Loop != nil {
+		if err := c.Loop.validate(); err != nil {
+			return nil, err
+		}
+	}
 	lock, err := operationLock(logPath)
 	if errors.Is(err, ErrRunning) {
 		state, readErr := readWorkerState(logPath + ".status")
@@ -430,11 +439,12 @@ func (a *Admission) Launch(ctx context.Context, c *Command, req Request, log *os
 	}
 	state := workerState{
 		Version: workerVersion, Nonce: hex.EncodeToString(nonce[:]), Path: c.Path, Request: req, StartedAt: time.Now().Unix(),
-		LogGen: a.logGen, Occurrences: a.occurrences,
+		LogGen: a.logGen, Occurrences: a.occurrences, Loop: c.Loop,
 	}
 	if err := writeWorkerState(log.Name()+".request", state); err != nil {
 		return Result{}, err
 	}
+	state.Loop = nil // the worker's request alone carries it: the status, which every Core decodes, never does
 	request, err := operationFile(log.Name()+".request", syscall.O_RDONLY)
 	if err != nil {
 		return Result{}, err
@@ -549,26 +559,15 @@ func runWorker(logPath string) int {
 		return 1
 	}
 	release.Close()
-	in, remove, err := scratch(filepath.Dir(logPath), ".stdin-*")
-	if err == nil {
-		defer remove()
-		err = json.NewEncoder(in).Encode(struct {
-			Version int `json:"version"`
-			Request
-		}{protocolVersion, state.Request})
-		if err == nil {
-			_, err = in.Seek(0, io.SeekStart)
-		}
+	var remove func()
+	if state.Loop != nil {
+		err = runLoop(filepath.Dir(logPath), &state, log)
+		state.Loop = nil
+	} else {
+		remove, err = runProgram(logPath, &state, lock, result, log)
 	}
-	if err == nil {
-		err = runNative(state.Path, lock, result, in, log, &state)
-		if err != nil {
-			state.Failure = err.Error()
-		}
-		state.Result, err = readResult(result)
-		if published, readErr := readWorkerState(logPath + ".status"); readErr == nil {
-			state.LogGen = published.LogGen
-		}
+	if remove != nil {
+		defer remove() // runs after the status is published and the lock is closed
 	}
 	if err != nil {
 		state.Failure = err.Error()
@@ -585,6 +584,33 @@ func runWorker(logPath string) int {
 	_ = lock.Close()
 	lock = nil
 	return 0
+}
+
+// runProgram runs the Update program for the worker of logPath, with the request on stdin and fd 3 the result file. It
+// returns the func that removes the stdin file, nil when there is none.
+func runProgram(logPath string, state *workerState, lock, result, log *os.File) (func(), error) {
+	in, remove, err := scratch(filepath.Dir(logPath), ".stdin-*")
+	if err != nil {
+		return nil, err
+	}
+	err = json.NewEncoder(in).Encode(struct {
+		Version int `json:"version"`
+		Request
+	}{protocolVersion, state.Request})
+	if err == nil {
+		_, err = in.Seek(0, io.SeekStart)
+	}
+	if err == nil {
+		err = runNative(state.Path, lock, result, in, log, state)
+		if err != nil {
+			state.Failure = err.Error()
+		}
+		state.Result, err = readResult(result)
+		if published, readErr := readWorkerState(logPath + ".status"); readErr == nil {
+			state.LogGen = published.LogGen
+		}
+	}
+	return remove, err
 }
 
 // holdReport is the native program's wait status, written by the process that keeps the lifetime lock.

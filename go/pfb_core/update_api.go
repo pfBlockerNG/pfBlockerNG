@@ -21,14 +21,15 @@ import (
 // newUpdates builds Core's scheduler and Update gate for --update-cmd. An empty path means no scheduler, and both are nil.
 // The optional maintenance command owns a distinct worker lane and fixed maintenance.log receipts in stateDir; the Update log,
 // scheduler state and Update receipts remain independent. The schedule is read in the --zoneinfo zone (empty: the local zone).
-func newUpdates(path, maintenancePath, zoneinfo, stateDir string, st *settings.Store, lanes *laneSettings, logf func(string, ...any)) (*scheduler.Scheduler, *update.Gate) {
+// A loop (--update-loop) makes each Update run the Core Updater loop with its paths instead of the program.
+func newUpdates(path, maintenancePath, zoneinfo, stateDir string, loop *update.Loop, st *settings.Store, lanes *laneSettings, logf func(string, ...any)) (*scheduler.Scheduler, *update.Gate) {
 	if path == "" {
 		return nil, nil
 	}
 	logPath := filepath.Join(stateDir, "update.log")
 	sched := scheduler.New(scheduler.Config{Model: scheduleModel(st), StatePath: filepath.Join(stateDir, "schedule_state.json"),
 		LogPath: logPath, Loc: time.Local, Zone: hostZone(zoneinfo, logf), Logf: logf, Maintenance: gateMaintenance(maintenance(maintenancePath, stateDir), lanes, logf)})
-	command := &update.Command{Path: path}
+	command := &update.Command{Path: path, Loop: loop}
 	gate := update.New(logPath, nil, sched.Done)
 	gate.Admit = command.Admit
 	sched.Bind(func(req update.Request, commit func() (map[string]int64, error)) error {

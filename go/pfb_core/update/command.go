@@ -21,6 +21,7 @@ const (
 // settings transaction; downloads and scripts retain their own operation-level bounds.
 type Command struct {
 	Path string
+	Loop *Loop // nil: the worker runs Path; else the Core Updater loop (issue #4038)
 }
 
 // isDeferral reports whether err, from cmd.Wait, is the program's exit with status 75.

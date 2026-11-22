@@ -99,10 +99,10 @@ func TestTheFileBackendHasNoPendingToken(t *testing.T) {
 	}
 }
 
-// Core carries the token and nothing else: only the backend seam and the store name it, and none of them hands it to a
-// formatter, a logger, a decoder or a comparison.
+// Core carries the token and nothing else: only the backend seam, the store and the Core Updater's snapshot (which hands
+// it to the apply, issue #4038) name it, and none of them hands it to a formatter, a logger, a decoder or a comparison.
 func TestNoCoreCodeInterpretsThePendingToken(t *testing.T) {
-	holders := map[string]bool{"settings/adapter.go": true, "settings/backend.go": true, "settings/store.go": true}
+	holders := map[string]bool{"settings/adapter.go": true, "settings/backend.go": true, "settings/store.go": true, "update/loop.go": true}
 	seen := 0
 	err := filepath.WalkDir("..", func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
