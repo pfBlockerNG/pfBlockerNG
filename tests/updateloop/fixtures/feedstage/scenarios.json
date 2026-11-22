@@ -37,16 +37,16 @@
     },
     {
       "id": "ip_post_script_removes_restore_point",
-      "description": "An IP post-script that removes its restore point leaves its output at the download, which cannot be put back.",
+      "description": "An IP post-script rewrites its file and removes the restore point beside it, which today needs to put the download back.",
       "kind": "ipv4",
       "custom": false,
       "baseline": "198.51.100.1\n",
       "source": "198.51.100.2\n",
       "pre": null,
       "post": "printf '10.9.9.9\\n' > \"$1\"\nrm -f \"$1.post\"",
-      "expect": {"outcome": "failed", "stage": "post-script", "postFailed": false, "entries": ["198.51.100.1"], "placeholder": "", "orig": "198.51.100.1\n"},
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["198.51.100.2"], "placeholder": "", "orig": "198.51.100.2\n"},
       "old_expect": {"outcome": "updated", "stage": "", "entries": ["198.51.100.2"], "orig": "10.9.9.9\n"},
-      "departure": "The script's output must never become the baseline: Core fails the feed at the post-script and the journal puts the baseline download and list back. Today ignores the failed restore (an unchecked rename) and keeps the script's output as the download."
+      "departure": "The script's output never becomes the download: Core runs the IP post-script on a copy in the feed's run folder, so the download stays the transferred source whatever the script removes. Today ignores the failed restore (an unchecked rename) and keeps the script's output as the download."
     },
     {
       "id": "ip_failed_transfer",

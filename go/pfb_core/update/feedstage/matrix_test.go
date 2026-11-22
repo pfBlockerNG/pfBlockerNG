@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -229,60 +230,89 @@ func runMatrixCall(t *testing.T, c matrixCall) (killedAt string, ops int) {
 	return "", ops
 }
 
-// copyRoot copies the flat folders below src to a fresh root, keeping each file's mode and modification time and the hard
-// links between the files of a folder: a KILL leaves backups linked to their targets, and a Recover over the copy must
-// take the steps it takes over the KILLed folders.
+// copyRoot copies the folders below src to a fresh root, keeping each file's mode and modification time, the subfolders a
+// run leaves in the feed folder, and the hard links between the files of a folder and its subfolders: a KILL leaves a run
+// folder whose files are linked to the published ones, and a Recover over the copy must take the steps it takes over the
+// KILLed folders.
 func copyRoot(t *testing.T, src string) string {
 	t.Helper()
 	dst := t.TempDir()
 	for _, d := range []string{"orig", "db", "scripts"} {
-		if err := os.Mkdir(filepath.Join(dst, d), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		entries, err := os.ReadDir(filepath.Join(src, d))
-		if err != nil {
-			t.Fatal(err)
-		}
 		copied := map[string]os.FileInfo{} // each copy, by the source it was copied from
-		for _, e := range entries {
-			from, to := filepath.Join(src, d, e.Name()), filepath.Join(dst, d, e.Name())
+		err := filepath.WalkDir(filepath.Join(src, d), func(from string, e fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, err := filepath.Rel(src, from)
+			if err != nil {
+				return err
+			}
+			to := filepath.Join(dst, rel)
 			info, err := e.Info()
 			if err != nil {
-				t.Fatal(err)
+				return err
 			}
-			if !info.Mode().IsRegular() {
-				t.Fatalf("%s is left a %v", from, info.Mode().Type())
+			switch {
+			case e.IsDir():
+				return os.Mkdir(to, 0o700)
+			case !info.Mode().IsRegular():
+				return fmt.Errorf("%s is left a %v", from, info.Mode().Type())
 			}
-			linked := false
 			for made, source := range copied {
 				if os.SameFile(source, info) {
-					if err := os.Link(made, to); err != nil {
-						t.Fatal(err)
-					}
-					linked = true
-					break
+					return os.Link(made, to)
 				}
-			}
-			if linked {
-				continue
 			}
 			copied[to] = info
 			data, err := os.ReadFile(from)
 			if err != nil {
-				t.Fatal(err)
+				return err
 			}
 			if err := os.WriteFile(to, data, info.Mode().Perm()); err != nil {
-				t.Fatal(err)
+				return err
 			}
-			if err := os.Chtimes(to, info.ModTime(), info.ModTime()); err != nil {
-				t.Fatal(err)
-			}
+			return os.Chtimes(to, info.ModTime(), info.ModTime())
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 	return dst
 }
 
-// journalLeftovers fails for any staged file, backup, absent record, commit marker or restore point in the feed folder.
+// publishedState is the name, mode and content of each file in the feed folder dir, a run folder left out: what readers of
+// the feed folder see.
+func publishedState(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := map[string]string{}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".pfbrun-") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.Mode().IsRegular() {
+			state[e.Name()] = info.Mode().String()
+			continue
+		}
+		state[e.Name()] = info.Mode().String() + " " + readFile(t, filepath.Join(dir, e.Name()))
+	}
+	return state
+}
+
+// committed reports whether a run folder in the feed folder dir holds its COMMIT: from then on the run rolls forward.
+func committed(dir string) bool {
+	found, _ := filepath.Glob(filepath.Join(dir, ".pfbrun-*", "COMMIT"))
+	return len(found) > 0
+}
+
+// journalLeftovers fails for any run folder, staged file or temporary in the feed folder.
 func journalLeftovers(t *testing.T, dir, when string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -327,19 +357,17 @@ func followUps(t *testing.T, root string, sc matrixScenario, oracle map[string]m
 // Scenario: an Update is killed at any file operation of a feed, and its recovery is killed too.
 // Given a published baseline and a changed source, for each kind (IP, DNSBL with v4, v6 and rows, custom list) and each
 // variant (no script, a post-script that rewrites its file, force parse, force both, a legacy digest), when the run is
-// KILLed before each of its file operations, the folder recovered (for one variant per kind, Recover itself KILLed before
-// each of its operations and run again), and the stage run again with the changed source and with the old one, then the
-// published lists are always what that source parses to: never a list of the other download, as unchanged or reparsed;
-// and no staged, backup, absent, marker or restore file is left. A Recover KILLed and run again must leave the folder an
-// uninterrupted Recover leaves, so the next runs checked on that folder hold for it as well.
+// KILLed before each of its file operations, then until its run folder holds COMMIT the feed folder is the baseline byte
+// for byte: no published file is new, changed or gone. When the folder is then recovered (for one variant per kind,
+// Recover itself KILLed before each of its operations and run again), and the stage run again with the changed source and
+// with the old one, then the published lists are always what that source parses to: never a list of the other download,
+// as unchanged or reparsed; and no run folder, staged file or temporary is left. A Recover KILLed and run again must leave
+// the folder an uninterrupted Recover leaves, so the next runs checked on that folder hold for it as well.
 //
-// The KILL points are the stage's own file operations (the op: steps of rename, remove, link, create and truncate).
-// feedfetch's transfer and whois, and feedparse's NormalizeFile and RunIP, call os directly and are no KILL point here.
-// The transfer and whois run inside the download's open journal set, which holds every file of the download state they
-// replace, so what a KILL leaves of those is undone by the set's rollback (TestKillInsideTheTransferIsRolledBack); their
-// temporaries are Recover's (TestRecoverRemovesTheTransferTemporaries). The parser runs inside that set as well: its
-// .norm and sidecar are keyed by the digest of the download they were built from, so they are rebuilt from the download
-// the rollback puts back, and RunIP's restore point is Recover's.
+// The KILL points are the stage's own file operations (the op: steps of rename, remove, link, create, mkdir and
+// truncate). feedfetch's transfer and whois, and feedparse's NormalizeFile and post-scripts, call os directly and are no
+// KILL point here: they write only in the run folder, which a KILL before COMMIT leaves to be deleted, and never through a
+// file the run folder shares with the feed folder.
 func TestKillAtEveryFileOperation(t *testing.T) {
 	if spec := os.Getenv(matrixEnv); spec != "" {
 		matrixChild(spec)
@@ -367,11 +395,17 @@ func TestKillAtEveryFileOperation(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/op%03d", sc.name(), n), func(t *testing.T) {
 				t.Parallel()
 				root := matrixRoot(t, sc)
+				baseline := publishedState(t, filepath.Join(root, "orig"))
 				op, _ := runMatrixCall(t, matrixCall{Mode: "run", KillAt: n, Root: root, Scenario: sc})
 				if op == "" {
 					t.Fatalf("the run ended before its operation %d of %d", n, total)
 				}
 				where := fmt.Sprintf("%s KILLed at operation %d (%s)", sc.name(), n, op)
+				if dir := filepath.Join(root, "orig"); !committed(dir) {
+					if got := publishedState(t, dir); !reflect.DeepEqual(got, baseline) {
+						t.Errorf("%s, before COMMIT: the feed folder is\n %q\nwant the baseline\n %q", where, got, baseline)
+					}
+				}
 				killed := root
 				if sc.Variant == "none" {
 					killed = copyRoot(t, root)

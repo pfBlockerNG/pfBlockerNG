@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -59,8 +60,8 @@ func killStage(root string) (*Stage, Feed) {
 		Source: "file://" + filepath.Join(root, "db", "feed.txt")}
 }
 
-// killChild runs the feed in a child process that announces on fd 3 when its post-script has succeeded, before the
-// restore point is put back, and then waits on stdin for the KILL. It never returns.
+// killChild runs the feed in a child process that announces on fd 3 when its post-script has succeeded, and then waits on
+// stdin for the KILL. It never returns.
 func killChild(root string) {
 	step = func(name string) {
 		if name != "post-script" {
@@ -78,10 +79,10 @@ func killChild(root string) {
 	os.Exit(2) // the boundary was never reached
 }
 
-// Scenario: KILL between a successful IP post-script and its restore.
-// Given a published baseline and a changed source with a post-script that rewrites the download, when the Updater is
-// killed after the script and before the restore point is renamed back, then the next entry's recovery puts the baseline
-// back (the script's output is never kept as a download), and the next run publishes the change.
+// Scenario: KILL right after a successful IP post-script.
+// Given a published baseline and a changed source with a post-script that rewrites its file, when the Updater is killed
+// right after the script, then the feed folder is the baseline byte for byte (the script's output and the new download
+// never reached it), the next entry's recovery leaves the baseline, and the next run publishes the change.
 func TestKillBetweenPostScriptAndRestoreIsRecovered(t *testing.T) {
 	if root := os.Getenv(killChildEnv); root != "" {
 		killChild(root)
@@ -98,6 +99,7 @@ func TestKillBetweenPostScriptAndRestoreIsRecovered(t *testing.T) {
 	if r := run(stage, feed, "none"); r.Disposition != "changed" {
 		t.Fatalf("the baseline run = %+v", r)
 	}
+	baseline := publishedState(t, filepath.Join(root, "orig"))
 	writeFile(t, source, "198.51.100.2\n")
 	if err := os.WriteFile(filepath.Join(root, "scripts", "post.sh"), []byte("#!/bin/sh\nprintf 'script output\\n' > \"$1\"\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -137,11 +139,8 @@ func TestKillBetweenPostScriptAndRestoreIsRecovered(t *testing.T) {
 	_ = child.Wait()
 
 	orig := filepath.Join(root, "orig", "Feed_v4.orig")
-	if got := readFile(t, orig); got != "script output\n" {
-		t.Fatalf("at the KILL the download holds %q, want the script's output (the window was not hit)", got)
-	}
-	if got := readFile(t, orig+".post"); got != "198.51.100.2\n" {
-		t.Fatalf("at the KILL the restore point holds %q, want the download", got)
+	if got := publishedState(t, filepath.Join(root, "orig")); !reflect.DeepEqual(got, baseline) {
+		t.Fatalf("at the KILL the feed folder is\n %q\nwant the baseline byte for byte\n %q", got, baseline)
 	}
 
 	if err := Recover(filepath.Join(root, "orig")); err != nil {

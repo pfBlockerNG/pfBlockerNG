@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -103,7 +104,7 @@ func killAt(t *testing.T, test, root, boundary string) {
 	_ = child.Wait()
 }
 
-// noLeftovers fails for any staged file, backup or restore point left in the feed folder dir.
+// noLeftovers fails for any run folder, staged file or restore point left in the feed folder dir.
 func noLeftovers(t *testing.T, dir string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -117,21 +118,23 @@ func noLeftovers(t *testing.T, dir string) {
 	}
 }
 
-// Scenario: KILL after a failed feed's baseline is put back.
+// Scenario: KILL after a failed feed's run is dropped.
 // Given a published baseline and a changed source whose pre-script fails after the new download was normalized, when the
-// Updater is killed right after the baseline download is put back, then the normalization record of the abandoned download
-// is still there; the next run ingests that download again and must parse it, never reuse the baseline's list for it.
+// Updater is killed right after the failed run is dropped, then the feed folder is the baseline byte for byte: neither the
+// abandoned download nor its normalization reached it. The next run ingests that download again and must parse it, never
+// reuse the baseline's list for it.
 func TestKillAfterRestoreLeavesNoStaleReuse(t *testing.T) {
 	if boundary := os.Getenv(killAtEnv); boundary != "" {
 		killChildAt(os.Getenv(killRootEnv), boundary)
 	}
 	root := killRoot(t, "198.51.100.1\n")
 	dir := filepath.Join(root, "orig")
+	baseline := publishedState(t, dir)
 	writeFile(t, filepath.Join(root, "db", "feed.txt"), "198.51.100.2\n")
 	killScript(t, root, "pre.sh", "exit 1")
 	killAt(t, "TestKillAfterRestoreLeavesNoStaleReuse", root, "restored")
-	if got := readFile(t, filepath.Join(dir, "Feed_v4.orig")); got != "198.51.100.1\n" {
-		t.Fatalf("at the KILL the download holds %q, want the baseline put back (the window was not hit)", got)
+	if got := publishedState(t, dir); !reflect.DeepEqual(got, baseline) {
+		t.Fatalf("at the KILL the feed folder is\n %q\nwant the baseline byte for byte\n %q", got, baseline)
 	}
 	if err := Recover(dir); err != nil {
 		t.Fatalf("Recover: %v", err)

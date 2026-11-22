@@ -9,8 +9,8 @@ import (
 
 // Scenario: the digest of the last transfer cannot be removed.
 // Given a custom list with its download and the digest of a transfer, when its text changes and removing that digest fails
-// for a reason other than its absence, then the run fails and the journal puts the last text and its digest back: a
-// digest never stands beside bytes it does not describe.
+// for a reason other than its absence, then the run fails and the last text and its digest stand: a digest never stands
+// beside bytes it does not describe.
 func TestCustomListFailsWhenTheTransferDigestStays(t *testing.T) {
 	stage := testStage(t)
 	dir := stage.Paths.FeedDir
@@ -19,7 +19,7 @@ func TestCustomListFailsWhenTheTransferDigestStays(t *testing.T) {
 	writeFile(t, orig, "203.0.113.1\n")
 	writeFile(t, sidecar, "0123456789abcdef0123456789abcdef")
 	withFault(t, func(op, path string) error {
-		if op == "remove" && path == sidecar {
+		if op == "remove" && filepath.Base(path) == filepath.Base(sidecar) {
 			return syscall.EIO
 		}
 		return nil
