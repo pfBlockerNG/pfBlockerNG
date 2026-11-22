@@ -458,10 +458,17 @@ SH
 	{
 		global $pfb;
 		$dbdir = $pfb['dbdir'];
-		// the ledger write after the pfctl call takes a string: a NULL makes the pfctl step throw once pfctl has run
-		$pfb['dbdir'] = NULL;
+		// the ledger write a failed pfctl call makes takes a string: the member source sets a NULL once the run has read the
+		// ledger, so the pfctl step throws once pfctl has run
+		file_put_contents("{$this->dir}/fail", "1\n");
+		$source = static function (): array {
+			global $pfb;
+			$pfb['dbdir'] = NULL;
+			return [['10.1.0.1'], []];
+		};
 		try {
-			$this->apply(['10.1.0.1'], [], 10000, 10000, 'delta');
+			pfb_apply_alias_delta_members($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']), $source, 1, 0, 10000,
+				10000, 'delta', 64, FALSE, $this->batchdir);
 			$this->fail('the pfctl step did not throw, so this test proves nothing');
 		} catch (TypeError) {
 		} finally {
