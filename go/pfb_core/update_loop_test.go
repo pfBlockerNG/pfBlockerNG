@@ -4,20 +4,27 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update"
 )
 
-// statusMembers is the worker status Core's last Update left in its state directory, member by member.
-func statusMembers(t *testing.T, c *runningCore) map[string]json.RawMessage {
+// workerMembers is the worker file name (update.log.status, update.log.request) Core's last Update left in its state
+// directory, member by member.
+func workerMembers(t *testing.T, c *runningCore, name string) map[string]json.RawMessage {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(c.state, "update.log.status"))
+	b, err := os.ReadFile(filepath.Join(c.state, name))
 	var members map[string]json.RawMessage
 	if err != nil || json.Unmarshal(b, &members) != nil {
-		t.Fatalf("update.log.status = %q, %v", b, err)
+		t.Fatalf("%s = %q, %v", name, b, err)
 	}
 	return members
 }
@@ -36,7 +43,8 @@ func loopFlags(t *testing.T) (flags []string, paths map[string]any) {
 }
 
 // WHEN Core runs with --update-loop THEN an admitted Update runs the Core Updater loop, which reads the settings itself,
-// instead of the --update-cmd program, and the worker's state carries the paths the flags gave Core.
+// instead of the --update-cmd program; the worker's request carries the paths the flags gave Core, and the status it
+// publishes does not.
 func TestWithTheUpdateLoopSwitchOnAnUpdateRunsTheLoopNotTheProgram(t *testing.T) {
 	holdQuarters(t)
 	f := newFakeUpdate(t)
@@ -57,10 +65,13 @@ func TestWithTheUpdateLoopSwitchOnAnUpdateRunsTheLoopNotTheProgram(t *testing.T)
 	}
 	paths["settingsCmd"] = adapter.path
 	var loop map[string]any
-	if err := json.Unmarshal(statusMembers(t, c)["loop"], &loop); err != nil {
-		t.Fatalf("the worker status has no loop: %v", err)
+	if err := json.Unmarshal(workerMembers(t, c, "update.log.request")["loop"], &loop); err != nil {
+		t.Fatalf("the worker request has no loop: %v", err)
 	}
 	sameJSON(t, jsonString(t, loop), jsonString(t, paths))
+	if loop, ok := workerMembers(t, c, "update.log.status")["loop"]; ok {
+		t.Errorf("the worker status carries the loop %s, want none", loop)
+	}
 	if main, err := os.ReadFile(paths["mainLog"].(string)); err != nil || !strings.Contains(string(main), "settings revision 5") {
 		t.Errorf("main log = %q, %v; want the loop's snapshot line", main, err)
 	}
@@ -82,27 +93,90 @@ func TestWithTheUpdateLoopSwitchOffAnUpdateRunsTheProgramAsBefore(t *testing.T) 
 	if n := f.runs(); n != 1 {
 		t.Errorf("the program ran %d times, want once", n)
 	}
-	if loop, ok := statusMembers(t, c)["loop"]; ok {
+	if loop, ok := workerMembers(t, c, "update.log.status")["loop"]; ok {
 		t.Errorf("the worker status carries a loop %s, want none", loop)
 	}
 }
 
-// --update-loop selects how an Update runs, so it needs --update-cmd; --main-log, like every path, must be absolute.
+// --update-loop selects how an Update runs, so it needs --update-cmd, and --main-log serves only the loop; with the switch
+// on, every path the loop is given, --settings-backend-cmd among them, must be absolute and clean and hold no control
+// character. Each refusal is a usage error with a line that names the flag at fault.
 func TestTheUpdateLoopFlagsAreRefusedAsUsageErrorsWhenTheyCannotWork(t *testing.T) {
 	dir := scratchDir(t)
 	base := []string{"--socket", filepath.Join(dir, "run", "api.sock"), "--state-dir", filepath.Join(dir, "state")}
-	for name, extra := range map[string][]string{
-		"loop without update-cmd": {"--update-loop"},
-		"relative main log":       {"--update-cmd", "/bin/true", "--update-loop", "--main-log", "pfblockerng.log"},
+	loop := []string{"--update-cmd", "/bin/true", "--update-loop"}
+	for _, tc := range []struct {
+		name, flag string
+		extra      []string
+	}{
+		{"loop without update-cmd", "--update-cmd", []string{"--update-loop"}},
+		{"main log without the loop", "--update-loop", []string{"--update-cmd", "/bin/true", "--main-log", filepath.Join(dir, "main.log")}},
+		{"relative main log", "-main-log", append(slices.Clone(loop), "--main-log", "pfblockerng.log")},
+		{"relative settings program", "--settings-backend-cmd", append(slices.Clone(loop), "--settings-backend-cmd", "adapter.sh")},
+		{"unclean settings program", "--settings-backend-cmd", append(slices.Clone(loop), "--settings-backend-cmd", dir+"/bin/../adapter.sh")},
+		{"control character in the resource folder", "--resource-dir", append(slices.Clone(loop), "--resource-dir", dir+"/store\x01")},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			stopped, cancel := context.WithCancel(context.Background())
 			cancel()
 			var stderr bytes.Buffer
-			if code := run(stopped, append(append([]string{}, base...), extra...), &stderr); code != 2 {
+			if code := run(stopped, append(slices.Clone(base), tc.extra...), &stderr); code != 2 {
 				t.Errorf("run = %d, want 2; stderr %q", code, stderr.String())
 			}
+			named := false
+			for _, line := range strings.Split(stderr.String(), "\n") {
+				named = named || !strings.HasPrefix(line, "pfb-core: usage:") && strings.Contains(line, tc.flag)
+			}
+			if !named {
+				t.Errorf("stderr = %q, want a line besides the usage text that names %s", stderr.String(), tc.flag)
+			}
 		})
+	}
+}
+
+// WHEN an invalid loop reaches the admission of an Update THEN the Update is refused before any side effect: the previous
+// transcript, the schedule state and the gate's status stay as they were, and no program runs.
+func TestAnInvalidLoopIsRefusedBeforeAnySideEffectOfAnUpdate(t *testing.T) {
+	stateDir := scratchDir(t)
+	st, err := settings.Open(stateDir, settings.Production())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Initialize(t.Context(), map[string]map[string]json.RawMessage{}); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(stateDir, "update.log")
+	if err := os.WriteFile(logPath, []byte("the previous Update\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeUpdate(t)
+	f.release()
+	sched, gate := newUpdates(f.path, "", "", stateDir, &update.Loop{ResourceDir: "relative/store"}, st, newLaneSettings(st, t.Logf), t.Logf)
+	t.Cleanup(gate.Stop)
+	files := func() map[string]string {
+		got := map[string]string{}
+		for _, name := range []string{"update.log", "schedule_state.json", "update.log.request", "update.log.status"} {
+			b, err := os.ReadFile(filepath.Join(stateDir, name))
+			got[name] = fmt.Sprintf("%q %v", b, err)
+		}
+		return got
+	}
+	beforeFiles := files()
+	beforeView, err := gate.View(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sched.Start("manual", "both", "none"); err == nil {
+		t.Error("Start = nil, want the invalid loop refused")
+	}
+	if after := files(); !reflect.DeepEqual(after, beforeFiles) {
+		t.Errorf("state files:\n have %v\n want %v", after, beforeFiles)
+	}
+	if afterView, err := gate.View(0, 0); err != nil || !reflect.DeepEqual(afterView, beforeView) {
+		t.Errorf("gate view = %+v, %v; want %+v", afterView, err, beforeView)
+	}
+	if n := f.runs(); n != 0 {
+		t.Errorf("the program ran %d times, want none", n)
 	}
 }
 

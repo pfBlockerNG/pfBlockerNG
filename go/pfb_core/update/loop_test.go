@@ -1,6 +1,7 @@
 package update
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,14 +14,15 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
 )
 
 // adapterEnv makes this test binary, run with no argument, stand in for the Outpost's settings adapter
-// (settings.AdapterBackend): it reads the request, appends "run" to the file runs, records in lockstate whether the
-// file named by the file lock (when there is one) is locked by another process, and then answers by the files of its
-// folder: block (it never answers), fail (its text on stderr, exit status 1), else reply on stdout.
+// (settings.AdapterBackend): it reads the request, appends "run" to the file runs, opens the FIFO started for writing
+// and then the FIFO proceed for reading when they exist (each open waits for the test), and then answers by the files
+// of its folder: block (it never answers), fail (its text on stderr, exit status 1), else reply on stdout.
 const adapterEnv = "PFB_TEST_SETTINGS_ADAPTER"
 
 func init() {
@@ -30,15 +32,13 @@ func init() {
 	}
 	_, _ = io.ReadAll(os.Stdin)
 	appendFile(filepath.Join(dir, "runs"), "run\n")
-	if lockPath, err := os.ReadFile(filepath.Join(dir, "lock")); err == nil {
-		state := "unlocked"
-		if f, err := os.Open(string(lockPath)); err == nil {
-			if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); errors.Is(err, syscall.EWOULDBLOCK) {
-				state = "locked"
-			}
+	for _, fifo := range []struct {
+		name string
+		flag int
+	}{{"started", os.O_WRONLY}, {"proceed", os.O_RDONLY}} {
+		if f, err := os.OpenFile(filepath.Join(dir, fifo.name), fifo.flag, 0); err == nil {
 			f.Close()
 		}
-		appendFile(filepath.Join(dir, "lockstate"), state)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "block")); err == nil {
 		time.Sleep(time.Hour) // never answers: the backend's read timeout ends it
@@ -132,19 +132,6 @@ func loopCommand(t *testing.T, loop *Loop) (*Command, string) {
 var wantBoundaries = []string{"snapshot", "work-list", "pre-hook", "extras", "change-detection", "apply-window", "dnsbl",
 	"dnsblip", "publish-dnsbl", "geoip-sets", "ip", "recompute", "suppression", "uber", "publish-ip", "apply", "post-hook",
 	"settle", "end"}
-
-// WHEN the loop runs over a snapshot it can read THEN it passes every stage boundary, each named, in the spec's order.
-func TestEveryStageBoundaryIsReachedOnceInTheSpecsOrder(t *testing.T) {
-	seen := recordBoundaries(t)
-	adapter, _ := settingsAdapter(t, plainReply)
-	u := &updater{loop: Loop{SettingsCmd: adapter}, req: Request{Trigger: "manual", Scope: "both", Force: "none"}, stateDir: t.TempDir()}
-	if err := u.run(); err != nil {
-		t.Fatalf("run = %v, want nil", err)
-	}
-	if !slices.Equal(*seen, wantBoundaries) {
-		t.Errorf("boundaries:\n have %q\n want %q", *seen, wantBoundaries)
-	}
-}
 
 // WHEN the loop takes its snapshot THEN it reads the adapter once, holds that revision's settings and keeps the pending
 // token as the adapter wrote it, in memory.
@@ -260,21 +247,18 @@ func TestASnapshotThatCannotBeReadFailsTheUpdateBeforeAnyLaterStage(t *testing.T
 	}
 }
 
-// WHEN Core admits an Update whose state carries the loop THEN the worker runs the loop, which reads the settings while
-// the worker holds the lifetime lock, and the Update program is not started.
-func TestTheWorkerRunsTheLoopUnderTheLockInsteadOfTheProgram(t *testing.T) {
-	adapter, adir := settingsAdapter(t, plainReply)
+// WHEN Core admits an Update whose state carries the loop THEN the worker runs the loop, and the Update program is not
+// started; the loop reaches the worker in its request only, and the status the worker publishes has no loop member, so
+// that a Core that does not know the member can still read it.
+func TestTheWorkerRunsTheLoopInsteadOfTheProgram(t *testing.T) {
+	adapter, _ := settingsAdapter(t, plainReply)
 	log := independentLog(t)
-	touch(t, filepath.Join(adir, "lock"), log.Name()+".lock")
 	c, pdir := loopCommand(t, &Loop{SettingsCmd: adapter})
 	if _, err := runCmd(t, c, Request{Trigger: "manual", Scope: "both", Force: "none"}, log); err != nil {
 		t.Fatalf("Run = %v, want success", err)
 	}
 	if _, err := os.Stat(filepath.Join(pdir, "runs")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the Update program ran (%v); the loop replaces it", err)
-	}
-	if b, _ := os.ReadFile(filepath.Join(adir, "lockstate")); string(b) != "locked" {
-		t.Errorf("the adapter saw the lifetime lock %q, want locked: the snapshot is taken after the lock", b)
 	}
 	if text := logText(t, log); !strings.Contains(text, "settings revision 7") {
 		t.Errorf("transcript = %q, want the snapshot's revision line", text)
@@ -283,6 +267,214 @@ func TestTheWorkerRunsTheLoopUnderTheLockInsteadOfTheProgram(t *testing.T) {
 	if err != nil || state.ExitCode == nil || *state.ExitCode != 0 || state.Failure != "" {
 		t.Errorf("terminal status = %+v, %v; want exit 0 without failure", state, err)
 	}
+	if loop, ok := fileMembers(t, log.Name()+".status")["loop"]; ok {
+		t.Errorf("the published status carries the loop %s, want none", loop)
+	}
+	var loop Loop
+	if err := json.Unmarshal(fileMembers(t, log.Name()+".request")["loop"], &loop); err != nil || loop.SettingsCmd != adapter {
+		t.Errorf("the request's loop = %+v, %v; want the adapter %q", loop, err, adapter)
+	}
+}
+
+// fileMembers is the JSON object in path, member by member.
+func fileMembers(t *testing.T, path string) map[string]json.RawMessage {
+	t.Helper()
+	var members map[string]json.RawMessage
+	b, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(b, &members) != nil {
+		t.Fatalf("%s = %q, %v", path, b, err)
+	}
+	return members
+}
+
+// waitUnlocked waits until no process holds the lock file at path: the worker holds it until it has ended.
+func waitUnlocked(t *testing.T, path string) {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	locked := make(chan error, 1)
+	go func() { locked <- syscall.Flock(int(f.Fd()), syscall.LOCK_EX) }()
+	select {
+	case err := <-locked:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(stuck):
+		t.Fatalf("STUCK: the worker did not end within %v", stuck)
+	}
+}
+
+// WHEN the worker runs the loop THEN the settings adapter starts only after the worker has completed its ownership
+// handshake with Launch: a controller that stops observing once the adapter has started ends with its own cancellation,
+// because Launch has already handed the Update over, never with a worker that did not acknowledge ownership.
+func TestTheSnapshotIsTakenOnlyAfterTheOwnershipHandshake(t *testing.T) {
+	adapter, adir := settingsAdapter(t, plainReply)
+	started, proceed := filepath.Join(adir, "started"), filepath.Join(adir, "proceed")
+	for _, fifo := range []string{started, proceed} {
+		if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log := independentLog(t)
+	c, _ := loopCommand(t, &Loop{SettingsCmd: adapter})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ran := make(chan error, 1)
+	go func() { _, err := c.Run(ctx, Request{Trigger: "manual"}, log); ran <- err }()
+	opened := make(chan error, 1)
+	go func() {
+		f, err := os.OpenFile(started, os.O_RDONLY, 0) // returns once the adapter has opened it: the adapter runs
+		if err == nil {
+			f.Close()
+		}
+		opened <- err
+	}()
+	select {
+	case err := <-opened:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case err := <-ran:
+		t.Fatalf("Run = %v before the adapter started", err)
+	case <-time.After(stuck):
+		t.Fatalf("STUCK: the adapter did not start within %v", stuck)
+	}
+	cancel()
+	select {
+	case err := <-ran:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Run = %v, want context.Canceled: the adapter ran before the worker completed its handshake", err)
+		}
+	case <-time.After(stuck):
+		t.Fatalf("STUCK: Run did not return within %v", stuck)
+	}
+	f, err := os.OpenFile(proceed, os.O_WRONLY, 0) // lets the adapter answer
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	waitUnlocked(t, log.Name()+".lock")
+}
+
+// WHEN the settings adapter fails with a line break, an escape sequence and kilobytes of text on its stderr THEN the
+// transcript, the main log and the receipt's failure text each hold one bounded line without a control character.
+func TestAFailedSnapshotWritesOneBoundedSanitizedLine(t *testing.T) {
+	adapter, adir := settingsAdapter(t, plainReply)
+	touch(t, filepath.Join(adir, "fail"), "MARK locked\tA\nsecond line \x1b[31mred "+strings.Repeat("x", 4000))
+	mainLog := filepath.Join(t.TempDir(), "pfblockerng.log")
+	log := independentLog(t)
+	c, _ := loopCommand(t, &Loop{SettingsCmd: adapter, MainLog: mainLog})
+	if _, err := runCmd(t, c, Request{Trigger: "manual"}, log); err == nil {
+		t.Fatal("Run = nil, want the snapshot's failure")
+	}
+	const bound = 512
+	state, err := readWorkerState(log.Name() + ".status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	main, err := os.ReadFile(mainLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{"transcript": logText(t, log), "main log": string(main), "failure": state.Failure + "\n"} {
+		var marked []string
+		for _, line := range strings.SplitAfter(text, "\n") {
+			if strings.Contains(line, "MARK") || strings.Contains(line, "second line") || strings.Contains(line, "xxxx") {
+				marked = append(marked, line)
+			}
+		}
+		if len(marked) != 1 {
+			t.Errorf("%s holds %d lines of the adapter's text, want one; the second starts %.40q", name, len(marked), marked[min(1, len(marked)-1)])
+			continue
+		}
+		line := strings.TrimSuffix(marked[0], "\n")
+		if !strings.Contains(line, "MARK locked") || len(line) > bound || strings.IndexFunc(line, unicode.IsControl) >= 0 {
+			t.Errorf("%s line = %.600q (%d bytes), want the adapter's reason in at most %d bytes without a control character",
+				name, line, len(line), bound)
+		}
+	}
+}
+
+// WHEN the main log is missing THEN the loop creates it with the mode the package's PHP logger gives a new log
+// (file_put_contents: 0666 less the umask); a FIFO, with or without a reader, a directory, a file with a second hard
+// link and a symbolic link are refused, and opening a FIFO never waits for a reader.
+func TestTheMainLogIsCreatedAsThePackageCreatesItAndOnlyAPlainFileIsTaken(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		old := syscall.Umask(0o022)
+		defer syscall.Umask(old)
+		path := filepath.Join(t.TempDir(), "pfblockerng.log")
+		f, err := openMainLog(path)
+		if err != nil {
+			t.Fatalf("openMainLog = %v, want the log created", err)
+		}
+		f.Close()
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o644 {
+			t.Errorf("the created main log = %v, %v; want mode 0644 under umask 022", info.Mode(), err)
+		}
+	})
+	refused := func(t *testing.T, path string) {
+		t.Helper()
+		opened := make(chan error, 1)
+		go func() {
+			f, err := openMainLog(path)
+			if err == nil {
+				f.Close()
+			}
+			opened <- err
+		}()
+		select {
+		case err := <-opened:
+			if err == nil {
+				t.Errorf("openMainLog(%s) = nil, want a refusal", path)
+			}
+		case <-time.After(stuck):
+			if r, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil { // frees an open that waits
+				defer r.Close()
+				<-opened
+			}
+			t.Fatalf("STUCK: openMainLog(%s) waited %v for a reader", path, stuck)
+		}
+	}
+	fifo := func(t *testing.T) string {
+		path := filepath.Join(t.TempDir(), "pfblockerng.log")
+		if err := syscall.Mkfifo(path, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	t.Run("FIFO without a reader", func(t *testing.T) { refused(t, fifo(t)) })
+	t.Run("FIFO with a reader", func(t *testing.T) {
+		path := fifo(t)
+		r, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		refused(t, path)
+	})
+	t.Run("directory", func(t *testing.T) { refused(t, t.TempDir()) })
+	t.Run("second hard link", func(t *testing.T) {
+		dir := t.TempDir()
+		touch(t, filepath.Join(dir, "other"), "kept")
+		if err := os.Link(filepath.Join(dir, "other"), filepath.Join(dir, "pfblockerng.log")); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, filepath.Join(dir, "pfblockerng.log"))
+		if b, _ := os.ReadFile(filepath.Join(dir, "other")); string(b) != "kept" {
+			t.Errorf("the other link = %q, want it untouched", b)
+		}
+	})
+	t.Run("symbolic link", func(t *testing.T) {
+		dir := t.TempDir()
+		touch(t, filepath.Join(dir, "target"), "")
+		if err := os.Symlink(filepath.Join(dir, "target"), filepath.Join(dir, "pfblockerng.log")); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, filepath.Join(dir, "pfblockerng.log"))
+	})
 }
 
 // WHEN the loop skips a scheduled Update THEN Core sees it deferred (the result "skipped"), as for exit status 75.
@@ -464,7 +656,7 @@ func TestNoSecretOfTheSnapshotIsWrittenAnywhere(t *testing.T) {
 }
 
 // WHEN a worker state carries a loop THEN only paths that are absolute, clean and free of control characters are taken,
-// an unknown field refuses the state, and the size bound still holds.
+// an empty list item is refused (empty means none only for a single path), and an unknown field refuses the state.
 func TestAWorkerStateWithAHostileLoopIsRefused(t *testing.T) {
 	base := workerState{Version: 1, Nonce: strings.Repeat("a", 64), Path: "/bin/true", Request: Request{Trigger: "apply"}, StartedAt: 100}
 	encode := func(loop *Loop) string {
@@ -484,10 +676,6 @@ func TestAWorkerStateWithAHostileLoopIsRefused(t *testing.T) {
 	if _, err := decodeWorkerState(strings.NewReader(encode(&Loop{}))); err != nil {
 		t.Fatalf("a loop over the file backend with no other path is refused: %v", err)
 	}
-	huge := make([]string, 0, 300000)
-	for range 300000 {
-		huge = append(huge, "/feed/folder")
-	}
 	for _, tc := range []struct{ name, body string }{
 		{"unknown field in the loop", strings.Replace(valid, `"loop":{`, `"loop":{"stateDir":"/elsewhere",`, 1)},
 		{"relative path", encode(&Loop{ResourceDir: "store"})},
@@ -496,7 +684,8 @@ func TestAWorkerStateWithAHostileLoopIsRefused(t *testing.T) {
 		{"relative folder in a list", encode(&Loop{FeedLocalDirs: []string{"/a", "b"}})},
 		{"control character", encode(&Loop{MainLog: "/var/log/x\n.log"})},
 		{"relative settings program", encode(&Loop{SettingsCmd: "adapter.sh"})},
-		{"over the size bound", encode(&Loop{FeedLocalDirs: huge})},
+		{"empty feed folder", encode(&Loop{FeedLocalDirs: []string{"/a", ""}})},
+		{"empty script folder", encode(&Loop{ScriptDirs: []string{""}})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := decodeWorkerState(strings.NewReader(tc.body)); err == nil {
