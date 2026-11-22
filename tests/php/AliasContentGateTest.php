@@ -46,7 +46,6 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_alias_set_different')]
 #[CoversFunction('pfb_write_canonical_alias')]
-#[CoversFunction('pfb_alias_mirror_copy')]
 #[CoversFunction('pfb_cross_list_scope')]
 #[CoversFunction('pfb_supp_update_active')]
 final class AliasContentGateTest extends TestCase
@@ -506,36 +505,7 @@ final class AliasContentGateTest extends TestCase
 		$this->assertSame(['pfB_Full_v4.txt'], array_values(array_diff(scandir($this->tmp), ['.', '..'])));
 	}
 
-	/** Issue #4191: a copy that fails (its source gone) publishes nothing: the previous mirror stays whole and nothing is left staged. */
-	public function testAliasMirrorCopyThatFailsKeepsThePreviousMirror(): void
-	{
-		$path = "{$this->tmp}/pfB_Asia_v4.txt";
-		file_put_contents($path, "10.0.0.1\n");
-
-		$this->assertFalse(pfb_alias_mirror_copy("{$this->tmp}/missing.txt", $path));
-
-		$this->assertSame("10.0.0.1\n", file_get_contents($path));
-		$this->assertSame(['pfB_Asia_v4.txt'], array_values(array_diff(scandir($this->tmp), ['.', '..'])));
-	}
-
-	/** Issue #4191: a GeoIP list copied in as an alias mirror replaces it whole, as the canonical writer does. */
-	public function testAliasMirrorCopyReplacesTheMirrorWholeUnderAnOpenReader(): void
-	{
-		$path = "{$this->tmp}/pfB_Europe_v4.txt";
-		$source = "{$this->tmp}/source.txt";
-		file_put_contents($path, "10.0.0.1\n");
-		file_put_contents($source, "192.0.2.0/24\n198.51.100.0/24\n");
-		$reader = fopen($path, 'rb');
-
-		$this->assertTrue(pfb_alias_mirror_copy($source, $path));
-
-		$this->assertSame("10.0.0.1\n", stream_get_contents($reader));
-		fclose($reader);
-		$this->assertSame("192.0.2.0/24\n198.51.100.0/24\n", file_get_contents($path));
-		$this->assertSame(['pfB_Europe_v4.txt', 'source.txt'], array_values(array_diff(scandir($this->tmp), ['.', '..'])));
-	}
-
-	/** Issue #4191: the apply copies GeoIP lists into the alias folder only through the whole-file helper. */
+	/** Issue #4191: the apply writes no list into the alias folder itself; every mirror goes through pfb_write_canonical_alias(). */
 	public function testTheApplyCopiesNoListIntoTheAliasFolderInPlace(): void
 	{
 		$apply = (string) php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');

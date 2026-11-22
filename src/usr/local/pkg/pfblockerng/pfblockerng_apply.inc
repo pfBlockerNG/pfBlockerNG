@@ -3469,6 +3469,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	}
 
 	$maxmind_run_once = TRUE;
+	$pfb_geoip_changed = $pfb_geoip_prev_sets = array();	// issue #4213: the continents' share of the ADR-40 reload set
 	foreach ($pfb['continents'] as $continent => $pfb_alias) {
 		$cont_key = 'pfblockerng' . strtolower(str_replace(' ', '', $continent));
 		if (!empty(config_get_path("installedpackages/{$cont_key}/config"))) {
@@ -3553,11 +3554,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$pfctlck = pfb_pfctl_table_count($cc_alias);
 
 						if (empty($pfctlck) && file_exists("{$pfbfolder}/{$cc_alias}.txt")) {
-							// issue #4191: a mirror that cannot be published drops the baseline, so the next pass publishes again
-							if (!pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt")) {
-								unlink_if_exists("{$pfborig}/{$cc_alias}.orig");
-							}
-							// Collect updated alias lists ('Reputation' disabled)
+							// Collect updated alias lists ('Reputation' disabled); the ADR-40 gate publishes the mirror (issue #4213)
 							$pfb_alias_lists[] = "{$cc_alias}";
 						}
 
@@ -3599,12 +3596,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											}
 										}
 									);
-
-									// Save Continent data to aliastable folder. A mirror that cannot be published drops the baseline just
-									// advanced, so the next pass finds the data changed and publishes again (issue #4191).
-									if (!pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt")) {
-										unlink_if_exists("{$pfborig}/{$cc_alias}.orig");
-									}
 								}
 
 								// Check if file exists and is > 0 in size and save alias file
@@ -3622,10 +3613,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
                                                                         }
 
 									@file_put_contents("{$pfbfolder}/{$cc_alias}.txt", "{$p_ip}\n", LOCK_EX);
-									// issue #4191: as above, an unpublished placeholder leaves the change for the next pass
-									if (!pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt")) {
-										unlink_if_exists("{$pfborig}/{$cc_alias}.orig");
-									}
 									$log = "[ {$cc_alias} ] Found no unique IPs, adding '{$p_ip}' to avoid empty file\n";
 									pfb_logger("{$log}", 1);
 								}
@@ -3633,6 +3620,16 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						}
 
 						if (file_exists("{$pfbfolder}/{$cc_alias}.txt")) {
+							// issue #4213: a changed continent (or empty table) goes through the ADR-40 gate the IP lists use, so its
+							// table is reloaded on a pass with no rule change. A mirror not published drops the baseline just
+							// advanced, so the next pass finds the data changed and publishes again (issue #4191).
+							if (in_array($cc_alias, $pfb_alias_lists, TRUE)) {
+								$members = @file_get_contents("{$pfbfolder}/{$cc_alias}.txt");
+								if ($members === FALSE || !pfb_alias_mirror_gate($cc_alias, $members, $pfctlck, $pfb_geoip_prev_sets, $pfb_geoip_changed)) {
+									unlink_if_exists("{$pfborig}/{$cc_alias}.orig");
+								}
+							}
+
 							// Create alias config
 							$new_aliases_list[] = "{$cc_alias}";
 							$new_aliases[] = array( 'name'		=> "{$cc_alias}",
@@ -4374,15 +4371,16 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// ADR-40: Snapshot the feed-changed set (populated by the download loop above)
 	// before the file-write loop.  The file-write loop will rebuild $pfb_alias_lists
 	// as the content-diff set (aliases whose canonical membership set actually changed),
-	// which is what the pfctl regions and ADR-12 emit consume.
+	// which is what the pfctl regions and ADR-12 emit consume.  The GeoIP block above
+	// already put the changed continents in it (issue #4213).
 	// $pfb_feed_changed: input to the hybrid scope gate; keeps the suppression sub-process
 	// and "read member files" decision anchored to feed-changed aliases.
 	$pfb_feed_changed    = $pfb_alias_lists;
-	$pfb_alias_lists     = array();   // reset: refilled below with content-validated aliases
+	$pfb_alias_lists     = $pfb_geoip_changed;   // reset: refilled below with content-validated aliases (continents' above)
 	// ADR-40: per-alias map from alias name -> previous canonical set (what was in the
-	// mirror BEFORE this pass wrote the new one).  Captured in the write loop (below) so the
+	// mirror BEFORE this pass wrote the new one).  Captured by the GeoIP block (above) and the write loop (below) so the
 	// no-rule-change reload site can compute add/del deltas without a second file read.
-	$pfb_alias_prev_sets = array();
+	$pfb_alias_prev_sets = $pfb_geoip_prev_sets;
 
 	// ADR-40: hoist cross-list scope and feed-changed alias selection here — both
 	// inputs ($pfb['dup'], $pfb['drep'], $pfb['prep'], $pfb_feed_changed,
@@ -4579,27 +4577,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						// only when the set changed.  This replaces the old pfbupdate flag write
 						// (which wrote on every feed-fetch) with a content-addressed gate.
 						if ($pfbupdate) {
-							$alias_mirror  = "{$pfb['aliasdir']}/{$alias}.txt";
-							$canonical_set = pfb_canonical_alias_set($alias_ips);
-							if (pfb_alias_set_different($canonical_set, $alias_mirror) || empty($pfctlck)) {
-								// ADR-40: capture the previous canonical set before overwriting
-								// the mirror, so the reload site has last_set for delta computation.
-								// When the kernel table is empty (empty($pfctlck)), stash an empty
-								// array so the reload site's force_rpl = empty([]) = TRUE fires a
-								// full -T replace to repopulate the kernel (fixes #468 regression:
-								// mirror == desired → empty delta → table silently stays empty).
-								// When the kernel table is non-empty, stash the mirror content as
-								// the true previous set for an accurate forward delta.
-								$prev_raw = file_exists($alias_mirror) ? @file_get_contents($alias_mirror) : '';
-								$pfb_alias_prev_sets[$alias] = empty($pfctlck) ? array() : pfb_canonical_alias_set($prev_raw ?: '');
-								// Set changed (or kernel table is empty) → write the new canonical
-								// mirror and flag this alias for pfctl reload.
-								// issue #4191: a mirror that still holds the previous set is not reported as updated
-								if (pfb_write_canonical_alias($alias_mirror, $canonical_set)) {
-									$pfb_alias_lists[] = "{$alias}";
-								}
-							}
-							// When set is unchanged: aliasdir file is already correct; no reload needed.
+							pfb_alias_mirror_gate($alias, $alias_ips, $pfctlck, $pfb_alias_prev_sets, $pfb_alias_lists);
 						}
 
 						// Add '[s]' to Alias descriptions (Bypass States removal feature)
@@ -5349,8 +5327,8 @@ function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $p
 					if (file_exists("{$pfb['aliasdir']}/{$final}.txt")) {
 						// ADR-40: compute delta from the stashed previous canonical set.
 						// Two cases always get force_rpl = TRUE here:
-						//   • ip_unlock-widened aliases: not in $pfb_alias_prev_sets (added
-						//     after the write loop), so ?? NULL → empty(NULL) = TRUE.
+						//   • a pending ip_unlock: the unlocked IP is out of the kernel table
+						//     but in both sets, so no delta re-adds it (issue #4213).
 						//   • Empty-kernel aliases: stashed as [] explicitly (M1 fix), so
 						//     empty([]) = TRUE → full -T replace repopulates the kernel.
 						// Content-changed aliases stash their actual previous set (non-empty
@@ -5358,9 +5336,8 @@ function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $p
 						$mirror_path = "{$pfb['aliasdir']}/{$final}.txt";
 						$desired     = pfb_canonical_alias_set(@file_get_contents($mirror_path) ?: '');
 						$previous    = $pfb_alias_prev_sets[$final] ?? $desired;
-						// Boot / empty-table signal: if the alias was not in the prev-set stash
-						// and the kernel table was empty, force a full replace.
-						$force_rpl   = empty($pfb_alias_prev_sets[$final] ?? NULL);
+						// Pending unlock, or boot / empty table (no stashed previous set): full replace.
+						$force_rpl   = $pfb_ip_unlock_forced || empty($pfb_alias_prev_sets[$final] ?? NULL);
 						pfb_apply_alias_delta(
 							$pfb['pfctl'],
 							$final,

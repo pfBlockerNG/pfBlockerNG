@@ -7,9 +7,10 @@ use PHPUnit\Framework\TestCase;
 require_once __DIR__ . '/PageStatementLoader.php';
 
 /**
- * Issue #4191 (CodeRabbit on PR #4207): an alias mirror that cannot be published must not pass for one that was. The GeoIP
- * branch keeps its change detectable for the next pass, the ADR-40 branch does not queue the alias for a reload, and a stage
- * that tempnam() could not create beside its target is refused before anything is written to it.
+ * Issues #4191 and #4213: an alias mirror that cannot be published must not pass for one that was. The ADR-40 gate the IP
+ * lists and the GeoIP continents share (pfb_alias_mirror_gate()) queues an alias only once its mirror is written, the
+ * GeoIP block keeps a continent it could not publish detectable for the next pass, and a stage that tempnam() could not create beside
+ * its target is refused before anything is written to it.
  */
 final class AliasMirrorPublishFailureTest extends TestCase
 {
@@ -17,156 +18,174 @@ final class AliasMirrorPublishFailureTest extends TestCase
 
 	private string $dir;
 
+	/** @var array{0: bool, 1: mixed} whether the global $pfb had an aliasdir, and its value */
+	private array $savedAliasdir;
+
+	/** The gate writes through the global $pfb['aliasdir']: point it at the sandbox for each test. */
 	protected function setUp(): void
 	{
 		$this->dir = sys_get_temp_dir() . '/pfb_alias_publish_' . bin2hex(random_bytes(6));
 		foreach (['orig', 'folder', 'alias'] as $sub) {
 			$this->assertTrue(mkdir("{$this->dir}/{$sub}", 0777, TRUE));
 		}
+		$this->savedAliasdir = [array_key_exists('aliasdir', $GLOBALS['pfb'] ?? []), $GLOBALS['pfb']['aliasdir'] ?? NULL];
+		$GLOBALS['pfb']['aliasdir'] = "{$this->dir}/alias";
 	}
 
 	protected function tearDown(): void
 	{
+		if ($this->savedAliasdir[0]) {
+			$GLOBALS['pfb']['aliasdir'] = $this->savedAliasdir[1];
+		} else {
+			unset($GLOBALS['pfb']['aliasdir']);
+		}
 		rmdir_recursive($this->dir);
 	}
 
-	/** Runs the GeoIP branch that publishes changed continent data, with new data staged at geoip_tmp. @return array<string, mixed> */
-	private function publishGeoip(): array
+	/** Issue #4213: a set that differs from the mirror is written and the alias queued, with the previous set for the delta. */
+	public function testTheGateWritesAChangedSetAndQueuesTheAliasWithItsPreviousSet(): void
 	{
-		$tmp = "{$this->dir}/geoip_tmp";
-		file_put_contents($tmp, "192.0.2.0/24\n");
-		file_put_contents("{$this->dir}/orig/pfB_Europe_v4.orig", "198.51.100.0/24\n");
+		file_put_contents("{$this->dir}/alias/pfB_Test_v4.txt", "192.0.2.1\n");
+		$prev = $changed = [];
+
+		$this->assertTrue(pfb_alias_mirror_gate('pfB_Test_v4', "192.0.2.2\n192.0.2.1\n", 1, $prev, $changed));
+
+		$this->assertSame("192.0.2.1\n192.0.2.2\n", file_get_contents("{$this->dir}/alias/pfB_Test_v4.txt"));
+		$this->assertSame(['pfB_Test_v4'], $changed);
+		$this->assertSame(['pfB_Test_v4' => ['192.0.2.1']], $prev);
+	}
+
+	/** Issue #4213: a set the mirror already holds, with a loaded table, is neither written nor queued. */
+	public function testTheGateLeavesAnUnchangedSetAlone(): void
+	{
+		file_put_contents("{$this->dir}/alias/pfB_Test_v4.txt", "192.0.2.1\n");
+		$inode = fileinode("{$this->dir}/alias/pfB_Test_v4.txt");
+		$prev = $changed = [];
+
+		$this->assertTrue(pfb_alias_mirror_gate('pfB_Test_v4', "192.0.2.1\n", 1, $prev, $changed));
+
+		clearstatcache();
+		$this->assertSame($inode, fileinode("{$this->dir}/alias/pfB_Test_v4.txt"), 'not rewritten');
+		$this->assertSame([], $changed);
+		$this->assertSame([], $prev);
+	}
+
+	/** Issue #4213 (#468): an empty kernel table is queued even for an unchanged set, with no previous set: a full replace. */
+	public function testTheGateQueuesAnEmptyTableForAFullReplace(): void
+	{
+		file_put_contents("{$this->dir}/alias/pfB_Test_v4.txt", "192.0.2.1\n");
+		$prev = $changed = [];
+
+		$this->assertTrue(pfb_alias_mirror_gate('pfB_Test_v4', "192.0.2.1\n", 0, $prev, $changed));
+
+		$this->assertSame(['pfB_Test_v4'], $changed);
+		$this->assertSame(['pfB_Test_v4' => []], $prev);
+	}
+
+	/** Issue #4191: an alias whose mirror still holds the previous set is not reported as updated. */
+	public function testTheGateDoesNotQueueAnAliasWhoseMirrorCannotBeWritten(): void
+	{
+		$this->assertTrue(mkdir("{$this->dir}/alias/pfB_Test_v4.txt"), 'setup: a folder in the mirror\'s place makes its write fail');
+		$prev = $changed = [];
+
+		$this->assertFalse(pfb_alias_mirror_gate('pfB_Test_v4', "192.0.2.1\n", 1, $prev, $changed));
+
+		$this->assertSame([], $changed);
+	}
+
+	/**
+	 * Runs the GeoIP block's publication of continent alias pfB_Europe_v4, whose baseline has just advanced to a set with a
+	 * new network.
+	 *
+	 * @param list<string> $queued the aliases the pass has queued so far (the GeoIP block queues a changed continent)
+	 * @return array<string, mixed>
+	 */
+	private function continentPublish(int $kernelEntries, array $queued): array
+	{
+		file_put_contents("{$this->dir}/orig/pfB_Europe_v4.orig", "192.0.2.0/24\n198.51.100.0/24\n");
 		return pfb_test_page_eval(
-			pfb_test_page_region(self::APPLY, "if (\$continent != 'md5_0') {", '// Check if file exists and is > 0 in size and save alias file'),
+			pfb_test_page_region(self::APPLY, 'if (in_array($cc_alias, $pfb_alias_lists, TRUE)) {', '// Create alias config'),
 			[
-				'continent' => 'new md5', 'cc_alias' => 'pfB_Europe_v4', 'vtype' => '_v4', 'elog' => '', 'pfbadv' => FALSE,
-				'pfborig' => "{$this->dir}/orig", 'pfbfolder' => "{$this->dir}/folder",
-				'pfb' => ['geoip_tmp' => $tmp, 'aliasdir' => "{$this->dir}/alias", 'agg' => PfbToggle::Off, 'script' => '/nonexistent'],
+				'cc_alias'            => 'pfB_Europe_v4',
+				'pfbfolder'           => "{$this->dir}/folder",
+				'pfborig'             => "{$this->dir}/orig",
+				'pfctlck'             => $kernelEntries,
+				'pfb_alias_lists'     => $queued,
+				'pfb_geoip_prev_sets' => [],
+				'pfb_geoip_changed'   => [],
 			]
 		);
 	}
 
-	public function testAGeoipMirrorPublishedKeepsTheNewBaseline(): void
+	/** The GeoIP block's output for pfB_Europe_v4: its members with the new network. */
+	private function givenMembers(): void
 	{
-		$this->publishGeoip();
+		file_put_contents("{$this->dir}/folder/pfB_Europe_v4.txt", "192.0.2.0/24\n198.51.100.0/24\n");
+	}
 
-		$this->assertSame("192.0.2.0/24\n", file_get_contents("{$this->dir}/orig/pfB_Europe_v4.orig"));
-		$this->assertSame("192.0.2.0/24\n", file_get_contents("{$this->dir}/alias/pfB_Europe_v4.txt"));
+	/** Issue #4213: a continent the GeoIP block changed is published and queued for reload; its baseline stays. */
+	public function testAChangedContinentIsPublishedAndQueuedForReload(): void
+	{
+		$this->givenMembers();
+		file_put_contents("{$this->dir}/alias/pfB_Europe_v4.txt", "192.0.2.0/24\n");
+
+		$scope = $this->continentPublish(1, ['pfB_Europe_v4']);
+
+		$this->assertSame(['pfB_Europe_v4'], $scope['pfb_geoip_changed']);
+		$this->assertSame(['pfB_Europe_v4' => ['192.0.2.0/24']], $scope['pfb_geoip_prev_sets']);
+		$this->assertSame("192.0.2.0/24\n198.51.100.0/24\n", file_get_contents("{$this->dir}/alias/pfB_Europe_v4.txt"));
+		$this->assertFileExists("{$this->dir}/orig/pfB_Europe_v4.orig");
+	}
+
+	/** Issue #4213 (#468): a continent queued for its empty kernel table is reloaded in full, even with its set unchanged. */
+	public function testAContinentWithAnEmptyTableIsQueuedForAFullReplace(): void
+	{
+		$this->givenMembers();
+		file_put_contents("{$this->dir}/alias/pfB_Europe_v4.txt", "192.0.2.0/24\n198.51.100.0/24\n");
+
+		$scope = $this->continentPublish(0, ['pfB_Europe_v4']);
+
+		$this->assertSame(['pfB_Europe_v4'], $scope['pfb_geoip_changed']);
+		$this->assertSame(['pfB_Europe_v4' => []], $scope['pfb_geoip_prev_sets']);
 	}
 
 	/**
-	 * The baseline the next pass compares the GeoIP data with must not vouch for data the alias mirror never received: it is
-	 * dropped, so the next pass finds the data changed and publishes again.
+	 * Issue #4191, kept by #4213: a continent mirror that cannot be written drops the GeoIP baseline, so the next pass finds
+	 * the data changed and publishes again.
 	 */
-	public function testAGeoipMirrorThatCannotBePublishedLeavesItsChangeDetectable(): void
+	public function testAContinentMirrorThatCannotBeWrittenLeavesItsChangeDetectable(): void
 	{
-		$this->assertTrue(mkdir("{$this->dir}/alias/pfB_Europe_v4.txt"), 'setup: a folder in the mirror\'s place makes its publication fail');
+		$this->givenMembers();
+		$this->assertTrue(mkdir("{$this->dir}/alias/pfB_Europe_v4.txt"), 'setup: a folder in the mirror\'s place makes its write fail');
 
-		$this->publishGeoip();
+		$scope = $this->continentPublish(1, ['pfB_Europe_v4']);
 
-		$this->assertFileDoesNotExist("{$this->dir}/orig/pfB_Europe_v4.orig", 'a baseline for unpublished data hides the change from the next pass');
+		$this->assertSame([], $scope['pfb_geoip_changed']);
+		$this->assertFileDoesNotExist("{$this->dir}/orig/pfB_Europe_v4.orig", 'a baseline for an unpublished mirror hides the change from the next pass');
 	}
 
-	/** Runs the GeoIP branch that publishes the placeholder for a continent with no unique IP left, its baseline advanced. */
-	private function publishGeoipPlaceholder(): void
+	/** Issue #4213: members that cannot be read are not taken for an empty continent; the change stays for the next pass. */
+	public function testContinentMembersThatCannotBeReadEmptyNoTable(): void
 	{
-		file_put_contents("{$this->dir}/orig/pfB_Europe_v4.orig", "192.0.2.0/24\n");
-		pfb_test_page_eval(
-			pfb_test_page_region(self::APPLY, 'if ($file_chk == 0) {',
-				"\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t}\n\n\t\t\t\t\t\tif (file_exists(\"{\$pfbfolder}/{\$cc_alias}.txt\")) {"),
-			[
-				'file_chk' => 0, 'vtype' => '_v4', 'cc_alias' => 'pfB_Europe_v4',
-				'pfborig' => "{$this->dir}/orig", 'pfbfolder' => "{$this->dir}/folder",
-				'pfb' => ['ip_ph' => '127.1.7.7', 'aliasdir' => "{$this->dir}/alias"],
-			]
-		);
-	}
+		file_put_contents("{$this->dir}/alias/pfB_Europe_v4.txt", "192.0.2.0/24\n");
 
-	public function testAGeoipPlaceholderPublishedKeepsTheBaseline(): void
-	{
-		$this->publishGeoipPlaceholder();
+		$scope = $this->continentPublish(1, ['pfB_Europe_v4']);
 
-		$this->assertSame("127.1.7.7\n", file_get_contents("{$this->dir}/alias/pfB_Europe_v4.txt"));
-		$this->assertSame("192.0.2.0/24\n", file_get_contents("{$this->dir}/orig/pfB_Europe_v4.orig"));
-	}
-
-	/** The placeholder's own publication keeps a failure detectable too: the next pass retries it. */
-	public function testAGeoipPlaceholderThatCannotBePublishedLeavesItsChangeDetectable(): void
-	{
-		$this->assertTrue(mkdir("{$this->dir}/alias/pfB_Europe_v4.txt"), 'setup: a folder in the mirror\'s place makes its publication fail');
-
-		$this->publishGeoipPlaceholder();
-
-		$this->assertFileDoesNotExist("{$this->dir}/orig/pfB_Europe_v4.orig", 'a baseline for an unpublished placeholder hides the change from the next pass');
-	}
-
-	/** Runs the GeoIP branch that republishes a continent's list into an empty kernel table, its baseline current. */
-	private function republishGeoipIntoAnEmptyTable(): void
-	{
-		file_put_contents("{$this->dir}/folder/pfB_Europe_v4.txt", "192.0.2.0/24\n");
-		file_put_contents("{$this->dir}/orig/pfB_Europe_v4.orig", "192.0.2.0/24\n");
-		pfb_test_page_eval(
-			pfb_test_page_region(self::APPLY, 'if (empty($pfctlck) && file_exists("{$pfbfolder}/{$cc_alias}.txt")) {', '// Collect active alias lists (Used for pfctl update'),
-			[
-				'pfctlck' => 0, 'cc_alias' => 'pfB_Europe_v4', 'pfb_alias_lists' => [],
-				'pfborig' => "{$this->dir}/orig", 'pfbfolder' => "{$this->dir}/folder", 'pfb' => ['aliasdir' => "{$this->dir}/alias"],
-			]
-		);
-	}
-
-	public function testAGeoipListRepublishedIntoAnEmptyTableKeepsTheBaseline(): void
-	{
-		$this->republishGeoipIntoAnEmptyTable();
-
-		$this->assertSame("192.0.2.0/24\n", file_get_contents("{$this->dir}/alias/pfB_Europe_v4.txt"));
-		$this->assertSame("192.0.2.0/24\n", file_get_contents("{$this->dir}/orig/pfB_Europe_v4.orig"));
-	}
-
-	/**
-	 * A republication into an empty table that fails drops the baseline as the other GeoIP copies do: the next pass then
-	 * finds the data changed and publishes again, whether or not anything loaded the table in between.
-	 */
-	public function testAGeoipListThatCannotBeRepublishedIntoAnEmptyTableLeavesItsChangeDetectable(): void
-	{
-		$this->assertTrue(mkdir("{$this->dir}/alias/pfB_Europe_v4.txt"), 'setup: a folder in the mirror\'s place makes its publication fail');
-
-		$this->republishGeoipIntoAnEmptyTable();
-
+		$this->assertSame([], $scope['pfb_geoip_changed']);
+		$this->assertSame("192.0.2.0/24\n", file_get_contents("{$this->dir}/alias/pfB_Europe_v4.txt"), 'the mirror was emptied');
 		$this->assertFileDoesNotExist("{$this->dir}/orig/pfB_Europe_v4.orig");
 	}
 
-	/** Runs the ADR-40 branch for one alias whose set differs from its mirror. @return array<string, mixed> */
-	private function applyCanonicalSet(string $mirror): array
+	/** Issue #4213: a continent the GeoIP block did not queue (unchanged, its table loaded) is left alone. */
+	public function testAContinentThePassDidNotQueueIsLeftAlone(): void
 	{
-		return pfb_test_page_eval(
-			pfb_test_page_region(self::APPLY, '$canonical_set = pfb_canonical_alias_set($alias_ips);', '// When set is unchanged: aliasdir file is already correct; no reload needed.'),
-			[
-				'alias_ips' => "192.0.2.1\n192.0.2.2\n", 'alias_mirror' => $mirror, 'pfctlck' => '2', 'alias' => 'pfB_Test_v4',
-				'pfb_alias_prev_sets' => [], 'pfb_alias_lists' => [],
-			]
-		);
-	}
+		$this->givenMembers();
+		file_put_contents("{$this->dir}/alias/pfB_Europe_v4.txt", "192.0.2.0/24\n");
 
-	public function testAnAliasWhoseMirrorIsWrittenIsQueuedForReload(): void
-	{
-		$mirror = "{$this->dir}/alias/pfB_Test_v4.txt";
-		file_put_contents($mirror, "192.0.2.1\n");
+		$scope = $this->continentPublish(1, []);
 
-		$scope = $this->applyCanonicalSet($mirror);
-
-		$this->assertSame(['pfB_Test_v4'], $scope['pfb_alias_lists']);
-		$this->assertSame("192.0.2.1\n192.0.2.2\n", file_get_contents($mirror));
-	}
-
-	/** An alias whose mirror still holds the previous set is not reported as updated. */
-	public function testAnAliasWhoseMirrorCannotBeWrittenIsNotQueuedForReload(): void
-	{
-		$mirror = "{$this->dir}/alias/pfB_Test_v4.txt";
-		$this->assertTrue(mkdir($mirror), 'setup: a folder in the mirror\'s place makes its write fail');
-
-		$scope = $this->applyCanonicalSet($mirror);
-
-		$this->assertSame([], $scope['pfb_alias_lists']);
+		$this->assertSame([], $scope['pfb_geoip_changed']);
+		$this->assertSame("192.0.2.0/24\n", file_get_contents("{$this->dir}/alias/pfB_Europe_v4.txt"));
 	}
 
 	/**
