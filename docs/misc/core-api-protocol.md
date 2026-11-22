@@ -928,11 +928,16 @@ Core reads the result file whole and holds the apply (#4037, slice 8e) to three 
 - `changedAliases` names only aliases of ids the request holds, in `resources` or in `removed`: any other alias refuses the
   result;
 - the file as a whole stays within 1 MiB. When it is longer, Core keeps the complete lines inside the first 1 MiB and reports
-  the rest as cut: what those lines report is settled, and the ids they do not name stay pending.
+  the rest as cut: what those lines report is settled, and the ids they do not name stay pending. When the line that crosses
+  the 1 MiB bound is itself over the line bound, the whole result is refused instead;
+- a line is empty or holds only spaces (Core skips it), or is one object: a tab, a carriage return or any other byte
+  outside printable ASCII refuses the result.
 
 A line Core refuses (another version, an unknown field, an id outside the request, a failure message holding a control
-character or a line or paragraph separator) refuses the whole result, unless it is the unterminated last line of a file
-within 1 MiB, cut short by the apply's death: then the lines before it count.
+character or a line or paragraph separator, a line over the line bound) refuses the whole result. One exception: the
+unterminated last line of a file within 1 MiB that the apply's death cut short. That is a line shorter than the line bound,
+of printable ASCII, that opens an object and ends before the object does. Then the lines before it count. An unterminated
+last line that is complete, malformed or followed by other data is refused like any other line.
 
 With `pendingOutsideWindow` true the apply marks the changes pending and applies nothing, so its one line holds no `applied`.
 

@@ -106,10 +106,10 @@ type line struct {
 // or holds only spaces and is within MaxLine; any other whitespace is refused as a byte that is not printable ASCII.
 // A result over MaxResult keeps the complete lines inside the first MaxResult bytes, with ErrCut (the flags and ChangedAliases
 // of that Result are lower bounds: assume a change and a possible reload), unless the bytes after the last newline inside
-// those MaxResult bytes number MaxLine or more: a line then broke its bound, and the result is refused whole like a line over
-// MaxLine. A line the apply's death cut short is the unterminated last line of the file, shorter than MaxLine, that is a proper
-// prefix of one JSON value (decoding it ends in io.ErrUnexpectedEOF); only such a line leaves the lines before it, with the
-// error. Any other error, of a terminated or an unterminated line, returns a zero Result, so nothing of it is settled.
+// those MaxResult bytes make a line over MaxLine: a line then broke its bound, and the result is refused whole like a line over
+// MaxLine. A line the apply's death cut short is the unterminated last line of the file, shorter than MaxLine, of printable
+// ASCII, that is a proper prefix of one JSON object (it opens one, and decoding it ends in io.ErrUnexpectedEOF); only such a
+// line leaves the lines before it, with the error. Any other error, of a terminated or an unterminated line, returns a zero Result, so nothing of it is settled.
 func ReadResult(f io.ReaderAt, req Request) (Result, error) {
 	b, err := readBounded(io.NewSectionReader(f, 0, MaxResult+1))
 	if err != nil {
@@ -118,7 +118,9 @@ func ReadResult(f io.ReaderAt, req Request) (Result, error) {
 	cut := len(b) > MaxResult
 	if cut {
 		end := bytes.LastIndexByte(b[:MaxResult], '\n') + 1
-		if len(b)-end >= MaxLine { // the dropped tail is itself over the line bound: the writer broke it, the file is not merely cut
+		// the dropped tail is itself over the line bound (its newline may be the one byte read past the file bound): the
+		// writer broke it, the file is not merely cut
+		if len(bytes.TrimSuffix(b[end:], []byte("\n")))+1 > MaxLine {
 			return Result{}, fmt.Errorf("the apply's result line is refused: it is over %d bytes", MaxLine)
 		}
 		b = b[:end]
@@ -144,7 +146,8 @@ func ReadResult(f io.ReaderAt, req Request) (Result, error) {
 			continue
 		}
 		if err := r.add(l); err != nil {
-			if !terminated && len(l) < MaxLine && errors.Is(json.NewDecoder(bytes.NewReader(l)).Decode(new(json.RawMessage)), io.ErrUnexpectedEOF) {
+			if !terminated && len(l) < MaxLine && l[0] == '{' && printableASCII(string(l), 0x20) &&
+				errors.Is(json.NewDecoder(bytes.NewReader(l)).Decode(new(json.RawMessage)), io.ErrUnexpectedEOF) {
 				return r.res, err
 			}
 			return Result{}, err
