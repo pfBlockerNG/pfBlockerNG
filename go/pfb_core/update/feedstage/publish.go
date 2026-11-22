@@ -57,21 +57,33 @@ type journalEntry struct {
 }
 
 // The file operations of a run and of Recover go through these, so that a test can stop at each one (step "op:<name>").
-func rename(from, to string) error { step("op:rename"); return os.Rename(from, to) }
-func link(from, to string) error   { step("op:link"); return os.Link(from, to) }
-func truncate(path string) error   { step("op:truncate"); return os.Truncate(path, 0) }
+func link(from, to string) error { step("op:link"); return os.Link(from, to) }
+func truncate(path string) error { step("op:truncate"); return os.Truncate(path, 0) }
 func createTemp(dir string) (*os.File, error) {
 	step("op:create")
 	return os.CreateTemp(dir, stagePrefix)
 }
-func create(path string) (*os.File, error) {
-	step("op:create")
-	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+
+// fault is a test seam beside step: an error it returns for an operation ("rename", "create", "remove", "lstat" or "sync")
+// and its path (a rename's source) stands for that operation's own error, which no folder a test can build produces.
+// Production never sets it.
+var fault = func(op, path string) error { return nil }
+
+func rename(from, to string) error {
+	step("op:rename")
+	if err := fault("rename", from); err != nil {
+		return err
+	}
+	return os.Rename(from, to)
 }
 
-// fault is a test seam beside step: an error it returns for an operation ("remove", "lstat" or "sync") and its path stands
-// for that operation's own error, which no folder a test can build produces. Production never sets it.
-var fault = func(op, path string) error { return nil }
+func create(path string) (*os.File, error) {
+	step("op:create")
+	if err := fault("create", path); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+}
 
 func remove(path string) error {
 	step("op:remove")
