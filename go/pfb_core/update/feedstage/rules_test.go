@@ -140,7 +140,11 @@ func TestPathsMustBeAbsoluteAndClean(t *testing.T) {
 			t.Errorf("%s: run = %+v, want a settings failure %s", tc.name, got, tc.reason)
 		}
 	}
-	if entries, _ := os.ReadDir(base); len(entries) != 0 {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatalf("the feed folder after the refused runs: %v", err)
+	}
+	if len(entries) != 0 {
 		t.Fatalf("refused runs left %d files in the feed folder", len(entries))
 	}
 }
@@ -157,11 +161,11 @@ func TestParseFailuresAreOneSummaryLine(t *testing.T) {
 		t.Fatalf("run = %+v, want two parse failures", got)
 	}
 	summary := "\n[!] Parse Errors [ Test_custom_v4 ]: 2\n"
-	if strings.Count(log.String(), "Parse Errors") != 1 || !strings.Contains(log.String(), summary) || strings.Contains(log.String(), "parse failure") {
+	if strings.Count(log.String(), "Parse Errors") != 1 || strings.Count(log.String(), summary) != 1 || strings.Contains(log.String(), "parse failure") {
 		t.Fatalf("the main log = %q, want the one summary line %q", log.String(), summary)
 	}
-	if !strings.Contains(errs.String(), summary) {
-		t.Fatalf("the error log = %q, want the summary line %q", errs.String(), summary)
+	if strings.Count(errs.String(), summary) != 1 {
+		t.Fatalf("the error log = %q, want the summary line %q once", errs.String(), summary)
 	}
 }
 

@@ -72,19 +72,21 @@ func TestUnknownKindOrStateIsRefused(t *testing.T) {
 func TestParseSettingsReachTheReuseRecord(t *testing.T) {
 	for _, tc := range []struct {
 		name, kind, source string
+		suppression        bool // Suppression is on from the first run, so that the change is the one floor alone
 		change             func(*Stage, *Feed)
 	}{
-		{"suppression and the IPv4 floor", "ipv4", "198.51.0.0/16\n", func(s *Stage, _ *Feed) { s.Config.Suppression, s.Config.FloorV4 = true, 24 }},
-		{"the IPv6 floor", "ipv6", "2001:db8::/32\n", func(s *Stage, _ *Feed) { s.Config.Suppression, s.Config.FloorV6 = true, 48 }},
-		{"the group's Suppression CIDR", "ipv4", "198.51.0.0/16\n", func(s *Stage, f *Feed) { s.Config.Suppression, f.SuppressionCIDR = true, 24 }},
-		{"suppression", "dnsbl", "a.example\n", func(s *Stage, _ *Feed) { s.Config.Suppression = true }},
-		{"the DNSBL IP switch", "dnsbl", "a.example\n198.51.100.1\n", func(s *Stage, _ *Feed) { s.Config.DNSBLIP = true }},
-		{"lenient", "dnsbl", "a.example\n", func(s *Stage, _ *Feed) { s.Config.Lenient = true }},
-		{"the format", "ipv4", "198.51.100.1\n", func(_ *Stage, f *Feed) { f.Format = "regex" }},
-		{"the list type", "ipv4", "198.51.100.1\n", func(_ *Stage, f *Feed) { f.Custom = true }},
+		{"the IPv4 floor", "ipv4", "198.51.0.0/16\n", true, func(s *Stage, _ *Feed) { s.Config.FloorV4 = 24 }},
+		{"the IPv6 floor", "ipv6", "2001:db8::/32\n", true, func(s *Stage, _ *Feed) { s.Config.FloorV6 = 48 }},
+		{"the group's Suppression CIDR", "ipv4", "198.51.0.0/16\n", true, func(_ *Stage, f *Feed) { f.SuppressionCIDR = 24 }},
+		{"suppression", "dnsbl", "a.example\n", false, func(s *Stage, _ *Feed) { s.Config.Suppression = true }},
+		{"the DNSBL IP switch", "dnsbl", "a.example\n198.51.100.1\n", false, func(s *Stage, _ *Feed) { s.Config.DNSBLIP = true }},
+		{"lenient", "dnsbl", "a.example\n", false, func(s *Stage, _ *Feed) { s.Config.Lenient = true }},
+		{"the format", "ipv4", "198.51.100.1\n", false, func(_ *Stage, f *Feed) { f.Format = "regex" }},
+		{"the list type", "ipv4", "198.51.100.1\n", false, func(_ *Stage, f *Feed) { f.Custom = true }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stage, _, source := localStage(t)
+			stage.Config.Suppression = tc.suppression
 			feed := testFeed(tc.kind, "enabled", "auto", "file://"+source)
 			writeFile(t, source, tc.source)
 			if got := run(stage, feed, "none"); got.Disposition != "changed" {

@@ -3,6 +3,7 @@ package feedstage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -144,7 +145,8 @@ func TestFailureReasonsNameNoPathOrCredential(t *testing.T) {
 	if got.Stage != "fetch" || got.Reason != "404 Not Found" {
 		t.Fatalf("a refused transfer = %s, want feedfetch's status reason at the fetch", raw)
 	}
-	for _, private := range []string{feed.Password, server.URL} {
+	// feed.Source is the URL Run receives: testFeed names the host feed.example, so server.URL is not it.
+	for _, private := range []string{feed.Password, feed.Source} {
 		if strings.Contains(string(raw), private) || strings.Contains(log.String(), private) {
 			t.Fatalf("a refused transfer exposed %q: result %s, log %q", private, raw, log.String())
 		}
@@ -227,6 +229,9 @@ func TestCancelDuringTheDNSBLPostScriptIsReportedCancelled(t *testing.T) {
 	feed := testFeed("dnsbl", "enabled", "auto", "file://"+source)
 	feed.PostScript = "blocks.sh"
 	got := stage.Run(ctx, feed, Change{Force: "download"})
+	if cause := context.Cause(ctx); !errors.Is(cause, errScriptStarted) {
+		t.Fatalf("the run = %+v ended with cause %v, want it cancelled once the script started", got, cause)
+	}
 	if got.Disposition != "failed" || got.Stage != "post-script" || got.Reason != "cancelled" {
 		t.Fatalf("a run cancelled in its DNSBL post-script = %+v, want failed/post-script/cancelled", got)
 	}

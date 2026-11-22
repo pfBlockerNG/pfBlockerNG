@@ -21,11 +21,14 @@ func TestCancelDuringTheIPPostScriptIsReportedCancelled(t *testing.T) {
 	writeFile(t, source, "203.0.113.1\n")
 	feed.PostScript = "blocks.sh"
 	got := stage.Run(ctx, feed, Change{Force: "download"})
+	if cause := context.Cause(ctx); !errors.Is(cause, errScriptStarted) {
+		t.Fatalf("the run = %+v ended with cause %v, want it cancelled once the script started", got, cause)
+	}
 	if got.Disposition != "failed" || got.Stage != "post-script" || got.Reason != "cancelled" {
 		t.Fatalf("a run cancelled in its IP post-script = %+v, want failed/post-script/cancelled", got)
 	}
-	if regularExists(filepath.Join(stage.Paths.FeedDir, "feed_v4.parsed.ip")) {
-		t.Fatal("a cancelled run published its list")
+	if _, err := os.Lstat(filepath.Join(stage.Paths.FeedDir, "feed_v4.parsed.ip")); !os.IsNotExist(err) {
+		t.Fatalf("a cancelled run left something at its list (%v), want nothing there", err)
 	}
 }
 

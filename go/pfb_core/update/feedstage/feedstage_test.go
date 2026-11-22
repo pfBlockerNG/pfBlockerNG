@@ -122,8 +122,11 @@ func TestProbeReuseAndForceModes(t *testing.T) {
 	if got := readFile(t, filepath.Join(dir, "feed_v4.parsed.ip")); got != "203.0.113.1\n" {
 		t.Fatalf("parsed IP artifact = %q", got)
 	}
-	if raw, _ := json.Marshal(first); strings.Contains(string(raw), secret) || strings.Contains(string(raw), server.URL) {
-		t.Fatalf("the result exposed a secret or URL: %s", raw)
+	// feed.Source is the URL Run receives: testFeed names the host feed.example, so server.URL is not it.
+	if raw, _ := json.Marshal(first); strings.Contains(string(raw), secret) {
+		t.Fatalf("the result exposed the password: %s", raw)
+	} else if strings.Contains(string(raw), feed.Source) {
+		t.Fatalf("the result exposed the URL %q: %s", feed.Source, raw)
 	}
 
 	if got := run(stage, feed, "none"); got.Disposition != "unchanged" || requests.Load() != 2 || conditional.Load() != 1 {
@@ -148,8 +151,11 @@ func TestProbeReuseAndForceModes(t *testing.T) {
 	if got := run(stage, feed, "both"); got.Disposition != "changed" || requests.Load() != 4 || conditional.Load() != 1 {
 		t.Fatalf("both force = %+v after %d requests (%d conditional), want one unconditional fetch", got, requests.Load(), conditional.Load())
 	}
-	if strings.Contains(updateLog.String(), secret) || strings.Contains(updateLog.String(), server.URL) {
-		t.Fatalf("the log exposed a secret or URL: %s", updateLog.String())
+	if strings.Contains(updateLog.String(), secret) {
+		t.Fatalf("the log exposed the password: %s", updateLog.String())
+	}
+	if strings.Contains(updateLog.String(), feed.Source) {
+		t.Fatalf("the log exposed the URL %q: %s", feed.Source, updateLog.String())
 	}
 }
 

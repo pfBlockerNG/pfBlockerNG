@@ -166,6 +166,11 @@ func TestRunReportsACommitThatIsNotDurable(t *testing.T) {
 		if got := readFile(t, filepath.Join(dir, "Feed_v4.parsed.ip")); got != "198.51.100.2\n" {
 			t.Errorf("marker stays %v: the next run left the list %q, want the change", tc.markerStays, got)
 		}
+		// The list of the change stands after either outcome, so the download must be checked too: with the old download
+		// put back, only a retry that installs the change again pairs it with that list.
+		if got := readFile(t, filepath.Join(dir, "Feed_v4.orig")); got != "198.51.100.2\n" {
+			t.Errorf("marker stays %v: the next run left the download %q, want the change installed", tc.markerStays, got)
+		}
 	}
 }
 
