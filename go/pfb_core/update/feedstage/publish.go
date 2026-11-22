@@ -155,18 +155,6 @@ func stageOutput(dir string, write func(io.Writer) error) (string, error) {
 	return name, nil
 }
 
-func syncDir(dir string) error {
-	directory, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	err = syncFile(directory)
-	if closeErr := directory.Close(); err == nil {
-		err = closeErr
-	}
-	return err
-}
-
 func sameFileContents(path, want string) (bool, error) {
 	info, err := regularFile(path)
 	if info == nil {
@@ -186,7 +174,7 @@ func openRun(dir, stem string) (string, error) {
 	if err := mkdir(run); err != nil {
 		return "", err
 	}
-	if err := syncDir(dir); err != nil { // the run folder survives a power loss before COMMIT is written in it
+	if err := syncPath(dir); err != nil { // the run folder survives a power loss before COMMIT is written in it
 		return "", errors.Join(err, discard(run))
 	}
 	for _, suffix := range seeded {
@@ -250,7 +238,7 @@ func commit(dir, run, stem string, suffixes, removable []string) (committed bool
 	}
 	_, err = io.WriteString(file, text.String())
 	if err = errors.Join(err, syncFile(file), file.Close()); err == nil {
-		err = syncDir(run)
+		err = syncPath(run)
 	}
 	if err == nil {
 		err = rename(staged, filepath.Join(run, commitName))
@@ -259,12 +247,13 @@ func commit(dir, run, stem string, suffixes, removable []string) (committed bool
 		return false, err
 	}
 	step("committed") // COMMIT stands: from here the run is committed and rolls forward, whatever fails
-	if err := syncDir(run); err != nil {
+	if err := syncPath(run); err != nil {
 		return true, err
 	}
 	return true, finishRun(dir, run, ops)
 }
 
+// syncPath syncs the file or folder at path.
 func syncPath(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -319,7 +308,7 @@ func finishRun(dir, run string, ops []commitOp) error {
 			return err
 		}
 	}
-	if err := syncDir(dir); err != nil {
+	if err := syncPath(dir); err != nil {
 		return err
 	}
 	return discard(run)
@@ -437,7 +426,7 @@ func Recover(dir string) error {
 			}
 		}
 	}
-	errs = append(errs, syncDir(dir))
+	errs = append(errs, syncPath(dir))
 	return errors.Join(errs...)
 }
 
