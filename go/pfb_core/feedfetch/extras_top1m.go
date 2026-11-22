@@ -439,7 +439,9 @@ const top1mStaging = ".pfbtop1m_new_"
 // publishes again: the digest goes last, so a baseline never vouches for a list that is not yet live. Nothing is set aside
 // and nothing is ever put back, but for a list today's PHP set aside with none published, which is the only copy.
 func top1mCommit(stage, target, base, raw string) bool {
-	top1mRescue(target)
+	if top1mRescue(target) != nil {
+		return false // the sweep would remove the only copy of the live list
+	}
 	top1mSweep(stage, filepath.Dir(target), filepath.Dir(base))
 	if err := top1mSettle(stage); err != nil {
 		return false
@@ -463,6 +465,11 @@ func top1mCommit(stage, target, base, raw string) bool {
 	// The old version's validators would let a server back on it answer 304 for the new baseline: the caller writes the new.
 	os.Remove(base + ".orig.etag")
 	os.Remove(base + ".orig.lastmod")
+	// The old digest goes first: beside a baseline that an interrupted return to the old version renamed back in, it would
+	// vouch for that version while another list is live. A missing digest reads as changed.
+	if err := os.Remove(base + ".xxhash128"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
 	if rename(raw, base+".orig") != nil || rename(stage, target) != nil {
 		return false
 	}
@@ -499,9 +506,9 @@ func top1mSettle(path string) error {
 // top1mRescue puts back the newest list today's PHP set aside (".pfbtop1m_active_") when none is published: a PHP
 // publication interrupted between its two renames leaves that copy as the only one. An empty file under that prefix is
 // what PHP's tempnam() leaves when killed before its unlink, never a list.
-func top1mRescue(target string) {
+func top1mRescue(target string) error {
 	if _, err := os.Lstat(target); !errors.Is(err, fs.ErrNotExist) {
-		return
+		return nil
 	}
 	entries, _ := os.ReadDir(filepath.Dir(target))
 	newest, at := "", time.Time{}
@@ -512,8 +519,9 @@ func top1mRescue(target string) {
 		}
 	}
 	if newest != "" {
-		rename(newest, target)
+		return rename(newest, target)
 	}
+	return nil
 }
 
 // top1mSweep removes from dirs what an interrupted TOP1M publication left: its staged files (all but keep, this run's own

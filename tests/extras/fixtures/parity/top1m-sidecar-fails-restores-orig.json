@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "The xxh128 sidecar cannot be written (a directory stands there). Today's PHP puts the list and the old baseline back (old_expect); Core publishes by renames alone (owner, #4131 and #4198): the new list and baseline are live, so the publication succeeds, and the baseline without its digest reads as changed, so the next run publishes again.",
+	"description": "The xxh128 sidecar cannot be written (a directory stands there). Core removes the old digest before its first rename (#4198); a directory that cannot be removed stops the publication there, so the old list and baseline stay live, as today's PHP leaves them.",
 	"hosts": {
 		"tranco-list.eu": [
 			"127.0.0.1",
@@ -42,26 +42,6 @@
 				}
 			],
 			"expect": {
-				"ok": true,
-				"ledger": null,
-				"files": {
-					"db/top-1m.csv": "1,google.com\n2,facebook.com\n3,example.org\n",
-					"db/top-1m.csv.zip.orig": {
-						"b64": "UEsDBBQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQoyLGZhY2Vib29rLmNvbQozLGV4YW1wbGUub3JnClBLAQIUAxQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAFIAAAAAAA=="
-					},
-					"db/top-1m.csv.zip.md5": null,
-					"db/top-1m.csv.zip.raw": null,
-					"db/top-1m.update": ""
-				},
-				"requests": [
-					{
-						"server": "origin",
-						"path": "/top-1m.csv.zip"
-					}
-				],
-				"top1m_changed": false
-			},
-			"old_expect": {
 				"ok": false,
 				"ledger": "TOP1M download failed",
 				"files": {
