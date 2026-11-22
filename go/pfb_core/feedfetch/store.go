@@ -2,7 +2,9 @@ package feedfetch
 
 import (
 	"errors"
+	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -96,13 +98,14 @@ func writeValidators(feed Feed, etag string, lastMod time.Time) {
 	writeValidatorsAt(feed.path(".orig"), etag, lastMod)
 }
 
-// writeValidatorsAt is writeValidators beside any base: a changed probe keeps them beside its body (#3911).
+// writeValidatorsAt is writeValidators beside any base: a changed probe keeps them beside its body (#3911). Each file is
+// replaced by a rename, never written through: a run folder holds hard links of the published ones.
 func writeValidatorsAt(base, etag string, lastMod time.Time) {
 	if etag = strings.NewReplacer("\r", "", "\n", "").Replace(etag); etag != "" {
-		os.WriteFile(base+".etag", []byte(etag), 0o600)
+		writeSidecarAtomically(base+".etag", etag)
 	}
 	if !lastMod.IsZero() && lastMod.Unix() > 0 {
-		os.WriteFile(base+".lastmod", []byte(strconv.FormatInt(lastMod.Unix(), 10)), 0o600)
+		writeSidecarAtomically(base+".lastmod", strconv.FormatInt(lastMod.Unix(), 10))
 	}
 }
 
@@ -119,10 +122,11 @@ func dropDigests(feed Feed) error {
 
 // finish is pfb_download_finalize_text() on the staged body, once its digest is taken: UTF-16/32 text transcoded to
 // UTF-8 (#946), then a missing trailing newline added (#1263), and the body synced, so that the published copy survives
-// a power loss whole, not as an empty file.
+// a power loss whole, not as an empty file. The newline goes to a copy renamed over the body, never through it: a probe
+// body staged by a rename may be a hard link of a published file.
 func finish(body string) error {
 	transcode(body)
-	f, err := os.OpenFile(body, os.O_RDWR, 0)
+	f, err := os.Open(body)
 	if err != nil {
 		return errors.New("staged body could not be read")
 	}
@@ -130,7 +134,7 @@ func finish(body string) error {
 	var werr error
 	if info, err := f.Stat(); err == nil && info.Size() > 0 {
 		if _, err := f.ReadAt(last, info.Size()-1); err == nil && last[0] != '\n' {
-			_, werr = f.WriteAt([]byte("\n"), info.Size())
+			werr = appendNewline(f, body, info.Mode().Perm())
 		}
 	}
 	serr := f.Sync()
@@ -138,6 +142,29 @@ func finish(body string) error {
 		return errors.New("staged body could not be written")
 	}
 	return nil
+}
+
+// appendNewline replaces path, open as in, by a synced copy of it with a newline at its end.
+func appendNewline(in *os.File, path string, mode os.FileMode) error {
+	out, err := os.CreateTemp(filepath.Dir(path), ".pfbstage_")
+	if err != nil {
+		return err
+	}
+	_, err = in.Seek(0, io.SeekStart)
+	if err == nil {
+		_, err = io.Copy(out, in)
+	}
+	if err == nil {
+		_, err = out.Write([]byte("\n"))
+	}
+	err = errors.Join(err, out.Chmod(mode), out.Sync(), out.Close())
+	if err == nil {
+		err = os.Rename(out.Name(), path)
+	}
+	if err != nil {
+		os.Remove(out.Name())
+	}
+	return err
 }
 
 // publish makes body the published copy in one rename, with digest beside it: the xxh128 of the raw bytes the transfer

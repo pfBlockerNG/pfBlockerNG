@@ -217,6 +217,10 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		}
 		t.status = 200
 	} else {
+		// The transfer creates its body anew: an archive an earlier run kept there may be a hard link of a published file.
+		if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
+			return fail("download file could not be created")
+		}
 		t = f.fetch(ctx, src, req, staged, nil)
 	}
 	if t.reason != "" {
