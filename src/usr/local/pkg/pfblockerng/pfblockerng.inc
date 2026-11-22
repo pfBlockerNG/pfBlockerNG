@@ -17046,7 +17046,8 @@ function pfb_ss_csv(array $hosts, ?callable $resolver = NULL): string {
  * Make the staged unbound.tmp the live unbound.conf, keeping the conf it replaces as unbound.bk for the failed-start rollback
  * (issue #4201). The backup is a whole copy of its own (pfSense rewrites unbound.conf in place, so never a hard link), and the
  * patch goes live only once that backup is in place. TRUE when there is no patch; FALSE when the patch could not go live: it
- * is then dropped, so the pass does not restart Unbound for a conf it did not change, and the next pass builds it again.
+ * is then dropped, so it does not hold the pass on the restart path, with any backup (a failed start must not roll one over
+ * the conf it left alone), and the next pass builds it again from the unchanged conf.
  */
 function pfb_unbound_conf_publish(string $dir): bool {
 	if (!file_exists("{$dir}/unbound.tmp")) {
@@ -17055,6 +17056,7 @@ function pfb_unbound_conf_publish(string $dir): bool {
 	if (!pfb_stage_publish("{$dir}/unbound.bk", static fn (string $staged): int => @copy("{$dir}/unbound.conf", $staged) ? 0 : 1)
 	    || !@rename("{$dir}/unbound.tmp", "{$dir}/unbound.conf")) {
 		unlink_if_exists("{$dir}/unbound.tmp");
+		unlink_if_exists("{$dir}/unbound.bk");
 		return FALSE;
 	}
 	return TRUE;
@@ -21911,7 +21913,9 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 
 	// Backup existing unbound.conf and rename new unbound.conf file
 	if (!pfb_unbound_conf_publish($pfb['dnsbldir'])) {
-		pfb_logger("\nDNS Resolver unbound.conf could not be backed up and replaced; the next update applies its changes\n", 1);
+		pfb_logger("\nDNS Resolver unbound.conf could not be backed up and replaced; the next update applies its changes\n", 2);
+		// the conf Unbound starts from still loads the python module: its folders stay mounted
+		$pfb['dnsbl_python_unmount'] = FALSE;
 	}
 
 	// When pfBlockerNG is disabled and 'keep blocklists' is disabled.
