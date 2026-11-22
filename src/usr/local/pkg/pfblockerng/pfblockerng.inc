@@ -16035,12 +16035,18 @@ function pfb_canonical_alias_set(string $member_content): array {
 function pfb_write_canonical_alias(string $path, array $canonical_set): bool {
 	$content = empty($canonical_set) ? '' : implode("\n", $canonical_set) . "\n";
 	// issue #4191: replaced whole -- pfctl -T replace -f and the alias URL read the mirror without a lock
-	return pfb_stage_publish($path, static fn (string $staged): int => @file_put_contents($staged, $content) === strlen($content) ? 0 : 1);
+	if (!pfb_stage_publish($path, static fn (string $staged): int => @file_put_contents($staged, $content) === strlen($content) ? 0 : 1)) {
+		return FALSE;
+	}
+	return TRUE;
 }
 
 /** Publish a copy of $source as an alias mirror (the aliasdir .txt), replaced whole as pfb_write_canonical_alias() does (issue #4191). */
 function pfb_alias_mirror_copy(string $source, string $mirror): bool {
-	return pfb_stage_publish($mirror, static fn (string $staged): int => @copy($source, $staged) ? 0 : 1);
+	if (!pfb_stage_publish($mirror, static fn (string $staged): int => @copy($source, $staged) ? 0 : 1)) {
+		return FALSE;
+	}
+	return TRUE;
 }
 
 /**
