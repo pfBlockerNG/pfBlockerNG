@@ -1,0 +1,1175 @@
+{
+	"schema": 1,
+	"contract": "ip-set-members",
+	"about": [
+		"Issue #4038 (slice 9b), from the decision of 2026-11-21 on #4037: Core publishes an ip-set or ip-aggregate member only as one address or one prefix, in one spelling, and the Outpost loads a line only when pf reads it as one entry.",
+		"members: each row is run through Core's canonical member function (go/pfb_core/update/apply, Member) and through the Outpost's member check (pfb_outpost_ip_member_valid() in pfblockerng.inc, tests/php/IpMembersFixtureTest.php). outpost is the check's verdict on member as written. canonical is what Core publishes for it, or null when Core leaves the row out with an issue. A canonical member is always one the check accepts, and a row the check refuses is never published.",
+		"The spelling is what Go's netip.Prefix.Masked() prints: a bare address for a host, address/length without host bits for a prefix, IPv6 in lower case with the longest run of zero groups compressed.",
+		"The address guard is today's (pfb_sanitize_ipaddr() and pfb_sanitize_ipaddr_v6() in pfblockerng.inc, issue #1922), judged on the network pf loads: an IPv4 network whose first octet is 0, the IPv6 network ::, and a prefix length of 0 are left out.",
+		"ipset_departures: the lists of go/pfb_core/ipset/testdata/ipset.json that Core publishes (a canonical set, an Uber aggregate, the canonical sets and aggregates of a pipeline pass) whose published body differs from today's: old_expect is the corpus's answer, expect the body Core publishes from it (sorted and unique). A list not named here is published as it is."
+	],
+	"members": [
+		{
+			"member": "1.2.3.4",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": "1.2.3.4",
+			"note": "a host is its bare address"
+		},
+		{
+			"member": "1.2.3.4/32",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": "1.2.3.4",
+			"note": "a /32 is the host: one member with 1.2.3.4"
+		},
+		{
+			"member": "1.2.3.0/24",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": "1.2.3.0/24",
+			"note": "a prefix without host bits stays as written"
+		},
+		{
+			"member": "1.2.3.4/24",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": "1.2.3.0/24",
+			"note": "host bits are cleared: pf loads the network"
+		},
+		{
+			"member": "1.2.3.5/31",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": "1.2.3.4/31",
+			"note": "host bits are cleared"
+		},
+		{
+			"member": "10.0.0.0/8",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": "10.0.0.0/8",
+			"note": "a wide prefix that does not start in 0.x is kept"
+		},
+		{
+			"member": "128.0.0.0/1",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": "128.0.0.0/1",
+			"note": "the widest prefix the guard keeps: it covers no 0.x address"
+		},
+		{
+			"member": "255.255.255.255",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": "255.255.255.255",
+			"note": "the last address"
+		},
+		{
+			"member": "127.1.7.7",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": "127.1.7.7",
+			"note": "the placeholder address is an ordinary member here; whether Core publishes it is the owner's open question 1 on #4038"
+		},
+		{
+			"member": "0.0.0.0",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": null,
+			"note": "left out by the address guard: 0.x is never an entry (#1922)"
+		},
+		{
+			"member": "0.1.2.3",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": null,
+			"note": "left out by the address guard: 0.x under any mask (#1922)"
+		},
+		{
+			"member": "0.0.0.0/8",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": null,
+			"note": "left out by the address guard: 0.x under any mask (#1922)"
+		},
+		{
+			"member": "0.0.0.0/0",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": null,
+			"note": "left out by the address guard: 0.x and a prefix length of 0; the Outpost check alone would load it"
+		},
+		{
+			"member": "1.2.3.4/0",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": null,
+			"note": "left out by the address guard: a prefix length of 0 is the whole family; today a custom list kept it as written"
+		},
+		{
+			"member": "1.2.3.4/7",
+			"family": "ipv4",
+			"outpost": true,
+			"canonical": null,
+			"note": "left out by the address guard: pf loads 0.0.0.0/7, a network in 0.x; today's parser kept it because it judged the address as written"
+		},
+		{
+			"member": "1.2.3.4/33",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a prefix past 32"
+		},
+		{
+			"member": "1.2.3.0/255.255.255.0",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a netmask form"
+		},
+		{
+			"member": "1.2.3.4-1.2.3.9",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a range"
+		},
+		{
+			"member": "pfbipset-nx.invalid",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a host name, which pf would resolve"
+		},
+		{
+			"member": "dead.beef",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a host name of hexadecimal letters"
+		},
+		{
+			"member": "010.1.1.1",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: an octet with a leading zero, which some parsers read as octal"
+		},
+		{
+			"member": "1.2.3.0/024",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a prefix length with a leading zero"
+		},
+		{
+			"member": "1.2.3.0/+24",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a prefix length with a sign"
+		},
+		{
+			"member": "1.2.3.4/",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: an empty prefix length"
+		},
+		{
+			"member": "1.2.3.4/32/32",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: two prefix lengths"
+		},
+		{
+			"member": "1.2.3",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: three octets"
+		},
+		{
+			"member": "1.2.3.4.5",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: five octets"
+		},
+		{
+			"member": " 1.2.3.4",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: leading white space"
+		},
+		{
+			"member": "1.2.3.4 ",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: trailing white space"
+		},
+		{
+			"member": "1.2.3.4\r",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: the carriage return of a CRLF line"
+		},
+		{
+			"member": "1.2.3.4\n",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a line feed"
+		},
+		{
+			"member": "１.2.3.4",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a full-width digit"
+		},
+		{
+			"member": "",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: empty"
+		},
+		{
+			"member": "#1.2.3.4",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a comment"
+		},
+		{
+			"member": "::ffff:1.2.3.4",
+			"family": "ipv4",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix of the family: an IPv4-mapped IPv6 address in an IPv4 set"
+		},
+		{
+			"member": "1.2.3.4",
+			"family": "ipv6",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix of the family: an IPv4 address in an IPv6 set"
+		},
+		{
+			"member": "2001:db8::1",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": "2001:db8::1",
+			"note": "a host is its bare address"
+		},
+		{
+			"member": "2001:DB8::A",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": "2001:db8::a",
+			"note": "hexadecimal digits in lower case"
+		},
+		{
+			"member": "2001:0db8:0000:0000:0000:0000:0000:0001",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": "2001:db8::1",
+			"note": "leading zeros dropped, the longest run of zero groups compressed"
+		},
+		{
+			"member": "0:0:0:0:0:0:0:1",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": "::1",
+			"note": "one spelling with ::1"
+		},
+		{
+			"member": "::1/128",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": "::1",
+			"note": "a /128 is the host"
+		},
+		{
+			"member": "2001:db8::1/32",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": "2001:db8::/32",
+			"note": "host bits are cleared"
+		},
+		{
+			"member": "2001:db8::/48",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": "2001:db8::/48",
+			"note": "a prefix without host bits stays as written"
+		},
+		{
+			"member": "8000::/1",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": "8000::/1",
+			"note": "the widest prefix the guard keeps"
+		},
+		{
+			"member": "fe80::1",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": "fe80::1",
+			"note": "a link-local address: the guard refuses only ::"
+		},
+		{
+			"member": "::ffff:1.2.3.4",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": "::ffff:1.2.3.4",
+			"note": "an IPv4-mapped address keeps its dotted tail"
+		},
+		{
+			"member": "::ffff:0.1.2.3",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": "::ffff:0.1.2.3",
+			"note": "the IPv6 guard is today's: only ::, so a mapped 0.x address is kept"
+		},
+		{
+			"member": "::ffff:1.2.3.4/96",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": "::ffff:0.0.0.0/96",
+			"note": "host bits are cleared from a mapped prefix"
+		},
+		{
+			"member": "::1.2.3.4",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": "::102:304",
+			"note": "an IPv4-compatible address is written in hexadecimal groups"
+		},
+		{
+			"member": "::127.1.7.7",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": "::7f01:707",
+			"note": "the IPv6 placeholder spelling becomes hexadecimal groups"
+		},
+		{
+			"member": "::",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": null,
+			"note": "left out by the address guard: :: is never an entry (#1922)"
+		},
+		{
+			"member": "::/0",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": null,
+			"note": "left out by the address guard: :: and a prefix length of 0"
+		},
+		{
+			"member": "::/64",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": null,
+			"note": "left out by the address guard: :: under any mask (#1922)"
+		},
+		{
+			"member": "::1/64",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": null,
+			"note": "left out by the address guard: pf loads ::/64; today's parser kept it because it judged the address as written"
+		},
+		{
+			"member": "::ffff:1.2.3.4/64",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": null,
+			"note": "left out by the address guard: pf loads ::/64"
+		},
+		{
+			"member": "2001:db8::/0",
+			"family": "ipv6",
+			"outpost": true,
+			"canonical": null,
+			"note": "left out by the address guard: a prefix length of 0 is the whole family"
+		},
+		{
+			"member": "fe80::1%em0",
+			"family": "ipv6",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a zone"
+		},
+		{
+			"member": "::1/129",
+			"family": "ipv6",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a prefix past 128"
+		},
+		{
+			"member": "2001:db8::/032",
+			"family": "ipv6",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a prefix length with a leading zero"
+		},
+		{
+			"member": "2001:db8::/ffff::",
+			"family": "ipv6",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a netmask form"
+		},
+		{
+			"member": "2001:db8::1-2001:db8::9",
+			"family": "ipv6",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a range"
+		},
+		{
+			"member": "2001:db8:::1",
+			"family": "ipv6",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: three colons"
+		},
+		{
+			"member": "1:2:3:4:5:6:7:8:9",
+			"family": "ipv6",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: nine groups"
+		},
+		{
+			"member": "[2001:db8::1]",
+			"family": "ipv6",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: brackets"
+		},
+		{
+			"member": "pfbipset-nx.invalid",
+			"family": "ipv6",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: a host name"
+		},
+		{
+			"member": "2001:db8::1 ",
+			"family": "ipv6",
+			"outpost": false,
+			"canonical": null,
+			"note": "left out: not one address or prefix: trailing white space"
+		}
+	],
+	"ipset_departures": [
+		{
+			"case": "canon_v6_case_and_order",
+			"list": "set",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:DB8::A",
+				"2001:db8::a",
+				"::1",
+				"::127.1.7.7",
+				"fe80::1"
+			],
+			"expect": [
+				"2001:db8::a",
+				"::1",
+				"::7f01:707",
+				"fe80::1"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"2001:DB8::A\" is published as \"2001:db8::a\"; \"::127.1.7.7\" is published as \"::7f01:707\"."
+		},
+		{
+			"case": "canon_comments_blank",
+			"list": "set",
+			"family": "ipv4",
+			"old_expect": [
+				"   ",
+				" # not a comment",
+				"1.1.1.1"
+			],
+			"expect": [
+				"1.1.1.1"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"   \" is left out: not one address or prefix of the family; \" # not a comment\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "canon_crlf",
+			"list": "set",
+			"family": "ipv4",
+			"old_expect": [
+				"1.1.1.1",
+				"1.1.1.1\r",
+				"2.2.2.2\r"
+			],
+			"expect": [
+				"1.1.1.1"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"1.1.1.1\\r\" is left out: not one address or prefix of the family; \"2.2.2.2\\r\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "canon_weld_without_newline",
+			"list": "set",
+			"family": "ipv4",
+			"old_expect": [
+				"1.1.1.1",
+				"2.2.2.23.3.3.3"
+			],
+			"expect": [
+				"1.1.1.1"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"2.2.2.23.3.3.3\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "canon_cidr_and_host_spellings",
+			"list": "set",
+			"family": "ipv4",
+			"old_expect": [
+				"1.2.3.4",
+				"1.2.3.4/32"
+			],
+			"expect": [
+				"1.2.3.4"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"1.2.3.4/32\" is published as \"1.2.3.4\"."
+		},
+		{
+			"case": "canon_unsorted_big_digits",
+			"list": "set",
+			"family": "ipv4",
+			"old_expect": [
+				"\t1.1.1.1",
+				" 1.1.1.1",
+				"1.1.1.1",
+				"1.1.1.1 "
+			],
+			"expect": [
+				"1.1.1.1"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"\\t1.1.1.1\" is left out: not one address or prefix of the family; \" 1.1.1.1\" is left out: not one address or prefix of the family; \"1.1.1.1 \" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "canon_h_name",
+			"list": "set",
+			"family": "ipv4",
+			"old_expect": [
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"pfbipset-nx.invalid"
+			],
+			"expect": [
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"pfbipset-nx.invalid\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "canon_h_leading0",
+			"list": "set",
+			"family": "ipv4",
+			"old_expect": [
+				"010.1.1.1",
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"expect": [
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"010.1.1.1\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "canon_h_pfx33",
+			"list": "set",
+			"family": "ipv4",
+			"old_expect": [
+				"1.2.3.4/33",
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"expect": [
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"1.2.3.4/33\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "canon_h_hostbits",
+			"list": "set",
+			"family": "ipv4",
+			"old_expect": [
+				"1.2.3.4/24",
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"expect": [
+				"1.2.3.0/24",
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"1.2.3.4/24\" is published as \"1.2.3.0/24\"."
+		},
+		{
+			"case": "canon_h_zerozero",
+			"list": "set",
+			"family": "ipv4",
+			"old_expect": [
+				"0.0.0.0/0",
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"expect": [
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"0.0.0.0/0\" is left out by the address guard."
+		},
+		{
+			"case": "canon_h_range",
+			"list": "set",
+			"family": "ipv4",
+			"old_expect": [
+				"1.2.3.4-1.2.3.9",
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"expect": [
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"1.2.3.4-1.2.3.9\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "canon_h_netmask",
+			"list": "set",
+			"family": "ipv4",
+			"old_expect": [
+				"1.2.3.0/255.255.255.0",
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"expect": [
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"1.2.3.0/255.255.255.0\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "canon_h_dupspell",
+			"list": "set",
+			"family": "ipv4",
+			"old_expect": [
+				"1.2.3.4",
+				"1.2.3.4/32",
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"expect": [
+				"1.2.3.4",
+				"198.51.100.0/25",
+				"203.0.113.7"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"1.2.3.4/32\" is published as \"1.2.3.4\"."
+		},
+		{
+			"case": "canon_v6_h_name",
+			"list": "set",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"pfbipset-nx.invalid"
+			],
+			"expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"pfbipset-nx.invalid\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "canon_v6_h_zone",
+			"list": "set",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"fe80::1%em0"
+			],
+			"expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"fe80::1%em0\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "canon_v6_h_pfx129",
+			"list": "set",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"::1/129"
+			],
+			"expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"::1/129\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "canon_v6_h_hostbits",
+			"list": "set",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8::1/32"
+			],
+			"expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8::/32"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"2001:db8::1/32\" is published as \"2001:db8::/32\"."
+		},
+		{
+			"case": "canon_v6_h_zerozero",
+			"list": "set",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"::/0"
+			],
+			"expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"::/0\" is left out by the address guard."
+		},
+		{
+			"case": "canon_v6_h_compat",
+			"list": "set",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"::1.2.3.4"
+			],
+			"expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"::102:304"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"::1.2.3.4\" is published as \"::102:304\"."
+		},
+		{
+			"case": "canon_v6_h_dupspell",
+			"list": "set",
+			"family": "ipv6",
+			"old_expect": [
+				"0:0:0:0:0:0:0:1",
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"::1"
+			],
+			"expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"::1"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"0:0:0:0:0:0:0:1\" is published as \"::1\"."
+		},
+		{
+			"case": "union_placeholder_only_dropped_v6",
+			"list": "aggregate",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8::1",
+				"2001:db8::2",
+				"::127.1.7.7"
+			],
+			"expect": [
+				"2001:db8::1",
+				"2001:db8::2",
+				"::7f01:707"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"::127.1.7.7\" is published as \"::7f01:707\"."
+		},
+		{
+			"case": "union_crlf_members_collapsed",
+			"list": "aggregate",
+			"family": "ipv4",
+			"old_expect": [
+				"1.1.1.1",
+				"1.1.1.1\r",
+				"1.1.1.2\r"
+			],
+			"expect": [
+				"1.1.1.1"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"1.1.1.1\\r\" is left out: not one address or prefix of the family; \"1.1.1.2\\r\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "union_h_name_on",
+			"list": "aggregate",
+			"family": "ipv4",
+			"old_expect": [
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9",
+				"pfbipset-nx.invalid"
+			],
+			"expect": [
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"pfbipset-nx.invalid\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "union_h_leading0_on",
+			"list": "aggregate",
+			"family": "ipv4",
+			"old_expect": [
+				"010.1.1.1",
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"expect": [
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"010.1.1.1\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "union_h_pfx33_on",
+			"list": "aggregate",
+			"family": "ipv4",
+			"old_expect": [
+				"1.2.3.4/33",
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"expect": [
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"1.2.3.4/33\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "union_h_hostbits_on",
+			"list": "aggregate",
+			"family": "ipv4",
+			"old_expect": [
+				"1.2.3.4/24",
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"expect": [
+				"1.2.3.0/24",
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"1.2.3.4/24\" is published as \"1.2.3.0/24\"."
+		},
+		{
+			"case": "union_h_zerozero_on",
+			"list": "aggregate",
+			"family": "ipv4",
+			"old_expect": [
+				"0.0.0.0/0",
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"expect": [
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"0.0.0.0/0\" is left out by the address guard."
+		},
+		{
+			"case": "union_h_zerozero_off",
+			"list": "aggregate",
+			"family": "ipv4",
+			"old_expect": [
+				"0.0.0.0/0"
+			],
+			"expect": [],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"0.0.0.0/0\" is left out by the address guard."
+		},
+		{
+			"case": "union_h_range_on",
+			"list": "aggregate",
+			"family": "ipv4",
+			"old_expect": [
+				"1.2.3.4-1.2.3.9",
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"expect": [
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"1.2.3.4-1.2.3.9\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "union_h_netmask_on",
+			"list": "aggregate",
+			"family": "ipv4",
+			"old_expect": [
+				"1.2.3.0/255.255.255.0",
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"expect": [
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"1.2.3.0/255.255.255.0\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "union_h_dupspell_on",
+			"list": "aggregate",
+			"family": "ipv4",
+			"old_expect": [
+				"1.2.3.4",
+				"1.2.3.4/32",
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"expect": [
+				"1.2.3.4",
+				"198.51.100.0/25",
+				"203.0.113.7",
+				"203.0.113.9"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"1.2.3.4/32\" is published as \"1.2.3.4\"."
+		},
+		{
+			"case": "union_v6_h_name",
+			"list": "aggregate",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8:3::9",
+				"pfbipset-nx.invalid"
+			],
+			"expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8:3::9"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"pfbipset-nx.invalid\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "union_v6_h_zone",
+			"list": "aggregate",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8:3::9",
+				"fe80::1%em0"
+			],
+			"expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8:3::9"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"fe80::1%em0\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "union_v6_h_pfx129",
+			"list": "aggregate",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8:3::9",
+				"::1/129"
+			],
+			"expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8:3::9"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"::1/129\" is left out: not one address or prefix of the family."
+		},
+		{
+			"case": "union_v6_h_hostbits",
+			"list": "aggregate",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8:3::9",
+				"2001:db8::1/32"
+			],
+			"expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8:3::9",
+				"2001:db8::/32"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"2001:db8::1/32\" is published as \"2001:db8::/32\"."
+		},
+		{
+			"case": "union_v6_h_zerozero",
+			"list": "aggregate",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8:3::9",
+				"::/0"
+			],
+			"expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8:3::9"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"::/0\" is left out by the address guard."
+		},
+		{
+			"case": "union_v6_h_compat",
+			"list": "aggregate",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8:3::9",
+				"::1.2.3.4"
+			],
+			"expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8:3::9",
+				"::102:304"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"::1.2.3.4\" is published as \"::102:304\"."
+		},
+		{
+			"case": "union_v6_h_dupspell",
+			"list": "aggregate",
+			"family": "ipv6",
+			"old_expect": [
+				"0:0:0:0:0:0:0:1",
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8:3::9",
+				"::1"
+			],
+			"expect": [
+				"2001:db8:1::7",
+				"2001:db8:2::/48",
+				"2001:db8:3::9",
+				"::1"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"0:0:0:0:0:0:0:1\" is published as \"::1\"."
+		},
+		{
+			"case": "pipe_sibling_recompute_v6",
+			"list": "passes[0].canonical.AliasA_v6",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:0:1::/126",
+				"2001:db8:0:1::10/124",
+				"2001:db8:0:1::20/123",
+				"2001:db8:0:1::4/128",
+				"2001:db8:0:1::40/122",
+				"2001:db8:0:1::6/127",
+				"2001:db8:0:1::8/125",
+				"2001:db8:0:1::80/121"
+			],
+			"expect": [
+				"2001:db8:0:1::/126",
+				"2001:db8:0:1::10/124",
+				"2001:db8:0:1::20/123",
+				"2001:db8:0:1::4",
+				"2001:db8:0:1::40/122",
+				"2001:db8:0:1::6/127",
+				"2001:db8:0:1::8/125",
+				"2001:db8:0:1::80/121"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"2001:db8:0:1::4/128\" is published as \"2001:db8:0:1::4\"."
+		},
+		{
+			"case": "pipe_sibling_recompute_v6",
+			"list": "passes[0].canonical.AliasB_v6",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:0:2::1/128"
+			],
+			"expect": [
+				"2001:db8:0:2::1"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"2001:db8:0:2::1/128\" is published as \"2001:db8:0:2::1\"."
+		},
+		{
+			"case": "pipe_sibling_recompute_v6",
+			"list": "passes[1].canonical.AliasA_v6",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:0:1::/126",
+				"2001:db8:0:1::10/124",
+				"2001:db8:0:1::20/123",
+				"2001:db8:0:1::4/128",
+				"2001:db8:0:1::40/122",
+				"2001:db8:0:1::6/127",
+				"2001:db8:0:1::8/125",
+				"2001:db8:0:1::80/121"
+			],
+			"expect": [
+				"2001:db8:0:1::/126",
+				"2001:db8:0:1::10/124",
+				"2001:db8:0:1::20/123",
+				"2001:db8:0:1::4",
+				"2001:db8:0:1::40/122",
+				"2001:db8:0:1::6/127",
+				"2001:db8:0:1::8/125",
+				"2001:db8:0:1::80/121"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"2001:db8:0:1::4/128\" is published as \"2001:db8:0:1::4\"."
+		},
+		{
+			"case": "pipe_sibling_recompute_v6",
+			"list": "passes[1].canonical.AliasB_v6",
+			"family": "ipv6",
+			"old_expect": [
+				"2001:db8:0:2::2/128"
+			],
+			"expect": [
+				"2001:db8:0:2::2"
+			],
+			"departure": "One spelling per network and the address guard (#4038, decision of 2026-11-21 on #4037): \"2001:db8:0:2::2/128\" is published as \"2001:db8:0:2::2\"."
+		}
+	]
+}

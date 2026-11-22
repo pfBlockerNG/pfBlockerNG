@@ -3463,6 +3463,254 @@
 				]
 			},
 			"refused": "issues[0].message is not a string"
+		},
+		{
+			"id": "core-writes-scope-ip",
+			"description": "As Core writes an ip scope (#4038, decision on #4037): resources and removed, issues, and no dnsbl object. Every field in Core's order, an ip-aggregate with no entries, the geo-catalog, and a message whose markup and ampersand are not escaped.",
+			"request": {
+				"version": 2,
+				"trigger": "scheduled",
+				"scope": "ip",
+				"pendingToken": "0123456789abcdef",
+				"resources": [
+					{
+						"id": "ip-set/Abuse/ipv4",
+						"generation": "42",
+						"action": "deny",
+						"direction": [
+							"ingress",
+							"egress"
+						],
+						"entries": 15234
+					},
+					{
+						"id": "ip-aggregate/deny/ipv4",
+						"generation": "17",
+						"action": "alias_only",
+						"entries": 0
+					},
+					{
+						"id": "geo-catalog",
+						"generation": "3"
+					}
+				],
+				"removed": [
+					"ip-set/Old/ipv4",
+					"ip-aggregate/native/ipv6"
+				],
+				"issues": [
+					{
+						"resource": "feed/ipv4:Foo_v4",
+						"stage": "download",
+						"code": "curl_incomplete",
+						"message": "curl: (18) <b>transfer</b> closed & retried"
+					}
+				]
+			},
+			"accepted": {
+				"trigger": "scheduled",
+				"scope": "ip",
+				"pendingToken": "0123456789abcdef",
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "ip-set/Abuse/ipv4",
+						"alias": "pfB_Abuse_v4",
+						"generation": "42",
+						"action": "deny",
+						"direction": [
+							"ingress",
+							"egress"
+						],
+						"entries": 15234
+					},
+					{
+						"id": "ip-aggregate/deny/ipv4",
+						"alias": "pfB_Deny_Aggregated_v4",
+						"generation": "17",
+						"action": "alias_only",
+						"entries": 0
+					},
+					{
+						"id": "geo-catalog",
+						"generation": "3"
+					}
+				],
+				"removed": [
+					{
+						"id": "ip-set/Old/ipv4",
+						"alias": "pfB_Old_v4"
+					},
+					{
+						"id": "ip-aggregate/native/ipv6",
+						"alias": "pfB_Native_Aggregated_v6"
+					}
+				],
+				"dnsbl": null,
+				"issues": [
+					{
+						"resource": "feed/ipv4:Foo_v4",
+						"stage": "download",
+						"code": "curl_incomplete",
+						"message": "curl: (18) <b>transfer</b> closed & retried"
+					}
+				]
+			}
+		},
+		{
+			"id": "core-writes-scope-dnsbl",
+			"description": "As Core writes a dnsbl scope (#4038, decision on #4037): the dnsbl object and no resource, removed id or geo-catalog; outside the apply window, with the pending token.",
+			"request": {
+				"version": 2,
+				"trigger": "scheduled",
+				"scope": "dnsbl",
+				"pendingToken": "~!a1",
+				"pendingOutsideWindow": true,
+				"dnsbl": {
+					"generation": "88",
+					"groups": [
+						{
+							"name": "Ads",
+							"entries": 120344,
+							"changed": true
+						},
+						{
+							"name": "Malware_2",
+							"entries": 0,
+							"changed": false
+						}
+					]
+				}
+			},
+			"accepted": {
+				"trigger": "scheduled",
+				"scope": "dnsbl",
+				"pendingToken": "~!a1",
+				"pendingOutsideWindow": true,
+				"resources": [],
+				"removed": [],
+				"dnsbl": {
+					"generation": "88",
+					"groups": [
+						{
+							"name": "Ads",
+							"entries": 120344,
+							"changed": true
+						},
+						{
+							"name": "Malware_2",
+							"entries": 0,
+							"changed": false
+						}
+					]
+				},
+				"issues": []
+			}
+		},
+		{
+			"id": "core-writes-dnsbl-without-groups",
+			"description": "As Core writes a DNSBL with no group: groups is an empty list, never null or absent.",
+			"request": {
+				"version": 2,
+				"trigger": "manual",
+				"scope": "dnsbl",
+				"dnsbl": {
+					"generation": "1",
+					"groups": []
+				}
+			},
+			"accepted": {
+				"trigger": "manual",
+				"scope": "dnsbl",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": {
+					"generation": "1",
+					"groups": []
+				},
+				"issues": []
+			}
+		},
+		{
+			"id": "core-writes-scope-both",
+			"description": "As Core writes a both scope: IP resources and the dnsbl object together, at the largest generation and entries.",
+			"request": {
+				"version": 2,
+				"trigger": "retry",
+				"scope": "both",
+				"resources": [
+					{
+						"id": "ip-set/Africa/ipv6",
+						"generation": "18446744073709551615",
+						"action": "permit",
+						"direction": [
+							"egress"
+						],
+						"entries": 9223372036854775807
+					}
+				],
+				"dnsbl": {
+					"generation": "2",
+					"groups": [
+						{
+							"name": "Ads",
+							"entries": 0,
+							"changed": false
+						}
+					]
+				}
+			},
+			"accepted": {
+				"trigger": "retry",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [
+					{
+						"id": "ip-set/Africa/ipv6",
+						"alias": "pfB_Africa_v6",
+						"generation": "18446744073709551615",
+						"action": "permit",
+						"direction": [
+							"egress"
+						],
+						"entries": 9223372036854775807
+					}
+				],
+				"removed": [],
+				"dnsbl": {
+					"generation": "2",
+					"groups": [
+						{
+							"name": "Ads",
+							"entries": 0,
+							"changed": false
+						}
+					]
+				},
+				"issues": []
+			}
+		},
+		{
+			"id": "core-writes-nothing-to-apply",
+			"description": "As Core writes an apply Update with nothing listed: the version, the trigger and the scope.",
+			"request": {
+				"version": 2,
+				"trigger": "apply",
+				"scope": "both"
+			},
+			"accepted": {
+				"trigger": "apply",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
 		}
 	],
 	"results": [
