@@ -352,11 +352,16 @@ final class OutpostApplyTest extends TestCase
 		$notice = $mine($first)[0]['notice'];
 		$this->assertStringContainsString('feed/ipv4:Foo_v4', $notice);
 		$this->assertStringContainsString('<b>broken</b>', $notice, 'markup reaches the notice as text');
-		$this->assertLessThanOrEqual(PFB_CORE_UPDATE_V2_MESSAGE_BYTES + 512, strlen($notice), 'the notice is bounded');
+		// each carries the message after a prefix of its own: the message itself is what the limit bounds
+		$shown = 'pfBlockerNG Update [ feed/ipv4:Foo_v4 ] download curl_incomplete: ';
+		$this->assertStringStartsWith($shown, $notice);
+		$this->assertGreaterThan(1000, strlen($notice) - strlen($shown), 'before: the message was cut, not dropped');
+		$this->assertLessThanOrEqual(PFB_CORE_UPDATE_V2_MESSAGE_BYTES, strlen($notice) - strlen($shown), 'the notice\'s message is bounded');
 		$ledger = json_decode($first['syncStatus']['pfb_sync_status.json'], TRUE);
 		$entry = $ledger['ip']['feed/ipv4:Foo_v4']['download'] ?? NULL;
 		$this->assertIsArray($entry, 'the issue is an ADR-61 entry of its stage: ' . $first['syncStatus']['pfb_sync_status.json']);
-		$this->assertLessThanOrEqual(PFB_CORE_UPDATE_V2_MESSAGE_BYTES + 512, strlen($entry['message']));
+		$this->assertStringStartsWith('curl_incomplete: ', $entry['message']);
+		$this->assertLessThanOrEqual(PFB_CORE_UPDATE_V2_MESSAGE_BYTES, strlen($entry['message']) - strlen('curl_incomplete: '), 'the entry\'s message is bounded');
 
 		$this->assertSame([], $mine($again), 'an issue already filed is not filed again');
 		$this->assertArrayHasKey('feed/ipv4:Foo_v4', json_decode($again['syncStatus']['pfb_sync_status.json'], TRUE)['ip'] ?? []);
