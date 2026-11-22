@@ -109,10 +109,13 @@ func writeValidatorsAt(base, etag string, lastMod time.Time) {
 	}
 }
 
+// DigestSuffixes are the digest sidecars of a feed's published copy: xxh128, and the legacy MD5 a digest read falls back to.
+func DigestSuffixes() []string { return []string{".orig.xxhash128", ".orig.md5"} }
+
 // dropDigests removes the digest sidecars of the published copy, to be called before the copy is replaced: a digest that
 // outlived its copy would let a source holding the older bytes read as unchanged.
 func dropDigests(feed Feed) error {
-	for _, s := range [...]string{".orig.xxhash128", ".orig.md5"} {
+	for _, s := range DigestSuffixes() {
 		if err := os.Remove(feed.path(s)); err != nil && !os.IsNotExist(err) {
 			return errors.New("published digest could not be replaced")
 		}

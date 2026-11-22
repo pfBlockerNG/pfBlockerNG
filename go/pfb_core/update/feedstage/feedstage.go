@@ -191,15 +191,19 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 	// What the run publishes when it fails: nothing, but for a failed transfer (retired) and a failed whois (its marker).
 	var retire []string
 	retireReason := ""
+	clearFail := false // the run transferred its source, which clears the fail marker as today (apply.inc:2859, :4276)
 	defer func() {
 		partialWhois := result.Disposition == "failed" && result.Stage == "whois" && result.SourceChanged
-		suffixes := retire
+		suffixes, removable := retire, seeded
 		if result.Disposition != "failed" || partialWhois {
 			suffixes = published
 		}
+		if clearFail && result.Disposition != "failed" {
+			removable = clearable
+		}
 		done, err := false, error(nil)
 		if suffixes != nil {
-			done, err = commit(dir, runDir, f.Name, suffixes)
+			done, err = commit(dir, runDir, f.Name, suffixes, removable)
 		}
 		if !done {
 			_ = discard(runDir) // what stays is Recover's
@@ -240,9 +244,11 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 				if rename(staged, origPath) != nil {
 					return failedFeed(f.ID, "fetch", "custom_source_unavailable")
 				}
-				// The digest describes the bytes of the last transfer, which the custom text replaced.
-				if removeIfExists(feedPath(feed, ".orig.xxhash128")) != nil {
-					return failedFeed(f.ID, "fetch", "custom_source_unavailable")
+				// The digests describe the bytes of the last transfer, which the custom text replaced.
+				for _, suffix := range feedfetch.DigestSuffixes() {
+					if removeIfExists(feedPath(feed, suffix)) != nil {
+						return failedFeed(f.ID, "fetch", "custom_source_unavailable")
+					}
 				}
 				sourceChanged = true
 			}
@@ -252,11 +258,12 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 				list = f.CustomText
 			}
 			whois := s.Fetcher.Whois(ctx, feed, feedfetch.WhoisRequest{List: list, IPv6: f.Kind == "ipv6"})
+			retire = []string{".fail"} // the marker a failed entry left stands whatever the run does next, as today
 			if ctx.Err() != nil || whois.Reason != "" || !whois.Found {
-				retire = []string{".fail"}
 				return failedFeed(f.ID, "whois", "whois_failed")
 			}
-			sourceChanged, whoisPartial = true, whois.Failed
+			// Today's whois and asn formats go through pfb_download(), whose success clears the marker; a custom list does not.
+			sourceChanged, whoisPartial, clearFail = true, whois.Failed, !f.Custom && !whois.Failed
 		default:
 			if force == "none" && change.Verdict == "" {
 				return failedFeed(f.ID, "settings", "verdict_invalid")
@@ -276,10 +283,11 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			}
 			ingested := s.Fetcher.Ingest(ctx, feed, request)
 			if !ingested.OK {
-				retire, retireReason = retired, "validators_retire_failed"
+				// Force both drops the digests before the transfer, whatever its outcome (pfb_force_clear_validators()).
+				retire, retireReason = forcedSuffixes(force), "validators_retire_failed"
 				return failedFeed(f.ID, "fetch", s.safeReason(ingested.Reason, "feed_fetch_failed", f))
 			}
-			sourceChanged = ingested.Status != httpStatusNotModified
+			sourceChanged, clearFail = ingested.Status != httpStatusNotModified, true
 		}
 	}
 	if ctx.Err() != nil {
@@ -319,7 +327,7 @@ func (s *Stage) validate(f Feed, change Change) string {
 		return "feed_name_invalid"
 	case s.Paths.GeoIPDir != "" && !cleanPath(s.Paths.GeoIPDir):
 		return "geoip_directory_invalid"
-	case slices.ContainsFunc(s.Paths.ScriptDirs, func(p string) bool { return !cleanPath(p) }):
+	case slices.ContainsFunc(s.Paths.ScriptDirs, func(p string) bool { return p != "" && !cleanPath(p) }): // "" is unset, skipped
 		return "script_directory_invalid"
 	}
 	if info, err := os.Lstat(s.Paths.FeedDir); err != nil || !info.IsDir() {
@@ -690,12 +698,17 @@ func parsedArtifactsExist(feed feedfetch.Feed, kind string) bool {
 	return true
 }
 
-func clearForcedState(feed feedfetch.Feed, force string) error {
-	suffixes := []string{".orig.etag", ".orig.lastmod", ".orig.size", ".probe", ".probe.etag", ".probe.lastmod", ".probe.size"}
+// forcedSuffixes are what a forced transfer drops before it runs: the validators and the probe body (retired), and for
+// force both the digests too.
+func forcedSuffixes(force string) []string {
 	if force == "both" {
-		suffixes = append(suffixes, ".orig.xxhash128")
+		return append(slices.Clone(retired), feedfetch.DigestSuffixes()...)
 	}
-	for _, suffix := range suffixes {
+	return retired
+}
+
+func clearForcedState(feed feedfetch.Feed, force string) error {
+	for _, suffix := range forcedSuffixes(force) {
 		if err := removeIfExists(feedPath(feed, suffix)); err != nil {
 			return err
 		}

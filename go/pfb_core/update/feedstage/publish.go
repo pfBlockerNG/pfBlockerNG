@@ -39,6 +39,9 @@ var seeded = []string{".orig", ".orig.xxhash128", ".orig.md5", ".orig.etag", ".o
 var published = append(slices.Clone(seeded), ".fail", ".parsed.ip", ".parsed.ndjson", ".parsed.v4.ip", ".parsed.v6.ip",
 	parsedSource+"."+digest.XXH128)
 
+// clearable are the suffixes a commit may remove: the seeded files the run removed, and the fail marker a transfer clears.
+var clearable = append(slices.Clone(seeded), ".fail")
+
 // retired are what a failed transfer still publishes: the validators it drops and the probe body it consumes (#2820).
 var retired = []string{".orig.etag", ".orig.lastmod", ".orig.size", ".probe", ".probe.etag", ".probe.lastmod", ".probe.size"}
 
@@ -192,6 +195,9 @@ func openRun(dir, stem string) (string, error) {
 	if err := mkdir(run); err != nil {
 		return "", err
 	}
+	if err := syncDir(dir); err != nil { // the run folder survives a power loss before COMMIT is written in it
+		return "", errors.Join(err, discard(run))
+	}
 	for _, suffix := range seeded {
 		from := filepath.Join(dir, stem+suffix)
 		info, err := lstat(from)
@@ -216,10 +222,10 @@ type commitOp struct {
 	verb, name string
 }
 
-// commit publishes the files of the run folder run whose suffixes are in suffixes, and removes the seeded ones the run
-// removed. committed reports whether COMMIT was made: without it the feed folder is untouched and the caller deletes the
-// run folder; with it an error leaves the run folder for Recover, which finishes it.
-func commit(dir, run, stem string, suffixes []string) (committed bool, err error) {
+// commit publishes the files of the run folder run whose suffixes are in suffixes, and removes the published ones the run
+// does not hold whose suffixes are in removable. committed reports whether COMMIT was made: without it the feed folder is
+// untouched and the caller deletes the run folder; with it an error leaves the run folder for Recover, which finishes it.
+func commit(dir, run, stem string, suffixes, removable []string) (committed bool, err error) {
 	var removals, renames []commitOp
 	for _, suffix := range suffixes {
 		name := stem + suffix
@@ -231,7 +237,7 @@ func commit(dir, run, stem string, suffixes []string) (committed bool, err error
 		if !errors.Is(err, fs.ErrNotExist) {
 			return false, err
 		}
-		if _, err := lstat(filepath.Join(dir, name)); err == nil && slices.Contains(seeded, suffix) {
+		if _, err := lstat(filepath.Join(dir, name)); err == nil && slices.Contains(removable, suffix) {
 			removals = append(removals, commitOp{"remove", name})
 		} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return false, err
@@ -261,13 +267,14 @@ func commit(dir, run, stem string, suffixes []string) (committed bool, err error
 		err = syncDir(run)
 	}
 	if err == nil {
-		if err = rename(staged, filepath.Join(run, commitName)); err == nil {
-			step("committed")
-			err = syncDir(run)
-		}
+		err = rename(staged, filepath.Join(run, commitName))
 	}
 	if err != nil {
 		return false, err
+	}
+	step("committed") // COMMIT stands: from here the run is committed and rolls forward, whatever fails
+	if err := syncDir(run); err != nil {
+		return true, err
 	}
 	return true, finishRun(dir, run, ops)
 }
@@ -366,7 +373,8 @@ func discard(run string) error {
 }
 
 // readCommit reads the COMMIT of the run folder of the feed stem: ok is false when there is none. Every line must be an
-// operation on one of the feed's published names (a removal on a seeded one); anything else is refused, whole.
+// operation on one of the feed's published names (a removal on a clearable one), each name once; anything else is
+// refused, whole.
 func readCommit(run, stem string) (ops []commitOp, ok bool, err error) {
 	// Opened without following a link or waiting on a FIFO: whatever stands there is checked on the open file.
 	file, err := os.OpenFile(filepath.Join(run, commitName), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
@@ -384,6 +392,7 @@ func readCommit(run, stem string) (ops []commitOp, ok bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
+	seen := map[string]bool{}
 	for _, line := range strings.SplitAfter(string(data), "\n") {
 		if line == "" {
 			continue
@@ -392,11 +401,13 @@ func readCommit(run, stem string) (ops []commitOp, ok bool, err error) {
 		suffix, hasStem := strings.CutPrefix(name, stem)
 		allowed := published
 		if verb == "remove" {
-			allowed = seeded
+			allowed = clearable
 		}
-		if !strings.HasSuffix(line, "\n") || verb != "rename" && verb != "remove" || !hasStem || !slices.Contains(allowed, suffix) {
+		if !strings.HasSuffix(line, "\n") || verb != "rename" && verb != "remove" || !hasStem || !slices.Contains(allowed, suffix) ||
+			seen[name] {
 			return nil, false, errors.New("COMMIT names an operation that is no publication of its feed")
 		}
+		seen[name] = true
 		ops = append(ops, commitOp{verb, name})
 	}
 	return ops, true, nil
