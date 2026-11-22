@@ -7072,11 +7072,12 @@ function pfb_outpost_report($out, array $report): bool
  * not launched, the DNSBL accounting failed or the line could not be written. With pendingOutsideWindow, or while a GeoIP generation swap is in progress,
  * the changes are marked pending and nothing is applied; the GeoIP case exits as version 1 does (1 for a manual Update, 0
  * otherwise). The apply trigger clears the due-ledger flag first and sets it again, with the pending mark, when the apply does
- * not succeed, an apply that throws included; every trigger sets the flag again on a non-zero exit.
+ * not succeed, an apply that throws included; every trigger sets the flag again on a non-zero exit except a deferral (exit 75),
+ * which marks nothing pending and only puts back the flag the apply trigger cleared.
  *
  * @param resource $out
  * @param array<string, callable> $seams test seams, each replacing a step that reaches the host: `dns` (pfb_apply_dns()),
- *   `unbound` (pfb_update_unbound()), `cache` (pfb_dnsbl_cache()) and `fetch` (pfb_outpost_fetch())
+ *   `unbound` (pfb_update_unbound()), `cache` (pfb_dnsbl_cache()), `fetch` (pfb_outpost_fetch()) and `report` (the last result line, pfb_outpost_report())
  */
 function pfb_outpost_apply(array $request, $out, ?string $socket = NULL, array $seams = []): int
 {
@@ -7133,8 +7134,11 @@ function pfb_outpost_apply(array $request, $out, ?string $socket = NULL, array $
 		}
 		return $status = pfb_outpost_apply_run($request, $out, $socket, $absorb, $started, $seams);
 	} finally {
-		if ($status !== 0) {
+		// a deferral (exit 75) leaves the pending mark alone and only puts back the due flag the apply trigger cleared
+		if ($status !== 0 && $status !== PFB_EXIT_LOCKED) {
 			pfb_mark_pending_changes();
+		}
+		if ($status !== 0 && ($status !== PFB_EXIT_LOCKED || $request['trigger'] === 'apply')) {
 			pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
 		}
 		if ($held && $owner) {
@@ -7161,7 +7165,7 @@ function pfb_outpost_apply_run(array $request, $out, ?string $socket, bool $abso
 	$pfb['filter_configure'] = FALSE;
 	pfb_apply_settings();	// the table entries limit and the rule options the expected aliases are built from
 
-	$pfb['dnsbl_accounting_failed'] = FALSE;	// as the pass starts: set by this apply's accounting only
+	$pfb['dnsbl_publish_failed'] = $pfb['dnsbl_accounting_failed'] = FALSE;	// as the pass starts: set by this apply's accounting only
 	$failed = [];
 	$fail = static function (string $id, string $stage, string $message) use (&$failed): void {
 		$failed[] = ['id' => $id, 'stage' => $stage, 'message' => $message];
@@ -7274,24 +7278,33 @@ function pfb_outpost_apply_run(array $request, $out, ?string $socket, bool $abso
 	$report = [];
 	$accounting = TRUE;
 	if ($request['scope'] !== 'ip') {
+		$reconciled = FALSE;
 		if ($request['dnsbl'] !== NULL) {
-			$accounting = pfb_outpost_dnsbl_stats($request['dnsbl']['groups']);
+			$reconciled = $accounting = pfb_outpost_dnsbl_stats($request['dnsbl']['groups']);
 		}
 		[$mode, $update, $python] = ($seams['dns'] ?? 'pfb_apply_dns')();
-		if ($update || $python) {
-			// as the update pass loads what its DNS step changed in the Resolver; Core owns the domain statistics, so no domain changed here
+		// as the pass: an accounting retry another process recorded, once this apply's accounting succeeded, and a stored
+		// temporary unlock reload the Resolver whatever the DNS step reports; a failed publication or statistics step does not
+		$retry = @file_get_contents("{$pfb['dnsbl_file']}.reload") === 'accounting';
+		if (pfb_dnsbl_reload_needed(!empty($pfb['dnsbl_publish_failed']), $retry && $reconciled, $update, $python, FALSE,
+		    file_exists($pfb['dnsbl_unlock']))) {
+			// Core owns the domain statistics, so no domain changed here
 			$pfb['domain_update'] = FALSE;
+			// a failed reload of pfb_reload_unbound() is not observed, as in the pass
 			($seams['unbound'] ?? 'pfb_update_unbound')($mode, $update, $python);
 			// #468, as the pass: on a RAM-disk /var the generated DNSBL state is archived once the reload has applied
 			if (pfb_dnsbl_active() && $pfb['unbound_state'] === PfbToggle::On && config_path_enabled('system', 'use_mfs_tmpvar')) {
 				($seams['cache'] ?? 'pfb_dnsbl_cache')('save');
 			}
 		}
-		// as the pass: a failed accounting, or an accounting retry another process recorded, keeps the changes pending
+		if ($retry && empty($pfb['dnsbl_publish_failed']) && ($mode === 'disabled' || ($reconciled && pfb_dnsbl_converged()))) {
+			unlink_if_exists("{$pfb['dnsbl_file']}.reload");
+		}
+		// as the pass: a failed accounting, or an accounting retry that is still recorded, keeps the changes pending
 		if (!empty($pfb['dnsbl_accounting_failed']) || @file_get_contents("{$pfb['dnsbl_file']}.reload") === 'accounting') {
 			$accounting = FALSE;
 		}
-		// shortcut: the reload re-locks DNSBL temporary unlocks as the update pass does; #4036 question 3 owns any change to it
+		// shortcut: a stored temporary unlock is re-locked by the Resolver reload as the pass does, with no unlock handling of its own, upgrade when #4036 question 3 decides one
 		pfb_apply_dns_proxy();
 		$report['dnsblChanged'] = $update || $python || in_array(TRUE, array_column($request['dnsbl']['groups'] ?? [], 'changed'), TRUE);
 	}
@@ -7380,9 +7393,10 @@ function pfb_outpost_apply_run(array $request, $out, ?string $socket, bool $abso
 	if ($reloaded) {
 		$report['reloadLaunched'] = !$reload_unknown;
 	}
-	$written = pfb_outpost_report($out, $report);
+	$written = ($seams['report'] ?? 'pfb_outpost_report')($out, $report);
 	pfb_apply_settle(!$accounting, $reload_unknown, $request['pendingToken'], $started,
-		$failed === [] ? NULL : 'a resource was not applied; pending changes kept');
+		!$written ? 'the result line could not be written; pending changes kept'
+			: ($failed === [] ? NULL : 'a resource was not applied; pending changes kept'));
 	return !$written || $failed !== [] || $reload_unknown || !$accounting ? 1 : 0;
 }
 
