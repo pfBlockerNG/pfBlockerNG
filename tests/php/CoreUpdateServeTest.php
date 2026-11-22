@@ -331,6 +331,28 @@ final class CoreUpdateServeTest extends TestCase
 		$this->assertStringContainsString('refused', $run['out'], 'the progress log says why');
 	}
 
+	/** @return array<string, array{0: string, 1: string}> a request of the shape version 1 takes, and the reason it is refused with */
+	public static function versionsOfARequest(): array
+	{
+		$v1 = '"trigger":"apply","scope":"both","force":"none"';
+		return [
+			'the integer 2 takes the version 2 contract' => ["{\"version\":2,{$v1}}", 'the request has the unknown field "force"'],
+			'the string "2" takes version 1'             => ["{\"version\":\"2\",{$v1}}", 'the request is not of version 1'],
+			'the number 2.0 takes version 1'             => ["{\"version\":2.0,{$v1}}", 'the request is not of version 1'],
+			'the integer 3 takes version 1'              => ["{\"version\":3,{$v1}}", 'the request is not of version 1'],
+		];
+	}
+
+	/** The integer 2 alone sends a request to the version 2 contract; every other version is version 1's to refuse. */
+	#[DataProvider('versionsOfARequest')]
+	public function testOnlyTheInteger2TakesTheVersion2Contract(string $request, string $reason): void
+	{
+		$run = $this->serve($request, ['sync' => fn (): bool => self::fail('a sync ran')]);
+
+		$this->assertSame(2, $run['exit'], $run['out']);
+		$this->assertStringContainsString($reason, $run['out']);
+	}
+
 	// ----- 2. Extras -----
 
 	public function testScheduledExtrasRunDccThenBlAndAreReportedAsSuccessfulOutcomes(): void

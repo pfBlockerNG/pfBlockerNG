@@ -89,7 +89,7 @@ final class OutpostResourceFetchTest extends TestCase
 		@unlink("{$this->dir}/requests");
 		$started = pfb_test_start_process([PHP_BINARY, __DIR__ . '/support/CoreApiStandIn.php', $socket, "{$this->dir}/requests",
 			'script', "{$this->dir}/script.json"]);
-		$this->awaitListening($started);
+		pfb_test_await_ready($started);
 		$result = pfb_outpost_fetch($id, $cursor, $this->mirror, $this->work, $socket, $timeout);
 		$run = pfb_test_finish_process($started, 30.0);
 		$this->assertSame(0, $run['exit'], "the stand-in did not serve its whole script: {$run['stderr']}");
@@ -98,33 +98,6 @@ final class OutpostResourceFetchTest extends TestCase
 			$requests[] = json_decode($line, TRUE);
 		}
 		return [$result, $requests];
-	}
-
-	/**
-	 * Block until the stand-in prints "ready". A stand-in that exits first fails at once with what it said; the deadline only
-	 * salvages a stuck run.
-	 *
-	 * @param array{0: resource, 1: array<int, resource>, 2: string} $started
-	 */
-	private function awaitListening(array $started): void
-	{
-		$stdout = $started[1][1];
-		$said = '';
-		$deadline = hrtime(TRUE) + 10_000_000_000;
-		while (!str_contains($said, "ready\n")) {
-			if (feof($stdout)) {
-				$run = pfb_test_finish_process($started, 5.0);
-				$this->fail("the stand-in exited ({$run['exit']}) before it listened: {$run['stderr']}");
-			}
-			if (hrtime(TRUE) > $deadline) {
-				pfb_test_finish_process($started, 1.0);
-				throw new RuntimeException('STUCK/ENVIRONMENT: the stand-in never listened');
-			}
-			$read = [$stdout];
-			$write = $except = NULL;
-			stream_select($read, $write, $except, 0, 100_000);
-			$said .= (string) fread($stdout, 64);
-		}
 	}
 
 	/** The mirror holds $body exactly, and no temporary file of the fetch is left beside it. */
@@ -1150,7 +1123,7 @@ final class OutpostResourceFetchTest extends TestCase
 		file_put_contents("{$this->dir}/script.json", json_encode([self::text("1.1.1.1\n")]));
 		$started = pfb_test_start_process([PHP_BINARY, __DIR__ . '/support/CoreApiStandIn.php', $socket, "{$this->dir}/requests",
 			'script', "{$this->dir}/script.json"]);
-		$this->awaitListening($started);
+		pfb_test_await_ready($started);
 		$full = fopen('/dev/full', 'wb');
 		$got = @pfb_core_fetch_body(['id' => self::ID, 'generation' => '8', 'part' => 'members'], $full, 65, $socket, 30);
 		fclose($full);

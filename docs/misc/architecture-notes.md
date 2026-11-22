@@ -2331,12 +2331,82 @@ and the smoke harness (`tests/smoke/helpers.py` `reload()`) call the new API dir
 **The apply functions (#4037).** The parts of the pass that touch pfSense are functions of their own in
 `pfblockerng_apply.inc`, so that the version 2 Outpost apply can call them: `pfb_apply_enter()` (the HA
 receive-suppression flag, the DNS listener VIPs under the DNS configuration lock, the DNSBL policy upgrade; FALSE when
-that lock is unavailable), `pfb_apply_objects()` (alias and rule writes, the pfctl table updates, the saved settings,
-the filter reload, kill states, the XMLRPC sync and the metrics export; it returns the changed aliases, whether an IP
-unlock forced a re-block and whether the reload launch failed) and `pfb_apply_settle()` (the pending mark, the
-due-ledger flag and the apply record). `sync_package_pfblockerng()` calls them in that order and is the temporary
-shim the cutover (#3977) deletes. What the pass does to pfSense is frozen by corpus A
-(`tests/outpost/fixtures/apply/`, run by `tests/php/OutpostApplyCorpusTest.php`).
+that lock is unavailable), `pfb_apply_settings()` (the RAM-disk registrations, the table entries limit, the rule
+options, tracker ids, the auto rule suffix and the rule interfaces), `pfb_apply_dns()` (the Resolver integration, the
+retired block-page objects, then `pfb_apply_dns_redirect()` and `pfb_apply_dot_block()`), `pfb_apply_dns_proxy()`,
+`pfb_apply_objects()` (alias and rule writes, the pfctl table updates, the saved settings, the filter reload, kill
+states, the XMLRPC sync and the metrics export; it returns the changed aliases, whether an IP unlock forced a re-block
+and whether the reload launch failed) and `pfb_apply_settle()` (the pending mark, the due-ledger flag and the apply
+record). `sync_package_pfblockerng()` calls them in that order and is the temporary shim the cutover (#3977) deletes.
+What the pass does to pfSense is frozen by corpus A (`tests/outpost/fixtures/apply/`, run by
+`tests/php/OutpostApplyCorpusTest.php`); the settings and DNS steps are pinned by behaviour, not by where their text
+sits (owner decision on #4037, 2026-11-22: `RuntimeGatewayReadsStructureTest`, `SyncCopiedObjectsTest`).
+
+**The Outpost apply (#4037).** A version 2 request on the update command's stdin goes to `pfb_outpost_apply()`
+(`pfblockerng_extra.inc`); any other version takes the version 1 path. Nothing sends version 2 until the Core Updater
+(#4038) and the cutover (#3977). The apply:
+
+1. validates the request whole (exit 2, no result); a `scheduled` request while the cron-disable sentinel exists exits 75;
+   takes the scheduler dispatcher lock and the feed-pass lock as the apply lock, as the update pass does (held: exit 75);
+   with `pendingOutsideWindow`, or while a GeoIP generation swap is in progress, it marks the changes pending, sets the
+   due-ledger flag, writes `{"version":2}` and exits 0 (the GeoIP case exits 1 for a `manual` request, as version 1's
+   pass does); the `apply` trigger clears the due-ledger flag and restores it, with the pending mark, when the apply does
+   not succeed, an apply that throws included, and after a deferral only when it cleared the flag;
+2. runs `pfb_apply_enter()` (DNS configuration lock unavailable: exit 75, every lock it took released), then
+   `pfb_apply_settings()`;
+3. unless the scope is `dnsbl`: walks config.xml for the aliases it expects (`pfb_outpost_expected_aliases()`:
+   continents, IP groups with DNSBLIP, aggregates, with their alias objects and rule templates as the pass builds
+   them). A resource whose alias is not expected, whose action or direction disagrees with config.xml (decision 2), or
+   whose request entries exceed `system/maximumtableentries` fails with stage `apply` and is not fetched. The others
+   are fetched one by one (`pfb_outpost_fetch()`), each new mirror staged beside the old one: a body whose entries
+   exceed the limit fails and its staged file is removed, and an unreachable or unavailable Core API, or a body
+   `GetResourceBody` answers `unavailable` once its item answered, removes every staged file and exits 75 before anything
+   changed; an item `GetResources` answers `unavailable` fails its resource alone. An `unchanged` reply whose kernel table
+   is empty while its cursor counts members (`pfb_pfctl_table_empty()`, which reads the first line of `pfctl -T show`
+   only) is pushed as a replace from its mirror, which the cursor sent has verified. A `removed` id, or a `not_found` reply, for an alias config.xml still
+   holds fails with stage `apply` ("settings changed since the Update's snapshot") and keeps its table, mirror and
+   cursor; one for an alias it no longer holds is a removal. Once every resource is fetched, the staged mirrors replace
+   the old ones by rename;
+4. files Core's issues (`pfb_outpost_issues()`: an ADR-61 entry per issue, facility `dnsbl` for a DNSBL feed or
+   resource, item its resource, stage `core` for Core's stage `apply` so that the tick's reconciler does not act on
+   it, and a notice the first time; `pfb_outpost_issues.json` in the database folder remembers what it opened, so a
+   later request without the issue closes it); unless the scope is `ip`: writes the statistics rows of
+   `request.dnsbl` (`dnsbl_save_stats()`), runs `pfb_apply_dns()`, `pfb_update_unbound()` when that changed the
+   Resolver's configuration (then the #468 archive `pfb_dnsbl_cache('save')` on a RAM-disk `/var`, as the pass does), and
+   `pfb_apply_dns_proxy()`. The reload decision is the pass's `pfb_dnsbl_reload_needed()`: it also runs for an
+   `accounting` retry once this apply's statistics were written, and never after a failed statistics step. A stored
+   temporary unlock alone does not force a reload here (the pass's cadence re-locks it; #4036 question 3 decides any
+   handling), but a reload for another reason re-locks it as the pass does. A reload failure of `pfb_reload_unbound()` is
+   not observed, as in the pass. The `accounting` retry marker is cleared as the pass clears it, once the reload converged
+   (`pfb_dnsbl_converged()`); a failed accounting or a marker that remains keeps the changes pending. A request with no
+   `dnsbl` body cannot reconcile the marker, so the apply neither fails on it nor clears it: the pass reconciles it;
+5. removes what left the configuration (the mirror, then `pfctl -T kill`, then the cursor: a kill that fails keeps its
+   ledger entry, and the tick's retry kills a table that has no mirror; a cursor that cannot be dropped fails the id,
+   and its retry, which finds the table gone, drops it); a `geo-catalog` body renders the GeoIP pages;
+   registers every expected alias with a mirror and runs `pfb_apply_objects()` with a push that sends each changed
+   table through `pfb_apply_alias_delta_files()`: a replace from the mirror for a `full` or `unchanged` reply, no
+   cursor, an empty kernel table or an IP unlock (with a delta too: the unlocked member is in no delta), else the mode
+   and churn decision of ADR-40. A table whose push failed, whose replace on the path with a rule change failed (the
+   result `pfb_apply_objects()` returns, not the ledger), or whose `ip/<alias>/apply` ledger entry is open afterwards,
+   failed; the others advance their cursor. The work folder of delta parts and batch files is renamed aside and removed
+   when the apply ends, whatever ends it;
+6. writes one result line: `applied` (the resources at the requested generation, the request's generation string,
+   `unchanged` ones included, and none when a needed filter reload was not launched), `removed`, `changedAliases` (the
+   tables pushed successfully, of the request's aliases), `ipChanged`, `dnsblChanged` (DNS steps run, or the Resolver
+   reloaded), `reloadLaunched` (a reload was needed) and `failed`; settles the request's `pendingToken` unless something
+   failed (a failed resource, a reload not launched or a result line that was not written is the apply record's reason,
+   and keeps the due flag); exits 0, or 1 when a resource failed, the reload was not launched, the DNSBL statistics could
+   not be written, the line was not written or the settlement could not clear the due flag (a due ledger that cannot be
+   read is not clear). A deferral (exit 75: a lock is held or Core does not serve) adds no pending mark,
+   except that `pfb_apply_enter()` marks pending when the DNS configuration lock is unavailable. Core retries a deferred
+   `scheduled` or `retry` Update on its next tick (a deferred Update records nothing, so its occurrences stay pending), and
+   does not retry a `manual` one or the `apply` trigger: a deferral after the locks are held sets the due flag for a
+   `manual` Update, and for the `apply` trigger only when it cleared the flag. A non-zero exit other than 75 sets the pending mark and the due flag again.
+
+Not yet: a change to the DNSBL temporary unlock handling (a stored unlock alone does not reload the Resolver here, and a
+reload re-locks it exactly as the update pass does; #4036 question 3 owns any change), the empty-set placeholder in a mirror, pruning
+DNSBL statistics rows of removed groups, and `--resource-dir` in the rc script. Behaviour:
+`tests/php/OutpostApplyTest.php` (through corpus A's worker) and `tests/smoke/test_smoke_outpost_apply.py`.
 
 **Deprecated-verb migration map** (each old verb still works through an adapter; the deprecation
 line is logged for the three operator-facing verbs):
