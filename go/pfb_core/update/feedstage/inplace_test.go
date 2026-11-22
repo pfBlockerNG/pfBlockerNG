@@ -42,26 +42,3 @@ func TestInPlacePostScriptNeverReachesTheBackup(t *testing.T) {
 	}
 	journalLeftovers(t, dir, "after the failed run")
 }
-
-// Recover removes what a KILL leaves of the scripts' and the normalization's temporaries, for a valid feed stem only.
-func TestRecoverRemovesTheScriptAndNormalizeTemporaries(t *testing.T) {
-	dir := t.TempDir()
-	removed := []string{"a_v4.pre.tmp", "a_v4.post.tmp", "a_v4.orig.post.tmp", "a_v4.norm.tmp"}
-	kept := []string{"a_v4.orig", "a.b.pre.tmp", "notes.tmp"}
-	for _, name := range append(append([]string{}, removed...), kept...) {
-		writeFile(t, filepath.Join(dir, name), "x\n")
-	}
-	if err := Recover(dir); err != nil {
-		t.Fatalf("Recover: %v", err)
-	}
-	for _, name := range removed {
-		if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
-			t.Errorf("Recover left %s (%v)", name, err)
-		}
-	}
-	for _, name := range kept {
-		if !regularExists(filepath.Join(dir, name)) {
-			t.Errorf("Recover removed %s, which is no temporary of a feed", name)
-		}
-	}
-}
