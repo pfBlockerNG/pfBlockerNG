@@ -21914,7 +21914,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	// Backup existing unbound.conf and rename new unbound.conf file
 	if (!pfb_unbound_conf_publish($pfb['dnsbldir'])) {
 		pfb_logger("\nDNS Resolver unbound.conf could not be backed up and replaced; the next update applies its changes\n", 2);
-		// the conf Unbound starts from still loads the python module: its folders stay mounted
+		// the conf Unbound starts from may still load the python module: its folders stay mounted until a patch goes live
 		$pfb['dnsbl_python_unmount'] = FALSE;
 	}
 

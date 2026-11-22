@@ -720,8 +720,8 @@ final class DnsProxyModuleGatingTest extends TestCase
 
 	/**
 	 * Issue #4201: a backup cut short by a full disk is never kept, and the patch then stays out: a rollback must never put a
-	 * truncated unbound.conf in place. The patch is dropped, so the pass does not restart Unbound for a conf it did not
-	 * change; the next pass builds it again from the unchanged conf.
+	 * truncated unbound.conf in place. The patch is dropped with any backup, so a failed start cannot roll an old backup over
+	 * the unchanged conf; the next pass builds the patch again from it.
 	 */
 	public function testUnboundConfPublishWhoseBackupIsCutShortKeepsTheConf(): void
 	{
