@@ -70,4 +70,44 @@ final class CoreSettingsRevisionKeyTest extends TestCase
 		$this->assertSame($first, pfb_core_settings_revision(self::settings('')), 'the key is kept: the revision stays');
 		$this->assertSame($bytes, file_get_contents($key));
 	}
+
+	/**
+	 * Issue #4199: a create killed after the file appeared and before its 32 bytes were written left an empty or short key, and
+	 * every revision then threw until the file was removed by hand. Such a key was never published whole, so it is replaced.
+	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('interruptedKeys')]
+	public function testAKeyLeftShortByAnInterruptedCreateIsReplacedByAWholeOne(string $left): void
+	{
+		$key = "{$this->dir}/one.key";
+		file_put_contents($key, $left);
+
+		$revision = pfb_core_settings_revision(self::settings(''));
+
+		$bytes = (string) file_get_contents($key);
+		$this->assertSame(32, strlen($bytes), 'a whole 256-bit key replaces the short one');
+		$this->assertNotSame($left, $bytes);
+		$this->assertSame('0600', sprintf('%04o', fileperms($key) & 0777));
+		$this->assertSame($revision, pfb_core_settings_revision(self::settings('')), 'the new key is kept');
+		$this->assertSame(['one.key'], array_values(array_diff(scandir($this->dir), ['.', '..'])), 'no staged file is left');
+	}
+
+	/** @return array<string, array{string}> */
+	public static function interruptedKeys(): array
+	{
+		return ['empty' => [''], 'half written' => [str_repeat("\x01", 16)]];
+	}
+
+	/** Issue #4199: a whole key already there is used as it is, never replaced: revisions already handed out depend on it. */
+	public function testAWholeKeyAlreadyThereIsKept(): void
+	{
+		$key = "{$this->dir}/one.key";
+		$bytes = str_repeat("\x02", 32);
+		file_put_contents($key, $bytes);
+		chmod($key, 0600);
+
+		pfb_core_settings_revision(self::settings(''));
+
+		$this->assertSame($bytes, file_get_contents($key));
+		$this->assertSame(['one.key'], array_values(array_diff(scandir($this->dir), ['.', '..'])));
+	}
 }

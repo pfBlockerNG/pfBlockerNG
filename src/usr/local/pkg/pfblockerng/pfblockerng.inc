@@ -5243,17 +5243,26 @@ function pfb_core_revision_key(): string {
 	if (!file_exists($path) && !is_dir(dirname($path))) {
 		@mkdir(dirname($path), 0755, TRUE);
 	}
-	$fh = file_exists($path) ? FALSE : @fopen($path, 'x');	// 'x': of two first callers, one creates it
-	if ($fh !== FALSE) {
-		chmod($path, 0600);
-		$written = fwrite($fh, random_bytes(32));
-		fclose($fh);
-		if ($written !== 32) {
-			@unlink($path);
-			throw new RuntimeException("cannot write the settings revision key {$path}");
-		}
-	}
 	$key = @file_get_contents($path);
+	if (!is_string($key) || strlen($key) !== 32) {
+		// issue #4199: the key is written whole under a staged name and linked into place, so a create that is killed leaves no
+		// short key. One that an older create left short was never published whole: it goes. link() never replaces a key: of
+		// two first callers, one links and the other reads its key.
+		if (is_string($key)) {
+			@unlink($path);
+		}
+		$staged = "{$path}." . bin2hex(random_bytes(6));
+		$fh = @fopen($staged, 'x');
+		if ($fh !== FALSE) {
+			$whole = chmod($staged, 0600) && fwrite($fh, random_bytes(32)) === 32 && fsync($fh);
+			fclose($fh);
+			if ($whole) {
+				@link($staged, $path);
+			}
+			@unlink($staged);
+		}
+		$key = @file_get_contents($path);
+	}
 	if (!is_string($key) || strlen($key) !== 32) {
 		throw new RuntimeException("cannot read the settings revision key {$path}");
 	}
