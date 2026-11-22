@@ -104,8 +104,9 @@ type line struct {
 // removed, failed and aliases of every line, and a flag true when any line says so. Keys are matched as encoding/json matches
 // them (case-insensitively, the last duplicate winning), which the apply never writes. A result over MaxResult keeps the
 // complete lines inside the first MaxResult bytes, with ErrCut (the flags and ChangedAliases of that Result are lower bounds:
-// assume a change and a possible reload), or, when those bytes hold no complete line, is refused whole like a line over MaxLine; a bad unterminated last line (one the apply's death cut
-// short) leaves the lines before it, with the error; any other error returns a zero Result, so nothing of it is settled.
+// assume a change and a possible reload), or, when those bytes hold no complete line, is refused whole like a line over MaxLine; a bad unterminated last line that is not a complete JSON value
+// (one the apply's death cut short) leaves the lines before it, with the error, while a complete invalid one is refused whole like a
+// terminated line; a blank line counts against MaxLine like any other; any other error returns a zero Result, so nothing of it is settled.
 func ReadResult(f io.ReaderAt, req Request) (Result, error) {
 	b, err := readBounded(io.NewSectionReader(f, 0, MaxResult+1))
 	if err != nil {
@@ -135,11 +136,11 @@ func ReadResult(f io.ReaderAt, req Request) (Result, error) {
 	for len(b) > 0 {
 		l, rest, terminated := bytes.Cut(b, []byte("\n"))
 		b = rest
-		if len(bytes.TrimSpace(l)) == 0 {
+		if len(bytes.TrimSpace(l)) == 0 && len(l)+1 <= MaxLine { // a blank line over the bound goes to add, which refuses it
 			continue
 		}
 		if err := r.add(l); err != nil {
-			if terminated {
+			if terminated || json.Valid(l) { // a complete value is no line the apply's death cut short
 				return Result{}, err
 			}
 			return r.res, err
