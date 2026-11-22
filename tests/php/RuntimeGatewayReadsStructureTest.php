@@ -16,6 +16,10 @@ use PHPUnit\Framework\TestCase;
  * through PfbConfig::read(), so the registry default is the only default. The value tests
  * prove PfbConfig's semantics; only a structure pin fails when a consumer goes back to the
  * old `$pfb['ipconfig'][...] ?: <default>` expression.
+ *
+ * The update pass's own reads are pinned by behaviour, not by where their text sits (owner decision on #4037, 2026-11-22):
+ * its settings step, pfb_apply_settings(), is shared with the version 2 apply, and a raw copy of the IP settings that disagrees
+ * with config.xml must not reach what it sets.
  */
 final class RuntimeGatewayReadsStructureTest extends TestCase
 {
@@ -31,10 +35,6 @@ final class RuntimeGatewayReadsStructureTest extends TestCase
 	/** @return iterable<string,array{0:string,1:?string,2:list<string>}> file, function (NULL = whole file), expected gateway keys */
 	public static function consumerProvider(): iterable
 	{
-		yield 'sync_package_pfblockerng' => ['pkg/pfblockerng/pfblockerng_apply.inc', 'sync_package_pfblockerng', [
-			'ip/inbound_deny_action', 'ip/outbound_deny_action', 'ip/pass_order', 'ip/autorule_suffix',
-			'ip/ip_placeholder', '"ip/{$type}_interface"',
-		]];
 		yield 'pfb_global' => ['pkg/pfblockerng/pfblockerng.inc', 'pfb_global', [
 			'ip/maxmind_locale', 'ip/asn_reporting', 'ip/asn_token', 'ip/maxmind_account', 'ip/maxmind_key',
 		]];
@@ -93,5 +93,62 @@ final class RuntimeGatewayReadsStructureTest extends TestCase
 			}
 		}
 		$this->assertSame([], $raw, "{$file}: registered keys must not be read from a raw config array");
+	}
+
+	/**
+	 * The settings step takes the six registered IP keys it consumes from config.xml through PfbConfig: an absent key is the
+	 * registry default (or its grandfathered value), a stored key is what is stored, and pfb_global()'s raw copy
+	 * ($pfb['ipconfig']) never decides either.
+	 */
+	public function testTheSettingsStepTakesTheRegisteredIpKeysFromTheGatewayNotFromARawCopy(): void
+	{
+		global $pfb;
+
+		$saved = ['pfb' => $pfb, 'config' => $GLOBALS['config'] ?? []];
+		$env   = ['PFB_IP_PLACEHOLDER' => getenv('PFB_IP_PLACEHOLDER'), 'PFB_REENTRY_TIMEOUT' => getenv('PFB_REENTRY_TIMEOUT'),
+			'PFB_USE_MFS_TMPVAR' => getenv('PFB_USE_MFS_TMPVAR')];
+		$dir   = sys_get_temp_dir() . '/pfb_settings_' . bin2hex(random_bytes(4));
+		mkdir($dir, 0700);
+		try {
+			$ip  = 'installedpackages/pfblockerngipsettings/config/0';
+			$run = static function () use ($dir): void {
+				global $pfb;
+				// what pfb_global() leaves, with every path the step may remove inside the test's own directory
+				$pfb['aliasarchive'] = "{$dir}/aliastables";
+				$pfb['dnsblarchive'] = "{$dir}/dnsbl_cache";
+				$pfb['ipconfig']     = ['inbound_deny_action' => 'match', 'outbound_deny_action' => 'match', 'pass_order' => 'order_3',
+					'autorule_suffix' => 'ar', 'ip_placeholder' => '10.9.9.9', 'inbound_interface' => 'raw0', 'outbound_interface' => 'raw1'];
+				pfb_apply_settings();
+			};
+			$GLOBALS['config'] = [];
+			config_set_path("{$ip}/enable_float", '');
+			config_set_path('installedpackages/pfblockernglistsv4/config', [['aliasname' => 'Beta', 'action' => 'Deny_Both']]);
+
+			// Given config.xml without the keys
+			$run();
+			$this->assertSame(['block', 'reject', 'order_0', '', '127.1.7.7', [], []],
+				[$pfb['deny_action_inbound'], $pfb['deny_action_outbound'], $pfb['order'], $pfb['suffix'], $pfb['ip_ph'],
+					$pfb['inbound_interfaces'], $pfb['outbound_interfaces']],
+				'absent keys read as the registry defaults (the suffix as its grandfathered "standard"), never as the raw copy');
+
+			// When config.xml stores each key
+			foreach (['inbound_deny_action' => 'reject', 'outbound_deny_action' => 'block', 'pass_order' => 'order_2',
+				'autorule_suffix' => 'ar', 'ip_placeholder' => '127.9.9.9', 'inbound_interface' => 'wan', 'outbound_interface' => 'lan,opt1'] as $key => $value) {
+				config_set_path("{$ip}/{$key}", $value);
+			}
+			$run();
+			$this->assertSame(['reject', 'block', 'order_2', ' AR', '127.9.9.9', ['wan'], ['lan', 'opt1']],
+				[$pfb['deny_action_inbound'], $pfb['deny_action_outbound'], $pfb['order'], $pfb['suffix'], $pfb['ip_ph'],
+					$pfb['inbound_interfaces'], $pfb['outbound_interfaces']],
+				'stored keys are what the step sets');
+			$this->assertSame('127.9.9.9', getenv('PFB_IP_PLACEHOLDER'), 'the shell script is handed the stored placeholder');
+		} finally {
+			$pfb = $saved['pfb'];
+			$GLOBALS['config'] = $saved['config'];
+			foreach ($env as $name => $value) {
+				putenv($value === FALSE ? $name : "{$name}={$value}");
+			}
+			rmdir_recursive($dir);
+		}
 	}
 }

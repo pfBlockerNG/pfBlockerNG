@@ -765,15 +765,21 @@ final class SyncCopiedObjectsTest extends TestCase
 		$this->assertNoValueLeak();
 	}
 
-	/** @return array<string,mixed> */
+	/**
+	 * The DNS-redirect and DoT/DoQ writers of the DNS step (pfb_apply_dns()), called as functions. They were cut out of the update
+	 * pass by source markers until the owner's decision on #4037 (2026-11-22) replaced that pin on where the text sits with these
+	 * calls; the scenarios and assertions are the ones the marker cuts ran.
+	 *
+	 * @return array<string,mixed>
+	 */
 	private static function writerSpec(string $writer): array
 	{
 		return $writer === 'redirect' ? [
-			'from' => "\t\t\$redir_changed = FALSE;", 'to' => "\n\t}\n\n\t// Sync DoT/DoQ block filter rules",
+			'writer' => 'pfb_apply_dns_redirect',
 			'kind' => 'nat', 'section' => 'nat/rule', 'toggle' => 'dnsbl/dnsbl_redir', 'ifaces' => 'dnsbl/dnsbl_redir_int',
 			'stale' => 'pfB_DNS_Redirect_opt1_v4', 'kept' => ['pfB_DNS_Redirect_lan_v4', 'pfB_DNS_Redirect_lan_v6'],
 		] : [
-			'from' => "\t\t\$dot_changed = FALSE;", 'to' => "\n\t}\n\n\t// Fingerprint the loaded input files",
+			'writer' => 'pfb_apply_dot_block',
 			'kind' => 'dot_filter', 'section' => 'filter/rule', 'toggle' => 'dnsbl/dnsbl_dot_block', 'ifaces' => 'dnsbl/dnsbl_dot_block_int',
 			'stale' => 'pfB_DoT_Block_opt1', 'kept' => ['pfB_DoT_Block_lan'],
 		];
@@ -821,7 +827,7 @@ final class SyncCopiedObjectsTest extends TestCase
 		PfbConfig::write($spec['ifaces'], $scenario === 'stale interface' ? 'lan' : '');
 		config_set_path($spec['section'], [['descr' => 'user rule', 'interface' => 'wan'], $external]);
 
-		$this->runApplyBlock($spec['from'], $spec['to'], 'enabled');
+		$spec['writer']('enabled');
 
 		$this->assertSame(
 			$scenario === 'stale interface' ? ['user rule', ...$spec['kept']] : ['user rule'],
@@ -850,7 +856,7 @@ final class SyncCopiedObjectsTest extends TestCase
 		$apply = function () use ($spec): bool {
 			global $pfb;
 			$pfb['filter_configure'] = FALSE;
-			$this->runApplyBlock($spec['from'], $spec['to'], 'enabled');
+			$spec['writer']('enabled');
 			return $pfb['filter_configure'];
 		};
 		$targets = static fn (): array => array_column(config_get_path('nat/rule'), 'target', 'descr');
@@ -879,7 +885,7 @@ final class SyncCopiedObjectsTest extends TestCase
 		$apply = function () use ($spec): void {
 			global $pfb;
 			$pfb['filter_configure'] = FALSE;
-			$this->runApplyBlock($spec['from'], $spec['to'], 'enabled');
+			$spec['writer']('enabled');
 		};
 		$apply();
 
@@ -902,12 +908,12 @@ final class SyncCopiedObjectsTest extends TestCase
 		try {
 			// Given lan and opt1 selected: both get their pair (the fixture can show an interface that is redirected)
 			PfbConfig::write($spec['ifaces'], 'lan,opt1');
-			$this->runApplyBlock($spec['from'], $spec['to'], 'enabled');
+			$spec['writer']('enabled');
 			$this->assertSame(['pfB_DNS_Redirect_lan_v4', 'pfB_DNS_Redirect_lan_v6', 'pfB_DNS_Redirect_opt1_v4', 'pfB_DNS_Redirect_opt1_v6'], $descrs(), 'before: both selected interfaces');
 
 			// When only lan is selected, opt1 (still listened on, still a Resolver interface, still on the box) and wan lose or never get rows
 			PfbConfig::write($spec['ifaces'], 'lan');
-			$this->runApplyBlock($spec['from'], $spec['to'], 'enabled');
+			$spec['writer']('enabled');
 			$this->assertSame(['pfB_DNS_Redirect_lan_v4', 'pfB_DNS_Redirect_lan_v6'], $descrs());
 		} finally {
 			unset($GLOBALS['pfb_test_interfaces']);
@@ -949,7 +955,7 @@ final class SyncCopiedObjectsTest extends TestCase
 		$apply = function () use ($spec): bool {
 			global $pfb;
 			$pfb['filter_configure'] = FALSE;
-			$this->runApplyBlock($spec['from'], $spec['to'], 'enabled');
+			$spec['writer']('enabled');
 			return $pfb['filter_configure'];
 		};
 		$targets = static fn (): array => array_column(config_get_path('nat/rule'), 'target', 'descr');
@@ -994,7 +1000,7 @@ final class SyncCopiedObjectsTest extends TestCase
 		PfbConfig::write('gen/pfb_dns_listen_vip6', $vip6);
 		config_set_path('virtualip/vip', [self::listenVip('192.0.2.53', '4'), ...($vip6Exists ? [self::listenVip('fd00:53::53', '6')] : [])]);
 
-		$this->runApplyBlock($spec['from'], $spec['to'], 'enabled');
+		$spec['writer']('enabled');
 
 		$this->assertSame(
 			[
@@ -1013,6 +1019,43 @@ final class SyncCopiedObjectsTest extends TestCase
 			'only an IPv4 VIP selected'            => ['on', 'none', TRUE],
 			'IPv6 VIP selected but missing'        => ['on', '_vipgone', FALSE],
 		];
+	}
+
+	/**
+	 * The DNS step hands both writers its mode: with DNSBL not enabled (the mode is '' or 'disabled') each removes its rows, though
+	 * its toggle is on and its interfaces are valid, and flags the pf reload that unloads them.
+	 */
+	#[DataProvider('modesThatAreNotEnabled')]
+	public function testWritersRemoveTheirRowsWhenTheDnsStepIsNotEnabled(string $mode): void
+	{
+		global $pfb;
+
+		$GLOBALS['config'] = [];
+		$pfb['dbdir']      = $this->dir;
+		foreach (['redirect', 'dot'] as $writer) {
+			$spec = self::writerSpec($writer);
+			PfbConfig::write($spec['toggle'], 'on');
+			PfbConfig::write($spec['ifaces'], 'lan');
+		}
+		$pfb['filter_configure'] = FALSE;
+		pfb_apply_dns_redirect('enabled');
+		pfb_apply_dot_block('enabled');
+		$this->assertSame(['pfB_DNS_Redirect_lan_v4', 'pfB_DNS_Redirect_lan_v6'], array_column(config_get_path('nat/rule', []), 'descr'), 'before: enabled writes the redirect rows');
+		$this->assertSame(['pfB_DoT_Block_lan'], array_column(config_get_path('filter/rule', []), 'descr'), 'before: enabled writes the DoT row');
+
+		$pfb['filter_configure'] = FALSE;
+		pfb_apply_dns_redirect($mode);
+		pfb_apply_dot_block($mode);
+
+		$this->assertSame([], config_get_path('nat/rule', []));
+		$this->assertSame([], config_get_path('filter/rule', []));
+		$this->assertTrue($pfb['filter_configure'], 'removing the rows flags a pf reload');
+	}
+
+	/** @return array<string,array{string}> */
+	public static function modesThatAreNotEnabled(): array
+	{
+		return ['DNSBL disabled' => ['disabled'], 'no mode (DNSBL on, Resolver off)' => ['']];
 	}
 
 	public function testFilterAutoruleWriteKeepsTheRawTrackerAndOnlyTheCheckedCopyIsCast(): void
