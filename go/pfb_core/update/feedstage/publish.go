@@ -36,8 +36,8 @@ var retired = []string{".orig.etag", ".orig.lastmod", ".orig.size", ".probe", ".
 var seeded = slices.Concat([]string{".orig"}, feedfetch.DigestSuffixes(), retired,
 	[]string{".raw", ".bk", ".norm", ".norm.src." + digest.XXH128})
 
-// published are the suffixes of every file a commit publishes, in the deterministic order its COMMIT lists them: the
-// download with its digests and validators, the lists, and the record of their input. Any other file a run leaves is
+// published are the suffixes of every file a commit publishes, in the deterministic order of its renames, which COMMIT lists
+// after the removals: the download with its digests and validators, the lists, and the record of their input. Any other file a run leaves is
 // never published.
 var published = append(slices.Clone(seeded), ".fail", ".parsed.ip", ".parsed.ndjson", ".parsed.v4.ip", ".parsed.v6.ip",
 	parsedSource+"."+digest.XXH128)
@@ -214,6 +214,9 @@ func commit(dir, run, stem string, suffixes, removable []string) (committed bool
 		}
 	}
 	ops := append(removals, renames...)
+	if len(ops) == 0 {
+		return false, nil // nothing to publish: the feed folder stays as it is and the caller deletes the run folder
+	}
 	if err := checkOps(dir, run, ops); err != nil {
 		return false, err
 	}

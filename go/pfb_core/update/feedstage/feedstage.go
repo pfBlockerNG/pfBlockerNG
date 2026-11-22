@@ -194,15 +194,19 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 	// What the run publishes when it fails: nothing, but for a failed transfer (retired) and a failed whois (its marker).
 	var retire []string
 	retireReason := ""
-	clearFail := false // the run transferred its source, which clears the fail marker as today (apply.inc:2859, :4276)
+	clearFail := false // the run's download succeeded, which removes the fail marker as today (apply.inc:2859, :4276)
 	defer func() {
 		partialWhois := result.Disposition == "failed" && result.Stage == "whois" && result.SourceChanged
 		suffixes, removable := retire, seeded
 		if result.Disposition != "failed" || partialWhois {
 			suffixes = published
 		}
-		if clearFail && result.Disposition != "failed" {
+		if clearFail {
+			// A successful download removes the marker whatever a later step does; the removal is published with the rest.
 			removable = clearable
+			if !slices.Contains(suffixes, ".fail") {
+				suffixes = append(slices.Clone(suffixes), ".fail")
+			}
 		}
 		done, err := false, error(nil)
 		if suffixes != nil {
@@ -262,11 +266,18 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			}
 			whois := s.Fetcher.Whois(ctx, feed, feedfetch.WhoisRequest{List: list, IPv6: f.Kind == "ipv6"})
 			retire = []string{".fail"} // the marker a failed entry left stands whatever the run does next, as today
+			// Today's whois and asn formats go through pfb_download(), which succeeds whatever the entries did, and its
+			// caller then unlinks the marker (apply.inc:4276); a custom list's whoisconvert never does.
+			if !f.Custom && ctx.Err() == nil && whois.Reason == "" {
+				if removeIfExists(feedPath(feed, ".fail")) != nil {
+					return failedFeed(f.ID, "whois", "whois_failed")
+				}
+				clearFail = true
+			}
 			if ctx.Err() != nil || whois.Reason != "" || !whois.Found {
 				return failedFeed(f.ID, "whois", "whois_failed")
 			}
-			// Today's whois and asn formats go through pfb_download(), whose success clears the marker; a custom list does not.
-			sourceChanged, whoisPartial, clearFail = true, whois.Failed, !f.Custom && !whois.Failed
+			sourceChanged, whoisPartial = true, whois.Failed
 		default:
 			if force == "none" && change.Verdict == "" {
 				return failedFeed(f.ID, "settings", "verdict_invalid")
@@ -288,6 +299,15 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			if !ingested.OK {
 				// Force both drops the digests before the transfer, whatever its outcome (pfb_force_clear_validators()).
 				retire, retireReason = forcedSuffixes(force), "validators_retire_failed"
+				// A failed transfer touches the marker, or past the skipfeed threshold removes it (pfb_download_failure()).
+				if f.SkipFeedPassed {
+					clearFail = true
+				} else {
+					if file, err := create(feedPath(feed, ".fail")); err == nil {
+						_ = file.Close()
+					}
+					retire = append(slices.Clone(retire), ".fail")
+				}
 				return failedFeed(f.ID, "fetch", s.safeReason(ingested.Reason, "feed_fetch_failed", f))
 			}
 			sourceChanged, clearFail = ingested.Status != httpStatusNotModified, true
