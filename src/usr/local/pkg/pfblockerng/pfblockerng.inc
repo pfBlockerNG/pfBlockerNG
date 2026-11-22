@@ -11133,6 +11133,12 @@ function pfb_stage_publish(string $target, callable $extract): bool {
 	if ($staged === FALSE) {
 		return FALSE;
 	}
+	// issue #4191: tempnam() falls back to the system temporary folder when it cannot create the stage beside the target (a
+	// missing or inode-exhausted folder), and a rename from there would be a copy over the target.
+	if (realpath(dirname($staged)) !== realpath(dirname($target))) {
+		unlink_if_exists($staged);
+		return FALSE;
+	}
 	// issue #2169: tempnam() creates at 0600, but published feeds have unprivileged readers.
 	if (!pfb_download_extraction_succeeded((int) $extract($staged)) ||
 	    !@chmod($staged, 0644) || !@rename($staged, $target)) {
@@ -16034,7 +16040,19 @@ function pfb_canonical_alias_set(string $member_content): array {
  */
 function pfb_write_canonical_alias(string $path, array $canonical_set): bool {
 	$content = empty($canonical_set) ? '' : implode("\n", $canonical_set) . "\n";
-	return @file_put_contents($path, $content, LOCK_EX) === strlen($content);
+	// issue #4191: replaced whole -- pfctl -T replace -f and the alias URL read the mirror without a lock
+	if (!pfb_stage_publish($path, static fn (string $staged): int => @file_put_contents($staged, $content) === strlen($content) ? 0 : 1)) {
+		return FALSE;
+	}
+	return TRUE;
+}
+
+/** Publish a copy of $source as an alias mirror (the aliasdir .txt), replaced whole as pfb_write_canonical_alias() does (issue #4191). */
+function pfb_alias_mirror_copy(string $source, string $mirror): bool {
+	if (!pfb_stage_publish($mirror, static fn (string $staged): int => @copy($source, $staged) ? 0 : 1)) {
+		return FALSE;
+	}
+	return TRUE;
 }
 
 /**

@@ -3567,7 +3567,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$pfctlck = pfb_pfctl_table_count($cc_alias);
 
 						if (empty($pfctlck) && file_exists("{$pfbfolder}/{$cc_alias}.txt")) {
-							@copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt");
+							// issue #4191: a mirror that cannot be published drops the baseline, so the next pass publishes again
+							if (!pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt")) {
+								unlink_if_exists("{$pfborig}/{$cc_alias}.orig");
+							}
 							// Collect updated alias lists ('Reputation' disabled)
 							$pfb_alias_lists[] = "{$cc_alias}";
 						}
@@ -3611,8 +3614,11 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 										}
 									);
 
-									// Save Continent data to aliastable folder
-									@copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt");
+									// Save Continent data to aliastable folder. A mirror that cannot be published drops the baseline just
+									// advanced, so the next pass finds the data changed and publishes again (issue #4191).
+									if (!pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt")) {
+										unlink_if_exists("{$pfborig}/{$cc_alias}.orig");
+									}
 								}
 
 								// Check if file exists and is > 0 in size and save alias file
@@ -3630,7 +3636,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
                                                                         }
 
 									@file_put_contents("{$pfbfolder}/{$cc_alias}.txt", "{$p_ip}\n", LOCK_EX);
-									@copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt");
+									// issue #4191: as above, an unpublished placeholder leaves the change for the next pass
+									if (!pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt")) {
+										unlink_if_exists("{$pfborig}/{$cc_alias}.orig");
+									}
 									$log = "[ {$cc_alias} ] Found no unique IPs, adding '{$p_ip}' to avoid empty file\n";
 									pfb_logger("{$log}", 1);
 								}
@@ -4599,8 +4608,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								$pfb_alias_prev_sets[$alias] = empty($pfctlck) ? array() : pfb_canonical_alias_set($prev_raw ?: '');
 								// Set changed (or kernel table is empty) → write the new canonical
 								// mirror and flag this alias for pfctl reload.
-								pfb_write_canonical_alias($alias_mirror, $canonical_set);
-								$pfb_alias_lists[] = "{$alias}";
+								// issue #4191: a mirror that still holds the previous set is not reported as updated
+								if (pfb_write_canonical_alias($alias_mirror, $canonical_set)) {
+									$pfb_alias_lists[] = "{$alias}";
+								}
 							}
 							// When set is unchanged: aliasdir file is already correct; no reload needed.
 						}
