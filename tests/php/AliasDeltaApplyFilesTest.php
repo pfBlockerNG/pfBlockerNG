@@ -1311,6 +1311,30 @@ SH
 	}
 
 	/**
+	 * @return array<string, array{callable(): array{0: iterable<?string>, 1: iterable<?string>}}> a member source whose second pass
+	 *   stops before the first batch: on a refused first line, or on a side that holds fewer members than its count
+	 */
+	public static function secondPassesStoppedBeforeAnyBatch(): array
+	{
+		return [
+			'a refused first line' => [static fn (): array => [(static function (): Generator { yield NULL; })(), []]],
+			'an empty add side'    => [static fn (): array => [[], []]],
+		];
+	}
+
+	/** Scenario: given no open entry, a second pass that stops before any batch went out leaves the ledger as it was: the table is unchanged. */
+	#[DataProvider('secondPassesStoppedBeforeAnyBatch')]
+	public function testASecondPassStoppedBeforeAnyBatchDoesNotTouchTheLedger(callable $source): void
+	{
+		$result = pfb_apply_alias_delta_members($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']), $source, 1, 0,
+			100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertSame([], $this->calls());
+		$this->assertSame([], $this->ledgerFiles(), 'neither the ledger nor its lock was created');
+	}
+
+	/**
 	 * Scenario: a replace is one call. Given no open entry, a replace that fails opens the entry; given that open entry, a
 	 * replace that succeeds closes it.
 	 */
