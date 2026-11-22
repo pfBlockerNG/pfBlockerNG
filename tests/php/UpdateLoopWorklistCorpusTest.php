@@ -46,7 +46,8 @@ namespace {
 	 * go straight to the pass, which is recorded with its scope and force: for them the change of a feed is today's reuse
 	 * rule over its markers (an update or fail marker, or no list: downloaded; else reused; a geoip feed downloaded after a
 	 * GeoIP change, the update marker pfblockerng_apply.inc touches for geoip.update), or parse for a Reload. A pending
-	 * decision leaves the feeds with an update marker to the apply. The Go
+	 * decision leaves to the apply what today's pending apply rebuilds: the feeds with an update or fail marker or without
+	 * their list. The Go
 	 * runner (go/pfb_core/update/worklist/corpus_test.go) replays the same file; where Core differs on purpose a case
 	 * holds today's answer in old_expect, which this runner asserts.
 	 */
@@ -338,7 +339,8 @@ namespace {
 				'stopped' => [],
 				'apply' => $apply,
 				'pending' => $apply !== 'pending' ? [] : array_values(array_map(static fn(array $f): string => $f['id'],
-					array_filter($feeds, static fn(array $f): bool => $marker($f, 'update')))),
+					array_filter($feeds, static fn(array $f): bool => $marker($f, 'update') || $marker($f, 'fail')
+						|| !file_exists("{$f['list']}/{$f['name']}.txt")))),
 			];
 			$want = array_merge($case['expect'], $case['old_expect'] ?? []);
 			ksort($got);

@@ -2408,6 +2408,303 @@
       }
     },
     {
+      "id": "pending_built_in_window",
+      "description": "An in-window scheduled Update builds the feeds an earlier Update left pending, unchecked and with no outcome, besides the feeds Core named.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "304"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        }
+      ],
+      "pendingFeeds": [
+        "ipv4:B_v4"
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "update": true
+        }
+      },
+      "old_expect": {
+        "changes": {
+          "ipv4:A_v4": "unchanged"
+        }
+      },
+      "departure": "Today's scheduled pass leaves the update marker of a feed Core did not name to a later manual or apply pass. Core builds the feeds earlier Updates left pending in the first Update that builds at all, so none waits on a trigger that may not come (Plan.PendingFeeds).",
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {
+          "ipv4:A_v4": "success"
+        },
+        "changes": {
+          "ipv4:A_v4": "unchanged",
+          "ipv4:B_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "pending_makes_an_update_due",
+      "description": "Feeds left pending make a scheduled Update that names nothing due: they are built.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": []
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        }
+      ],
+      "pendingFeeds": [
+        "ipv4:A_v4"
+      ],
+      "files": {
+        "ipv4:A_v4": {
+          "update": true
+        }
+      },
+      "old_expect": {
+        "changes": {},
+        "apply": "nothing"
+      },
+      "departure": "Today's scheduled pass leaves the update marker of a feed Core did not name to a later manual or apply pass. Core builds the feeds earlier Updates left pending in the first Update that builds at all, so none waits on a trigger that may not come (Plan.PendingFeeds).",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
+      "id": "pending_outside_scope_carried",
+      "description": "A manual Update builds the pending feeds of its scope and leaves the others pending.",
+      "request": {
+        "trigger": "manual",
+        "scope": "ip",
+        "force": "none"
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            },
+            {
+              "header": "B",
+              "state": "enabled",
+              "format": "auto",
+              "source": "same"
+            }
+          ]
+        },
+        {
+          "kind": "dnsbl",
+          "name": "GD",
+          "action": "unbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "D",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "pendingFeeds": [
+        "ipv4:B_v4",
+        "dnsbl:D"
+      ],
+      "files": {
+        "ipv4:B_v4": {
+          "update": true
+        },
+        "dnsbl:D": {
+          "update": true
+        }
+      },
+      "old_expect": {
+        "pending": []
+      },
+      "departure": "Today keeps the update marker of a feed outside the scope for a later pass; Core carries the feed in Plan.PendingFeeds.",
+      "expect": {
+        "checked": [],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "unchanged",
+          "ipv4:B_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "now",
+        "pending": [
+          "dnsbl:D"
+        ]
+      }
+    },
+    {
+      "id": "outside_window_missing_list",
+      "description": "Outside the window a named feed without its list is left to the apply, as today's apply rebuilds a feed without a list.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:A_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "A",
+              "state": "enabled",
+              "format": "auto",
+              "source": "changed"
+            }
+          ]
+        }
+      ],
+      "window": "outside",
+      "files": {
+        "ipv4:A_v4": {
+          "list": false
+        }
+      },
+      "expect": {
+        "checked": [
+          "ipv4:A_v4"
+        ],
+        "outcomes": {},
+        "changes": {
+          "ipv4:A_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [],
+        "apply": "pending",
+        "pending": [
+          "ipv4:A_v4"
+        ]
+      }
+    },
+    {
+      "id": "whois_invalid_source",
+      "description": "A whois or asn feed whose source today's check refuses has no outcome. With its list published it is not run; without one it is run, and the stage's failed resolution leaves the fail marker as today's failed download does.",
+      "request": {
+        "trigger": "scheduled",
+        "feeds": [
+          "ipv4:W_v4",
+          "ipv4:N_v4"
+        ]
+      },
+      "groups": [
+        {
+          "kind": "ipv4",
+          "name": "G4",
+          "action": "Deny_Inbound",
+          "frequency": "01hour",
+          "feeds": [
+            {
+              "header": "W",
+              "state": "enabled",
+              "format": "whois",
+              "source": "exa\u0001mple.com"
+            },
+            {
+              "header": "N",
+              "state": "enabled",
+              "format": "asn",
+              "source": "AS64-500"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "ipv4:N_v4": {
+          "list": false
+        }
+      },
+      "old_expect": {
+        "checked": [
+          "ipv4:W_v4",
+          "ipv4:N_v4"
+        ],
+        "changes": {
+          "ipv4:W_v4": "unchanged",
+          "ipv4:N_v4": "changed"
+        },
+        "stopped": []
+      },
+      "departure": "Today's pass reuses the published list of a feed whose source its check refused. Core's stage resolves every whois and asn feed it runs, so Core does not run such a feed while its list stands: stopped, the list kept.",
+      "expect": {
+        "checked": [
+          "ipv4:N_v4"
+        ],
+        "outcomes": {},
+        "changes": {
+          "ipv4:N_v4": "changed"
+        },
+        "fail": [],
+        "stopped": [
+          "ipv4:W_v4"
+        ],
+        "apply": "now",
+        "pending": []
+      }
+    },
+    {
       "id": "never_and_disabled_are_not_walked",
       "description": "A group updated Never, a Disabled group and a disabled row are not checked.",
       "request": {
