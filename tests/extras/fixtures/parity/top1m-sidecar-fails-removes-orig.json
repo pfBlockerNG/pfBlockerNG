@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"description": "The xxh128 sidecar cannot be written and there was no baseline before: the new baseline is removed with the new list.",
+	"description": "The xxh128 sidecar cannot be written and there was no baseline before. Today's PHP removes the new baseline with the new list (old_expect); Core publishes by renames alone (#4198), so the new list and baseline stay live without a digest, which reads as changed: the next run publishes again.",
 	"hosts": {
 		"tranco-list.eu": [
 			"127.0.0.1",
@@ -38,6 +38,24 @@
 				}
 			],
 			"expect": {
+				"ok": false,
+				"ledger": "TOP1M download failed",
+				"files": {
+					"db/top-1m.csv": "1,google.com\n2,facebook.com\n3,example.org\n",
+					"db/top-1m.csv.zip.orig": {
+						"b64": "UEsDBBQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAdG9wLTFtLmNzdjEsZ29vZ2xlLmNvbQoyLGZhY2Vib29rLmNvbQozLGV4YW1wbGUub3JnClBLAQIUAxQAAAAAAAAAIVxAOb0EKgAAACoAAAAKAAAAAAAAAAAAAACAAQAAAAB0b3AtMW0uY3N2UEsFBgAAAAABAAEAOAAAAFIAAAAAAA=="
+					},
+					"db/top-1m.csv.zip.raw": null,
+					"db/top-1m.update": null
+				},
+				"requests": [
+					{
+						"server": "origin",
+						"path": "/top-1m.csv.zip"
+					}
+				]
+			},
+			"old_expect": {
 				"ok": false,
 				"ledger": "TOP1M download failed",
 				"files": {
