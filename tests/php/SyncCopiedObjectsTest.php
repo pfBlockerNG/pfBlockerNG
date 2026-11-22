@@ -1045,11 +1045,13 @@ final class SyncCopiedObjectsTest extends TestCase
 
 		$pfb['filter_configure'] = FALSE;
 		pfb_apply_dns_redirect($mode);
-		pfb_apply_dot_block($mode);
-
 		$this->assertSame([], config_get_path('nat/rule', []));
+		$this->assertTrue($pfb['filter_configure'], 'removing the redirect rows flags a pf reload');
+
+		$pfb['filter_configure'] = FALSE;
+		pfb_apply_dot_block($mode);
 		$this->assertSame([], config_get_path('filter/rule', []));
-		$this->assertTrue($pfb['filter_configure'], 'removing the rows flags a pf reload');
+		$this->assertTrue($pfb['filter_configure'], 'removing the DoT row flags a pf reload');
 	}
 
 	/** @return array<string,array{string}> */
