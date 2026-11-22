@@ -92,7 +92,7 @@ func servedBodies(t *testing.T, bodies map[string]string) *httptest.Server {
 
 // Scenario: a probe body kept for one source is never published for another (issue #4038, note from the review of #4195).
 // Given an Update outside the window probed the feed at /old and kept the changed body,
-// When the feed's source is moved to /new and the next Update hands the feed to the stage without probing it,
+// When the feed's source is moved to /new and its fail marker adds it to the next walk, which runs it without a probe,
 // Then the kept body is dropped before the stage runs, and the stage publishes what /new serves.
 func TestKeptProbeOfAnotherSourceIsNeverPublished(t *testing.T) {
 	srv := servedBodies(t, map[string]string{"/old": "9.9.9.9\n", "/new": "5.6.7.8\n"})
@@ -102,17 +102,18 @@ func TestKeptProbeOfAnotherSourceIsNeverPublished(t *testing.T) {
 	if plan := build(t, in); plan.Decision != Pending {
 		t.Fatalf("the first Update = %v, want pending", plan.Decision)
 	}
-	if !exists(f.path(".probe")) || !exists(f.path(".update")) {
-		t.Fatal("before: the changed probe body and the update marker stand")
+	if !exists(f.path(".probe")) || !exists(f.path(".probe.src")) {
+		t.Fatal("before: the changed probe body and the record of its source stand")
 	}
 
 	f.setURL(remoteURL(srv) + "/new")
-	item := onlyItem(t, build(t, f.input(Request{Trigger: "manual", Scope: "both", Force: "none"})))
+	writeFile(t, f.path(".fail"), "")
+	item := onlyItem(t, build(t, f.input(Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})))
 	if exists(f.path(".probe")) {
 		t.Fatal("the probe body kept for /old still stands after the work list for /new")
 	}
 	if item.Change.Verdict != feedstage.VerdictChanged {
-		t.Fatalf("change = %+v, want changed from the update marker", item.Change)
+		t.Fatalf("change = %+v, want changed from the fail marker", item.Change)
 	}
 	if r := f.stage.Run(context.Background(), item.Feed, item.Change); r.Disposition != "changed" {
 		t.Fatalf("run = %+v, want changed", r)
@@ -134,7 +135,8 @@ func TestKeptProbeOfTheSameSourceIsIngested(t *testing.T) {
 		t.Fatal("before: the changed probe body stands")
 	}
 	bodies["/old"] = "1.1.1.1\n" // what the server serves now is not what the probe kept
-	item := onlyItem(t, build(t, f.input(Request{Trigger: "manual", Scope: "both", Force: "none"})))
+	writeFile(t, f.path(".fail"), "")
+	item := onlyItem(t, build(t, f.input(Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})))
 	if !exists(f.path(".probe")) {
 		t.Fatal("the probe body of the same source was dropped")
 	}
@@ -153,7 +155,6 @@ func TestProbeWithoutASourceRecordIsDropped(t *testing.T) {
 			f := newFixture(t, "http://192.0.2.1/list")
 			writeFile(t, f.path(".probe"), "9.9.9.9\n")
 			writeFile(t, f.path(".probe.etag"), "\"x\"")
-			writeFile(t, f.path(".update"), "")
 			if record == "dir" {
 				if err := os.Mkdir(f.path(".probe.src"), 0o700); err != nil {
 					t.Fatal(err)
@@ -215,9 +216,6 @@ func TestUnrecoverableFolderStopsItsFeeds(t *testing.T) {
 	if item.Stopped == "" || item.Outcome != "" || item.Checked {
 		t.Fatalf("item = %+v, want stopped without a check or an outcome", item)
 	}
-	if exists(f.path(".update")) {
-		t.Fatal("a stopped feed was marked for an update")
-	}
 }
 
 // SkipFeedPassed is today's skipfeed limit against today's failures, as pfb_download_failure() reads it: the failure the
@@ -236,9 +234,9 @@ func TestSkipFeedPassed(t *testing.T) {
 	}
 }
 
-// A group's custom list is a feed of its own on a manual or apply Update, which compares its text (feedstage); a scheduled
-// Update never runs it, as today's pass does not select it.
-func TestCustomListRunsOnManualAndApplyOnly(t *testing.T) {
+// A group's custom list is a feed of its own on a manual Update, which compares its text (feedstage); a scheduled
+// or apply Update never runs it: today's scheduled pass does not select it, and Core's apply builds nothing.
+func TestCustomListRunsOnManualOnly(t *testing.T) {
 	f := newFixture(t, "http://192.0.2.1/list")
 	f.group["customList"] = "198.51.100.7\n"
 	f.group["whoisConvert"] = true
@@ -247,7 +245,7 @@ func TestCustomListRunsOnManualAndApplyOnly(t *testing.T) {
 		want int
 	}{
 		{Request{Trigger: "manual", Scope: "ip", Force: "parse"}, 2},
-		{Request{Trigger: "apply"}, 2},
+		{Request{Trigger: "apply"}, 0},
 		{Request{Trigger: "manual", Scope: "dnsbl", Force: "none"}, 0},
 		{Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}, 1},
 	} {
@@ -299,20 +297,5 @@ func TestRequestOutsideTheProtocolIsRefused(t *testing.T) {
 		if _, err := Build(context.Background(), f.input(req)); err == nil {
 			t.Errorf("%+v: accepted, want refused", req)
 		}
-	}
-}
-
-// ClearUpdate removes a rebuilt feed's update marker; a marker already gone is no error.
-func TestClearUpdate(t *testing.T) {
-	f := newFixture(t, "http://192.0.2.1/list")
-	writeFile(t, f.path(".update"), "")
-	if err := ClearUpdate(f.dir, "A_v4"); err != nil || exists(f.path(".update")) {
-		t.Fatalf("ClearUpdate = %v, marker stands %v; want it removed", err, exists(f.path(".update")))
-	}
-	if err := ClearUpdate(f.dir, "A_v4"); err != nil {
-		t.Fatalf("ClearUpdate of a missing marker = %v, want nil", err)
-	}
-	if err := ClearUpdate(f.dir, "../x"); err == nil {
-		t.Fatal("ClearUpdate of a name that is no feed word was accepted")
 	}
 }

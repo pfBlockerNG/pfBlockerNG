@@ -37,7 +37,7 @@ namespace {
 
 	/**
 	 * The work-list corpus of the Core Updater (issue #4038, tests/updateloop/fixtures/worklist/scenarios.json): which feeds
-	 * an Update checks, their outcomes, the change each feed it runs is handed, the markers left, and whether the pass
+	 * an Update checks, their outcomes, the change each feed it runs is handed, the fail markers left, and whether the pass
 	 * applies now, is left pending, or does not run. Today's code decides it: pfb_core_update_run() routes the request, as the
 	 * Outpost's Update program does, and the walk is pfblockerng_sync_cron() with pfb_update_check() probing a local
 	 * `php -S` server (tests/php/support/FeedFetchCorpusRouter.php). The walk runs verbatim: its source is evaluated in the
@@ -328,7 +328,6 @@ namespace {
 				'outcomes' => $outcomes,
 				'changes' => $changes,
 				'fail' => array_values(array_map(static fn(array $f): string => $f['id'], array_filter($feeds, static fn(array $f): bool => $marker($f, 'fail')))),
-				'update' => array_values(array_map(static fn(array $f): string => $f['id'], array_filter($feeds, static fn(array $f): bool => $marker($f, 'update')))),
 				'stopped' => [],
 				'apply' => $GLOBALS['pfb_worklist_sync'] !== [] ? 'now' : (pfb_due_ledger_is_pending('cron', $pfb['dbdir']) ? 'pending' : 'nothing'),
 			];
