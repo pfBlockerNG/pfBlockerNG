@@ -125,7 +125,7 @@ final class RuntimeGatewayReadsStructureTest extends TestCase
 				$pfb['aliasarchive'] = "{$dir}/aliastables";
 				$pfb['dnsblarchive'] = "{$dir}/dnsbl_cache";
 				$pfb['ipconfig']     = ['inbound_deny_action' => 'match', 'outbound_deny_action' => 'match', 'pass_order' => 'order_3',
-					'autorule_suffix' => 'ar', 'ip_placeholder' => '10.9.9.9', 'inbound_interface' => 'raw0', 'outbound_interface' => 'raw1'];
+					'autorule_suffix' => 'standard', 'ip_placeholder' => '10.9.9.9', 'inbound_interface' => 'raw0', 'outbound_interface' => 'raw1'];
 				pfb_apply_settings();
 			};
 			$GLOBALS['config'] = [];
