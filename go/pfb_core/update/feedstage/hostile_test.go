@@ -28,7 +28,7 @@ func TestFeedDirectoryThatIsALinkIsRefused(t *testing.T) {
 	writeFile(t, source, "198.51.100.2\n")
 	stage := &Stage{Paths: Paths{FeedDir: link}, Fetcher: &feedfetch.Fetcher{Policy: feedfetch.Policy{LocalDirs: []string{sourceDir}}}}
 
-	got := stage.Run(context.Background(), Feed{ID: "ipv4:feed_v4", Kind: "ipv4", Name: "feed_v4", State: "enabled",
+	got := run(stage, Feed{ID: "ipv4:feed_v4", Kind: "ipv4", Name: "feed_v4", State: "enabled",
 		Format: "auto", Source: "file://" + source}, "download")
 	if got.Disposition != "failed" || got.Stage != "settings" || got.Reason != "feed_directory_unavailable" {
 		t.Fatalf("run through a linked feed folder = %+v; want failed/settings/feed_directory_unavailable", got)
@@ -138,7 +138,7 @@ func killChild(root string) {
 	}
 	stage, feed := killStage(root)
 	feed.PostScript = "post.sh"
-	stage.Run(context.Background(), feed, "none")
+	run(stage, feed, "none")
 	os.Exit(2) // the boundary was never reached
 }
 
@@ -159,7 +159,7 @@ func TestKillBetweenPostScriptAndRestoreIsRecovered(t *testing.T) {
 	stage, feed := killStage(root)
 	source := filepath.Join(root, "db", "feed.txt")
 	writeFile(t, source, "198.51.100.1\n")
-	if r := stage.Run(context.Background(), feed, "none"); r.Disposition != "changed" {
+	if r := run(stage, feed, "none"); r.Disposition != "changed" {
 		t.Fatalf("the baseline run = %+v", r)
 	}
 	writeFile(t, source, "198.51.100.2\n")
@@ -224,7 +224,7 @@ func TestKillBetweenPostScriptAndRestoreIsRecovered(t *testing.T) {
 		}
 	}
 
-	if r := stage.Run(context.Background(), feed, "none"); r.Disposition != "changed" {
+	if r := run(stage, feed, "none"); r.Disposition != "changed" {
 		t.Fatalf("the run after recovery = %+v, want the change published", r)
 	}
 	if got := readFile(t, filepath.Join(root, "orig", "Feed_v4.parsed.ip")); got != "198.51.100.2\n" {

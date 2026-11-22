@@ -1,7 +1,6 @@
 package feedstage
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,7 +27,7 @@ func TestFailureAfterNormalizeLeavesNoStaleReuse(t *testing.T) {
 	feed := Feed{ID: "ipv4:Feed_v4", Kind: "ipv4", Name: "Feed_v4", State: "enabled", Format: "auto", Source: "file://" + source}
 	orig, parsed := filepath.Join(root, "orig", "Feed_v4.orig"), filepath.Join(root, "orig", "Feed_v4.parsed.ip")
 	writeFile(t, source, "198.51.100.1\n")
-	if r := stage.Run(context.Background(), feed, "none"); r.Disposition != "changed" {
+	if r := run(stage, feed, "none"); r.Disposition != "changed" {
 		t.Fatalf("the baseline run = %+v", r)
 	}
 
@@ -47,7 +46,7 @@ func TestFailureAfterNormalizeLeavesNoStaleReuse(t *testing.T) {
 	}
 	scripted := feed
 	scripted.PostScript = "post.sh"
-	if r := stage.Run(context.Background(), scripted, "none"); r.Disposition != "failed" || r.Stage != "publish" {
+	if r := run(stage, scripted, "none"); r.Disposition != "failed" || r.Stage != "publish" {
 		t.Fatalf("the run whose publication fails = %+v, want failed at publish", r)
 	}
 	step = saved
@@ -59,7 +58,7 @@ func TestFailureAfterNormalizeLeavesNoStaleReuse(t *testing.T) {
 	}
 	writeFile(t, parsed, "198.51.100.1\n")
 
-	if r := stage.Run(context.Background(), feed, "none"); r.Disposition != "changed" {
+	if r := run(stage, feed, "none"); r.Disposition != "changed" {
 		t.Fatalf("the next run = %+v, want the change parsed, not the baseline's list reused", r)
 	}
 	if got := readFile(t, parsed); got != "198.51.100.2\n" {

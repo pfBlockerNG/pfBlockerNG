@@ -2,7 +2,6 @@ package feedstage
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -136,7 +135,7 @@ func TestCorpusMatchesTodaysFeedBlock(t *testing.T) {
 			}
 			if c.Baseline != nil {
 				writeFile(t, source, *c.Baseline)
-				if r := stage.Run(context.Background(), feed, "none"); r.Disposition != "changed" {
+				if r := run(stage, feed, "none"); r.Disposition != "changed" {
 					t.Fatalf("the baseline pass = %+v, want changed", r)
 				}
 			}
@@ -159,7 +158,7 @@ func TestCorpusMatchesTodaysFeedBlock(t *testing.T) {
 					feed.PostScript = name
 				}
 			}
-			r := stage.Run(context.Background(), feed, "none")
+			r := run(stage, feed, "none")
 			if got := logical(t, feedDir, c.Kind, feed.Name, r); !reflect.DeepEqual(got, c.Expect) {
 				t.Fatalf("%s\n got  %+v\n want %+v\n result %+v", c.Description, got, c.Expect, r)
 			}

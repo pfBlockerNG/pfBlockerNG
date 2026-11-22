@@ -50,6 +50,31 @@ func testFeed(kind, state, format, source string) Feed {
 	}
 }
 
+// detect is stage 6 for the tests: sub-slice 9d probes a transferred feed before the stage runs and hands Run its verdict.
+func detect(s *Stage, f Feed, force string) Change {
+	change := Change{Verdict: VerdictChanged, Force: force}
+	if force != "none" || s.validate(f, change) != "" || f.Custom || f.WhoisConvert || f.Format == "whois" || f.Format == "asn" {
+		return change
+	}
+	request, reason := s.request(f)
+	if reason != "" {
+		return change
+	}
+	probe := s.Fetcher.Probe(context.Background(), feedfetch.Feed{Dir: s.Paths.FeedDir, Name: f.Name}, request)
+	switch {
+	case !probe.OK || probe.Decision == feedfetch.Failed:
+		return Change{Verdict: VerdictFailed, Reason: probe.Reason, Force: force}
+	case probe.Decision == feedfetch.Unchanged:
+		change.Verdict = VerdictUnchanged
+	}
+	return change
+}
+
+// run is one feed of an Update: stage 6's verdict, then the stage.
+func run(s *Stage, f Feed, force string) Result {
+	return s.Run(context.Background(), f, detect(s, f, force))
+}
+
 func writeFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -86,7 +111,7 @@ func TestProbeReuseAndForceModes(t *testing.T) {
 	dir := stage.Paths.FeedDir
 	writeFile(t, filepath.Join(dir, "feed_v4.orig"), "203.0.113.2\n")
 
-	first := stage.Run(context.Background(), feed, "none")
+	first := run(stage, feed, "none")
 	if first.Disposition != "changed" || first.Entries != 1 || requests.Load() != 1 {
 		t.Fatalf("first probe+ingest = %+v after %d HTTP requests, want changed/one entry/one request", first, requests.Load())
 	}
@@ -100,10 +125,10 @@ func TestProbeReuseAndForceModes(t *testing.T) {
 		t.Fatalf("the result exposed a secret or URL: %s", raw)
 	}
 
-	if got := stage.Run(context.Background(), feed, "none"); got.Disposition != "unchanged" || requests.Load() != 2 || conditional.Load() != 1 {
+	if got := run(stage, feed, "none"); got.Disposition != "unchanged" || requests.Load() != 2 || conditional.Load() != 1 {
 		t.Fatalf("unchanged probe = %+v after %d requests (%d conditional), want one conditional request", got, requests.Load(), conditional.Load())
 	}
-	if got := stage.Run(context.Background(), feed, "parse"); got.Disposition != "reparsed" || requests.Load() != 2 {
+	if got := run(stage, feed, "parse"); got.Disposition != "reparsed" || requests.Load() != 2 {
 		t.Fatalf("parse force = %+v after %d HTTP requests, want reparsed without a request", got, requests.Load())
 	}
 	for suffix, body := range map[string]string{
@@ -111,7 +136,7 @@ func TestProbeReuseAndForceModes(t *testing.T) {
 	} {
 		writeFile(t, filepath.Join(dir, "feed_v4"+suffix), body)
 	}
-	if got := stage.Run(context.Background(), feed, "download"); got.Disposition != "changed" || requests.Load() != 3 || conditional.Load() != 1 {
+	if got := run(stage, feed, "download"); got.Disposition != "changed" || requests.Load() != 3 || conditional.Load() != 1 {
 		t.Fatalf("download force = %+v after %d requests (%d conditional), want one unconditional fetch", got, requests.Load(), conditional.Load())
 	}
 	for _, suffix := range []string{".probe", ".probe.etag", ".probe.lastmod", ".probe.size"} {
@@ -119,7 +144,7 @@ func TestProbeReuseAndForceModes(t *testing.T) {
 			t.Errorf("forced download left %s: %v", suffix, err)
 		}
 	}
-	if got := stage.Run(context.Background(), feed, "both"); got.Disposition != "changed" || requests.Load() != 4 || conditional.Load() != 1 {
+	if got := run(stage, feed, "both"); got.Disposition != "changed" || requests.Load() != 4 || conditional.Load() != 1 {
 		t.Fatalf("both force = %+v after %d requests (%d conditional), want one unconditional fetch", got, requests.Load(), conditional.Load())
 	}
 	if strings.Contains(updateLog.String(), secret) || strings.Contains(updateLog.String(), server.URL) {
@@ -139,7 +164,7 @@ func TestFailureKeepsLastGoodOriginalAndParsedArtifacts(t *testing.T) {
 	defer server.Close()
 	stage := testStage(t)
 	feed := testFeed("ipv4", "enabled", "auto", server.URL+"/feed")
-	if got := stage.Run(context.Background(), feed, "none"); got.Disposition != "changed" {
+	if got := run(stage, feed, "none"); got.Disposition != "changed" {
 		t.Fatalf("initial run = %+v", got)
 	}
 	orig := filepath.Join(stage.Paths.FeedDir, "feed_v4.orig")
@@ -147,7 +172,7 @@ func TestFailureKeepsLastGoodOriginalAndParsedArtifacts(t *testing.T) {
 	beforeOrig, beforeParsed := readFile(t, orig), readFile(t, parsed)
 
 	fail.Store(true)
-	if got := stage.Run(context.Background(), feed, "none"); got.Disposition != "failed" {
+	if got := run(stage, feed, "none"); got.Disposition != "failed" {
 		t.Fatalf("failed run = %+v", got)
 	}
 	if afterOrig, afterParsed := readFile(t, orig), readFile(t, parsed); afterOrig != beforeOrig || afterParsed != beforeParsed {
@@ -170,7 +195,7 @@ func TestProxyUnusableRefusesWithoutDialingAndKeepsLastGood(t *testing.T) {
 	writeFile(t, orig, "203.0.113.1\n")
 	writeFile(t, parsed, "203.0.113.1\n")
 	for _, force := range []string{"none", "download"} {
-		if got := stage.Run(context.Background(), feed, force); got.Disposition != "failed" || got.Reason != "proxy_unusable" {
+		if got := run(stage, feed, force); got.Disposition != "failed" || got.Reason != "proxy_unusable" {
 			t.Fatalf("run(%q) with an unusable proxy = %+v; want failed/proxy_unusable", force, got)
 		}
 	}
@@ -189,7 +214,7 @@ func TestFailureReasonDoesNotExposeLocalPaths(t *testing.T) {
 	source := "file://" + filepath.Join(dir, "missing-feed")
 	stage := testStage(t)
 	stage.Fetcher.Policy.LocalDirs = []string{dir}
-	got := stage.Run(context.Background(), testFeed("ipv4", "enabled", "auto", source), "none")
+	got := run(stage, testFeed("ipv4", "enabled", "auto", source), "none")
 	if got.Disposition != "failed" {
 		t.Fatalf("run for a missing local feed = %+v", got)
 	}
@@ -212,7 +237,7 @@ func TestPropagatesSafeFetcherFailureReasons(t *testing.T) {
 	for _, tc := range []struct{ force, stage string }{{"none", "probe"}, {"download", "fetch"}} {
 		var updateLog strings.Builder
 		stage.Log = &updateLog
-		got := stage.Run(context.Background(), feed, tc.force)
+		got := run(stage, feed, tc.force)
 		if got.Disposition != "failed" || got.Stage != tc.stage || got.Reason != "404 Not Found" {
 			t.Fatalf("run(%q) failure = %+v; want feedfetch's safe status reason at stage %s", tc.force, got, tc.stage)
 		}
@@ -250,7 +275,7 @@ func TestHoldsDisabledBaselineAndWithoutBaseline(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if got := stage.Run(context.Background(), feed, "none"); got.Disposition != tc.want {
+			if got := stage.Run(context.Background(), feed, Change{Verdict: VerdictUnchanged, Force: "none"}); got.Disposition != tc.want {
 				t.Fatalf("run for %s = %+v; want %s", tc.name, got, tc.want)
 			}
 		})
@@ -269,7 +294,7 @@ func TestParseWithoutBaselineIngestsThenParses(t *testing.T) {
 	}))
 	defer server.Close()
 	stage := testStage(t)
-	got := stage.Run(context.Background(), testFeed("ipv4", "enabled", "auto", server.URL+"/feed"), "parse")
+	got := run(stage, testFeed("ipv4", "enabled", "auto", server.URL+"/feed"), "parse")
 	if got.Disposition != "changed" || got.Stage != "parse" || !got.SourceChanged || got.Entries != 1 {
 		t.Fatalf("run(parse) without a baseline = %+v; want a fetched and parsed changed feed", got)
 	}
@@ -296,7 +321,7 @@ func TestDNSBLPublishesBothEmptyFamilySignalsAndRetainsThemOnFailure(t *testing.
 	stage := testStage(t)
 	stage.Config.DNSBLIP = true
 	feed := testFeed("dnsbl", "enabled", "auto", server.URL+"/feed")
-	result := stage.Run(context.Background(), feed, "none")
+	result := run(stage, feed, "none")
 	if result.Disposition != "changed" || result.DNSBLRows != 1 || result.IPv4Count != 0 || result.IPv6Count != 0 {
 		t.Fatalf("DNSBL result = %+v, want one row and explicit empty IP families", result)
 	}
@@ -309,7 +334,7 @@ func TestDNSBLPublishesBothEmptyFamilySignalsAndRetainsThemOnFailure(t *testing.
 		}
 	}
 	fail.Store(true)
-	if got := stage.Run(context.Background(), feed, "none"); got.Disposition != "failed" {
+	if got := run(stage, feed, "none"); got.Disposition != "failed" {
 		t.Fatalf("failed DNSBL run = %+v", got)
 	}
 	for _, name := range names {
@@ -327,7 +352,7 @@ func TestWhoisKeepsPartialResolutionAndReportsFailure(t *testing.T) {
 		}
 		return nil, errors.New("lookup failed")
 	}
-	got := stage.Run(context.Background(), testFeed("ipv4", "enabled", "whois", "one.example,bad.example"), "none")
+	got := run(stage, testFeed("ipv4", "enabled", "whois", "one.example,bad.example"), "none")
 	if got.Disposition != "failed" || got.Stage != "whois" || got.Reason != "whois_partial" || got.Entries != 1 {
 		t.Fatalf("partial WHOIS result = %+v, want one kept entry and a whois-stage failure", got)
 	}
@@ -341,7 +366,7 @@ func TestWhoisKeepsPartialResolutionAndReportsFailure(t *testing.T) {
 
 func TestCustomListsParseWithoutTransfer(t *testing.T) {
 	ip := testStage(t)
-	got := ip.Run(context.Background(), Feed{ID: "custom:ipv4:Test", Kind: "ipv4", Name: "Test_custom_v4", State: "enabled",
+	got := run(ip, Feed{ID: "custom:ipv4:Test", Kind: "ipv4", Name: "Test_custom_v4", State: "enabled",
 		Format: "auto", Custom: true, CustomText: "203.0.113.21\n"}, "none")
 	if got.Disposition != "changed" || got.Entries != 1 {
 		t.Fatalf("custom IP run = %+v", got)
@@ -350,7 +375,7 @@ func TestCustomListsParseWithoutTransfer(t *testing.T) {
 		t.Fatalf("custom IP list = %q", data)
 	}
 	dnsbl := testStage(t)
-	got = dnsbl.Run(context.Background(), Feed{ID: "custom:dnsbl:Test", Kind: "dnsbl", Name: "Test_custom", State: "enabled",
+	got = run(dnsbl, Feed{ID: "custom:dnsbl:Test", Kind: "dnsbl", Name: "Test_custom", State: "enabled",
 		Format: "auto", Custom: true, CustomText: "example.test\n"}, "none")
 	if got.Disposition != "changed" || got.DNSBLRows != 1 {
 		t.Fatalf("custom DNSBL run = %+v", got)
@@ -372,7 +397,7 @@ func TestRunsPreScriptAndKeepsOldArtifactsWhenItFails(t *testing.T) {
 	feed.PreScript = "rewrite.sh"
 	orig := filepath.Join(stage.Paths.FeedDir, "feed_v4.orig")
 	writeFile(t, orig, "203.0.113.1\n")
-	if got := stage.Run(context.Background(), feed, "parse"); got.Disposition != "reparsed" || got.PreScriptFailed {
+	if got := run(stage, feed, "parse"); got.Disposition != "reparsed" || got.PreScriptFailed {
 		t.Fatalf("successful pre-script run = %+v", got)
 	}
 	if data := readFile(t, filepath.Join(stage.Paths.FeedDir, "feed_v4.parsed.ip")); data != "203.0.113.88\n" {
@@ -389,7 +414,7 @@ func TestRunsPreScriptAndKeepsOldArtifactsWhenItFails(t *testing.T) {
 	badParsed := filepath.Join(bad.Paths.FeedDir, "feed_v4.parsed.ip")
 	writeFile(t, badOrig, "203.0.113.5\n")
 	writeFile(t, badParsed, "203.0.113.6\n")
-	if got := bad.Run(context.Background(), feed, "parse"); got.Disposition != "failed" || !got.PreScriptFailed || got.Stage != "script" {
+	if got := run(bad, feed, "parse"); got.Disposition != "failed" || !got.PreScriptFailed || got.Stage != "script" {
 		t.Fatalf("missing pre-script run = %+v", got)
 	}
 	for path, want := range map[string]string{badOrig: "203.0.113.5\n", badParsed: "203.0.113.6\n"} {
@@ -437,7 +462,7 @@ func TestUnsetPathsAreErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stage := testStage(t)
 			stage.Paths = tc.paths
-			got := stage.Run(context.Background(), tc.feed, "download")
+			got := run(stage, tc.feed, "download")
 			if got.Disposition != "failed" || got.Stage != "settings" || got.Reason != tc.reason {
 				t.Fatalf("run = %+v; want a settings failure %s", got, tc.reason)
 			}
