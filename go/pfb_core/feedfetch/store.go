@@ -2,9 +2,12 @@ package feedfetch
 
 import (
 	"errors"
+	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
@@ -96,20 +99,24 @@ func writeValidators(feed Feed, etag string, lastMod time.Time) {
 	writeValidatorsAt(feed.path(".orig"), etag, lastMod)
 }
 
-// writeValidatorsAt is writeValidators beside any base: a changed probe keeps them beside its body (#3911).
+// writeValidatorsAt is writeValidators beside any base: a changed probe keeps them beside its body (#3911). Each file is
+// replaced by a rename, never written through: a run folder holds hard links of the published ones.
 func writeValidatorsAt(base, etag string, lastMod time.Time) {
 	if etag = strings.NewReplacer("\r", "", "\n", "").Replace(etag); etag != "" {
-		os.WriteFile(base+".etag", []byte(etag), 0o600)
+		writeSidecarAtomically(base+".etag", etag)
 	}
 	if !lastMod.IsZero() && lastMod.Unix() > 0 {
-		os.WriteFile(base+".lastmod", []byte(strconv.FormatInt(lastMod.Unix(), 10)), 0o600)
+		writeSidecarAtomically(base+".lastmod", strconv.FormatInt(lastMod.Unix(), 10))
 	}
 }
+
+// DigestSuffixes are the digest sidecars of a feed's published copy: xxh128, and the legacy MD5 a digest read falls back to.
+func DigestSuffixes() []string { return []string{".orig.xxhash128", ".orig.md5"} }
 
 // dropDigests removes the digest sidecars of the published copy, to be called before the copy is replaced: a digest that
 // outlived its copy would let a source holding the older bytes read as unchanged.
 func dropDigests(feed Feed) error {
-	for _, s := range [...]string{".orig.xxhash128", ".orig.md5"} {
+	for _, s := range DigestSuffixes() {
 		if err := os.Remove(feed.path(s)); err != nil && !os.IsNotExist(err) {
 			return errors.New("published digest could not be replaced")
 		}
@@ -119,10 +126,12 @@ func dropDigests(feed Feed) error {
 
 // finish is pfb_download_finalize_text() on the staged body, once its digest is taken: UTF-16/32 text transcoded to
 // UTF-8 (#946), then a missing trailing newline added (#1263), and the body synced, so that the published copy survives
-// a power loss whole, not as an empty file.
+// a power loss whole, not as an empty file. The newline goes in place when the body has one name only, which needs one byte
+// of space, and to a copy renamed over the body when it has more: a probe body staged by a rename may be a hard link of a
+// published file, which is never written through.
 func finish(body string) error {
 	transcode(body)
-	f, err := os.OpenFile(body, os.O_RDWR, 0)
+	f, err := os.Open(body)
 	if err != nil {
 		return errors.New("staged body could not be read")
 	}
@@ -130,7 +139,11 @@ func finish(body string) error {
 	var werr error
 	if info, err := f.Stat(); err == nil && info.Size() > 0 {
 		if _, err := f.ReadAt(last, info.Size()-1); err == nil && last[0] != '\n' {
-			_, werr = f.WriteAt([]byte("\n"), info.Size())
+			if hasOtherNames(info) {
+				werr = replaceByCopy(f, body, info.Mode().Perm(), []byte("\n"), time.Time{})
+			} else {
+				werr = appendNewline(body)
+			}
 		}
 	}
 	serr := f.Sync()
@@ -138,6 +151,48 @@ func finish(body string) error {
 		return errors.New("staged body could not be written")
 	}
 	return nil
+}
+
+// hasOtherNames reports whether the file info describes has a hard link besides the one it was reached by.
+func hasOtherNames(info os.FileInfo) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && st.Nlink > 1
+}
+
+func appendNewline(path string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString("\n")
+	return errors.Join(err, f.Close())
+}
+
+// replaceByCopy replaces path, open as in, by a synced copy of it with tail at its end and, unless mtime is zero, that
+// modification time: path may be a hard link of a published file, which is never written through.
+func replaceByCopy(in *os.File, path string, mode os.FileMode, tail []byte, mtime time.Time) error {
+	out, err := os.CreateTemp(filepath.Dir(path), ".pfbstage_")
+	if err != nil {
+		return err
+	}
+	_, err = in.Seek(0, io.SeekStart)
+	if err == nil {
+		_, err = io.Copy(out, in)
+	}
+	if err == nil {
+		_, err = out.Write(tail)
+	}
+	err = errors.Join(err, out.Chmod(mode), out.Sync(), out.Close())
+	if err == nil && !mtime.IsZero() {
+		err = os.Chtimes(out.Name(), mtime, mtime)
+	}
+	if err == nil {
+		err = os.Rename(out.Name(), path)
+	}
+	if err != nil {
+		os.Remove(out.Name())
+	}
+	return err
 }
 
 // publish makes body the published copy in one rename, with digest beside it: the xxh128 of the raw bytes the transfer
@@ -175,4 +230,25 @@ func localDecision(path string, feed Feed) Decision {
 		return Unchanged
 	}
 	return Changed
+}
+
+// retimeFile is retime; a test seam.
+var retimeFile = retime
+
+// retime gives path the modification time mtime: in place when the file has one name only, otherwise on a copy renamed
+// over it, as a hard link is never written through.
+func retime(path string, mtime time.Time) error {
+	in, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	if hasOtherNames(info) {
+		return replaceByCopy(in, path, info.Mode().Perm(), nil, mtime)
+	}
+	return os.Chtimes(path, mtime, mtime)
 }

@@ -217,6 +217,10 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		}
 		t.status = 200
 	} else {
+		// The transfer creates its body anew: an archive an earlier run kept there may be a hard link of a published file.
+		if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
+			return fail("download file could not be created")
+		}
 		t = f.fetch(ctx, src, req, staged, nil)
 	}
 	if t.reason != "" {
@@ -264,6 +268,19 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		defer os.Remove(et)
 		body = et
 	}
+	if fromProbe && src.ftp != nil && f.Proxy == nil {
+		// The body came from the probe's, which may be a hard link of a published file. It is retimed before anything
+		// is published, so a failure leaves the published copy and its digests as they were. Its validators are dropped, as on
+		// any failed ingest (#2820).
+		if lastMod := readFTPMetadataAt(probe).lastMod; !lastMod.IsZero() {
+			if err := retimeFile(body, lastMod); err != nil {
+				for _, v := range [...]string{".etag", ".lastmod", ".size"} {
+					os.Remove(probe + v)
+				}
+				return Result{Status: t.status, Reason: "published copy could not be retimed"}
+			}
+		}
+	}
 	if err := publish(feed, body, sum, t.lastMod); err != nil {
 		return Result{Status: t.status, Reason: err.Error()}
 	}
@@ -273,11 +290,6 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		for _, v := range [...]string{".etag", ".lastmod", ".size"} {
 			os.Remove(published + v)
 			os.Rename(probe+v, published+v)
-		}
-		if src.ftp != nil && f.Proxy == nil {
-			if lastMod := readFTPMetadata(feed).lastMod; !lastMod.IsZero() {
-				os.Chtimes(published, lastMod, lastMod)
-			}
 		}
 	} else if src.ftp != nil && f.Proxy == nil {
 		writeFTPMetadataAt(published, ftpMetadataFor(t))

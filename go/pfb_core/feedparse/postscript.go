@@ -38,10 +38,11 @@ type PostScriptResult struct {
 }
 
 // restorePoint is one RunIP run's restore point; done once it is back over the download or gone, so that no later Restore
-// acts on what another run staged at that name.
+// acts on what another run staged at that name. err is why a restore point that is gone never came back.
 type restorePoint struct {
 	orig, path string
 	done       bool
+	err        error
 }
 
 // RunDNSBL is the DNSBL post-script: orig is copied to staged, the script runs on staged with the argument dnsbl, and
@@ -90,35 +91,56 @@ func (p PostScript) RunIP(ctx context.Context, orig, restore, vtype string) Post
 	return r
 }
 
-// Restore renames RunIP's restore point back over the download; it does nothing for another result, and nothing once the
-// restore point is back or gone, on this result or any copy of it. A restore point the script replaced with anything but a
-// regular file is removed instead, so that no symlink or FIFO takes the download's place. A rename that fails (the script
-// left a folder at orig) leaves both as they are, and a later Restore tries again.
-func (r PostScriptResult) Restore() {
+// Restore renames RunIP's restore point back over the download; it does nothing for another result, and nothing more once
+// the restore point is back or gone, on this result or any copy of it. A restore point the script replaced with anything but
+// a regular file is removed instead, so that no symlink or FIFO takes the download's place. A rename that fails (the script
+// left a folder at orig) leaves both as they are, and a later Restore tries again. The error says the download is not back:
+// the rename failed, or the restore point is gone or was no regular file, so orig may hold the script's output.
+func (r PostScriptResult) Restore() error {
 	rp := r.restore
-	if rp == nil || rp.done {
-		return
+	if rp == nil {
+		return nil
+	}
+	if rp.done {
+		return rp.err
 	}
 	info, err := os.Lstat(rp.path)
 	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		rp.done, rp.err = true, errors.New("the post-script's restore point is gone")
+		return rp.err
 	case err != nil:
-		rp.done = errors.Is(err, fs.ErrNotExist)
+		return err
 	case info.Mode().IsRegular():
-		rp.done = os.Rename(rp.path, rp.orig) == nil
-	default:
-		rp.done = os.Remove(rp.path) == nil
+		err = os.Rename(rp.path, rp.orig)
+		rp.done = err == nil
+		return err
 	}
+	if err = os.Remove(rp.path); err != nil {
+		return err
+	}
+	rp.done, rp.err = true, errors.New("the post-script's restore point is no regular file")
+	return rp.err
 }
 
-// vet is pfb_resolve_list_script() on Name, run at every run: its base name, as a regular file whose real path sits directly
-// in one of Dirs (a symlink may only point inside its folder); the absolute in-folder path, which exec follows: a name
-// without a slash would be looked up on PATH. A set name that fails is logged; "0" is no name, as PHP's empty() reads it.
+// vet is ResolveListScript on Name and Dirs, run at every run; a set name that fails is logged.
 func (p PostScript) vet() (string, bool) {
-	if p.Name == "" || p.Name == "0" {
+	if path, ok := ResolveListScript(p.Name, p.Dirs); ok || p.Name == "" || p.Name == "0" {
+		return path, ok
+	}
+	p.sinks().Line(true, "\n[ %s ] post-script '%s' is not a file in the list-script folders; skipping\n", p.Header, p.Name)
+	return "", false
+}
+
+// ResolveListScript is pfb_resolve_list_script(): name's base name, as a regular file whose real path sits directly in one of
+// dirs, searched in order (a symlink may only point inside its folder). It returns the absolute in-folder path, which exec
+// follows: a name without a slash would be looked up on PATH. "" and "0" are no name, as PHP's empty() reads them.
+func ResolveListScript(name string, dirs []string) (string, bool) {
+	if name == "" || name == "0" {
 		return "", false
 	}
-	name := filepath.Base(p.Name)
-	for _, dir := range p.Dirs {
+	name = filepath.Base(name)
+	for _, dir := range dirs {
 		if dir == "" { // an unset folder, which Abs would make the working folder
 			continue
 		}
@@ -139,7 +161,6 @@ func (p PostScript) vet() (string, bool) {
 			return path, true
 		}
 	}
-	p.sinks().Line(true, "\n[ %s ] post-script '%s' is not a file in the list-script folders; skipping\n", p.Header, p.Name)
 	return "", false
 }
 
