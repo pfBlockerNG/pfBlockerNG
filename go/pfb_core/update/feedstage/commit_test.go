@@ -69,7 +69,7 @@ func TestRunReportsACommitThatIsNotDurable(t *testing.T) {
 			if got := publishedState(t, dir); !reflect.DeepEqual(got, baseline) {
 				t.Errorf("%s: the feed folder is\n %q\nwant the baseline\n %q", tc.name, got, baseline)
 			}
-			journalLeftovers(t, dir, tc.name+", after the failed run")
+			runLeftovers(t, dir, tc.name+", after the failed run")
 		} else if !committed(dir) {
 			t.Errorf("%s: the failed run left no committed run folder for Recover to finish", tc.name)
 		}
@@ -84,7 +84,7 @@ func TestRunReportsACommitThatIsNotDurable(t *testing.T) {
 				t.Errorf("%s: after Recover the list is %q, want the one of the new download", tc.name, got)
 			}
 		}
-		journalLeftovers(t, dir, tc.name+", after Recover")
+		runLeftovers(t, dir, tc.name+", after Recover")
 		if r := run(stage, feed, "none"); r.Disposition == "failed" {
 			t.Errorf("%s: the next run = %+v", tc.name, r)
 		}

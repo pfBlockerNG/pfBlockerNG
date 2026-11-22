@@ -40,5 +40,5 @@ func TestInPlacePostScriptNeverReachesTheDownload(t *testing.T) {
 	if body := readFile(t, orig); body != "203.0.113.1\n" {
 		t.Fatalf("after the failed run the download is %q, want the download before the run", body)
 	}
-	journalLeftovers(t, dir, "after the failed run")
+	runLeftovers(t, dir, "after the failed run")
 }

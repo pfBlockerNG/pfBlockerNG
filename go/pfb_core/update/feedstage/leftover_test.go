@@ -28,7 +28,7 @@ func TestRunFinishesOrDeletesALeftoverRunFolder(t *testing.T) {
 		if got := readFile(t, filepath.Join(dir, "feed_v4.parsed.ip")); got != "203.0.113.50\n" {
 			t.Errorf("the list is %q, want the one the committed run folder publishes", got)
 		}
-		journalLeftovers(t, dir, "after the Hold run")
+		runLeftovers(t, dir, "after the Hold run")
 	})
 	t.Run("uncommitted", func(t *testing.T) {
 		stage, feed, source := localStage(t)
@@ -41,7 +41,7 @@ func TestRunFinishesOrDeletesALeftoverRunFolder(t *testing.T) {
 		if got := readFile(t, filepath.Join(dir, "feed_v4.parsed.ip")); got != "198.51.100.2\n" {
 			t.Errorf("the list is %q, want the run's own", got)
 		}
-		journalLeftovers(t, dir, "after the run")
+		runLeftovers(t, dir, "after the run")
 	})
 }
 
@@ -79,7 +79,7 @@ func TestRunFailsOnARunFolderItCannotUse(t *testing.T) {
 		if r.Disposition != "failed" || r.Stage != "fetch" || r.Reason != "run_folder_failed" {
 			t.Errorf("the run = %+v, want failed at fetch with run_folder_failed", r)
 		}
-		journalLeftovers(t, stage.Paths.FeedDir, "after the failed run")
+		runLeftovers(t, stage.Paths.FeedDir, "after the failed run")
 	})
 }
 
@@ -112,5 +112,5 @@ func TestAFailedRetireOfTheValidatorsIsReported(t *testing.T) {
 	if got := readFile(t, etag); got != `"old"` {
 		t.Errorf("the ETag is %q, want it standing after the failed commit", got)
 	}
-	journalLeftovers(t, stage.Paths.FeedDir, "after the failed run")
+	runLeftovers(t, stage.Paths.FeedDir, "after the failed run")
 }

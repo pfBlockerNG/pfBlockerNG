@@ -316,8 +316,8 @@ func committed(dir string) bool {
 	return len(found) > 0
 }
 
-// journalLeftovers fails for any run folder, staged file or temporary in the feed folder.
-func journalLeftovers(t *testing.T, dir, when string) {
+// runLeftovers fails for any run folder, staged file or temporary left in the feed folder.
+func runLeftovers(t *testing.T, dir, when string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -334,7 +334,7 @@ func journalLeftovers(t *testing.T, dir, when string) {
 // at the old content, each on its own copy, through stage 6: the published lists must be what that source parses to.
 func followUps(t *testing.T, root string, sc matrixScenario, oracle map[string]map[string]string, where string) {
 	t.Helper()
-	journalLeftovers(t, filepath.Join(root, "orig"), where+", after Recover")
+	runLeftovers(t, filepath.Join(root, "orig"), where+", after Recover")
 	old, changed := sc.contents()
 	for _, content := range []string{changed, old} {
 		copied := copyRoot(t, root)
@@ -354,7 +354,7 @@ func followUps(t *testing.T, root string, sc matrixScenario, oracle map[string]m
 					r.Disposition, name, got[name], want[name], before)
 			}
 		}
-		journalLeftovers(t, dir, where+", after the next run")
+		runLeftovers(t, dir, where+", after the next run")
 	}
 }
 

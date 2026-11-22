@@ -48,7 +48,7 @@ func TestACommitWhoseFolderSyncFailsIsFinishedForward(t *testing.T) {
 	if orig != "198.51.100.2\n" || list != "198.51.100.2\n" {
 		t.Errorf("after Recover the download is %q and the list %q, want both of the new source", orig, list)
 	}
-	journalLeftovers(t, dir, "after Recover")
+	runLeftovers(t, dir, "after Recover")
 }
 
 // Scenario: the feed folder cannot be synced once the run folder is made.

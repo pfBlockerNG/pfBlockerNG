@@ -38,5 +38,5 @@ func TestCustomListFailsWhenTheTransferDigestStays(t *testing.T) {
 			t.Errorf("after the failed run %s = %q, want the last %q", filepath.Base(path), body, want)
 		}
 	}
-	journalLeftovers(t, dir, "after the failed run")
+	runLeftovers(t, dir, "after the failed run")
 }

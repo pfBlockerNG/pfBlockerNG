@@ -124,7 +124,7 @@ func TestKillAfterAFailedRunIsDiscardedLeavesNoStaleReuse(t *testing.T) {
 	if err := Recover(dir); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
-	journalLeftovers(t, dir, "after Recover")
+	runLeftovers(t, dir, "after Recover")
 	if err := os.Remove(filepath.Join(root, "scripts", "pre.sh")); err != nil {
 		t.Fatal(err)
 	}

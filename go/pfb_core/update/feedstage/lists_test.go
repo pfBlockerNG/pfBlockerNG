@@ -68,5 +68,5 @@ func TestAListWithoutItsRecordIsNeverPublished(t *testing.T) {
 			t.Errorf("%s = %q, want the baseline", name, got)
 		}
 	}
-	journalLeftovers(t, dir, "after the failed run")
+	runLeftovers(t, dir, "after the failed run")
 }

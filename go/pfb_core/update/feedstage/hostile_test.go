@@ -80,7 +80,7 @@ func TestKillAfterThePostScriptIsRecovered(t *testing.T) {
 	if got := readFile(t, filepath.Join(dir, "Feed_v4.parsed.ip")); got != "198.51.100.1\n" {
 		t.Fatalf("after recovery the list is %q, want the baseline's", got)
 	}
-	journalLeftovers(t, dir, "after recovery")
+	runLeftovers(t, dir, "after recovery")
 
 	stage, feed := killStage(root)
 	if r := run(stage, feed, "none"); r.Disposition != "changed" {
