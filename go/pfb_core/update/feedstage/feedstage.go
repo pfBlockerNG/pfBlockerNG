@@ -50,7 +50,7 @@ type Feed struct {
 	Kind   string // ipv4, ipv6 or dnsbl
 	Name   string // the file stem in the feed folder: [A-Za-z0-9_]+
 	State  string // enabled, disabled, hold or flex
-	Format string // auto, regex, geoip, whois, asn or rsync
+	Format string // auto, regex, geoip, whois, asn or rsync; any other value is auto, as today
 	Source string // the URL; a geoip feed's country code; a whois or asn feed's list
 
 	Username, Password    string     // the source's own credentials
@@ -128,6 +128,11 @@ func failedFeed(id, stage, reason string) Result {
 // Run runs one feed with stage 6's verdict and the Update's force.
 func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) {
 	result = Result{ID: f.ID}
+	// Today's per-feed blocks and pfb_download() compare the format with these names case-sensitively, and any other value,
+	// such as the category editor's "Auto" or an empty one, falls through to auto.
+	if !slices.Contains([]string{"auto", "regex", "geoip", "whois", "asn", "rsync"}, f.Format) {
+		f.Format = "auto"
+	}
 	if reason := s.validate(f, change); reason != "" {
 		return failedFeed(f.ID, "settings", reason)
 	}
@@ -293,8 +298,6 @@ func (s *Stage) validate(f Feed, change Change) string {
 		return "feed_kind_invalid"
 	case !slices.Contains([]string{"enabled", "disabled", "hold", "flex"}, f.State):
 		return "feed_state_invalid"
-	case !slices.Contains([]string{"auto", "regex", "geoip", "whois", "asn", "rsync"}, f.Format):
-		return "feed_format_invalid"
 	case s.Fetcher == nil:
 		return "fetcher_missing"
 	case s.Paths.FeedDir == "":

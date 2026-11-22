@@ -14,20 +14,24 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
 )
 
-// The names a run stages beside a feed's files. Recover knows each of them: a staged output (stagePrefix), the entries and
-// marker of a journal set (see journal), the pre-script's copy "<name>.pre", the DNSBL post-script's copy "<name>.post", the
-// IP post-script's restore point "<name>.orig.post", and the temporaries of those copies and of the normalization.
+// The names a run stages beside a feed's files. Recover knows each of them: a staged output (stagePrefix, and feedfetch's
+// fetchStagePrefix), the entries and marker of a journal set (see journal), the pre-script's copy "<name>.pre", the DNSBL
+// post-script's copy "<name>.post", the IP post-script's restore point "<name>.orig.post", and the temporaries of those
+// copies, of the normalization and of the transfer.
 const (
-	stagePrefix  = ".pfbstage-"
-	backupMark   = ".pfbbackup-"
-	absentMark   = ".pfbabsent-"
-	commitMark   = ".pfbcommit-"
-	restorePoint = ".orig.post"
+	stagePrefix      = ".pfbstage-"
+	fetchStagePrefix = ".pfbstage_" // feedfetch's extraction, transcoding and ET split, staged in the feed folder
+	backupMark       = ".pfbbackup-"
+	absentMark       = ".pfbabsent-"
+	commitMark       = ".pfbcommit-"
+	restorePoint     = ".orig.post"
 )
 
 // recoveredSuffixes are the copies and temporaries a KILL can leave behind a feed stem: feedparse's script copies, their
-// copyFile temporaries, and NormalizeFile's.
-var recoveredSuffixes = []string{".pre", ".post", ".pre.tmp", ".post.tmp", ".orig.post.tmp", ".norm.tmp"}
+// copyFile temporaries, and NormalizeFile's; feedfetch's whois copy (writeAtomic) and FTP validators
+// (writeSidecarAtomically).
+var recoveredSuffixes = []string{".pre", ".post", ".pre.tmp", ".post.tmp", ".orig.post.tmp", ".norm.tmp", ".orig.tmp",
+	".orig.lastmod.part", ".orig.size.part"}
 
 // parsedSource names the record of the normalized input a feed's published lists stand for, beside them as a digest sidecar.
 const parsedSource = ".parsed.src"
@@ -476,7 +480,7 @@ func Recover(dir string) error {
 	errs = append(errs, finishSets(dir, entries, ""))
 	for _, e := range entries {
 		name := e.Name()
-		recovered := strings.HasPrefix(name, stagePrefix)
+		recovered := strings.HasPrefix(name, stagePrefix) || strings.HasPrefix(name, fetchStagePrefix)
 		for _, suffix := range recoveredSuffixes {
 			stem, ok := strings.CutSuffix(name, suffix)
 			recovered = recovered || ok && validFeedWord(stem)
