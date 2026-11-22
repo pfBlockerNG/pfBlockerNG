@@ -351,12 +351,30 @@ func TestTheSnapshotIsTakenOnlyAfterTheOwnershipHandshake(t *testing.T) {
 	case <-time.After(stuck):
 		t.Fatalf("STUCK: Run did not return within %v", stuck)
 	}
-	f, err := os.OpenFile(proceed, os.O_WRONLY, 0) // lets the adapter answer
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
+	releaseFIFO(t, proceed) // lets the adapter answer
 	waitUnlocked(t, log.Name()+".lock")
+}
+
+// releaseFIFO opens path for writing, which returns once a reader holds it, and fails the test when no reader comes
+// (an adapter that died or timed out) instead of blocking until the suite's timeout.
+func releaseFIFO(t *testing.T, path string) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		f, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err == nil {
+			f.Close()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(stuck):
+		t.Fatalf("STUCK: nothing read %s within %v", path, stuck)
+	}
 }
 
 // WHEN the settings adapter fails with a line break, an escape sequence and kilobytes of text on its stderr THEN the

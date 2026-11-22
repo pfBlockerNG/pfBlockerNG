@@ -41,11 +41,7 @@ func TestTheStatusOfARunningLoopUpdateHasNoLoopMember(t *testing.T) {
 		t.Fatalf("STUCK: the adapter did not start within %v", stuck)
 	}
 	members := fileMembers(t, log.Name()+".status")
-	if f, err := os.OpenFile(proceed, os.O_WRONLY, 0); err == nil { // lets the adapter answer
-		f.Close()
-	} else {
-		t.Fatal(err)
-	}
+	releaseFIFO(t, proceed) // lets the adapter answer
 	if err := <-ran; err != nil {
 		t.Errorf("Run = %v, want success", err)
 	}
