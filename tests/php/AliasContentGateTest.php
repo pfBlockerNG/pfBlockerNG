@@ -459,6 +459,63 @@ final class AliasContentGateTest extends TestCase
 		$this->assertFalse(pfb_write_canonical_alias($path, ['192.0.2.1']));
 		$this->assertDirectoryExists($path);
 		$this->assertSame(['pfB_Blocked_v4.txt'], array_values(array_diff(scandir($this->tmp), ['.', '..'])));
+		rmdir($path);
+	}
+
+	/**
+	 * Run $call in a forked child whose file writes stop after $bytes (RLIMIT_FSIZE, SIGXFSZ ignored), as a full disk cuts
+	 * them short; the child dies without running shutdown handlers. @return string what $call returned (var_export)
+	 */
+	private static function cutShort(int $bytes, callable $call): string
+	{
+		$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+		$pid = pcntl_fork();
+		if ($pid === -1) {
+			throw new RuntimeException('fork failed');
+		}
+		if ($pid === 0) {
+			pcntl_alarm(30);
+			fclose($pair[0]);
+			pcntl_signal(SIGXFSZ, SIG_IGN);
+			posix_setrlimit(POSIX_RLIMIT_FSIZE, $bytes, $bytes);
+			fwrite($pair[1], var_export($call(), TRUE));
+			posix_kill(posix_getpid(), SIGKILL);
+		}
+		fclose($pair[1]);
+		$out = (string) stream_get_contents($pair[0]);
+		pcntl_waitpid($pid, $status);
+		return $out;
+	}
+
+	/** Issue #4191: a write a full disk cuts short publishes nothing: the previous mirror stays whole and nothing is left staged. */
+	public function testWriteCanonicalAliasCutShortKeepsThePreviousMirror(): void
+	{
+		if (!function_exists('pcntl_fork') || !function_exists('posix_setrlimit')) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		$path = "{$this->tmp}/pfB_Full_v4.txt";
+		file_put_contents($path, "10.0.0.1\n");
+		$set = [];
+		for ($i = 0; $i < 2000; $i++) {
+			$set[] = '192.0.' . intdiv($i, 250) . '.' . ($i % 250);
+		}
+
+		$this->assertSame('false', self::cutShort(4096, static fn (): bool => pfb_write_canonical_alias($path, $set)));
+
+		$this->assertSame("10.0.0.1\n", file_get_contents($path));
+		$this->assertSame(['pfB_Full_v4.txt'], array_values(array_diff(scandir($this->tmp), ['.', '..'])));
+	}
+
+	/** Issue #4191: a copy that fails (its source gone) publishes nothing: the previous mirror stays whole and nothing is left staged. */
+	public function testAliasMirrorCopyThatFailsKeepsThePreviousMirror(): void
+	{
+		$path = "{$this->tmp}/pfB_Asia_v4.txt";
+		file_put_contents($path, "10.0.0.1\n");
+
+		$this->assertFalse(pfb_alias_mirror_copy("{$this->tmp}/missing.txt", $path));
+
+		$this->assertSame("10.0.0.1\n", file_get_contents($path));
+		$this->assertSame(['pfB_Asia_v4.txt'], array_values(array_diff(scandir($this->tmp), ['.', '..'])));
 	}
 
 	/** Issue #4191: a GeoIP list copied in as an alias mirror replaces it whole, as the canonical writer does. */
@@ -482,7 +539,7 @@ final class AliasContentGateTest extends TestCase
 	public function testTheApplyCopiesNoListIntoTheAliasFolderInPlace(): void
 	{
 		$apply = (string) php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
-		$this->assertSame(0, preg_match_all('/\bcopy\s*\([^;]*aliasdir/', $apply));
+		$this->assertSame(0, preg_match_all('/\b(?:copy|file_put_contents|fopen)\s*\([^;]*aliasdir/', $apply));
 	}
 
 	/**
