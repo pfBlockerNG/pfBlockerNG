@@ -24,16 +24,23 @@ func TestRetryCappedPendingFeedIsNotBuiltLater(t *testing.T) {
 	}
 }
 
-// A pending feed whose transfer request the stage refuses (today's "Invalid URL" and the like) can never be built
-// without a settings change: it is dropped from pending, checked or not.
+// A pending feed whose source the stage refuses (feed_source_invalid: today's "Invalid URL" and the like) can never be
+// built without a settings change: it is dropped from pending, checked or not, and an apply does not run it. A refusal of
+// the stage's own configuration (no rsync program, no GeoIP folder) can clear without one: the feed stays pending.
 func TestRequestRefusedPendingFeedIsDropped(t *testing.T) {
 	for _, in := range []Input{{Trigger: "apply"}, {Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}} {
-		f := newFixture(t, "rsync://feed.example/module/list")
-		f.row()["format"] = "rsync" // the stage has no rsync program: refused
+		f := newFixture(t, "../US")
+		f.row()["format"] = "geoip" // a country code that is no word: the stage refuses the source
 		in.PendingFeeds = []string{"ipv4:A_v4"}
-		if plan := build(t, f.input(in)); len(plan.PendingFeeds) != 0 {
-			t.Errorf("%s: pending %v, want the refused feed dropped", in.Trigger, plan.PendingFeeds)
+		if plan := build(t, f.input(in)); len(plan.PendingFeeds) != 0 || in.Trigger == "apply" && len(plan.Items) != 0 {
+			t.Errorf("%s: plan %+v, want the refused feed dropped and not run", in.Trigger, plan)
 		}
+	}
+	f := newFixture(t, "rsync://feed.example/module/list")
+	f.row()["format"] = "rsync" // the stage has no rsync program
+	plan := build(t, f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}, PendingFeeds: []string{"ipv4:A_v4"}}))
+	if len(plan.PendingFeeds) != 1 {
+		t.Fatalf("plan %+v, want the feed kept pending while the stage cannot transfer it", plan)
 	}
 }
 
