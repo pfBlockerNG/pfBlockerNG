@@ -15989,10 +15989,11 @@ function pfb_canonical_alias_set(string $member_content): array {
  *
  * @param string   $path          Absolute path to the aliasdir .txt file.
  * @param string[] $canonical_set Sorted, unique entries (output of pfb_canonical_alias_set).
+ * @return bool Whether the whole file was written.
  */
-function pfb_write_canonical_alias(string $path, array $canonical_set): void {
+function pfb_write_canonical_alias(string $path, array $canonical_set): bool {
 	$content = empty($canonical_set) ? '' : implode("\n", $canonical_set) . "\n";
-	@file_put_contents($path, $content, LOCK_EX);
+	return @file_put_contents($path, $content, LOCK_EX) === strlen($content);
 }
 
 /**

@@ -269,6 +269,14 @@ SH
 		file_put_contents($this->rulesPath, "{$op}|{$entry}|{$rc}|{$err}\n", FILE_APPEND);
 	}
 
+	/** Seed table's aliasdir mirror with $content. @return string its path */
+	private function seedMirror(string $table, string $content): string
+	{
+		$mirror = "{$GLOBALS['pfb']['aliasdir']}/{$table}.txt";
+		$this->assertNotFalse(file_put_contents($mirror, $content), 'test setup: failed to seed the mirror');
+		return $mirror;
+	}
+
 	private function withFeedPassContention(callable $action): mixed
 	{
 		$holder = fopen("{$GLOBALS['pfb']['dbdir']}/pfb_feed_pass.lock", 'c');
@@ -804,15 +812,13 @@ SH
 	{
 		$this->scriptFailure('add', '198.51.100.30');
 		$clists = ['ipwhitelist4' => ['pfB_Whitelist_v4' => ['base64_idx' => 0, 'data' => []]]];
+		$mirror = $this->seedMirror('pfB_Whitelist_v4', "198.51.100.1\n");
 
 		$result = pfb_alerts_ip_action('ip_white', '198.51.100.30', 'pfB_Whitelist_v4', '', $clists, []);
 
 		$this->assertStringContainsString('failed', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
-		$this->assertFileDoesNotExist(
-			"{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt",
-			'a failed add must NOT append to the aliasdir .txt file'
-		);
+		$this->assertSame("198.51.100.1\n", file_get_contents($mirror), 'a failed add must NOT touch the aliasdir mirror');
 		$this->assertArrayNotHasKey(
 			'installedpackages',
 			$GLOBALS['config'] ?? [],
@@ -833,6 +839,7 @@ SH
 		$table = 'pfB_Whitelist_v4';
 		$clists = ['ipwhitelist4' => [$table => ['base64_idx' => 0, 'data' => []]]];
 
+		$mirror = $this->seedMirror($table, "198.51.100.1\n");
 		$result = $this->withFeedPassLockError(
 			static fn (): array => pfb_alerts_ip_action('ip_white', '198.51.100.30', $table, '', $clists, [])
 		);
@@ -841,7 +848,7 @@ SH
 		$this->assertStringNotContainsString('mid-update', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
 		$this->assertFileDoesNotExist($this->logPath, 'an acquisition error must not call pfctl');
-		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['aliasdir']}/{$table}.txt");
+		$this->assertSame("198.51.100.1\n", file_get_contents($mirror));
 		$this->assertArrayNotHasKey('installedpackages', $GLOBALS['config'] ?? []);
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? []);
 		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v4.update");
@@ -852,6 +859,7 @@ SH
 		$table = 'pfB_Whitelist_v4';
 		$clists = ['ipwhitelist4' => [$table => ['base64_idx' => 0, 'data' => []]]];
 
+		$mirror = $this->seedMirror($table, "198.51.100.1\n");
 		$result = $this->withFeedPassContention(
 			static fn (): array => pfb_alerts_ip_action('ip_white', '198.51.100.30', $table, '', $clists, [])
 		);
@@ -859,14 +867,21 @@ SH
 		$this->assertStringContainsString('mid-update', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
 		$this->assertFileDoesNotExist($this->logPath, 'a busy whitelist add must not call pfctl');
-		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['aliasdir']}/{$table}.txt");
+		$this->assertSame("198.51.100.1\n", file_get_contents($mirror));
 		$this->assertArrayNotHasKey('installedpackages', $GLOBALS['config'] ?? []);
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? []);
 		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v4.update");
 	}
 
-	public function testIpWhiteV4SuccessAppendsAndWrites(): void
+	/**
+	 * Issue #4200: the alias file is the table's last-applied mirror, which pfSense reloads the table from and ADR-40 diffs
+	 * against. A successful add must keep every entry already there and add the new one, in canonical form, never replace
+	 * the file with the one address.
+	 */
+	public function testIpWhiteV4SuccessAddsTheIpToTheMirrorAndKeepsItsEntries(): void
 	{
+		$mirror = "{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt";
+		file_put_contents($mirror, "198.51.100.3\n198.51.100.1\n198.51.100.2\n");
 		$clists = ['ipwhitelist4' => ['pfB_Whitelist_v4' => ['base64_idx' => 0, 'data' => []]]];
 
 		$result = $this->withWriteConfigLockProbe(
@@ -877,36 +892,72 @@ SH
 
 		$this->assertStringContainsString('added', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
-		$this->assertFileExists("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt");
-		$this->assertStringContainsString('198.51.100.31', file_get_contents("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt"));
+		$this->assertSame(
+			"198.51.100.1\n198.51.100.2\n198.51.100.3\n198.51.100.31\n",
+			file_get_contents($mirror),
+			'the mirror must keep its entries and gain the added IP, sorted and deduplicated'
+		);
+		$this->assertStringNotContainsString('could not be updated', $result['savemsg'], 'a written mirror raises no warning');
 		// config_set_path() persistence is observable through the global config on success.
 		$this->assertArrayHasKey('installedpackages', $GLOBALS['config'] ?? [], 'the success path must persist via config_set_path()');
 		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
 		$this->assertFileExists("{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v4.update");
 	}
 
+	/** Issue #4200: an IP the mirror already holds is not written twice. */
+	public function testIpWhiteOfAnIpTheMirrorAlreadyHoldsKeepsOneCopy(): void
+	{
+		$mirror = "{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt";
+		file_put_contents($mirror, "198.51.100.1\n198.51.100.31\n");
+		$clists = ['ipwhitelist4' => ['pfB_Whitelist_v4' => ['base64_idx' => 0, 'data' => []]]];
+
+		$result = pfb_alerts_ip_action('ip_white', '198.51.100.31', 'pfB_Whitelist_v4', '', $clists, []);
+
+		$this->assertStringContainsString('added', $result['savemsg']);
+		$this->assertSame("198.51.100.1\n198.51.100.31\n", file_get_contents($mirror));
+	}
+
+	/**
+	 * Issue #4200: the alias URL serves the mirror itself (pfblockerng.php), so a missing mirror is an empty set. The add
+	 * writes a mirror holding the IP, so that a filter reload before the next update pass keeps it in the table.
+	 */
+	public function testIpWhiteWithoutAMirrorWritesOneHoldingTheIp(): void
+	{
+		$mirror = "{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt";
+		$clists = ['ipwhitelist4' => ['pfB_Whitelist_v4' => ['base64_idx' => 0, 'data' => []]]];
+		$this->assertFileDoesNotExist($mirror, 'test setup: no mirror before the add');
+
+		$result = pfb_alerts_ip_action('ip_white', '198.51.100.31', 'pfB_Whitelist_v4', '', $clists, []);
+
+		$this->assertStringContainsString('added', $result['savemsg']);
+		$this->assertSame("198.51.100.31\n", file_get_contents($mirror));
+	}
+
 	public function testIpWhiteV6FailureSkipsAllWrites(): void
 	{
 		$this->scriptFailure('add', '2001:db8::30');
 		$clists = ['ipwhitelist6' => ['pfB_Whitelist_v6' => ['base64_idx' => 0, 'data' => []]]];
+		$mirror = $this->seedMirror('pfB_Whitelist_v6', "2001:db8::1\n");
 
 		$result = pfb_alerts_ip_action('ip_white', '2001:db8::30', 'pfB_Whitelist_v6', '', $clists, []);
 
 		$this->assertStringContainsString('failed', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
-		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v6.txt");
+		$this->assertSame("2001:db8::1\n", file_get_contents($mirror));
 		$this->assertEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
 	}
 
-	public function testIpWhiteV6SuccessAppendsAndWrites(): void
+	public function testIpWhiteV6SuccessAddsTheIpToTheMirrorAndWrites(): void
 	{
+		$mirror = "{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v6.txt";
+		file_put_contents($mirror, "2001:db8::1\n");
 		$clists = ['ipwhitelist6' => ['pfB_Whitelist_v6' => ['base64_idx' => 0, 'data' => []]]];
 
 		$result = pfb_alerts_ip_action('ip_white', '2001:db8::31', 'pfB_Whitelist_v6', '', $clists, []);
 
 		$this->assertStringContainsString('added', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
-		$this->assertFileExists("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v6.txt");
+		$this->assertSame("2001:db8::1\n2001:db8::31\n", file_get_contents($mirror), 'issue #4200: the v6 mirror keeps its entry');
 		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
 		// issue #1723: pfb_text_area_encode() normalizes the trailing CRLF to LF.
 		$this->assertSame(
@@ -958,6 +1009,21 @@ SH
 		);
 		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
 		$this->assertDirectoryExists($alias_path, 'alias-file persistence failure must leave the target directory untouched');
+	}
+
+	/**
+	 * Issue #4200: when the mirror cannot be written, the kernel table holds the IP and the mirror does not, so a filter reload
+	 * before the next update pass would drop it. The add still succeeds, and the message says the mirror was not updated.
+	 */
+	public function testIpWhiteWhoseMirrorCannotBeWrittenSaysSo(): void
+	{
+		$table = 'pfB_Whitelist_v4';
+		$this->assertTrue(mkdir("{$GLOBALS['pfb']['aliasdir']}/{$table}.txt"), 'setup: a folder in the mirror\'s place makes its write fail');
+
+		$result = pfb_alerts_ip_action('ip_white', '198.51.100.34', $table, '', ['ipwhitelist4' => [$table => ['base64_idx' => 0, 'data' => []]]], []);
+
+		$this->assertStringContainsString('added', $result['savemsg']);
+		$this->assertStringContainsString("alias file [ {$table}.txt ] could not be updated", $result['savemsg']);
 	}
 
 	public function testIpWhiteDuplicateSkipsPfctlAndRedirect(): void

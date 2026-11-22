@@ -20,9 +20,9 @@ use PHPUnit\Framework\TestCase;
  *     Returns TRUE when the canonical set differs from the last-applied mirror,
  *     or when the mirror does not exist (boot/empty-table repopulation path).
  *
- *   pfb_write_canonical_alias(string $path, array $canonical_set): void
+ *   pfb_write_canonical_alias(string $path, array $canonical_set): bool
  *     Writes the canonical set to the given path (one entry per line, trailing
- *     newline). The written file becomes the new last-applied mirror for
+ *     newline), and reports whether the whole file was written. The written file becomes the new last-applied mirror for
  *     pfb_alias_set_different() on the next pass.
  *
  *   pfb_cross_list_scope(bool $dup_on, bool $rep_on): bool
