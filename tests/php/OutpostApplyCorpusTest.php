@@ -56,8 +56,8 @@ final class OutpostApplyCorpusTest extends TestCase
 	{
 		$this->assertSame(['actions-and-directions', 'aggregate-deny', 'delta-auto-high-churn', 'delta-auto-low-churn',
 			'delta-mode-batched', 'dns-config-lock-held', 'dns-listener-vips', 'empty-kernel-forced-replace', 'first-load-rule-change',
-			'ip-unlock-reblock', 'kill-states', 'mode-replace-low-churn', 'nat-alias-suffix', 'package-disabled', 'pfctl-failure',
-			'received-policy-absorbed', 'refetch-same-set', 'reload-launch-missing', 'reuse-flag-cleared',
+			'ip-unlock-reblock', 'kill-states', 'mode-replace-low-churn', 'nat-alias-suffix', 'package-disabled',
+			'pfctl-failure-then-recover', 'pfctl-failure', 'received-policy-absorbed', 'refetch-same-set', 'reload-launch-missing', 'reuse-flag-cleared',
 			'rule-change-presync-and-kill', 'unchanged'], array_keys(self::corpus()), 'a scenario file went missing from ' . self::FIXTURES);
 	}
 

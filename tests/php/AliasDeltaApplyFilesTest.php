@@ -17,6 +17,7 @@ use PHPUnit\Framework\TestCase;
  * file it was handed with -f.
  */
 #[CoversFunction('pfb_apply_alias_delta_files')]
+#[CoversFunction('pfb_apply_alias_delta')]
 final class AliasDeltaApplyFilesTest extends TestCase
 {
 	private const TABLE = 'pfB_Files_v4';
@@ -59,8 +60,10 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$infile" ] && cp "$infile" "$dir/call$n" && { stat -c %a "$infile" 2>/dev/null || stat -f %Lp "$infile"; } > "$dir/mode$n"
 printf '%s\t%s\t%s\n' "$action" "$table" "$infile" >> "$dir/log"
-# a test's "rewrite" file replaces, in place, the file named in "rewrite.to" when the first call arrives
-if [ "$n" = 1 ] && [ -f "$dir/rewrite" ]; then cp "$dir/rewrite" "$(cat "$dir/rewrite.to")"; fi
+# a test's "rewrite" file replaces, in place, the file named in "rewrite.to" when call "rewrite.at" (the first by default) arrives
+at=1
+[ -f "$dir/rewrite.at" ] && at=$(cat "$dir/rewrite.at")
+if [ "$n" = "$at" ] && [ -f "$dir/rewrite" ]; then cp "$dir/rewrite" "$(cat "$dir/rewrite.to")"; fi
 if [ -f "$dir/fail" ] && grep -qx "$n" "$dir/fail"; then
 	echo "pfctl: Cannot $action table: Operation not permitted"
 	exit 1
@@ -455,10 +458,17 @@ SH
 	{
 		global $pfb;
 		$dbdir = $pfb['dbdir'];
-		// the ledger write after the pfctl call takes a string: a NULL makes the pfctl step throw once pfctl has run
-		$pfb['dbdir'] = NULL;
+		// the ledger write a failed pfctl call makes takes a string: the member source sets a NULL once the run has read the
+		// ledger, so the pfctl step throws once pfctl has run
+		file_put_contents("{$this->dir}/fail", "1\n");
+		$source = static function (): array {
+			global $pfb;
+			$pfb['dbdir'] = NULL;
+			return [['10.1.0.1'], []];
+		};
 		try {
-			$this->apply(['10.1.0.1'], [], 10000, 10000, 'delta');
+			pfb_apply_alias_delta_members($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']), $source, 1, 0, 10000,
+				10000, 'delta', 64, FALSE, $this->batchdir);
 			$this->fail('the pfctl step did not throw, so this test proves nothing');
 		} catch (TypeError) {
 		} finally {
@@ -935,6 +945,746 @@ SH
 		$this->apply(['10.1.0.1'], [], 40, 40, 'replace');
 		$this->assertSame([], array_values(array_filter(self::loggedSince($offset), static fn (string $l): bool => str_contains($l, 'negative count'))),
 			'sound counts log no such line');
+	}
+
+	// ---------------------------------------------------------------------------------------------------------------
+	// The ledger after a run (issue #4189): a delta run never closes ip/<table>/apply, a run that finds it open replaces the
+	// table from its mirror, and a delta run that sent a batch and did not end clean leaves it open
+	// ---------------------------------------------------------------------------------------------------------------
+
+	/**
+	 * Apply $add and $remove to the table on the given path: 'files' through pfb_apply_alias_delta_files(), 'arrays' through
+	 * pfb_apply_alias_delta() with the table holding $remove before and $add after. The array path says only whether the delta
+	 * path was taken, so its ok is NULL.
+	 *
+	 * @param list<string> $add
+	 * @param list<string> $remove
+	 * @return array{delta: bool, ok: ?bool}
+	 */
+	private function applyOn(string $path, array $add, array $remove, string $mode = 'delta', bool $force = FALSE): array
+	{
+		if ($path === 'files') {
+			return $this->apply($add, $remove, max(count($add), 1), max(count($remove), 1), $mode, 64, $force);
+		}
+		return ['delta' => pfb_apply_alias_delta($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']), $add, $remove,
+			$mode, 64, $force), 'ok' => NULL];
+	}
+
+	/** @param array{delta: bool, ok: ?bool} $result what applyOn() returned on $path; $ok is checked on the file path only */
+	private function assertResultOn(string $path, bool $delta, bool $ok, array $result): void
+	{
+		$this->assertSame(['delta' => $delta, 'ok' => $path === 'files' ? $ok : NULL], $result);
+	}
+
+	/** @return list<array{facility: string, item: string, stage: string, message: string}> the open entries of the ledger, without their times */
+	private function openEntries(): array
+	{
+		return array_map(static fn (array $e): array => ['facility' => $e['facility'], 'item' => $e['item'], 'stage' => $e['stage'],
+			'message' => $e['message']], pfb_sync_status_list_open($this->dir));
+	}
+
+	/** @return array{facility: string, item: string, stage: string, message: string} the open apply entry a failed $op call leaves */
+	private static function failedCallEntry(string $op): array
+	{
+		return self::entry(pfb_pfctl_error_message(self::TABLE, $op, 1, "pfctl: Cannot {$op} table: Operation not permitted"));
+	}
+
+	/** @return array{facility: string, item: string, stage: string, message: string} the table's open apply entry holding $message */
+	private static function entry(string $message): array
+	{
+		return ['facility' => 'ip', 'item' => self::TABLE, 'stage' => 'apply', 'message' => $message];
+	}
+
+	/** @return list<string> the ledger's files (the ledger and its lock): none when nothing touched the ledger */
+	private function ledgerFiles(): array
+	{
+		return array_map('basename', glob("{$this->dir}/pfb_sync_status*") ?: []);
+	}
+
+	/** Make the pfctl double write a ledger holding the table's apply entry, first seen at 1000, when call $at arrives. */
+	private function openTheEntryAtCall(int $at, string $message): void
+	{
+		file_put_contents("{$this->dir}/rewrite", json_encode(['ip' => [self::TABLE => ['apply' =>
+			['message' => $message, 'first_seen' => 1000, 'last_seen' => 1000]]]]));
+		file_put_contents("{$this->dir}/rewrite.to", "{$this->dir}/pfb_sync_status.json");
+		file_put_contents("{$this->dir}/rewrite.at", "{$at}\n");
+	}
+
+	/** @return array{message: string, first_seen: int, last_seen: int} the table's open apply entry, with its times */
+	private function theEntry(): array
+	{
+		$open = pfb_sync_status_list_open($this->dir);
+		$this->assertCount(1, $open, 'one entry is open: ' . json_encode($open));
+		$this->assertSame(['ip', self::TABLE, 'apply'], [$open[0]['facility'], $open[0]['item'], $open[0]['stage']]);
+		return ['message' => $open[0]['message'], 'first_seen' => $open[0]['first_seen'], 'last_seen' => $open[0]['last_seen']];
+	}
+
+	/**
+	 * @return array<string, array{string, int, int, list<int>, list<array{0: string, 1: int}>, string}> the path, the members to add
+	 *   and to remove, the calls that fail, the calls pfctl sees, and the verb of the last failed call
+	 */
+	public static function runsWithAFailedBatchAndALaterSuccess(): array
+	{
+		$rows = [];
+		foreach (['files', 'arrays'] as $path) {
+			$rows["{$path}: the add batch fails, the delete batch succeeds"] = [$path, 1, 1, [1], [['add', 1], ['delete', 1]], 'add'];
+			$rows["{$path}: the first of three add batches fails"] = [$path, 129, 1, [1], [['add', 64], ['add', 64], ['add', 1], ['delete', 1]], 'add'];
+			$rows["{$path}: a middle batch fails"] = [$path, 129, 1, [2], [['add', 64], ['add', 64], ['add', 1], ['delete', 1]], 'add'];
+			$rows["{$path}: an add and a delete batch fail, the last delete succeeds"] = [$path, 129, 65, [1, 4],
+				[['add', 64], ['add', 64], ['add', 1], ['delete', 64], ['delete', 1]], 'delete'];
+		}
+		return $rows;
+	}
+
+	/**
+	 * Scenario: a delta goes out in several batches and one fails. Given no open entry, when a later batch of the same run
+	 * succeeds, then the entry the failed batch opened is still open when the run returns, holding the last failure's message:
+	 * the kernel table is behind its mirror, so the tick's retry must find it. Every batch is still sent.
+	 *
+	 * @param list<int> $failing
+	 * @param list<array{0: string, 1: int}> $shape
+	 */
+	#[DataProvider('runsWithAFailedBatchAndALaterSuccess')]
+	public function testAFailedBatchLeavesTheApplyEntryOpenWhateverLaterBatchesDid(string $path, int $adds, int $removes, array $failing,
+	    array $shape, string $last_failed): void
+	{
+		$add = self::addresses($adds, 1);
+		$remove = self::addresses($removes, 2);
+		$this->assertSame([], $this->openEntries(), 'before: no entry is open');
+		file_put_contents("{$this->dir}/fail", implode("\n", $failing) . "\n");
+
+		$result = $this->applyOn($path, $add, $remove);
+
+		$this->assertResultOn($path, TRUE, FALSE, $result);
+		$this->assertSame($shape, $this->shape(), 'every batch is sent after a failure');
+		$this->assertSame([self::failedCallEntry($last_failed)], $this->openEntries(), 'the failed batch keeps the entry open');
+	}
+
+	/**
+	 * Scenario: a batch whose file cannot be written is skipped. Given no open entry, when the next batch is written and
+	 * succeeds, then the entry the skipped batch opened is still open when the run returns. The member source swaps the
+	 * batch directory for a regular file while the first batch is written, and puts it back for the second.
+	 */
+	public function testASkippedBatchLeavesTheApplyEntryOpenWhenALaterBatchSucceeds(): void
+	{
+		$batchdir = $this->batchdir;
+		$source = static function () use ($batchdir): Generator {
+			rename($batchdir, "{$batchdir}.away");
+			file_put_contents($batchdir, '');
+			yield from self::addresses(64, 1);
+			// resumed after the first batch was pushed
+			unlink($batchdir);
+			rename("{$batchdir}.away", $batchdir);
+			yield '10.1.1.0';
+		};
+		$this->assertSame([], $this->openEntries(), 'before: no entry is open');
+
+		$result = pfb_apply_alias_delta_members($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+			static fn (): array => [$source(), []], 65, 0, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertSame([['add', 1]], $this->shape(), 'the skipped batch is not sent, the next one is');
+		$this->assertStringContainsString('batch file', $this->theEntry()['message']);
+	}
+
+	/**
+	 * Scenario: an add batch fails in pfctl and a later batch of the same run cannot be written. Given the entry the failed call
+	 * opened, when the later batch file fails, then the entry still names pfctl's error: that is what the tick's retry and the
+	 * Sync Status page need, not the later reason. The member source swaps the batch directory for a regular file once the first
+	 * batch is pushed.
+	 */
+	public function testABatchFileFailureKeepsTheMessageOfAnEarlierPfctlFailure(): void
+	{
+		$batchdir = $this->batchdir;
+		$source = static function () use ($batchdir): Generator {
+			yield from self::addresses(64, 1);
+			// resumed after the first batch was pushed
+			rename($batchdir, "{$batchdir}.away");
+			file_put_contents($batchdir, '');
+			yield '10.1.1.0';
+		};
+		file_put_contents("{$this->dir}/fail", "1\n");
+
+		$result = pfb_apply_alias_delta_members($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+			static fn (): array => [$source(), []], 65, 0, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertSame([['add', 64]], $this->shape(), 'the first batch is sent, the second is skipped');
+		$this->assertSame([self::failedCallEntry('add')], $this->openEntries(), 'the entry keeps the pfctl failure');
+	}
+
+	/** @return array<string, array{string}> */
+	public static function bothPaths(): array
+	{
+		return ['members from files' => ['files'], 'members from arrays' => ['arrays']];
+	}
+
+	/**
+	 * @return array<string, array{string, int, int}> the path and the members to add and to remove: a delta of several batches,
+	 *   and a delta of nothing, which without the open entry makes no call
+	 */
+	public static function runsThatFindTheEntryOpen(): array
+	{
+		$rows = [];
+		foreach (['files', 'arrays'] as $path) {
+			$rows["{$path}: a delta of four batches"] = [$path, 129, 1];
+			$rows["{$path}: a delta of nothing"] = [$path, 0, 0];
+		}
+		return $rows;
+	}
+
+	/**
+	 * Scenario: an earlier run left the table behind its mirror. Given the open entry, when the next run starts, then it replaces
+	 * the table from its mirror with one call instead of applying its delta, whatever the mode and the counts say, as the
+	 * tick's retry does, and the replace closes the entry; one log line says why. (This test replaces one that pinned the
+	 * earlier rule: a run whose every batch succeeded closed the entry. A delta computed against a mirror the kernel table never
+	 * reached cannot bring the table to it.)
+	 */
+	#[DataProvider('runsThatFindTheEntryOpen')]
+	public function testARunThatFindsTheEntryOpenReplacesTheTableFromItsMirrorAndClosesIt(string $path, int $adds, int $removes): void
+	{
+		pfb_sync_status_open('ip', self::TABLE, 'apply', 'an earlier run failed', $this->dir);
+		$this->assertCount(1, $this->openEntries(), 'before: the earlier run left the entry open');
+		$offset = self::logOffset();
+
+		$result = $this->applyOn($path, self::addresses($adds, 1), self::addresses($removes, 2));
+
+		$this->assertResultOn($path, FALSE, TRUE, $result);
+		$this->assertSame([['replace', self::TABLE, "{$this->dir}/mirror", ['10.255.0.1']]],
+			array_map(static fn (array $c): array => array_values($c), $this->calls()), 'one replace from the mirror, no delta call');
+		$this->assertSame([], $this->openEntries(), 'the replace closes the entry');
+		$why = array_filter(self::loggedSince($offset), static fn (string $l): bool => str_contains($l, 'is open'));
+		$this->assertCount(1, $why, 'one line says why: ' . implode(' | ', self::loggedSince($offset)));
+	}
+
+	/** A run of the file path that finds the entry open replaces the table even when a count is negative: a replace uses no count. */
+	public function testARunThatFindsTheEntryOpenReplacesTheTableWhateverItsCounts(): void
+	{
+		pfb_sync_status_open('ip', self::TABLE, 'apply', 'an earlier run failed', $this->dir);
+
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+			$this->members('add', ['10.1.0.1']), -1, $this->members('remove', []), 0, 100, 100, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => FALSE, 'ok' => TRUE], $result);
+		$this->assertSame([['replace', 1]], $this->shape());
+		$this->assertSame([], $this->openEntries());
+	}
+
+	/**
+	 * @return array<string, array{string, list<int>, string}> the path, the calls that fail (call 1 is the replace), and the verb
+	 *   whose failure the entry names at the end
+	 */
+	public static function failedReplacesOfARunThatFoundTheEntryOpen(): array
+	{
+		$rows = [];
+		foreach (['files', 'arrays'] as $path) {
+			$rows["{$path}: the replace fails, every batch succeeds"] = [$path, [1], 'replace'];
+			$rows["{$path}: the replace fails, then an add batch fails"] = [$path, [1, 3], 'add'];
+		}
+		return $rows;
+	}
+
+	/**
+	 * Scenario: a table whose replace keeps failing (pf's table-entries limit lets small batches through but not a full replace)
+	 * must not be frozen. Given the open entry, when the replace that the entry forced fails, then the run's delta goes out
+	 * after it, batch by batch, so the table keeps moving; the entry stays open, holding the last failure's message, and one
+	 * log line says so. The run reports the delta path taken and ok FALSE: the table is still not its mirror. (This test
+	 * replaces one that pinned the earlier rule: the failed replace was the end of the run.)
+	 *
+	 * @param list<int> $failing
+	 */
+	#[DataProvider('failedReplacesOfARunThatFoundTheEntryOpen')]
+	public function testAFailedReplaceThatTheOpenEntryForcedIsFollowedByTheDeltaAndTheEntryStaysOpen(string $path, array $failing,
+	    string $last_failed): void
+	{
+		pfb_sync_status_open('ip', self::TABLE, 'apply', 'an earlier run failed', $this->dir);
+		file_put_contents("{$this->dir}/fail", implode("\n", $failing) . "\n");
+		$offset = self::logOffset();
+
+		$result = $this->applyOn($path, self::addresses(129, 1), self::addresses(1, 2));
+
+		$this->assertResultOn($path, TRUE, FALSE, $result);
+		$this->assertSame([['replace', 1], ['add', 64], ['add', 64], ['add', 1], ['delete', 1]], $this->shape(),
+			'the replace, then every batch of the delta');
+		$this->assertSame([self::failedCallEntry($last_failed)], $this->openEntries(), 'the entry stays open');
+		$says = array_filter(self::loggedSince($offset), static fn (string $l): bool => str_contains($l, 'the replace failed, so'));
+		$this->assertCount(1, $says, 'one line says the delta goes out: ' . implode(' | ', self::loggedSince($offset)));
+	}
+
+	/**
+	 * Scenario: given the open entry and nothing to apply, when the forced replace fails, then no call follows it and the run
+	 * reports ok FALSE: an empty delta does not make the table its mirror.
+	 */
+	public function testAFailedForcedReplaceWithNothingToApplyStillFailsTheResult(): void
+	{
+		pfb_sync_status_open('ip', self::TABLE, 'apply', 'an earlier run failed', $this->dir);
+		file_put_contents("{$this->dir}/fail", "1\n");
+		$offset = self::logOffset();
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $this->apply([], [], 100, 100, 'delta'));
+
+		$this->assertSame([['replace', 1]], $this->shape());
+		$this->assertSame([self::failedCallEntry('replace')], $this->openEntries());
+		$says = array_filter(self::loggedSince($offset), static fn (string $l): bool => str_contains($l, 'the delta goes out'));
+		$this->assertSame([], array_values($says), 'no delta goes out, so no line says one does');
+	}
+
+	/**
+	 * Scenario: given the open entry and a negative count, when the forced replace fails, then nothing follows it: a delta
+	 * trusts its counts, and a negative one is refused.
+	 */
+	public function testAFailedForcedReplaceWithANegativeCountIsTheEndOfTheRun(): void
+	{
+		pfb_sync_status_open('ip', self::TABLE, 'apply', 'an earlier run failed', $this->dir);
+		file_put_contents("{$this->dir}/fail", "1\n");
+
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+			$this->members('add', ['10.1.0.1']), 1, $this->members('remove', []), 0, -1, 100, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => FALSE, 'ok' => FALSE], $result);
+		$this->assertSame([['replace', 1]], $this->shape(), 'no batch follows the failed replace');
+		$this->assertSame([self::failedCallEntry('replace')], $this->openEntries());
+	}
+
+	/**
+	 * @return array<string, array{string, string, bool}> the path, the mode and the force flag of a replace that the open entry
+	 *   did not force: mode replace, a forced replace, and auto mode's own churn decision (130 changes over 129 members)
+	 */
+	public static function replacesTheEntryDidNotForce(): array
+	{
+		$rows = [];
+		foreach (['files', 'arrays'] as $path) {
+			$rows["{$path}: mode replace"]      = [$path, 'replace', FALSE];
+			$rows["{$path}: a forced replace"]  = [$path, 'delta', TRUE];
+			$rows["{$path}: auto mode's churn"] = [$path, 'auto', FALSE];
+		}
+		return $rows;
+	}
+
+	/**
+	 * Scenario: given the open entry, when a replace that the run would have made anyway fails, then nothing follows it: the
+	 * failed replace is the end of the run, as it is without the entry, and the entry holds the replace's message.
+	 */
+	#[DataProvider('replacesTheEntryDidNotForce')]
+	public function testAFailedReplaceTheEntryDidNotForceIsTheEndOfTheRun(string $path, string $mode, bool $force): void
+	{
+		pfb_sync_status_open('ip', self::TABLE, 'apply', 'an earlier run failed', $this->dir);
+		file_put_contents("{$this->dir}/fail", "1\n");
+
+		$result = $this->applyOn($path, self::addresses(129, 1), self::addresses(1, 2), $mode, $force);
+
+		$this->assertResultOn($path, FALSE, FALSE, $result);
+		$this->assertSame([['replace', 1]], $this->shape(), 'no batch follows the failed replace');
+		$this->assertSame([self::failedCallEntry('replace')], $this->openEntries());
+	}
+
+	/** @return array<string, array{string, string, bool}> the path, the mode and the force flag of mode replace and a forced replace */
+	public static function replacesOfModeOrForce(): array
+	{
+		return array_filter(self::replacesTheEntryDidNotForce(), static fn (array $row): bool => $row[1] !== 'auto');
+	}
+
+	/**
+	 * A replace the run makes whatever the ledger holds (mode replace, or a forced one) is not one the open entry forces: no line
+	 * says the entry is open, and the replace closes the entry.
+	 */
+	#[DataProvider('replacesOfModeOrForce')]
+	public function testAReplaceOfModeOrForceDoesNotLogThatTheEntryIsOpen(string $path, string $mode, bool $force): void
+	{
+		pfb_sync_status_open('ip', self::TABLE, 'apply', 'an earlier run failed', $this->dir);
+		$offset = self::logOffset();
+
+		$this->assertResultOn($path, FALSE, TRUE, $this->applyOn($path, self::addresses(129, 1), self::addresses(1, 2), $mode, $force));
+
+		$this->assertSame([['replace', 1]], $this->shape());
+		$this->assertSame([], $this->openEntries(), 'the replace closes the entry');
+		$this->assertSame([], array_values(array_filter(self::loggedSince($offset), static fn (string $l): bool => str_contains($l, 'is open'))),
+			'no line says the entry is open');
+	}
+
+	/**
+	 * @return array<string, array{string, string, string}> the path and an open entry that is not this table's apply entry: the
+	 *   apply entry of another table, and this table's entry at another stage
+	 */
+	public static function entriesThatAreNotTheTablesApplyEntry(): array
+	{
+		$rows = [];
+		foreach (['files', 'arrays'] as $path) {
+			$rows["{$path}: ip/<another table>/apply"] = [$path, 'pfB_Other_v4', 'apply'];
+			$rows["{$path}: ip/<this table>/download"] = [$path, self::TABLE, 'download'];
+		}
+		return $rows;
+	}
+
+	/**
+	 * Scenario: only this table's apply entry says its table is behind its mirror. Given another open entry, the run applies its
+	 * delta and leaves that entry as it was.
+	 */
+	#[DataProvider('entriesThatAreNotTheTablesApplyEntry')]
+	public function testAnOpenEntryThatIsNotTheTablesApplyEntryDoesNotForceAReplace(string $path, string $item, string $stage): void
+	{
+		pfb_sync_status_open('ip', $item, $stage, 'another failure', $this->dir);
+		$other = ['facility' => 'ip', 'item' => $item, 'stage' => $stage, 'message' => 'another failure'];
+
+		$this->assertResultOn($path, TRUE, TRUE, $this->applyOn($path, self::addresses(129, 1), self::addresses(1, 2)));
+
+		$this->assertSame([['add', 64], ['add', 64], ['add', 1], ['delete', 1]], $this->shape(), 'the delta, not a replace');
+		$this->assertSame([$other], $this->openEntries(), 'the other entry is left as it was');
+	}
+
+	/** Scenario: given no open entry, when every batch of a delta succeeds, then the run does not touch the ledger at all. */
+	#[DataProvider('bothPaths')]
+	public function testADeltaWhoseEveryBatchSucceedsMakesNoLedgerWrite(string $path): void
+	{
+		$this->assertSame([], $this->ledgerFiles(), 'before: no ledger');
+
+		$result = $this->applyOn($path, self::addresses(129, 1), self::addresses(1, 2));
+
+		$this->assertResultOn($path, TRUE, TRUE, $result);
+		$this->assertSame([['add', 64], ['add', 64], ['add', 1], ['delete', 1]], $this->shape());
+		$this->assertSame([], $this->ledgerFiles(), 'neither the ledger nor its lock was created');
+	}
+
+	/**
+	 * Scenario: given no open entry, when the first batch succeeds and later ones fail, then the entry is open and its first_seen
+	 * is that of the first failure: nothing closed it in between. The double sets first_seen to 1000 at the third call, between
+	 * the failures of the second and the fourth.
+	 */
+	#[DataProvider('bothPaths')]
+	public function testAnEntryARunOpensIsFirstSeenOnce(string $path): void
+	{
+		file_put_contents("{$this->dir}/fail", "2\n4\n");
+		$this->openTheEntryAtCall(3, 'the second call failed');
+
+		$result = $this->applyOn($path, self::addresses(129, 1), self::addresses(65, 2));
+
+		$this->assertResultOn($path, TRUE, FALSE, $result);
+		$this->assertSame([['add', 64], ['add', 64], ['add', 1], ['delete', 64], ['delete', 1]], $this->shape());
+		$entry = $this->theEntry();
+		$this->assertSame(self::failedCallEntry('delete')['message'], $entry['message'], 'the last failure\'s message');
+		$this->assertSame(1000, $entry['first_seen'], 'first seen once: no batch closed the entry between the failures');
+		$this->assertGreaterThan(1000, $entry['last_seen']);
+	}
+
+	/**
+	 * Scenario: an entry is open while a delta's batches go out (here the double opens it as the first call arrives). Given
+	 * that, a successful batch does not close it: when a later batch fails the entry keeps its first_seen, and when none fails it
+	 * is still open with its message.
+	 */
+	#[DataProvider('bothPaths')]
+	public function testASuccessfulBatchNeverClosesAnOpenEntry(string $path): void
+	{
+		$this->openTheEntryAtCall(1, 'opened while the run went out');
+		file_put_contents("{$this->dir}/fail", "2\n");
+
+		$this->assertResultOn($path, TRUE, FALSE, $this->applyOn($path, self::addresses(129, 1), self::addresses(1, 2)));
+
+		$entry = $this->theEntry();
+		$this->assertSame(self::failedCallEntry('add')['message'], $entry['message']);
+		$this->assertSame(1000, $entry['first_seen'], 'the first batch, which succeeded, did not close the entry');
+
+		unlink("{$this->dir}/fail");
+		unlink("{$this->dir}/log");
+		rename("{$this->dir}/pfb_sync_status.json", "{$this->dir}/opened-later");
+		$this->openTheEntryAtCall(1, 'opened while the run went out');
+
+		$this->assertResultOn($path, TRUE, TRUE, $this->applyOn($path, self::addresses(129, 1), self::addresses(1, 2)));
+
+		$this->assertSame([['add', 64], ['add', 64], ['add', 1], ['delete', 1]], $this->shape());
+		$this->assertSame(['message' => 'opened while the run went out', 'first_seen' => 1000, 'last_seen' => 1000], $this->theEntry(),
+			'a delta whose every batch succeeded leaves the entry as it found it');
+	}
+
+	/**
+	 * Scenario: a member file is rewritten between the passes, so the second pass refuses a line after batches went out. Given
+	 * no open entry, the run stops and leaves the entry open, naming the line, as its log line does.
+	 */
+	#[DataProvider('rewrittenSides')]
+	public function testARunStoppedByARefusedLineAfterABatchWentOutLeavesTheEntryOpen(string $side): void
+	{
+		$members = self::addresses(2000, 1);
+		$long = $this->members($side, $members);
+		$short = $this->members($side === 'add' ? 'remove' : 'add', ['10.2.0.1']);
+		$bad = $members;
+		$bad[1899] = 'ae0';
+		file_put_contents("{$this->dir}/rewrite", implode("\n", $bad) . "\n");
+		file_put_contents("{$this->dir}/rewrite.to", $long);
+
+		$result = $side === 'add'
+			? pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+				$long, 2000, $short, 1, 100000, 100000, 'delta', 64, FALSE, $this->batchdir)
+			: pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+				$short, 1, $long, 2000, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertNotSame([], $this->calls(), 'batches went out before the refused line');
+		$this->assertSame([self::entry("Updating [ " . self::TABLE . " ]: the {$side} file line 1900 is not a member")], $this->openEntries());
+	}
+
+	/**
+	 * Scenario: a batch fails in pfctl and a later line is refused by the member source. Given no open entry, the entry keeps
+	 * naming the pfctl failure, as it does for a wrong count; the refused line is only logged.
+	 */
+	#[DataProvider('rewrittenSides')]
+	public function testARefusedLineAfterAFailedBatchLeavesTheEntryNamingThePfctlFailure(string $side): void
+	{
+		$members = self::addresses(2000, 1);
+		$long = $this->members($side, $members);
+		$short = $this->members($side === 'add' ? 'remove' : 'add', ['10.2.0.1']);
+		$bad = $members;
+		$bad[1899] = 'ae0';
+		file_put_contents("{$this->dir}/rewrite", implode("\n", $bad) . "\n");
+		file_put_contents("{$this->dir}/rewrite.to", $long);
+		file_put_contents("{$this->dir}/fail", "1\n");
+
+		$result = $side === 'add'
+			? pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+				$long, 2000, $short, 1, 100000, 100000, 'delta', 64, FALSE, $this->batchdir)
+			: pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+				$short, 1, $long, 2000, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertSame([self::failedCallEntry('add')], $this->openEntries(),
+			'call 1, an add batch on either side, fails and is named, not the refused line');
+	}
+
+	/**
+	 * @return array<string, array{string, int, string}> the side, the lines its file holds once rewritten (it is counted at 2000),
+	 *   and the reason the entry names
+	 */
+	public static function recountedSides(): array
+	{
+		return [
+			'the add file grew'      => ['add', 2100, 'the add file holds more than 2000 members'],
+			'the add file shrank'    => ['add', 1000, 'add read 1000 members, not 2000'],
+			'the remove file grew'   => ['remove', 2100, 'the delete file holds more than 2000 members'],
+			'the remove file shrank' => ['remove', 1000, 'delete read 1000 members, not 2000'],
+		];
+	}
+
+	/**
+	 * Scenario: a member file is rewritten to another count between the passes, so the run ends on a wrong count after batches
+	 * went out. Given no open entry, the run leaves the entry open, naming the count, as its log line does.
+	 */
+	#[DataProvider('recountedSides')]
+	public function testARunEndedByAWrongCountAfterBatchesWentOutLeavesTheEntryOpen(string $side, int $lines, string $reason): void
+	{
+		$members = self::addresses(2000, 1);
+		$long = $this->members($side, $members);
+		$short = $this->members($side === 'add' ? 'remove' : 'add', ['10.2.0.1']);
+		$rewritten = array_slice(array_merge($members, self::addresses(100, 3)), 0, $lines);
+		file_put_contents("{$this->dir}/rewrite", implode("\n", $rewritten) . "\n");
+		file_put_contents("{$this->dir}/rewrite.to", $long);
+
+		$result = $side === 'add'
+			? pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+				$long, 2000, $short, 1, 100000, 100000, 'delta', 64, FALSE, $this->batchdir)
+			: pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+				$short, 1, $long, 2000, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertNotSame([], $this->calls(), 'batches went out before the count was found wrong');
+		$this->assertSame([self::entry('Updating [ ' . self::TABLE . " ]: {$reason}")], $this->openEntries());
+	}
+
+	/** @return array<string, array{string, int, int, string}> the family, the add count, the add file's lines, and the mode */
+	public static function runsRefusedBeforeAnyBatch(): array
+	{
+		return [
+			'a count the add file contradicts' => ['ipv4', 2, 3, 'delta'],
+			'a negative count'                 => ['ipv4', -1, 1, 'delta'],
+			'an unknown family'                => ['ipv5', 1, 1, 'delta'],
+			'an unknown family on a replace'   => ['ipv5', 1, 1, 'replace'],
+		];
+	}
+
+	/** Scenario: given no open entry, a run refused before anything was sent leaves the table and the ledger as they were. */
+	#[DataProvider('runsRefusedBeforeAnyBatch')]
+	public function testARunRefusedBeforeAnyBatchDoesNotTouchTheLedger(string $family, int $count, int $lines, string $mode): void
+	{
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, $family, $this->members('mirror', ['10.255.0.1']),
+			$this->members('add', self::addresses($lines, 1)), $count, $this->members('remove', []), 0, 100, 100, $mode, 64, FALSE,
+			$this->batchdir);
+
+		$this->assertFalse($result['ok']);
+		$this->assertSame([], $this->calls());
+		$this->assertSame([], $this->ledgerFiles(), 'neither the ledger nor its lock was created');
+	}
+
+	/**
+	 * @return array<string, array{callable(): array{0: iterable<?string>, 1: iterable<?string>}}> a member source whose second pass
+	 *   stops before the first batch: on a refused first line, or on a side that holds fewer members than its count
+	 */
+	public static function secondPassesStoppedBeforeAnyBatch(): array
+	{
+		return [
+			'a refused first line' => [static fn (): array => [(static function (): Generator { yield NULL; })(), []]],
+			'an empty add side'    => [static fn (): array => [[], []]],
+		];
+	}
+
+	/** Scenario: given no open entry, a second pass that stops before any batch went out leaves the ledger as it was: the table is unchanged. */
+	#[DataProvider('secondPassesStoppedBeforeAnyBatch')]
+	public function testASecondPassStoppedBeforeAnyBatchDoesNotTouchTheLedger(callable $source): void
+	{
+		$result = pfb_apply_alias_delta_members($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']), $source, 1, 0,
+			100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertSame([], $this->calls());
+		$this->assertSame([], $this->ledgerFiles(), 'neither the ledger nor its lock was created');
+	}
+
+	/**
+	 * Scenario: a replace is one call. Given no open entry, a replace that fails opens the entry; given that open entry, a
+	 * replace that succeeds closes it.
+	 */
+	#[DataProvider('bothPaths')]
+	public function testAFailedReplaceOpensTheEntryAndASuccessfulOneClosesIt(string $path): void
+	{
+		$this->assertSame([], $this->openEntries(), 'before: no entry is open');
+		file_put_contents("{$this->dir}/fail", "1\n");
+
+		$this->assertResultOn($path, FALSE, FALSE, $this->applyOn($path, ['10.1.0.1'], [], 'replace'));
+		$this->assertSame([self::failedCallEntry('replace')], $this->openEntries(), 'the failed replace opens the entry');
+
+		unlink("{$this->dir}/fail");
+		unlink("{$this->dir}/log");
+		$this->assertResultOn($path, FALSE, TRUE, $this->applyOn($path, ['10.1.0.1'], [], 'delta', TRUE));
+		$this->assertSame([['replace', 1]], $this->shape());
+		$this->assertSame([], $this->openEntries(), 'the successful replace closes it');
+	}
+
+	/**
+	 * Scenario: a run has a failed pfctl batch and also ends on a wrong count. Whichever comes first, the entry names the pfctl
+	 * failure, which the tick's retry and the Sync Status page need: the reason is written only when no batch failed. The add
+	 * file counted at 2000 is rewritten to 1000 as call 1 arrives, so 16 add batches go out and the delete batch is call 17.
+	 */
+	public function testAWrongCountAfterAFailedBatchLeavesTheEntryNamingThePfctlFailure(): void
+	{
+		$members = self::addresses(2000, 1);
+		$add = $this->members('add', $members);
+		file_put_contents("{$this->dir}/rewrite", implode("\n", array_slice($members, 0, 1000)) . "\n");
+		file_put_contents("{$this->dir}/rewrite.to", $add);
+		file_put_contents("{$this->dir}/fail", "17\n");
+
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']), $add, 2000,
+			$this->members('remove', ['10.2.0.1']), 1, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertCount(17, $this->calls());
+		$this->assertSame(['delete', 1], $this->shape()[16], 'call 17 is the delete batch, which fails');
+		$this->assertSame([self::failedCallEntry('delete')], $this->openEntries(), 'the wrong count came first, the pfctl failure is named');
+	}
+
+	/** Scenario: the same, the other way round: the add batch fails, then the remove file, rewritten as call 1 arrives, ends short. */
+	public function testAFailedBatchBeforeAWrongCountLeavesTheEntryNamingThePfctlFailure(): void
+	{
+		$members = self::addresses(2000, 2);
+		$remove = $this->members('remove', $members);
+		file_put_contents("{$this->dir}/rewrite", implode("\n", array_slice($members, 0, 1000)) . "\n");
+		file_put_contents("{$this->dir}/rewrite.to", $remove);
+		file_put_contents("{$this->dir}/fail", "1\n");
+		$offset = self::logOffset();
+
+		$result = pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+			$this->members('add', ['10.1.0.1']), 1, $remove, 2000, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertSame(['add', 1], $this->shape()[0]);
+		$this->assertSame([self::failedCallEntry('add')], $this->openEntries(), 'the pfctl failure came first and is still named');
+		$count = array_filter(self::loggedSince($offset), static fn (string $l): bool => str_ends_with($l, ' Updating [ ' . self::TABLE
+			. ' ]: delete read 1000 members, not 2000'));
+		$this->assertCount(1, $count, 'the wrong count is still logged: ' . implode(' | ', self::loggedSince($offset)));
+	}
+
+	/**
+	 * @return array<string, array{list<int>, ?string}> the calls that fail, and the verb of the failed call the entry names (NULL:
+	 *   the entry names the exception)
+	 */
+	public static function throwsAfterABatch(): array
+	{
+		return [
+			'after a batch that succeeded' => [[], NULL],
+			'after a batch that failed'    => [[1], 'add'],
+		];
+	}
+
+	/**
+	 * Scenario: the member source throws after a batch went out. The exception reaches the caller with its own type, and the
+	 * table, partly updated, is left with its entry open: one naming the exception when no batch of the run had opened it,
+	 * the failed batch's when one had.
+	 *
+	 * @param list<int> $failing
+	 */
+	#[DataProvider('throwsAfterABatch')]
+	public function testAThrowAfterABatchWentOutEscapesAndLeavesTheEntryOpen(array $failing, ?string $named): void
+	{
+		file_put_contents("{$this->dir}/fail", $failing === [] ? '' : implode("\n", $failing) . "\n");
+		$source = static function (): Generator {
+			yield from self::addresses(64, 1);
+			throw new UnexpectedValueException('the source failed after a batch');
+		};
+
+		try {
+			pfb_apply_alias_delta_members($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+				static fn (): array => [$source(), []], 65, 0, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+			$this->fail('the exception was swallowed');
+		} catch (UnexpectedValueException $e) {
+			$this->assertSame('the source failed after a batch', $e->getMessage());
+		}
+
+		$this->assertSame([['add', 64]], $this->shape(), 'one batch went out before the throw');
+		if ($named === NULL) {
+			$this->assertStringContainsString('UnexpectedValueException', $this->theEntry()['message']);
+		} else {
+			$this->assertSame([self::failedCallEntry($named)], $this->openEntries());
+		}
+	}
+
+	/**
+	 * Scenario: the member source throws after a batch went out, and the ledger cannot be written either (its directory is
+	 * gone from $pfb). The exception that stopped the run escapes, not the ledger write's.
+	 */
+	public function testAThrowAfterABatchEscapesWithItsOwnTypeWhenTheLedgerCannotBeWritten(): void
+	{
+		global $pfb;
+		$dbdir = $pfb['dbdir'];
+		$source = static function (): Generator {
+			global $pfb;
+			yield from self::addresses(64, 1);
+			$pfb['dbdir'] = NULL;
+			throw new UnexpectedValueException('the source failed after a batch');
+		};
+
+		try {
+			pfb_apply_alias_delta_members($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+				static fn (): array => [$source(), []], 65, 0, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+			$this->fail('the exception was swallowed');
+		} catch (UnexpectedValueException $e) {
+			$this->assertSame('the source failed after a batch', $e->getMessage());
+		} finally {
+			$pfb['dbdir'] = $dbdir;
+		}
+		$this->assertSame([['add', 64]], $this->shape());
+	}
+
+	/**
+	 * Scenario: the first batch throws before its file exists (a NUL byte in the batch directory's name), so no batch reached pf.
+	 * The exception escapes and the ledger is left alone: the table is as it was.
+	 */
+	public function testAThrowBeforeAnyBatchReachedPfLeavesTheLedgerAlone(): void
+	{
+		try {
+			pfb_apply_alias_delta_files($this->pfctl(), self::TABLE, 'ipv4', $this->members('mirror', ['10.255.0.1']),
+				$this->members('add', ['10.1.0.1']), 1, $this->members('remove', []), 0, 10000, 10000, 'delta', 64, FALSE,
+				"{$this->dir}/nul\0dir");
+			$this->fail('a temporary directory holding a NUL byte did not throw');
+		} catch (ValueError) {
+		}
+
+		$this->assertSame([], $this->calls());
+		$this->assertSame([], $this->ledgerFiles(), 'neither the ledger nor its lock was created');
 	}
 
 	// ---------------------------------------------------------------------------------------------------------------
