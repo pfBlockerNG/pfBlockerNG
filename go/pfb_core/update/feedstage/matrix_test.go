@@ -229,7 +229,9 @@ func runMatrixCall(t *testing.T, c matrixCall) (killedAt string, ops int) {
 	return "", ops
 }
 
-// copyRoot copies the flat folders below src to a fresh root, keeping each file's mode and modification time.
+// copyRoot copies the flat folders below src to a fresh root, keeping each file's mode and modification time and the hard
+// links between the files of a folder: a KILL leaves backups linked to their targets, and a Recover over the copy must
+// take the steps it takes over the KILLed folders.
 func copyRoot(t *testing.T, src string) string {
 	t.Helper()
 	dst := t.TempDir()
@@ -241,6 +243,7 @@ func copyRoot(t *testing.T, src string) string {
 		if err != nil {
 			t.Fatal(err)
 		}
+		copied := map[string]os.FileInfo{} // each copy, by the source it was copied from
 		for _, e := range entries {
 			from, to := filepath.Join(src, d, e.Name()), filepath.Join(dst, d, e.Name())
 			info, err := e.Info()
@@ -250,6 +253,20 @@ func copyRoot(t *testing.T, src string) string {
 			if !info.Mode().IsRegular() {
 				t.Fatalf("%s is left a %v", from, info.Mode().Type())
 			}
+			linked := false
+			for made, source := range copied {
+				if os.SameFile(source, info) {
+					if err := os.Link(made, to); err != nil {
+						t.Fatal(err)
+					}
+					linked = true
+					break
+				}
+			}
+			if linked {
+				continue
+			}
+			copied[to] = info
 			data, err := os.ReadFile(from)
 			if err != nil {
 				t.Fatal(err)
@@ -315,6 +332,14 @@ func followUps(t *testing.T, root string, sc matrixScenario, oracle map[string]m
 // published lists are always what that source parses to: never a list of the other download, as unchanged or reparsed;
 // and no staged, backup, absent, marker or restore file is left. A Recover KILLed and run again must leave the folder an
 // uninterrupted Recover leaves, so the next runs checked on that folder hold for it as well.
+//
+// The KILL points are the stage's own file operations (the op: steps of rename, remove, link, create and truncate).
+// feedfetch's transfer and whois, and feedparse's NormalizeFile and RunIP, call os directly and are no KILL point here.
+// The transfer and whois run inside the download's open journal set, which holds every file of the download state they
+// replace, so what a KILL leaves of those is undone by the set's rollback (TestKillInsideTheTransferIsRolledBack); their
+// temporaries are Recover's (TestRecoverRemovesTheTransferTemporaries). The parser runs inside that set as well: its
+// .norm and sidecar are keyed by the digest of the download they were built from, so they are rebuilt from the download
+// the rollback puts back, and RunIP's restore point is Recover's.
 func TestKillAtEveryFileOperation(t *testing.T) {
 	if spec := os.Getenv(matrixEnv); spec != "" {
 		matrixChild(spec)
