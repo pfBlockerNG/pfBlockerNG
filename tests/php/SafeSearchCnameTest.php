@@ -209,6 +209,18 @@ final class SafeSearchCnameTest extends TestCase
 		$this->assertSame(['safe.duckduckgo.com'], $asked);
 	}
 
+	/** Issue #4201: without a resolver given, the apply's CSV resolves a CNAME target through drill (pfb_ss_resolve_target). */
+	public function test_csv_resolves_a_cname_target_through_drill_by_default(): void
+	{
+		$this->installLookupFixtures(FALSE);
+
+		$this->assertSame(
+			"duckduckgo.com,cname,safe.duckduckgo.com,192.0.2.10,2001:db8::10\n"
+			. "www.duckduckgo.com,cname,safe.duckduckgo.com,192.0.2.10,2001:db8::10\n",
+			pfb_ss_csv(['duckduckgo.com' => ['A' => 'cname', 'AAAA' => 'safe.duckduckgo.com']])
+		);
+	}
+
 	public function test_csv_rows_cname_without_baked_ips_keeps_empty_columns(): void
 	{
 		// The without-baked side: a CNAME row is still 5 columns, with empty baked

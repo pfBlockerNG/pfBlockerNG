@@ -53,4 +53,14 @@ final class UnboundInputsPublishedWholeTest extends TestCase
 		$recover = substr($recover, 0, (int) strpos($recover, 'function ', 1));
 		$this->assertStringContainsString("pfb_unbound_py_atomic_write(\$pfb['unbound_py_conf'], pfb_unbound_python_ini('enabled'))", $recover);
 	}
+
+	/** Issue #4201: the pass makes its patch live only through pfb_unbound_conf_publish(), which keeps a whole backup first. */
+	public function testThePassPublishesItsUnboundConfPatchWithAWholeBackup(): void
+	{
+		$code = self::source('pfblockerng.inc');
+		$update = substr($code, (int) strpos($code, 'function pfb_update_unbound('));
+		$update = substr($update, 0, (int) strpos($update, 'function ', 1));
+		$this->assertStringContainsString("pfb_unbound_conf_publish(\$pfb['dnsbldir'])", $update);
+		$this->assertStringNotContainsString('unbound.bk"', $update, 'no backup of its own beside the helper');
+	}
 }
