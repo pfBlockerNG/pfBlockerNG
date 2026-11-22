@@ -17026,6 +17026,33 @@ function pfb_ss_publish(string $rows): bool {
 	return @file_get_contents($pfb['unbound_py_ss']) !== $rows && pfb_unbound_py_atomic_write($pfb['unbound_py_ss'], $rows);
 }
 
+/**
+ * The decider's SafeSearch CSV for $hosts (domain => rewrite): each host's rows, a CNAME host's target resolved by $resolver
+ * to bake its #2 fallback IPs (issue #149), which the freshness cron keeps current.
+ *
+ * @param array<string, array<string, string>> $hosts
+ */
+function pfb_ss_csv(array $hosts, ?callable $resolver = NULL): string {
+	$resolver ??= 'pfb_ss_resolve_target';
+	$rows = '';
+	foreach ($hosts as $host => $data) {
+		[$v4, $v6] = ($data['A'] ?? '') === 'cname' ? $resolver($data['AAAA'] ?? '') : ['', ''];
+		$rows .= pfb_ss_csv_rows($host, $data, $v4, $v6);
+	}
+	return $rows;
+}
+
+/**
+ * Make the staged unbound.tmp the live unbound.conf, keeping the conf it replaces as unbound.bk for the failed-start rollback
+ * (issue #4201). The backup is a whole copy of its own (pfSense rewrites unbound.conf in place, so never a hard link), and the
+ * patch goes live only once that backup is in place.
+ */
+function pfb_unbound_conf_publish(string $dir): bool {
+	return file_exists("{$dir}/unbound.tmp")
+	    && pfb_stage_publish("{$dir}/unbound.bk", static fn (string $staged): int => @copy("{$dir}/unbound.conf", $staged) ? 0 : 1)
+	    && @rename("{$dir}/unbound.tmp", "{$dir}/unbound.conf");
+}
+
 // Define DNSBL Unbound include settings (config.xml)
 function pfb_unbound_dnsbl($mode) {
 	global $g, $pfb;
@@ -21872,10 +21899,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	}
 
 	// Backup existing unbound.conf and rename new unbound.conf file
-	if (file_exists("{$pfb['dnsbldir']}/unbound.tmp")) {
-		@copy("{$pfb['dnsbldir']}/unbound.conf", "{$pfb['dnsbldir']}/unbound.bk");
-		@rename("{$pfb['dnsbldir']}/unbound.tmp", "{$pfb['dnsbldir']}/unbound.conf");
-	}
+	pfb_unbound_conf_publish($pfb['dnsbldir']);
 
 	// When pfBlockerNG is disabled and 'keep blocklists' is disabled.
 	// Runtime values are PfbToggle enums; anything other than On is disabled.

@@ -2348,19 +2348,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 			// Create the decider's CSV list of SafeSearch hosts
 			if (!empty($safesearch_hosts)) {
-				$ss_rows = '';
-				foreach ($safesearch_hosts as $host => $data) {
-					$v4 = $v6 = '';
-					// CNAME redirect: bake the target's current A/AAAA as the #2
-					// fallback (issue #149); the freshness cron keeps them current.
-					if (($data['A'] ?? '') === 'cname') {
-						list($v4, $v6) = pfb_ss_resolve_target($data['AAAA'] ?? '');
-					}
-					$ss_rows .= pfb_ss_csv_rows($host, $data, $v4, $v6);
-				}
-
 				// Publish the CSV whole when it changed (issue #4201)
-				if (pfb_ss_publish($ss_rows)) {
+				if (pfb_ss_publish(pfb_ss_csv($safesearch_hosts))) {
 					$safesearch_update = TRUE;
 					touch("{$pfb['dnsbl_file']}.reload");
 				}

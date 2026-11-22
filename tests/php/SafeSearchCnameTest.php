@@ -47,6 +47,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_ss_refresh_lines')]
 #[CoversFunction('pfb_ss_resolve_target')]
 #[CoversFunction('pfb_ss_publish')]
+#[CoversFunction('pfb_ss_csv')]
 final class SafeSearchCnameTest extends TestCase
 {
 	private string $tmp;
@@ -180,6 +181,32 @@ final class SafeSearchCnameTest extends TestCase
 				'2001:db8::7'
 			)
 		);
+	}
+
+	/**
+	 * Issue #4201: the CSV the apply publishes holds every SafeSearch host's rows, in order, and resolves only a CNAME
+	 * host's target to bake its fallback IPs.
+	 */
+	public function test_csv_holds_every_hosts_rows_and_resolves_only_cname_targets(): void
+	{
+		$asked = [];
+		$resolver = static function (string $target) use (&$asked): array {
+			$asked[] = $target;
+			return ['203.0.113.7', '2001:db8::7'];
+		};
+
+		$csv = pfb_ss_csv([
+			'forcesafe.example.com' => ['A' => '1.2.3.4', 'AAAA' => ''],
+			'duckduckgo.com'        => ['A' => 'cname', 'AAAA' => 'safe.duckduckgo.com'],
+		], $resolver);
+
+		$this->assertSame(
+			"forcesafe.example.com,1.2.3.4,\nwww.forcesafe.example.com,1.2.3.4,\n"
+			. "duckduckgo.com,cname,safe.duckduckgo.com,203.0.113.7,2001:db8::7\n"
+			. "www.duckduckgo.com,cname,safe.duckduckgo.com,203.0.113.7,2001:db8::7\n",
+			$csv
+		);
+		$this->assertSame(['safe.duckduckgo.com'], $asked);
 	}
 
 	public function test_csv_rows_cname_without_baked_ips_keeps_empty_columns(): void

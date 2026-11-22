@@ -327,6 +327,30 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertSame($stale, file_get_contents($GLOBALS['pfb']['unbound_py_conf']));
 	}
 
+	/**
+	 * Issue #4201: a pass whose only change is a whitelist it cannot write signals no restart and leaves the manifest's
+	 * whitelist as it was.
+	 */
+	public function testAWhitelistThatCannotBeRewrittenSignalsNoRestart(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		PfbConfig::writeSystem('dnsbl/whitelist', base64_encode("allowed.example.com\r\nalso-allowed.example.org\r\n"));
+		$this->assertTrue(pfb_unbound_python('enabled'), 'setup: the first pass writes the whitelist');
+		$stale = "stale.example.com,0\nother-stale.example.net,0\n";
+		file_put_contents($GLOBALS['pfb']['unbound_py_wh'], $stale);
+		$sources = @file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
+
+		$signalled = CutShortWrite::run(16, static fn (): bool => pfb_unbound_python('enabled'));
+
+		$this->assertSame('false', $signalled, 'no restart for a whitelist that was not written');
+		$this->assertSame($stale, file_get_contents($GLOBALS['pfb']['unbound_py_wh']));
+		$this->assertSame($sources, @file_get_contents($GLOBALS['pfb']['unbound_py_sources']), 'the manifest whitelist is not synced to it');
+	}
+
 	public function testProxyOnTakesUnboundsPythonSlotForTheObserverAsTheModuleDoes(): void
 	{
 		// Given the proxy on and a Resolver running the admin's own python module.
@@ -650,6 +674,51 @@ final class DnsProxyModuleGatingTest extends TestCase
 
 		$this->assertFalse($changed, 'this pass has nothing to patch');
 		$this->assertFileDoesNotExist("{$this->tmp}/unbound.tmp", 'the rename after the pass must find no stale patch');
+	}
+
+	/** Issue #4201: the patch goes live with the conf it replaces kept whole as unbound.bk, a file of its own, for the rollback. */
+	public function testUnboundConfPublishKeepsTheReplacedConfAsAWholeBackup(): void
+	{
+		file_put_contents("{$this->tmp}/unbound.conf", self::CONF_WITH_MODULE);
+		file_put_contents("{$this->tmp}/unbound.tmp", self::CONF_WITHOUT_MODULE);
+
+		$this->assertTrue(pfb_unbound_conf_publish($this->tmp));
+
+		$this->assertSame(self::CONF_WITHOUT_MODULE, file_get_contents("{$this->tmp}/unbound.conf"));
+		$this->assertSame(self::CONF_WITH_MODULE, file_get_contents("{$this->tmp}/unbound.bk"));
+		$this->assertFileDoesNotExist("{$this->tmp}/unbound.tmp");
+		$this->assertNotSame(fileinode("{$this->tmp}/unbound.conf"), fileinode("{$this->tmp}/unbound.bk"));
+	}
+
+	/** Issue #4201: with no patch staged there is nothing to publish, and no backup is made. */
+	public function testUnboundConfPublishWithoutAPatchChangesNothing(): void
+	{
+		file_put_contents("{$this->tmp}/unbound.conf", self::CONF_WITH_MODULE);
+		@unlink("{$this->tmp}/unbound.tmp");
+
+		$this->assertFalse(pfb_unbound_conf_publish($this->tmp));
+		$this->assertSame(self::CONF_WITH_MODULE, file_get_contents("{$this->tmp}/unbound.conf"));
+		$this->assertFileDoesNotExist("{$this->tmp}/unbound.bk");
+	}
+
+	/**
+	 * Issue #4201: a backup cut short by a full disk is never kept, and the patch then stays out: a rollback must never put a
+	 * truncated unbound.conf in place.
+	 */
+	public function testUnboundConfPublishWhoseBackupIsCutShortKeepsTheConf(): void
+	{
+		if (!CutShortWrite::available()) {
+			$this->markTestSkipped('pcntl and posix are required to cut a write short.');
+		}
+		file_put_contents("{$this->tmp}/unbound.conf", self::CONF_WITH_MODULE);
+		file_put_contents("{$this->tmp}/unbound.tmp", self::CONF_WITHOUT_MODULE);
+		file_put_contents("{$this->tmp}/unbound.bk", "previous backup\n");
+		$dir = $this->tmp;
+
+		$this->assertSame('false', CutShortWrite::run(16, static fn (): bool => pfb_unbound_conf_publish($dir)));
+
+		$this->assertSame(self::CONF_WITH_MODULE, file_get_contents("{$this->tmp}/unbound.conf"), 'the patch is not published without its backup');
+		$this->assertSame("previous backup\n", file_get_contents("{$this->tmp}/unbound.bk"), 'no truncated backup replaces the last whole one');
 	}
 
 	public function testUnboundConfGainsNoModuleWithoutASnapshot(): void

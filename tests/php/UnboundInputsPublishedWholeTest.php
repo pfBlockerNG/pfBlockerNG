@@ -35,4 +35,22 @@ final class UnboundInputsPublishedWholeTest extends TestCase
 		$this->assertStringNotContainsString('pfb_py_ss.raw', self::source('pfblockerng_apply.inc'),
 			'rows appended to a staging file a killed pass left were published by the next pass');
 	}
+
+	/** Issue #4201: the apply publishes the whole CSV of every host, and flags the reload only when it was replaced. */
+	public function testTheApplyPublishesTheSafeSearchCsvAndReloadsOnlyWhenItWasReplaced(): void
+	{
+		$this->assertMatchesRegularExpression(
+			'/if\s*\(\s*pfb_ss_publish\(\s*pfb_ss_csv\(\s*\$safesearch_hosts\s*\)\s*\)\s*\)\s*\{\s*\$safesearch_update\s*=\s*TRUE;\s*touch\("\{\$pfb\[\'dnsbl_file\'\]\}\.reload"\);\s*\}/',
+			self::source('pfblockerng_apply.inc')
+		);
+	}
+
+	/** Issue #4201: an aborted removal writes the DNS proxy's module ini again, whole. */
+	public function testAnAbortedRemovalWritesTheModuleIniWhole(): void
+	{
+		$code = self::source('pfblockerng.inc');
+		$recover = substr($code, (int) strpos($code, 'function pfb_package_removal_recover('));
+		$recover = substr($recover, 0, (int) strpos($recover, 'function ', 1));
+		$this->assertStringContainsString("pfb_unbound_py_atomic_write(\$pfb['unbound_py_conf'], pfb_unbound_python_ini('enabled'))", $recover);
+	}
 }
