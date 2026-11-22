@@ -9,7 +9,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 )
 
 // Scenario: the fail marker follows today's PHP (pfb_download_failure(), apply.inc:2859 and :4276).
@@ -162,19 +161,44 @@ func TestAMarkerOnlyCommitFailureHasItsOwnReason(t *testing.T) {
 	}
 }
 
+// firedDeadline is a context whose deadline passes when the test says so: it reports DeadlineExceeded once fired, with no
+// timer for the run to race.
+type firedDeadline struct {
+	context.Context
+	fire context.CancelFunc
+}
+
+func newFiredDeadline() firedDeadline {
+	base, fire := context.WithCancel(context.Background())
+	return firedDeadline{base, fire}
+}
+
+func (d firedDeadline) Err() error {
+	if d.Context.Err() != nil {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
 // Scenario: a transfer that ended because its deadline passed is a failed download, as today's pfb_download_failure(): the
 // marker is created. Only a cancelled run leaves it alone.
 func TestATransferThatTimedOutCreatesTheFailMarker(t *testing.T) {
 	stage, feed, _ := localStage(t)
 	feed.Source = "http://feed.example/list.txt"
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
-	defer cancel()
-	// The transfer blocks at the resolution of the source's host until the deadline ends it.
+	ctx := newFiredDeadline()
+	defer ctx.fire()
+	// The deadline passes once the transfer is at the resolution of the source's host, which blocks until the deadline ends it.
+	reached := false
 	stage.Fetcher.Policy.Resolve = func(c context.Context, _ string) ([]netip.Addr, error) {
+		reached = true
+		ctx.fire()
 		<-c.Done()
 		return nil, c.Err()
 	}
 	got := stage.Run(ctx, feed, Change{Verdict: VerdictChanged, Force: "download"})
+	if !reached {
+		t.Fatalf("the run = %+v never reached the transfer's resolver", got)
+	}
 	if got.Disposition != "failed" || got.Stage != "fetch" {
 		t.Fatalf("the run = %+v, want failed at the transfer", got)
 	}
@@ -210,9 +234,15 @@ func TestAParseFailureAfterWhoisKeepsItsOwnReasonWhenTheCommitFails(t *testing.T
 	stage.Fetcher.ASNCSV = filepath.Join(t.TempDir(), "asn.csv")
 	writeFile(t, stage.Fetcher.ASNCSV, "198.51.100.0,198.51.100.255,AS64500,Example\n")
 	feed.Format, feed.Source = "asn", "AS64500"
-	writeFile(t, filepath.Join(stage.Paths.FeedDir, "feed_v4.fail"), "")
+	marker := filepath.Join(stage.Paths.FeedDir, "feed_v4.fail")
+	writeFile(t, marker, "")
+	commitFailed := false
 	withFault(t, func(op, path string) error {
-		if op == "create" && filepath.Base(path) == "feed_v4.parsed.ip" || op == "sync" && filepath.Base(path) == "COMMIT.tmp" {
+		if op == "sync" && filepath.Base(path) == "COMMIT.tmp" {
+			commitFailed = true
+			return syscall.EIO
+		}
+		if op == "create" && filepath.Base(path) == "feed_v4.parsed.ip" {
 			return syscall.EIO
 		}
 		return nil
@@ -221,5 +251,11 @@ func TestAParseFailureAfterWhoisKeepsItsOwnReasonWhenTheCommitFails(t *testing.T
 	fault = noFault
 	if got.Disposition != "failed" || got.Stage != "parse" || got.Reason != "ip_parse_failed" {
 		t.Errorf("the run = %+v, want failed at parse with ip_parse_failed", got)
+	}
+	if !commitFailed {
+		t.Error("the marker's commit never reached its injected sync failure")
+	}
+	if !regularExists(marker) {
+		t.Error("the marker is gone although its removal was never committed")
 	}
 }
