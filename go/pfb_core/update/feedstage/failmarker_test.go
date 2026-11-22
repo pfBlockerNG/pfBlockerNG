@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // Scenario: the fail marker follows today's PHP (pfb_download_failure(), apply.inc:2859 and :4276).
@@ -107,6 +108,9 @@ func TestACancelledTransferTouchesNoFailMarker(t *testing.T) {
 			if got.Disposition != "failed" {
 				t.Fatalf("the run = %+v, want failed", got)
 			}
+			if got.Stage != "fetch" || got.Reason != "cancelled" {
+				t.Errorf("the run = %+v, want failed at fetch with the reason cancelled", got)
+			}
 			if regularExists(marker) != passed {
 				t.Errorf("the marker exists = %v after a cancelled transfer, want it untouched (%v)", !passed, passed)
 			}
@@ -155,5 +159,67 @@ func TestAMarkerOnlyCommitFailureHasItsOwnReason(t *testing.T) {
 	fault = noFault
 	if got.Disposition != "failed" || got.Stage != "whois" || got.Reason != "fail_marker_publish_failed" {
 		t.Errorf("the run = %+v, want failed at whois with fail_marker_publish_failed", got)
+	}
+}
+
+// Scenario: a transfer that ended because its deadline passed is a failed download, as today's pfb_download_failure(): the
+// marker is created. Only a cancelled run leaves it alone.
+func TestATransferThatTimedOutCreatesTheFailMarker(t *testing.T) {
+	stage, feed, _ := localStage(t)
+	feed.Source = "http://feed.example/list.txt"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	// The transfer blocks at the resolution of the source's host until the deadline ends it.
+	stage.Fetcher.Policy.Resolve = func(c context.Context, _ string) ([]netip.Addr, error) {
+		<-c.Done()
+		return nil, c.Err()
+	}
+	got := stage.Run(ctx, feed, Change{Verdict: VerdictChanged, Force: "download"})
+	if got.Disposition != "failed" || got.Stage != "fetch" {
+		t.Fatalf("the run = %+v, want failed at the transfer", got)
+	}
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		t.Fatalf("the context ended with %v, want its deadline", ctx.Err())
+	}
+	if !regularExists(filepath.Join(stage.Paths.FeedDir, "feed_v4.fail")) {
+		t.Error("no failure marker after a transfer that timed out, want it published")
+	}
+}
+
+// Scenario: the first download of a feed fails and the commit of its marker cannot be made. With no validators to retire,
+// the marker is the commit's only operation, so that is the reason.
+func TestAFirstDownloadFailureWhoseMarkerCommitFailsNamesTheMarker(t *testing.T) {
+	stage, feed, _ := localStage(t) // the source file is absent: the transfer fails
+	withFault(t, func(op, path string) error {
+		if op == "sync" && filepath.Base(path) == "COMMIT.tmp" {
+			return syscall.EIO
+		}
+		return nil
+	})
+	got := stage.Run(context.Background(), feed, Change{Verdict: VerdictChanged, Force: "none"})
+	fault = noFault
+	if got.Disposition != "failed" || got.Stage != "fetch" || got.Reason != "fail_marker_publish_failed" {
+		t.Errorf("the run = %+v, want failed at fetch with fail_marker_publish_failed", got)
+	}
+}
+
+// Scenario: the whois branch's marker reason names only a failure the whois branch returned. An asn feed whose whois
+// succeeds and whose parse fails keeps the parse stage and reason when the commit of the marker's removal fails too.
+func TestAParseFailureAfterWhoisKeepsItsOwnReasonWhenTheCommitFails(t *testing.T) {
+	stage, feed, _ := localStage(t)
+	stage.Fetcher.ASNCSV = filepath.Join(t.TempDir(), "asn.csv")
+	writeFile(t, stage.Fetcher.ASNCSV, "198.51.100.0,198.51.100.255,AS64500,Example\n")
+	feed.Format, feed.Source = "asn", "AS64500"
+	writeFile(t, filepath.Join(stage.Paths.FeedDir, "feed_v4.fail"), "")
+	withFault(t, func(op, path string) error {
+		if op == "create" && filepath.Base(path) == "feed_v4.parsed.ip" || op == "sync" && filepath.Base(path) == "COMMIT.tmp" {
+			return syscall.EIO
+		}
+		return nil
+	})
+	got := stage.Run(context.Background(), feed, Change{Force: "none"})
+	fault = noFault
+	if got.Disposition != "failed" || got.Stage != "parse" || got.Reason != "ip_parse_failed" {
+		t.Errorf("the run = %+v, want failed at parse with ip_parse_failed", got)
 	}
 }

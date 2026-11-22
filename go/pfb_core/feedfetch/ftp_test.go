@@ -498,7 +498,9 @@ func TestAFailedRetimeOfAnFTPProbeBodyPublishesNothingOfIt(t *testing.T) {
 	if !after.ModTime().Equal(origInfo.ModTime()) || !os.SameFile(after, origInfo) {
 		t.Errorf(".orig was replaced or retimed by the failed run (%v, %v), want the published file untouched", after.ModTime(), origInfo.ModTime())
 	}
-	if _, err := os.Stat(filepath.Join(feed.Dir, feed.Name+".probe")); !os.IsNotExist(err) {
-		t.Errorf("the probe body is left after the failed run (%v)", err)
+	for _, suffix := range []string{".probe", ".probe.etag", ".probe.lastmod", ".probe.size"} {
+		if _, err := os.Stat(filepath.Join(feed.Dir, feed.Name+suffix)); !os.IsNotExist(err) {
+			t.Errorf("%s is left after the failed run (%v)", suffix, err)
+		}
 	}
 }
