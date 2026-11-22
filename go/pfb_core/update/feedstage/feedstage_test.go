@@ -1,0 +1,451 @@
+package feedstage
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
+)
+
+// testStage is a stage over a fresh feed folder whose fetcher reaches the loopback test servers by name: the feed URLs name
+// feed.example, which the vetting resolver answers with 127.0.0.1 (allow-listed) and a public address.
+func testStage(t *testing.T) *Stage {
+	t.Helper()
+	return &Stage{
+		Paths: Paths{FeedDir: t.TempDir()},
+		Fetcher: &feedfetch.Fetcher{
+			Policy: feedfetch.Policy{
+				Allow: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")},
+				Resolve: func(context.Context, string) ([]netip.Addr, error) {
+					return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("1.1.1.1")}, nil
+				},
+			},
+			RetryDelay: time.Nanosecond,
+		},
+	}
+}
+
+// testFeed is the feed "feed" of kind (ipv4, ipv6 or dnsbl), its file stem in the feed folder carrying the family suffix.
+func testFeed(kind, state, format, source string) Feed {
+	name := "feed"
+	switch kind {
+	case "ipv4":
+		name += "_v4"
+	case "ipv6":
+		name += "_v6"
+	}
+	return Feed{
+		ID: kind + ":" + name, Kind: kind, Name: name, State: state, Format: format,
+		Source: strings.Replace(source, "127.0.0.1", "feed.example", 1),
+	}
+}
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", filepath.Base(path), err)
+	}
+	return string(data)
+}
+
+func TestProbeReuseAndForceModes(t *testing.T) {
+	var requests, conditional atomic.Int32
+	secret := "feed-secret-never-return"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Header.Get("If-None-Match") != "" {
+			conditional.Add(1)
+		}
+		w.Header().Set("ETag", `"same"`)
+		_, _ = w.Write([]byte("203.0.113.1\n"))
+	}))
+	defer server.Close()
+	stage := testStage(t)
+	var updateLog strings.Builder
+	stage.Log = &updateLog
+	feed := testFeed("ipv4", "enabled", "auto", server.URL+"/feed")
+	feed.Username, feed.Password = "user", secret
+	dir := stage.Paths.FeedDir
+	writeFile(t, filepath.Join(dir, "feed_v4.orig"), "203.0.113.2\n")
+
+	first := stage.Run(context.Background(), feed, "none")
+	if first.Disposition != "changed" || first.Entries != 1 || requests.Load() != 1 {
+		t.Fatalf("first probe+ingest = %+v after %d HTTP requests, want changed/one entry/one request", first, requests.Load())
+	}
+	if got := readFile(t, filepath.Join(dir, "feed_v4.orig.etag")); got != `"same"` {
+		t.Fatalf("the changed probe's ETag = %q, want it beside the published baseline", got)
+	}
+	if got := readFile(t, filepath.Join(dir, "feed_v4.parsed.ip")); got != "203.0.113.1\n" {
+		t.Fatalf("parsed IP artifact = %q", got)
+	}
+	if raw, _ := json.Marshal(first); strings.Contains(string(raw), secret) || strings.Contains(string(raw), server.URL) {
+		t.Fatalf("the result exposed a secret or URL: %s", raw)
+	}
+
+	if got := stage.Run(context.Background(), feed, "none"); got.Disposition != "unchanged" || requests.Load() != 2 || conditional.Load() != 1 {
+		t.Fatalf("unchanged probe = %+v after %d requests (%d conditional), want one conditional request", got, requests.Load(), conditional.Load())
+	}
+	if got := stage.Run(context.Background(), feed, "parse"); got.Disposition != "reparsed" || requests.Load() != 2 {
+		t.Fatalf("parse force = %+v after %d HTTP requests, want reparsed without a request", got, requests.Load())
+	}
+	for suffix, body := range map[string]string{
+		".probe": "stale.example\n", ".probe.etag": `"stale"`, ".probe.lastmod": "yesterday", ".probe.size": "12",
+	} {
+		writeFile(t, filepath.Join(dir, "feed_v4"+suffix), body)
+	}
+	if got := stage.Run(context.Background(), feed, "download"); got.Disposition != "changed" || requests.Load() != 3 || conditional.Load() != 1 {
+		t.Fatalf("download force = %+v after %d requests (%d conditional), want one unconditional fetch", got, requests.Load(), conditional.Load())
+	}
+	for _, suffix := range []string{".probe", ".probe.etag", ".probe.lastmod", ".probe.size"} {
+		if _, err := os.Stat(filepath.Join(dir, "feed_v4"+suffix)); !os.IsNotExist(err) {
+			t.Errorf("forced download left %s: %v", suffix, err)
+		}
+	}
+	if got := stage.Run(context.Background(), feed, "both"); got.Disposition != "changed" || requests.Load() != 4 || conditional.Load() != 1 {
+		t.Fatalf("both force = %+v after %d requests (%d conditional), want one unconditional fetch", got, requests.Load(), conditional.Load())
+	}
+	if strings.Contains(updateLog.String(), secret) || strings.Contains(updateLog.String(), server.URL) {
+		t.Fatalf("the log exposed a secret or URL: %s", updateLog.String())
+	}
+}
+
+func TestFailureKeepsLastGoodOriginalAndParsedArtifacts(t *testing.T) {
+	var fail atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fail.Load() {
+			http.Error(w, "rejected", http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte("203.0.113.9\n"))
+	}))
+	defer server.Close()
+	stage := testStage(t)
+	feed := testFeed("ipv4", "enabled", "auto", server.URL+"/feed")
+	if got := stage.Run(context.Background(), feed, "none"); got.Disposition != "changed" {
+		t.Fatalf("initial run = %+v", got)
+	}
+	orig := filepath.Join(stage.Paths.FeedDir, "feed_v4.orig")
+	parsed := filepath.Join(stage.Paths.FeedDir, "feed_v4.parsed.ip")
+	beforeOrig, beforeParsed := readFile(t, orig), readFile(t, parsed)
+
+	fail.Store(true)
+	if got := stage.Run(context.Background(), feed, "none"); got.Disposition != "failed" {
+		t.Fatalf("failed run = %+v", got)
+	}
+	if afterOrig, afterParsed := readFile(t, orig), readFile(t, parsed); afterOrig != beforeOrig || afterParsed != beforeParsed {
+		t.Fatalf("a failed feed changed last-known-good artifacts: orig %q -> %q; parsed %q -> %q", beforeOrig, afterOrig, beforeParsed, afterParsed)
+	}
+}
+
+func TestProxyUnusableRefusesWithoutDialingAndKeepsLastGood(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte("203.0.113.9\n"))
+	}))
+	defer server.Close()
+	stage := testStage(t)
+	stage.Fetcher.ProxyUnusable = true
+	feed := testFeed("ipv4", "enabled", "auto", server.URL+"/feed")
+	orig := filepath.Join(stage.Paths.FeedDir, "feed_v4.orig")
+	parsed := filepath.Join(stage.Paths.FeedDir, "feed_v4.parsed.ip")
+	writeFile(t, orig, "203.0.113.1\n")
+	writeFile(t, parsed, "203.0.113.1\n")
+	for _, force := range []string{"none", "download"} {
+		if got := stage.Run(context.Background(), feed, force); got.Disposition != "failed" || got.Reason != "proxy_unusable" {
+			t.Fatalf("run(%q) with an unusable proxy = %+v; want failed/proxy_unusable", force, got)
+		}
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("a run with an unusable proxy sent %d direct requests, want none", requests.Load())
+	}
+	for path, want := range map[string]string{orig: "203.0.113.1\n", parsed: "203.0.113.1\n"} {
+		if got := readFile(t, path); got != want {
+			t.Fatalf("%s = %q after a proxy refusal, want last-known-good %q", filepath.Base(path), got, want)
+		}
+	}
+}
+
+func TestFailureReasonDoesNotExposeLocalPaths(t *testing.T) {
+	dir := t.TempDir()
+	source := "file://" + filepath.Join(dir, "missing-feed")
+	stage := testStage(t)
+	stage.Fetcher.Policy.LocalDirs = []string{dir}
+	got := stage.Run(context.Background(), testFeed("ipv4", "enabled", "auto", source), "none")
+	if got.Disposition != "failed" {
+		t.Fatalf("run for a missing local feed = %+v", got)
+	}
+	result, _ := json.Marshal(got)
+	if got.Reason != "feed_probe_failed" || strings.Contains(string(result), dir) || strings.Contains(string(result), source) {
+		t.Fatalf("the failure exposed its local source: %s", result)
+	}
+}
+
+func TestPropagatesSafeFetcherFailureReasons(t *testing.T) {
+	secret := "feed-secret-never-return"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "missing", http.StatusNotFound)
+	}))
+	defer server.Close()
+	stage := testStage(t)
+	feed := testFeed("ipv4", "enabled", "auto", server.URL+"/feed")
+	feed.Username, feed.Password = "user", secret
+	writeFile(t, filepath.Join(stage.Paths.FeedDir, "feed_v4.orig"), "203.0.113.1\n")
+	for _, tc := range []struct{ force, stage string }{{"none", "probe"}, {"download", "fetch"}} {
+		var updateLog strings.Builder
+		stage.Log = &updateLog
+		got := stage.Run(context.Background(), feed, tc.force)
+		if got.Disposition != "failed" || got.Stage != tc.stage || got.Reason != "404 Not Found" {
+			t.Fatalf("run(%q) failure = %+v; want feedfetch's safe status reason at stage %s", tc.force, got, tc.stage)
+		}
+		result, _ := json.Marshal(got)
+		for _, private := range []string{secret, server.URL} {
+			if strings.Contains(string(result), private) || strings.Contains(updateLog.String(), private) {
+				t.Fatalf("run(%q) exposed a secret or URL: result %s, log %q", tc.force, result, updateLog.String())
+			}
+		}
+	}
+}
+
+func TestHoldsDisabledBaselineAndWithoutBaseline(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, preScript, want string
+		hasOrig                      bool
+	}{
+		{name: "held without baseline", state: "hold", want: "held"},
+		{name: "held baseline with script", state: "hold", preScript: "pre.sh", hasOrig: true, want: "reparsed"},
+		{name: "disabled row", state: "disabled", want: "held"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Error("a held or disabled feed made a network request")
+			}))
+			defer server.Close()
+			stage := testStage(t)
+			feed := testFeed("ipv4", tc.state, "auto", server.URL+"/feed")
+			feed.PreScript = tc.preScript
+			if tc.hasOrig {
+				writeFile(t, filepath.Join(stage.Paths.FeedDir, "feed_v4.orig"), "203.0.113.7\n")
+				dir := t.TempDir()
+				stage.Paths.ScriptDirs = []string{dir}
+				if err := os.WriteFile(filepath.Join(dir, tc.preScript), []byte("#!/bin/sh\ntrue\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := stage.Run(context.Background(), feed, "none"); got.Disposition != tc.want {
+				t.Fatalf("run for %s = %+v; want %s", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseWithoutBaselineIngestsThenParses(t *testing.T) {
+	var requests, conditional atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Header.Get("If-None-Match") != "" {
+			conditional.Add(1)
+		}
+		w.Header().Set("ETag", `"new"`)
+		_, _ = w.Write([]byte("203.0.113.7\n"))
+	}))
+	defer server.Close()
+	stage := testStage(t)
+	got := stage.Run(context.Background(), testFeed("ipv4", "enabled", "auto", server.URL+"/feed"), "parse")
+	if got.Disposition != "changed" || got.Stage != "parse" || !got.SourceChanged || got.Entries != 1 {
+		t.Fatalf("run(parse) without a baseline = %+v; want a fetched and parsed changed feed", got)
+	}
+	if requests.Load() != 1 || conditional.Load() != 0 {
+		t.Fatalf("run(parse) without a baseline made %d requests (%d conditional), want one unconditional ingest", requests.Load(), conditional.Load())
+	}
+	for _, name := range []string{"feed_v4.orig", "feed_v4.parsed.ip"} {
+		if got := readFile(t, filepath.Join(stage.Paths.FeedDir, name)); got != "203.0.113.7\n" {
+			t.Fatalf("%s = %q; want the fetched entry", name, got)
+		}
+	}
+}
+
+func TestDNSBLPublishesBothEmptyFamilySignalsAndRetainsThemOnFailure(t *testing.T) {
+	var fail atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fail.Load() {
+			http.Error(w, "rejected", http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte("example.test\n"))
+	}))
+	defer server.Close()
+	stage := testStage(t)
+	stage.Config.DNSBLIP = true
+	feed := testFeed("dnsbl", "enabled", "auto", server.URL+"/feed")
+	result := stage.Run(context.Background(), feed, "none")
+	if result.Disposition != "changed" || result.DNSBLRows != 1 || result.IPv4Count != 0 || result.IPv6Count != 0 {
+		t.Fatalf("DNSBL result = %+v, want one row and explicit empty IP families", result)
+	}
+	names := []string{"feed.parsed.ndjson", "feed.parsed.v4.ip", "feed.parsed.v6.ip"}
+	before := make(map[string]string, len(names))
+	for _, name := range names {
+		before[name] = readFile(t, filepath.Join(stage.Paths.FeedDir, name))
+		if strings.HasSuffix(name, ".ip") && before[name] != "" {
+			t.Errorf("empty family side list %s = %q, want empty", name, before[name])
+		}
+	}
+	fail.Store(true)
+	if got := stage.Run(context.Background(), feed, "none"); got.Disposition != "failed" {
+		t.Fatalf("failed DNSBL run = %+v", got)
+	}
+	for _, name := range names {
+		if got := readFile(t, filepath.Join(stage.Paths.FeedDir, name)); got != before[name] {
+			t.Errorf("a failed DNSBL run changed %s: %q", name, got)
+		}
+	}
+}
+
+func TestWhoisKeepsPartialResolutionAndReportsFailure(t *testing.T) {
+	stage := testStage(t)
+	stage.Fetcher.Lookup = func(_ context.Context, _, host string) ([]netip.Addr, error) {
+		if host == "one.example" {
+			return []netip.Addr{netip.MustParseAddr("203.0.113.19")}, nil
+		}
+		return nil, errors.New("lookup failed")
+	}
+	got := stage.Run(context.Background(), testFeed("ipv4", "enabled", "whois", "one.example,bad.example"), "none")
+	if got.Disposition != "failed" || got.Stage != "whois" || got.Reason != "whois_partial" || got.Entries != 1 {
+		t.Fatalf("partial WHOIS result = %+v, want one kept entry and a whois-stage failure", got)
+	}
+	if data := readFile(t, filepath.Join(stage.Paths.FeedDir, "feed_v4.orig")); !strings.Contains(data, "203.0.113.19") {
+		t.Fatalf("partial WHOIS baseline = %q, want the resolved address", data)
+	}
+	if data := readFile(t, filepath.Join(stage.Paths.FeedDir, "feed_v4.parsed.ip")); data != "203.0.113.19\n" {
+		t.Fatalf("partial WHOIS list = %q, want the resolved address published", data)
+	}
+}
+
+func TestCustomListsParseWithoutTransfer(t *testing.T) {
+	ip := testStage(t)
+	got := ip.Run(context.Background(), Feed{ID: "custom:ipv4:Test", Kind: "ipv4", Name: "Test_custom_v4", State: "enabled",
+		Format: "auto", Custom: true, CustomText: "203.0.113.21\n"}, "none")
+	if got.Disposition != "changed" || got.Entries != 1 {
+		t.Fatalf("custom IP run = %+v", got)
+	}
+	if data := readFile(t, filepath.Join(ip.Paths.FeedDir, "Test_custom_v4.parsed.ip")); data != "203.0.113.21\n" {
+		t.Fatalf("custom IP list = %q", data)
+	}
+	dnsbl := testStage(t)
+	got = dnsbl.Run(context.Background(), Feed{ID: "custom:dnsbl:Test", Kind: "dnsbl", Name: "Test_custom", State: "enabled",
+		Format: "auto", Custom: true, CustomText: "example.test\n"}, "none")
+	if got.Disposition != "changed" || got.DNSBLRows != 1 {
+		t.Fatalf("custom DNSBL run = %+v", got)
+	}
+	if _, err := os.Stat(filepath.Join(dnsbl.Paths.FeedDir, "Test_custom.parsed.ndjson")); err != nil {
+		t.Fatalf("custom DNSBL parsed artifact: %v", err)
+	}
+}
+
+func TestRunsPreScriptAndKeepsOldArtifactsWhenItFails(t *testing.T) {
+	scriptDir := t.TempDir()
+	script := "#!/bin/sh\nprintf '%s\\n' '203.0.113.88' > \"$1\"\n"
+	if err := os.WriteFile(filepath.Join(scriptDir, "rewrite.sh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stage := testStage(t)
+	stage.Paths.ScriptDirs = []string{scriptDir}
+	feed := testFeed("ipv4", "enabled", "auto", "http://example.test/feed")
+	feed.PreScript = "rewrite.sh"
+	orig := filepath.Join(stage.Paths.FeedDir, "feed_v4.orig")
+	writeFile(t, orig, "203.0.113.1\n")
+	if got := stage.Run(context.Background(), feed, "parse"); got.Disposition != "reparsed" || got.PreScriptFailed {
+		t.Fatalf("successful pre-script run = %+v", got)
+	}
+	if data := readFile(t, filepath.Join(stage.Paths.FeedDir, "feed_v4.parsed.ip")); data != "203.0.113.88\n" {
+		t.Fatalf("pre-script parsed bytes = %q", data)
+	}
+	if data := readFile(t, orig); data != "203.0.113.1\n" {
+		t.Fatalf("the pre-script changed the raw baseline: %q", data)
+	}
+
+	bad := testStage(t)
+	bad.Paths.ScriptDirs = []string{scriptDir}
+	feed.PreScript = "missing.sh"
+	badOrig := filepath.Join(bad.Paths.FeedDir, "feed_v4.orig")
+	badParsed := filepath.Join(bad.Paths.FeedDir, "feed_v4.parsed.ip")
+	writeFile(t, badOrig, "203.0.113.5\n")
+	writeFile(t, badParsed, "203.0.113.6\n")
+	if got := bad.Run(context.Background(), feed, "parse"); got.Disposition != "failed" || !got.PreScriptFailed || got.Stage != "script" {
+		t.Fatalf("missing pre-script run = %+v", got)
+	}
+	for path, want := range map[string]string{badOrig: "203.0.113.5\n", badParsed: "203.0.113.6\n"} {
+		if data := readFile(t, path); data != want {
+			t.Fatalf("a pre-script failure changed %s: %q", filepath.Base(path), data)
+		}
+	}
+}
+
+func TestPublishesParsedArtifactsAtomically(t *testing.T) {
+	dir := t.TempDir()
+	names := []string{"first.parsed.ip", "second.parsed.ip"}
+	for _, name := range names {
+		writeFile(t, filepath.Join(dir, name), "old\n")
+	}
+	staged := filepath.Join(dir, ".staged-first")
+	writeFile(t, staged, "new\n")
+	err := publishStaged(dir, []stagedFeedFile{
+		{name: names[0], temp: staged},
+		{name: names[1], temp: filepath.Join(dir, ".missing-stage")},
+	})
+	if err == nil {
+		t.Fatal("a publication with a missing staged artifact succeeded")
+	}
+	for _, name := range names {
+		if got := readFile(t, filepath.Join(dir, name)); got != "old\n" {
+			t.Errorf("a failed publication changed %s: %q", name, got)
+		}
+	}
+}
+
+// An unset or relative folder is refused before anything is touched: no default may name a host folder.
+func TestUnsetPathsAreErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		paths  Paths
+		feed   Feed
+		reason string
+	}{
+		{"no feed folder", Paths{}, testFeed("ipv4", "enabled", "auto", "http://example.test/feed"), "feed_directory_missing"},
+		{"relative feed folder", Paths{FeedDir: "feeds"}, testFeed("ipv4", "enabled", "auto", "http://example.test/feed"), "feed_directory_invalid"},
+		{"geoip without its folder", Paths{FeedDir: t.TempDir()}, testFeed("ipv4", "enabled", "geoip", "US United States"), "geoip_directory_missing"},
+		{"rsync without its program", Paths{FeedDir: t.TempDir()}, testFeed("ipv4", "enabled", "rsync", "rsync://feed.example/list"), "rsync_unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stage := testStage(t)
+			stage.Paths = tc.paths
+			got := stage.Run(context.Background(), tc.feed, "download")
+			if got.Disposition != "failed" || got.Stage != "settings" || got.Reason != tc.reason {
+				t.Fatalf("run = %+v; want a settings failure %s", got, tc.reason)
+			}
+			if tc.paths.FeedDir != "" && filepath.IsAbs(tc.paths.FeedDir) {
+				if entries, _ := os.ReadDir(tc.paths.FeedDir); len(entries) != 0 {
+					t.Fatalf("a refused feed left %d files in its folder", len(entries))
+				}
+			}
+		})
+	}
+}

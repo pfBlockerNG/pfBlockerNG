@@ -1,0 +1,241 @@
+{
+  "schema": 1,
+  "placeholder": "127.1.7.7",
+  "cases": [
+    {
+      "id": "ip_success",
+      "description": "A changed source is transferred, parsed and published; the download becomes the baseline.",
+      "kind": "ipv4",
+      "custom": false,
+      "baseline": "198.51.100.1\n",
+      "source": "198.51.100.2\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["198.51.100.2"], "placeholder": "", "orig": "198.51.100.2\n"}
+    },
+    {
+      "id": "ip_reuse",
+      "description": "An unchanged source reuses the published list: nothing is parsed again.",
+      "kind": "ipv4",
+      "custom": false,
+      "baseline": "198.51.100.1\n",
+      "source": "198.51.100.1\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "unchanged", "stage": "", "postFailed": false, "entries": ["198.51.100.1"], "placeholder": "", "orig": "198.51.100.1\n"}
+    },
+    {
+      "id": "ip_reuse_post_script",
+      "description": "An unchanged source with a post-script is parsed again from the baseline, never reused verbatim (issue #1960).",
+      "kind": "ipv4",
+      "custom": false,
+      "baseline": "198.51.100.1\n",
+      "source": "198.51.100.1\n",
+      "pre": null,
+      "post": "exit 0",
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["198.51.100.1"], "placeholder": "", "orig": "198.51.100.1\n"}
+    },
+    {
+      "id": "ip_failed_transfer",
+      "description": "A source that cannot be transferred keeps the last known-good download and list.",
+      "kind": "ipv4",
+      "custom": false,
+      "baseline": "198.51.100.1\n",
+      "source": null,
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "failed", "stage": "transfer", "postFailed": false, "entries": ["198.51.100.1"], "placeholder": "", "orig": "198.51.100.1\n"}
+    },
+    {
+      "id": "ip_failed_pre_script",
+      "description": "A failed pre-script keeps the last known-good list and leaves the feed to be retried.",
+      "kind": "ipv4",
+      "custom": false,
+      "baseline": "198.51.100.1\n",
+      "source": "198.51.100.2\n",
+      "pre": "exit 1",
+      "post": null,
+      "expect": {"outcome": "failed", "stage": "pre-script", "postFailed": false, "entries": ["198.51.100.1"], "placeholder": "", "orig": "198.51.100.1\n"},
+      "old_expect": {"orig": "198.51.100.2\n"},
+      "departure": "Core has no .update marker to carry the retry: the download is put back to the baseline, so the next change detection sees the source as changed again. Today keeps the new download and the marker."
+    },
+    {
+      "id": "ip_pre_script_transforms",
+      "description": "A pre-script's output is what is parsed; the download itself stays as transferred.",
+      "kind": "ipv4",
+      "custom": false,
+      "baseline": "198.51.100.1\n",
+      "source": "198.51.100.2\n",
+      "pre": "printf '198.51.100.9\\n' >> \"$1\"",
+      "post": null,
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["198.51.100.2", "198.51.100.9"], "placeholder": "", "orig": "198.51.100.2\n"}
+    },
+    {
+      "id": "ip_failed_post_script",
+      "description": "A failed post-script does not fail the feed: the list is published and the download is put back over the script's leftovers.",
+      "kind": "ipv4",
+      "custom": false,
+      "baseline": "198.51.100.1\n",
+      "source": "198.51.100.2\n",
+      "pre": null,
+      "post": "printf 'junk\\n' > \"$1\"; exit 1",
+      "expect": {"outcome": "updated", "stage": "", "postFailed": true, "entries": ["198.51.100.2"], "placeholder": "", "orig": "198.51.100.2\n"}
+    },
+    {
+      "id": "ip_post_script_deletes",
+      "description": "A post-script that deletes the download: the restore point puts it back, and the list is the parse of the download.",
+      "kind": "ipv4",
+      "custom": false,
+      "baseline": "198.51.100.1\n",
+      "source": "198.51.100.2\n",
+      "pre": null,
+      "post": "rm -f \"$1\"",
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["198.51.100.2"], "placeholder": "", "orig": "198.51.100.2\n"}
+    },
+    {
+      "id": "ip_post_script_empties",
+      "description": "A post-script that empties a comment-only download: the empty check reads the script's output, finds no file content, adds no placeholder and keeps the last list.",
+      "kind": "ipv4",
+      "custom": false,
+      "baseline": "198.51.100.1\n",
+      "source": "# nothing listed\n",
+      "pre": null,
+      "post": ": > \"$1\"",
+      "expect": {"outcome": "empty", "stage": "", "postFailed": false, "entries": ["198.51.100.1"], "placeholder": "", "orig": "# nothing listed\n"}
+    },
+    {
+      "id": "ip_post_script_replaces",
+      "description": "A post-script that replaces the download with a symbolic link: the restore point is renamed over the link, so the download is a regular file again.",
+      "kind": "ipv4",
+      "custom": false,
+      "baseline": "198.51.100.1\n",
+      "source": "198.51.100.2\n",
+      "pre": null,
+      "post": "rm -f \"$1\"; ln -s \"$1.post\" \"$1\"",
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["198.51.100.2"], "placeholder": "", "orig": "198.51.100.2\n"}
+    },
+    {
+      "id": "ip_empty_after_parse",
+      "description": "A download with content but no address publishes nothing: the last list stays and no placeholder is added.",
+      "kind": "ipv4",
+      "custom": false,
+      "baseline": "198.51.100.1\n",
+      "source": "not an address\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "empty", "stage": "", "postFailed": false, "entries": ["198.51.100.1"], "placeholder": "", "orig": "not an address\n"}
+    },
+    {
+      "id": "ip_empty_placeholder",
+      "description": "A download without one content line replaces the list with the empty-feed placeholder.",
+      "kind": "ipv4",
+      "custom": false,
+      "baseline": "198.51.100.1\n",
+      "source": "# nothing listed\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": [], "placeholder": "empty", "orig": "# nothing listed\n"}
+    },
+    {
+      "id": "ip_custom",
+      "description": "A custom list needs no transfer: its text becomes the download and is parsed.",
+      "kind": "ipv4",
+      "custom": true,
+      "baseline": null,
+      "source": "198.51.100.5\n198.51.100.6\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["198.51.100.5", "198.51.100.6"], "placeholder": "", "orig": "198.51.100.5\n198.51.100.6\n"}
+    },
+    {
+      "id": "dnsbl_success",
+      "description": "A changed DNSBL source is transferred, parsed and published.",
+      "kind": "dnsbl",
+      "custom": false,
+      "baseline": "a.example\n",
+      "source": "b.example\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["b.example"], "placeholder": "", "orig": "b.example\n"}
+    },
+    {
+      "id": "dnsbl_reuse",
+      "description": "An unchanged DNSBL source reuses the published rows.",
+      "kind": "dnsbl",
+      "custom": false,
+      "baseline": "a.example\n",
+      "source": "a.example\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "unchanged", "stage": "", "postFailed": false, "entries": ["a.example"], "placeholder": "", "orig": "a.example\n"}
+    },
+    {
+      "id": "dnsbl_failed_transfer",
+      "description": "A DNSBL source that cannot be transferred keeps the last known-good download and rows.",
+      "kind": "dnsbl",
+      "custom": false,
+      "baseline": "a.example\n",
+      "source": null,
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "failed", "stage": "transfer", "postFailed": false, "entries": ["a.example"], "placeholder": "", "orig": "a.example\n"}
+    },
+    {
+      "id": "dnsbl_failed_pre_script",
+      "description": "A failed DNSBL pre-script keeps the last known-good rows and leaves the feed to be retried.",
+      "kind": "dnsbl",
+      "custom": false,
+      "baseline": "a.example\n",
+      "source": "b.example\n",
+      "pre": "exit 1",
+      "post": null,
+      "expect": {"outcome": "failed", "stage": "pre-script", "postFailed": false, "entries": ["a.example"], "placeholder": "", "orig": "a.example\n"},
+      "old_expect": {"orig": "b.example\n"},
+      "departure": "Core has no .update marker to carry the retry: the download is put back to the baseline, so the next change detection sees the source as changed again. Today keeps the new download and the marker."
+    },
+    {
+      "id": "dnsbl_failed_post_script",
+      "description": "A failed DNSBL post-script runs on a throwaway copy: the rows are published and the download is untouched.",
+      "kind": "dnsbl",
+      "custom": false,
+      "baseline": "a.example\n",
+      "source": "b.example\n",
+      "pre": null,
+      "post": "printf 'junk\\n' > \"$1\"; exit 1",
+      "expect": {"outcome": "updated", "stage": "", "postFailed": true, "entries": ["b.example"], "placeholder": "", "orig": "b.example\n"}
+    },
+    {
+      "id": "dnsbl_post_script_deletes",
+      "description": "A DNSBL post-script that deletes its input deletes only the throwaway copy.",
+      "kind": "dnsbl",
+      "custom": false,
+      "baseline": "a.example\n",
+      "source": "b.example\n",
+      "pre": null,
+      "post": "rm -f \"$1\"",
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["b.example"], "placeholder": "", "orig": "b.example\n"}
+    },
+    {
+      "id": "dnsbl_empty_after_parse",
+      "description": "A DNSBL download without one domain keeps the last published rows.",
+      "kind": "dnsbl",
+      "custom": false,
+      "baseline": "a.example\n",
+      "source": "# nothing listed\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "empty", "stage": "", "postFailed": false, "entries": ["a.example"], "placeholder": "", "orig": "# nothing listed\n"}
+    },
+    {
+      "id": "dnsbl_custom",
+      "description": "A DNSBL custom list needs no transfer: its text becomes the download and is parsed.",
+      "kind": "dnsbl",
+      "custom": true,
+      "baseline": null,
+      "source": "c.example\nd.example\n",
+      "pre": null,
+      "post": null,
+      "expect": {"outcome": "updated", "stage": "", "postFailed": false, "entries": ["c.example", "d.example"], "placeholder": "", "orig": "c.example\nd.example\n"}
+    }
+  ]
+}
