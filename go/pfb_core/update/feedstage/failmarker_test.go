@@ -15,9 +15,9 @@ import (
 // entries fail, so its marker is removed too; a custom whois list never removes it.
 func TestAFailedTransferCreatesTheFailMarker(t *testing.T) {
 	stage, feed, _ := localStage(t) // the source file is absent: the transfer fails
-	got := run(stage, feed, "none")
-	if got.Disposition != "failed" {
-		t.Fatalf("the run = %+v, want failed", got)
+	got := run(stage, feed, "download")
+	if got.Disposition != "failed" || got.Stage != "fetch" {
+		t.Fatalf("the run = %+v, want failed at the transfer", got)
 	}
 	if !regularExists(filepath.Join(stage.Paths.FeedDir, "feed_v4.fail")) {
 		t.Error("no failure marker after a failed transfer, want it published")
@@ -29,8 +29,8 @@ func TestAFailedTransferPastSkipFeedRemovesTheFailMarker(t *testing.T) {
 	marker := filepath.Join(stage.Paths.FeedDir, "feed_v4.fail")
 	writeFile(t, marker, "")
 	feed.SkipFeedPassed = true
-	if got := run(stage, feed, "none"); got.Disposition != "failed" {
-		t.Fatalf("the run = %+v, want failed", got)
+	if got := run(stage, feed, "download"); got.Disposition != "failed" || got.Stage != "fetch" {
+		t.Fatalf("the run = %+v, want failed at the transfer", got)
 	}
 	if regularExists(marker) {
 		t.Error("the marker stands after a failed transfer past the skipfeed threshold, want it removed")
