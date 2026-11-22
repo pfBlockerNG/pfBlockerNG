@@ -284,26 +284,11 @@ func sameFileContents(path, want string) (bool, error) {
 	if !info.Mode().IsRegular() {
 		return false, errors.New("feed source is not a regular file")
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer file.Close()
 	if info.Size() != int64(len(want)) {
 		return false, nil
 	}
-	buf := make([]byte, 64<<10)
-	for offset := 0; offset < len(want); {
-		n := min(len(buf), len(want)-offset)
-		if _, err := io.ReadFull(file, buf[:n]); err != nil {
-			return false, err
-		}
-		if string(buf[:n]) != want[offset:offset+n] {
-			return false, nil
-		}
-		offset += n
-	}
-	return true, nil
+	data, err := os.ReadFile(path)
+	return string(data) == want, err
 }
 
 // Recover makes the feed folder dir consistent before the next run stages anything (issue #4038, cutover item from #4035):

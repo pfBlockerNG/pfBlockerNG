@@ -1,17 +1,13 @@
-// Package feedstage is the per-feed sequence of the Core Updater's DNSBL and IP stages (spec §3, stages 8 and 12; issue
-// #4038): for one feed, the reuse decision, the transfer or the custom list, normalize, the pre-script, the parse, the
-// post-script, the empty check and the staged publication, with a snapshot of the baseline that is put back when the feed
-// fails. Recover puts back what a killed run left in a feed folder. The group-level work (DNSBLIP, the sets, publication to
-// the resource store) is the caller's.
+// Package feedstage runs one feed through the Core Updater's DNSBL and IP stages (spec §3, stages 8 and 12). The
+// group-level work (DNSBLIP, the sets, publication to the resource store) is the caller's.
 //
-// A feed's files live in Paths.FeedDir under Feed.Name: the download "<name>.orig" and its sidecars (feedfetch), the
-// normalized copy (feedparse), and the parsed list the next stages read: "<name>.parsed.ip" for an IP feed, the rows
-// "<name>.parsed.ndjson" and the side lists "<name>.parsed.v4.ip" and "<name>.parsed.v6.ip" for a DNSBL feed. A parsed list
-// holds real entries only: the placeholder outcome is reported, never written. The parity corpus with today's per-feed
-// blocks is tests/updateloop/fixtures/feedstage.
+// A feed's files live in Paths.FeedDir under Feed.Name. The next stages read its parsed lists: "<name>.parsed.ip" for an IP
+// feed; the rows "<name>.parsed.ndjson" and the side lists "<name>.parsed.v4.ip" and "<name>.parsed.v6.ip" for a DNSBL
+// feed. A parsed list holds real entries only: the placeholder outcome is reported, never written.
 package feedstage
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -230,39 +226,24 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			if reason != "" {
 				return failedFeed(f.ID, "settings", reason)
 			}
-			if force == "none" {
-				switch change.Verdict {
-				case VerdictFailed:
-					return failedFeed(f.ID, "probe", s.safeReason(change.Reason, "feed_probe_failed", f))
-				case VerdictUnchanged:
-					// NormalizeFile below decides whether the cached artifacts are reusable.
-				default:
-					backup, backupErr = snapshotPaths(feedStatePaths(feed))
-					if backupErr != nil {
-						return failedFeed(f.ID, "fetch", "baseline_backup_failed")
-					}
-					ingested := s.Fetcher.Ingest(ctx, feed, request)
-					if !ingested.OK {
-						backup.keepAbsent(validatorPaths(feed)...)
-						return failedFeed(f.ID, "fetch", s.safeReason(ingested.Reason, "feed_fetch_failed", f))
-					}
-					sourceChanged = ingested.Status != httpStatusNotModified
-				}
-			} else {
-				backup, backupErr = snapshotPaths(feedStatePaths(feed))
-				if backupErr != nil {
-					return failedFeed(f.ID, "fetch", "baseline_backup_failed")
-				}
-				if err := clearForcedState(feed, force); err != nil {
-					return failedFeed(f.ID, "fetch", "feed_force_prepare_failed")
-				}
-				ingested := s.Fetcher.Ingest(ctx, feed, request)
-				if !ingested.OK {
-					backup.keepAbsent(validatorPaths(feed)...)
-					return failedFeed(f.ID, "fetch", s.safeReason(ingested.Reason, "feed_fetch_failed", f))
-				}
-				sourceChanged = ingested.Status != httpStatusNotModified
+			if force == "none" && change.Verdict == VerdictFailed {
+				return failedFeed(f.ID, "probe", s.safeReason(change.Reason, "feed_probe_failed", f))
 			}
+			if force == "none" && change.Verdict == VerdictUnchanged {
+				break // the reuse rule below decides whether the published lists stand
+			}
+			if backup, backupErr = snapshotPaths(feedStatePaths(feed)); backupErr != nil {
+				return failedFeed(f.ID, "fetch", "baseline_backup_failed")
+			}
+			if force != "none" && clearForcedState(feed, force) != nil {
+				return failedFeed(f.ID, "fetch", "feed_force_prepare_failed")
+			}
+			ingested := s.Fetcher.Ingest(ctx, feed, request)
+			if !ingested.OK {
+				backup.keepAbsent(validatorPaths(feed)...)
+				return failedFeed(f.ID, "fetch", s.safeReason(ingested.Reason, "feed_fetch_failed", f))
+			}
+			sourceChanged = ingested.Status != httpStatusNotModified
 		}
 	}
 	if ctx.Err() != nil {
@@ -374,11 +355,7 @@ func (s *Stage) parseAndPublish(ctx context.Context, f Feed, feed feedfetch.Feed
 		s.sinks().Line(true, "\n[ %s ] pre-script '%s' is not a file in the list-script folders; skipping\n", f.Name, f.PreScript)
 	}
 	if pre != "" {
-		listType := familySuffix(f.Kind)
-		if f.Kind == "dnsbl" {
-			listType = "dnsbl"
-		}
-		outcome := feedparse.RunPreScript(ctx, pre, norm.Path, feedPath(feed, ".pre"), s.Log, listType)
+		outcome := feedparse.RunPreScript(ctx, pre, norm.Path, feedPath(feed, ".pre"), s.Log, cmp.Or(familySuffix(f.Kind), "dnsbl"))
 		switch {
 		case outcome.OK:
 		case outcome.Reason == feedparse.PreScriptCancelled || ctx.Err() != nil:
@@ -407,25 +384,27 @@ func (s *Stage) parseAndPublish(ctx context.Context, f Feed, feed feedfetch.Feed
 			}
 		},
 	}
+	input, err := os.Open(parsePath)
+	if err != nil {
+		return failedFeed(f.ID, "parse", "normalized_feed_unavailable")
+	}
+	defer input.Close()
 	script := feedparse.PostScript{Name: f.PostScript, Dirs: s.Paths.ScriptDirs, Header: f.Name, Log: s.Log, Errors: s.Errors,
 		Transcript: s.Transcript}
 	if f.Kind == "dnsbl" {
-		return s.parseDNSBL(ctx, f, feed, parsePath, script, source, disposition, result, sink)
+		result = s.parseDNSBL(ctx, f, feed, input, script, source, disposition, result, sink)
+	} else {
+		result = s.parseIP(ctx, f, feed, input, probePath, script, source, disposition, result, sink)
 	}
-	return s.parseIP(ctx, f, feed, parsePath, probePath, script, source, disposition, result, sink)
+	return result
 }
 
 func (s *Stage) sinks() output.Sinks {
 	return output.Sinks{Log: s.Log, Transcript: s.Transcript, Errors: s.Errors}
 }
 
-func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, parsePath, probePath string, post feedparse.PostScript,
-	source, disposition string, result Result, sink feedparse.Sink) Result {
-	input, err := os.Open(parsePath)
-	if err != nil {
-		return failedFeed(f.ID, "parse", "normalized_feed_unavailable")
-	}
-	defer input.Close()
+func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input io.Reader, probePath string,
+	post feedparse.PostScript, source, disposition string, result Result, sink feedparse.Sink) Result {
 	floorV4, floorV6 := s.Config.FloorV4, s.Config.FloorV6
 	if f.Format == "geoip" {
 		floorV4, floorV6 = 0, 0
@@ -480,20 +459,11 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, parseP
 	if parsed.Entries == 0 && parsed.Placeholder == "" {
 		result.Disposition, files = "empty", nil // the last list stays, and stands for this input
 	}
-	if err := publishParsed(feed, files, source); err != nil {
-		result.Disposition, result.Stage, result.Reason = "failed", "publish", "parsed_publish_failed"
-	}
-	ran.Restore()
-	return result
+	return publishResult(feed, files, source, result) // the deferred Restore puts the download back after the publication
 }
 
-func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, parsePath string, post feedparse.PostScript,
+func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, input io.Reader, post feedparse.PostScript,
 	source, disposition string, result Result, sink feedparse.Sink) Result {
-	input, err := os.Open(parsePath)
-	if err != nil {
-		return failedFeed(f.ID, "parse", "normalized_feed_unavailable")
-	}
-	defer input.Close()
 	var parsed feedparse.DNSBLFeed
 	stagedNDJSON, err := stageOutput(feed.Dir, func(writer io.Writer) error {
 		var err error
@@ -506,16 +476,18 @@ func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, par
 		return failedFeed(f.ID, "parse", "dnsbl_parse_failed")
 	}
 	defer os.Remove(stagedNDJSON)
-	stagedV4, err := stageOutput(feed.Dir, func(w io.Writer) error { return writeLines(w, parsed.IP4) })
-	if err != nil {
-		return failedFeed(f.ID, "parse", "dnsbl_parse_failed")
+	var files []stagedFeedFile
+	for _, side := range []struct {
+		suffix string
+		lines  []string
+	}{{".parsed.v4.ip", parsed.IP4}, {".parsed.v6.ip", parsed.IP6}} {
+		staged, err := stageOutput(feed.Dir, func(w io.Writer) error { return writeLines(w, side.lines) })
+		if err != nil {
+			return failedFeed(f.ID, "parse", "dnsbl_parse_failed")
+		}
+		defer os.Remove(staged)
+		files = append(files, stagedFeedFile{name: feed.Name + side.suffix, temp: staged})
 	}
-	defer os.Remove(stagedV4)
-	stagedV6, err := stageOutput(feed.Dir, func(w io.Writer) error { return writeLines(w, parsed.IP6) })
-	if err != nil {
-		return failedFeed(f.ID, "parse", "dnsbl_parse_failed")
-	}
-	defer os.Remove(stagedV6)
 
 	// The DNSBL post-script runs on a throwaway copy of the download; nothing reads what it leaves.
 	ran := post.RunDNSBL(ctx, feedPath(feed, ".orig"), feedPath(feed, ".post"))
@@ -526,10 +498,6 @@ func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, par
 	result.Disposition, result.Stage = disposition, "parse"
 	result.DNSBLRows, result.IPv4Count, result.IPv6Count = parsed.Rows, len(parsed.IP4), len(parsed.IP6)
 	result.UpdateIP, result.SchemeSkipped, result.HPHostsStop = parsed.UpdateIP, parsed.SchemeSkipped, parsed.Stopped
-	files := []stagedFeedFile{
-		{name: feed.Name + ".parsed.v4.ip", temp: stagedV4},
-		{name: feed.Name + ".parsed.v6.ip", temp: stagedV6},
-	}
 	rows := feedPath(feed, ".parsed.ndjson")
 	if parsed.Rows > 0 {
 		files = append(files, stagedFeedFile{name: feed.Name + ".parsed.ndjson", temp: stagedNDJSON})
@@ -540,6 +508,10 @@ func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, par
 			files = append(files, stagedFeedFile{name: feed.Name + ".parsed.ndjson", temp: stagedNDJSON})
 		}
 	}
+	return publishResult(feed, files, source, result)
+}
+
+func publishResult(feed feedfetch.Feed, files []stagedFeedFile, source string, result Result) Result {
 	if err := publishParsed(feed, files, source); err != nil {
 		result.Disposition, result.Stage, result.Reason = "failed", "publish", "parsed_publish_failed"
 	}
