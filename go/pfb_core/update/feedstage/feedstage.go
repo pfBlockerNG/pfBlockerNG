@@ -149,7 +149,8 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 	// As today, a script that does not resolve is no script, for reuse as for Hold (apply.inc:4071, :2641).
 	pre, _ := feedparse.ResolveListScript(f.PreScript, s.Paths.ScriptDirs)
 	post, _ := feedparse.ResolveListScript(f.PostScript, s.Paths.ScriptDirs)
-	if f.State == "hold" && force != "parse" {
+	// A Reload (force parse) is never held, as today's Reload skips the Hold fast path (apply.inc:4116-4140, :2786-2800).
+	if f.State == "hold" && change.Force != "parse" {
 		// Hold is download once: held while its published list stands, unless a script asks for the download to be parsed
 		// again; a list that is gone is parsed again from the download, and a feed never downloaded downloads once.
 		switch {
@@ -164,7 +165,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 	// The download and its sidecars are one journal set, committed when the run stands and rolled back when it fails. The
 	// lists and their record commit in a set of their own first: when this set then rolls back, or a KILL leaves it to
 	// Recover, the new lists stand beside the old download, and the record (the digest of the normalized input they were
-	// parsed from) differs from the old download's, so reuse parses that download again.
+	// parsed from, with the parse settings) differs from the old download's, so reuse parses that download again.
 	var backup *journal
 	var backupErr error
 	defer func() {
@@ -233,6 +234,9 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 			}
 			sourceChanged, whoisPartial = true, whois.Failed
 		default:
+			if force == "none" && change.Verdict == "" {
+				return failedFeed(f.ID, "settings", "verdict_invalid")
+			}
 			request, reason := s.request(f)
 			if reason != "" {
 				return failedFeed(f.ID, "settings", reason)
@@ -273,13 +277,19 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 }
 
 // validate refuses a feed whose folders or name could reach outside what the caller named, and an input Run does not know.
+// An empty verdict is refused only where Run reads it, for a transfer.
 func (s *Stage) validate(f Feed, change Change) string {
-	known := map[Verdict]bool{VerdictChanged: true, VerdictUnchanged: true, VerdictFailed: true}
 	switch {
-	case change.Force != "none" && change.Force != "parse" && change.Force != "download" && change.Force != "both":
+	case !slices.Contains([]string{"none", "parse", "download", "both"}, change.Force):
 		return "force_invalid"
-	case !known[change.Verdict] && (change.Force == "none" || change.Verdict != ""):
+	case change.Verdict != "" && !slices.Contains([]Verdict{VerdictChanged, VerdictUnchanged, VerdictFailed}, change.Verdict):
 		return "verdict_invalid"
+	case !slices.Contains([]string{"ipv4", "ipv6", "dnsbl"}, f.Kind):
+		return "feed_kind_invalid"
+	case !slices.Contains([]string{"enabled", "disabled", "hold", "flex"}, f.State):
+		return "feed_state_invalid"
+	case !slices.Contains([]string{"auto", "regex", "geoip", "whois", "asn", "rsync"}, f.Format):
+		return "feed_format_invalid"
 	case s.Fetcher == nil:
 		return "fetcher_missing"
 	case s.Paths.FeedDir == "":
@@ -352,10 +362,14 @@ func (s *Stage) parseAndPublish(ctx context.Context, f Feed, feed feedfetch.Feed
 		return failedFeed(f.ID, "normalize", "cancelled")
 	}
 	// The input the lists will stand for: the normalized download, when no script takes part (issue #1960: a configured
-	// script runs every pass, so a feed with one is never reused).
+	// script runs every pass, so a feed with one is never reused), with every setting the parse reads, so that a changed
+	// setting parses an unchanged download once again. Today's reuse has no settings term: a deliberate improvement, which
+	// the Go tests cover and no corpus row can (today's block differs by design).
 	source := ""
 	if norm.Normalized && pre == "" && post == "" {
-		source, _ = digest.File(norm.Path)
+		if normalized, err := digest.File(norm.Path); err == nil {
+			source = digest.Bytes([]byte(normalized + "\n" + s.parseSettings(f)))
+		}
 	}
 	if force == "none" && source != "" && !whoisPartial && parsedArtifactsExist(feed, f.Kind) && recordedSource(feed) == source {
 		result.Disposition, result.Stage, result.Reason = "unchanged", "normalize", "normalized_unchanged"
@@ -414,8 +428,15 @@ func (s *Stage) sinks() output.Sinks {
 	return output.Sinks{Log: s.Log, Transcript: s.Transcript, Errors: s.Errors}
 }
 
-func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input io.Reader, probePath string,
-	post feedparse.PostScript, source, disposition string, result Result, sink feedparse.Sink) Result {
+// parseSettings is every setting the parse of f reads, as its configuration.
+func (s *Stage) parseSettings(f Feed) string {
+	if f.Kind == "dnsbl" {
+		return fmt.Sprintf("%+v", s.dnsblConfig(f))
+	}
+	return fmt.Sprintf("%+v", s.ipConfig(f))
+}
+
+func (s *Stage) ipConfig(f Feed) feedparse.IPConfig {
 	floorV4, floorV6 := s.Config.FloorV4, s.Config.FloorV6
 	if f.Format == "geoip" {
 		floorV4, floorV6 = 0, 0
@@ -423,10 +444,19 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input 
 	if f.Kind == "ipv4" && f.SuppressionCIDR > 0 {
 		floorV4 = f.SuppressionCIDR
 	}
-	cfg := feedparse.IPConfig{
+	return feedparse.IPConfig{
 		VType: familySuffix(f.Kind), PFType: feedparse.IPParseType(f.Format, f.Source), Custom: f.Custom,
 		FloorV4: cidrFloor(floorV4), FloorV6: cidrFloor(floorV6), Suppression: s.Config.Suppression,
 	}
+}
+
+func (s *Stage) dnsblConfig(f Feed) feedparse.DNSBLConfig {
+	return feedparse.DNSBLConfig{DNSBLIP: s.Config.DNSBLIP, Lenient: s.Config.Lenient, Custom: f.Custom, Suppression: s.Config.Suppression}
+}
+
+func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input io.Reader, probePath string,
+	post feedparse.PostScript, source, disposition string, result Result, sink feedparse.Sink) Result {
+	cfg := s.ipConfig(f)
 	var parsed feedparse.IPFeed
 	staged, err := stageOutput(feed.Dir, func(writer io.Writer) error {
 		var err error
@@ -478,9 +508,7 @@ func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, inp
 	var parsed feedparse.DNSBLFeed
 	stagedNDJSON, err := stageOutput(feed.Dir, func(writer io.Writer) error {
 		var err error
-		parsed, err = feedparse.ParseDNSBLFeed(input, feedparse.DNSBLConfig{
-			DNSBLIP: s.Config.DNSBLIP, Lenient: s.Config.Lenient, Custom: f.Custom, Suppression: s.Config.Suppression,
-		}, writer, sink)
+		parsed, err = feedparse.ParseDNSBLFeed(input, s.dnsblConfig(f), writer, sink)
 		return err
 	})
 	if err != nil {
@@ -513,7 +541,8 @@ func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, inp
 	if parsed.Rows > 0 {
 		files = append(files, stagedFeedFile{name: feed.Name + ".parsed.ndjson", temp: stagedNDJSON})
 	} else {
-		// No domain: the last rows stay, or an empty list stands for a feed that never had one.
+		// No domain: the last rows stay, or an empty list stands for a feed that never had one; the v4 and v6 side lists are
+		// still replaced, as today's block unlinks them.
 		result.Disposition = "empty"
 		if !regularExists(rows) {
 			files = append(files, stagedFeedFile{name: feed.Name + ".parsed.ndjson", temp: stagedNDJSON})
