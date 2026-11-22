@@ -863,6 +863,8 @@ writes no result and exits 2. A field that is `null` is absent; an unknown field
 checks the request's shape, and the apply honours `scope` when it acts. Each of `resources` and `removed` is still
 refused over 4,096 entries with `<list> holds more than 4096 entries`, a check that runs before the combined bound.
 
+Core writes `pendingToken` as the settings read gave it (`platform.pendingToken`) and does not validate it.
+
 - **A resource** is `{"id", "generation", "action", "direction", "entries"}`. The `id` is a [resource id](#resources) the
   apply handles: an `ip-set`, an `ip-aggregate` or the `geo-catalog`, never a `dnsbl/*` id (pfB-DNS fetches those). Each
   id appears once across `resources` and `removed`. The `geo-catalog` takes only its `id` and `generation`.
@@ -918,6 +920,24 @@ lines of one Update leave room for each other. When a line would be longer, ever
 lengthens a line; nothing else is ever shortened or left out. With the bounds above, the report of every request accepted
 fits: the longest, every one of 2,048 ids of 36 bytes failed and every alias of 31 characters changed, is 286,826 bytes
 once shortened. A report beyond the bounds is refused, and no line is written for it.
+
+Core reads the result file whole and holds the apply (#4037, slice 8e) to three rules of the file, beyond those of each line:
+
+- an id is named on one result line only, across the whole file: an id on two lines (applied on one and failed on another,
+  or applied twice) refuses the result;
+- `changedAliases` names only aliases of ids the request holds, in `resources` or in `removed`: any other alias refuses the
+  result;
+- the file as a whole stays within 1 MiB. When it is longer, Core keeps the complete lines inside the first 1 MiB and reports
+  the rest as cut: what those lines report is settled, and the ids they do not name stay pending. When the line that crosses
+  the 1 MiB bound is itself over the line bound, the whole result is refused instead;
+- a line is empty or holds only spaces (Core skips it), or is one object: a tab, a carriage return or any other byte
+  outside printable ASCII refuses the result.
+
+A line Core refuses (another version, an unknown field, an id outside the request, a failure message holding a control
+character or a line or paragraph separator, a line over the line bound) refuses the whole result. One exception: the
+unterminated last line of a file within 1 MiB that the apply's death cut short. That is a line shorter than the line bound,
+of printable ASCII, that opens an object and ends before the object does. Then the lines before it count. An unterminated
+last line that is complete, malformed or followed by other data is refused like any other line.
 
 With `pendingOutsideWindow` true the apply marks the changes pending and applies nothing, so its one line holds no `applied`.
 
