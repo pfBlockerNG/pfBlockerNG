@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -196,6 +197,19 @@ func probeServer(t *testing.T, doc corpusDoc, c corpusCase) *httptest.Server {
 	return srv
 }
 
+// remotePolicy resolves every feed host as the PHP runner does: to the server and to an address that is not the box's, so
+// the probe reaches the server as a remote feed. A host of the box's addresses alone is a self-hosted feed, never probed.
+func remotePolicy() feedfetch.Policy {
+	return feedfetch.Policy{Resolve: func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("203.0.113.5")}, nil
+	}}
+}
+
+// remoteURL is the server's URL under the feed host name remotePolicy resolves.
+func remoteURL(srv *httptest.Server) string {
+	return "http://feed.example:" + srv.URL[strings.LastIndex(srv.URL, ":")+1:]
+}
+
 func suffixOf(kind string) string {
 	return map[string]string{"ipv4": "_v4", "ipv6": "_v6"}[kind]
 }
@@ -235,7 +249,7 @@ func corpusInput(t *testing.T, doc corpusDoc, c corpusCase) (Input, map[string]s
 	}
 	dirs := map[string]string{"ipv4": ipDir, "ipv6": ipDir, "dnsbl": dnsblDir}
 	srv := probeServer(t, doc, c)
-	fetcher := &feedfetch.Fetcher{Policy: feedfetch.Policy{NoFilter: true}, RetryDelay: 1}
+	fetcher := &feedfetch.Fetcher{Policy: remotePolicy(), RetryDelay: 1}
 	stages := map[string]*feedstage.Stage{}
 	for kind, dir := range dirs {
 		stages[kind] = &feedstage.Stage{Paths: feedstage.Paths{FeedDir: dir}, Fetcher: fetcher}
@@ -262,7 +276,7 @@ func corpusInput(t *testing.T, doc corpusDoc, c corpusCase) (Input, map[string]s
 			id := g.Kind + ":" + f.Header + suffixOf(g.Kind)
 			url := f.Source
 			if f.Format == "auto" {
-				url = srv.URL + "/" + g.Kind + "_" + f.Header
+				url = remoteURL(srv) + "/" + g.Kind + "_" + f.Header
 			}
 			feeds = append(feeds, map[string]any{"header": f.Header, "state": f.State, "format": f.Format, "url": url,
 				"credentials": ""})
