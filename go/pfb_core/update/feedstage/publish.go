@@ -405,6 +405,45 @@ func journalEntryOf(dir, name string) (journalEntry, string, bool) {
 	return journalEntry{}, "", false
 }
 
+// finishSets finishes the journal sets in dir, as listed in entries, that hold an entry of the feed stem ("" for every
+// set): forward with a commit marker, back without one. A marker names no feed, so with a stem only the markers of sets
+// with such an entry are reached; without one, a marker whose entries are all gone is removed too.
+func finishSets(dir string, entries []os.DirEntry, stem string) error {
+	sets, committed := map[string][]journalEntry{}, map[string]bool{}
+	for _, e := range entries {
+		name := e.Name()
+		if id, ok := strings.CutPrefix(name, commitMark); ok && validFeedWord(id) {
+			committed[id] = true
+		} else if entry, id, ok := journalEntryOf(dir, name); ok {
+			if entryStem, _, _ := strings.Cut(filepath.Base(entry.target), "."); stem == "" || entryStem == stem {
+				sets[id] = append(sets[id], entry)
+			}
+		}
+	}
+	var errs []error
+	for id, set := range sets {
+		if !committed[id] {
+			errs = append(errs, rollbackSet(set))
+		}
+	}
+	for id := range committed {
+		if stem == "" || len(sets[id]) > 0 {
+			errs = append(errs, finishSet(filepath.Join(dir, commitMark+id), sets[id]))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// finishFeedSets finishes the sets an earlier run of the feed stem left in dir (a rollback or a finishSet that failed),
+// as Recover would.
+func finishFeedSets(dir, stem string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	return finishSets(dir, entries, stem)
+}
+
 // Recover makes the feed folder dir consistent before the next run stages anything (issue #4038, cutover item from #4035):
 // a KILL leaves restore points, journal sets and staged files. A regular IP restore point is renamed back over the download
 // (a run without a journal set over the download, force parse or reuse, has only that); every journal set with its commit
@@ -423,7 +462,6 @@ func Recover(dir string) error {
 		return err
 	}
 	var errs []error
-	sets, committed := map[string][]journalEntry{}, map[string]bool{}
 	for _, e := range entries {
 		name := e.Name()
 		if stem, ok := strings.CutSuffix(name, restorePoint); ok && validFeedWord(stem) {
@@ -434,20 +472,8 @@ func Recover(dir string) error {
 				errs = append(errs, remove(path))
 			}
 		}
-		if id, ok := strings.CutPrefix(name, commitMark); ok && validFeedWord(id) {
-			committed[id] = true
-		} else if entry, id, ok := journalEntryOf(dir, name); ok {
-			sets[id] = append(sets[id], entry)
-		}
 	}
-	for id, set := range sets {
-		if !committed[id] {
-			errs = append(errs, rollbackSet(set))
-		}
-	}
-	for id := range committed {
-		errs = append(errs, finishSet(filepath.Join(dir, commitMark+id), sets[id]))
-	}
+	errs = append(errs, finishSets(dir, entries, ""))
 	for _, e := range entries {
 		name := e.Name()
 		recovered := strings.HasPrefix(name, stagePrefix)

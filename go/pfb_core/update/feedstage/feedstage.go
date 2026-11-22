@@ -139,6 +139,11 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		return failedFeed(f.ID, "probe", "cancelled")
 	}
 	dir := s.Paths.FeedDir
+	// A set an earlier run could not finish is finished before this run reads the feed's files or opens a set of its own:
+	// left to a later Recover beside this run's sets, its backups could put an older download back over a newer one.
+	if finishFeedSets(dir, f.Name) != nil {
+		return failedFeed(f.ID, "publish", "baseline_restore_failed")
+	}
 	feed := feedfetch.Feed{Dir: dir, Name: f.Name}
 	origPath := feedPath(feed, ".orig")
 	hasOrig := regularExists(origPath)
