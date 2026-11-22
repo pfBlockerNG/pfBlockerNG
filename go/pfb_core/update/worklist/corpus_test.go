@@ -212,10 +212,6 @@ func remoteURL(srv *httptest.Server) string {
 	return "http://feed.example:" + srv.URL[strings.LastIndex(srv.URL, ":")+1:]
 }
 
-func suffixOf(kind string) string {
-	return map[string]string{"ipv4": "_v4", "ipv6": "_v6"}[kind]
-}
-
 func writeFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -275,7 +271,7 @@ func corpusInput(t *testing.T, doc corpusDoc, c corpusCase) (Input, map[string]s
 	for _, g := range c.Groups {
 		feeds := []any{}
 		for _, f := range g.Feeds {
-			id := g.Kind + ":" + f.Header + suffixOf(g.Kind)
+			id := g.Kind + ":" + f.Header + suffix(g.Kind)
 			url := f.Source
 			if f.Format == "auto" {
 				url = remoteURL(srv) + "/" + g.Kind + "_" + f.Header
@@ -283,7 +279,7 @@ func corpusInput(t *testing.T, doc corpusDoc, c corpusCase) (Input, map[string]s
 			feeds = append(feeds, map[string]any{"header": f.Header, "state": f.State, "format": f.Format, "url": url,
 				"credentials": ""})
 			files := c.Files[id]
-			dir, name := dirs[g.Kind], f.Header+suffixOf(g.Kind)
+			dir, name := dirs[g.Kind], f.Header+suffix(g.Kind)
 			base := filepath.Join(dir, name)
 			switch files.Orig {
 			case nil, true:
@@ -361,7 +357,7 @@ func logical(c corpusCase, plan Plan, dirs map[string]string) corpusExpect {
 				continue
 			}
 			for _, f := range g.Feeds {
-				name := f.Header + suffixOf(kind)
+				name := f.Header + suffix(kind)
 				base := filepath.Join(dirs[kind], name)
 				if _, err := os.Lstat(base + ".fail"); err == nil {
 					got.Fail = append(got.Fail, kind+":"+name)

@@ -56,11 +56,6 @@ func (f *fixture) input(in Input) Input {
 
 func (f *fixture) path(suffix string) string { return filepath.Join(f.dir, "A_v4"+suffix) }
 
-func exists(path string) bool {
-	_, err := os.Lstat(path)
-	return err == nil
-}
-
 func build(t *testing.T, in Input) Plan {
 	t.Helper()
 	plan, err := Build(context.Background(), in)
@@ -92,61 +87,48 @@ func servedBodies(t *testing.T, bodies map[string]string) *httptest.Server {
 	return srv
 }
 
-// Scenario: a probe body kept for one source is never published for another (issue #4038, note from the review of #4195).
+// Scenario: a probe body kept for one source is never published for another (issue #4038, note from the review of #4195),
+// and one kept for the same source is used once, as today's ingest uses the probe's body.
 // Given an Update outside the window probed the feed at /old and kept the changed body,
-// When the feed's source is moved to /new and its fail marker adds it to the next walk, which runs it without a probe,
-// Then the kept body is dropped before the stage runs, and the stage publishes what /new serves.
-func TestKeptProbeOfAnotherSourceIsNeverPublished(t *testing.T) {
-	srv := servedBodies(t, map[string]string{"/old": "9.9.9.9\n", "/new": "5.6.7.8\n"})
-	f := newFixture(t, remoteURL(srv)+"/old")
-	in := f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})
-	in.InWindow = false
-	if plan := build(t, in); plan.Decision != Pending {
-		t.Fatalf("the first Update = %v, want pending", plan.Decision)
-	}
-	if !exists(f.path(".probe")) || !exists(f.path(".probe.src")) {
-		t.Fatal("before: the changed probe body and the record of its source stand")
-	}
-
-	f.setURL(remoteURL(srv) + "/new")
-	writeFile(t, f.path(".fail"), "")
-	item := onlyItem(t, build(t, f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})))
-	if exists(f.path(".probe")) {
-		t.Fatal("the probe body kept for /old still stands after the work list for /new")
-	}
-	if item.Change.Verdict != feedstage.VerdictChanged {
-		t.Fatalf("change = %+v, want changed from the fail marker", item.Change)
-	}
-	if r := f.stage.Run(context.Background(), item.Feed, item.Change); r.Disposition != "changed" {
-		t.Fatalf("run = %+v, want changed", r)
-	}
-	if got, _ := os.ReadFile(f.path(".orig")); string(got) != "5.6.7.8\n" {
-		t.Fatalf("published %q, want the body /new serves", got)
-	}
-}
-
-// Scenario: a probe body kept for the same source is used once, as today's ingest uses the probe's body.
-func TestKeptProbeOfTheSameSourceIsIngested(t *testing.T) {
-	bodies := map[string]string{"/old": "9.9.9.9\n"}
-	srv := servedBodies(t, bodies)
-	f := newFixture(t, remoteURL(srv)+"/old")
-	in := f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})
-	in.InWindow = false
-	build(t, in)
-	if !exists(f.path(".probe")) {
-		t.Fatal("before: the changed probe body stands")
-	}
-	bodies["/old"] = "1.1.1.1\n" // what the server serves now is not what the probe kept
-	writeFile(t, f.path(".fail"), "")
-	item := onlyItem(t, build(t, f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})))
-	if !exists(f.path(".probe")) {
-		t.Fatal("the probe body of the same source was dropped")
-	}
-	if r := f.stage.Run(context.Background(), item.Feed, item.Change); r.Disposition != "changed" {
-		t.Fatalf("run = %+v, want changed", r)
-	}
-	if got, _ := os.ReadFile(f.path(".orig")); string(got) != "9.9.9.9\n" {
-		t.Fatalf("published %q, want the kept probe body", got)
+// When the feed's source stays or moves to /new and its fail marker adds it to the next walk, which runs it without a probe,
+// Then the stage publishes the kept body for the same source, and what /new serves for another: the kept body was dropped.
+func TestKeptProbeBodyIsPublishedOnlyForItsSource(t *testing.T) {
+	for _, c := range []struct {
+		name, path, want string
+		kept             bool
+	}{
+		{"same source", "/old", "9.9.9.9\n", true},
+		{"another source", "/new", "5.6.7.8\n", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			bodies := map[string]string{"/old": "9.9.9.9\n", "/new": "5.6.7.8\n"}
+			srv := servedBodies(t, bodies)
+			f := newFixture(t, remoteURL(srv)+"/old")
+			in := f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})
+			in.InWindow = false
+			if plan := build(t, in); plan.Decision != Pending {
+				t.Fatalf("the first Update = %v, want pending", plan.Decision)
+			}
+			if !present(f.path(".probe")) || !present(f.path(".probe.src")) {
+				t.Fatal("before: the changed probe body and the record of its source stand")
+			}
+			bodies["/old"] = "1.1.1.1\n" // what /old serves now is not what the probe kept
+			f.setURL(remoteURL(srv) + c.path)
+			writeFile(t, f.path(".fail"), "")
+			item := onlyItem(t, build(t, f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})))
+			if present(f.path(".probe")) != c.kept {
+				t.Fatalf("the kept probe body stands %v after the work list, want %v", present(f.path(".probe")), c.kept)
+			}
+			if item.Change.Verdict != feedstage.VerdictChanged {
+				t.Fatalf("change = %+v, want changed from the fail marker", item.Change)
+			}
+			if r := f.stage.Run(context.Background(), item.Feed, item.Change); r.Disposition != "changed" {
+				t.Fatalf("run = %+v, want changed", r)
+			}
+			if got, _ := os.ReadFile(f.path(".orig")); string(got) != c.want {
+				t.Fatalf("published %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 
@@ -164,7 +146,7 @@ func TestProbeWithoutASourceRecordIsDropped(t *testing.T) {
 			}
 			build(t, f.input(Input{Trigger: "manual", Scope: "both", Force: "none"}))
 			for _, suffix := range []string{".probe", ".probe.etag"} {
-				if exists(f.path(suffix)) {
+				if present(f.path(suffix)) {
 					t.Errorf("%s stands, want it dropped with the body of an unknown source", suffix)
 				}
 			}
@@ -207,7 +189,7 @@ func TestRecoverRunsBeforeTheProbe(t *testing.T) {
 	writeFile(t, f.path(".probe.part"), "half a body")
 	writeFile(t, f.path(".fail"), "") // checked without a probe: no network
 	build(t, f.input(Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}))
-	if exists(f.path(".probe.part")) {
+	if present(f.path(".probe.part")) {
 		t.Fatal("the probe's temporary from a killed run stands, want it removed by Recover before the probe")
 	}
 }
