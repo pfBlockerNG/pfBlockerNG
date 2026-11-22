@@ -1087,6 +1087,32 @@ SH
 		$this->assertStringContainsString('batch file', $this->theEntry()['message']);
 	}
 
+	/**
+	 * Scenario: an add batch fails in pfctl and a later batch of the same run cannot be written. Given the entry the failed call
+	 * opened, when the later batch file fails, then the entry still names pfctl's error: that is what the tick's retry and the
+	 * Sync Status page need, not the later reason. The member source swaps the batch directory for a regular file once the first
+	 * batch is pushed.
+	 */
+	public function testABatchFileFailureKeepsTheMessageOfAnEarlierPfctlFailure(): void
+	{
+		$batchdir = $this->batchdir;
+		$source = static function () use ($batchdir): Generator {
+			yield from self::addresses(64, 1);
+			// resumed after the first batch was pushed
+			rename($batchdir, "{$batchdir}.away");
+			file_put_contents($batchdir, '');
+			yield '10.1.1.0';
+		};
+		file_put_contents("{$this->dir}/fail", "1\n");
+
+		$result = pfb_apply_alias_delta_members($this->pfctl(), self::TABLE, $this->members('mirror', ['10.255.0.1']),
+			static fn (): array => [$source(), []], 65, 0, 100000, 100000, 'delta', 64, FALSE, $this->batchdir);
+
+		$this->assertSame(['delta' => TRUE, 'ok' => FALSE], $result);
+		$this->assertSame([['add', 64]], $this->shape(), 'the first batch is sent, the second is skipped');
+		$this->assertSame([self::failedCallEntry('add')], $this->openEntries(), 'the entry keeps the pfctl failure');
+	}
+
 	/** @return array<string, array{string}> */
 	public static function bothPaths(): array
 	{
