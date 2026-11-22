@@ -319,6 +319,7 @@ func TestTheBoundsOfARequest(t *testing.T) {
 	if kept < 1 || kept >= 4096 || !reflect.DeepEqual(got[:kept], big.Issues[:kept]) || got[kept] != summary(4096-kept) {
 		t.Fatalf("Core writes %d issues, want a non-empty prefix of the 4096 in order and a summary of the rest", len(got))
 	}
+	// the estimate ignores the summary count's digits and HTML escaping, which the probe's issues do not exercise
 	if next, _ := json.Marshal(big.Issues[kept]); len(b)+len(next)+1 <= apply.MaxRequest {
 		t.Errorf("issue %d is left out, although it fits beside the summary", kept)
 	}

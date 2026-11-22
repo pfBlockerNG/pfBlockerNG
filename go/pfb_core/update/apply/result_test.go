@@ -193,22 +193,49 @@ func TestALineCutShortByDeathKeepsTheLinesBeforeIt(t *testing.T) {
 	}
 }
 
-// WHEN a line is blank THEN it is skipped, but its bytes still count against the line bound, as a line of content does.
+// WHEN a line is blank THEN it is skipped, but its bytes still count against the line bound, as a line of content does: past
+// the bound the result is refused whole, terminated or not, with the line before it not kept.
 func TestABlankLineKeepsToTheLineBound(t *testing.T) {
-	if got, err := read(t, strings.Repeat(" ", apply.MaxLine-1)+"\n"); err != nil || !reflect.DeepEqual(got, apply.Result{}) {
+	ok := `{"version":2,"applied":{"geo-catalog":"3"}}` + "\n"
+	if got, err := read(t, ok+strings.Repeat(" ", apply.MaxLine-1)+"\n"); err != nil || !reflect.DeepEqual(got.Applied, map[string]uint64{"geo-catalog": 3}) {
 		t.Errorf("a blank line of exactly %d bytes: %+v (%v), want it skipped", apply.MaxLine, got, err)
 	}
-	if got, err := read(t, strings.Repeat(" ", apply.MaxLine)+"\n"); err == nil || !reflect.DeepEqual(got, apply.Result{}) {
-		t.Errorf("a blank line one byte over its bound: %+v (%v), want the result refused whole", got, err)
+	for name, blank := range map[string]string{"terminated": strings.Repeat(" ", apply.MaxLine) + "\n", "unterminated": strings.Repeat(" ", apply.MaxLine)} {
+		if got, err := read(t, ok+blank); err == nil || !reflect.DeepEqual(got, apply.Result{}) {
+			t.Errorf("a %s blank line one byte over its bound: %+v (%v), want the result refused whole", name, got, err)
+		}
 	}
 }
 
-// WHEN the last line is unterminated and a complete JSON value THEN the apply did not die writing it: it is a complete invalid
-// line and the result is refused whole, as with a newline; WHEN it is cut short mid-value THEN the lines before it count.
+// WHEN a line is empty or holds only spaces THEN it is skipped; WHEN it holds any other whitespace THEN it is a line like any
+// other and its byte that is not a space is refused, the result whole.
+func TestOnlyEmptyAndSpaceLinesAreSkipped(t *testing.T) {
+	ok := `{"version":2,"applied":{"geo-catalog":"3"}}` + "\n"
+	if got, err := read(t, ok+"\n   \n\n"); err != nil || !reflect.DeepEqual(got.Applied, map[string]uint64{"geo-catalog": 3}) {
+		t.Errorf("empty and space lines: %+v (%v), want them skipped", got, err)
+	}
+	for name, blank := range map[string]string{"CR": "\r", "tab": "\t", "vertical tab": "\v", "form feed": "\f", "no-break space": "\u00a0"} {
+		if got, err := read(t, ok+blank+"\n"); err == nil || !reflect.DeepEqual(got, apply.Result{}) {
+			t.Errorf("a line of a %s: %+v (%v), want the result refused whole", name, got, err)
+		}
+	}
+}
+
+// WHEN the last line is unterminated THEN only a proper prefix of one JSON value, shorter than the line bound, is a line the
+// apply's death cut short and leaves the lines before it; any other bad last line refuses the result whole.
 func TestAnUnterminatedLastLineIsKeptOnlyWhenCutShort(t *testing.T) {
 	ok := `{"version":2,"applied":{"geo-catalog":"3"}}` + "\n"
-	if got, err := read(t, ok+`{"version":1}`); err == nil || errors.Is(err, apply.ErrCut) || !reflect.DeepEqual(got, apply.Result{}) {
-		t.Errorf("a complete invalid last line without a newline: %+v (%v), want the result refused whole", got, err)
+	for name, last := range map[string]string{
+		"a complete invalid value":          `{"version":1}`,
+		"data after a complete value":       `{"version":2} {"version":2}`,
+		"a stray byte after a value":        `{"version":1}x`,
+		"content over the line bound":       `{"version":2,"failed":[{"id":"geo-catalog","stage":"apply","message":"` + strings.Repeat("a", 600000),
+		"spaces over the line bound":        strings.Repeat(" ", 600000),
+		"a stray byte that starts no value": "x",
+	} {
+		if got, err := read(t, ok+last); err == nil || errors.Is(err, apply.ErrCut) || !reflect.DeepEqual(got, apply.Result{}) {
+			t.Errorf("%s as an unterminated last line: %+v (%v), want the result refused whole", name, trim(got), err)
+		}
 	}
 	if got, err := read(t, ok+`{"version":2,"appl`); err == nil || !reflect.DeepEqual(got.Applied, map[string]uint64{"geo-catalog": 3}) {
 		t.Errorf("a truncated last line: %+v (%v), want the first line's values and an error", got, err)
@@ -260,6 +287,18 @@ func TestALineLongerThanTheFileBoundIsRefusedNotCut(t *testing.T) {
 	for name, file := range map[string]string{"without a newline": line, "with a newline at the end": line + "\"}]}\n"} {
 		if got, err := read(t, file); err == nil || errors.Is(err, apply.ErrCut) || !reflect.DeepEqual(got, apply.Result{}) {
 			t.Errorf("a line of 2 MiB %s: %+v (%v), want it refused whole and no ErrCut", name, trim(got), err)
+		}
+	}
+}
+
+// WHEN a result is over 1 MiB and what follows its last newline inside the first 1 MiB is MaxLine bytes or more THEN a line
+// broke the line bound: the result is refused whole, with no ErrCut and no earlier line kept.
+func TestACutTailOverTheLineBoundIsRefusedNotCut(t *testing.T) {
+	ok := `{"version":2,"applied":{"geo-catalog":"3"}}` + "\n"
+	long := lineOf(t, "geo-catalog", 1200<<10)
+	for name, file := range map[string]string{"after a line": ok + long, "alone after a newline": "\n" + long} {
+		if got, err := read(t, file); err == nil || errors.Is(err, apply.ErrCut) || !reflect.DeepEqual(got, apply.Result{}) {
+			t.Errorf("a 1.2 MiB line %s: %+v (%v), want it refused whole and no ErrCut", name, trim(got), err)
 		}
 	}
 }

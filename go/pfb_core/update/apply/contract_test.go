@@ -301,6 +301,24 @@ var writtenOtherwise = map[string]struct{ reason, message string }{
 var writtenByteForByte = []string{"core-writes-scope-ip", "core-writes-scope-dnsbl", "core-writes-dnsbl-without-groups",
 	"core-writes-scope-both", "core-writes-nothing-to-apply", "core-writes-issues-left-out"}
 
+// firstIssue is the first issue of a decoded request, or a failure of the test that names the row.
+func firstIssue(t *testing.T, id string, req any) map[string]any {
+	t.Helper()
+	obj, ok := req.(map[string]any)
+	if !ok {
+		t.Fatalf("%s: the row's request is not an object", id)
+	}
+	issues, ok := obj["issues"].([]any)
+	if !ok || len(issues) == 0 {
+		t.Fatalf("%s: the row has no issues list to hold the message", id)
+	}
+	issue, ok := issues[0].(map[string]any)
+	if !ok {
+		t.Fatalf("%s: the first issue of the row is not an object", id)
+	}
+	return issue
+}
+
 // WHEN Core writes the request of each accepted row THEN the validator's normal form of it is the row's, or the row is one
 // Core does not write, for the reason listed.
 func TestCoreWritesWhatTheApplyAccepts(t *testing.T) {
@@ -342,9 +360,16 @@ func TestCoreWritesWhatTheApplyAccepts(t *testing.T) {
 				t.Errorf("Core writes\n%s\nthe row holds\n%s", written, stdin)
 			}
 			if row.AcceptedCounts != nil {
-				got := normalForm(t, written).(map[string]any)
+				got, ok := normalForm(t, written).(map[string]any)
+				if !ok {
+					t.Fatalf("%s: Core's request is not an object", row.ID)
+				}
 				for list, n := range row.AcceptedCounts {
-					if c := len(got[list].([]any)); c != n {
+					items, ok := got[list].([]any)
+					if !ok {
+						t.Fatalf("%s: %s is not a list in what Core wrote", row.ID, list)
+					}
+					if c := len(items); c != n {
 						t.Errorf("%s: Core wrote %d entries, the row accepts %d", list, c, n)
 					}
 				}
@@ -353,7 +378,11 @@ func TestCoreWritesWhatTheApplyAccepts(t *testing.T) {
 			got, want := normalForm(t, written), decodeAny(t, row.Accepted)
 			other, listed := writtenOtherwise[row.ID]
 			if listed {
-				want.(map[string]any)["issues"].([]any)[0].(map[string]any)["message"] = other.message
+				issue := firstIssue(t, row.ID, want)
+				if issue["message"] == other.message {
+					t.Errorf("%s is listed as written otherwise, but the row accepts the message Core writes, %q", row.ID, other.message)
+				}
+				issue["message"] = other.message
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("Core writes %s\nthe validator's normal form of it differs from the expected\n%s", written, row.Accepted)
