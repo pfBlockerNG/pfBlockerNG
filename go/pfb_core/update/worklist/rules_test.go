@@ -39,7 +39,7 @@ func TestFeedNameThatIsNoWordIsStopped(t *testing.T) {
 	if item.Stopped != "feed_name_invalid" || item.Outcome != "" {
 		t.Fatalf("item = %+v, want stopped as feed_name_invalid without an outcome", item)
 	}
-	if !exists(outside + ".fail") {
+	if !present(outside + ".fail") {
 		t.Fatal("Build removed a file outside the feed folder")
 	}
 }
@@ -87,8 +87,8 @@ func TestProbeSourceCoversTheWholeRequest(t *testing.T) {
 			c.move(f.row())
 			writeFile(t, f.path(".fail"), "") // checked without a probe
 			build(t, f.input(named()))
-			if exists(f.path(".probe")) != c.kept {
-				t.Fatalf("the kept probe body stands: %v, want %v", exists(f.path(".probe")), c.kept)
+			if present(f.path(".probe")) != c.kept {
+				t.Fatalf("the kept probe body stands: %v, want %v", present(f.path(".probe")), c.kept)
 			}
 		})
 	}
@@ -106,7 +106,7 @@ func TestProbeSourceRecordBehindALinkIsNotRead(t *testing.T) {
 	}
 	writeFile(t, f.path(".fail"), "")
 	build(t, f.input(named()))
-	if exists(f.path(".probe")) {
+	if present(f.path(".probe")) {
 		t.Fatal("a probe body whose source record is a link was kept")
 	}
 	if got, err := os.ReadFile(elsewhere); err != nil || string(got) != source {
@@ -120,9 +120,9 @@ func TestForceCheckRunsAHeldFeed(t *testing.T) {
 	f.row()["state"] = "hold"
 	writeFile(t, f.path(".fail"), "")
 	item := onlyItem(t, build(t, f.input(Input{Trigger: "manual", Scope: "ip", Force: "download"})))
-	if item.Change.Force != "download" || item.Checked || exists(f.path(".fail")) {
+	if item.Change.Force != "download" || item.Checked || present(f.path(".fail")) {
 		t.Fatalf("item = %+v, fail marker stands %v; want it run with the force, unchecked, its marker gone", item,
-			exists(f.path(".fail")))
+			present(f.path(".fail")))
 	}
 }
 
