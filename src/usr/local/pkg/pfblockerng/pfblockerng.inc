@@ -16047,11 +16047,33 @@ function pfb_write_canonical_alias(string $path, array $canonical_set): bool {
 	return TRUE;
 }
 
-/** Publish a copy of $source as an alias mirror (the aliasdir .txt), replaced whole as pfb_write_canonical_alias() does (issue #4191). */
-function pfb_alias_mirror_copy(string $source, string $mirror): bool {
-	if (!pfb_stage_publish($mirror, static fn (string $staged): int => @copy($source, $staged) ? 0 : 1)) {
+/**
+ * The ADR-40 content-addressed gate for one alias: its canonical set is written to its last-applied mirror (the aliasdir
+ * .txt) and the alias is queued for reload in $changed when the set differs from the mirror, or the kernel table is empty
+ * ($pfctlck), with the previous set in $prev_sets for the reload's delta (none when the table is empty: a full replace).
+ * The IP lists and the GeoIP continents share it (issue #4213). FALSE only when a needed write failed: the alias is then
+ * not reported as updated.
+ *
+ * @param array<string, string[]> $prev_sets
+ * @param string[]                $changed
+ */
+function pfb_alias_mirror_gate(string $alias, string $alias_ips, $pfctlck, array &$prev_sets, array &$changed): bool {
+	global $pfb;
+	$alias_mirror  = "{$pfb['aliasdir']}/{$alias}.txt";
+	$canonical_set = pfb_canonical_alias_set($alias_ips);
+	if (!pfb_alias_set_different($canonical_set, $alias_mirror) && !empty($pfctlck)) {
+		return TRUE;	// the mirror, and the table, already hold the set
+	}
+	// ADR-40: the previous set before the mirror is overwritten, so the reload site has last_set for its delta. An empty
+	// kernel table (boot, re-enable) gets an empty one, so the reload replaces the table in full (#468: mirror == desired
+	// gives an empty delta and the table would stay empty).
+	$prev_raw = file_exists($alias_mirror) ? @file_get_contents($alias_mirror) : '';
+	$prev_sets[$alias] = empty($pfctlck) ? array() : pfb_canonical_alias_set($prev_raw ?: '');
+	// issue #4191: a mirror that still holds the previous set is not reported as updated
+	if (!pfb_write_canonical_alias($alias_mirror, $canonical_set)) {
 		return FALSE;
 	}
+	$changed[] = $alias;
 	return TRUE;
 }
 

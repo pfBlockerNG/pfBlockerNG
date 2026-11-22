@@ -3469,6 +3469,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	}
 
 	$maxmind_run_once = TRUE;
+	$pfb_geoip_mirrors = array();	// continent alias => its member file and GeoIP baseline (issue #4213)
 	foreach ($pfb['continents'] as $continent => $pfb_alias) {
 		$cont_key = 'pfblockerng' . strtolower(str_replace(' ', '', $continent));
 		if (!empty(config_get_path("installedpackages/{$cont_key}/config"))) {
@@ -3553,11 +3554,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$pfctlck = pfb_pfctl_table_count($cc_alias);
 
 						if (empty($pfctlck) && file_exists("{$pfbfolder}/{$cc_alias}.txt")) {
-							// issue #4191: a mirror that cannot be published drops the baseline, so the next pass publishes again
-							if (!pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt")) {
-								unlink_if_exists("{$pfborig}/{$cc_alias}.orig");
-							}
-							// Collect updated alias lists ('Reputation' disabled)
+							// Collect updated alias lists ('Reputation' disabled); the ADR-40 gate publishes the mirror (issue #4213)
 							$pfb_alias_lists[] = "{$cc_alias}";
 						}
 
@@ -3600,11 +3597,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 										}
 									);
 
-									// Save Continent data to aliastable folder. A mirror that cannot be published drops the baseline just
-									// advanced, so the next pass finds the data changed and publishes again (issue #4191).
-									if (!pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt")) {
-										unlink_if_exists("{$pfborig}/{$cc_alias}.orig");
-									}
 								}
 
 								// Check if file exists and is > 0 in size and save alias file
@@ -3622,10 +3614,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
                                                                         }
 
 									@file_put_contents("{$pfbfolder}/{$cc_alias}.txt", "{$p_ip}\n", LOCK_EX);
-									// issue #4191: as above, an unpublished placeholder leaves the change for the next pass
-									if (!pfb_alias_mirror_copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt")) {
-										unlink_if_exists("{$pfborig}/{$cc_alias}.orig");
-									}
 									$log = "[ {$cc_alias} ] Found no unique IPs, adding '{$p_ip}' to avoid empty file\n";
 									pfb_logger("{$log}", 1);
 								}
@@ -3633,6 +3621,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						}
 
 						if (file_exists("{$pfbfolder}/{$cc_alias}.txt")) {
+							// issue #4213: its mirror goes through the same ADR-40 gate as the IP lists'
+							$pfb_geoip_mirrors[$cc_alias] = ['members' => "{$pfbfolder}/{$cc_alias}.txt", 'orig' => "{$pfborig}/{$cc_alias}.orig"];
+
 							// Create alias config
 							$new_aliases_list[] = "{$cc_alias}";
 							$new_aliases[] = array( 'name'		=> "{$cc_alias}",
@@ -4579,27 +4570,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						// only when the set changed.  This replaces the old pfbupdate flag write
 						// (which wrote on every feed-fetch) with a content-addressed gate.
 						if ($pfbupdate) {
-							$alias_mirror  = "{$pfb['aliasdir']}/{$alias}.txt";
-							$canonical_set = pfb_canonical_alias_set($alias_ips);
-							if (pfb_alias_set_different($canonical_set, $alias_mirror) || empty($pfctlck)) {
-								// ADR-40: capture the previous canonical set before overwriting
-								// the mirror, so the reload site has last_set for delta computation.
-								// When the kernel table is empty (empty($pfctlck)), stash an empty
-								// array so the reload site's force_rpl = empty([]) = TRUE fires a
-								// full -T replace to repopulate the kernel (fixes #468 regression:
-								// mirror == desired → empty delta → table silently stays empty).
-								// When the kernel table is non-empty, stash the mirror content as
-								// the true previous set for an accurate forward delta.
-								$prev_raw = file_exists($alias_mirror) ? @file_get_contents($alias_mirror) : '';
-								$pfb_alias_prev_sets[$alias] = empty($pfctlck) ? array() : pfb_canonical_alias_set($prev_raw ?: '');
-								// Set changed (or kernel table is empty) → write the new canonical
-								// mirror and flag this alias for pfctl reload.
-								// issue #4191: a mirror that still holds the previous set is not reported as updated
-								if (pfb_write_canonical_alias($alias_mirror, $canonical_set)) {
-									$pfb_alias_lists[] = "{$alias}";
-								}
-							}
-							// When set is unchanged: aliasdir file is already correct; no reload needed.
+							pfb_alias_mirror_gate($alias, $alias_ips, $pfctlck, $pfb_alias_prev_sets, $pfb_alias_lists);
 						}
 
 						// Add '[s]' to Alias descriptions (Bypass States removal feature)
@@ -4634,6 +4605,18 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	}
 	// Clear variables
 	$alias_ips = '';
+
+	// issue #4213: the continent aliases the GeoIP block built go through the same content-addressed gate, under the same
+	// scope, so a changed continent table is reloaded on a pass with no rule change. A mirror that cannot be written drops
+	// the GeoIP baseline, so the next pass finds the data changed again.
+	foreach ($pfb_geoip_mirrors as $alias => $geoip) {
+		$pfctlck = pfb_pfctl_table_count($alias);
+		if ($pfb_cross_list || in_array($alias, $final_alias_old) || empty($pfctlck)) {
+			if (!pfb_alias_mirror_gate($alias, (string) @file_get_contents($geoip['members']), $pfctlck, $pfb_alias_prev_sets, $pfb_alias_lists)) {
+				unlink_if_exists($geoip['orig']);
+			}
+		}
+	}
 
 	#########################################################################
 	#  ADR-11: per-type aggregate ("Uber") Native aliases (opt-in)		#
