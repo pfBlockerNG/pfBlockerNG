@@ -126,4 +126,71 @@ final class CoreSettingsRevisionKeyTest extends TestCase
 		}
 		$this->assertSame($bytes, file_get_contents($key), 'the key is left as it was');
 	}
+
+	/**
+	 * Run $call in $n forked children released together once all are forked; each sends back what it returned (or "ERR:" and
+	 * the message) and dies without running shutdown handlers. @return string[]
+	 */
+	private static function inChildren(int $n, callable $call): array
+	{
+		$pairs = $pids = [];
+		for ($i = 0; $i < $n; $i++) {
+			$pairs[$i] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+			$pid = pcntl_fork();
+			if ($pid === 0) {
+				fread($pairs[$i][1], 1);	// the start signal
+				try {
+					$out = (string) $call();
+				} catch (Throwable $e) {
+					$out = 'ERR:' . $e->getMessage();
+				}
+				fwrite($pairs[$i][1], $out);
+				posix_kill(posix_getpid(), SIGKILL);
+			}
+			$pids[$i] = $pid;
+		}
+		foreach ($pairs as $pair) {
+			fwrite($pair[0], 'g');
+		}
+		$outs = [];
+		foreach ($pids as $i => $pid) {
+			fclose($pairs[$i][1]);
+			$outs[$i] = (string) stream_get_contents($pairs[$i][0]);
+			pcntl_waitpid($pid, $status);
+		}
+		return $outs;
+	}
+
+	/** Issue #4199: first callers that race to create the key all get the one key that was published, never one each. */
+	public function testFirstCallersRacingToCreateTheKeyAllGetThePublishedOne(): void
+	{
+		if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+			$this->markTestSkipped('pcntl and posix are required to race separate processes.');
+		}
+		for ($round = 0; $round < 20; $round++) {
+			$GLOBALS['pfb']['core_revision_key'] = $key = "{$this->dir}/race{$round}.key";
+
+			$outs = self::inChildren(8, static fn (): string => bin2hex(pfb_core_revision_key()));
+
+			$this->assertSame(array_fill(0, 8, bin2hex((string) file_get_contents($key))), $outs, "round {$round}: every caller returns the published key");
+		}
+	}
+
+	/** Issue #4199: a create that cannot write the whole key throws as a write failure and publishes nothing, staged or not. */
+	public function testACreateThatCannotWriteTheWholeKeyThrowsAndLeavesNoKey(): void
+	{
+		if (!function_exists('pcntl_fork') || !function_exists('posix_setrlimit')) {
+			$this->markTestSkipped('pcntl and posix are required to limit a separate process\'s file size.');
+		}
+		$key = "{$this->dir}/one.key";
+
+		$outs = self::inChildren(1, static function (): string {
+			pcntl_signal(SIGXFSZ, SIG_IGN);
+			posix_setrlimit(POSIX_RLIMIT_FSIZE, 16, 16);	// the staged key gets 16 of its 32 bytes
+			return bin2hex(pfb_core_revision_key());
+		});
+
+		$this->assertSame("ERR:cannot write the settings revision key {$key}", $outs[0]);
+		$this->assertSame(['one.key.lock'], array_values(array_diff(scandir($this->dir), ['.', '..'])), 'no key and no staged key');
+	}
 }
