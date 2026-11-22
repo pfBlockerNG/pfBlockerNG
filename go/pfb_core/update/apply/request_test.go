@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -339,5 +340,30 @@ func TestTheIdOfAGroup(t *testing.T) {
 				t.Errorf("%s maps to %q", id, alias)
 			}
 		}
+	}
+}
+
+// WHEN a hundred thousand issues are given THEN the left-out count is the number given minus the number kept, and the work stays
+// proportional to what is kept: about 4096 issues are normalised and encoded, never all of them.
+func TestTheWorkOfEncodingIssuesIsBoundedByWhatIsKept(t *testing.T) {
+	const given = 100000
+	req := apply.Request{Trigger: "scheduled", Scope: "both"}
+	for i := range given {
+		req.Issues = append(req.Issues, apply.Issue{Resource: fmt.Sprint(i), Stage: "parse", Code: "c", Message: strings.Repeat("m", 1024)})
+	}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	b, err := apply.Encode(req)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := issuesOf(t, b)
+	kept := len(got) - 1
+	if kept < 400 || got[kept] != summary(given-kept) {
+		t.Errorf("%d issues written, the last is %+v: want the count of %d given minus %d kept", len(got), got[kept], given, kept)
+	}
+	if n := after.TotalAlloc - before.TotalAlloc; n > 128<<20 {
+		t.Errorf("%d issues of 1 KiB allocate %d bytes, over 128 MiB", given, n)
 	}
 }

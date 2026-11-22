@@ -226,3 +226,27 @@ func (c *countingReader) ReadAt(p []byte, off int64) (int, error) {
 	c.n += n
 	return n, err
 }
+
+// WHEN one line is longer than the bound of the whole file, with or without its newline, THEN the writer broke the contract: the
+// result is refused whole, as a line over MaxLine is, and it is no cut.
+func TestALineLongerThanTheFileBoundIsRefusedNotCut(t *testing.T) {
+	line := `{"version":2,"failed":[{"id":"geo-catalog","stage":"apply","message":"` + strings.Repeat("a", 2<<20)
+	for name, file := range map[string]string{"without a newline": line, "with a newline at the end": line + "\"}]}\n"} {
+		if got, err := read(t, file); err == nil || errors.Is(err, apply.ErrCut) || !reflect.DeepEqual(got, apply.Result{}) {
+			t.Errorf("a line of 2 MiB %s: %+v (%v), want it refused whole and no ErrCut", name, trim(got), err)
+		}
+	}
+}
+
+// WHEN an empty result is read THEN the work does not depend on the bound: bytes allocated stay far under 1 MiB.
+func TestReadingAnEmptyResultAllocatesLittle(t *testing.T) {
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	if _, err := read(t, ""); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ReadMemStats(&after)
+	if n := after.TotalAlloc - before.TotalAlloc; n > 64<<10 {
+		t.Errorf("an empty result allocates %d bytes, over 64 KiB", n)
+	}
+}
