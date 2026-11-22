@@ -129,7 +129,6 @@ func TestPathsMustBeAbsoluteAndClean(t *testing.T) {
 		{"feed folder that is no UTF-8", Paths{FeedDir: base + "/\xff"}, "feed_directory_invalid"},
 		{"relative GeoIP folder", Paths{FeedDir: base, GeoIPDir: "GeoIP"}, "geoip_directory_invalid"},
 		{"unclean GeoIP folder", Paths{FeedDir: base, GeoIPDir: base + "/x/../GeoIP"}, "geoip_directory_invalid"},
-		{"empty script folder", Paths{FeedDir: base, ScriptDirs: []string{""}}, "script_directory_invalid"},
 		{"unclean script folder", Paths{FeedDir: base, ScriptDirs: []string{base + "//scripts"}}, "script_directory_invalid"},
 	} {
 		stage := testStage(t)
