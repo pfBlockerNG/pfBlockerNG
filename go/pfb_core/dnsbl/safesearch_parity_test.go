@@ -2,12 +2,12 @@ package dnsbl_test
 
 // The SafeSearch corpus of sub-slice 9g (issue #4038): tests/core/fixtures/dnsbl_safesearch_parity.json, frozen against
 // today's SafeSearch stage by tests/php/DnsblSafeSearchParityTest.php. Each case's lists are written to a folder and read
-// by SafeSearchTable with the case's fixture resolver; its rows are written as the decider's CSV, as pfb_ss_csv_rows()
-// writes them, and compared with expect.csv, the hosts it leaves out with expect.refused.
+// by SafeSearchTable, which resolves nothing: the fixture resolver is today's PHP's alone (owner, 2026-11-23: pfB-DNS
+// resolves a CNAME row's fallback addresses). Its rows are written as the decider's CSV, as pfb_ss_csv_rows() writes them,
+// and compared with expect.csv, the hosts it leaves out with expect.refused.
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -86,15 +86,9 @@ func TestSafeSearchTableMatchesTheParityFixture(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			var asked []string
-			resolve := func(_ context.Context, target string) (string, string) {
-				asked = append(asked, target)
-				a := c.Resolver[target]
-				return a[0], a[1]
-			}
 			p := dnsbl.SafeSearchPolicy{Enable: c.Policy.SafeSearch, YouTube: c.Policy.SafeSearchYoutube, DoH: c.Policy.SafeSearchDoh,
 				DoHList: c.Policy.SafeSearchDohList}
-			rows, refused := dnsbl.SafeSearchTable(context.Background(), dir, p, resolve)
+			rows, refused := dnsbl.SafeSearchTable(dir, p)
 			if got := csvOf(rows); got != c.Expect.CSV {
 				t.Errorf("SafeSearch CSV\n got %q\nwant %q", got, c.Expect.CSV)
 			}
@@ -104,9 +98,9 @@ func TestSafeSearchTableMatchesTheParityFixture(t *testing.T) {
 			if c.Expect.CSV == "" && rows != nil {
 				t.Errorf("rows = %v, want nil: no host publishes no SafeSearch body", rows)
 			}
-			for _, target := range asked {
-				if !strings.Contains(c.Expect.CSV, ",cname,"+target+",") {
-					t.Errorf("the resolver was asked for %q, the target of no CNAME row", target)
+			for _, r := range rows {
+				if r.V4 != "" || r.V6 != "" {
+					t.Errorf("row %+v carries a fallback address: Core resolves nothing", r)
 				}
 			}
 		})

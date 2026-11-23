@@ -186,8 +186,14 @@ func TestTheFeedsArePublishedInTodaysWalkOrderWithTheirAttributes(t *testing.T) 
 	if out.DNSBL == nil || out.DNSBL.Generation != reply.Generation || !reflect.DeepEqual(out.DNSBL.Groups, wantGroups) {
 		t.Errorf("DNSBL = %+v, want generation %d and groups %+v", out.DNSBL, reply.Generation, wantGroups)
 	}
-	if len(out.Issues) != 0 {
-		t.Errorf("issues = %+v, want none", out.Issues)
+	// Gone is configured nowhere and OffA's group is Disabled: their files are removed, each with an issue
+	var wantIssues []apply.Issue
+	for _, name := range []string{"Gone", "OffA"} {
+		wantIssues = append(wantIssues, apply.Issue{Resource: "feed/dnsbl:" + name, Stage: "parse", Code: "feed_files_removed",
+			Message: "no configured feed names it, so its files are removed (a row the settings do not project counts as removed)"})
+	}
+	if !reflect.DeepEqual(out.Issues, wantIssues) {
+		t.Errorf("issues\n got %+v\nwant %+v", out.Issues, wantIssues)
 	}
 }
 
