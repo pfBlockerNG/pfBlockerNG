@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -54,6 +55,10 @@ func geoTree(t *testing.T) (root string, g GeoSets) {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// A country folder the conversion published holds its ISO list; without it Build builds nothing.
+	if err := os.WriteFile(filepath.Join(g.CCDir, ".geoip_isos"), []byte("ZA\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	return root, g
 }
@@ -348,5 +353,170 @@ func TestTheGeoCatalogWithoutAnASNTableOrWithoutTheCountryCatalog(t *testing.T) 
 	members, err := GeoCatalog(cc, filepath.Join(dir, "absent.txt"))
 	if err != nil || !slices.Equal(members, []string{page}) {
 		t.Errorf("GeoCatalog = %q, %v; want the country rows alone", members, err)
+	}
+}
+
+func writeAll(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+	for p, content := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, p)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, p), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Scenario Outline: without country data (no ISO list in the country folder, or no country folder) no set is built,
+// as today's pass stops before the continent block when MaxMind processing failed (apply.inc:3445-3460): every set
+// keeps its baseline and list, and the caller is told.
+func TestWithoutCountryDataNoSetIsBuilt(t *testing.T) {
+	for name, remove := range map[string]string{"no ISO list": ".geoip_isos", "no country folder": ""} {
+		t.Run(name, func(t *testing.T) {
+			root, g := geoTree(t)
+			before := map[string]string{"cc/ZA_v4.txt": "41.0.0.0/11\n", "db/original/pfB_Africa_v4.orig": "1.0.0.0/8\n",
+				"db/deny/pfB_Africa_v4.txt": "1.0.0.0/8\n"}
+			writeAll(t, root, before)
+			if err := os.RemoveAll(filepath.Join(g.CCDir, remove)); err != nil {
+				t.Fatal(err)
+			}
+			sets, err := g.Build(context.Background(), africa("ZA"))
+			if !errors.Is(err, ErrNoCountryData) || len(sets) != 0 {
+				t.Errorf("Build = %+v, %v; want no set and ErrNoCountryData", sets, err)
+			}
+			want := map[string]string{"original/pfB_Africa_v4.orig": "1.0.0.0/8\n", "deny/pfB_Africa_v4.txt": "1.0.0.0/8\n"}
+			if got := geoFiles(t, root); !mapsEqual(got, want) {
+				t.Errorf("files = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// Scenario: the list is renamed before its baseline. When the second rename fails, the new list is published, the old
+// baseline stays, the set is not reported rebuilt and the error is; the next Build finds the baseline behind and
+// republishes both.
+func TestTheListIsRenamedBeforeItsBaseline(t *testing.T) {
+	root, g := geoTree(t)
+	writeAll(t, root, map[string]string{"cc/ZA_v4.txt": "41.0.0.0/11\n", "db/original/pfB_Africa_v4.orig": "1.0.0.0/8\n",
+		"db/deny/pfB_Africa_v4.txt": "1.0.0.0/8\n"})
+	saved := geoRename
+	t.Cleanup(func() { geoRename = saved })
+	renames := 0
+	geoRename = func(from, to string) error {
+		if renames++; renames == 2 {
+			return syscall.EIO
+		}
+		return saved(from, to)
+	}
+	sets, err := g.Build(context.Background(), africa("ZA"))
+	if err == nil || len(sets) != 1 || sets[0].Changed {
+		t.Errorf("Build = %+v, %v; want the set not rebuilt and an error", sets, err)
+	}
+	want := map[string]string{"original/pfB_Africa_v4.orig": "1.0.0.0/8\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"}
+	if got := geoFiles(t, root); !mapsEqual(got, want) {
+		t.Errorf("after the failed rename, files = %q, want the new list and the old baseline %q", got, want)
+	}
+
+	geoRename = saved
+	sets, err = g.Build(context.Background(), africa("ZA"))
+	if err != nil || len(sets) != 1 || !sets[0].Changed {
+		t.Errorf("the next Build = %+v, %v; want the set rebuilt", sets, err)
+	}
+	want["original/pfB_Africa_v4.orig"] = "41.0.0.0/11\n"
+	if got := geoFiles(t, root); !mapsEqual(got, want) {
+		t.Errorf("after the next Build, files = %q, want %q", got, want)
+	}
+}
+
+// Scenario: an interrupted publication whose country data then returns to the old baseline heals: the list is compared
+// with the set too.
+func TestAListLeftByAnInterruptedPublicationHeals(t *testing.T) {
+	root, g := geoTree(t)
+	// Killed after the list's rename: the new list (102/8), the old baseline (41/11); the country data is 41/11 again.
+	writeAll(t, root, map[string]string{"cc/ZA_v4.txt": "41.0.0.0/11\n", "db/original/pfB_Africa_v4.orig": "41.0.0.0/11\n",
+		"db/deny/pfB_Africa_v4.txt": "102.0.0.0/8\n"})
+	sets, err := g.Build(context.Background(), africa("ZA"))
+	if err != nil || len(sets) != 1 || !sets[0].Changed {
+		t.Errorf("Build = %+v, %v; want the set rebuilt", sets, err)
+	}
+	want := map[string]string{"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"}
+	if got := geoFiles(t, root); !mapsEqual(got, want) {
+		t.Errorf("files = %q, want %q", got, want)
+	}
+}
+
+// Scenario: a cancelled Update builds no further set and reports the cancellation.
+func TestACancelledBuildPublishesNothing(t *testing.T) {
+	root, g := geoTree(t)
+	writeAll(t, root, map[string]string{"cc/ZA_v4.txt": "41.0.0.0/11\n"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	sets, err := g.Build(ctx, africa("ZA"))
+	if !errors.Is(err, context.Canceled) || len(sets) != 0 {
+		t.Errorf("Build = %+v, %v; want no set and context.Canceled", sets, err)
+	}
+	if got := geoFiles(t, root); len(got) != 0 {
+		t.Errorf("files = %q, want none", got)
+	}
+}
+
+// Scenario Outline: a country code outside the projection's pattern ((A[12]_)?[A-Z][A-Z0-9](_rep)?) names no file: it is
+// never joined into a path, so ../../x reads nothing outside the country folder.
+func TestACountryCodeOutsideThePatternIsRefused(t *testing.T) {
+	for _, code := range []string{"../../x", "../x", "x", "ZAA", "Z", "za", "ZA/../ZA", "A3_ZA", "ZA_rep_rep"} {
+		t.Run(code, func(t *testing.T) {
+			root, g := geoTree(t)
+			g.CCDir = filepath.Join(root, "a", "b", "cc")
+			writeAll(t, root, map[string]string{"a/b/cc/.geoip_isos": "ZA\n", "a/b/cc/ZA_v4.txt": "41.0.0.0/11\n",
+				"a/x_v4.txt": "6.6.6.0/24\n", "a/b/x_v4.txt": "6.6.6.0/24\n", "a/b/cc/" + strings.ReplaceAll(code, "/", "_") + "_v4.txt": "6.6.6.0/24\n"})
+			if _, err := g.Build(context.Background(), africa(code, "ZA")); err != nil {
+				t.Fatal(err)
+			}
+			if got := geoFiles(t, root)["deny/pfB_Africa_v4.txt"]; got != "41.0.0.0/11\n" {
+				t.Errorf("the list = %q, want ZA's networks alone", got)
+			}
+		})
+	}
+	// The codes the pattern takes are read.
+	root, g := geoTree(t)
+	writeAll(t, root, map[string]string{"cc/A1_v4.txt": "1.0.0.0/24\n", "cc/A2_US_rep_v4.txt": "2.0.0.0/24\n", "cc/US_rep_v4.txt": "3.0.0.0/24\n"})
+	if _, err := g.Build(context.Background(), africa("A1", "A2_US_rep", "US_rep")); err != nil {
+		t.Fatal(err)
+	}
+	if got := geoFiles(t, root)["deny/pfB_Africa_v4.txt"]; got != "1.0.0.0/24\n2.0.0.0/24\n3.0.0.0/24\n" {
+		t.Errorf("the list = %q", got)
+	}
+}
+
+// Scenario: the catalog's reads are bounded. An ASN row longer than a resource member is left out; a body over the
+// Outpost's bound (PFB_GEOIP_CATALOG_MAX, 16 MiB) is refused, whether the country rows or the ASN rows make it so.
+func TestTheGeoCatalogIsBounded(t *testing.T) {
+	dir := t.TempDir()
+	cc, table := filepath.Join(dir, "cc"), filepath.Join(dir, "asn.txt")
+	page := `{"kind":"page","page":"Africa","continent":"Africa"}`
+	writeAll(t, dir, map[string]string{"cc/.geo_catalog": page + "\n",
+		"asn.txt": "AS1 [ " + strings.Repeat("n", resources.MaxMemberLength) + " ]\nAS2 [ ok ]\n"})
+	members, err := GeoCatalog(cc, table)
+	if err != nil || !slices.Equal(members, []string{`{"kind":"asn","asn":2,"name":"ok"}`, page}) {
+		t.Errorf("GeoCatalog = %d members, %v; want the long row left out", len(members), err)
+	}
+
+	if geoCatalogMax != 16<<20 {
+		t.Errorf("the bound is %d, want PFB_GEOIP_CATALOG_MAX (16 MiB)", geoCatalogMax)
+	}
+	saved := geoCatalogMax
+	t.Cleanup(func() { geoCatalogMax = saved })
+	geoCatalogMax = len(page) + 1 + len(`{"kind":"asn","asn":2,"name":"ok"}`) + 1 // exactly the body above
+	if _, err := GeoCatalog(cc, table); err != nil {
+		t.Errorf("a body at the bound is refused: %v", err)
+	}
+	geoCatalogMax--
+	if _, err := GeoCatalog(cc, table); err == nil {
+		t.Error("a body the ASN rows take over the bound is not refused")
+	}
+	geoCatalogMax = len(page) // the country rows alone are over it
+	if _, err := GeoCatalog(cc, filepath.Join(dir, "absent")); err == nil {
+		t.Error("a .geo_catalog over the bound is not refused")
 	}
 }

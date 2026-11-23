@@ -40,15 +40,33 @@
     },
     {
       "id": "an-unchanged-set-is-left-as-it-is",
-      "description": "A set equal to its baseline, with its list in place, is not rebuilt: the list keeps what it holds.",
+      "description": "A set equal to its baseline, with its list in place and equal to it, is not rebuilt.",
       "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
       "cc": {"ZA_v4.txt": "41.0.0.0/11\n"},
-      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "kept\n"},
+      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
       "expect": {
-        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "kept\n"},
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
         "changed": [],
         "log": []
       }
+    },
+    {
+      "id": "a-list-that-differs-from-its-baseline-is-rebuilt",
+      "description": "A set equal to its baseline whose list holds something else (a run killed between publishing the list and its baseline, then the country data back to the baseline) is rebuilt, so the list heals.",
+      "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
+      "cc": {"ZA_v4.txt": "41.0.0.0/11\n"},
+      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "102.0.0.0/8\n"},
+      "expect": {
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
+        "changed": ["pfB_Africa_v4"],
+        "log": []
+      },
+      "old_expect": {
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "102.0.0.0/8\n"},
+        "changed": [],
+        "log": []
+      },
+      "departure": "Core compares the published list with the set as well as the baseline: today's PHP compares only the baseline, so a list left behind by an interrupted publication stays until the country data changes."
     },
     {
       "id": "a-changed-set-replaces-baseline-and-list",
@@ -178,9 +196,9 @@
       "description": "A set is compared with its baseline as it would be stored, its last line terminated: an unterminated country list equal to the baseline is no change.",
       "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
       "cc": {"ZA_v4.txt": "41.0.0.0/11"},
-      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "kept\n"},
+      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
       "expect": {
-        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "kept\n"},
+        "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
         "changed": [],
         "log": []
       },
