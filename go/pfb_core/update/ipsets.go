@@ -50,7 +50,8 @@ type IPInput struct {
 	GeoSets []GeoSet // stage 11's continent sets
 	// DNSBLIP are the DNSBLIP_v4 and _v6 lists (sub-slice 9g fills it), each a set the loop builds and a list like a feed's:
 	// joined after its family's groups and custom lists, which is where today's pass puts it in the recompute's member order
-	// ($pfb['existing'], pfblockerng_apply.inc:1833-1844) and in the IP stage (:3710, :4411).
+	// ($pfb['existing'], pfblockerng_apply.inc:1833-1844) and in the IP stage (:3710, :4411). nil is not supplied: the prune
+	// then leaves the DNSBLIP lists of the class folders alone; non-nil (empty when DNSBLIP is off) lets it remove them.
 	DNSBLIP []GeoSet
 }
 
@@ -181,7 +182,7 @@ func (s IPSets) Build(ctx context.Context, in IPInput) (IPOut, error) {
 			}
 		}
 	}
-	if err := s.prune(final); err != nil {
+	if err := s.prune(final, in.DNSBLIP != nil); err != nil {
 		return out, err
 	}
 
@@ -358,7 +359,7 @@ func (s IPSets) groups(in IPInput, agg bool, res *IPOut) ([]ipGroup, error) {
 // prune deletes each list of a class folder that no list of that class names now, as today's orphan prune does
 // (pfblockerng_apply.inc:1962-2035, the <folder>/<name>.txt of a header $pfb['existing'] no longer holds). A continent's list
 // is the GeoIP stage's and is left to it.
-func (s IPSets) prune(final map[string]map[string]string) error {
+func (s IPSets) prune(final map[string]map[string]string, dnsblip bool) error {
 	for class, lists := range final {
 		files, err := filepath.Glob(filepath.Join(s.Folders[class], "*.txt"))
 		if err != nil {
@@ -367,6 +368,10 @@ func (s IPSets) prune(final map[string]map[string]string) error {
 		for _, f := range files {
 			name := strings.TrimSuffix(filepath.Base(f), ".txt")
 			if _, ok := lists[name]; ok || slices.Contains(continents, strings.TrimSuffix(strings.TrimSuffix(name, "_v4"), "_v6")) {
+				continue
+			}
+			// DNSBLIP's lists stay while the caller does not supply DNSBLIP: sub-slice 9g takes them over with IPInput.DNSBLIP
+			if !dnsblip && (name == "DNSBLIP_v4" || name == "DNSBLIP_v6") {
 				continue
 			}
 			if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
