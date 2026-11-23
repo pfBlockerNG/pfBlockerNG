@@ -1058,6 +1058,32 @@ line (JSON Lines), each line a member like any other (owner, 2026-11-17, #4049).
 Core Updater publishes with the body (for an IP set, its action and direction). A change of metadata alone is a new generation,
 answered as a `delta` whose `addEntries` and `removeEntries` are `0`.
 
+**DNSBL resources** (issue #4036; written by `go/pfb_core/dnsbl`). pfB-DNS fetches these to build what the manifest
+`pfb_py_sources.json` and its files give it today:
+
+| Id | Body | Metadata |
+|---|---|---|
+| `dnsbl/manifest` | JSON Lines, the rows below; published after every body it names, so it is the one commit point | `{"groups": [{"name", "entries"}], "feeds": N, "entries": N}`: the entries of each group's feed bodies, groups in feed order, and their total |
+| `dnsbl/feed-<feed>` | plain text: the feed's rows, each a domain or a verbatim ABP rule, as a `.raw` file holds them; `<feed>` is the feed header, letters, digits and underscores | `{}` |
+| `dnsbl/top1m` | plain text: the TOP1M whitelist, one domain per line; published only while TOP1M is on | `{}` |
+| `dnsbl/safesearch` | JSON Lines: `{"host", "a", "aaaa"}`, with `"v4", "v6"` on a CNAME row; one row per host | `{}` |
+| `dnsbl/psl` | JSON Lines: `{"section": "icann" \| "private", "rule"}`, the rules between the PSL file's section markers, comments and blank lines left out | `{}` |
+
+The manifest's rows, one per line:
+
+- `{"kind": "config", "builtinLogFlag", "top1mEnabled"}`, once;
+- `{"kind": "whitelist", "domain"}`, `{"kind": "unlock", "domain"}`, `{"kind": "tld_blacklist", "tld"}` and
+  `{"kind": "tld_exclusion", "domain"}`, one per entry;
+- `{"kind": "feed", "position", "feed", "group", "logFlag", "provenance": "feed" | "user", "mode": "deny" | "permit",
+  "top1m", "resource", "generation", "digest", "entries"}` per feed: `position` from 1 is the order the build reads the
+  feeds in, and the last four describe the feed's body;
+- `{"kind": "member", "resource", "generation", "digest", "entries"}` per other body.
+
+A client sorts the `feed` rows by `position` and fetches each named body at the named generation. A feed's rows are a set:
+order and repeats inside a feed are not kept (owner, 2026-11-23). A row the store cannot hold (a control character, a leading
+`#`, over 1 MiB) is left out and counted for the Core Updater. The generation of `dnsbl/manifest` is the `dnsbl.generation`
+of the apply request ([Update command, version 2](#update-command-version-2)).
+
 **Request.** `{"resources": {"<id>": <cursor>, ...}}`. A cursor is `{}` (none) or `{"generation": "<decimal string>", "digest":
 "<32 hex>"}`: the generation and digest of the body the caller applied. Both fields come together; a field that is `null` is
 absent. A missing or empty `resources` answers `{"resources": {}}`. A caller never does arithmetic on a generation: it keeps the
