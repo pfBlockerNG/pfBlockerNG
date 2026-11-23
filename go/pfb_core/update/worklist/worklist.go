@@ -77,6 +77,11 @@ type Input struct {
 	// this Update: the caller's, as neither is in a projection (pfb_failures() counts the error log's FAIL lines).
 	SkipFeed int
 	Failures map[string]int
+	// BlacklistDir is the database folder ($pfb['dbdir']) the Extras stage publishes each Blacklist provider into: the
+	// category <id>/<id>_<category> and, after a new download, the provider's update marker <id>/<id>.update. Each
+	// selected category of schedule's categoryProviders (Settings["schedule"], categoryUpdates on) is a DNSBL feed
+	// "<title>_<category>" read from that file, as today's pass lists it; empty: no category is run.
+	BlacklistDir string
 }
 
 // Item is one feed the per-feed stage runs, in walk order, or one it must not run (Stopped).
@@ -89,6 +94,9 @@ type Item struct {
 	// Stopped is why the feed is not run this Update (its folder could not be recovered, or a kept probe or a fail marker
 	// could not be handled): no change and no outcome, so the occurrence stays pending.
 	Stopped string
+	// Marker is a Blacklist category's provider update marker: the caller removes it once every category of the provider
+	// ran without failing, as today's pass consumes it.
+	Marker string
 }
 
 // Plan is the work list and stage 7's decision.
@@ -119,6 +127,7 @@ type candidate struct {
 	dir    string
 	walked bool   // a feed the walk visits: a feed row of a group not updated Never
 	stop   string // why the feed is stopped before any file of it is read: its folder or its name
+	marker string // a Blacklist category's provider update marker
 }
 
 type builder struct {
@@ -147,7 +156,7 @@ func Build(ctx context.Context, in Input) (Plan, error) {
 	}
 	b.pending = map[string]bool{}
 	for _, f := range b.feeds("both") {
-		if !f.Custom {
+		if !f.Custom && f.marker == "" {
 			b.configured = append(b.configured, f.ID)
 			b.pending[f.ID] = feedstage.ValidName(f.Name) &&
 				(slices.Contains(in.PendingFeeds, f.ID) || in.GeoIPChanged && f.Format == "geoip")
@@ -304,7 +313,7 @@ func (b *builder) consumeFail(c candidate, item Item) Item {
 // for one, else the pass of a changed Extra.
 func (b *builder) scheduled(cands []candidate) Plan {
 	due := len(b.in.Feeds) > 0 || b.in.ManifestMissing || b.buildable(cands) || slices.ContainsFunc(cands, func(c candidate) bool {
-		return c.walked && c.stop == "" && present(c.path(".fail"))
+		return c.walked && c.stop == "" && present(c.path(".fail")) || c.downloaded()
 	})
 	switch {
 	case due:
@@ -346,7 +355,7 @@ func (b *builder) pass(cands []candidate, force string) Plan {
 		// A custom list compares its own text, and a Reload reads no verdict (feedstage).
 		if !c.feed.Custom && force == "none" {
 			change.Verdict = feedstage.VerdictUnchanged
-			if c.stop == "" && (present(c.path(".fail")) || !feedstage.ListsPublished(c.dir, c.feed)) {
+			if c.stop == "" && (present(c.path(".fail")) || !feedstage.ListsPublished(c.dir, c.feed) || c.downloaded()) {
 				change.Verdict = feedstage.VerdictChanged
 			}
 		}
@@ -369,6 +378,13 @@ func (b *builder) walk(cands []candidate, forceAll bool, pending map[string]bool
 		id := c.feed.ID
 		selected := forceAll || pending[id]
 		switch {
+		case c.marker != "":
+			// A category is never checked: built after its provider's download, or by a Force Check.
+			if forceAll || c.downloaded() {
+				found = found || !forceAll
+				plan.Items = append(plan.Items, b.prepare(c, feedstage.Change{Verdict: feedstage.VerdictChanged, Force: force}))
+			}
+			continue
 		case !c.walked:
 			continue
 		case c.stop == "" && c.feed.State == "hold" && feedstage.ListsPublished(c.dir, c.feed):
@@ -422,8 +438,15 @@ func (b *builder) prepare(c candidate, change feedstage.Change) Item {
 	if source, ok := probeIdentity(c); ok && dropStaleProbe(c, source) != nil {
 		return Item{Feed: c.feed, Stopped: "probe_unavailable"}
 	}
-	return Item{Feed: c.feed, Change: change}
+	item := Item{Feed: c.feed, Change: change}
+	if c.downloaded() {
+		item.Marker = c.marker
+	}
+	return item
 }
+
+// downloaded reports whether c is a Blacklist category whose provider the Extras stage downloaded anew.
+func (c candidate) downloaded() bool { return c.marker != "" && c.stop == "" && present(c.marker) }
 
 // verdict is what check decided for one feed: stage 6's answer, the outcome, or why the feed stops, whether today's check
 // sets $pfb['update_cron'] (found), and whether the feed is left to the apply when the window defers its build (marked).
@@ -533,6 +556,7 @@ func (b *builder) continentEnabled() bool {
 type listed struct {
 	feedstage.Feed
 	walked bool
+	marker string
 }
 
 // feeds are the feeds of the scope's kinds in today's walk order: IPv4, IPv6, DNSBL, groups and rows in config order,
@@ -551,12 +575,42 @@ func (b *builder) feeds(scope string) []listed {
 			walked := text(group, "updateFrequency") != "Never"
 			for _, row := range list(group, "feeds") {
 				if text(row, "state") != "disabled" && text(row, "url") != "" {
-					out = append(out, listed{feedFor(kind, group, row), walked})
+					out = append(out, listed{feedFor(kind, group, row), walked, ""})
 				}
 			}
 			if custom := text(group, "customList"); custom != "" {
-				out = append(out, listed{customFeedFor(kind, group, custom), false})
+				out = append(out, listed{customFeedFor(kind, group, custom), false, ""})
 			}
+		}
+	}
+	if scope != "ip" {
+		out = append(out, b.categories()...)
+	}
+	return out
+}
+
+// categories are the selected Blacklist categories as DNSBL feeds, provider by provider in settings order (today's
+// $lists, pfblockerng_apply.inc): "<title>_<category>", a dash of the category an underscore, read from the local file
+// <BlacklistDir>/<id>/<id>_<category>. A title that is no word stops its categories (feed_name_invalid).
+func (b *builder) categories() []listed {
+	schedule := b.in.Settings["schedule"]
+	if on, _ := schedule["categoryUpdates"].(bool); !on || b.in.BlacklistDir == "" {
+		return nil
+	}
+	var out []listed
+	for _, p := range list(schedule, "categoryProviders") {
+		id := text(p, "id")
+		if selected, _ := p["selected"].(bool); !selected || id == "" || strings.ContainsAny(id, "/.") {
+			continue
+		}
+		dir := filepath.Join(b.in.BlacklistDir, id)
+		for _, category := range strings.Split(text(p, "categories"), ",") {
+			if category = strings.ReplaceAll(category, "-", "_"); category == "" || strings.ContainsAny(category, "/") {
+				continue
+			}
+			name := text(p, "title") + "_" + category
+			out = append(out, listed{feedstage.Feed{ID: "dnsbl:" + name, Kind: "dnsbl", Name: name, State: "enabled", Format: "auto",
+				Source: "file://" + filepath.Join(dir, id+"_"+category)}, false, filepath.Join(dir, id+".update")})
 		}
 	}
 	return out
@@ -575,7 +629,7 @@ func (b *builder) candidates(scope string, want func(id string) bool) ([]candida
 			return nil, fmt.Errorf("no feed stage for %s feeds", f.Kind)
 		}
 		f.SkipFeedPassed = b.in.SkipFeed != 0 && b.in.Failures[f.Name] >= b.in.SkipFeed
-		c := candidate{feed: f.Feed, stage: stage, dir: stage.Paths.FeedDir, walked: f.walked}
+		c := candidate{feed: f.Feed, stage: stage, dir: stage.Paths.FeedDir, walked: f.walked, marker: f.marker}
 		err, done := b.recovered[c.dir]
 		if !done {
 			err = feedstage.Recover(c.dir)

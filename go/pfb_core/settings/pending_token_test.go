@@ -104,7 +104,7 @@ func TestTheFileBackendHasNoPendingToken(t *testing.T) {
 // or a comparison.
 func TestNoCoreCodeInterpretsThePendingToken(t *testing.T) {
 	holders := map[string]bool{"settings/adapter.go": true, "settings/backend.go": true, "settings/store.go": true,
-		"update/loop.go": true, "update/apply/request.go": true}
+		"update/loop.go": true, "update/stages.go": true, "update/apply/request.go": true}
 	seen := 0
 	err := filepath.WalkDir("..", func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {

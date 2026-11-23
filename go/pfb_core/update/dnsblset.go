@@ -141,7 +141,7 @@ func (s DNSBLSet) Build(ctx context.Context, in DNSBLInput) (DNSBLOut, error) {
 			return out, err
 		}
 	} else {
-		res, err := dnsbl.Publish(s.Store, set)
+		res, err := publishDNSBL(s.Store, set)
 		if err != nil {
 			return out, err
 		}

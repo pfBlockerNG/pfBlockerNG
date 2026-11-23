@@ -561,7 +561,7 @@ func runWorker(logPath string) int {
 	release.Close()
 	var remove func()
 	if state.Loop != nil {
-		err = runLoop(filepath.Dir(logPath), &state, log)
+		err = runLoop(filepath.Dir(logPath), &state, lock, result, log)
 		state.Loop = nil
 	} else {
 		remove, err = runProgram(logPath, &state, lock, result, log)

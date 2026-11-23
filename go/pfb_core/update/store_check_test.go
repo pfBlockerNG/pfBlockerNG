@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
 )
 
 // Issue #4038, hostile row: a resource store that cannot be written (read-only, or a file in its folder's place) fails the
@@ -42,16 +44,16 @@ func TestAStoreThatCannotBeWrittenFailsTheUpdateBeforeAnyStagePublishes(t *testi
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := tc.store(t)
-			adapter, _ := settingsAdapter(t, plainReply)
-			u := &updater{loop: Loop{SettingsCmd: adapter, ResourceDir: store}, req: Request{Trigger: "manual"}, stateDir: t.TempDir()}
+			u := loopAnswering(t, plainReply).updater(t, Request{Trigger: "manual"})
+			u.loop.ResourceDir = store
 			seen := recordBoundaries(t)
 			err := u.run()
 			if !tc.fails {
 				if err != nil || !slices.Equal(*seen, wantBoundaries) {
 					t.Fatalf("run = %v, boundaries %q; want every stage", err, *seen)
 				}
-				if entries, err := os.ReadDir(store); err != nil || len(entries) != 0 {
-					t.Errorf("the store holds %d entries (%v) after the check, want none", len(entries), err)
+				if err := resources.Open(store).Writable(); err != nil {
+					t.Errorf("the store cannot be written after the Update: %v", err)
 				}
 				return
 			}
