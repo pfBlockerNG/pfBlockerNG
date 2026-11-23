@@ -5,6 +5,7 @@ package update
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -74,5 +75,23 @@ func TestAnIPUpdateBeforeAnyDNSBLBuildPublishesNoDNSBLIP(t *testing.T) {
 		if strings.HasPrefix(id, "ip-set/DNSBLIP/") {
 			t.Errorf("the store holds %s, published from no list", id)
 		}
+	}
+}
+
+// A damaged body of a set the last apply was requested to load does not fail a nothing-due tick: the tick reads
+// generations from the store's index alone, and the next publication repairs the body.
+func TestADamagedBodyDoesNotFailANothingDueTick(t *testing.T) {
+	fx := newLoopFixture(t)
+	if _, err := fx.run(t, manual()); err != nil {
+		t.Fatal(err)
+	}
+	g := generation(t, fx.storeOf(), "ip-set/Abuse/ipv4").Generation
+	touch(t, filepath.Join(fx.store, "ip-set~Abuse~ipv4."+strconv.FormatUint(g, 10)+".body"), "damaged\n")
+	runs := fx.applyRuns(t)
+	if _, err := fx.run(t, Request{Trigger: "scheduled"}); err != nil {
+		t.Fatalf("tick = %v, want success: a damaged body is the next publication's to repair", err)
+	}
+	if fx.applyRuns(t) != runs {
+		t.Errorf("apply runs %d, want %d: the generation was requested already", fx.applyRuns(t), runs)
 	}
 }
