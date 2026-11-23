@@ -293,8 +293,9 @@ substring, so such an entry could never match. The plain `A1` and `A2` entries s
 *Amendment 2026-11-23 (issue #4036, slice 7a): `dnsbl/<scope>` is five kinds of resource, written by `go/pfb_core/dnsbl`
 (`Publish`): `dnsbl/feed-<feed>` per feed (plain text: the rows a `.raw` file holds, a domain or a verbatim ABP rule each),
 `dnsbl/top1m` (plain text), `dnsbl/safesearch` and `dnsbl/psl` (JSON Lines), and `dnsbl/manifest` (JSON Lines), published
-last as the one commit point: its rows carry the config, the whitelist, unlock and TLD entries, and one row per feed and
-per other body naming that body's generation and digest. The per-group counts are the manifest's metadata. The generation
+last: its rows carry the config, the whitelist, unlock and TLD entries, and one row per feed and per other body naming that
+body's generation and digest. A body can move on before a client fetches it (the store keeps only the current and the
+applied generation); the client then keeps its set and retries at its next poll. The per-group counts are the manifest's metadata. The generation
 of `dnsbl/manifest` is the `dnsbl.generation` of the apply request (8.1). A feed's rows are a sorted set (owner,
 2026-11-23): its irreducible regex rules are numbered and scanned in byte order, a row repeated in one feed is counted once,
 and of two ABP rules of one feed on the same key the later in byte order wins. A row the store cannot hold is left out and
