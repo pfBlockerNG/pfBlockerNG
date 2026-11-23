@@ -63,7 +63,10 @@ that applies every resource and removal the request names.
 
 ## Freezing
 
-Run the smoke module on a box (`scripts/local-smoke.sh --filter test_smoke_update_loop_corpus`). Each run writes
+The capture runs on demand only: the smoke module's cases skip unless `PFB_SMOKE_UPDATE_LOOP_CAPTURE=1` is set, as
+re-freezing is the only reason to run today's Update again (the Go replay checks the corpus in every CI run). Run it on
+the box, whose run inherits the variable: `PFB_SMOKE_UPDATE_LOOP_CAPTURE=1 sh scripts/smoke-on-box.sh --filter
+test_smoke_update_loop_corpus`. `scripts/local-smoke.sh` does not forward the variable to the box. Each run writes
 `update_loop_corpus_actual.json` in its diagnostics folder: per case, the records and the full transcripts. Copy a case's
 records into its `expect`. Cases here hold no SafeSearch: its table resolves names through the box's resolver, a
 host-dependent input that stays out of the shared corpus.

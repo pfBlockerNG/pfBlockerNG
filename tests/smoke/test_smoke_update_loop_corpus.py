@@ -286,6 +286,14 @@ def test_result_lines_add_up() -> None:
     assert results(lines) == ({"a": "success", "b": "success"}, ["x", "y"])
 
 
+# Capturing re-runs today's Update on the box (about 170 s): needed only to re-freeze the corpus, which the Go replay
+# checks in every CI run, so it runs on demand (go/pfb_core/update/testdata/e2e/README.md, "Freezing").
+CAPTURE_ENV = "PFB_SMOKE_UPDATE_LOOP_CAPTURE"
+
+
+@pytest.mark.skipif(
+    os.environ.get(CAPTURE_ENV) != "1", reason=f"on-demand corpus capture: set {CAPTURE_ENV}=1 to re-freeze"
+)
 @pytest.mark.parametrize("case", corpus()["cases"], ids=lambda c: c["id"])
 def test_case_matches_todays_update(case: dict[str, Any], deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     h.reset_pfb_baseline(deployed_vm)
