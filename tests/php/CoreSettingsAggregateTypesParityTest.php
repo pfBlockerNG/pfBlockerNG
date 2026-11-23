@@ -130,8 +130,10 @@ final class CoreSettingsAggregateTypesParityTest extends TestCase
 		$settings = $read['settings'];
 		$settings['policy/ip']['aggregates'] = [];
 
-		$this->backend(['version' => 1, 'op' => 'write', 'expectedRevision' => $read['revision'], 'settings' => $settings]);
+		$reply = $this->backend(['version' => 1, 'op' => 'write', 'expectedRevision' => $read['revision'], 'settings' => $settings]);
 
+		$this->assertSame(['version' => 1, 'revision' => $read['revision']], $reply, 'the write succeeds, and changes nothing');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'nothing is written for a derived field');
 		$this->assertSame('Deny', config_get_path(self::KEY), 'config.xml keeps the IP page\'s selection');
 		$this->assertSame([['class' => 'deny']], $this->read()['settings']['policy/ip']['aggregates'] ?? NULL, 'the next read answers it again');
 	}
