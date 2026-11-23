@@ -5132,7 +5132,9 @@ function pfb_outpost_cursor_drop(string $id, ?string $path = NULL): ?string {
  * Group Policy switches and lists (issue #4036) are what pfB-DNS takes from the ini's [noAAAA] and [GP_Bypass_List] sections,
  * which the ini carries while the switch is on: pfb_core_dns_list_fields() describes them.
  *
- * @return array<string, mixed> the 19 fields, in the protocol's order
+ * The pfB-DNS switch (issue #4038) is today's reader as pfb_dnsbl_active() compares it; the adapter's write refuses a change to it.
+ *
+ * @return array<string, mixed> the 20 fields, in the protocol's order
  */
 function pfb_core_dns_settings(): array {
 	$lists = pfb_core_dns_list_fields();
@@ -5156,7 +5158,8 @@ function pfb_core_dns_settings(): array {
 		'regexCap'              => $on('dnsbl/pfb_regex_cap'),
 		'metricsClientIp'       => $on('gen/pfb_metrics_client_ip'),
 	] + array_replace($lists, pfb_core_table_read(array_diff_key($lists, ['noAaaaList' => TRUE])),
-		['noAaaaList' => pfb_core_noaaaa_list(pfb_core_table_text($lists['noAaaaList'][0]))]);
+		['noAaaaList' => pfb_core_noaaaa_list(pfb_core_table_text($lists['noAaaaList'][0]))])
+		+ ['pfbDnsEnabled' => PfbConfig::read('dns/pfb_dns') === PfbToggle::On];
 }
 
 /**
@@ -6789,7 +6792,7 @@ function pfb_core_settings_refusal(string $code, string $message, array $fieldEr
 
 /**
  * The refusal for a malformed settings adapter request, NULL for a well-formed one: nothing is locked or written before it passes.
- * A request holds exactly the keys of its op, and a write's `settings` exactly `dns` (the 19 fields, each of its native type and
+ * A request holds exactly the keys of its op, and a write's `settings` exactly `dns` (the 20 fields, each of its native type and
  * range, the lists as pfb_core_table_faults() holds them, no noAAAA domain listed twice), the feed projections
  * (pfb_core_feed_projection_faults(), issue #3937), `schedule` (pfb_core_schedule_faults(), issue #3941) and `ingest` (an object
  * here; pfb_core_settings_backend() holds it to what config.xml and the platform project, issue #3975) and the table-driven
@@ -6827,8 +6830,14 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
 	$fields = pfb_core_dns_fields();
 	$lists = pfb_core_dns_list_fields();
 	$faults = [];
-	foreach (array_keys(array_diff_key($dns, $fields, $lists)) as $name) {
+	foreach (array_keys(array_diff_key($dns, $fields, $lists, ['pfbDnsEnabled' => TRUE])) as $name) {
 		$faults[] = ['field' => "dns.{$name}", 'message' => 'no such field'];
+	}
+	// issue #4038: the pfB-DNS switch is the DNS page's; a write carries it as read, and the write refuses a change to it
+	if (!array_key_exists('pfbDnsEnabled', $dns)) {
+		$faults[] = ['field' => 'dns.pfbDnsEnabled', 'message' => 'required'];
+	} elseif (!is_bool($dns['pfbDnsEnabled'])) {
+		$faults[] = ['field' => 'dns.pfbDnsEnabled', 'message' => 'not a valid value'];
 	}
 	foreach ($fields as $name => [, $type]) {
 		if (!array_key_exists($name, $dns)) {
@@ -6932,6 +6941,11 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 			if ($readOnly !== []) {
 				return pfb_core_settings_refusal('invalid_argument', "{$id} is read-only: config.xml and the platform own it", $readOnly);
 			}
+		}
+		// issue #4038: the pfB-DNS switch is the DNS page's; the revision just matched, so a difference is a write of it
+		if ($request['settings']['dns']['pfbDnsEnabled'] !== $now['dns']['pfbDnsEnabled']) {
+			return pfb_core_settings_refusal('invalid_argument', 'dns.pfbDnsEnabled is read-only: the DNS page owns it',
+				[['field' => 'dns.pfbDnsEnabled', 'message' => 'read-only: the DNS page owns it']]);
 		}
 		// issue #3978: a provider's title and feed are the package's Blacklist definitions; the revision just matched, so a difference is a write
 		$packaged = array_column($now['schedule']['categoryProviders'], NULL, 'id');

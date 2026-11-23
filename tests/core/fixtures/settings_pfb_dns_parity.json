@@ -1,0 +1,98 @@
+{
+ "schema": 1,
+ "projection": "dns",
+ "field": "pfbDnsEnabled",
+ "description": "The pfB-DNS switch dns/pfb_dns (issue #4038, sub-slice 9g): DNSBL is active only while pfBlockerNG, pfB-DNS and DNSBL are on (pfb_dnsbl_active()). A case's stored value is what config.xml holds (absent when the case has none); php is today's reader, PfbConfig::read('dns/pfb_dns') === PfbToggle::On, as pfb_dnsbl_active() compares it; pfbDnsEnabled is what the settings adapter answers in dns, read-only. A refused row is a value Core refuses to read.",
+ "cases": [
+  {
+   "id": "absent",
+   "description": "Nothing stored: the registry default '' reads Off, so DNSBL is not active.",
+   "php": false,
+   "pfbDnsEnabled": false
+  },
+  {
+   "id": "empty",
+   "description": "The DNS page's switch off stores '': Off.",
+   "stored": "",
+   "php": false,
+   "pfbDnsEnabled": false
+  },
+  {
+   "id": "on",
+   "description": "The DNS page's switch on stores 'on': On.",
+   "stored": "on",
+   "php": true,
+   "pfbDnsEnabled": true
+  },
+  {
+   "id": "upper-first",
+   "description": "A hand-edited 'On': the toggle reader takes any case.",
+   "stored": "On",
+   "php": true,
+   "pfbDnsEnabled": true
+  },
+  {
+   "id": "upper",
+   "description": "A hand-edited 'ON': On.",
+   "stored": "ON",
+   "php": true,
+   "pfbDnsEnabled": true
+  },
+  {
+   "id": "off",
+   "description": "The word 'off': Off.",
+   "stored": "off",
+   "php": false,
+   "pfbDnsEnabled": false
+  },
+  {
+   "id": "yes",
+   "description": "Hostile: 'yes' is no On spelling: Off.",
+   "stored": "yes",
+   "php": false,
+   "pfbDnsEnabled": false
+  },
+  {
+   "id": "leading-space",
+   "description": "Hostile: ' on' with a leading space is not trimmed: Off.",
+   "stored": " on",
+   "php": false,
+   "pfbDnsEnabled": false
+  },
+  {
+   "id": "one",
+   "description": "Hostile: '1': Off.",
+   "stored": "1",
+   "php": false,
+   "pfbDnsEnabled": false
+  },
+  {
+   "id": "array",
+   "description": "Hostile: an array where a scalar is stored: Off, without a warning.",
+   "stored": [
+    "on"
+   ],
+   "php": false,
+   "pfbDnsEnabled": false
+  },
+  {
+   "id": "empty-array",
+   "description": "Hostile: an empty array: Off.",
+   "stored": [],
+   "php": false,
+   "pfbDnsEnabled": false
+  }
+ ],
+ "refused": [
+  {
+   "id": "string",
+   "description": "The stored spelling, not a boolean.",
+   "pfbDnsEnabled": "on"
+  },
+  {
+   "id": "number",
+   "description": "A number.",
+   "pfbDnsEnabled": 1
+  }
+ ]
+}

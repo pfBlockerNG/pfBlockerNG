@@ -27,7 +27,8 @@
 				"noAaaa": false,
 				"noAaaaList": [],
 				"groupPolicy": false,
-				"groupPolicyBypassList": []
+				"groupPolicyBypassList": [],
+				"pfbDnsEnabled": false
 			},
 			"ini": {
 				"noAAAA": null,

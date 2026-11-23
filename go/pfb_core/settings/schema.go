@@ -107,6 +107,9 @@ func dnsProjection() Projection {
 		{Name: "groupPolicy", Type: TypeBool, Default: false},
 		{Name: "groupPolicyBypassList", Type: TypeList, Default: []any{}, Key: "cidr", Check: checkBypassEntry,
 			Items: []Field{{Name: "cidr", Type: TypeString, Default: ""}}},
+		// The pfB-DNS switch dns/pfb_dns, answered by the Outpost and refused on a write: DNSBL is active only while it is on
+		// (pfb_dnsbl_active()). tests/core/fixtures/settings_pfb_dns_parity.json is its parity fixture.
+		{Name: "pfbDnsEnabled", Type: TypeBool, Default: false},
 	}, Retired: []string{"logViaWebserver", "hstsNullBlocking"}} // #4054, #4056
 }
 

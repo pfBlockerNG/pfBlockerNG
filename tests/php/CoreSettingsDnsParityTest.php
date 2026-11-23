@@ -101,7 +101,7 @@ final class CoreSettingsDnsParityTest extends TestCase
 		$this->assertSame('dns', $doc['projection']);
 		$defaults = array_values(array_filter($doc['cases'], static fn(array $c): bool => $c['id'] === 'defaults'));
 		$this->assertCount(1, $defaults, 'one defaults case');
-		$this->assertSame([...array_keys(self::INI_KEY), 'noAaaa', 'noAaaaList', 'groupPolicy', 'groupPolicyBypassList'], array_keys($defaults[0]['native']),
+		$this->assertSame([...array_keys(self::INI_KEY), 'noAaaa', 'noAaaaList', 'groupPolicy', 'groupPolicyBypassList', 'pfbDnsEnabled'], array_keys($defaults[0]['native']),
 			'the defaults case names every field');
 		$refused = array_column($doc['refused'], 'id');
 		$this->assertSame(array_values(array_unique($refused)), $refused, 'a refused row id appears once');
@@ -156,6 +156,10 @@ final class CoreSettingsDnsParityTest extends TestCase
 			$lists[$list] = $switch === 'noAaaa' ? self::noAaaaEntries($rows) : self::bypassEntries($rows);
 		}
 		foreach ($case['native'] as $field => $expected) {
+			if ($field === 'pfbDnsEnabled') {	// issue #4038: the pfB-DNS switch is in no ini; CoreSettingsPfbDnsParityTest freezes its reader
+				$this->assertSame($expected, pfb_core_dns_settings()['pfbDnsEnabled'], "{$case['id']}: the pfB-DNS switch");
+				continue;
+			}
 			if (array_key_exists($field, $lists)) {
 				$this->assertSame($expected, $lists[$field], "{$case['id']}: {$field} from the ini\n{$on}");
 				continue;

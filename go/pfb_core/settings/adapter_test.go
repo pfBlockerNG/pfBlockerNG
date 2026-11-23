@@ -359,7 +359,7 @@ func TestLoadFailsWhenTheAdapterDoes(t *testing.T) {
 
 const allDnsFields = `{"cnameValidation":false,"control":true,"controlLegacy":false,"decisionCacheMax":10000,` +
 	`"groupPolicy":false,"groupPolicyBypassList":[],` +
-	`"idnBlockMalicious":true,"idnEscalateSuspicious":false,"idnMode":"off","metricsClientIp":false,"noAaaa":false,"noAaaaList":[],` +
+	`"idnBlockMalicious":true,"idnEscalateSuspicious":false,"idnMode":"off","metricsClientIp":false,"noAaaa":false,"noAaaaList":[],"pfbDnsEnabled":false,` +
 	`"pslAllowPrivate":false,"pslFeedIcannPolicy":"honor","pslFeedPrivatePolicy":"honor","pslIncludePrivate":true,"regexCap":false,` +
 	`"replyLogging":true,"tldWildcard":false}`
 
