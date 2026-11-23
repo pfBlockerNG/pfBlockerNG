@@ -221,7 +221,7 @@ def run_step(vm: SmokeVM, step: dict[str, Any], base: str) -> tuple[dict[str, An
         "exit": run.returncode,
         "outcomes": outcomes,
         "attempted": attempted,
-        "sets": left["sets"],
+        "sets": left["sets"] or {},  # PHP encodes an empty array as a list
         "dnsbl": left["dnsbl"],
         "issues": left["issues"],
         "stages": stages(run.stdout),
@@ -246,8 +246,6 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    # The mock server is the SLIRP host alias, an internal address the default-ON feed-host filter would refuse.
-    h.set_feed_internal_allowlist(smoke_vm, "192.168.89.0/24")
     h.use_system_dns_upstream(smoke_vm)
     h.unblock_egress()
     try:
@@ -291,6 +289,8 @@ def test_result_lines_add_up() -> None:
 @pytest.mark.parametrize("case", corpus()["cases"], ids=lambda c: c["id"])
 def test_case_matches_todays_update(case: dict[str, Any], deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     h.reset_pfb_baseline(deployed_vm)
+    # The baseline unsets the feed-host allowlist; the mock server is an internal address the default-ON filter refuses.
+    h.set_feed_internal_allowlist(deployed_vm, "192.168.89.0/24")
     h.unblock_egress()
     base = mock_feeds.feed_url("")
     serve(mock_feeds, case["serve"])
