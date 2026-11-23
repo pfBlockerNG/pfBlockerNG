@@ -76,3 +76,31 @@ func TestIDsLeavesOutANullIndexEntry(t *testing.T) {
 		t.Errorf("IDs(dnsbl/) = %q, %v; want dnsbl/a", ids, err)
 	}
 }
+
+// RemovedIDs lists, under a prefix, the ids marked removed and not yet deleted, in byte order; a current id, an id under
+// another prefix and an id whose removal was applied are left out, and a store with no index holds none.
+func TestRemovedIDsListsTheRemovedIDsUnderAPrefix(t *testing.T) {
+	s := resources.Open(t.TempDir())
+	if ids, err := s.RemovedIDs("ip-set/"); err != nil || ids != nil {
+		t.Fatalf("empty store: RemovedIDs = %q, %v; want none", ids, err)
+	}
+	for _, id := range []string{"ip-set/B/ipv4", "ip-set/A/ipv6", "ip-set/A/ipv4", "ip-set/C/ipv4", "ip-aggregate/deny/ipv4"} {
+		if _, err := s.Publish(id, []string{"192.0.2.1"}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"ip-set/B/ipv4", "ip-set/A/ipv6", "ip-set/C/ipv4", "ip-aggregate/deny/ipv4"} {
+		if err := s.Remove(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.RemovalApplied("ip-set/C/ipv4"); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := s.RemovedIDs("ip-set/"); err != nil || !slices.Equal(ids, []string{"ip-set/A/ipv6", "ip-set/B/ipv4"}) {
+		t.Errorf("RemovedIDs(ip-set/) = %q, %v; want ip-set/A/ipv6, ip-set/B/ipv4", ids, err)
+	}
+	if ids, err := s.IDs("ip-set/"); err != nil || !slices.Equal(ids, []string{"ip-set/A/ipv4"}) {
+		t.Errorf("IDs(ip-set/) = %q, %v; want only the current ip-set/A/ipv4", ids, err)
+	}
+}

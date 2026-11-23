@@ -503,14 +503,20 @@ func (s *Store) FoldApplied(prefix string, report map[string]Cursor) error {
 
 // IDs is every id under prefix the store holds and has not marked removed, in byte order. It is a writer call: an index
 // that cannot be read is cleared first, as by any write (loadWriter).
-func (s *Store) IDs(prefix string) ([]string, error) {
+func (s *Store) IDs(prefix string) ([]string, error) { return s.ids(prefix, false) }
+
+// RemovedIDs is every id under prefix the store holds marked removed (Remove) and not yet deleted (RemovalApplied), in
+// byte order: the removed list of an apply request. A writer call, as IDs.
+func (s *Store) RemovedIDs(prefix string) ([]string, error) { return s.ids(prefix, true) }
+
+func (s *Store) ids(prefix string, removed bool) ([]string, error) {
 	idx, err := s.loadWriter()
 	if err != nil {
 		return nil, err
 	}
 	var ids []string
 	for _, id := range slices.Sorted(maps.Keys(idx.Resources)) {
-		if e := idx.Resources[id]; e != nil && strings.HasPrefix(id, prefix) && !e.Removed {
+		if e := idx.Resources[id]; e != nil && strings.HasPrefix(id, prefix) && e.Removed == removed {
 			ids = append(ids, id)
 		}
 	}

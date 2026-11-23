@@ -1,6 +1,7 @@
 package ipset
 
 import (
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -54,7 +55,13 @@ type Settings struct {
 }
 
 // PipelineFeed is a configured deny feed: Name ends "_v4" or "_v6", Alias is its logical set and Text its first parse.
-type PipelineFeed struct{ Name, Alias, Text string }
+// Prepared: the caller already ran the feed's per-feed stage (a GeoIP continent, only aggregated), so a change snapshots Text
+// as it is. NoSuppress: the list is never suppressed (a group's custom list, a continent: today's alias loop reads them
+// beside the suppression pass).
+type PipelineFeed struct {
+	Name, Alias, Text    string
+	Prepared, NoSuppress bool
+}
 
 // PipelineConfig is a run: Feeds in config order (the priority order), the suppression lists of both families (nil for no
 // list), and whether the Uber union of the deny class is built.
@@ -75,10 +82,42 @@ type Pipeline struct {
 }
 
 // NewPipeline starts a run with an empty deny folder and masterfile.
-func NewPipeline(cfg PipelineConfig) *Pipeline {
+func NewPipeline(cfg PipelineConfig) *Pipeline { return ResumePipeline(cfg, State{}) }
+
+// State is what a Pipeline carries from one pass to the next, for a caller that keeps it between runs: the snapshot of
+// each feed that changed once, the deny folder and the masterfile.
+type State struct {
+	Snap, Deny map[string]string
+	Master     []string
+}
+
+// State is the pipeline's state after its last pass.
+func (p *Pipeline) State() State {
+	return State{Snap: maps.Clone(p.snap), Deny: maps.Clone(p.deny), Master: slices.Clone(p.master)}
+}
+
+// ResumePipeline continues a run from st with cfg's feeds and texts. A feed of st that cfg does not list has left: its
+// snapshot and deny file go, and so do its masterfile rows (the remove verb).
+func ResumePipeline(cfg PipelineConfig, st State) *Pipeline {
 	p := &Pipeline{cfg: cfg, text: map[string]string{}, snap: map[string]string{}, deny: map[string]string{}, rows: map[string]int{}}
+	var gone []string
+	for name := range st.Snap {
+		if !slices.ContainsFunc(cfg.Feeds, func(f PipelineFeed) bool { return f.Name == name }) {
+			gone = append(gone, name)
+		}
+	}
 	for _, f := range cfg.Feeds {
 		p.text[f.Name] = f.Text
+		if snap, ok := st.Snap[f.Name]; ok {
+			p.snap[f.Name], p.rows[f.Name] = snap, len(textRows(snap))
+		}
+		if text, ok := st.Deny[f.Name]; ok {
+			p.deny[f.Name] = text
+		}
+	}
+	p.master = slices.Clone(st.Master)
+	if len(gone) > 0 {
+		p.master = Remove(gone, p.master, nil).Master
 	}
 	return p
 }
@@ -135,7 +174,7 @@ func (p *Pipeline) Pass(changed []string, set map[string]string) PassOut {
 		}
 		trigger = true
 		text := p.text[f.Name]
-		if strings.HasSuffix(f.Name, "_v4") {
+		if strings.HasSuffix(f.Name, "_v4") && !f.Prepared {
 			// A stage that leaves the rows as they are leaves the file as it is.
 			if pre := Preprocess(text, PrepIn{Dup: cfg.Dup, Agg: cfg.Agg, Rep: cfg.Rep, DRep: cfg.DRep, Reputation: rep}); !slices.Equal(pre.Members, textRows(text)) {
 				text = fileOf(pre.Members)
@@ -198,7 +237,7 @@ func (p *Pipeline) Pass(changed []string, set map[string]string) PassOut {
 			if !ok {
 				continue
 			}
-			if cfg.Supp && trigger && (touched[f.Alias] || ran) && holes != nil && *holes != "" {
+			if cfg.Supp && trigger && !f.NoSuppress && (touched[f.Alias] || ran) && holes != nil && *holes != "" {
 				if s := Suppress(SuppressIn{Family: family, Alias: f.Name, Members: text, Holes: holes, Master: p.master, Dedup: cfg.Dup}); s.Applied {
 					text = fileOf(s.Members)
 					p.deny[f.Name], p.master = text, s.Master
