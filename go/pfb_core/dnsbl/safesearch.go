@@ -1,7 +1,6 @@
 package dnsbl
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,10 +15,6 @@ type SafeSearchPolicy struct {
 	DoHList []string // safeSearchDohList: a line of the DoH list that names one of them stays blocked
 }
 
-// Resolver answers a CNAME target's address of each family, "" for none. The production lookup is the caller's: today's
-// asks the configured external DNS server (pfb_ss_resolve_target()), which no settings projection carries yet.
-type Resolver func(ctx context.Context, target string) (v4, v6 string)
-
 // ssHost is one host of today's $safesearch_hosts: a later line sets one field and leaves the others.
 type ssHost struct {
 	name, a, aaaa string
@@ -28,11 +23,12 @@ type ssHost struct {
 
 // SafeSearchTable is today's SafeSearch stage (pfblockerng_apply.inc, "Loading DNSBL SafeSearch", then pfb_ss_csv()): the
 // rows of the package's lists pfb_dnsbl.<name>.conf in dir that the policy turns on, a host and its www. variant (an
-// nxdomain host once), a CNAME host's target resolved by resolve (nil resolves nothing). nil when no host is listed: no
-// body is published. A host with a row the decider's CSV would not read back as written (a comma in a field, or an empty
+// nxdomain host once). A CNAME row carries its target and no fallback address: today's stage resolves the target's
+// addresses (pfb_ss_resolve_target()); Core leaves that to pfB-DNS (owner, 2026-11-23). nil when no host is listed: no body
+// is published. A host with a row the decider's CSV would not read back as written (a comma in a field, or an empty
 // host) is left out and named in refused. Unlike today, the DoH list file is not rewritten: its lines are commented out in
 // memory, which reads as today's pass over the same file.
-func SafeSearchTable(ctx context.Context, dir string, p SafeSearchPolicy, resolve Resolver) (rows []SafeSearch, refused []string) {
+func SafeSearchTable(dir string, p SafeSearchPolicy) (rows []SafeSearch, refused []string) {
 	var hosts []*ssHost
 	byName := map[string]*ssHost{}
 	for _, list := range []struct {
@@ -89,11 +85,7 @@ func SafeSearchTable(ctx context.Context, dir string, p SafeSearchPolicy, resolv
 		}
 	}
 	for _, h := range hosts {
-		var v4, v6 string
-		if h.a == "cname" && !h.nxdomain && resolve != nil && !strings.Contains(h.aaaa, ",") {
-			v4, v6 = resolve(ctx, h.aaaa)
-		}
-		if h.name == "" || strings.Contains(h.name+h.a+h.aaaa+v4+v6, ",") {
+		if h.name == "" || strings.Contains(h.name+h.a+h.aaaa, ",") {
 			refused = append(refused, h.name)
 			continue
 		}
@@ -101,7 +93,7 @@ func SafeSearchTable(ctx context.Context, dir string, p SafeSearchPolicy, resolv
 		case h.nxdomain:
 			rows = append(rows, SafeSearch{Host: h.name, A: "nxdomain", AAAA: "nxdomain"})
 		case h.a == "cname":
-			rows = append(rows, SafeSearch{h.name, "cname", h.aaaa, v4, v6}, SafeSearch{"www." + h.name, "cname", h.aaaa, v4, v6})
+			rows = append(rows, SafeSearch{Host: h.name, A: "cname", AAAA: h.aaaa}, SafeSearch{Host: "www." + h.name, A: "cname", AAAA: h.aaaa})
 		default:
 			rows = append(rows, SafeSearch{Host: h.name, A: h.a, AAAA: h.aaaa}, SafeSearch{Host: "www." + h.name, A: h.a, AAAA: h.aaaa})
 		}

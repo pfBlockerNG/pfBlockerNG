@@ -19,17 +19,16 @@ import (
 )
 
 // DNSBLSet is the group-level DNSBL work of an Update (spec section 3, stages 8 to 10; issue #4038, sub-slice 9g): the
-// removed-list cleanup of the DNSBL feed folder, DNSBLIP's lists, and the dnsbl/* publication through slice 7a's assembler
-// with the feeds the per-feed stage parsed, the settings' whitelist, TLD and logging inputs, TOP1M, SafeSearch and the PSL.
+// dnsbl/* publication through slice 7a's assembler with the feeds the per-feed stage parsed, the settings' whitelist, TLD
+// and logging inputs, TOP1M, SafeSearch and the PSL; the removed-list cleanup of the DNSBL feed folder; DNSBLIP's lists.
 // Every path is the caller's.
 type DNSBLSet struct {
 	Store         *resources.Store
-	FeedDir       string         // the DNSBL feed folder: the per-feed stage's Paths.FeedDir for dnsbl feeds ($pfb['dnsdir'])
-	ListDir       string         // where DNSBLIP_v4.txt and DNSBLIP_v6.txt are written ($pfb['dbdir'])
-	Top1m         string         // the TOP1M whitelist the Extras stage writes (pfbalexawhitelist.txt)
-	PSL           string         // the PSL authority the package ships
-	SafeSearchDir string         // the folder of the package's SafeSearch lists, pfb_dnsbl.<name>.conf
-	Resolve       dnsbl.Resolver // the SafeSearch CNAME targets' lookup; nil resolves nothing
+	FeedDir       string // the DNSBL feed folder: the per-feed stage's Paths.FeedDir for dnsbl feeds ($pfb['dnsdir'])
+	ListDir       string // where DNSBLIP_v4.txt and DNSBLIP_v6.txt are written ($pfb['dbdir'])
+	Top1m         string // the TOP1M whitelist the Extras stage writes (pfbalexawhitelist.txt)
+	PSL           string // the PSL authority the package ships
+	SafeSearchDir string // the folder of the package's SafeSearch lists, pfb_dnsbl.<name>.conf
 }
 
 // DNSBLInput is what one Update hands the DNSBL build.
@@ -42,81 +41,146 @@ type DNSBLInput struct {
 // DNSBLOut is what the DNSBL build gives the rest of the Update.
 type DNSBLOut struct {
 	DNSBL *apply.DNSBL // the apply request's dnsbl: the manifest's generation and the groups; nil while DNSBL is off
-	// DNSBLIP is IPInput.DNSBLIP for the IP sets (sub-slice 9h): never nil, empty while DNSBLIP is off, so that the IP sets'
-	// prune removes its lists from the class folders.
+	// DNSBLIP is IPInput.DNSBLIP for the IP sets (sub-slice 9h): never nil, empty while DNSBLIP or DNSBL is off, so that the
+	// IP sets' prune removes its lists from the class folders.
 	DNSBLIP []GeoSet
 	Issues  []apply.Issue
 }
 
-// Build runs the DNSBL build of one Update. With policy/dnsbl.enabled off it publishes nothing and removes every dnsbl/*
-// resource. An error leaves the published DNSBL data as it was.
+// dnsblipList is a DNSBLIP list Build writes once every step that can fail has passed.
+type dnsblipList struct {
+	set  GeoSet
+	body []byte
+}
+
+// Build runs the DNSBL build of one Update. With policy/dnsbl.enabled off it publishes nothing, removes every dnsbl/*
+// resource and DNSBLIP's lists: today DNSBLIP exists only while pfb_dnsbl_active() holds. Of that test's facts, pfBlockerNG's
+// switch holds whenever an Update runs, and the pfB-DNS switch (dns/pfb_dns) is in no projection, so it is not tested yet.
+// Every read and check runs before the first change, so a cancelled Update, settings that are absent or of the wrong shape,
+// or any read or publication error leave the disk as they found it. A failure after the publication (the feed folder's
+// cleanup, a DNSBLIP list's write) is returned too, and the next Update finishes it: both compare what is there.
 func (s DNSBLSet) Build(ctx context.Context, in DNSBLInput) (DNSBLOut, error) {
+	out := DNSBLOut{DNSBLIP: []GeoSet{}}
+	if err := checkDNSBLSettings(in.Settings); err != nil {
+		return out, err
+	}
 	policy := in.Settings["policy/dnsbl"]
+	enabled := settingBool(policy, "enabled")
 	feeds := dnsblFeeds(in.Settings)
-	out := DNSBLOut{}
-	if err := s.cleanup(feeds); err != nil {
+	var lists []dnsblipList
+	if enabled {
+		var err error
+		if lists, err = s.dnsblipLists(feeds, settingText(policy, "dnsblIpAction")); err != nil {
+			return out, err
+		}
+	}
+
+	var set dnsbl.Set
+	var ssRefused []string
+	invalid, refused := map[string]int{}, map[string]bool{}
+	if enabled {
+		set = dnsbl.Set{BuiltinLogFlag: mechanismFlag(settingText(policy, "logging")), Top1mEnabled: settingBool(policy, "top1m"),
+			Whitelist: settingItems(policy["whitelist"], "domain"), TLDWildcard: settingBool(in.Settings["dns"], "tldWildcard"),
+			TLDBlacklist: settingItems(policy["tldBlacklist"], "tld"), TLDExclusions: settingItems(policy["tldExclusions"], "domain")}
+		if set.Top1mEnabled {
+			b, err := os.ReadFile(s.Top1m)
+			switch {
+			case err == nil:
+				set.Top1m = slices.DeleteFunc(strings.Split(string(b), "\n"), func(l string) bool { return l == "" })
+			case !errors.Is(err, fs.ErrNotExist): // a missing list fails the publication, as today's writer does
+				return out, err
+			}
+		}
+		var err error
+		if set.PSL, err = os.ReadFile(s.PSL); err != nil {
+			return out, err
+		}
+		set.SafeSearch, ssRefused = dnsbl.SafeSearchTable(s.SafeSearchDir, dnsbl.SafeSearchPolicy{Enable: settingBool(policy, "safeSearch"),
+			YouTube: settingText(policy, "safeSearchYoutube"), DoH: settingBool(policy, "safeSearchDoh"),
+			DoHList: settingItems(policy["safeSearchDohList"], "host")})
+		for _, f := range feeds {
+			if !feedstage.ValidName(f.Name) {
+				refused[f.Name] = true // never joined into a path
+				continue
+			}
+			file, err := os.Open(filepath.Join(s.FeedDir, f.Name+".parsed.ndjson"))
+			if errors.Is(err, fs.ErrNotExist) {
+				continue // not parsed yet, or parsed to nothing on its first run: today's writer skips it too
+			}
+			if err != nil {
+				return out, err
+			}
+			var bad int
+			f.Rows, bad, err = dnsbl.ReadStaged(file)
+			file.Close()
+			if err != nil {
+				return out, fmt.Errorf("%s: %w", f.Name, err)
+			}
+			invalid[f.Name] += bad
+			set.Feeds = append(set.Feeds, f)
+		}
+	}
+	if err := ctx.Err(); err != nil {
 		return out, err
 	}
-	var err error
-	if out.DNSBLIP, err = s.dnsblip(feeds, settingText(policy, "dnsblIpAction")); err != nil {
-		return out, err
-	}
-	if !settingBool(policy, "enabled") {
+
+	if !enabled {
 		held, err := s.Store.IDs("dnsbl/")
 		for _, id := range held {
 			err = errors.Join(err, s.Store.Remove(id))
 		}
-		return out, err
-	}
-
-	set := dnsbl.Set{BuiltinLogFlag: mechanismFlag(settingText(policy, "logging")), Top1mEnabled: settingBool(policy, "top1m"),
-		Whitelist: settingItems(policy["whitelist"], "domain"), TLDWildcard: settingBool(in.Settings["dns"], "tldWildcard"),
-		TLDBlacklist: settingItems(policy["tldBlacklist"], "tld"), TLDExclusions: settingItems(policy["tldExclusions"], "domain")}
-	if set.Top1mEnabled {
-		if b, err := os.ReadFile(s.Top1m); err == nil { // a missing list fails the publication, as today's writer does
-			set.Top1m = slices.DeleteFunc(strings.Split(string(b), "\n"), func(l string) bool { return l == "" })
-		}
-	}
-	if set.PSL, err = os.ReadFile(s.PSL); err != nil {
-		return out, err
-	}
-	var ssRefused []string
-	set.SafeSearch, ssRefused = dnsbl.SafeSearchTable(ctx, s.SafeSearchDir, dnsbl.SafeSearchPolicy{Enable: settingBool(policy, "safeSearch"),
-		YouTube: settingText(policy, "safeSearchYoutube"), DoH: settingBool(policy, "safeSearchDoh"),
-		DoHList: settingItems(policy["safeSearchDohList"], "host")}, s.Resolve)
-
-	invalid, refused := map[string]int{}, map[string]bool{}
-	for _, f := range feeds {
-		if !feedstage.ValidName(f.Name) {
-			refused[f.Name] = true // never joined into a path
-			continue
-		}
-		file, err := os.Open(filepath.Join(s.FeedDir, f.Name+".parsed.ndjson"))
-		if errors.Is(err, fs.ErrNotExist) {
-			continue // not parsed yet, or parsed to nothing on its first run: today's writer skips it too
-		}
 		if err != nil {
 			return out, err
 		}
-		var bad int
-		f.Rows, bad, err = dnsbl.ReadStaged(file)
-		file.Close()
+	} else {
+		res, err := dnsbl.Publish(s.Store, set)
 		if err != nil {
-			return out, fmt.Errorf("%s: %w", f.Name, err)
+			return out, err
 		}
-		invalid[f.Name] += bad
-		set.Feeds = append(set.Feeds, f)
+		if out.DNSBL, err = s.groups(res.Generation, set.Feeds, in.Changed); err != nil {
+			return out, err
+		}
+		for _, name := range res.Refused {
+			refused[name] = true
+		}
+		out.Issues = publishIssues(feeds, refused, invalid, res.Dropped, ssRefused)
 	}
-	res, err := dnsbl.Publish(s.Store, set)
+
+	removed, err := s.cleanup(feeds)
+	for _, name := range removed {
+		out.Issues = append(out.Issues, apply.Issue{Resource: "feed/dnsbl:" + name, Stage: "parse", Code: "feed_files_removed",
+			Message: "no configured feed names it, so its files are removed (a row the settings do not project counts as removed)"})
+	}
 	if err != nil {
 		return out, err
 	}
-	for _, name := range res.Refused {
-		refused[name] = true
-	}
+	out.DNSBLIP, err = s.writeDNSBLIP(lists)
+	return out, err
+}
 
+// groups is the apply request's dnsbl: the manifest's generation and its groups, each changed when a feed of it was parsed
+// this Update.
+func (s DNSBLSet) groups(generation uint64, feeds []dnsbl.Feed, changed map[string]bool) (*apply.DNSBL, error) {
+	reply, err := s.Store.Get(dnsbl.ManifestID, nil)
+	if err != nil {
+		return nil, err
+	}
+	var meta struct{ Groups []apply.Group }
+	if err := json.Unmarshal(reply.Metadata, &meta); err != nil {
+		return nil, err
+	}
+	for i, g := range meta.Groups {
+		meta.Groups[i].Changed = slices.ContainsFunc(feeds, func(f dnsbl.Feed) bool { return f.Group == g.Name && changed[f.Name] })
+	}
+	return &apply.DNSBL{Generation: generation, Groups: meta.Groups}, nil
+}
+
+// publishIssues are the publication's issues: a feed refused or with rows left out, in walk order; rows a fixed body left
+// out; SafeSearch hosts of the wrong shape.
+func publishIssues(feeds []dnsbl.Feed, refused map[string]bool, invalid, dropped map[string]int, ssRefused []string) []apply.Issue {
+	var issues []apply.Issue
 	issue := func(resource, code, message string) {
-		out.Issues = append(out.Issues, apply.Issue{Resource: resource, Stage: "parse", Code: code, Message: message})
+		issues = append(issues, apply.Issue{Resource: resource, Stage: "parse", Code: code, Message: message})
 	}
 	reported := map[string]bool{}
 	for _, f := range feeds {
@@ -126,37 +190,59 @@ func (s DNSBLSet) Build(ctx context.Context, in DNSBLInput) (DNSBLOut, error) {
 		reported[f.Name] = true
 		if refused[f.Name] {
 			issue("feed/dnsbl:"+f.Name, "feed_name_refused", "the feed's name cannot name a dnsbl resource: the feed is left out")
-		} else if n := invalid[f.Name] + res.Dropped[dnsbl.FeedPrefix+f.Name]; n > 0 {
+		} else if n := invalid[f.Name] + dropped[dnsbl.FeedPrefix+f.Name]; n > 0 {
 			issue("feed/dnsbl:"+f.Name, "rows_left_out", fmt.Sprintf("%d rows are left out: the store cannot hold them", n))
 		}
 	}
 	for _, id := range []string{dnsbl.Top1mID, dnsbl.SafeSearchID, dnsbl.PSLID} {
-		if n := res.Dropped[id]; n > 0 {
+		if n := dropped[id]; n > 0 {
 			issue(id, "rows_left_out", fmt.Sprintf("%d rows are left out: the store cannot hold them", n))
 		}
 	}
 	for _, host := range ssRefused {
 		issue(dnsbl.SafeSearchID, "safesearch_row_refused", fmt.Sprintf("a SafeSearch row of the wrong shape is left out: host %q", host))
 	}
+	return issues
+}
 
-	reply, err := s.Store.Get(dnsbl.ManifestID, nil)
-	if err != nil {
-		return out, err
+// checkDNSBLSettings refuses settings a build cannot take for what they say: a projection it reads that is absent, or a
+// field of the wrong type. Taking them would read a configured feed as removed and delete its files (today's
+// $config_complete guard, pfblockerng_apply.inc).
+func checkDNSBLSettings(settings map[string]map[string]any) error {
+	type field struct{ projection, name, kind string }
+	fields := []field{{"feeds/dnsbl", "groups", "list"}, {"policy/dnsbl", "enabled", "bool"}, {"policy/dnsbl", "groups", "list"},
+		{"policy/dnsbl", "whitelist", "list"}, {"policy/dnsbl", "tldBlacklist", "list"}, {"policy/dnsbl", "tldExclusions", "list"},
+		{"policy/dnsbl", "top1m", "bool"}, {"policy/dnsbl", "safeSearchDohList", "list"}, {"dns", "tldWildcard", "bool"},
+		{"schedule", "categoryUpdates", "bool"}, {"schedule", "categoryProviders", "list"}}
+	for _, f := range fields {
+		p, ok := settings[f.projection]
+		if !ok {
+			return fmt.Errorf("the DNSBL build needs the %s settings", f.projection)
+		}
+		v := p[f.name]
+		if _, isBool := v.(bool); f.kind == "bool" && !isBool || f.kind == "list" && !objectList(v) {
+			return fmt.Errorf("%s.%s is not a %s", f.projection, f.name, f.kind)
+		}
 	}
-	var meta struct{ Groups []apply.Group }
-	if err := json.Unmarshal(reply.Metadata, &meta); err != nil {
-		return out, err
+	for i, g := range rows(settings["feeds/dnsbl"]["groups"]) {
+		if !objectList(g["feeds"]) {
+			return fmt.Errorf("feeds/dnsbl.groups[%d].feeds is not a list", i)
+		}
 	}
-	for i, g := range meta.Groups {
-		meta.Groups[i].Changed = slices.ContainsFunc(set.Feeds, func(f dnsbl.Feed) bool { return f.Group == g.Name && in.Changed[f.Name] })
-	}
-	out.DNSBL = &apply.DNSBL{Generation: res.Generation, Groups: meta.Groups}
-	return out, nil
+	return nil
+}
+
+// objectList: v is a list of objects.
+func objectList(v any) bool {
+	list, ok := v.([]any)
+	return ok && !slices.ContainsFunc(list, func(item any) bool { _, ok := item.(map[string]any); return !ok })
 }
 
 // dnsblFeeds are the configured DNSBL feeds, without rows, in today's walk order ($lists, pfblockerng_apply.inc): each
 // primary group put first, so the last primary group leads; then the selected Blacklist categories; then the other groups.
 // A group's feeds are its rows that are not disabled and have a source, then its custom list; a group is DNSBL_<name>.
+// Departure: today a group whose first row has no source loses all its rows ("If only the 'customlist' is defined"); Core
+// takes its other rows. Only a hand-edited configuration holds such a group: the Groups page and Core's write refuse it.
 func dnsblFeeds(settings map[string]map[string]any) []dnsbl.Feed {
 	policy := settings["policy/dnsbl"]
 	var categories []dnsbl.Feed
@@ -206,12 +292,15 @@ func dnsblFeeds(settings map[string]map[string]any) []dnsbl.Feed {
 }
 
 // cleanup is today's removed-list cleanup of the DNSBL feed folder: every file of a feed whose parsed rows are there and
-// that is no configured feed now is removed. Its resource leaves the store when the next publication no longer names it.
-func (s DNSBLSet) cleanup(feeds []dnsbl.Feed) error {
+// that is no configured feed now is removed, and its name returned; its resource left the store with the publication.
+// Departure: a stored row the settings do not project (a header repeated in an earlier group, a hidden group) is still
+// configured today and keeps its files; Core cannot see it, so it counts as removed, and the caller raises an issue for it.
+func (s DNSBLSet) cleanup(feeds []dnsbl.Feed) ([]string, error) {
 	parsed, err := filepath.Glob(filepath.Join(s.FeedDir, "*.parsed.ndjson"))
 	if err != nil {
-		return err
+		return nil, err
 	}
+	var removed []string
 	for _, p := range parsed {
 		name := strings.TrimSuffix(filepath.Base(p), ".parsed.ndjson")
 		if !feedstage.ValidName(name) || slices.ContainsFunc(feeds, func(f dnsbl.Feed) bool { return f.Name == name }) {
@@ -219,38 +308,34 @@ func (s DNSBLSet) cleanup(feeds []dnsbl.Feed) error {
 		}
 		files, err := filepath.Glob(filepath.Join(s.FeedDir, name+".*"))
 		if err != nil {
-			return err
+			return removed, err
 		}
 		for _, f := range files {
 			if info, err := os.Lstat(f); err == nil && !info.IsDir() {
 				if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
-					return err
+					return removed, err
 				}
 			}
 		}
+		removed = append(removed, name)
 	}
-	return nil
+	return removed, nil
 }
 
-// dnsblip writes DNSBLIP's lists (pfblockerng_apply.inc, "Collect all DNSBL IP feeds"): each family's side lists of the
-// configured feeds concatenated in the order of today's <feed>_<v4|v6>.ip names, empty when there is none (no placeholder,
-// owner 2026-11-23), in the class folder of DNSBLIP's action; with the action Disabled the lists are removed.
-func (s DNSBLSet) dnsblip(feeds []dnsbl.Feed, action string) ([]GeoSet, error) {
-	sets := []GeoSet{}
-	verb := strings.TrimPrefix(action, "Alias_")
-	verb, _, _ = strings.Cut(verb, "_")
+// dnsblipLists reads DNSBLIP's lists (pfblockerng_apply.inc, "Collect all DNSBL IP feeds"): each family's side lists of
+// the configured feeds concatenated in the order of today's <feed>_<v4|v6>.ip names, empty when there is none (no
+// placeholder, owner 2026-11-23), in the class folder of DNSBLIP's action; none with the action Disabled.
+func (s DNSBLSet) dnsblipLists(feeds []dnsbl.Feed, action string) ([]dnsblipList, error) {
+	verb, _, _ := strings.Cut(strings.TrimPrefix(action, "Alias_"), "_")
 	class := map[string]string{"Deny": "deny", "Permit": "permit", "Match": "match", "Native": "native"}[verb]
+	if class == "" {
+		return nil, nil
+	}
+	var lists []dnsblipList
 	for _, fam := range []struct {
 		family string
 		v      ipset.Family
 	}{{"ipv4", ipset.V4}, {"ipv6", ipset.V6}} {
-		path := filepath.Join(s.ListDir, "DNSBLIP_"+string(fam.v)+".txt")
-		if class == "" {
-			if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return nil, err
-			}
-			continue
-		}
 		var files []ipset.Feed
 		read := map[string]bool{}
 		for _, f := range feeds {
@@ -267,23 +352,41 @@ func (s DNSBLSet) dnsblip(feeds []dnsbl.Feed, action string) ([]GeoSet, error) {
 			}
 			files = append(files, ipset.Feed{Name: f.Name + "_" + string(fam.v), Text: string(b)})
 		}
-		list := ipset.DNSBLIP(fam.v, "", files)
-		if list.Sources == nil {
-			list.Content = ""
+		var body []byte
+		if len(files) > 0 {
+			body = []byte(ipset.DNSBLIP(fam.v, "", files).Content)
 		}
-		changed := !sameContent(path, []byte(list.Content))
-		if changed {
-			staged, err := stageFile(path, []byte(list.Content))
+		lists = append(lists, dnsblipList{GeoSet{Alias: "DNSBLIP_" + string(fam.v), Group: "DNSBLIP", Family: fam.family,
+			Action: action, ListClass: class, Path: filepath.Join(s.ListDir, "DNSBLIP_"+string(fam.v)+".txt")}, body})
+	}
+	return lists, nil
+}
+
+// writeDNSBLIP writes each list that changed, or removes both lists when there are none, and returns the sets.
+func (s DNSBLSet) writeDNSBLIP(lists []dnsblipList) ([]GeoSet, error) {
+	sets := []GeoSet{}
+	if len(lists) == 0 {
+		var err error
+		for _, v := range []ipset.Family{ipset.V4, ipset.V6} {
+			if e := os.Remove(filepath.Join(s.ListDir, "DNSBLIP_"+string(v)+".txt")); !errors.Is(e, fs.ErrNotExist) {
+				err = errors.Join(err, e)
+			}
+		}
+		return sets, err
+	}
+	for _, l := range lists {
+		l.set.Changed = !sameContent(l.set.Path, l.body)
+		if l.set.Changed {
+			staged, err := stageFile(l.set.Path, l.body)
 			if err != nil {
-				return nil, err
+				return sets, err
 			}
-			if err := os.Rename(staged, path); err != nil {
+			if err := os.Rename(staged, l.set.Path); err != nil {
 				os.Remove(staged)
-				return nil, err
+				return sets, err
 			}
 		}
-		sets = append(sets, GeoSet{Alias: "DNSBLIP_" + string(fam.v), Group: "DNSBLIP", Family: fam.family, Action: action,
-			ListClass: class, Path: path, Changed: changed})
+		sets = append(sets, l.set)
 	}
 	return sets, nil
 }
