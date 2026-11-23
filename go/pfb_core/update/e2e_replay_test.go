@@ -225,6 +225,8 @@ func TestTheLoopReplaysTodaysUpdate(t *testing.T) {
 			t.Setenv(e2eEnv, dir)
 			loop := e2eLoop(t, root, self)
 			store := resources.Open(filepath.Join(root, "core/resources"))
+			// One state directory for the case, as on a box: the Core Updater's own state (updater.json) carries over
+			log := independentLog(t)
 			for i, step := range c.Steps {
 				want := c.Expect[i]
 				feeds.set(step.Serve)
@@ -239,10 +241,9 @@ func TestTheLoopReplaysTodaysUpdate(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				log := independentLog(t)
 				res, err := runCmd(t, &Command{Path: self, Loop: loop}, step.Request, log)
-				if (err == nil) != (want.Exit == 0) {
-					t.Errorf("step %d: Run = %v, want the exit status %d of today's Update\ntranscript:\n%s", i, err, want.Exit, logText(t, log))
+				if exit := e2eExit(t, log, err); exit != want.Exit {
+					t.Errorf("step %d: exit status %d (Run = %v), want %d of today's Update\ntranscript:\n%s", i, exit, err, want.Exit, logText(t, log))
 				}
 				for _, d := range e2eCompare(t, store, dir, res, want) {
 					t.Errorf("step %d %s", i, d)
@@ -250,6 +251,22 @@ func TestTheLoopReplaysTodaysUpdate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// e2eExit is the worker's exit status for the step as today's program would give it: the status it recorded, 1 for a
+// failure it recorded without one (the loop's own), and 1 when Run failed before the worker recorded anything.
+func e2eExit(t *testing.T, log *os.File, runErr error) int {
+	t.Helper()
+	state, err := readWorkerState(log.Name() + ".status")
+	switch {
+	case err != nil:
+		return 1
+	case state.ExitCode != nil:
+		return *state.ExitCode
+	case state.Failure != "" || runErr != nil:
+		return 1
+	}
+	return 0
 }
 
 // e2eCompare is every difference between what the loop gave after a step and what today's Update left.
