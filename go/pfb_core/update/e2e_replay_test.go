@@ -10,7 +10,7 @@ package update
 //   - the desired sets: every ip-set and ip-aggregate the store holds, by its alias, against the pfB_* mirrors;
 //   - the DNSBL data: dnsbl/manifest and its feed bodies against the manifest pfb_py_sources.json and its raw files;
 //   - the feed outcomes and the attempted ids: the worker's Result against the result lines today's program wrote;
-//   - the issues: the apply-stage issues of the version 2 request against the ADR-61 ledgers' open entries;
+//   - the issues: the issues of the version 2 request, by table and stage, against the ADR-61 ledgers' open entries;
 //   - the stage order: the stages today's transcript shows keep their order among the loop's stage boundaries.
 //
 // The Loop is given as JSON (e2eLoop): its paths besides today's fields name the folders of a pfSense box under a
@@ -260,7 +260,7 @@ func e2eCompare(t *testing.T, store *resources.Store, dir string, res Result, wa
 	diff("sets", e2eSets(t, store), e2eWantSets(want.Sets))
 	gotDNSBL, wantDNSBL := e2eDNSBL(t, store), e2eWantDNSBL(want)
 	diff("DNSBL data", gotDNSBL, wantDNSBL)
-	diff("apply-stage issues", e2eIssues(t, dir), e2eWantIssues(want))
+	diff("issues", e2eIssues(t, dir), e2eWantIssues(want))
 	if stages := e2eLines(t, filepath.Join(dir, "stages")); !subsequence(want.Stages, stages) {
 		out = append(out, fmt.Sprintf("stage order: today's %q are not in that order among the loop's boundaries %q", want.Stages, stages))
 	}
@@ -433,7 +433,8 @@ func e2eWantDNSBL(want e2eExpect) *e2eDNSBLData {
 	return out
 }
 
-// e2eIssues is the apply-stage issues of every version 2 request the loop wrote this step, as "resource alias: stage".
+// e2eIssues is the issues of every version 2 request the loop wrote this step, as "<table>: <stage>": an ip-set's issue
+// names its alias, as the ADR-61 ledger names the table.
 func e2eIssues(t *testing.T, dir string) []string {
 	t.Helper()
 	var out []string
@@ -446,26 +447,22 @@ func e2eIssues(t *testing.T, dir string) []string {
 			t.Fatalf("the apply request %q: %v", line, err)
 		}
 		for _, is := range req.Issues {
-			if is.Stage == "apply" {
-				alias, ok := apply.Alias(is.Resource)
-				if !ok {
-					alias = is.Resource
-				}
-				out = append(out, alias+": apply")
+			item, ok := apply.Alias(is.Resource)
+			if !ok {
+				item = is.Resource
 			}
+			out = append(out, item+": "+is.Stage)
 		}
 	}
 	return sortedSet(out)
 }
 
-// e2eWantIssues is the ADR-61 ledgers' open entries of today's Update: the apply-stage problems the apply reported, by
-// the table they name (the issues the loop files before the apply, download and parse problems, have no ledger entry).
+// e2eWantIssues is the ADR-61 ledgers' open entries after today's Update, as "<table>: <stage>"; messages differ by design
+// and are not compared.
 func e2eWantIssues(want e2eExpect) []string {
 	var out []string
 	for _, is := range want.Issues {
-		if is.Stage == "apply" {
-			out = append(out, is.Item+": apply")
-		}
+		out = append(out, is.Item+": "+is.Stage)
 	}
 	return sortedSet(out)
 }

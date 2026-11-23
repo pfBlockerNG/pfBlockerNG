@@ -242,7 +242,7 @@ def mismatches(want: list[dict[str, Any]], got: list[dict[str, Any]]) -> list[st
 
 @pytest.fixture(scope="module")
 def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:
-    """The branch package deployed once, the mock network allowlisted, System DNS on the stub, egress open."""
+    """The branch package deployed once, System DNS on the stub, egress open."""
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
@@ -289,6 +289,9 @@ def test_result_lines_add_up() -> None:
 @pytest.mark.parametrize("case", corpus()["cases"], ids=lambda c: c["id"])
 def test_case_matches_todays_update(case: dict[str, Any], deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     h.reset_pfb_baseline(deployed_vm)
+    # The baseline keeps the ADR-61 ledger: an earlier case's open entry would read as this case's issue.
+    cleared = deployed_vm.ssh("rm -f /var/db/pfblockerng/pfb_sync_status.json", timeout=60)
+    assert cleared.returncode == 0, cleared.stderr
     # The baseline unsets the feed-host allowlist; the mock server is an internal address the default-ON filter refuses.
     h.set_feed_internal_allowlist(deployed_vm, "192.168.89.0/24")
     h.unblock_egress()

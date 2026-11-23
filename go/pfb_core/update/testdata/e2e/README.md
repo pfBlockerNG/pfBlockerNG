@@ -29,7 +29,7 @@ Each feed header is used by one case only, so no case finds another's downloads.
 | `outcomes`, `attempted` | The result lines on fd 3, added up |
 | `sets` | Every `pfB_*` mirror under `/var/db/aliastables`, its lines in file order |
 | `dnsbl` | The manifest `pfb_py_sources.json` (`config`, and each feed row with the lines of its raw file as `rows`), or null without one |
-| `issues` | The open entries of the ADR-61 ledgers, without their times |
+| `issues` | The open entries of the ADR-61 ledgers, without their times (the harness clears the ledger before each case) |
 | `stages` | The transcript's stage headers in the order they first appear, named as the loop names its stages |
 | `snapshot` | The settings adapter's read before the Update, the feed server's address written as `{{FEEDS}}`: the replay's settings, never compared |
 
@@ -40,7 +40,7 @@ Each feed header is used by one case only, so no case finds another's downloads.
 | Sets | Every `ip-set` and `ip-aggregate` the store holds, by `apply.Alias` | No placeholder row (owner question 1); one spelling per network and the address guard (`apply.Member`); a sorted set |
 | DNSBL data | `dnsbl/manifest` and its feed bodies | A feed's rows are a sorted, de-duplicated set (#4036 owner question 2); a feed without today's permit mode is a deny feed |
 | Outcomes | The worker's `Result` | none |
-| Issues | Apply-stage issues of the version 2 request | Only apply-stage problems: download and parse problems have no ledger entry today |
+| Issues | The version 2 request's issues, by table (an `ip-set` id read as its alias) and stage | Messages are not compared |
 | Stage order | The stage boundaries the worker reaches | Today's stages keep their order among them |
 
 The settings snapshot is replayed with the mock network `192.168.89.0/24` in the feed-host allowlist replaced by

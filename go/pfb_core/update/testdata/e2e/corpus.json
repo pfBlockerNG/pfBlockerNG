@@ -3,7 +3,7 @@
  "cases": [
   {
    "id": "both_first_run_then_unchanged_then_changed",
-   "description": "Two IPv4 feeds in one Deny group, an IPv6 Deny group and a DNSBL group: the first manual Update builds every set and the DNSBL data; the same request again finds every feed unchanged (the mock answers 304 to the ETag it gave); a retry Update naming one IPv4 feed after its body changed rebuilds that group only.",
+   "description": "Two IPv4 feeds in one Deny group, an IPv6 Deny group and a DNSBL group: the first manual Update builds every set and the DNSBL data; a retry Update naming every feed finds each unchanged (the mock answers 304 to the ETag it gave); a retry Update naming one IPv4 feed after its body changed rebuilds that group only.",
    "groups": [
     {"kind": "ipv4", "name": "E2EOneDeny", "action": "Deny_Both", "feeds": [{"header": "E2E1A", "serve": "e2e1_v4a"}, {"header": "E2E1B", "serve": "e2e1_v4b"}]},
     {"kind": "ipv6", "name": "E2EOneSix", "action": "Deny_Both", "feeds": [{"header": "E2E1S", "serve": "e2e1_v6"}]},
@@ -17,7 +17,7 @@
    },
    "steps": [
     {"request": {"trigger": "manual", "scope": "both", "force": "none"}},
-    {"request": {"trigger": "manual", "scope": "both", "force": "none"}},
+    {"request": {"trigger": "retry", "feeds": ["ipv4:E2E1A_v4", "ipv4:E2E1B_v4", "ipv6:E2E1S_v6", "dnsbl:E2E1D"]}},
     {"serve": {"e2e1_v4a": {"text": "192.0.2.1\n192.0.2.9\n", "etag": "\"a2\""}},
      "request": {"trigger": "retry", "feeds": ["ipv4:E2E1A_v4"]}}
    ]
@@ -37,7 +37,7 @@
   },
   {
    "id": "narrow_scope_leaves_the_other_side_alone",
-   "description": "An IPv4 group and a DNSBL group, both built once; then both bodies change and a manual Update of scope ip runs: the IPv4 set is rebuilt, the DNSBL data stays as the first Update left it and its feed gets no outcome.",
+   "description": "An IPv4 group and a DNSBL group, both built once; then both bodies change and a manual Update of scope ip with force download runs: the IPv4 set is rebuilt from the new body, the DNSBL data stays as the first Update left it.",
    "ordering": "a narrower scope leaving other work pending",
    "groups": [
     {"kind": "ipv4", "name": "E2EScope", "action": "Deny_Both", "feeds": [{"header": "E2E3A", "serve": "e2e3_v4"}]},
@@ -50,7 +50,7 @@
    "steps": [
     {"request": {"trigger": "manual", "scope": "both", "force": "none"}},
     {"serve": {"e2e3_v4": {"text": "192.0.2.31\n", "etag": "\"a2\""}, "e2e3_dns": {"text": "uuid-e2e4038c02.com\n", "etag": "\"d2\""}},
-     "request": {"trigger": "manual", "scope": "ip", "force": "none"}}
+     "request": {"trigger": "manual", "scope": "ip", "force": "download"}}
    ]
   },
   {
