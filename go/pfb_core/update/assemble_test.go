@@ -58,10 +58,6 @@ func standInApply(dir string) int {
 		_ = os.WriteFile(filepath.Join(dir, "refused"), []byte(reason), 0o600)
 		return 2
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, "exit")); err == nil {
-		code, _ := strconv.Atoi(strings.TrimSpace(string(b)))
-		return code
-	}
 	var req struct {
 		Resources []struct {
 			ID         string `json:"id"`
@@ -90,6 +86,12 @@ func standInApply(dir string) int {
 	result := os.NewFile(3, "result")
 	if _, err := result.Write(append(b, '\n')); err != nil {
 		return 1
+	}
+	// An exit status in the file "exit" ends the apply after its line: the loop must not settle what a deferring or a
+	// failing apply reported.
+	if b, err := os.ReadFile(filepath.Join(dir, "exit")); err == nil {
+		code, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+		return code
 	}
 	return 0
 }
@@ -503,6 +505,16 @@ func TestAManualUpdateBuildsPublishesAppliesAndSettles(t *testing.T) {
 	if b, err := os.ReadFile(fx.log.Name() + apply.ResultSuffix); err != nil || !strings.Contains(string(b), `"version":2`) {
 		t.Errorf("the apply's own result file = %q, %v; want its version 2 line", b, err)
 	}
+	// The settled generation is the baseline: once a newer one is published, a cursor at it gets a delta.
+	settled := generation(t, s, "ip-set/Abuse/ipv4")
+	touch(t, filepath.Join(fx.src, "A.txt"), "93.184.216.3\n")
+	if _, err := fx.run(t, Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Get("ip-set/Abuse/ipv4", &resources.Cursor{Generation: settled.Generation, Digest: settled.Digest}); err != nil ||
+		got.Generation <= settled.Generation || got.Kind != resources.KindDelta && got.Kind != resources.KindFull {
+		t.Errorf("a cursor at the settled generation %d gets %+v, %v; want a delta or the new body", settled.Generation, got, err)
+	}
 	if res.GeoIPReady == nil || !*res.GeoIPReady {
 		t.Errorf("geoipReady = %v, want true: the loop's conversion ran or was not needed", res.GeoIPReady)
 	}
@@ -874,8 +886,11 @@ func TestTheAppliedDNSBLBodiesStayReadableWhenAPublicationFailsMidway(t *testing
 		}
 		return dnsbl.Result{}, errors.New("the publication stopped after one body")
 	}
-	if _, err := fx.run(t, manual()); err == nil {
-		t.Fatal("run = nil, want the publication's failure")
+	if _, err := fx.run(t, manual()); err == nil || !strings.Contains(err.Error(), "the publication stopped after one body") {
+		t.Fatalf("run = %v, want the injected publication failure", err)
+	}
+	if now := generation(t, fx.storeOf(), id); now.Generation <= applied.Generation {
+		t.Fatalf("%s at %d, want a body published after the applied %d", id, now.Generation, applied.Generation)
 	}
 	if got := generationMembers(t, fx.storeOf(), id, applied.Generation); len(got) == 0 {
 		t.Errorf("the applied generation %d serves nothing", applied.Generation)
@@ -936,5 +951,8 @@ func TestAnUnreadableIPSetsStateRebuildsTheSameSets(t *testing.T) {
 	}
 	if after := generation(t, fx.storeOf(), "ip-set/Abuse/ipv4"); after.Generation != before.Generation || after.Digest != before.Digest {
 		t.Errorf("ip-set/Abuse/ipv4 moved from %+v to %+v", before, after)
+	}
+	if b, err := os.ReadFile(filepath.Join(fx.state, ipStateName)); err != nil || !json.Valid(b) {
+		t.Errorf("%s = %q, %v; want it replaced with a valid state", ipStateName, b, err)
 	}
 }

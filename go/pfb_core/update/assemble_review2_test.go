@@ -3,6 +3,7 @@ package update
 // The light review of 7cc5e5137..42b7ad279 (issue #4038, sub-slice 9i).
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,11 +21,15 @@ func TestTheApplyOfUnappliedGenerationsWaitsForTheWindow(t *testing.T) {
 	if _, err := fx.run(t, manual()); err != nil {
 		t.Fatal(err)
 	}
+	before := generation(t, fx.storeOf(), "ip-set/Abuse/ipv4").Generation
 	fx.settings["feeds/ipv4"]["groups"].([]any)[0].(map[string]any)["action"] = "Deny_Both"
 	fx.reply(t)
 	touch(t, filepath.Join(fx.applyDir, "exit"), "75")
-	if _, err := fx.run(t, Request{Trigger: "apply"}); err == nil {
-		t.Fatal("run = nil, want the deferral")
+	if _, err := fx.run(t, Request{Trigger: "apply"}); !errors.Is(err, ErrDeferred) {
+		t.Fatalf("run = %v, want ErrDeferred", err)
+	}
+	if g := generation(t, fx.storeOf(), "ip-set/Abuse/ipv4").Generation; g <= before {
+		t.Fatalf("ip-set/Abuse/ipv4 at %d, want the action edit published after %d", g, before)
 	}
 	os.Remove(filepath.Join(fx.applyDir, "exit"))
 	fx.settings["ingest"]["applyWindow"] = outsideWindow(t)
@@ -45,12 +50,17 @@ func TestTheApplyOfUnappliedGenerationsWaitsForTheWindow(t *testing.T) {
 // THEN neither runs the apply: the generation was requested already, and the refusal is the apply's issue.
 func TestAnIDTheApplyRefusedDoesNotRunTheApplyAgain(t *testing.T) {
 	fx := newLoopFixture(t)
-	script(t, filepath.Join(fx.applyDir, "apply.sh"), `cat > /dev/null; echo run >> '`+fx.applyDir+`/runs'
+	// the stand-in refuses a request that does not name the id it reports failed
+	script(t, filepath.Join(fx.applyDir, "apply.sh"), `req=$(cat); echo run >> '`+fx.applyDir+`/runs'
+case "$req" in *'"id":"ip-set/Abuse/ipv4"'*) ;; *) exit 2 ;; esac
 printf '%s\n' '{"version":2,"failed":[{"id":"ip-set/Abuse/ipv4","stage":"apply","message":"pfctl: table limit"}]}' >&3`)
 	if _, err := fx.run(t, manual()); err != nil {
 		t.Fatal(err)
 	}
 	runs := fx.applyRuns(t)
+	if runs != 1 {
+		t.Fatalf("apply runs %d after the manual Update, want 1", runs)
+	}
 	for tick := 1; tick <= 2; tick++ {
 		if _, err := fx.run(t, Request{Trigger: "scheduled"}); err != nil {
 			t.Fatalf("tick %d: %v", tick, err)

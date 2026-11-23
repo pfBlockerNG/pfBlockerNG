@@ -37,7 +37,11 @@ func TestANarrowScopeBuildsNothingOfTheOtherSide(t *testing.T) {
 	if after := generation(t, fx.storeOf(), dnsbl.ManifestID); after.Generation != manifest.Generation {
 		t.Errorf("an ip Update moved dnsbl/manifest from %d to %d", manifest.Generation, after.Generation)
 	}
-	set = generation(t, fx.storeOf(), "ip-set/Abuse/ipv4") // the ip Update applied the action edit
+	after := generation(t, fx.storeOf(), "ip-set/Abuse/ipv4") // the ip Update published the action edit
+	if after.Generation <= set.Generation {
+		t.Fatalf("the ip Update left ip-set/Abuse/ipv4 at %d, want the action edit published after %d", after.Generation, set.Generation)
+	}
+	set = after
 	fx.settings["feeds/ipv4"]["groups"].([]any)[0].(map[string]any)["action"] = "Deny_Inbound"
 	fx.reply(t)
 	if _, err := fx.run(t, Request{Trigger: "manual", Scope: "dnsbl", Force: "none"}); err != nil {

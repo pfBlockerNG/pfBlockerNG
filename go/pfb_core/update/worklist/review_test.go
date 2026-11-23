@@ -83,3 +83,30 @@ func TestACategoryWhoseNameAFeedHoldsIsRefused(t *testing.T) {
 		t.Errorf("DNSBL feed = %+v, want it run as changed", item)
 	}
 }
+
+// CodeRabbit r4671035990: a scheduled walk keeps a stopped category in the plan, carrying its provider's marker, so the
+// caller does not consume the marker.
+func TestAScheduledWalkKeepsAStoppedCategoryWithItsMarker(t *testing.T) {
+	c := newCategoryFixture(t)
+	c.in.Settings["schedule"]["categoryProviders"].([]any)[0].(map[string]any)["title"] = "U T"
+	writeFile(t, c.marker(), "")
+	f := newFixture(t, "https://example.invalid/a")
+	in := c.in
+	in.Trigger, in.Feeds = "scheduled", []string{"ipv4:A_v4"}
+	in.Settings["feeds/ipv4"] = map[string]any{"groups": []any{f.group}}
+	in.Stages = map[string]*feedstage.Stage{"ipv4": f.stage, "ipv6": f.stage, "dnsbl": c.in.Stages["dnsbl"]}
+	var stopped []Item
+	for _, item := range build(t, in).Items {
+		if item.Feed.Kind == "dnsbl" {
+			stopped = append(stopped, item)
+		}
+	}
+	if len(stopped) != 2 {
+		t.Fatalf("category items = %+v, want both, stopped", stopped)
+	}
+	for _, item := range stopped {
+		if item.Stopped == "" || item.Marker != c.marker() {
+			t.Errorf("%s: %+v, want stopped carrying %s", item.Feed.ID, item, c.marker())
+		}
+	}
+}
