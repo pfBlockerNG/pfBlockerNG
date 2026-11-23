@@ -64,7 +64,7 @@ func dnsblPolicy(extra map[string]any) map[string]any {
 }
 
 func dnsblSettings(groups []any, policy map[string]any) map[string]map[string]any {
-	return map[string]map[string]any{"feeds/dnsbl": {"groups": groups}, "policy/dnsbl": policy, "dns": {"tldWildcard": false},
+	return map[string]map[string]any{"feeds/dnsbl": {"groups": groups}, "policy/dnsbl": policy, "dns": {"tldWildcard": false, "pfbDnsEnabled": true},
 		"schedule": {"categoryUpdates": false, "categoryProviders": []any{}}}
 }
 
@@ -212,7 +212,7 @@ func TestTheManifestConfigRowsComeFromTheSettings(t *testing.T) {
 				"whitelist":     []any{map[string]any{"domain": ".w.example"}, map[string]any{"domain": "v.example"}},
 				"tldBlacklist":  []any{map[string]any{"tld": "zip"}},
 				"tldExclusions": []any{map[string]any{"domain": "ok.zip"}}}))
-			settings["dns"] = map[string]any{"tldWildcard": c.wildcard}
+			settings["dns"]["tldWildcard"] = c.wildcard
 			if _, err := s.Build(context.Background(), DNSBLInput{Settings: settings}); err != nil {
 				t.Fatal(err)
 			}

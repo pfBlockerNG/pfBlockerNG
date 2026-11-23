@@ -47,6 +47,9 @@ type DNSBLOut struct {
 	Issues  []apply.Issue
 }
 
+// dnsblRemove removes a file of the removed-list cleanup: a test's fault seam.
+var dnsblRemove = os.Remove
+
 // dnsblipList is a DNSBLIP list Build writes once every step that can fail has passed.
 type dnsblipList struct {
 	set  GeoSet
