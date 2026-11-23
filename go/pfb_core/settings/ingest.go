@@ -36,8 +36,6 @@ func ingestProjection() Projection {
 		{Name: "skipFeedLimit", Type: TypeInt, Default: int64(0), Min: new(int64(0)), Max: new(int64(6))},
 		// The ADR-49 feed sanity scan gen/pfb_feed_sanity.
 		{Name: "feedSanity", Type: TypeBool, Default: false},
-		// Derived: the Outpost holds a change that waits for an apply (pfb_core_update_pending_apply()).
-		{Name: "pendingApply", Type: TypeBool, Default: false},
 	}, Retired: []string{"sinkholeV4", "sinkholeV6"}} // #4054
 }
 
