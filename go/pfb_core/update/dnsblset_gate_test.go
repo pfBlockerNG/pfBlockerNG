@@ -124,3 +124,40 @@ func TestAFailedCleanupLeavesTheFeedToTheNextUpdate(t *testing.T) {
 		t.Errorf("issues = %+v, want %+v", out.Issues, want)
 	}
 }
+
+// WHEN a stale feed's file cannot be inspected (an error other than its absence) THEN the build fails before the parsed rows
+// are touched, so the next Update finds the feed again, removes every file and raises the issue.
+func TestAFileTheCleanupCannotInspectLeavesTheFeedToTheNextUpdate(t *testing.T) {
+	s, settings := sideListTree(t) // Old is staged and no longer configured
+	touch(t, filepath.Join(s.FeedDir, "Old.orig"), "raw\n")
+	failing := filepath.Join(s.FeedDir, "Old.orig")
+	dnsblLstat = func(name string) (fs.FileInfo, error) {
+		if name == failing {
+			return nil, fs.ErrPermission
+		}
+		return os.Lstat(name)
+	}
+	t.Cleanup(func() { dnsblLstat = os.Lstat })
+	if _, err := s.Build(context.Background(), DNSBLInput{Settings: settings}); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("the file cannot be inspected: %v, want that error", err)
+	}
+	for _, name := range []string{"Old.parsed.ndjson", "Old.orig"} {
+		if _, err := os.Stat(filepath.Join(s.FeedDir, name)); err != nil {
+			t.Errorf("%s after a failed inspection: %v, want kept", name, err)
+		}
+	}
+
+	dnsblLstat = os.Lstat
+	out, err := s.Build(context.Background(), DNSBLInput{Settings: settings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(s.FeedDir, "Old.*")); len(left) != 0 {
+		t.Errorf("Old's files after the next Update: %q, want none", left)
+	}
+	want := []apply.Issue{{Resource: "feed/dnsbl:Old", Stage: "parse", Code: "feed_files_removed",
+		Message: "no configured feed names it, so its files are removed (a row the settings do not project counts as removed)"}}
+	if !reflect.DeepEqual(out.Issues, want) {
+		t.Errorf("issues = %+v, want %+v", out.Issues, want)
+	}
+}
