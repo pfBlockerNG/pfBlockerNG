@@ -43,16 +43,24 @@ const e2eCorpusPath = "testdata/e2e/corpus.json"
 // read ({"op":"read"} on stdin) is answered with the file reply of the folder the variable names; anything else is the
 // version 2 apply request, which is appended to the file requests there and answered on fd 3 with one result line that
 // applies every resource and removal it names. The worker, the same binary started with arguments, instead records each
-// stage boundary it reaches in the file stages there.
+// stage boundary it reaches in the file stages there (e2eWorkerStages).
 const e2eEnv = "PFB_TEST_E2E_REPLAY"
+
+// e2eWorkerStages installs the worker's boundary recorder. It is a package variable's initializer, not an init function:
+// the worker runs from worker.go's init, which comes before any test file's, while every package variable is initialized
+// before any init function runs.
+var e2eWorkerStages = func() bool {
+	dir := os.Getenv(e2eEnv)
+	if dir == "" || len(os.Args) == 1 {
+		return false
+	}
+	boundary = func(name string) { appendFile(filepath.Join(dir, "stages"), name+"\n") }
+	return true
+}()
 
 func init() {
 	dir := os.Getenv(e2eEnv)
-	if dir == "" {
-		return
-	}
-	if len(os.Args) != 1 {
-		boundary = func(name string) { appendFile(filepath.Join(dir, "stages"), name+"\n") }
+	if dir == "" || len(os.Args) != 1 {
 		return
 	}
 	in, _ := io.ReadAll(io.LimitReader(os.Stdin, apply.MaxRequest+1))

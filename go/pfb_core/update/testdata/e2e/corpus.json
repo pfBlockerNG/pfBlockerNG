@@ -5,34 +5,1496 @@
    "id": "both_first_run_then_unchanged_then_changed",
    "description": "Two IPv4 feeds in one Deny group, an IPv6 Deny group and a DNSBL group: the first manual Update builds every set and the DNSBL data; a retry Update naming every feed finds each unchanged (the mock answers 304 to the ETag it gave); a retry Update naming one IPv4 feed after its body changed rebuilds that group only.",
    "groups": [
-    {"kind": "ipv4", "name": "E2EOneDeny", "action": "Deny_Both", "feeds": [{"header": "E2E1A", "serve": "e2e1_v4a"}, {"header": "E2E1B", "serve": "e2e1_v4b"}]},
-    {"kind": "ipv6", "name": "E2EOneSix", "action": "Deny_Both", "feeds": [{"header": "E2E1S", "serve": "e2e1_v6"}]},
-    {"kind": "dnsbl", "name": "E2EOneAds", "feeds": [{"header": "E2E1D", "serve": "e2e1_dns"}]}
+    {
+     "kind": "ipv4",
+     "name": "E2EOneDeny",
+     "action": "Deny_Both",
+     "feeds": [
+      {
+       "header": "E2E1A",
+       "serve": "e2e1_v4a"
+      },
+      {
+       "header": "E2E1B",
+       "serve": "e2e1_v4b"
+      }
+     ]
+    },
+    {
+     "kind": "ipv6",
+     "name": "E2EOneSix",
+     "action": "Deny_Both",
+     "feeds": [
+      {
+       "header": "E2E1S",
+       "serve": "e2e1_v6"
+      }
+     ]
+    },
+    {
+     "kind": "dnsbl",
+     "name": "E2EOneAds",
+     "feeds": [
+      {
+       "header": "E2E1D",
+       "serve": "e2e1_dns"
+      }
+     ]
+    }
    ],
    "serve": {
-    "e2e1_v4a": {"text": "# E2E1A\n192.0.2.1\n192.0.2.2\n198.51.100.0/24\n", "etag": "\"a1\""},
-    "e2e1_v4b": {"text": "203.0.113.7\n203.0.113.8\n192.0.2.2\n", "etag": "\"b1\""},
-    "e2e1_v6": {"text": "2001:db8:1::1\n2001:db8:2::/48\n", "etag": "\"s1\""},
-    "e2e1_dns": {"text": "uuid-e2e4038a01.com\nuuid-e2e4038a02.com\n0.0.0.0 uuid-e2e4038a03.com\n", "etag": "\"d1\""}
+    "e2e1_v4a": {
+     "text": "# E2E1A\n192.0.2.1\n192.0.2.2\n198.51.100.0/24\n",
+     "etag": "\"a1\""
+    },
+    "e2e1_v4b": {
+     "text": "203.0.113.7\n203.0.113.8\n192.0.2.2\n",
+     "etag": "\"b1\""
+    },
+    "e2e1_v6": {
+     "text": "2001:db8:1::1\n2001:db8:2::/48\n",
+     "etag": "\"s1\""
+    },
+    "e2e1_dns": {
+     "text": "uuid-e2e4038a01.com\nuuid-e2e4038a02.com\n0.0.0.0 uuid-e2e4038a03.com\n",
+     "etag": "\"d1\""
+    }
    },
    "steps": [
-    {"request": {"trigger": "manual", "scope": "both", "force": "none"}},
-    {"request": {"trigger": "retry", "feeds": ["ipv4:E2E1A_v4", "ipv4:E2E1B_v4", "ipv6:E2E1S_v6", "dnsbl:E2E1D"]}},
-    {"serve": {"e2e1_v4a": {"text": "192.0.2.1\n192.0.2.9\n", "etag": "\"a2\""}},
-     "request": {"trigger": "retry", "feeds": ["ipv4:E2E1A_v4"]}}
+    {
+     "request": {
+      "trigger": "manual",
+      "scope": "both",
+      "force": "none"
+     }
+    },
+    {
+     "request": {
+      "trigger": "retry",
+      "feeds": [
+       "ipv4:E2E1A_v4",
+       "ipv4:E2E1B_v4",
+       "ipv6:E2E1S_v6",
+       "dnsbl:E2E1D"
+      ]
+     }
+    },
+    {
+     "serve": {
+      "e2e1_v4a": {
+       "text": "192.0.2.1\n192.0.2.9\n",
+       "etag": "\"a2\""
+      }
+     },
+     "request": {
+      "trigger": "retry",
+      "feeds": [
+       "ipv4:E2E1A_v4"
+      ]
+     }
+    }
+   ],
+   "expect": [
+    {
+     "exit": 0,
+     "outcomes": {},
+     "attempted": [],
+     "sets": {
+      "pfB_E2EOneDeny_v4": [
+       "192.0.2.1",
+       "192.0.2.2",
+       "198.51.100.0/24",
+       "203.0.113.7",
+       "203.0.113.8"
+      ],
+      "pfB_E2EOneSix_v6": [
+       "2001:db8:1::1",
+       "2001:db8:2::/48"
+      ]
+     },
+     "dnsbl": {
+      "config": {
+       "tld_wildcard_blacklist": [],
+       "tld_wildcard_exclusion": [],
+       "user_whitelist": [],
+       "user_unlock": [],
+       "top1m_enabled": false,
+       "builtin_log_flag": "0"
+      },
+      "feeds": [
+       {
+        "feed": "E2E1D",
+        "group": "DNSBL_E2EOneAds",
+        "provenance": "feed",
+        "log_flag": "0",
+        "rows": [
+         "uuid-e2e4038a01.com",
+         "uuid-e2e4038a02.com",
+         "uuid-e2e4038a03.com"
+        ]
+       }
+      ]
+     },
+     "issues": [],
+     "stages": [
+      "dnsbl",
+      "geoip-sets",
+      "ip",
+      "apply"
+     ],
+     "snapshot": {
+      "platform": {
+       "pendingToken": null
+      },
+      "revision": 1310936728088979,
+      "settings": {
+       "dns": {
+        "cnameValidation": false,
+        "control": false,
+        "controlLegacy": false,
+        "decisionCacheMax": 10000,
+        "groupPolicy": false,
+        "groupPolicyBypassList": [],
+        "idnBlockMalicious": true,
+        "idnEscalateSuspicious": false,
+        "idnMode": "off",
+        "metricsClientIp": false,
+        "noAaaa": false,
+        "noAaaaList": [],
+        "pfbDnsEnabled": true,
+        "pslAllowPrivate": false,
+        "pslFeedIcannPolicy": "honor",
+        "pslFeedPrivatePolicy": "honor",
+        "pslIncludePrivate": true,
+        "regexCap": false,
+        "replyLogging": true,
+        "tldWildcard": false
+       },
+       "extras": {
+        "ipinfoToken": "",
+        "maxmindAccount": "",
+        "maxmindCsvDisabled": false,
+        "maxmindKey": "",
+        "maxmindLocale": "en",
+        "top1mProvider": "tranco",
+        "top1mToken": ""
+       },
+       "feeds/dnsbl": {
+        "groups": [
+         {
+          "action": "unbound",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "action": "deny",
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E1D",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e1_dns"
+           }
+          ],
+          "name": "E2EOneAds",
+          "postScript": "",
+          "preScript": "",
+          "updateFrequency": "EveryDay"
+         }
+        ]
+       },
+       "feeds/geoip": {
+        "groups": [
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Top"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Africa"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Antarctica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Asia"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Europe"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_NAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Oceania"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_SAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_PS"
+         }
+        ]
+       },
+       "feeds/ipv4": {
+        "groups": [
+         {
+          "action": "Deny_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E1A",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e1_v4a"
+           },
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E1B",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e1_v4b"
+           }
+          ],
+          "listClass": "deny",
+          "name": "E2EOneDeny",
+          "postScript": "",
+          "preScript": "",
+          "suppressionCidr": 0,
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         }
+        ]
+       },
+       "feeds/ipv6": {
+        "groups": [
+         {
+          "action": "Deny_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E1S",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e1_v6"
+           }
+          ],
+          "listClass": "deny",
+          "name": "E2EOneSix",
+          "postScript": "",
+          "preScript": "",
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         }
+        ]
+       },
+       "hooks": {
+        "rows": []
+       },
+       "ingest": {
+        "applyWindow": "",
+        "dnsblIp": false,
+        "dnsblLenient": false,
+        "feedHostAllowlist": [
+         {
+          "cidr": "192.168.89.0/24"
+         }
+        ],
+        "feedHostFilter": true,
+        "proxyPassword": "",
+        "proxyUnusable": false,
+        "proxyUrl": "",
+        "proxyUser": "",
+        "scheduledWorkDisabled": true,
+        "selfAddresses": [
+         {
+          "address": "192.168.89.15"
+         },
+         {
+          "address": "192.168.1.1"
+         },
+         {
+          "address": "192.168.43.15"
+         },
+         {
+          "address": "fec0::be24:11ff:fe37:9cac"
+         },
+         {
+          "address": "fd00::1"
+         }
+        ],
+        "suppression": false,
+        "suppressionCidrV4": 0,
+        "suppressionCidrV6": 0
+       },
+       "maintenance": {
+        "clearDnsblCounters": "never",
+        "clearIpCounters": "never",
+        "enabled": true,
+        "metricsExport": false,
+        "scheduledWorkDisabled": true
+       },
+       "policy/dnsbl": {
+        "blacklistLogging": "disabled_log",
+        "dnsblIpAction": "Disabled",
+        "enabled": true,
+        "groups": [
+         {
+          "logging": "disabled_log",
+          "name": "E2EOneAds",
+          "primary": true,
+          "top1mFilter": false
+         }
+        ],
+        "logging": "disabled_log",
+        "regex": false,
+        "regexList": [],
+        "safeSearch": false,
+        "safeSearchDoh": false,
+        "safeSearchDohList": [],
+        "safeSearchYoutube": "Disable",
+        "tldAllow": false,
+        "tldAllowBgtld": [],
+        "tldAllowCctld": [],
+        "tldAllowGtld": [],
+        "tldAllowItld": [],
+        "tldBlacklist": [],
+        "tldExclusions": [],
+        "top1m": false,
+        "top1mCount": 1000,
+        "top1mInclusions": [],
+        "whitelist": []
+       },
+       "policy/ip": {
+        "aggregate": false,
+        "aggregates": [],
+        "countryBlacklistAction": "none",
+        "countryWhitelist": [],
+        "countryWhitelistAction": "ignore",
+        "dMax": false,
+        "dMaxLimit": 0,
+        "dedup": false,
+        "etBlock": [],
+        "etMatch": [],
+        "max": false,
+        "maxLimit": 0,
+        "pMax": false,
+        "pMaxLimit": 0,
+        "suppressionV4": [],
+        "suppressionV6": []
+       },
+       "schedule": {
+        "categoryFrequency": "Never",
+        "categoryProviders": [],
+        "categoryUpdates": false,
+        "groups": [
+         {
+          "hour": 0,
+          "id": "ipv4/E2EOneDeny",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         },
+         {
+          "hour": 0,
+          "id": "ipv6/E2EOneSix",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         },
+         {
+          "hour": 0,
+          "id": "dnsbl/E2EOneAds",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         }
+        ],
+        "hour": 0,
+        "minute": 0,
+        "scheduledUpdates": true,
+        "weekday": 7
+       }
+      },
+      "version": 1
+     }
+    },
+    {
+     "exit": 0,
+     "outcomes": {
+      "ipv4:E2E1A_v4": "success",
+      "ipv4:E2E1B_v4": "success",
+      "ipv6:E2E1S_v6": "success",
+      "dnsbl:E2E1D": "success"
+     },
+     "attempted": [],
+     "sets": {
+      "pfB_E2EOneDeny_v4": [
+       "192.0.2.1",
+       "192.0.2.2",
+       "198.51.100.0/24",
+       "203.0.113.7",
+       "203.0.113.8"
+      ],
+      "pfB_E2EOneSix_v6": [
+       "2001:db8:1::1",
+       "2001:db8:2::/48"
+      ]
+     },
+     "dnsbl": {
+      "config": {
+       "tld_wildcard_blacklist": [],
+       "tld_wildcard_exclusion": [],
+       "user_whitelist": [],
+       "user_unlock": [],
+       "top1m_enabled": false,
+       "builtin_log_flag": "0"
+      },
+      "feeds": [
+       {
+        "feed": "E2E1D",
+        "group": "DNSBL_E2EOneAds",
+        "provenance": "feed",
+        "log_flag": "0",
+        "rows": [
+         "uuid-e2e4038a01.com",
+         "uuid-e2e4038a02.com",
+         "uuid-e2e4038a03.com"
+        ]
+       }
+      ]
+     },
+     "issues": [],
+     "stages": [],
+     "snapshot": {
+      "platform": {
+       "pendingToken": null
+      },
+      "revision": 1310936728088979,
+      "settings": {
+       "dns": {
+        "cnameValidation": false,
+        "control": false,
+        "controlLegacy": false,
+        "decisionCacheMax": 10000,
+        "groupPolicy": false,
+        "groupPolicyBypassList": [],
+        "idnBlockMalicious": true,
+        "idnEscalateSuspicious": false,
+        "idnMode": "off",
+        "metricsClientIp": false,
+        "noAaaa": false,
+        "noAaaaList": [],
+        "pfbDnsEnabled": true,
+        "pslAllowPrivate": false,
+        "pslFeedIcannPolicy": "honor",
+        "pslFeedPrivatePolicy": "honor",
+        "pslIncludePrivate": true,
+        "regexCap": false,
+        "replyLogging": true,
+        "tldWildcard": false
+       },
+       "extras": {
+        "ipinfoToken": "",
+        "maxmindAccount": "",
+        "maxmindCsvDisabled": false,
+        "maxmindKey": "",
+        "maxmindLocale": "en",
+        "top1mProvider": "tranco",
+        "top1mToken": ""
+       },
+       "feeds/dnsbl": {
+        "groups": [
+         {
+          "action": "unbound",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "action": "deny",
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E1D",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e1_dns"
+           }
+          ],
+          "name": "E2EOneAds",
+          "postScript": "",
+          "preScript": "",
+          "updateFrequency": "EveryDay"
+         }
+        ]
+       },
+       "feeds/geoip": {
+        "groups": [
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Top"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Africa"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Antarctica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Asia"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Europe"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_NAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Oceania"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_SAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_PS"
+         }
+        ]
+       },
+       "feeds/ipv4": {
+        "groups": [
+         {
+          "action": "Deny_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E1A",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e1_v4a"
+           },
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E1B",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e1_v4b"
+           }
+          ],
+          "listClass": "deny",
+          "name": "E2EOneDeny",
+          "postScript": "",
+          "preScript": "",
+          "suppressionCidr": 0,
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         }
+        ]
+       },
+       "feeds/ipv6": {
+        "groups": [
+         {
+          "action": "Deny_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E1S",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e1_v6"
+           }
+          ],
+          "listClass": "deny",
+          "name": "E2EOneSix",
+          "postScript": "",
+          "preScript": "",
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         }
+        ]
+       },
+       "hooks": {
+        "rows": []
+       },
+       "ingest": {
+        "applyWindow": "",
+        "dnsblIp": false,
+        "dnsblLenient": false,
+        "feedHostAllowlist": [
+         {
+          "cidr": "192.168.89.0/24"
+         }
+        ],
+        "feedHostFilter": true,
+        "proxyPassword": "",
+        "proxyUnusable": false,
+        "proxyUrl": "",
+        "proxyUser": "",
+        "scheduledWorkDisabled": true,
+        "selfAddresses": [
+         {
+          "address": "192.168.89.15"
+         },
+         {
+          "address": "192.168.1.1"
+         },
+         {
+          "address": "192.168.43.15"
+         },
+         {
+          "address": "fec0::be24:11ff:fe37:9cac"
+         },
+         {
+          "address": "fd00::1"
+         }
+        ],
+        "suppression": false,
+        "suppressionCidrV4": 0,
+        "suppressionCidrV6": 0
+       },
+       "maintenance": {
+        "clearDnsblCounters": "never",
+        "clearIpCounters": "never",
+        "enabled": true,
+        "metricsExport": false,
+        "scheduledWorkDisabled": true
+       },
+       "policy/dnsbl": {
+        "blacklistLogging": "disabled_log",
+        "dnsblIpAction": "Disabled",
+        "enabled": true,
+        "groups": [
+         {
+          "logging": "disabled_log",
+          "name": "E2EOneAds",
+          "primary": true,
+          "top1mFilter": false
+         }
+        ],
+        "logging": "disabled_log",
+        "regex": false,
+        "regexList": [],
+        "safeSearch": false,
+        "safeSearchDoh": false,
+        "safeSearchDohList": [],
+        "safeSearchYoutube": "Disable",
+        "tldAllow": false,
+        "tldAllowBgtld": [],
+        "tldAllowCctld": [],
+        "tldAllowGtld": [],
+        "tldAllowItld": [],
+        "tldBlacklist": [],
+        "tldExclusions": [],
+        "top1m": false,
+        "top1mCount": 1000,
+        "top1mInclusions": [],
+        "whitelist": []
+       },
+       "policy/ip": {
+        "aggregate": false,
+        "aggregates": [],
+        "countryBlacklistAction": "none",
+        "countryWhitelist": [],
+        "countryWhitelistAction": "ignore",
+        "dMax": false,
+        "dMaxLimit": 0,
+        "dedup": false,
+        "etBlock": [],
+        "etMatch": [],
+        "max": false,
+        "maxLimit": 0,
+        "pMax": false,
+        "pMaxLimit": 0,
+        "suppressionV4": [],
+        "suppressionV6": []
+       },
+       "schedule": {
+        "categoryFrequency": "Never",
+        "categoryProviders": [],
+        "categoryUpdates": false,
+        "groups": [
+         {
+          "hour": 0,
+          "id": "ipv4/E2EOneDeny",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         },
+         {
+          "hour": 0,
+          "id": "ipv6/E2EOneSix",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         },
+         {
+          "hour": 0,
+          "id": "dnsbl/E2EOneAds",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         }
+        ],
+        "hour": 0,
+        "minute": 0,
+        "scheduledUpdates": true,
+        "weekday": 7
+       }
+      },
+      "version": 1
+     }
+    },
+    {
+     "exit": 0,
+     "outcomes": {
+      "ipv4:E2E1A_v4": "success"
+     },
+     "attempted": [],
+     "sets": {
+      "pfB_E2EOneDeny_v4": [
+       "192.0.2.1",
+       "192.0.2.2",
+       "192.0.2.9",
+       "203.0.113.7",
+       "203.0.113.8"
+      ],
+      "pfB_E2EOneSix_v6": [
+       "2001:db8:1::1",
+       "2001:db8:2::/48"
+      ]
+     },
+     "dnsbl": {
+      "config": {
+       "tld_wildcard_blacklist": [],
+       "tld_wildcard_exclusion": [],
+       "user_whitelist": [],
+       "user_unlock": [],
+       "top1m_enabled": false,
+       "builtin_log_flag": "0"
+      },
+      "feeds": [
+       {
+        "feed": "E2E1D",
+        "group": "DNSBL_E2EOneAds",
+        "provenance": "feed",
+        "log_flag": "0",
+        "rows": [
+         "uuid-e2e4038a01.com",
+         "uuid-e2e4038a02.com",
+         "uuid-e2e4038a03.com"
+        ]
+       }
+      ]
+     },
+     "issues": [],
+     "stages": [
+      "dnsbl",
+      "geoip-sets",
+      "ip",
+      "apply"
+     ],
+     "snapshot": {
+      "platform": {
+       "pendingToken": null
+      },
+      "revision": 1310936728088979,
+      "settings": {
+       "dns": {
+        "cnameValidation": false,
+        "control": false,
+        "controlLegacy": false,
+        "decisionCacheMax": 10000,
+        "groupPolicy": false,
+        "groupPolicyBypassList": [],
+        "idnBlockMalicious": true,
+        "idnEscalateSuspicious": false,
+        "idnMode": "off",
+        "metricsClientIp": false,
+        "noAaaa": false,
+        "noAaaaList": [],
+        "pfbDnsEnabled": true,
+        "pslAllowPrivate": false,
+        "pslFeedIcannPolicy": "honor",
+        "pslFeedPrivatePolicy": "honor",
+        "pslIncludePrivate": true,
+        "regexCap": false,
+        "replyLogging": true,
+        "tldWildcard": false
+       },
+       "extras": {
+        "ipinfoToken": "",
+        "maxmindAccount": "",
+        "maxmindCsvDisabled": false,
+        "maxmindKey": "",
+        "maxmindLocale": "en",
+        "top1mProvider": "tranco",
+        "top1mToken": ""
+       },
+       "feeds/dnsbl": {
+        "groups": [
+         {
+          "action": "unbound",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "action": "deny",
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E1D",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e1_dns"
+           }
+          ],
+          "name": "E2EOneAds",
+          "postScript": "",
+          "preScript": "",
+          "updateFrequency": "EveryDay"
+         }
+        ]
+       },
+       "feeds/geoip": {
+        "groups": [
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Top"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Africa"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Antarctica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Asia"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Europe"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_NAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Oceania"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_SAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_PS"
+         }
+        ]
+       },
+       "feeds/ipv4": {
+        "groups": [
+         {
+          "action": "Deny_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E1A",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e1_v4a"
+           },
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E1B",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e1_v4b"
+           }
+          ],
+          "listClass": "deny",
+          "name": "E2EOneDeny",
+          "postScript": "",
+          "preScript": "",
+          "suppressionCidr": 0,
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         }
+        ]
+       },
+       "feeds/ipv6": {
+        "groups": [
+         {
+          "action": "Deny_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E1S",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e1_v6"
+           }
+          ],
+          "listClass": "deny",
+          "name": "E2EOneSix",
+          "postScript": "",
+          "preScript": "",
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         }
+        ]
+       },
+       "hooks": {
+        "rows": []
+       },
+       "ingest": {
+        "applyWindow": "",
+        "dnsblIp": false,
+        "dnsblLenient": false,
+        "feedHostAllowlist": [
+         {
+          "cidr": "192.168.89.0/24"
+         }
+        ],
+        "feedHostFilter": true,
+        "proxyPassword": "",
+        "proxyUnusable": false,
+        "proxyUrl": "",
+        "proxyUser": "",
+        "scheduledWorkDisabled": true,
+        "selfAddresses": [
+         {
+          "address": "192.168.89.15"
+         },
+         {
+          "address": "192.168.1.1"
+         },
+         {
+          "address": "192.168.43.15"
+         },
+         {
+          "address": "fec0::be24:11ff:fe37:9cac"
+         },
+         {
+          "address": "fd00::1"
+         }
+        ],
+        "suppression": false,
+        "suppressionCidrV4": 0,
+        "suppressionCidrV6": 0
+       },
+       "maintenance": {
+        "clearDnsblCounters": "never",
+        "clearIpCounters": "never",
+        "enabled": true,
+        "metricsExport": false,
+        "scheduledWorkDisabled": true
+       },
+       "policy/dnsbl": {
+        "blacklistLogging": "disabled_log",
+        "dnsblIpAction": "Disabled",
+        "enabled": true,
+        "groups": [
+         {
+          "logging": "disabled_log",
+          "name": "E2EOneAds",
+          "primary": true,
+          "top1mFilter": false
+         }
+        ],
+        "logging": "disabled_log",
+        "regex": false,
+        "regexList": [],
+        "safeSearch": false,
+        "safeSearchDoh": false,
+        "safeSearchDohList": [],
+        "safeSearchYoutube": "Disable",
+        "tldAllow": false,
+        "tldAllowBgtld": [],
+        "tldAllowCctld": [],
+        "tldAllowGtld": [],
+        "tldAllowItld": [],
+        "tldBlacklist": [],
+        "tldExclusions": [],
+        "top1m": false,
+        "top1mCount": 1000,
+        "top1mInclusions": [],
+        "whitelist": []
+       },
+       "policy/ip": {
+        "aggregate": false,
+        "aggregates": [],
+        "countryBlacklistAction": "none",
+        "countryWhitelist": [],
+        "countryWhitelistAction": "ignore",
+        "dMax": false,
+        "dMaxLimit": 0,
+        "dedup": false,
+        "etBlock": [],
+        "etMatch": [],
+        "max": false,
+        "maxLimit": 0,
+        "pMax": false,
+        "pMaxLimit": 0,
+        "suppressionV4": [],
+        "suppressionV6": []
+       },
+       "schedule": {
+        "categoryFrequency": "Never",
+        "categoryProviders": [],
+        "categoryUpdates": false,
+        "groups": [
+         {
+          "hour": 0,
+          "id": "ipv4/E2EOneDeny",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         },
+         {
+          "hour": 0,
+          "id": "ipv6/E2EOneSix",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         },
+         {
+          "hour": 0,
+          "id": "dnsbl/E2EOneAds",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         }
+        ],
+        "hour": 0,
+        "minute": 0,
+        "scheduledUpdates": true,
+        "weekday": 7
+       }
+      },
+      "version": 1
+     }
+    }
    ]
   },
   {
    "id": "failed_fetch_keeps_the_other_feeds",
    "description": "A Deny group of two IPv4 feeds, one whose URL answers 404: the failed feed gets no success outcome and the group is built from the feed that downloaded.",
    "groups": [
-    {"kind": "ipv4", "name": "E2EFail", "action": "Deny_Both", "feeds": [{"header": "E2E2A", "serve": "e2e2_v4a"}, {"header": "E2E2M", "serve": "e2e2_missing"}]}
+    {
+     "kind": "ipv4",
+     "name": "E2EFail",
+     "action": "Deny_Both",
+     "feeds": [
+      {
+       "header": "E2E2A",
+       "serve": "e2e2_v4a"
+      },
+      {
+       "header": "E2E2M",
+       "serve": "e2e2_missing"
+      }
+     ]
+    }
    ],
    "serve": {
-    "e2e2_v4a": {"text": "198.51.100.10\n198.51.100.11\n", "etag": "\"a1\""}
+    "e2e2_v4a": {
+     "text": "198.51.100.10\n198.51.100.11\n",
+     "etag": "\"a1\""
+    }
    },
    "steps": [
-    {"request": {"trigger": "manual", "scope": "both", "force": "none"}}
+    {
+     "request": {
+      "trigger": "manual",
+      "scope": "both",
+      "force": "none"
+     }
+    }
+   ],
+   "expect": [
+    {
+     "exit": 0,
+     "outcomes": {},
+     "attempted": [],
+     "sets": {
+      "pfB_E2EFail_v4": [
+       "198.51.100.10",
+       "198.51.100.11"
+      ]
+     },
+     "dnsbl": null,
+     "issues": [
+      {
+       "facility": "ip",
+       "item": "pfB_E2EFail_v4",
+       "stage": "download",
+       "message": "[ pfB_E2EFail_v4 - E2E2M_v4 ] Download FAIL"
+      }
+     ],
+     "stages": [
+      "dnsbl",
+      "geoip-sets",
+      "ip",
+      "apply"
+     ],
+     "snapshot": {
+      "platform": {
+       "pendingToken": "1d473f2849f15037"
+      },
+      "revision": 1502710564994848,
+      "settings": {
+       "dns": {
+        "cnameValidation": false,
+        "control": false,
+        "controlLegacy": false,
+        "decisionCacheMax": 10000,
+        "groupPolicy": false,
+        "groupPolicyBypassList": [],
+        "idnBlockMalicious": true,
+        "idnEscalateSuspicious": false,
+        "idnMode": "off",
+        "metricsClientIp": false,
+        "noAaaa": false,
+        "noAaaaList": [],
+        "pfbDnsEnabled": false,
+        "pslAllowPrivate": false,
+        "pslFeedIcannPolicy": "honor",
+        "pslFeedPrivatePolicy": "honor",
+        "pslIncludePrivate": true,
+        "regexCap": false,
+        "replyLogging": true,
+        "tldWildcard": false
+       },
+       "extras": {
+        "ipinfoToken": "",
+        "maxmindAccount": "",
+        "maxmindCsvDisabled": false,
+        "maxmindKey": "",
+        "maxmindLocale": "en",
+        "top1mProvider": "tranco",
+        "top1mToken": ""
+       },
+       "feeds/dnsbl": {
+        "groups": []
+       },
+       "feeds/geoip": {
+        "groups": [
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Top"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Africa"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Antarctica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Asia"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Europe"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_NAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Oceania"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_SAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_PS"
+         }
+        ]
+       },
+       "feeds/ipv4": {
+        "groups": [
+         {
+          "action": "Deny_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E2A",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e2_v4a"
+           },
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E2M",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e2_missing"
+           }
+          ],
+          "listClass": "deny",
+          "name": "E2EFail",
+          "postScript": "",
+          "preScript": "",
+          "suppressionCidr": 0,
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         }
+        ]
+       },
+       "feeds/ipv6": {
+        "groups": []
+       },
+       "hooks": {
+        "rows": []
+       },
+       "ingest": {
+        "applyWindow": "",
+        "dnsblIp": false,
+        "dnsblLenient": false,
+        "feedHostAllowlist": [
+         {
+          "cidr": "192.168.89.0/24"
+         }
+        ],
+        "feedHostFilter": true,
+        "proxyPassword": "",
+        "proxyUnusable": false,
+        "proxyUrl": "",
+        "proxyUser": "",
+        "scheduledWorkDisabled": true,
+        "selfAddresses": [
+         {
+          "address": "192.168.89.15"
+         },
+         {
+          "address": "192.168.1.1"
+         },
+         {
+          "address": "192.168.43.15"
+         },
+         {
+          "address": "fec0::be24:11ff:fe37:9cac"
+         },
+         {
+          "address": "fd00::1"
+         }
+        ],
+        "suppression": false,
+        "suppressionCidrV4": 0,
+        "suppressionCidrV6": 0
+       },
+       "maintenance": {
+        "clearDnsblCounters": "never",
+        "clearIpCounters": "never",
+        "enabled": true,
+        "metricsExport": false,
+        "scheduledWorkDisabled": true
+       },
+       "policy/dnsbl": {
+        "blacklistLogging": "disabled_log",
+        "dnsblIpAction": "Disabled",
+        "enabled": false,
+        "groups": [],
+        "logging": "disabled_log",
+        "regex": false,
+        "regexList": [],
+        "safeSearch": false,
+        "safeSearchDoh": false,
+        "safeSearchDohList": [],
+        "safeSearchYoutube": "Disable",
+        "tldAllow": false,
+        "tldAllowBgtld": [],
+        "tldAllowCctld": [],
+        "tldAllowGtld": [],
+        "tldAllowItld": [],
+        "tldBlacklist": [],
+        "tldExclusions": [],
+        "top1m": false,
+        "top1mCount": 1000,
+        "top1mInclusions": [],
+        "whitelist": []
+       },
+       "policy/ip": {
+        "aggregate": false,
+        "aggregates": [],
+        "countryBlacklistAction": "none",
+        "countryWhitelist": [],
+        "countryWhitelistAction": "ignore",
+        "dMax": false,
+        "dMaxLimit": 0,
+        "dedup": false,
+        "etBlock": [],
+        "etMatch": [],
+        "max": false,
+        "maxLimit": 0,
+        "pMax": false,
+        "pMaxLimit": 0,
+        "suppressionV4": [],
+        "suppressionV6": []
+       },
+       "schedule": {
+        "categoryFrequency": "Never",
+        "categoryProviders": [],
+        "categoryUpdates": false,
+        "groups": [
+         {
+          "hour": 0,
+          "id": "ipv4/E2EFail",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         }
+        ],
+        "hour": 0,
+        "minute": 0,
+        "scheduledUpdates": true,
+        "weekday": 7
+       }
+      },
+      "version": 1
+     }
+    }
    ]
   },
   {
@@ -40,49 +1502,1965 @@
    "description": "An IPv4 group and a DNSBL group, both built once; then both bodies change and a manual Update of scope ip with force download runs: the IPv4 set is rebuilt from the new body, the DNSBL data stays as the first Update left it.",
    "ordering": "a narrower scope leaving other work pending",
    "groups": [
-    {"kind": "ipv4", "name": "E2EScope", "action": "Deny_Both", "feeds": [{"header": "E2E3A", "serve": "e2e3_v4"}]},
-    {"kind": "dnsbl", "name": "E2EScopeAds", "feeds": [{"header": "E2E3D", "serve": "e2e3_dns"}]}
+    {
+     "kind": "ipv4",
+     "name": "E2EScope",
+     "action": "Deny_Both",
+     "feeds": [
+      {
+       "header": "E2E3A",
+       "serve": "e2e3_v4"
+      }
+     ]
+    },
+    {
+     "kind": "dnsbl",
+     "name": "E2EScopeAds",
+     "feeds": [
+      {
+       "header": "E2E3D",
+       "serve": "e2e3_dns"
+      }
+     ]
+    }
    ],
    "serve": {
-    "e2e3_v4": {"text": "192.0.2.30\n", "etag": "\"a1\""},
-    "e2e3_dns": {"text": "uuid-e2e4038c01.com\n", "etag": "\"d1\""}
+    "e2e3_v4": {
+     "text": "192.0.2.30\n",
+     "etag": "\"a1\""
+    },
+    "e2e3_dns": {
+     "text": "uuid-e2e4038c01.com\n",
+     "etag": "\"d1\""
+    }
    },
    "steps": [
-    {"request": {"trigger": "manual", "scope": "both", "force": "none"}},
-    {"serve": {"e2e3_v4": {"text": "192.0.2.31\n", "etag": "\"a2\""}, "e2e3_dns": {"text": "uuid-e2e4038c02.com\n", "etag": "\"d2\""}},
-     "request": {"trigger": "manual", "scope": "ip", "force": "download"}}
+    {
+     "request": {
+      "trigger": "manual",
+      "scope": "both",
+      "force": "none"
+     }
+    },
+    {
+     "serve": {
+      "e2e3_v4": {
+       "text": "192.0.2.31\n",
+       "etag": "\"a2\""
+      },
+      "e2e3_dns": {
+       "text": "uuid-e2e4038c02.com\n",
+       "etag": "\"d2\""
+      }
+     },
+     "request": {
+      "trigger": "manual",
+      "scope": "ip",
+      "force": "download"
+     }
+    }
+   ],
+   "expect": [
+    {
+     "exit": 0,
+     "outcomes": {},
+     "attempted": [],
+     "sets": {
+      "pfB_E2EScope_v4": [
+       "192.0.2.30"
+      ]
+     },
+     "dnsbl": {
+      "config": {
+       "tld_wildcard_blacklist": [],
+       "tld_wildcard_exclusion": [],
+       "user_whitelist": [],
+       "user_unlock": [],
+       "top1m_enabled": false,
+       "builtin_log_flag": "0"
+      },
+      "feeds": [
+       {
+        "feed": "E2E3D",
+        "group": "DNSBL_E2EScopeAds",
+        "provenance": "feed",
+        "log_flag": "0",
+        "rows": [
+         "uuid-e2e4038c01.com"
+        ]
+       }
+      ]
+     },
+     "issues": [],
+     "stages": [
+      "dnsbl",
+      "geoip-sets",
+      "ip",
+      "apply"
+     ],
+     "snapshot": {
+      "platform": {
+       "pendingToken": "1d473f2849f15037"
+      },
+      "revision": 2783523552618211,
+      "settings": {
+       "dns": {
+        "cnameValidation": false,
+        "control": false,
+        "controlLegacy": false,
+        "decisionCacheMax": 10000,
+        "groupPolicy": false,
+        "groupPolicyBypassList": [],
+        "idnBlockMalicious": true,
+        "idnEscalateSuspicious": false,
+        "idnMode": "off",
+        "metricsClientIp": false,
+        "noAaaa": false,
+        "noAaaaList": [],
+        "pfbDnsEnabled": true,
+        "pslAllowPrivate": false,
+        "pslFeedIcannPolicy": "honor",
+        "pslFeedPrivatePolicy": "honor",
+        "pslIncludePrivate": true,
+        "regexCap": false,
+        "replyLogging": true,
+        "tldWildcard": false
+       },
+       "extras": {
+        "ipinfoToken": "",
+        "maxmindAccount": "",
+        "maxmindCsvDisabled": false,
+        "maxmindKey": "",
+        "maxmindLocale": "en",
+        "top1mProvider": "tranco",
+        "top1mToken": ""
+       },
+       "feeds/dnsbl": {
+        "groups": [
+         {
+          "action": "unbound",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "action": "deny",
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E3D",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e3_dns"
+           }
+          ],
+          "name": "E2EScopeAds",
+          "postScript": "",
+          "preScript": "",
+          "updateFrequency": "EveryDay"
+         }
+        ]
+       },
+       "feeds/geoip": {
+        "groups": [
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Top"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Africa"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Antarctica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Asia"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Europe"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_NAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Oceania"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_SAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_PS"
+         }
+        ]
+       },
+       "feeds/ipv4": {
+        "groups": [
+         {
+          "action": "Deny_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E3A",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e3_v4"
+           }
+          ],
+          "listClass": "deny",
+          "name": "E2EScope",
+          "postScript": "",
+          "preScript": "",
+          "suppressionCidr": 0,
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         }
+        ]
+       },
+       "feeds/ipv6": {
+        "groups": []
+       },
+       "hooks": {
+        "rows": []
+       },
+       "ingest": {
+        "applyWindow": "",
+        "dnsblIp": false,
+        "dnsblLenient": false,
+        "feedHostAllowlist": [
+         {
+          "cidr": "192.168.89.0/24"
+         }
+        ],
+        "feedHostFilter": true,
+        "proxyPassword": "",
+        "proxyUnusable": false,
+        "proxyUrl": "",
+        "proxyUser": "",
+        "scheduledWorkDisabled": true,
+        "selfAddresses": [
+         {
+          "address": "192.168.89.15"
+         },
+         {
+          "address": "192.168.1.1"
+         },
+         {
+          "address": "192.168.43.15"
+         },
+         {
+          "address": "fec0::be24:11ff:fe37:9cac"
+         },
+         {
+          "address": "fd00::1"
+         }
+        ],
+        "suppression": false,
+        "suppressionCidrV4": 0,
+        "suppressionCidrV6": 0
+       },
+       "maintenance": {
+        "clearDnsblCounters": "never",
+        "clearIpCounters": "never",
+        "enabled": true,
+        "metricsExport": false,
+        "scheduledWorkDisabled": true
+       },
+       "policy/dnsbl": {
+        "blacklistLogging": "disabled_log",
+        "dnsblIpAction": "Disabled",
+        "enabled": true,
+        "groups": [
+         {
+          "logging": "disabled_log",
+          "name": "E2EScopeAds",
+          "primary": true,
+          "top1mFilter": false
+         }
+        ],
+        "logging": "disabled_log",
+        "regex": false,
+        "regexList": [],
+        "safeSearch": false,
+        "safeSearchDoh": false,
+        "safeSearchDohList": [],
+        "safeSearchYoutube": "Disable",
+        "tldAllow": false,
+        "tldAllowBgtld": [],
+        "tldAllowCctld": [],
+        "tldAllowGtld": [],
+        "tldAllowItld": [],
+        "tldBlacklist": [],
+        "tldExclusions": [],
+        "top1m": false,
+        "top1mCount": 1000,
+        "top1mInclusions": [],
+        "whitelist": []
+       },
+       "policy/ip": {
+        "aggregate": false,
+        "aggregates": [],
+        "countryBlacklistAction": "none",
+        "countryWhitelist": [],
+        "countryWhitelistAction": "ignore",
+        "dMax": false,
+        "dMaxLimit": 0,
+        "dedup": false,
+        "etBlock": [],
+        "etMatch": [],
+        "max": false,
+        "maxLimit": 0,
+        "pMax": false,
+        "pMaxLimit": 0,
+        "suppressionV4": [],
+        "suppressionV6": []
+       },
+       "schedule": {
+        "categoryFrequency": "Never",
+        "categoryProviders": [],
+        "categoryUpdates": false,
+        "groups": [
+         {
+          "hour": 0,
+          "id": "ipv4/E2EScope",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         },
+         {
+          "hour": 0,
+          "id": "dnsbl/E2EScopeAds",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         }
+        ],
+        "hour": 0,
+        "minute": 0,
+        "scheduledUpdates": true,
+        "weekday": 7
+       }
+      },
+      "version": 1
+     }
+    },
+    {
+     "exit": 0,
+     "outcomes": {},
+     "attempted": [],
+     "sets": {
+      "pfB_E2EScope_v4": [
+       "192.0.2.31"
+      ]
+     },
+     "dnsbl": {
+      "config": {
+       "tld_wildcard_blacklist": [],
+       "tld_wildcard_exclusion": [],
+       "user_whitelist": [],
+       "user_unlock": [],
+       "top1m_enabled": false,
+       "builtin_log_flag": "0"
+      },
+      "feeds": [
+       {
+        "feed": "E2E3D",
+        "group": "DNSBL_E2EScopeAds",
+        "provenance": "feed",
+        "log_flag": "0",
+        "rows": [
+         "uuid-e2e4038c01.com"
+        ]
+       }
+      ]
+     },
+     "issues": [],
+     "stages": [
+      "dnsbl",
+      "geoip-sets",
+      "ip",
+      "apply"
+     ],
+     "snapshot": {
+      "platform": {
+       "pendingToken": "1d473f2849f15037"
+      },
+      "revision": 2783523552618211,
+      "settings": {
+       "dns": {
+        "cnameValidation": false,
+        "control": false,
+        "controlLegacy": false,
+        "decisionCacheMax": 10000,
+        "groupPolicy": false,
+        "groupPolicyBypassList": [],
+        "idnBlockMalicious": true,
+        "idnEscalateSuspicious": false,
+        "idnMode": "off",
+        "metricsClientIp": false,
+        "noAaaa": false,
+        "noAaaaList": [],
+        "pfbDnsEnabled": true,
+        "pslAllowPrivate": false,
+        "pslFeedIcannPolicy": "honor",
+        "pslFeedPrivatePolicy": "honor",
+        "pslIncludePrivate": true,
+        "regexCap": false,
+        "replyLogging": true,
+        "tldWildcard": false
+       },
+       "extras": {
+        "ipinfoToken": "",
+        "maxmindAccount": "",
+        "maxmindCsvDisabled": false,
+        "maxmindKey": "",
+        "maxmindLocale": "en",
+        "top1mProvider": "tranco",
+        "top1mToken": ""
+       },
+       "feeds/dnsbl": {
+        "groups": [
+         {
+          "action": "unbound",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "action": "deny",
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E3D",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e3_dns"
+           }
+          ],
+          "name": "E2EScopeAds",
+          "postScript": "",
+          "preScript": "",
+          "updateFrequency": "EveryDay"
+         }
+        ]
+       },
+       "feeds/geoip": {
+        "groups": [
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Top"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Africa"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Antarctica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Asia"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Europe"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_NAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Oceania"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_SAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_PS"
+         }
+        ]
+       },
+       "feeds/ipv4": {
+        "groups": [
+         {
+          "action": "Deny_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E3A",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e3_v4"
+           }
+          ],
+          "listClass": "deny",
+          "name": "E2EScope",
+          "postScript": "",
+          "preScript": "",
+          "suppressionCidr": 0,
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         }
+        ]
+       },
+       "feeds/ipv6": {
+        "groups": []
+       },
+       "hooks": {
+        "rows": []
+       },
+       "ingest": {
+        "applyWindow": "",
+        "dnsblIp": false,
+        "dnsblLenient": false,
+        "feedHostAllowlist": [
+         {
+          "cidr": "192.168.89.0/24"
+         }
+        ],
+        "feedHostFilter": true,
+        "proxyPassword": "",
+        "proxyUnusable": false,
+        "proxyUrl": "",
+        "proxyUser": "",
+        "scheduledWorkDisabled": true,
+        "selfAddresses": [
+         {
+          "address": "192.168.89.15"
+         },
+         {
+          "address": "192.168.1.1"
+         },
+         {
+          "address": "192.168.43.15"
+         },
+         {
+          "address": "fec0::be24:11ff:fe37:9cac"
+         },
+         {
+          "address": "fd00::1"
+         }
+        ],
+        "suppression": false,
+        "suppressionCidrV4": 0,
+        "suppressionCidrV6": 0
+       },
+       "maintenance": {
+        "clearDnsblCounters": "never",
+        "clearIpCounters": "never",
+        "enabled": true,
+        "metricsExport": false,
+        "scheduledWorkDisabled": true
+       },
+       "policy/dnsbl": {
+        "blacklistLogging": "disabled_log",
+        "dnsblIpAction": "Disabled",
+        "enabled": true,
+        "groups": [
+         {
+          "logging": "disabled_log",
+          "name": "E2EScopeAds",
+          "primary": true,
+          "top1mFilter": false
+         }
+        ],
+        "logging": "disabled_log",
+        "regex": false,
+        "regexList": [],
+        "safeSearch": false,
+        "safeSearchDoh": false,
+        "safeSearchDohList": [],
+        "safeSearchYoutube": "Disable",
+        "tldAllow": false,
+        "tldAllowBgtld": [],
+        "tldAllowCctld": [],
+        "tldAllowGtld": [],
+        "tldAllowItld": [],
+        "tldBlacklist": [],
+        "tldExclusions": [],
+        "top1m": false,
+        "top1mCount": 1000,
+        "top1mInclusions": [],
+        "whitelist": []
+       },
+       "policy/ip": {
+        "aggregate": false,
+        "aggregates": [],
+        "countryBlacklistAction": "none",
+        "countryWhitelist": [],
+        "countryWhitelistAction": "ignore",
+        "dMax": false,
+        "dMaxLimit": 0,
+        "dedup": false,
+        "etBlock": [],
+        "etMatch": [],
+        "max": false,
+        "maxLimit": 0,
+        "pMax": false,
+        "pMaxLimit": 0,
+        "suppressionV4": [],
+        "suppressionV6": []
+       },
+       "schedule": {
+        "categoryFrequency": "Never",
+        "categoryProviders": [],
+        "categoryUpdates": false,
+        "groups": [
+         {
+          "hour": 0,
+          "id": "ipv4/E2EScope",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         },
+         {
+          "hour": 0,
+          "id": "dnsbl/E2EScopeAds",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         }
+        ],
+        "hour": 0,
+        "minute": 0,
+        "scheduledUpdates": true,
+        "weekday": 7
+       }
+      },
+      "version": 1
+     }
+    }
    ]
   },
   {
    "id": "force_parse_rebuilds_from_the_saved_download",
    "description": "An IPv4 group and a DNSBL group built once; the bodies then change on the server and a manual Update with force parse runs: the sets are rebuilt from the downloads already on disk, so they keep the first bodies.",
    "groups": [
-    {"kind": "ipv4", "name": "E2EParse", "action": "Deny_Both", "feeds": [{"header": "E2E4A", "serve": "e2e4_v4"}]},
-    {"kind": "dnsbl", "name": "E2EParseAds", "feeds": [{"header": "E2E4D", "serve": "e2e4_dns"}]}
+    {
+     "kind": "ipv4",
+     "name": "E2EParse",
+     "action": "Deny_Both",
+     "feeds": [
+      {
+       "header": "E2E4A",
+       "serve": "e2e4_v4"
+      }
+     ]
+    },
+    {
+     "kind": "dnsbl",
+     "name": "E2EParseAds",
+     "feeds": [
+      {
+       "header": "E2E4D",
+       "serve": "e2e4_dns"
+      }
+     ]
+    }
    ],
    "serve": {
-    "e2e4_v4": {"text": "203.0.113.40\n203.0.113.41\n", "etag": "\"a1\""},
-    "e2e4_dns": {"text": "uuid-e2e4038d01.com\n", "etag": "\"d1\""}
+    "e2e4_v4": {
+     "text": "203.0.113.40\n203.0.113.41\n",
+     "etag": "\"a1\""
+    },
+    "e2e4_dns": {
+     "text": "uuid-e2e4038d01.com\n",
+     "etag": "\"d1\""
+    }
    },
    "steps": [
-    {"request": {"trigger": "manual", "scope": "both", "force": "none"}},
-    {"serve": {"e2e4_v4": {"text": "203.0.113.49\n", "etag": "\"a2\""}, "e2e4_dns": {"text": "uuid-e2e4038d09.com\n", "etag": "\"d2\""}},
-     "request": {"trigger": "manual", "scope": "both", "force": "parse"}}
+    {
+     "request": {
+      "trigger": "manual",
+      "scope": "both",
+      "force": "none"
+     }
+    },
+    {
+     "serve": {
+      "e2e4_v4": {
+       "text": "203.0.113.49\n",
+       "etag": "\"a2\""
+      },
+      "e2e4_dns": {
+       "text": "uuid-e2e4038d09.com\n",
+       "etag": "\"d2\""
+      }
+     },
+     "request": {
+      "trigger": "manual",
+      "scope": "both",
+      "force": "parse"
+     }
+    }
+   ],
+   "expect": [
+    {
+     "exit": 0,
+     "outcomes": {},
+     "attempted": [],
+     "sets": {
+      "pfB_E2EParse_v4": [
+       "203.0.113.40",
+       "203.0.113.41"
+      ]
+     },
+     "dnsbl": {
+      "config": {
+       "tld_wildcard_blacklist": [],
+       "tld_wildcard_exclusion": [],
+       "user_whitelist": [],
+       "user_unlock": [],
+       "top1m_enabled": false,
+       "builtin_log_flag": "0"
+      },
+      "feeds": [
+       {
+        "feed": "E2E4D",
+        "group": "DNSBL_E2EParseAds",
+        "provenance": "feed",
+        "log_flag": "0",
+        "rows": [
+         "uuid-e2e4038d01.com"
+        ]
+       }
+      ]
+     },
+     "issues": [],
+     "stages": [
+      "dnsbl",
+      "geoip-sets",
+      "ip",
+      "apply"
+     ],
+     "snapshot": {
+      "platform": {
+       "pendingToken": "1d473f2849f15037"
+      },
+      "revision": 1815879571088183,
+      "settings": {
+       "dns": {
+        "cnameValidation": false,
+        "control": false,
+        "controlLegacy": false,
+        "decisionCacheMax": 10000,
+        "groupPolicy": false,
+        "groupPolicyBypassList": [],
+        "idnBlockMalicious": true,
+        "idnEscalateSuspicious": false,
+        "idnMode": "off",
+        "metricsClientIp": false,
+        "noAaaa": false,
+        "noAaaaList": [],
+        "pfbDnsEnabled": true,
+        "pslAllowPrivate": false,
+        "pslFeedIcannPolicy": "honor",
+        "pslFeedPrivatePolicy": "honor",
+        "pslIncludePrivate": true,
+        "regexCap": false,
+        "replyLogging": true,
+        "tldWildcard": false
+       },
+       "extras": {
+        "ipinfoToken": "",
+        "maxmindAccount": "",
+        "maxmindCsvDisabled": false,
+        "maxmindKey": "",
+        "maxmindLocale": "en",
+        "top1mProvider": "tranco",
+        "top1mToken": ""
+       },
+       "feeds/dnsbl": {
+        "groups": [
+         {
+          "action": "unbound",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "action": "deny",
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E4D",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e4_dns"
+           }
+          ],
+          "name": "E2EParseAds",
+          "postScript": "",
+          "preScript": "",
+          "updateFrequency": "EveryDay"
+         }
+        ]
+       },
+       "feeds/geoip": {
+        "groups": [
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Top"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Africa"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Antarctica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Asia"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Europe"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_NAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Oceania"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_SAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_PS"
+         }
+        ]
+       },
+       "feeds/ipv4": {
+        "groups": [
+         {
+          "action": "Deny_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E4A",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e4_v4"
+           }
+          ],
+          "listClass": "deny",
+          "name": "E2EParse",
+          "postScript": "",
+          "preScript": "",
+          "suppressionCidr": 0,
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         }
+        ]
+       },
+       "feeds/ipv6": {
+        "groups": []
+       },
+       "hooks": {
+        "rows": []
+       },
+       "ingest": {
+        "applyWindow": "",
+        "dnsblIp": false,
+        "dnsblLenient": false,
+        "feedHostAllowlist": [
+         {
+          "cidr": "192.168.89.0/24"
+         }
+        ],
+        "feedHostFilter": true,
+        "proxyPassword": "",
+        "proxyUnusable": false,
+        "proxyUrl": "",
+        "proxyUser": "",
+        "scheduledWorkDisabled": true,
+        "selfAddresses": [
+         {
+          "address": "192.168.89.15"
+         },
+         {
+          "address": "192.168.1.1"
+         },
+         {
+          "address": "192.168.43.15"
+         },
+         {
+          "address": "fec0::be24:11ff:fe37:9cac"
+         },
+         {
+          "address": "fd00::1"
+         }
+        ],
+        "suppression": false,
+        "suppressionCidrV4": 0,
+        "suppressionCidrV6": 0
+       },
+       "maintenance": {
+        "clearDnsblCounters": "never",
+        "clearIpCounters": "never",
+        "enabled": true,
+        "metricsExport": false,
+        "scheduledWorkDisabled": true
+       },
+       "policy/dnsbl": {
+        "blacklistLogging": "disabled_log",
+        "dnsblIpAction": "Disabled",
+        "enabled": true,
+        "groups": [
+         {
+          "logging": "disabled_log",
+          "name": "E2EParseAds",
+          "primary": true,
+          "top1mFilter": false
+         }
+        ],
+        "logging": "disabled_log",
+        "regex": false,
+        "regexList": [],
+        "safeSearch": false,
+        "safeSearchDoh": false,
+        "safeSearchDohList": [],
+        "safeSearchYoutube": "Disable",
+        "tldAllow": false,
+        "tldAllowBgtld": [],
+        "tldAllowCctld": [],
+        "tldAllowGtld": [],
+        "tldAllowItld": [],
+        "tldBlacklist": [],
+        "tldExclusions": [],
+        "top1m": false,
+        "top1mCount": 1000,
+        "top1mInclusions": [],
+        "whitelist": []
+       },
+       "policy/ip": {
+        "aggregate": false,
+        "aggregates": [],
+        "countryBlacklistAction": "none",
+        "countryWhitelist": [],
+        "countryWhitelistAction": "ignore",
+        "dMax": false,
+        "dMaxLimit": 0,
+        "dedup": false,
+        "etBlock": [],
+        "etMatch": [],
+        "max": false,
+        "maxLimit": 0,
+        "pMax": false,
+        "pMaxLimit": 0,
+        "suppressionV4": [],
+        "suppressionV6": []
+       },
+       "schedule": {
+        "categoryFrequency": "Never",
+        "categoryProviders": [],
+        "categoryUpdates": false,
+        "groups": [
+         {
+          "hour": 0,
+          "id": "ipv4/E2EParse",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         },
+         {
+          "hour": 0,
+          "id": "dnsbl/E2EParseAds",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         }
+        ],
+        "hour": 0,
+        "minute": 0,
+        "scheduledUpdates": true,
+        "weekday": 7
+       }
+      },
+      "version": 1
+     }
+    },
+    {
+     "exit": 0,
+     "outcomes": {},
+     "attempted": [],
+     "sets": {
+      "pfB_E2EParse_v4": [
+       "203.0.113.40",
+       "203.0.113.41"
+      ]
+     },
+     "dnsbl": {
+      "config": {
+       "tld_wildcard_blacklist": [],
+       "tld_wildcard_exclusion": [],
+       "user_whitelist": [],
+       "user_unlock": [],
+       "top1m_enabled": false,
+       "builtin_log_flag": "0"
+      },
+      "feeds": [
+       {
+        "feed": "E2E4D",
+        "group": "DNSBL_E2EParseAds",
+        "provenance": "feed",
+        "log_flag": "0",
+        "rows": [
+         "uuid-e2e4038d01.com"
+        ]
+       }
+      ]
+     },
+     "issues": [],
+     "stages": [
+      "dnsbl",
+      "geoip-sets",
+      "ip",
+      "apply"
+     ],
+     "snapshot": {
+      "platform": {
+       "pendingToken": "1d473f2849f15037"
+      },
+      "revision": 1815879571088183,
+      "settings": {
+       "dns": {
+        "cnameValidation": false,
+        "control": false,
+        "controlLegacy": false,
+        "decisionCacheMax": 10000,
+        "groupPolicy": false,
+        "groupPolicyBypassList": [],
+        "idnBlockMalicious": true,
+        "idnEscalateSuspicious": false,
+        "idnMode": "off",
+        "metricsClientIp": false,
+        "noAaaa": false,
+        "noAaaaList": [],
+        "pfbDnsEnabled": true,
+        "pslAllowPrivate": false,
+        "pslFeedIcannPolicy": "honor",
+        "pslFeedPrivatePolicy": "honor",
+        "pslIncludePrivate": true,
+        "regexCap": false,
+        "replyLogging": true,
+        "tldWildcard": false
+       },
+       "extras": {
+        "ipinfoToken": "",
+        "maxmindAccount": "",
+        "maxmindCsvDisabled": false,
+        "maxmindKey": "",
+        "maxmindLocale": "en",
+        "top1mProvider": "tranco",
+        "top1mToken": ""
+       },
+       "feeds/dnsbl": {
+        "groups": [
+         {
+          "action": "unbound",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "action": "deny",
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E4D",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e4_dns"
+           }
+          ],
+          "name": "E2EParseAds",
+          "postScript": "",
+          "preScript": "",
+          "updateFrequency": "EveryDay"
+         }
+        ]
+       },
+       "feeds/geoip": {
+        "groups": [
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Top"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Africa"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Antarctica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Asia"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Europe"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_NAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Oceania"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_SAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_PS"
+         }
+        ]
+       },
+       "feeds/ipv4": {
+        "groups": [
+         {
+          "action": "Deny_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E4A",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e4_v4"
+           }
+          ],
+          "listClass": "deny",
+          "name": "E2EParse",
+          "postScript": "",
+          "preScript": "",
+          "suppressionCidr": 0,
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         }
+        ]
+       },
+       "feeds/ipv6": {
+        "groups": []
+       },
+       "hooks": {
+        "rows": []
+       },
+       "ingest": {
+        "applyWindow": "",
+        "dnsblIp": false,
+        "dnsblLenient": false,
+        "feedHostAllowlist": [
+         {
+          "cidr": "192.168.89.0/24"
+         }
+        ],
+        "feedHostFilter": true,
+        "proxyPassword": "",
+        "proxyUnusable": false,
+        "proxyUrl": "",
+        "proxyUser": "",
+        "scheduledWorkDisabled": true,
+        "selfAddresses": [
+         {
+          "address": "192.168.89.15"
+         },
+         {
+          "address": "192.168.1.1"
+         },
+         {
+          "address": "192.168.43.15"
+         },
+         {
+          "address": "fec0::be24:11ff:fe37:9cac"
+         },
+         {
+          "address": "fd00::1"
+         }
+        ],
+        "suppression": false,
+        "suppressionCidrV4": 0,
+        "suppressionCidrV6": 0
+       },
+       "maintenance": {
+        "clearDnsblCounters": "never",
+        "clearIpCounters": "never",
+        "enabled": true,
+        "metricsExport": false,
+        "scheduledWorkDisabled": true
+       },
+       "policy/dnsbl": {
+        "blacklistLogging": "disabled_log",
+        "dnsblIpAction": "Disabled",
+        "enabled": true,
+        "groups": [
+         {
+          "logging": "disabled_log",
+          "name": "E2EParseAds",
+          "primary": true,
+          "top1mFilter": false
+         }
+        ],
+        "logging": "disabled_log",
+        "regex": false,
+        "regexList": [],
+        "safeSearch": false,
+        "safeSearchDoh": false,
+        "safeSearchDohList": [],
+        "safeSearchYoutube": "Disable",
+        "tldAllow": false,
+        "tldAllowBgtld": [],
+        "tldAllowCctld": [],
+        "tldAllowGtld": [],
+        "tldAllowItld": [],
+        "tldBlacklist": [],
+        "tldExclusions": [],
+        "top1m": false,
+        "top1mCount": 1000,
+        "top1mInclusions": [],
+        "whitelist": []
+       },
+       "policy/ip": {
+        "aggregate": false,
+        "aggregates": [],
+        "countryBlacklistAction": "none",
+        "countryWhitelist": [],
+        "countryWhitelistAction": "ignore",
+        "dMax": false,
+        "dMaxLimit": 0,
+        "dedup": false,
+        "etBlock": [],
+        "etMatch": [],
+        "max": false,
+        "maxLimit": 0,
+        "pMax": false,
+        "pMaxLimit": 0,
+        "suppressionV4": [],
+        "suppressionV6": []
+       },
+       "schedule": {
+        "categoryFrequency": "Never",
+        "categoryProviders": [],
+        "categoryUpdates": false,
+        "groups": [
+         {
+          "hour": 0,
+          "id": "ipv4/E2EParse",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         },
+         {
+          "hour": 0,
+          "id": "dnsbl/E2EParseAds",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         }
+        ],
+        "hour": 0,
+        "minute": 0,
+        "scheduledUpdates": true,
+        "weekday": 7
+       }
+      },
+      "version": 1
+     }
+    }
    ]
   },
   {
    "id": "apply_trigger_runs_no_feed_work",
    "description": "An IPv4 group built once; its body then changes on the server and an apply Update runs: no feed is checked or downloaded, no outcome is reported, and the set stays as it was.",
    "groups": [
-    {"kind": "ipv4", "name": "E2EApply", "action": "Deny_Both", "feeds": [{"header": "E2E5A", "serve": "e2e5_v4"}]}
+    {
+     "kind": "ipv4",
+     "name": "E2EApply",
+     "action": "Deny_Both",
+     "feeds": [
+      {
+       "header": "E2E5A",
+       "serve": "e2e5_v4"
+      }
+     ]
+    }
    ],
    "serve": {
-    "e2e5_v4": {"text": "198.51.100.50\n", "etag": "\"a1\""}
+    "e2e5_v4": {
+     "text": "198.51.100.50\n",
+     "etag": "\"a1\""
+    }
    },
    "steps": [
-    {"request": {"trigger": "manual", "scope": "both", "force": "none"}},
-    {"serve": {"e2e5_v4": {"text": "198.51.100.59\n", "etag": "\"a2\""}},
-     "request": {"trigger": "apply"}}
+    {
+     "request": {
+      "trigger": "manual",
+      "scope": "both",
+      "force": "none"
+     }
+    },
+    {
+     "serve": {
+      "e2e5_v4": {
+       "text": "198.51.100.59\n",
+       "etag": "\"a2\""
+      }
+     },
+     "request": {
+      "trigger": "apply"
+     }
+    }
+   ],
+   "expect": [
+    {
+     "exit": 0,
+     "outcomes": {},
+     "attempted": [],
+     "sets": {
+      "pfB_E2EApply_v4": [
+       "198.51.100.50"
+      ]
+     },
+     "dnsbl": null,
+     "issues": [],
+     "stages": [
+      "dnsbl",
+      "geoip-sets",
+      "ip",
+      "apply"
+     ],
+     "snapshot": {
+      "platform": {
+       "pendingToken": "1d473f2849f15037"
+      },
+      "revision": 2374235755624561,
+      "settings": {
+       "dns": {
+        "cnameValidation": false,
+        "control": false,
+        "controlLegacy": false,
+        "decisionCacheMax": 10000,
+        "groupPolicy": false,
+        "groupPolicyBypassList": [],
+        "idnBlockMalicious": true,
+        "idnEscalateSuspicious": false,
+        "idnMode": "off",
+        "metricsClientIp": false,
+        "noAaaa": false,
+        "noAaaaList": [],
+        "pfbDnsEnabled": false,
+        "pslAllowPrivate": false,
+        "pslFeedIcannPolicy": "honor",
+        "pslFeedPrivatePolicy": "honor",
+        "pslIncludePrivate": true,
+        "regexCap": false,
+        "replyLogging": true,
+        "tldWildcard": false
+       },
+       "extras": {
+        "ipinfoToken": "",
+        "maxmindAccount": "",
+        "maxmindCsvDisabled": false,
+        "maxmindKey": "",
+        "maxmindLocale": "en",
+        "top1mProvider": "tranco",
+        "top1mToken": ""
+       },
+       "feeds/dnsbl": {
+        "groups": []
+       },
+       "feeds/geoip": {
+        "groups": [
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Top"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Africa"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Antarctica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Asia"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Europe"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_NAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Oceania"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_SAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_PS"
+         }
+        ]
+       },
+       "feeds/ipv4": {
+        "groups": [
+         {
+          "action": "Deny_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E5A",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e5_v4"
+           }
+          ],
+          "listClass": "deny",
+          "name": "E2EApply",
+          "postScript": "",
+          "preScript": "",
+          "suppressionCidr": 0,
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         }
+        ]
+       },
+       "feeds/ipv6": {
+        "groups": []
+       },
+       "hooks": {
+        "rows": []
+       },
+       "ingest": {
+        "applyWindow": "",
+        "dnsblIp": false,
+        "dnsblLenient": false,
+        "feedHostAllowlist": [
+         {
+          "cidr": "192.168.89.0/24"
+         }
+        ],
+        "feedHostFilter": true,
+        "proxyPassword": "",
+        "proxyUnusable": false,
+        "proxyUrl": "",
+        "proxyUser": "",
+        "scheduledWorkDisabled": true,
+        "selfAddresses": [
+         {
+          "address": "192.168.89.15"
+         },
+         {
+          "address": "192.168.1.1"
+         },
+         {
+          "address": "192.168.43.15"
+         },
+         {
+          "address": "fec0::be24:11ff:fe37:9cac"
+         },
+         {
+          "address": "fd00::1"
+         }
+        ],
+        "suppression": false,
+        "suppressionCidrV4": 0,
+        "suppressionCidrV6": 0
+       },
+       "maintenance": {
+        "clearDnsblCounters": "never",
+        "clearIpCounters": "never",
+        "enabled": true,
+        "metricsExport": false,
+        "scheduledWorkDisabled": true
+       },
+       "policy/dnsbl": {
+        "blacklistLogging": "disabled_log",
+        "dnsblIpAction": "Disabled",
+        "enabled": false,
+        "groups": [],
+        "logging": "disabled_log",
+        "regex": false,
+        "regexList": [],
+        "safeSearch": false,
+        "safeSearchDoh": false,
+        "safeSearchDohList": [],
+        "safeSearchYoutube": "Disable",
+        "tldAllow": false,
+        "tldAllowBgtld": [],
+        "tldAllowCctld": [],
+        "tldAllowGtld": [],
+        "tldAllowItld": [],
+        "tldBlacklist": [],
+        "tldExclusions": [],
+        "top1m": false,
+        "top1mCount": 1000,
+        "top1mInclusions": [],
+        "whitelist": []
+       },
+       "policy/ip": {
+        "aggregate": false,
+        "aggregates": [],
+        "countryBlacklistAction": "none",
+        "countryWhitelist": [],
+        "countryWhitelistAction": "ignore",
+        "dMax": false,
+        "dMaxLimit": 0,
+        "dedup": false,
+        "etBlock": [],
+        "etMatch": [],
+        "max": false,
+        "maxLimit": 0,
+        "pMax": false,
+        "pMaxLimit": 0,
+        "suppressionV4": [],
+        "suppressionV6": []
+       },
+       "schedule": {
+        "categoryFrequency": "Never",
+        "categoryProviders": [],
+        "categoryUpdates": false,
+        "groups": [
+         {
+          "hour": 0,
+          "id": "ipv4/E2EApply",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         }
+        ],
+        "hour": 0,
+        "minute": 0,
+        "scheduledUpdates": true,
+        "weekday": 7
+       }
+      },
+      "version": 1
+     }
+    },
+    {
+     "exit": 0,
+     "outcomes": {},
+     "attempted": [],
+     "sets": {
+      "pfB_E2EApply_v4": [
+       "198.51.100.50"
+      ]
+     },
+     "dnsbl": null,
+     "issues": [],
+     "stages": [
+      "dnsbl",
+      "geoip-sets",
+      "ip",
+      "apply"
+     ],
+     "snapshot": {
+      "platform": {
+       "pendingToken": "1d473f2849f15037"
+      },
+      "revision": 2374235755624561,
+      "settings": {
+       "dns": {
+        "cnameValidation": false,
+        "control": false,
+        "controlLegacy": false,
+        "decisionCacheMax": 10000,
+        "groupPolicy": false,
+        "groupPolicyBypassList": [],
+        "idnBlockMalicious": true,
+        "idnEscalateSuspicious": false,
+        "idnMode": "off",
+        "metricsClientIp": false,
+        "noAaaa": false,
+        "noAaaaList": [],
+        "pfbDnsEnabled": false,
+        "pslAllowPrivate": false,
+        "pslFeedIcannPolicy": "honor",
+        "pslFeedPrivatePolicy": "honor",
+        "pslIncludePrivate": true,
+        "regexCap": false,
+        "replyLogging": true,
+        "tldWildcard": false
+       },
+       "extras": {
+        "ipinfoToken": "",
+        "maxmindAccount": "",
+        "maxmindCsvDisabled": false,
+        "maxmindKey": "",
+        "maxmindLocale": "en",
+        "top1mProvider": "tranco",
+        "top1mToken": ""
+       },
+       "feeds/dnsbl": {
+        "groups": []
+       },
+       "feeds/geoip": {
+        "groups": [
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Top"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Africa"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Antarctica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Asia"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Europe"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_NAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Oceania"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_SAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_PS"
+         }
+        ]
+       },
+       "feeds/ipv4": {
+        "groups": [
+         {
+          "action": "Deny_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E5A",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e5_v4"
+           }
+          ],
+          "listClass": "deny",
+          "name": "E2EApply",
+          "postScript": "",
+          "preScript": "",
+          "suppressionCidr": 0,
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         }
+        ]
+       },
+       "feeds/ipv6": {
+        "groups": []
+       },
+       "hooks": {
+        "rows": []
+       },
+       "ingest": {
+        "applyWindow": "",
+        "dnsblIp": false,
+        "dnsblLenient": false,
+        "feedHostAllowlist": [
+         {
+          "cidr": "192.168.89.0/24"
+         }
+        ],
+        "feedHostFilter": true,
+        "proxyPassword": "",
+        "proxyUnusable": false,
+        "proxyUrl": "",
+        "proxyUser": "",
+        "scheduledWorkDisabled": true,
+        "selfAddresses": [
+         {
+          "address": "192.168.89.15"
+         },
+         {
+          "address": "192.168.1.1"
+         },
+         {
+          "address": "192.168.43.15"
+         },
+         {
+          "address": "fec0::be24:11ff:fe37:9cac"
+         },
+         {
+          "address": "fd00::1"
+         }
+        ],
+        "suppression": false,
+        "suppressionCidrV4": 0,
+        "suppressionCidrV6": 0
+       },
+       "maintenance": {
+        "clearDnsblCounters": "never",
+        "clearIpCounters": "never",
+        "enabled": true,
+        "metricsExport": false,
+        "scheduledWorkDisabled": true
+       },
+       "policy/dnsbl": {
+        "blacklistLogging": "disabled_log",
+        "dnsblIpAction": "Disabled",
+        "enabled": false,
+        "groups": [],
+        "logging": "disabled_log",
+        "regex": false,
+        "regexList": [],
+        "safeSearch": false,
+        "safeSearchDoh": false,
+        "safeSearchDohList": [],
+        "safeSearchYoutube": "Disable",
+        "tldAllow": false,
+        "tldAllowBgtld": [],
+        "tldAllowCctld": [],
+        "tldAllowGtld": [],
+        "tldAllowItld": [],
+        "tldBlacklist": [],
+        "tldExclusions": [],
+        "top1m": false,
+        "top1mCount": 1000,
+        "top1mInclusions": [],
+        "whitelist": []
+       },
+       "policy/ip": {
+        "aggregate": false,
+        "aggregates": [],
+        "countryBlacklistAction": "none",
+        "countryWhitelist": [],
+        "countryWhitelistAction": "ignore",
+        "dMax": false,
+        "dMaxLimit": 0,
+        "dedup": false,
+        "etBlock": [],
+        "etMatch": [],
+        "max": false,
+        "maxLimit": 0,
+        "pMax": false,
+        "pMaxLimit": 0,
+        "suppressionV4": [],
+        "suppressionV6": []
+       },
+       "schedule": {
+        "categoryFrequency": "Never",
+        "categoryProviders": [],
+        "categoryUpdates": false,
+        "groups": [
+         {
+          "hour": 0,
+          "id": "ipv4/E2EApply",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         }
+        ],
+        "hour": 0,
+        "minute": 0,
+        "scheduledUpdates": true,
+        "weekday": 7
+       }
+      },
+      "version": 1
+     }
+    }
    ]
   },
   {
@@ -91,28 +3469,666 @@
    "ordering": "DNSBLIP built after the DNSBL stage and consumed by the IP stage",
    "dnsbl_ip": "Deny_Both",
    "groups": [
-    {"kind": "dnsbl", "name": "E2EIpAds", "feeds": [{"header": "E2E6D", "serve": "e2e6_dns"}]}
+    {
+     "kind": "dnsbl",
+     "name": "E2EIpAds",
+     "feeds": [
+      {
+       "header": "E2E6D",
+       "serve": "e2e6_dns"
+      }
+     ]
+    }
    ],
    "serve": {
-    "e2e6_dns": {"text": "uuid-e2e4038f01.com\n192.0.2.60\n2001:db8:60::1\n", "etag": "\"d1\""}
+    "e2e6_dns": {
+     "text": "uuid-e2e4038f01.com\n192.0.2.60\n2001:db8:60::1\n",
+     "etag": "\"d1\""
+    }
    },
    "steps": [
-    {"request": {"trigger": "manual", "scope": "both", "force": "none"}}
+    {
+     "request": {
+      "trigger": "manual",
+      "scope": "both",
+      "force": "none"
+     }
+    }
+   ],
+   "expect": [
+    {
+     "exit": 0,
+     "outcomes": {},
+     "attempted": [],
+     "sets": {
+      "pfB_DNSBLIP_v4": [
+       "192.0.2.60"
+      ],
+      "pfB_DNSBLIP_v6": [
+       "2001:db8:60::1"
+      ]
+     },
+     "dnsbl": {
+      "config": {
+       "tld_wildcard_blacklist": [],
+       "tld_wildcard_exclusion": [],
+       "user_whitelist": [],
+       "user_unlock": [],
+       "top1m_enabled": false,
+       "builtin_log_flag": "0"
+      },
+      "feeds": [
+       {
+        "feed": "E2E6D",
+        "group": "DNSBL_E2EIpAds",
+        "provenance": "feed",
+        "log_flag": "0",
+        "rows": [
+         "uuid-e2e4038f01.com"
+        ]
+       }
+      ]
+     },
+     "issues": [],
+     "stages": [
+      "dnsbl",
+      "geoip-sets",
+      "ip",
+      "apply"
+     ],
+     "snapshot": {
+      "platform": {
+       "pendingToken": "1d473f2849f15037"
+      },
+      "revision": 790879020964278,
+      "settings": {
+       "dns": {
+        "cnameValidation": false,
+        "control": false,
+        "controlLegacy": false,
+        "decisionCacheMax": 10000,
+        "groupPolicy": false,
+        "groupPolicyBypassList": [],
+        "idnBlockMalicious": true,
+        "idnEscalateSuspicious": false,
+        "idnMode": "off",
+        "metricsClientIp": false,
+        "noAaaa": false,
+        "noAaaaList": [],
+        "pfbDnsEnabled": true,
+        "pslAllowPrivate": false,
+        "pslFeedIcannPolicy": "honor",
+        "pslFeedPrivatePolicy": "honor",
+        "pslIncludePrivate": true,
+        "regexCap": false,
+        "replyLogging": true,
+        "tldWildcard": false
+       },
+       "extras": {
+        "ipinfoToken": "",
+        "maxmindAccount": "",
+        "maxmindCsvDisabled": false,
+        "maxmindKey": "",
+        "maxmindLocale": "en",
+        "top1mProvider": "tranco",
+        "top1mToken": ""
+       },
+       "feeds/dnsbl": {
+        "groups": [
+         {
+          "action": "unbound",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "action": "deny",
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E6D",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e6_dns"
+           }
+          ],
+          "name": "E2EIpAds",
+          "postScript": "",
+          "preScript": "",
+          "updateFrequency": "EveryDay"
+         }
+        ]
+       },
+       "feeds/geoip": {
+        "groups": [
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Top"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Africa"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Antarctica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Asia"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Europe"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_NAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Oceania"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_SAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_PS"
+         }
+        ]
+       },
+       "feeds/ipv4": {
+        "groups": []
+       },
+       "feeds/ipv6": {
+        "groups": []
+       },
+       "hooks": {
+        "rows": []
+       },
+       "ingest": {
+        "applyWindow": "",
+        "dnsblIp": true,
+        "dnsblLenient": false,
+        "feedHostAllowlist": [
+         {
+          "cidr": "192.168.89.0/24"
+         }
+        ],
+        "feedHostFilter": true,
+        "proxyPassword": "",
+        "proxyUnusable": false,
+        "proxyUrl": "",
+        "proxyUser": "",
+        "scheduledWorkDisabled": true,
+        "selfAddresses": [
+         {
+          "address": "192.168.89.15"
+         },
+         {
+          "address": "192.168.1.1"
+         },
+         {
+          "address": "192.168.43.15"
+         },
+         {
+          "address": "fec0::be24:11ff:fe37:9cac"
+         },
+         {
+          "address": "fd00::1"
+         }
+        ],
+        "suppression": false,
+        "suppressionCidrV4": 0,
+        "suppressionCidrV6": 0
+       },
+       "maintenance": {
+        "clearDnsblCounters": "never",
+        "clearIpCounters": "never",
+        "enabled": true,
+        "metricsExport": false,
+        "scheduledWorkDisabled": true
+       },
+       "policy/dnsbl": {
+        "blacklistLogging": "disabled_log",
+        "dnsblIpAction": "Deny_Both",
+        "enabled": true,
+        "groups": [
+         {
+          "logging": "disabled_log",
+          "name": "E2EIpAds",
+          "primary": true,
+          "top1mFilter": false
+         }
+        ],
+        "logging": "disabled_log",
+        "regex": false,
+        "regexList": [],
+        "safeSearch": false,
+        "safeSearchDoh": false,
+        "safeSearchDohList": [],
+        "safeSearchYoutube": "Disable",
+        "tldAllow": false,
+        "tldAllowBgtld": [],
+        "tldAllowCctld": [],
+        "tldAllowGtld": [],
+        "tldAllowItld": [],
+        "tldBlacklist": [],
+        "tldExclusions": [],
+        "top1m": false,
+        "top1mCount": 1000,
+        "top1mInclusions": [],
+        "whitelist": []
+       },
+       "policy/ip": {
+        "aggregate": false,
+        "aggregates": [],
+        "countryBlacklistAction": "none",
+        "countryWhitelist": [],
+        "countryWhitelistAction": "ignore",
+        "dMax": false,
+        "dMaxLimit": 0,
+        "dedup": false,
+        "etBlock": [],
+        "etMatch": [],
+        "max": false,
+        "maxLimit": 0,
+        "pMax": false,
+        "pMaxLimit": 0,
+        "suppressionV4": [],
+        "suppressionV6": []
+       },
+       "schedule": {
+        "categoryFrequency": "Never",
+        "categoryProviders": [],
+        "categoryUpdates": false,
+        "groups": [
+         {
+          "hour": 0,
+          "id": "dnsbl/E2EIpAds",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         }
+        ],
+        "hour": 0,
+        "minute": 0,
+        "scheduledUpdates": true,
+        "weekday": 7
+       }
+      },
+      "version": 1
+     }
+    }
    ]
   },
   {
    "id": "permit_group_and_an_empty_feed",
    "description": "A Permit IPv4 group, and a Deny IPv4 group whose only feed holds comments only: the permit set holds its members; the empty set is today's placeholder, which Core leaves out (owner question 1).",
    "groups": [
-    {"kind": "ipv4", "name": "E2EPermit", "action": "Permit_Both", "feeds": [{"header": "E2E7P", "serve": "e2e7_permit"}]},
-    {"kind": "ipv4", "name": "E2EEmpty", "action": "Deny_Both", "feeds": [{"header": "E2E7E", "serve": "e2e7_empty"}]}
+    {
+     "kind": "ipv4",
+     "name": "E2EPermit",
+     "action": "Permit_Both",
+     "feeds": [
+      {
+       "header": "E2E7P",
+       "serve": "e2e7_permit"
+      }
+     ]
+    },
+    {
+     "kind": "ipv4",
+     "name": "E2EEmpty",
+     "action": "Deny_Both",
+     "feeds": [
+      {
+       "header": "E2E7E",
+       "serve": "e2e7_empty"
+      }
+     ]
+    }
    ],
    "serve": {
-    "e2e7_permit": {"text": "203.0.113.70\n203.0.113.71\n", "etag": "\"p1\""},
-    "e2e7_empty": {"text": "# nothing listed\n", "etag": "\"e1\""}
+    "e2e7_permit": {
+     "text": "203.0.113.70\n203.0.113.71\n",
+     "etag": "\"p1\""
+    },
+    "e2e7_empty": {
+     "text": "# nothing listed\n",
+     "etag": "\"e1\""
+    }
    },
    "steps": [
-    {"request": {"trigger": "manual", "scope": "both", "force": "none"}}
+    {
+     "request": {
+      "trigger": "manual",
+      "scope": "both",
+      "force": "none"
+     }
+    }
+   ],
+   "expect": [
+    {
+     "exit": 0,
+     "outcomes": {},
+     "attempted": [],
+     "sets": {
+      "pfB_E2EEmpty_v4": [
+       "127.1.7.7"
+      ],
+      "pfB_E2EPermit_v4": [
+       "203.0.113.70",
+       "203.0.113.71"
+      ]
+     },
+     "dnsbl": null,
+     "issues": [],
+     "stages": [
+      "dnsbl",
+      "geoip-sets",
+      "ip",
+      "apply"
+     ],
+     "snapshot": {
+      "platform": {
+       "pendingToken": "1d473f2849f15037"
+      },
+      "revision": 1785197535692619,
+      "settings": {
+       "dns": {
+        "cnameValidation": false,
+        "control": false,
+        "controlLegacy": false,
+        "decisionCacheMax": 10000,
+        "groupPolicy": false,
+        "groupPolicyBypassList": [],
+        "idnBlockMalicious": true,
+        "idnEscalateSuspicious": false,
+        "idnMode": "off",
+        "metricsClientIp": false,
+        "noAaaa": false,
+        "noAaaaList": [],
+        "pfbDnsEnabled": false,
+        "pslAllowPrivate": false,
+        "pslFeedIcannPolicy": "honor",
+        "pslFeedPrivatePolicy": "honor",
+        "pslIncludePrivate": true,
+        "regexCap": false,
+        "replyLogging": true,
+        "tldWildcard": false
+       },
+       "extras": {
+        "ipinfoToken": "",
+        "maxmindAccount": "",
+        "maxmindCsvDisabled": false,
+        "maxmindKey": "",
+        "maxmindLocale": "en",
+        "top1mProvider": "tranco",
+        "top1mToken": ""
+       },
+       "feeds/dnsbl": {
+        "groups": []
+       },
+       "feeds/geoip": {
+        "groups": [
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Top"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Africa"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Antarctica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Asia"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Europe"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_NAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_Oceania"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_SAmerica"
+         },
+         {
+          "action": "Disabled",
+          "countriesV4": [],
+          "countriesV6": [],
+          "listClass": "none",
+          "name": "pfB_PS"
+         }
+        ]
+       },
+       "feeds/ipv4": {
+        "groups": [
+         {
+          "action": "Permit_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E7P",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e7_permit"
+           }
+          ],
+          "listClass": "permit",
+          "name": "E2EPermit",
+          "postScript": "",
+          "preScript": "",
+          "suppressionCidr": 0,
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         },
+         {
+          "action": "Deny_Both",
+          "bindAddress": "",
+          "customList": "",
+          "feeds": [
+           {
+            "credentials": "",
+            "format": "auto",
+            "header": "E2E7E",
+            "state": "enabled",
+            "url": "{{FEEDS}}/e2e7_empty"
+           }
+          ],
+          "listClass": "deny",
+          "name": "E2EEmpty",
+          "postScript": "",
+          "preScript": "",
+          "suppressionCidr": 0,
+          "updateFrequency": "EveryDay",
+          "whoisConvert": false
+         }
+        ]
+       },
+       "feeds/ipv6": {
+        "groups": []
+       },
+       "hooks": {
+        "rows": []
+       },
+       "ingest": {
+        "applyWindow": "",
+        "dnsblIp": false,
+        "dnsblLenient": false,
+        "feedHostAllowlist": [
+         {
+          "cidr": "192.168.89.0/24"
+         }
+        ],
+        "feedHostFilter": true,
+        "proxyPassword": "",
+        "proxyUnusable": false,
+        "proxyUrl": "",
+        "proxyUser": "",
+        "scheduledWorkDisabled": true,
+        "selfAddresses": [
+         {
+          "address": "192.168.89.15"
+         },
+         {
+          "address": "192.168.1.1"
+         },
+         {
+          "address": "192.168.43.15"
+         },
+         {
+          "address": "fec0::be24:11ff:fe37:9cac"
+         },
+         {
+          "address": "fd00::1"
+         }
+        ],
+        "suppression": false,
+        "suppressionCidrV4": 0,
+        "suppressionCidrV6": 0
+       },
+       "maintenance": {
+        "clearDnsblCounters": "never",
+        "clearIpCounters": "never",
+        "enabled": true,
+        "metricsExport": false,
+        "scheduledWorkDisabled": true
+       },
+       "policy/dnsbl": {
+        "blacklistLogging": "disabled_log",
+        "dnsblIpAction": "Disabled",
+        "enabled": false,
+        "groups": [],
+        "logging": "disabled_log",
+        "regex": false,
+        "regexList": [],
+        "safeSearch": false,
+        "safeSearchDoh": false,
+        "safeSearchDohList": [],
+        "safeSearchYoutube": "Disable",
+        "tldAllow": false,
+        "tldAllowBgtld": [],
+        "tldAllowCctld": [],
+        "tldAllowGtld": [],
+        "tldAllowItld": [],
+        "tldBlacklist": [],
+        "tldExclusions": [],
+        "top1m": false,
+        "top1mCount": 1000,
+        "top1mInclusions": [],
+        "whitelist": []
+       },
+       "policy/ip": {
+        "aggregate": false,
+        "aggregates": [],
+        "countryBlacklistAction": "none",
+        "countryWhitelist": [],
+        "countryWhitelistAction": "ignore",
+        "dMax": false,
+        "dMaxLimit": 0,
+        "dedup": false,
+        "etBlock": [],
+        "etMatch": [],
+        "max": false,
+        "maxLimit": 0,
+        "pMax": false,
+        "pMaxLimit": 0,
+        "suppressionV4": [],
+        "suppressionV6": []
+       },
+       "schedule": {
+        "categoryFrequency": "Never",
+        "categoryProviders": [],
+        "categoryUpdates": false,
+        "groups": [
+         {
+          "hour": 0,
+          "id": "ipv4/E2EPermit",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         },
+         {
+          "hour": 0,
+          "id": "ipv4/E2EEmpty",
+          "minute": 0,
+          "override": false,
+          "weekday": 7
+         }
+        ],
+        "hour": 0,
+        "minute": 0,
+        "scheduledUpdates": true,
+        "weekday": 7
+       }
+      },
+      "version": 1
+     }
+    }
    ]
   }
  ]
