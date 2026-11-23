@@ -149,6 +149,19 @@ final class CoreSettingsPfbDnsParityTest extends TestCase
 		$this->assertContains(['field' => 'dns.pfbDnsEnabled', 'message' => 'required'], $refusal['error']['fieldErrors'] ?? [], json_encode($refusal));
 	}
 
+	public function testTheAdaptersWriteRefusesASwitchThatIsNoBoolean(): void
+	{
+		$read = $this->read();
+		foreach (['on', 1, NULL, []] as $value) {
+			$settings = $read['settings'];
+			$settings['dns']['pfbDnsEnabled'] = $value;
+			$refusal = pfb_core_settings_request_refusal(['version' => 1, 'op' => 'write', 'expectedRevision' => $read['revision'], 'settings' => $settings],
+				static fn(): array => []);
+			$this->assertContains(['field' => 'dns.pfbDnsEnabled', 'message' => 'not a valid value'], $refusal['error']['fieldErrors'] ?? [],
+				json_encode($value) . ': ' . json_encode($refusal));
+		}
+	}
+
 	public function testTheRevisionMovesWhenTheSwitchChanges(): void
 	{
 		$base = $this->read()['revision'];

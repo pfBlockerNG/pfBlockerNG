@@ -67,6 +67,7 @@ func TestAFeedIdentityFieldOfTheWrongTypeRefusesTheBuild(t *testing.T) {
 		"pfbDnsEnabled not a bool": func(m map[string]map[string]any) { m["dns"]["pfbDnsEnabled"] = "on" },
 		"a group's action":         func(m map[string]map[string]any) { group(m)["action"] = 1 },
 		"a group's name":           func(m map[string]map[string]any) { group(m)["name"] = 1 },
+		"a group's customList":     func(m map[string]map[string]any) { group(m)["customList"] = 1 },
 		"a row's header":           func(m map[string]map[string]any) { row(m)["header"] = 1 },
 		"a row's state":            func(m map[string]map[string]any) { row(m)["state"] = 1 },
 		"a row's url":              func(m map[string]map[string]any) { row(m)["url"] = 1 },
