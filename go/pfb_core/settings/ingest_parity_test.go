@@ -111,9 +111,9 @@ func TestTheIngestProjectionRefusesTheFixturesHostileInputNamingTheField(t *test
 	}
 }
 
-// WHEN the adapter answers ingest.skipFeedLimit THEN the Core Updater's retry cap (worklist: a limit that is not 0 and a failure
-// count at or past it) decides as today's pfb_update_check() at every count, except on a case that names its departure, where the
-// two must differ (issue #4038).
+// WHEN the adapter answers ingest.skipFeedLimit THEN the comparison the work list makes (a limit that is not 0 and a failure
+// count at or past it), re-derived here on the limit Core reads, gives today's pfb_update_check() decision at every count, except
+// on a case that names its departure, where the two must differ (issue #4038). It checks the value, not the work list itself.
 func TestTheSkipFeedLimitCapsRetriesAsTodaysPHPAtEveryFailureCount(t *testing.T) {
 	doc := loadIngestFixture(t)
 	seen := 0
