@@ -348,10 +348,15 @@ func (s DNSBLSet) cleanup(feeds []dnsbl.Feed) ([]string, error) {
 		}
 		files = append(slices.DeleteFunc(files, func(f string) bool { return f == p }), p)
 		for _, f := range files {
-			if info, err := os.Lstat(f); err == nil && !info.IsDir() {
-				if err := dnsblRemove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
-					return removed, err
-				}
+			info, err := dnsblLstat(f)
+			if errors.Is(err, fs.ErrNotExist) || err == nil && info.IsDir() {
+				continue
+			}
+			if err != nil { // before the parsed rows, which come last: the next Update finds the feed again
+				return removed, err
+			}
+			if err := dnsblRemove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return removed, err
 			}
 		}
 		removed = append(removed, name)
