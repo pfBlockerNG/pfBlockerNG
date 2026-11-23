@@ -273,9 +273,9 @@ func newLoopFixture(t *testing.T) *loopFixture {
 	t.Cleanup(func() { log.Close() })
 	fx.log = log
 	touch(t, filepath.Join(fx.pkg, "dnsbl_psl"), testPSL)
-	touch(t, filepath.Join(fx.src, "A.txt"), "10.0.0.1\n")
-	touch(t, filepath.Join(fx.src, "B.txt"), "10.0.1.1\n")
-	touch(t, filepath.Join(fx.src, "D.txt"), "ads.example\n192.0.2.7\n")
+	touch(t, filepath.Join(fx.src, "A.txt"), "93.184.216.1\n")
+	touch(t, filepath.Join(fx.src, "B.txt"), "93.184.217.1\n")
+	touch(t, filepath.Join(fx.src, "D.txt"), "ads.example\n151.101.1.7\n")
 	fixture, err := filepath.Abs("../../../tests/core/fixtures/apply_contract_v2.json")
 	if err != nil {
 		t.Fatal(err)
@@ -354,6 +354,7 @@ func (fx *loopFixture) runLoop(t *testing.T, loop *Loop, req Request) (Result, e
 	if err != nil {
 		t.Fatalf("the outcome lines cannot be read as version 1: %v", err)
 	}
+	os.Remove(fx.log.Name() + ".result") // as a settled worker leaves it for the next admission: no result without a status
 	return res, runErr
 }
 
@@ -463,10 +464,10 @@ func TestAManualUpdateBuildsPublishesAppliesAndSettles(t *testing.T) {
 		t.Fatalf("run = %v, want success", err)
 	}
 	s := fx.storeOf()
-	if got := storeMembers(t, s, "ip-set/Abuse/ipv4"); !slices.Equal(got, []string{"10.0.0.1", "10.0.1.1"}) {
+	if got := storeMembers(t, s, "ip-set/Abuse/ipv4"); !slices.Equal(got, []string{"93.184.216.1", "93.184.217.1"}) {
 		t.Errorf("ip-set/Abuse/ipv4 = %q, want both feeds' addresses", got)
 	}
-	if got := storeMembers(t, s, "ip-set/DNSBLIP/ipv4"); !slices.Equal(got, []string{"192.0.2.7"}) {
+	if got := storeMembers(t, s, "ip-set/DNSBLIP/ipv4"); !slices.Equal(got, []string{"151.101.1.7"}) {
 		t.Errorf("ip-set/DNSBLIP/ipv4 = %q, want the DNSBL feed's address", got)
 	}
 	for _, id := range []string{dnsbl.FeedPrefix + "D", dnsbl.FeedPrefix + "UT1_ads", dnsbl.ManifestID, "geo-catalog"} {
@@ -578,7 +579,7 @@ func TestTheExtrasRunBeforeTheFeedsAreChecked(t *testing.T) {
 	t.Cleanup(func() { extrasRun = prev })
 	extrasRun = func(_ *feedfetch.Fetcher, _ context.Context, v feedfetch.ExtrasVerb) (int, feedfetch.ExtrasResult) {
 		if v.Name == "dcc" {
-			touch(t, filepath.Join(fx.src, "A.txt"), "10.0.0.9\n")
+			touch(t, filepath.Join(fx.src, "A.txt"), "93.184.216.9\n")
 		}
 		return 0, feedfetch.ExtrasResult{OK: true}
 	}
@@ -586,7 +587,7 @@ func TestTheExtrasRunBeforeTheFeedsAreChecked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := storeMembers(t, fx.storeOf(), "ip-set/Abuse/ipv4"); !slices.Contains(got, "10.0.0.9") {
+	if got := storeMembers(t, fx.storeOf(), "ip-set/Abuse/ipv4"); !slices.Contains(got, "93.184.216.9") {
 		t.Errorf("ip-set/Abuse/ipv4 = %q, want A's address from after the Extra ran", got)
 	}
 	if res.Outcomes["extra:dcc"] != "success" || res.Outcomes["ipv4:A_v4"] != "success" {
@@ -600,11 +601,11 @@ func TestDNSBLIPIsBuiltFromTheDNSBLStageAndPublishedByTheIPStageInOneUpdate(t *t
 	if _, err := fx.run(t, manual()); err != nil {
 		t.Fatal(err)
 	}
-	touch(t, filepath.Join(fx.src, "D.txt"), "ads.example\n198.51.100.4\n")
+	touch(t, filepath.Join(fx.src, "D.txt"), "ads.example\n151.101.2.4\n")
 	if _, err := fx.run(t, Request{Trigger: "scheduled", Feeds: []string{"dnsbl:D"}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := storeMembers(t, fx.storeOf(), "ip-set/DNSBLIP/ipv4"); !slices.Equal(got, []string{"198.51.100.4"}) {
+	if got := storeMembers(t, fx.storeOf(), "ip-set/DNSBLIP/ipv4"); !slices.Equal(got, []string{"151.101.2.4"}) {
 		t.Errorf("ip-set/DNSBLIP/ipv4 = %q, want the address the DNSBL feed holds now", got)
 	}
 }
@@ -631,12 +632,12 @@ func TestAFailedFeedIsAddedThoughNotNamed(t *testing.T) {
 	if _, err := fx.run(t, manual()); err != nil {
 		t.Fatal(err)
 	}
-	touch(t, filepath.Join(fx.src, "B.txt"), "10.0.1.9\n")
+	touch(t, filepath.Join(fx.src, "B.txt"), "93.184.217.9\n")
 	touch(t, filepath.Join(fx.db, "original", "B_v4.fail"), "")
 	if _, err := fx.run(t, Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := storeMembers(t, fx.storeOf(), "ip-set/Abuse/ipv4"); !slices.Contains(got, "10.0.1.9") {
+	if got := storeMembers(t, fx.storeOf(), "ip-set/Abuse/ipv4"); !slices.Contains(got, "93.184.217.9") {
 		t.Errorf("ip-set/Abuse/ipv4 = %q, want B rebuilt for its fail marker", got)
 	}
 }
@@ -745,7 +746,7 @@ func TestOutsideTheApplyWindowTheApplyOnlyRecordsThePendingWork(t *testing.T) {
 	}
 	before := generation(t, fx.storeOf(), "ip-set/Abuse/ipv4")
 	os.Remove(filepath.Join(fx.hookDir, "post.json"))
-	touch(t, filepath.Join(fx.src, "A.txt"), "10.0.0.5\n")
+	touch(t, filepath.Join(fx.src, "A.txt"), "93.184.216.5\n")
 	fx.settings["ingest"]["applyWindow"] = outsideWindow(t)
 	fx.reply(t)
 	res, err := fx.run(t, Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}})
@@ -771,7 +772,7 @@ func TestOutsideTheApplyWindowTheApplyOnlyRecordsThePendingWork(t *testing.T) {
 	if _, err := fx.run(t, Request{Trigger: "apply"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := storeMembers(t, fx.storeOf(), "ip-set/Abuse/ipv4"); !slices.Contains(got, "10.0.0.5") {
+	if got := storeMembers(t, fx.storeOf(), "ip-set/Abuse/ipv4"); !slices.Contains(got, "93.184.216.5") {
 		t.Errorf("after the apply Update: %q, want A's pending change built", got)
 	}
 }
@@ -784,7 +785,7 @@ func TestAnApplyThatDefersMakesTheUpdateSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	touch(t, filepath.Join(fx.applyDir, "exit"), "75")
-	touch(t, filepath.Join(fx.src, "A.txt"), "10.0.0.6\n")
+	touch(t, filepath.Join(fx.src, "A.txt"), "93.184.216.6\n")
 	c := &Command{Path: filepath.Join(fx.applyDir, "apply.sh"), Loop: fx.loop()}
 	res, err := c.Run(context.Background(), Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}, fx.log)
 	if !errors.Is(err, ErrDeferred) {
@@ -799,7 +800,7 @@ func TestAnApplyThatDefersMakesTheUpdateSkipped(t *testing.T) {
 		t.Fatalf("the generation applied before is gone: %v", err)
 	}
 	// Nothing the deferred apply saw is a baseline: the next publication drops it.
-	touch(t, filepath.Join(fx.src, "A.txt"), "10.0.0.7\n")
+	touch(t, filepath.Join(fx.src, "A.txt"), "93.184.216.7\n")
 	if _, err := c.Run(context.Background(), Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}, fx.log); !errors.Is(err, ErrDeferred) {
 		t.Fatal(err)
 	}
