@@ -844,10 +844,19 @@ member. The rc script does not pass the flag.
   to `update.log.result` in the version 1 shape as each feed finishes; the Extras line also carries `attempted` and
   `"geoipReady": true`. The `--update-cmd` program is the Outpost apply: it runs once, with a version 2 request on stdin
   (also outside the apply window, with `pendingOutsideWindow: true`) and `update.log.apply` as its fd 3, read with the
-  version 2 rules; an Update the work list finds nothing due for runs no apply. Exit status 75 of the apply makes the
-  Update `skipped`, 2 fails it; what an apply that failed otherwise reported is settled before the Update fails. The
-  pending token handed to the apply is the Core Updater's own snapshot's. The Core Updater's own state, the feeds left
-  pending, is `updater.json` in the state directory.
+  version 2 rules. An Update the work list finds nothing due for runs the apply only while the store holds an `ip-set`,
+  `ip-aggregate` or `geo-catalog` generation, or a removal, no apply took; the request lists what the store holds, so
+  such an Update applies what an earlier one published. A narrow scope runs none of the other side's stages, as today:
+  an `ip` Update builds and publishes nothing of DNSBL, a `dnsbl` Update nothing of the IP sets. The `pre` hook fires
+  only when a pass runs. Exit status 75 of the apply makes the Update `skipped`, 2 fails it; what an apply that failed
+  otherwise reported is settled before the Update fails. The pending token handed to the apply is the Core Updater's own
+  snapshot's, as the settings read gave it: until the Outpost repairs a pending-changes marker that holds no valid token
+  (#3977, slice 10), such a marker makes the apply exit 2 on every Update. The Core Updater's own state is
+  `updater.json` in the state directory: the feeds left pending, which keep, until an Update's settle succeeds, the earlier
+  ones and every feed that Update ran. The Blacklist providers' `.update` markers and `geoip.update` are consumed only
+  once the settle succeeded, `geoip.update` only when no geoip-format feed failed or was out of scope. Departure: the
+  loop keeps DNSBL downloads in `dnsbl` under `dbDir`, where the PHP pass keeps them in `dnsblorig`, so its first run
+  downloads every DNSBL feed again; the cutover (#3977) decides.
 - **Lock.** In loop mode the worker itself holds the Update lock, and the apply's holder holds it too while the apply
   runs; killing the worker frees the lock while other processes it started may still run. The limit stays until
   sub-slice 9j-2 of issue #4038.
