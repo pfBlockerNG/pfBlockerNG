@@ -7,10 +7,13 @@ package update
 import (
 	"bytes"
 	"encoding/json"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -45,9 +48,13 @@ type e2eSandbox struct {
 	loop            *Loop
 	store           *resources.Store
 	log             *os.File
+	mu              sync.Mutex
+	auth            []string // the path and Authorization header of every request the feed server answered
 }
 
-func newE2ESandbox(t *testing.T, c e2eCase) *e2eSandbox {
+// newE2ESandbox serves the feeds on the loopback address 127.0.0.1, which the Fetcher reads as the box's own (no
+// credentials, no proxy), or on listen, an address of the loopback network that is not, as a remote feed host.
+func newE2ESandbox(t *testing.T, c e2eCase, listen string) *e2eSandbox {
 	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
@@ -55,7 +62,21 @@ func newE2ESandbox(t *testing.T, c e2eCase) *e2eSandbox {
 	}
 	sb := &e2eSandbox{dir: t.TempDir(), root: t.TempDir(), self: self, feeds: &e2eFeeds{bodies: map[string]e2eBody{}}}
 	sb.feeds.set(c.Serve)
-	sb.server = httptest.NewServer(sb.feeds)
+	sb.server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sb.mu.Lock()
+		sb.auth = append(sb.auth, r.URL.Path+" "+r.Header.Get("Authorization"))
+		sb.mu.Unlock()
+		sb.feeds.ServeHTTP(w, r)
+	}))
+	if listen != "" {
+		l, err := net.Listen("tcp", listen+":0")
+		if err != nil {
+			t.Fatalf("ENVIRONMENT: %s cannot be listened on: %v", listen, err)
+		}
+		sb.server.Listener.Close()
+		sb.server.Listener = l
+	}
+	sb.server.Start()
 	t.Cleanup(sb.server.Close)
 	t.Setenv(e2eEnv, sb.dir)
 	sb.loop = e2eLoop(t, sb.root, self)
@@ -196,7 +217,7 @@ func TestAKilledUpdateLeavesTheStoreWholeAndTheNextConverges(t *testing.T) {
 	const first, changed = 0, 2 // the first Update; the Update that changes ipv4:E2E1A_v4
 	var want string
 	t.Run("uninterrupted", func(t *testing.T) {
-		sb := newE2ESandbox(t, c)
+		sb := newE2ESandbox(t, c, "")
 		for _, i := range []int{first, changed} {
 			if err := sb.run(t, c, i); err != nil {
 				t.Fatalf("step %d: %v\n%s", i, err, logText(t, sb.log))
@@ -213,7 +234,7 @@ func TestAKilledUpdateLeavesTheStoreWholeAndTheNextConverges(t *testing.T) {
 	}
 	for _, at := range append(names, "end") {
 		t.Run(at, func(t *testing.T) {
-			sb := newE2ESandbox(t, c)
+			sb := newE2ESandbox(t, c, "")
 			if err := sb.run(t, c, first); err != nil {
 				t.Fatalf("the first Update: %v\n%s", err, logText(t, sb.log))
 			}
