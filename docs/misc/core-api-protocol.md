@@ -391,6 +391,9 @@ once and reads again, and the Update's start reads the backend again ([Update an
 | `proxyUnusable` | bool, `false` | A configured proxy that Core cannot represent; remote transfers refuse instead of bypassing it |
 | `scheduledWorkDisabled` | bool, `false` | The `.pfb_cron_disable` marker is a file (`pfb_cron_disabled()`); its content is ignored (issue #4031) |
 | `applyWindow` | string `HH:MM-HH:MM` (zero-padded, local time) or `""`; `""` | General `pfb_quiet_hours` as `pfb_quiet_hours_in_window()` reads it (`pfb_quiet_hours_bounds()`); `""` is no window (issue #4038) |
+| `skipFeedLimit` | int 0 to 6 (0: no limit), `0` | General `skipfeed`, the retry cap `pfb_update_check()` compares a feed's failed downloads today with (issue #4038) |
+| `feedSanity` | bool, `false` | General `pfb_feed_sanity` is `on`, the ADR-49 feed sanity scan (issue #4038) |
+| `pendingApply` (derived) | bool, `false` | The Outpost holds a change that waits for an apply: `pfb_core_update_pending_apply()` (issue #4038) |
 
 - **Suppression limits.** A limit beyond what the IP page offers (hand-edited config.xml: 18, 8.5, `1e1`, negative) reads as
   0, as a group's own `suppressionCidr` reads a value out of its range; today's PHP applies such a number as typed. A limit
@@ -417,6 +420,13 @@ once and reads again, and the Update's start reads the backend again ([Update an
   `InApplyWindow` also takes as no window. Parity fixture: `tests/core/fixtures/settings_apply_window_parity.json`, frozen by
   `CoreSettingsApplyWindowParityTest`; `go/pfb_core/settings/apply_window_parity_test.go` proves `InApplyWindow` on `applyWindow`
   decides as today's PHP on the stored value.
+- **Retry cap.** A value the General page and the wizard never write (hand-edited config.xml: 10, `03`, 2.5, negative) reads
+  as 0, no limit, as a suppression limit out of its range does; today's PHP compares such a value as typed (`-1` stops every
+  download of the feed). A non-numeric value or an array reads as 0, which is what today's comparison makes of it. Core counts a
+  feed's failed downloads from its own outcomes, not from the PHP error log.
+- **Pending apply.** What the Outpost answers, derived from the pending marker and the due ledger's `pending_apply`; Core never
+  reads `platform.pendingToken` to decide it. It moves the revision when it changes, so a Core that read before a change was
+  marked or applied reads again.
 - **Core refuses what it reads.** `proxyUrl` must use `http`, `https`, `socks5` or `socks5h` with a port from 1 to 65535 and no userinfo; a listed self address an IP address that is not unspecified, link-local, IPv4-mapped or zoned; an allowlist entry an address or a CIDR without a zone. A backend answer that breaks a rule fails the read ([Settings backends](#settings-backends)).
 
 Parity fixture: `tests/core/fixtures/settings_ingest_parity.json`. `CoreSettingsIngestParityTest` (PHPUnit) freezes it

@@ -5392,8 +5392,10 @@ function pfb_core_ingest_entry_valid(string $entry): bool {
  *
  * `scheduledWorkDisabled` is pfb_cron_disabled(). `applyWindow` is the apply window `gen/pfb_quiet_hours` as pfb_quiet_hours_bounds() reads it,
  * zero-padded, or '' for every value today's reader takes as no window (tests/core/fixtures/settings_apply_window_parity.json).
+ * `skipFeedLimit` is the retry cap `gen/skipfeed` (0: none) when it is one the General page offers, else 0. `feedSanity` is the ADR-49
+ * switch `gen/pfb_feed_sanity`. `pendingApply` is pfb_core_update_pending_apply(): Core never reads the pending token itself.
  *
- * @return array<string, mixed> the 14 fields, in the protocol's order
+ * @return array<string, mixed> the 17 fields, in the protocol's order
  */
 function pfb_core_ingest_settings(): array {
 	$on = static fn(string $key): bool => PfbConfig::read($key) === PfbToggle::On;
@@ -5416,6 +5418,9 @@ function pfb_core_ingest_settings(): array {
 	] + pfb_core_proxy_settings() + [
 		'scheduledWorkDisabled' => pfb_cron_disabled(),
 		'applyWindow'           => $window === NULL ? '' : sprintf('%02d:%02d-%02d:%02d', intdiv($window[0], 60), $window[0] % 60, intdiv($window[1], 60), $window[1] % 60),
+		'skipFeedLimit'         => (int) (pfb_schedule_numeric_token(pfb_core_table_text('gen/skipfeed'), 0, 6) ?? 0),
+		'feedSanity'            => $on('gen/pfb_feed_sanity'),
+		'pendingApply'          => pfb_core_update_pending_apply(),
 	];
 }
 
@@ -13338,8 +13343,10 @@ function pfb_clear_pending_changes(): void {
 }
 // An empty (unversioned) marker is always pending: a pass versions it before applying it.
 function pfb_pending_changes(): bool {
-	$version = @file_get_contents(pfb_pending_changes_marker());
-	return $version === '' || $version !== FALSE && $version !== @file_get_contents(pfb_pending_changes_marker() . '.applied');
+	// file_exists() first: the settings adapter answers this (ingest.pendingApply) and a read of no marker must not warn
+	$read = static fn(string $path): string|false => file_exists($path) ? @file_get_contents($path) : FALSE;
+	$version = $read(pfb_pending_changes_marker());
+	return $version === '' || $version !== FALSE && $version !== $read(pfb_pending_changes_marker() . '.applied');
 }
 
 /*
