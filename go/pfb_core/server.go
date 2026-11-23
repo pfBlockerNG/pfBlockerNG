@@ -18,6 +18,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/applied"
 )
 
 // docs/misc/core-api-protocol.md is the contract this file serves: POST /v1/<Method>, one JSON object in and out (a
@@ -60,10 +62,7 @@ var statusOf = map[string]int{
 	codeUnavailable:      http.StatusServiceUnavailable,
 }
 
-type fieldError struct {
-	Field   string `json:"field"`
-	Message string `json:"message"`
-}
+type fieldError = applied.FieldError
 
 // apiError is what a method returns to answer with the error envelope; any other error is answered as internal.
 type apiError struct {

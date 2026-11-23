@@ -161,7 +161,7 @@ func (fx *loopFixture) command() *Command {
 
 // The stage boundaries of spec section 3 from the snapshot on, in order (stage 17, the outcomes, is written as each feed
 // finishes and has no boundary of its own), then the end of the loop.
-var wantBoundaries = []string{"snapshot", "work-list", "pre-hook", "extras", "change-detection", "apply-window", "dnsbl",
+var wantBoundaries = []string{"snapshot", "work-list", "extras", "change-detection", "apply-window", "pre-hook", "dnsbl",
 	"dnsblip", "publish-dnsbl", "geoip-sets", "ip", "recompute", "suppression", "uber", "publish-ip", "apply", "post-hook",
 	"settle", "end"}
 

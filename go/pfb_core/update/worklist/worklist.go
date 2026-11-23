@@ -94,8 +94,8 @@ type Item struct {
 	// Stopped is why the feed is not run this Update (its folder could not be recovered, or a kept probe or a fail marker
 	// could not be handled): no change and no outcome, so the occurrence stays pending.
 	Stopped string
-	// Marker is a Blacklist category's provider update marker: the caller removes it once every category of the provider
-	// ran without failing, as today's pass consumes it.
+	// Marker is a Blacklist category's provider update marker, when it exists: the caller removes it once every category
+	// of the provider ran without failing or stopping, as today's pass consumes it.
 	Marker string
 }
 
@@ -432,14 +432,14 @@ func (b *builder) walk(cands []candidate, forceAll bool, pending map[string]bool
 // prepare is the item of a feed with change, its kept probe body dropped when it was fetched for another source. A feed it
 // cannot prepare is stopped, with no change.
 func (b *builder) prepare(c candidate, change feedstage.Change) Item {
-	if c.stop != "" {
-		return Item{Feed: c.feed, Stopped: c.stop}
-	}
-	if source, ok := probeIdentity(c); ok && dropStaleProbe(c, source) != nil {
-		return Item{Feed: c.feed, Stopped: "probe_unavailable"}
-	}
 	item := Item{Feed: c.feed, Change: change}
-	if c.downloaded() {
+	switch source, ok := probeIdentity(c); {
+	case c.stop != "":
+		item = Item{Feed: c.feed, Stopped: c.stop}
+	case ok && dropStaleProbe(c, source) != nil:
+		item = Item{Feed: c.feed, Stopped: "probe_unavailable"}
+	}
+	if c.marker != "" && present(c.marker) {
 		item.Marker = c.marker
 	}
 	return item
@@ -557,6 +557,7 @@ type listed struct {
 	feedstage.Feed
 	walked bool
 	marker string
+	taken  bool // a Blacklist category whose feed name a configured DNSBL feed holds
 }
 
 // feeds are the feeds of the scope's kinds in today's walk order: IPv4, IPv6, DNSBL, groups and rows in config order,
@@ -575,23 +576,28 @@ func (b *builder) feeds(scope string) []listed {
 			walked := text(group, "updateFrequency") != "Never"
 			for _, row := range list(group, "feeds") {
 				if text(row, "state") != "disabled" && text(row, "url") != "" {
-					out = append(out, listed{feedFor(kind, group, row), walked, ""})
+					out = append(out, listed{Feed: feedFor(kind, group, row), walked: walked})
 				}
 			}
 			if custom := text(group, "customList"); custom != "" {
-				out = append(out, listed{customFeedFor(kind, group, custom), false, ""})
+				out = append(out, listed{Feed: customFeedFor(kind, group, custom)})
 			}
 		}
 	}
 	if scope != "ip" {
-		out = append(out, b.categories()...)
+		for _, c := range b.categories() {
+			c.taken = slices.ContainsFunc(out, func(l listed) bool { return l.Kind == "dnsbl" && l.Name == c.Name })
+			out = append(out, c)
+		}
 	}
 	return out
 }
 
-// categories are the selected Blacklist categories as DNSBL feeds, provider by provider in settings order (today's
-// $lists, pfblockerng_apply.inc): "<title>_<category>", a dash of the category an underscore, read from the local file
-// <BlacklistDir>/<id>/<id>_<category>. A title that is no word stops its categories (feed_name_invalid).
+// categories are the selected Blacklist categories as DNSBL feeds "blacklist:<id>:<category>", provider by provider in
+// settings order (today's $lists, pfblockerng_apply.inc), each named "<title>_<category>", a dash of the category an
+// underscore, and read from the local file <BlacklistDir>/<id>/<id>_<category>. A title that is no word stops its
+// categories (feed_name_invalid); a name a configured DNSBL feed holds stops the category (feed_name_taken), so it is never
+// run against that feed's files.
 func (b *builder) categories() []listed {
 	schedule := b.in.Settings["schedule"]
 	if on, _ := schedule["categoryUpdates"].(bool); !on || b.in.BlacklistDir == "" {
@@ -604,13 +610,14 @@ func (b *builder) categories() []listed {
 			continue
 		}
 		dir := filepath.Join(b.in.BlacklistDir, id)
-		for _, category := range strings.Split(text(p, "categories"), ",") {
-			if category = strings.ReplaceAll(category, "-", "_"); category == "" || strings.ContainsAny(category, "/") {
+		for _, raw := range strings.Split(text(p, "categories"), ",") {
+			category := strings.ReplaceAll(raw, "-", "_")
+			if category == "" || strings.ContainsAny(category, "/") {
 				continue
 			}
 			name := text(p, "title") + "_" + category
-			out = append(out, listed{feedstage.Feed{ID: "dnsbl:" + name, Kind: "dnsbl", Name: name, State: "enabled", Format: "auto",
-				Source: "file://" + filepath.Join(dir, id+"_"+category)}, false, filepath.Join(dir, id+".update")})
+			out = append(out, listed{Feed: feedstage.Feed{ID: "blacklist:" + id + ":" + raw, Kind: "dnsbl", Name: name, State: "enabled",
+				Format: "auto", Source: "file://" + filepath.Join(dir, id+"_"+category)}, marker: filepath.Join(dir, id+".update")})
 		}
 	}
 	return out
@@ -636,6 +643,8 @@ func (b *builder) candidates(scope string, want func(id string) bool) ([]candida
 			b.recovered[c.dir] = err
 		}
 		switch {
+		case f.taken:
+			c.stop = "feed_name_taken"
 		case !feedstage.ValidName(f.Name):
 			c.stop = "feed_name_invalid"
 		case err != nil:

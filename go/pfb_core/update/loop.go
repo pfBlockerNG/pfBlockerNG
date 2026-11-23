@@ -88,15 +88,16 @@ const maxFailure = 300
 // "end" after the last. Production never sets it.
 var boundary = func(name string) {}
 
-// stages are the Core Updater's stages from the snapshot on, in the spec's order; a nil run is a stage another one runs:
+// stages are the Core Updater's stages from the snapshot on, in the spec's order, but for the pre hook, which fires where
+// today's pass fires it, once the work list has decided a pass runs; a nil run is a stage another one runs:
 // DNSBLIP is built by the DNSBL build of publish-dnsbl, and the recompute, the suppression and the Uber unions by the IP
 // sets of publish-ip. Stage 17, the feed outcomes, is written as each feed finishes and has no boundary.
 var stages = []struct {
 	name string
 	run  func(*updater) error
 }{
-	{"snapshot", (*updater).snapshot}, {"work-list", (*updater).workList}, {"pre-hook", (*updater).preHook},
-	{"extras", (*updater).extrasStage}, {"change-detection", (*updater).changeDetection}, {"apply-window", (*updater).applyWindow},
+	{"snapshot", (*updater).snapshot}, {"work-list", (*updater).workList}, {"extras", (*updater).extrasStage},
+	{"change-detection", (*updater).changeDetection}, {"apply-window", (*updater).applyWindow}, {"pre-hook", (*updater).preHook},
 	{"dnsbl", (*updater).dnsblStage}, {"dnsblip", nil}, {"publish-dnsbl", (*updater).publishDNSBLStage},
 	{"geoip-sets", (*updater).geoSets}, {"ip", (*updater).ipStage}, {"recompute", nil}, {"suppression", nil}, {"uber", nil},
 	{"publish-ip", (*updater).publishIP}, {"apply", (*updater).applyStage}, {"post-hook", (*updater).postHook},

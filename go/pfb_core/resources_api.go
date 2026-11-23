@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/applied"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
 )
 
@@ -38,10 +39,7 @@ type bodyStream struct {
 	size int64
 }
 
-type resourceCursor struct {
-	Generation *string `json:"generation"`
-	Digest     *string `json:"digest"`
-}
+type resourceCursor = applied.Cursor
 
 // resourceMethods is GetResources and GetResourceBody over store, read-only. Without a store (no --resource-dir) they answer
 // unavailable. A further local client (pfb-dns) reads only the dnsbl/* resources: to it no other resource exists.
@@ -197,32 +195,7 @@ func resourceBody(store *resources.Store, params []byte, client bool) (any, erro
 	return &bodyStream{f: f, size: size}, nil
 }
 
-// parseResourceCursor is id's cursor (nil: none) or the field errors of the id or the cursor. A null field is absent. A field
-// name carries the id as given, which passed resources.ValidID or was reported as "a key is not a resource id" alone.
+// parseResourceCursor is id's cursor (nil: none) or the field errors of the id or the cursor (applied.ParseCursor).
 func parseResourceCursor(id string, c *resourceCursor) (*resources.Cursor, []fieldError) {
-	field := "resources." + id + "."
-	switch {
-	case !resources.ValidID(id): // never quoted: a key may be as long as the body
-		return nil, []fieldError{{Field: "resources", Message: "a key is not a resource id"}}
-	case c == nil:
-		return nil, []fieldError{{Field: "resources", Message: fmt.Sprintf("the cursor of %q must be a JSON object", id)}}
-	case c.Generation == nil && c.Digest == nil:
-		return nil, nil
-	case c.Generation == nil:
-		return nil, []fieldError{{Field: field + "generation", Message: "required with digest"}}
-	case c.Digest == nil:
-		return nil, []fieldError{{Field: field + "digest", Message: "required with generation"}}
-	}
-	var bad []fieldError
-	g, err := strconv.ParseUint(*c.Generation, 10, 64)
-	if err != nil {
-		bad = append(bad, fieldError{Field: field + "generation", Message: "must be a string of decimal digits that fits 64 bits"})
-	}
-	if d := *c.Digest; len(d) != 32 || strings.Trim(d, "0123456789abcdef") != "" {
-		bad = append(bad, fieldError{Field: field + "digest", Message: "must be 32 lower-case hexadecimal characters"})
-	}
-	if bad != nil {
-		return nil, bad
-	}
-	return &resources.Cursor{Generation: g, Digest: *c.Digest}, nil
+	return applied.ParseCursor(id, c)
 }

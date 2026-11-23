@@ -1,7 +1,6 @@
 package update
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -15,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,6 +22,7 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/geoip"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/hooks"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/applied"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/ipset"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/schedule"
@@ -218,13 +217,14 @@ func extrasSettings(snap map[string]map[string]any) feedfetch.ExtrasSettings {
 	return s
 }
 
-// hookTrigger is pfb_req_to_hook_trigger() of the request: a manual Update is update, its Force Reload force-reload;
-// any other Update is cron.
+// hookTrigger is the trigger today's pass gives its hooks (pfb_req_to_hook_trigger()): a manual Update is update, its
+// Force Reload force-reload; an apply Update is update too, as pfb_core_update_apply() runs the pass as a manual one
+// (pfblockerng_extra.inc); any other Update is cron.
 func (u *updater) hookTrigger() string {
 	switch {
 	case u.req.Trigger == "manual" && u.req.Force == "parse":
 		return "force-reload"
-	case u.req.Trigger == "manual" && (u.req.Force == "none" || u.req.Force == ""):
+	case u.req.Trigger == "manual" && (u.req.Force == "none" || u.req.Force == ""), u.req.Trigger == "apply":
 		return "update"
 	}
 	return "cron"
@@ -239,9 +239,12 @@ func (u *updater) hooks(ctx context.Context, when string, vars map[string]string
 	runner.Run(ctx, when, hooks.Rows(u.snap["hooks"]), hooks.Context{Lifecycle: u.req.Lifecycle, PkgOp: u.req.PkgOp, Vars: vars})
 }
 
-// preHook is stage 4.
+// preHook is stage 4, where today's pass fires it: at its top, so only when a pass runs (not when nothing is due, nor
+// outside the apply window).
 func (u *updater) preHook() error {
-	u.hooks(context.Background(), "pre", map[string]string{})
+	if u.building() {
+		u.hooks(context.Background(), "pre", map[string]string{})
+	}
 	return nil
 }
 
@@ -288,8 +291,8 @@ func (u *updater) changeDetection() error {
 		}
 	}
 	_, manifestErr := u.store.Get(dnsbl.ManifestID, nil)
-	// A manual request without a scope or a force is both and none, as the update program reads it.
-	plan, err := worklist.Build(context.Background(), worklist.Input{Trigger: u.req.Trigger, Scope: cmp.Or(u.req.Scope, "both"),
+	// A manual request without a force is none, as the update program reads it.
+	plan, err := worklist.Build(context.Background(), worklist.Input{Trigger: u.req.Trigger, Scope: u.scope(),
 		Force: cmp.Or(u.req.Force, "none"),
 		Feeds: u.req.Feeds, PendingFeeds: u.pending, Settings: u.snap, Stages: u.stages,
 		InWindow:      schedule.InApplyWindow(time.Now().Unix(), settingText(u.snap["ingest"], "applyWindow"), zone),
@@ -300,6 +303,18 @@ func (u *updater) changeDetection() error {
 		return err
 	}
 	u.plan = plan
+	// Until the settle succeeds, the earlier pending feeds and every feed this Update runs stay pending: an apply that
+	// defers or fails, or a stage that fails, leaves them to the next Update.
+	held := slices.Concat(u.pending, plan.PendingFeeds)
+	for _, item := range plan.Items {
+		if item.Stopped == "" && !slices.Contains(held, item.Feed.ID) {
+			held = append(held, item.Feed.ID)
+		}
+	}
+	slices.Sort(held)
+	if err := u.pendingAfter(slices.Compact(held)); err != nil {
+		return err
+	}
 	for _, item := range plan.Items {
 		if item.Stopped != "" {
 			u.issues = append(u.issues, apply.Issue{Resource: u.issueResource(item.Feed), Stage: "download", Code: item.Stopped,
@@ -329,10 +344,36 @@ func (u *updater) applyWindow() error {
 // building is whether this Update builds and publishes: stages 8 to 16.
 func (u *updater) building() bool { return u.plan.Decision == worklist.Now }
 
+// scope is the Update's scope: a manual Update's, both for any other. A narrow scope runs none of the other side's
+// stages, as today.
+func (u *updater) scope() string {
+	if u.req.Trigger != "manual" {
+		return "both"
+	}
+	return cmp.Or(u.req.Scope, "both")
+}
+
+// pendingAfter writes the Updater's state: the feeds left to a later Update.
+func (u *updater) pendingAfter(feeds []string) error {
+	b, err := json.Marshal(updaterState{PendingFeeds: feeds})
+	if err != nil {
+		return err
+	}
+	return writeList(filepath.Join(u.stateDir, updaterStateName), string(b))
+}
+
 // runFeeds is the per-feed stage of every item of kinds, in work-list order, each outcome written once its feed ends.
 func (u *updater) runFeeds(kinds ...string) error {
 	for _, item := range u.plan.Items {
-		if !slices.Contains(kinds, item.Feed.Kind) || item.Stopped != "" {
+		if !slices.Contains(kinds, item.Feed.Kind) {
+			continue
+		}
+		if item.Stopped != "" {
+			// a stopped category keeps its provider's marker; a stopped geoip-format feed keeps the MaxMind marker
+			if item.Marker != "" {
+				u.markers[item.Marker] = true
+			}
+			u.geoFailed = u.geoFailed || item.Feed.Format == "geoip"
 			continue
 		}
 		r := u.stages[item.Feed.Kind].Run(context.Background(), item.Feed, item.Change)
@@ -380,20 +421,10 @@ func (u *updater) issueResource(f feedstage.Feed) string {
 
 // dnsblStage is stage 8's per-feed part; the group-level part runs with the publication (stage 10).
 func (u *updater) dnsblStage() error {
-	if !u.building() {
+	if !u.building() || u.scope() == "ip" {
 		return nil
 	}
-	if err := u.runFeeds("dnsbl"); err != nil {
-		return err
-	}
-	for marker, failed := range u.markers {
-		if !failed {
-			if err := os.Remove(marker); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return err
-			}
-		}
-	}
-	return nil
+	return u.runFeeds("dnsbl")
 }
 
 // foldDNSBL folds what pfB-DNS reported applied (applied.json) into the store's dnsbl/* baselines, before each dnsbl/*
@@ -401,16 +432,25 @@ func (u *updater) dnsblStage() error {
 // bodies pfB-DNS serves. While DNSBL is off the report is stale: an empty one is folded, which deletes every removed
 // dnsbl/* body (plan section C, row 10).
 func (u *updater) foldDNSBL() error {
-	report := readAppliedReport(u.stateDir)
+	report, err := applied.Read(u.stateDir) // a record the Core API would refuse folds nothing
+	if err != nil {
+		u.sinks.Line(true, "Core Updater: the applied report is not used: %s\n", oneLine(err))
+		report = nil
+	}
 	if !u.dnsblActive() {
 		report = map[string]resources.Cursor{}
 	}
 	return u.store.FoldApplied("dnsbl/", report)
 }
 
-// publishDNSBLStage is stages 9 and 10: DNSBLIP and the dnsbl/* publication, through the DNSBL build.
+// publishDNSBLStage is stages 9 and 10: DNSBLIP and the dnsbl/* publication, through the DNSBL build. An ip Update builds
+// none of it: the IP sets take DNSBLIP's lists as the last DNSBL build wrote them.
 func (u *updater) publishDNSBLStage() error {
 	if !u.building() {
+		return nil
+	}
+	if u.scope() == "ip" {
+		u.dnsblOut.DNSBLIP = standingDNSBLIP(u.snap, u.loop.DBDir)
 		return nil
 	}
 	if err := u.foldDNSBL(); err != nil {
@@ -426,7 +466,7 @@ func (u *updater) publishDNSBLStage() error {
 
 // geoSets is stage 11.
 func (u *updater) geoSets() error {
-	if !u.building() {
+	if !u.building() || u.scope() == "dnsbl" {
 		return nil
 	}
 	sets, err := GeoSets{CCDir: u.ccDir(), OrigDir: u.db("original"), Folders: u.folders(), Enabled: true,
@@ -451,33 +491,30 @@ func (u *updater) folders() map[string]string {
 	return map[string]string{"deny": u.db("deny"), "permit": u.db("permit"), "match": u.db("match"), "native": u.db("native")}
 }
 
-// ipStage is stage 12's per-feed part. The MaxMind marker is consumed once the continent sets and the geoip-format feeds
-// built from the new country lists have succeeded.
+// ipStage is stage 12's per-feed part.
 func (u *updater) ipStage() error {
-	if !u.building() {
+	if !u.building() || u.scope() == "dnsbl" {
 		return nil
 	}
-	if err := u.runFeeds("ipv4", "ipv6"); err != nil {
-		return err
-	}
-	if !u.geoFailed {
-		return u.extras.ClearGeoIPUpdate()
-	}
-	return nil
+	return u.runFeeds("ipv4", "ipv6")
 }
 
 // publishIP is stages 13 to 16: the IP sets (recompute, suppression, the canonical sets and the Uber unions run inside
 // IPSets.Build), the closing report, and the geo-catalog.
 func (u *updater) publishIP() error {
-	if !u.building() {
+	if !u.building() || u.scope() == "dnsbl" {
 		return nil
 	}
 	sets := IPSets{FeedDirs: map[string]string{"ipv4": u.db("original"), "ipv6": u.db("original")}, Folders: u.folders(),
 		StateDir: u.stateDir, Store: u.store}
 	geo, closer, err := CountryLookup(filepath.Join(u.loop.GeoIPDir, "GeoLite2-Country.mmdb"))
-	if err == nil {
+	switch {
+	case err == nil:
 		defer closer.Close()
 		sets.Geo = geo
+	case !errors.Is(err, fs.ErrNotExist): // no database is no lookup, as today; one that cannot be read is an issue
+		u.issues = append(u.issues, apply.Issue{Resource: "geoip", Stage: "dedup", Code: "country_lookup_failed",
+			Message: "the MaxMind country database cannot be opened: dMax and the reputation stage run without a country lookup"})
 	}
 	out, err := sets.Build(context.Background(), IPInput{Settings: u.snap, Changed: u.changed, GeoSets: u.geoSetsOut,
 		DNSBLIP: u.dnsblOut.DNSBLIP})
@@ -526,42 +563,76 @@ func (u *updater) closing(s *ipset.Sanity) {
 	}
 }
 
-// request is the apply's version 2 request: what this Update published, within its scope, or, outside the window, the
-// pending mark alone. The token is the Updater's own snapshot's.
-func (u *updater) request() apply.Request {
-	scope := u.req.Scope
-	if u.req.Trigger != "manual" || scope == "" {
-		scope = "both"
-	}
+// request is the apply's version 2 request: every ip-set, ip-aggregate and the geo-catalog the store holds, and every
+// removal, within the scope; or, outside the window, the pending mark alone. Taken from the store, it also hands the apply
+// what an earlier Update published and no apply took. The token is the Updater's own snapshot's.
+func (u *updater) request() (apply.Request, error) {
 	outside := u.plan.Decision == worklist.Pending
-	r := apply.Request{Trigger: u.req.Trigger, Scope: scope, PendingOutsideWindow: outside, Issues: u.issues,
+	r := apply.Request{Trigger: u.req.Trigger, Scope: u.scope(), PendingOutsideWindow: outside, Issues: u.issues,
 		PendingToken: u.token}
-	if !u.building() {
-		return r
+	if outside {
+		return r, nil
 	}
-	if scope != "dnsbl" {
-		r.Resources, r.Removed = slices.Clone(u.ipOut.Resources), u.ipOut.Removed
-		if u.catalog != nil {
-			r.Resources = append(r.Resources, *u.catalog)
+	if r.Scope != "dnsbl" {
+		for _, prefix := range []string{"geo-catalog", "ip-aggregate/", "ip-set/"} {
+			ids, err := u.store.IDs(prefix)
+			if err != nil {
+				return r, err
+			}
+			for _, id := range ids {
+				reply, err := u.store.Get(id, nil)
+				if err != nil {
+					return r, err
+				}
+				var meta struct {
+					Action    string   `json:"action"`
+					Direction []string `json:"direction"`
+				}
+				if err := json.Unmarshal(reply.Metadata, &meta); err != nil {
+					return r, err
+				}
+				res := apply.Resource{ID: id, Generation: reply.Generation}
+				if id != "geo-catalog" {
+					res.Action, res.Direction, res.Entries = meta.Action, meta.Direction, reply.Entries
+				}
+				r.Resources = append(r.Resources, res)
+			}
+			removed, err := u.store.RemovedIDs(prefix)
+			if err != nil {
+				return r, err
+			}
+			r.Removed = append(r.Removed, removed...)
 		}
 	}
-	if scope != "ip" {
+	if r.Scope != "ip" {
 		r.DNSBL = u.dnsblOut.DNSBL
 	}
-	return r
+	return r, nil
 }
 
 // applyStage is stage 18: the one invocation of the Outpost apply, through the holder that keeps the Update lock while the
 // apply runs (process.RunIndependent: never signalled). Its stdin is the request, its fd 3 a result file of its own,
 // update.log.apply, read with the version 2 rules. Its state is saved first: the plan's pending feeds.
 func (u *updater) applyStage() error {
-	if err := writeList(filepath.Join(u.stateDir, updaterStateName), mustJSON(updaterState{PendingFeeds: u.plan.PendingFeeds})); err != nil {
+	if u.plan.Decision == worklist.Nothing {
+		// Nothing is due, but the store may hold what an earlier Update published and no apply took: it is applied now.
+		waiting := false
+		for _, prefix := range []string{"geo-catalog", "ip-aggregate/", "ip-set/"} {
+			ids, err := u.store.Unapplied(prefix)
+			if err != nil {
+				return err
+			}
+			waiting = waiting || len(ids) > 0
+		}
+		if !waiting {
+			return nil
+		}
+		u.sinks.Line(false, "Core Updater: the store holds generations no apply took: the apply runs\n")
+	}
+	req, err := u.request()
+	if err != nil {
 		return err
 	}
-	if u.plan.Decision == worklist.Nothing {
-		return nil
-	}
-	req := u.request()
 	body, err := apply.Encode(req)
 	if err != nil {
 		return fmt.Errorf("the apply request cannot be written: %w", err)
@@ -655,49 +726,25 @@ func (u *updater) settle() error {
 	if u.store != nil {
 		errs = append(errs, u.foldDNSBL(), u.store.Sweep())
 	}
-	return errors.Join(append(errs, u.applyErr)...)
-}
-
-func mustJSON(v any) string {
-	b, _ := json.Marshal(v)
-	return string(b)
-}
-
-// readAppliedReport is the report pfB-DNS made (ReportApplied, recorded in applied.json in the state folder), as the
-// Core API's readApplied reads it: nil without the file or when it cannot be taken whole, which folds nothing.
-func readAppliedReport(stateDir string) map[string]resources.Cursor {
-	f, err := os.OpenFile(filepath.Join(stateDir, "applied.json"), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
+	if err := errors.Join(append(errs, u.applyErr)...); err != nil {
+		return err
+	}
+	// Settled: the plan's pending feeds stand, and the markers whose consumers all succeeded are consumed.
+	if err := u.pendingAfter(u.plan.PendingFeeds); err != nil {
+		return err
+	}
+	if !u.building() {
 		return nil
 	}
-	defer f.Close()
-	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
-		return nil
-	}
-	raw, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
-	if err != nil || len(raw) > 1<<20 {
-		return nil
-	}
-	var rec struct {
-		Format    int `json:"format"`
-		Resources map[string]struct {
-			Generation string `json:"generation"`
-			Digest     string `json:"digest"`
-		} `json:"resources"`
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if dec.Decode(&rec) != nil || rec.Format != 1 || rec.Resources == nil {
-		return nil
-	}
-	report := map[string]resources.Cursor{}
-	for id, c := range rec.Resources {
-		g, err := strconv.ParseUint(c.Generation, 10, 64)
-		if err != nil || !resources.ValidID(id) || !strings.HasPrefix(id, "dnsbl/") || len(c.Digest) != 32 ||
-			strings.Trim(c.Digest, "0123456789abcdef") != "" {
-			return nil
+	for marker, failed := range u.markers {
+		if !failed {
+			if err := os.Remove(marker); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
 		}
-		report[id] = resources.Cursor{Generation: g, Digest: c.Digest}
 	}
-	return report
+	if u.scope() != "dnsbl" && !u.geoFailed {
+		return u.extras.ClearGeoIPUpdate()
+	}
+	return nil
 }
