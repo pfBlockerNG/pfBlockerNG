@@ -302,7 +302,7 @@ func (u *updater) changeDetection() error {
 	u.plan = plan
 	for _, item := range plan.Items {
 		if item.Stopped != "" {
-			u.issues = append(u.issues, apply.Issue{Resource: "feed/" + item.Feed.ID, Stage: "download", Code: item.Stopped,
+			u.issues = append(u.issues, apply.Issue{Resource: u.issueResource(item.Feed), Stage: "download", Code: item.Stopped,
 				Message: "the feed is not run this Update"})
 		}
 		// A feed the stage does not run now finished with its check.
@@ -341,7 +341,7 @@ func (u *updater) runFeeds(kinds ...string) error {
 			u.changed[item.Feed.Name] = true
 		case "failed":
 			stage := map[string]string{"script": "script", "parse": "parse", "normalize": "parse", "publish": "parse"}[r.Stage]
-			u.issues = append(u.issues, apply.Issue{Resource: "feed/" + item.Feed.ID, Stage: cmp.Or(stage, "download"), Code: cmp.Or(r.Reason, "feed_failed"),
+			u.issues = append(u.issues, apply.Issue{Resource: u.issueResource(item.Feed), Stage: cmp.Or(stage, "download"), Code: cmp.Or(r.Reason, "feed_failed"),
 				Message: "the feed failed at its " + cmp.Or(r.Stage, "run") + " stage; its last list stays"})
 			if item.Feed.Format == "geoip" {
 				u.geoFailed = true
@@ -357,6 +357,25 @@ func (u *updater) runFeeds(kinds ...string) error {
 		}
 	}
 	return nil
+}
+
+// issueResource is what a feed's issue names: an IP feed's group set, as the ADR-61 ledger names the table today
+// ("pfB_<group>_v4"); a DNSBL feed, or an IP feed whose group maps to no set, by its feed id.
+func (u *updater) issueResource(f feedstage.Feed) string {
+	if f.Kind == "dnsbl" {
+		return "feed/" + f.ID
+	}
+	suffix := "_" + short(f.Kind)
+	for _, g := range rows(u.snap["feeds/"+f.Kind]["groups"]) {
+		owns := str(g, "name")+"_custom"+suffix == f.Name
+		for _, row := range rows(g["feeds"]) {
+			owns = owns || str(row, "header")+suffix == f.Name
+		}
+		if id, ok := apply.SetID(str(g, "name"), f.Kind); owns && ok {
+			return id
+		}
+	}
+	return "feed/" + f.ID
 }
 
 // dnsblStage is stage 8's per-feed part; the group-level part runs with the publication (stage 10).
