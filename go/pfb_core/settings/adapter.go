@@ -58,7 +58,7 @@ type reply struct {
 	Settings map[string]map[string]json.RawMessage `json:"settings"`
 	Platform *struct {
 		PendingToken json.RawMessage `json:"pendingToken"`
-		PendingApply bool            `json:"pendingApply"`
+		PendingApply json.RawMessage `json:"pendingApply"` // absent is false; present, a JSON bool (null is no bool)
 	} `json:"platform"`
 	Error *replyError `json:"error"`
 }
@@ -73,7 +73,14 @@ func (a *AdapterBackend) Read(ctx context.Context) (Stored, error) {
 	}
 	stored := Stored{Initialized: true, Revision: r.Revision, Projections: r.Settings}
 	if r.Platform != nil {
-		stored.PendingToken, stored.PendingApply = r.Platform.PendingToken, r.Platform.PendingApply
+		stored.PendingToken = r.Platform.PendingToken
+		switch string(r.Platform.PendingApply) {
+		case "", "false":
+		case "true":
+			stored.PendingApply = true
+		default:
+			return Stored{}, backendErr("platform.pendingApply is not a JSON bool")
+		}
 	}
 	return stored, nil
 }
