@@ -40,14 +40,17 @@ var loopProjections = []string{"dns", "feeds/ipv4", "feeds/ipv6", "feeds/dnsbl",
 	"policy/dnsbl", "extras", "hooks"}
 
 // updaterStateName is the Core Updater's own state in Core's state folder: the feeds earlier Updates left to the apply
-// (worklist.Plan.PendingFeeds), and what the last apply that ran to its end was requested to load and remove. It holds no
-// setting.
+// (worklist.Plan.PendingFeeds), what the last apply that ran to its end was requested to load and remove, and each feed's
+// failed downloads on the day FailuresDay (local date), which the retry cap ingest.skipFeedLimit is compared with. It holds
+// no setting.
 const updaterStateName = "updater.json"
 
 type updaterState struct {
 	PendingFeeds     []string          `json:"pendingFeeds"`
 	Requested        map[string]uint64 `json:"requested,omitempty"`
 	RequestedRemoved []string          `json:"requestedRemoved,omitempty"`
+	FailuresDay      string            `json:"failuresDay,omitempty"`
+	Failures         map[string]int    `json:"failures,omitempty"` // feed name -> failed downloads on FailuresDay
 }
 
 // readUpdaterState is the Updater's state in dir; a missing or unreadable one is empty: a change no Update built left its
@@ -173,7 +176,7 @@ func (u *updater) fetcher() (*feedfetch.Fetcher, error) {
 	// the country folder holds the lists geoip-format feeds read as local files
 	f := &feedfetch.Fetcher{Policy: feedfetch.Policy{NoFilter: !flag(ingest, "feedHostFilter"),
 		LocalDirs: append(slices.Clone(u.loop.FeedLocalDirs), u.ccDir())},
-		UserAgent: u.loop.UserAgent, RsyncBin: u.loop.RsyncBin, ProxyUnusable: flag(ingest, "proxyUnusable"),
+		UserAgent: u.loop.UserAgent, RsyncBin: u.loop.RsyncBin, ProxyUnusable: flag(ingest, "proxyUnusable"), Sanity: flag(ingest, "feedSanity"),
 		ASNCSV: filepath.Join(u.loop.GeoIPDir, "asn.csv"), ETDir: u.db("ET"), ETMatchFile: u.db("match", "generated", "pfB_Match_ET_v4.txt")}
 	for _, p := range rows(u.snap["schedule"]["categoryProviders"]) {
 		if id := str(p, "id"); id != "" && !strings.ContainsAny(id, "/.") {
@@ -302,12 +305,17 @@ func (u *updater) changeDetection() error {
 	// A manual request without a force is none, as the update program reads it.
 	u.zone = zone
 	u.inWindow = schedule.InApplyWindow(loopNow().Unix(), settingText(u.snap["ingest"], "applyWindow"), zone)
+	// The failed downloads of today only, as pfb_failures() greps the error log for today's date.
+	if day := loopNow().In(zone).Format(time.DateOnly); u.state.FailuresDay != day {
+		u.state.FailuresDay, u.state.Failures = day, nil
+	}
 	plan, err := worklist.Build(context.Background(), worklist.Input{Trigger: u.req.Trigger, Scope: u.scope(),
 		Force: cmp.Or(u.req.Force, "none"),
 		Feeds: u.req.Feeds, PendingFeeds: u.pending, Settings: u.snap, Stages: u.stages,
 		InWindow:      u.inWindow,
-		ExtrasChanged: u.extrasOut.Changed,
-		GeoIPChanged:  u.geoMarker || u.extrasOut.GeoIPChanged, BlacklistDir: u.loop.DBDir,
+		ExtrasChanged: u.extrasOut.Changed, PendingApply: u.settings.PendingApply(),
+		SkipFeed: num(u.snap["ingest"], "skipFeedLimit"), Failures: u.state.Failures,
+		GeoIPChanged: u.geoMarker || u.extrasOut.GeoIPChanged, BlacklistDir: u.loop.DBDir,
 		ManifestMissing: u.dnsblActive() && errors.Is(manifestErr, resources.ErrNotFound)})
 	if err != nil {
 		return err
@@ -392,6 +400,16 @@ func (u *updater) runFeeds(kinds ...string) error {
 			continue
 		}
 		r := u.stages[item.Feed.Kind].Run(context.Background(), item.Feed, item.Change)
+		// A failed transfer counts against the retry cap, as pfb_download_failure() logs its FAIL line; a cancelled one does not.
+		if r.Disposition == "failed" && r.Stage == "fetch" && r.Reason != "cancelled" {
+			if u.state.Failures == nil {
+				u.state.Failures = map[string]int{}
+			}
+			u.state.Failures[item.Feed.Name]++
+			if err := u.saveState(); err != nil {
+				return err
+			}
+		}
 		switch r.Disposition {
 		case "changed", "reparsed":
 			u.changed[item.Feed.Name] = true

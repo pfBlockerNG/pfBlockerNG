@@ -428,7 +428,11 @@ once and reads again, and the Update's start reads the backend again ([Update an
 - **Retry cap.** A value the General page and the wizard never write (hand-edited config.xml: 10, `03`, 2.5, negative) reads
   as 0, no limit, as a suppression limit out of its range does; today's PHP compares such a value as typed (`-1` stops every
   download of the feed). A non-numeric value or an array reads as 0, which is what today's comparison makes of it. Core counts a
-  feed's failed downloads from its own outcomes, not from the PHP error log.
+  feed's failed downloads of the day (a transfer that failed, not one cancelled) in the Core Updater's own state
+  (`updater.json`), not from the PHP error log, and starts again when the local date changes, as `pfb_failures()` reads only
+  today's lines. Departure: today's count also drops when the error log is trimmed or cleared; Core's does not. The widget's
+  Clear Failed Downloads closes the ADR-61 sync-status entries only and never reset the count, though the cap's log line says
+  so; it resets nothing in Core either.
 - **Core refuses what it reads.** `proxyUrl` must use `http`, `https`, `socks5` or `socks5h` with a port from 1 to 65535 and no userinfo; a listed self address an IP address that is not unspecified, link-local, IPv4-mapped or zoned; an allowlist entry an address or a CIDR without a zone. A backend answer that breaks a rule fails the read ([Settings backends](#settings-backends)).
 
 Parity fixture: `tests/core/fixtures/settings_ingest_parity.json`. `CoreSettingsIngestParityTest` (PHPUnit) freezes it

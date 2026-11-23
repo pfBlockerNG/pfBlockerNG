@@ -73,8 +73,8 @@ type Input struct {
 	// ManifestMissing: the DNSBL manifest is absent while the DNSBL hosts module is on, as pfb_core_update_retry_due()
 	// reads it; supplied by the Core Updater (sub-slice 9i) from the DNSBL publication (sub-slice 9g).
 	ManifestMissing bool
-	// SkipFeed is the skipfeed limit (0: none) and Failures the failed downloads of each feed today, by its name, before
-	// this Update: the caller's, as neither is in a projection (pfb_failures() counts the error log's FAIL lines).
+	// SkipFeed is the skipfeed limit (0: none, ingest.skipFeedLimit) and Failures the failed downloads of each feed today, by
+	// its name, before this Update, as the Core Updater's state counts them (today's pfb_failures() greps the error log).
 	SkipFeed int
 	Failures map[string]int
 	// BlacklistDir is the database folder ($pfb['dbdir']) the Extras stage publishes each Blacklist provider into: the
