@@ -531,23 +531,6 @@ func (s *Store) Sweep() error {
 	return nil
 }
 
-// Unapplied is every id under prefix whose current generation is not its applied baseline, or that is marked removed: what
-// no consumer has applied yet, in byte order. A writer call, as IDs.
-func (s *Store) Unapplied(prefix string) ([]string, error) {
-	idx, err := s.loadWriter()
-	if err != nil {
-		return nil, err
-	}
-	var ids []string
-	for _, id := range slices.Sorted(maps.Keys(idx.Resources)) {
-		e := idx.Resources[id]
-		if strings.HasPrefix(id, prefix) && (e.Removed || e.Applied == nil || e.Applied.Generation != e.Current.Generation) {
-			ids = append(ids, id)
-		}
-	}
-	return ids, nil
-}
-
 // IDs is every id under prefix the store holds and has not marked removed, in byte order. It is a writer call: an index
 // that cannot be read is cleared first, as by any write (loadWriter).
 func (s *Store) IDs(prefix string) ([]string, error) { return s.ids(prefix, false) }

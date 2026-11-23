@@ -7548,7 +7548,9 @@ function pfb_outpost_issues(array $issues): void
 	$before = is_array($before) ? $before : [];
 	$now = [];
 	foreach ($issues as $issue) {
-		$facility = str_starts_with($issue['resource'], 'dnsbl/') || str_starts_with($issue['resource'], 'feed/dnsbl:') ? 'dnsbl' : 'ip';
+		// a Blacklist category's feed (feed/blacklist:<provider>:<category>) is a DNSBL feed
+		$facility = str_starts_with($issue['resource'], 'dnsbl/') || str_starts_with($issue['resource'], 'feed/dnsbl:')
+			|| str_starts_with($issue['resource'], 'feed/blacklist:') ? 'dnsbl' : 'ip';
 		// the tick's reconciler re-applies every open ip and dnsbl apply entry as a table or the Resolver: Core's is neither
 		$stage = $issue['stage'] === 'apply' ? 'core' : $issue['stage'];
 		$key = "{$facility}|{$stage}|{$issue['resource']}";

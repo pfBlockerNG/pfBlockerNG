@@ -410,7 +410,8 @@ func dnsblipClass(action string) string {
 }
 
 // standingDNSBLIP is DNSBLIP's sets as the last DNSBL build wrote their lists in listDir, for an Update that builds no
-// DNSBL (an ip scope): unchanged, and none while DNSBL is not active or DNSBLIP's action is Disabled.
+// DNSBL (an ip scope): unchanged; none while DNSBL is not active or DNSBLIP's action is Disabled, and none of a family
+// whose list no build wrote.
 func standingDNSBLIP(settings map[string]map[string]any, listDir string) []GeoSet {
 	policy := settings["policy/dnsbl"]
 	action := settingText(policy, "dnsblIpAction")
@@ -420,6 +421,9 @@ func standingDNSBLIP(settings map[string]map[string]any, listDir string) []GeoSe
 		return sets
 	}
 	for _, v := range []ipset.Family{ipset.V4, ipset.V6} {
+		if _, err := os.Stat(filepath.Join(listDir, "DNSBLIP_"+string(v)+".txt")); err != nil {
+			continue
+		}
 		sets = append(sets, GeoSet{Alias: "DNSBLIP_" + string(v), Group: "DNSBLIP", Family: "ip" + string(v), Action: action,
 			ListClass: class, Path: filepath.Join(listDir, "DNSBLIP_"+string(v)+".txt")})
 	}

@@ -40,11 +40,14 @@ var loopProjections = []string{"dns", "feeds/ipv4", "feeds/ipv6", "feeds/dnsbl",
 	"policy/dnsbl", "extras", "hooks"}
 
 // updaterStateName is the Core Updater's own state in Core's state folder: the feeds earlier Updates left to the apply
-// (worklist.Plan.PendingFeeds). It holds no setting.
+// (worklist.Plan.PendingFeeds), and what the last apply that ran to its end was requested to load and remove. It holds no
+// setting.
 const updaterStateName = "updater.json"
 
 type updaterState struct {
-	PendingFeeds []string `json:"pendingFeeds"`
+	PendingFeeds     []string          `json:"pendingFeeds"`
+	Requested        map[string]uint64 `json:"requested,omitempty"`
+	RequestedRemoved []string          `json:"requestedRemoved,omitempty"`
 }
 
 // readUpdaterState is the Updater's state in dir; a missing or unreadable one is empty: a change no Update built left its
@@ -109,7 +112,8 @@ func (u *updater) workList() error {
 		}
 		u.snap[id] = v
 	}
-	u.pending = readUpdaterState(u.stateDir).PendingFeeds
+	u.state = readUpdaterState(u.stateDir)
+	u.pending = u.state.PendingFeeds
 	u.geoMarker = exists(u.db("geoip.update"))
 	u.store = resources.Open(u.loop.ResourceDir)
 	logs := map[string]*io.Writer{"error.log": &u.errors, "extras.log": &u.extrasLog, "ip_parsed_error.log": &u.ipParseLog,
@@ -292,10 +296,11 @@ func (u *updater) changeDetection() error {
 	}
 	_, manifestErr := u.store.Get(dnsbl.ManifestID, nil)
 	// A manual request without a force is none, as the update program reads it.
+	u.inWindow = schedule.InApplyWindow(time.Now().Unix(), settingText(u.snap["ingest"], "applyWindow"), zone)
 	plan, err := worklist.Build(context.Background(), worklist.Input{Trigger: u.req.Trigger, Scope: u.scope(),
 		Force: cmp.Or(u.req.Force, "none"),
 		Feeds: u.req.Feeds, PendingFeeds: u.pending, Settings: u.snap, Stages: u.stages,
-		InWindow:      schedule.InApplyWindow(time.Now().Unix(), settingText(u.snap["ingest"], "applyWindow"), zone),
+		InWindow:      u.inWindow,
 		ExtrasChanged: u.extrasOut.Changed,
 		GeoIPChanged:  u.geoMarker || u.extrasOut.GeoIPChanged, BlacklistDir: u.loop.DBDir,
 		ManifestMissing: u.dnsblActive() && errors.Is(manifestErr, resources.ErrNotFound)})
@@ -353,9 +358,14 @@ func (u *updater) scope() string {
 	return cmp.Or(u.req.Scope, "both")
 }
 
-// pendingAfter writes the Updater's state: the feeds left to a later Update.
+// pendingAfter writes the Updater's state with feeds as the feeds left to a later Update.
 func (u *updater) pendingAfter(feeds []string) error {
-	b, err := json.Marshal(updaterState{PendingFeeds: feeds})
+	u.state.PendingFeeds = feeds
+	return u.saveState()
+}
+
+func (u *updater) saveState() error {
+	b, err := json.Marshal(u.state)
 	if err != nil {
 		return err
 	}
@@ -615,17 +625,11 @@ func (u *updater) request() (apply.Request, error) {
 // update.log.apply, read with the version 2 rules. Its state is saved first: the plan's pending feeds.
 func (u *updater) applyStage() error {
 	if u.plan.Decision == worklist.Nothing {
-		// Nothing is due, but the store may hold what an earlier Update published and no apply took: it is applied now.
-		waiting := false
-		for _, prefix := range []string{"geo-catalog", "ip-aggregate/", "ip-set/"} {
-			ids, err := u.store.Unapplied(prefix)
-			if err != nil {
-				return err
-			}
-			waiting = waiting || len(ids) > 0
-		}
-		if !waiting {
-			return nil
+		// Nothing is due, but inside the window the store may hold what an earlier Update published and no apply that
+		// ran to its end was requested to load: it is applied now.
+		waiting, err := u.unrequested()
+		if err != nil || !waiting {
+			return err
 		}
 		u.sinks.Line(false, "Core Updater: the store holds generations no apply took: the apply runs\n")
 	}
@@ -678,6 +682,16 @@ func (u *updater) applyStage() error {
 			u.applyErr = fmt.Errorf("the apply failed: exit status %d", status)
 		}
 	}
+	if exit == apply.Succeeded && !req.PendingOutsideWindow && req.Scope != "dnsbl" {
+		// What it was requested to load is not requested again: an id it refused is its own issue to raise.
+		u.state.Requested, u.state.RequestedRemoved = map[string]uint64{}, req.Removed
+		for _, r := range req.Resources {
+			u.state.Requested[r.ID] = r.Generation
+		}
+		if err := u.saveState(); err != nil {
+			return err
+		}
+	}
 	res, err := apply.ReadResult(result, req)
 	if err != nil && !errors.Is(err, apply.ErrCut) {
 		return errors.Join(u.applyErr, fmt.Errorf("the apply's result cannot be read: %w", err))
@@ -688,6 +702,39 @@ func (u *updater) applyStage() error {
 	}
 	u.applied = &res
 	return nil
+}
+
+// unrequested reports whether, inside the apply window and outside a dnsbl scope, the store holds an ip-set, ip-aggregate
+// or geo-catalog generation, or a removal, that no apply that ran to its end was requested to load.
+func (u *updater) unrequested() (bool, error) {
+	if !u.inWindow || u.scope() == "dnsbl" {
+		return false, nil
+	}
+	for _, prefix := range []string{"geo-catalog", "ip-aggregate/", "ip-set/"} {
+		ids, err := u.store.IDs(prefix)
+		if err != nil {
+			return false, err
+		}
+		for _, id := range ids {
+			reply, err := u.store.Get(id, nil)
+			if err != nil {
+				return false, err
+			}
+			if g, ok := u.state.Requested[id]; !ok || g != reply.Generation {
+				return true, nil
+			}
+		}
+		removed, err := u.store.RemovedIDs(prefix)
+		if err != nil {
+			return false, err
+		}
+		for _, id := range removed {
+			if !slices.Contains(u.state.RequestedRemoved, id) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // postHook is stage 19: after the apply returned, under the Update lock, before the Update is reported finished; only

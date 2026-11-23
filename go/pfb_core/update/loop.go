@@ -119,7 +119,9 @@ type updater struct {
 	lock, result, log *os.File
 
 	snap                                         map[string]map[string]any // the projections the stages read
+	state                                        updaterState              // the Updater's state, as read and as written
 	pending                                      []string                  // the Updater state's pending feeds
+	inWindow                                     bool                      // now is inside the apply window
 	geoMarker, geoFailed                         bool                      // geoip.update at the work list; a GeoIP consumer failed
 	store                                        *resources.Store
 	stages                                       map[string]*feedstage.Stage
