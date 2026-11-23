@@ -851,8 +851,9 @@ def test_core_binary_mtime_follows_its_own_module(tmp_path: Path) -> None:
         assert int((tmp_path / "out" / target / "pfb-core").stat().st_mtime) == 1_700_000_000
 
 
-# --- pfb-core dependencies (issue #3906): Core may require golang.org/x/net, x/sys and x/text at the gateway's
-# versions, and (issue #3925) the pfBlockerNG xxh3 fork, and nothing else. The ports recipe vendors the gateway's
+# --- pfb-core dependencies (issue #3906): Core may require golang.org/x/net, x/sys and x/text (and, issue #4038,
+# github.com/oschwald/maxminddb-golang/v2) at the gateway's versions, and (issue #3925) the pfBlockerNG xxh3 fork, and
+# nothing else. The ports recipe vendors the gateway's
 # modules, so Core's vendor/ is cut from the gateway's tree. ---
 
 X_NET, X_TEXT, X_SYS = "golang.org/x/net", "golang.org/x/text", "golang.org/x/sys"

@@ -23,8 +23,10 @@ const coreModule = "github.com/pfBlockerNG/pfBlockerNG/go/pfb_core"
 // golang.org/x/net and x/text: the feed parser's UTS #46 conversion (#3906); x/sys: the xxh3 fork's CPU detection; all
 // three pinned in go.mod to the versions of go/pfb_dns_gateway. github.com/pfBlockerNG/xxh3: the xxh128 feed digest the
 // PHP side writes (#3925), vendored by Core itself. go4.org/netipx: IP set union and subtraction (#4033), vendored by
-// Core itself at a pinned pseudo-version.
-var allowedModules = []string{"golang.org/x/net", "golang.org/x/sys", "golang.org/x/text", "github.com/pfBlockerNG/xxh3", "go4.org/netipx"}
+// Core itself at a pinned pseudo-version. github.com/oschwald/maxminddb-golang/v2: dMax's country lookup (#4038, owner
+// decision of 2026-11-23), pinned to the version of go/pfb_dns_gateway, the same reader pfB-DNS uses.
+var allowedModules = []string{"golang.org/x/net", "golang.org/x/sys", "golang.org/x/text", "github.com/pfBlockerNG/xxh3", "go4.org/netipx",
+	"github.com/oschwald/maxminddb-golang/v2"}
 
 func moduleAllowed(path string) bool {
 	for _, m := range allowedModules {

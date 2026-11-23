@@ -30,7 +30,8 @@
 # "size", "freebsd_abi_note"}, ...}, "pfb_core": the same per target for pfb-core, {} for a tree without
 # go/pfb_core, "pfb_crowdsec": the same for pfb_crowdsec}. go/pfb_crowdsec is standard library only: a go.mod with any
 # `require` or `replace`, or a vendor/ there, exits 1 before anything is built, and it is built in place.
-# --modules-txt and --vendored concern the gateway. Core may require golang.org/x/net, x/sys and x/text,
+# --modules-txt and --vendored concern the gateway. Core may require golang.org/x/net, x/sys, x/text and
+# github.com/oschwald/maxminddb-golang/v2 (the dMax country lookup, #4038),
 # at the versions the gateway's go.mod requires, and github.com/pfBlockerNG/xxh3 and go4.org/netipx (which the gateway
 # does not carry) at any version, and nothing else: it is built from a scratch copy of its module whose vendor/ is cut
 # from the gateway's (those modules' packages and licenses, and their vendor/modules.txt sections) plus each own
@@ -75,7 +76,7 @@ CORE_MODULE = Path("go") / "pfb_core"
 CORE_BINARY = "pfb-core"
 # Core's allowed dependencies, at the versions the gateway's go.mod requires: the ports recipe's vendor tree is the
 # gateway's, so Core's vendor/ is cut from it.
-CORE_MODULES = ("golang.org/x/net", "golang.org/x/sys", "golang.org/x/text")
+CORE_MODULES = ("golang.org/x/net", "golang.org/x/sys", "golang.org/x/text", "github.com/oschwald/maxminddb-golang/v2")
 # Modules Core vendors itself, at any version, because the gateway does not carry them: the xxh3 fork (issue #3925)
 # and go4.org/netipx (issue #4033).
 CORE_OWN_MODULES = ("github.com/pfBlockerNG/xxh3", "go4.org/netipx")

@@ -304,7 +304,8 @@ marker is ever published, and the activation's readiness wait fails with the Res
 
 **pfb-core** (issue #3841, the Core API daemon). A source that also carries `go/pfb_core` gets it
 built the same way, by the same helper, into `freebsd-<arch>/pfb-core` beside `pfb-dns`; the helper
-records it under `pfb_core`. Core may require `golang.org/x/net`, `golang.org/x/sys` and `golang.org/x/text` at
+records it under `pfb_core`. Core may require `golang.org/x/net`, `golang.org/x/sys`, `golang.org/x/text` and
+`github.com/oschwald/maxminddb-golang/v2` (the dMax country lookup, #4038) at
 exactly the versions the gateway's `go.mod` requires; the helper builds it from a scratch copy whose `vendor/` is cut
 from the gateway's (those modules' packages, licenses and `modules.txt` sections). Core's own modules,
 `github.com/pfBlockerNG/xxh3` (#3925) and `go4.org/netipx` (#4033), which the gateway does not use, are added to that
