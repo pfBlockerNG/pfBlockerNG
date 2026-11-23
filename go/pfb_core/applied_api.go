@@ -1,22 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"io/fs"
-	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/applied"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
 )
 
@@ -25,17 +18,14 @@ import (
 // writer, folds the record into the applied baselines (resources.Store.FoldApplied).
 
 const (
-	appliedFile         = "applied.json"
-	dnsblPrefix         = "dnsbl/" // the resources pfb-dns reads and reports, and all a further local client may read
-	maxAppliedResources = 4096
-	maxAppliedFile      = defaultMaxBody // a record re-encodes a request's resources, so it is never larger than its body
+	appliedFile         = applied.File
+	dnsblPrefix         = applied.Prefix // the resources pfb-dns reads and reports, and all a further local client may read
+	maxAppliedFile      = applied.MaxBytes
+	maxAppliedResources = applied.MaxResources
 )
 
 // appliedRecord is appliedFile's content.
-type appliedRecord struct {
-	Format    int                        `json:"format"`
-	Resources map[string]*resourceCursor `json:"resources"`
-}
+type appliedRecord = applied.Record
 
 // appliedMethods is ReportApplied, recording into stateDir.
 func appliedMethods(stateDir string) map[string]method {
@@ -47,7 +37,7 @@ func appliedMethods(stateDir string) map[string]method {
 		if err := decodeResourceParams(params, &p); err != nil {
 			return nil, err
 		}
-		report, bad := parseApplied(p.Resources)
+		report, bad := applied.Parse(p.Resources)
 		if bad != nil {
 			return nil, newError(codeInvalidArgument, "the report is not valid; nothing was recorded", bad...)
 		}
@@ -55,83 +45,8 @@ func appliedMethods(stateDir string) map[string]method {
 	}}}
 }
 
-// parseApplied is a report's cursors by id, or its field errors: at most maxAppliedResources dnsbl/* ids, each with a
-// generation and a digest.
-func parseApplied(entries map[string]*resourceCursor) (map[string]resources.Cursor, []fieldError) {
-	switch {
-	case entries == nil:
-		return nil, []fieldError{{Field: "resources", Message: "required"}}
-	case len(entries) > maxAppliedResources:
-		return nil, []fieldError{{Field: "resources", Message: fmt.Sprintf("at most %d resources per report", maxAppliedResources)}}
-	}
-	report, bad, badKey := make(map[string]resources.Cursor, len(entries)), []fieldError(nil), false
-	for _, id := range slices.Sorted(maps.Keys(entries)) {
-		switch {
-		case !resources.ValidID(id): // never quoted: a key may be as long as the body
-			if !badKey { // once per request, however many keys fail
-				bad, badKey = append(bad, fieldError{Field: "resources", Message: "a key is not a resource id"}), true
-			}
-			continue
-		case !strings.HasPrefix(id, dnsblPrefix):
-			bad = append(bad, fieldError{Field: "resources", Message: fmt.Sprintf("%q is not a dnsbl/* resource id", id)})
-			continue
-		}
-		c, errs := parseResourceCursor(id, entries[id])
-		if c == nil && errs == nil { // a cursor without either field: a report names both
-			errs = []fieldError{{Field: "resources." + id + ".generation", Message: "required"},
-				{Field: "resources." + id + ".digest", Message: "required"}}
-		}
-		if errs != nil {
-			bad = append(bad, errs...)
-			continue
-		}
-		report[id] = *c
-	}
-	return report, bad
-}
-
-// readApplied is the report appliedFile in stateDir records: nil without the file, an empty map for a report of nothing.
-// A file that is not a regular file (a symlink is not followed), is larger than maxAppliedFile, or is not a report
-// ReportApplied accepts is an error, and nothing of it is used.
-func readApplied(stateDir string) (map[string]resources.Cursor, error) {
-	f, err := os.OpenFile(filepath.Join(stateDir, appliedFile), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	if fi, err := f.Stat(); err != nil {
-		return nil, err
-	} else if !fi.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	raw, err := io.ReadAll(io.LimitReader(f, maxAppliedFile+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(raw) > maxAppliedFile {
-		return nil, fmt.Errorf("larger than %d bytes", maxAppliedFile)
-	}
-	var rec appliedRecord
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&rec); err != nil {
-		return nil, err
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return nil, errors.New("data after its record")
-	}
-	if rec.Format != 1 {
-		return nil, fmt.Errorf("format %d is not one this Core reads", rec.Format)
-	}
-	report, bad := parseApplied(rec.Resources)
-	if bad != nil {
-		return nil, fmt.Errorf("%s: %s", bad[0].Field, bad[0].Message)
-	}
-	return report, nil
-}
+// readApplied is the report appliedFile in stateDir records (applied.Read, the Core Updater's reader too).
+func readApplied(stateDir string) (map[string]resources.Cursor, error) { return applied.Read(stateDir) }
 
 // appliedMu holds one report's write from its open to its rename: reports land in the order they take it, and share the
 // one temporary name.

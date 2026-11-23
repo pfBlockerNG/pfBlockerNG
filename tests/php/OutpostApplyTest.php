@@ -715,6 +715,26 @@ final class OutpostApplyTest extends TestCase
 		$this->assertSame([], $open, 'no apply entry is open');
 	}
 
+	/**
+	 * Issue #4038: the Core Updater names a Blacklist category's feed feed/blacklist:<provider>:<category>. WHEN a request carries
+	 * issues of a category, a DNSBL feed and an IP feed THEN the category's and the DNSBL feed's are dnsbl entries, the IP feed's
+	 * an ip entry.
+	 */
+	public function testACategorysIssueIsADnsblEntry(): void
+	{
+		$issues = [];
+		foreach (['feed/blacklist:UT1:ads', 'feed/dnsbl:Foo', 'feed/ipv4:Foo_v4'] as $resource) {
+			$issues[] = ['resource' => $resource, 'stage' => 'download', 'code' => 'curl_incomplete', 'message' => 'cut'];
+		}
+		$r = $this->applyOnce(['apply' => ['request' => self::request([], ['issues' => $issues])]]);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$ledger = json_decode($r['syncStatus']['pfb_sync_status.json'] ?? '{}', TRUE);
+		$this->assertSame(['feed/blacklist:UT1:ads', 'feed/dnsbl:Foo'], array_keys($ledger['dnsbl'] ?? []),
+			'the dnsbl entries: ' . json_encode($ledger));
+		$this->assertSame(['feed/ipv4:Foo_v4'], array_keys($ledger['ip'] ?? []), 'the ip entries: ' . json_encode($ledger));
+	}
+
 	/** @return array<string, array{0: string, 1: int}> a trigger, and the exit status of its apply while GeoIP is not ready */
 	public static function triggersWhileGeoipIsNotReady(): array
 	{

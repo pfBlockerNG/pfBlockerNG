@@ -35,23 +35,28 @@ func loopFlags(t *testing.T) (flags []string, paths map[string]any) {
 	dir := scratchDir(t)
 	p := func(name string) string { return filepath.Join(dir, name) }
 	// the loop fails an Update whose store it cannot write (issue #4038), so the store is a real folder
-	if err := os.Mkdir(p("store"), 0o755); err != nil {
-		t.Fatal(err)
+	for _, d := range []string{"store", "db", "log"} {
+		if err := os.Mkdir(p(d), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	flags = []string{"--resource-dir", p("store"), "--feed-local-dir", p("feeds1"), "--feed-local-dir", p("feeds2"),
 		"--script-dir", p("scripts"), "--rsync-bin", p("rsync"), "--hook-dir", p("hooks"), "--python-wrapper", p("python.sh"),
+		"--db-dir", p("db"), "--geoip-dir", p("GeoIP"), "--log-dir", p("log"), "--pkg-dir", p("pkg"), "--asn-table", p("asn.txt"),
 		"--main-log", p("main.log")}
 	paths = map[string]any{"resourceDir": p("store"), "feedLocalDirs": []any{p("feeds1"), p("feeds2")}, "scriptDirs": []any{p("scripts")},
-		"rsyncBin": p("rsync"), "hookDir": p("hooks"), "pythonWrapper": p("python.sh"), "mainLog": p("main.log")}
+		"rsyncBin": p("rsync"), "hookDir": p("hooks"), "pythonWrapper": p("python.sh"), "mainLog": p("main.log"), "dbDir": p("db"),
+		"geoipShareDir": p("GeoIP"), "logDir": p("log"), "pkgDir": p("pkg"), "asnTable": p("asn.txt")}
 	return flags, paths
 }
 
-// WHEN Core runs with --update-loop THEN an admitted Update runs the Core Updater loop, which reads the settings itself,
-// instead of the --update-cmd program; the worker's request carries the paths the flags gave Core, and the status it
-// publishes does not.
+// WHEN Core runs with --update-loop THEN an admitted Update runs the Core Updater loop, which reads the settings itself and
+// runs the --update-cmd program once, as the Outpost apply with a version 2 request (issue #4038, sub-slice 9i); the
+// worker's request carries the paths the flags gave Core, and the status it publishes does not.
 func TestWithTheUpdateLoopSwitchOnAnUpdateRunsTheLoopNotTheProgram(t *testing.T) {
 	holdQuarters(t)
 	f := newFakeUpdate(t)
+	f.release()
 	adapter := newFakeAdapter(t, readReply(t, 5, nil))
 	flags, paths := loopFlags(t)
 	c := startCore(t, scratchDir(t), append([]string{"--update-cmd", f.path, "--update-loop", "--settings-backend-cmd", adapter.path}, flags...)...)
@@ -61,8 +66,8 @@ func TestWithTheUpdateLoopSwitchOnAnUpdateRunsTheLoopNotTheProgram(t *testing.T)
 	if end.Update.Result != "success" || !strings.Contains(end.Log, "settings revision 5") {
 		t.Errorf("GetUpdate = %+v, want a success whose transcript has the loop's snapshot line", end)
 	}
-	if n := f.runs(); n != 0 {
-		t.Errorf("the --update-cmd program ran %d times, want none", n)
+	if req, err := os.ReadFile(filepath.Join(f.dir, "req")); f.runs() != 1 || err != nil || !bytes.Contains(req, []byte(`"version":2`)) {
+		t.Errorf("the --update-cmd program ran %d times with %q (%v), want once with a version 2 request", f.runs(), req, err)
 	}
 	if n := adapter.runs() - before; n != 2 {
 		t.Errorf("the adapter ran %d times for the Update, want 2: the Core API's read before launch and the loop's own", n)

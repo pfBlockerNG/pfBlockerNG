@@ -141,7 +141,7 @@ func (s DNSBLSet) Build(ctx context.Context, in DNSBLInput) (DNSBLOut, error) {
 			return out, err
 		}
 	} else {
-		res, err := dnsbl.Publish(s.Store, set)
+		res, err := publishDNSBL(s.Store, set)
 		if err != nil {
 			return out, err
 		}
@@ -368,8 +368,7 @@ func (s DNSBLSet) cleanup(feeds []dnsbl.Feed) ([]string, error) {
 // the configured feeds concatenated in the order of today's <feed>_<v4|v6>.ip names, empty when there is none (no
 // placeholder, owner 2026-11-23), in the class folder of DNSBLIP's action; none with the action Disabled.
 func (s DNSBLSet) dnsblipLists(feeds []dnsbl.Feed, action string) ([]dnsblipList, error) {
-	verb, _, _ := strings.Cut(strings.TrimPrefix(action, "Alias_"), "_")
-	class := map[string]string{"Deny": "deny", "Permit": "permit", "Match": "match", "Native": "native"}[verb]
+	class := dnsblipClass(action)
 	if class == "" {
 		return nil, nil
 	}
@@ -402,6 +401,33 @@ func (s DNSBLSet) dnsblipLists(feeds []dnsbl.Feed, action string) ([]dnsblipList
 			Action: action, ListClass: class, Path: filepath.Join(s.ListDir, "DNSBLIP_"+string(fam.v)+".txt")}, body})
 	}
 	return lists, nil
+}
+
+// dnsblipClass is the list class of DNSBLIP's action, "" for none (Disabled).
+func dnsblipClass(action string) string {
+	verb, _, _ := strings.Cut(strings.TrimPrefix(action, "Alias_"), "_")
+	return map[string]string{"Deny": "deny", "Permit": "permit", "Match": "match", "Native": "native"}[verb]
+}
+
+// standingDNSBLIP is DNSBLIP's sets as the last DNSBL build wrote their lists in listDir, for an Update that builds no
+// DNSBL (an ip scope): unchanged; none while DNSBL is not active or DNSBLIP's action is Disabled, and none of a family
+// whose list no build wrote.
+func standingDNSBLIP(settings map[string]map[string]any, listDir string) []GeoSet {
+	policy := settings["policy/dnsbl"]
+	action := settingText(policy, "dnsblIpAction")
+	class := dnsblipClass(action)
+	sets := []GeoSet{}
+	if !settingBool(policy, "enabled") || !settingBool(settings["dns"], "pfbDnsEnabled") || class == "" {
+		return sets
+	}
+	for _, v := range []ipset.Family{ipset.V4, ipset.V6} {
+		if _, err := os.Stat(filepath.Join(listDir, "DNSBLIP_"+string(v)+".txt")); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		sets = append(sets, GeoSet{Alias: "DNSBLIP_" + string(v), Group: "DNSBLIP", Family: "ip" + string(v), Action: action,
+			ListClass: class, Path: filepath.Join(listDir, "DNSBLIP_"+string(v)+".txt")})
+	}
+	return sets
 }
 
 // writeDNSBLIP writes each list that changed, or removes both lists when there are none, and returns the sets.

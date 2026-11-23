@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/output"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
 )
 
@@ -127,21 +128,52 @@ func loopCommand(t *testing.T, loop *Loop) (*Command, string) {
 	return c, dir
 }
 
+// loopAnswering is a loop fixture (every folder, the store and the stand-in apply) whose settings adapter answers reply.
+func loopAnswering(t *testing.T, reply string) *loopFixture {
+	t.Helper()
+	fx := newLoopFixture(t)
+	touch(t, filepath.Join(fx.adapterDir, "reply"), reply)
+	return fx
+}
+
+// updater is the loop of fx for req, run in this process as the worker runs it: under the Update lock, with its outcome
+// file.
+func (fx *loopFixture) updater(t *testing.T, req Request) *updater {
+	t.Helper()
+	lock, err := operationLock(fx.log.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { lock.Close() })
+	result, err := replaceRegular(fx.log.Name() + ".result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { result.Close() })
+	return &updater{loop: *fx.loop(), req: req, stateDir: fx.state, sinks: output.Sinks{Transcript: fx.log},
+		program: filepath.Join(fx.applyDir, "apply.sh"), logPath: fx.log.Name(), lock: lock, result: result, log: fx.log}
+}
+
+// command is the Command of fx: its stand-in apply is the program, its loop fx's.
+func (fx *loopFixture) command() *Command {
+	return &Command{Path: filepath.Join(fx.applyDir, "apply.sh"), Loop: fx.loop()}
+}
+
 // The stage boundaries of spec section 3 from the snapshot on, in order (stage 17, the outcomes, is written as each feed
 // finishes and has no boundary of its own), then the end of the loop.
-var wantBoundaries = []string{"snapshot", "work-list", "pre-hook", "extras", "change-detection", "apply-window", "dnsbl",
+var wantBoundaries = []string{"snapshot", "work-list", "extras", "change-detection", "apply-window", "pre-hook", "dnsbl",
 	"dnsblip", "publish-dnsbl", "geoip-sets", "ip", "recompute", "suppression", "uber", "publish-ip", "apply", "post-hook",
 	"settle", "end"}
 
 // WHEN the loop takes its snapshot THEN it reads the adapter once, holds that revision's settings and keeps the pending
 // token as the adapter wrote it, in memory.
 func TestTheSnapshotReadsTheAdapterOnceAndKeepsTheTokenInMemory(t *testing.T) {
-	adapter, dir := settingsAdapter(t, plainReply)
-	u := &updater{loop: Loop{SettingsCmd: adapter}, req: Request{Trigger: "manual", Scope: "both", Force: "none"}, stateDir: t.TempDir()}
+	fx := loopAnswering(t, plainReply)
+	u := fx.updater(t, Request{Trigger: "manual", Scope: "both", Force: "none"})
 	if err := u.run(); err != nil {
 		t.Fatalf("run = %v, want nil", err)
 	}
-	if n := adapterRuns(t, dir); n != 1 {
+	if n := adapterRuns(t, fx.adapterDir); n != 1 {
 		t.Errorf("the adapter ran %d times, want once", n)
 	}
 	if u.settings == nil {
@@ -157,7 +189,8 @@ func TestTheSnapshotReadsTheAdapterOnceAndKeepsTheTokenInMemory(t *testing.T) {
 
 // WHEN Core keeps its settings in its state directory (no adapter) THEN the snapshot reads them from there.
 func TestWithoutAnAdapterTheSnapshotReadsTheStateDirectorysSettings(t *testing.T) {
-	stateDir := t.TempDir()
+	fx := newLoopFixture(t)
+	stateDir := fx.state
 	st, err := settings.Open(stateDir, settings.Production())
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +198,8 @@ func TestWithoutAnAdapterTheSnapshotReadsTheStateDirectorysSettings(t *testing.T
 	if _, err := st.Initialize(t.Context(), map[string]map[string]json.RawMessage{}); err != nil {
 		t.Fatal(err)
 	}
-	u := &updater{req: Request{Trigger: "manual"}, stateDir: stateDir}
+	u := fx.updater(t, Request{Trigger: "manual"})
+	u.loop.SettingsCmd = ""
 	if err := u.run(); err != nil {
 		t.Fatalf("run = %v, want nil", err)
 	}
@@ -188,8 +222,7 @@ func TestOnlyAScheduledUpdateIsSkippedWhenScheduledWorkIsDisabled(t *testing.T) 
 	} {
 		t.Run(tc.trigger, func(t *testing.T) {
 			seen := recordBoundaries(t)
-			adapter, _ := settingsAdapter(t, disabledReply)
-			u := &updater{loop: Loop{SettingsCmd: adapter}, req: Request{Trigger: tc.trigger}, stateDir: t.TempDir()}
+			u := loopAnswering(t, disabledReply).updater(t, Request{Trigger: tc.trigger})
 			if err := u.run(); !errors.Is(err, tc.want) || tc.want == nil && err != nil {
 				t.Fatalf("run = %v, want %v", err, tc.want)
 			}
@@ -199,8 +232,7 @@ func TestOnlyAScheduledUpdateIsSkippedWhenScheduledWorkIsDisabled(t *testing.T) 
 		})
 	}
 	t.Run("scheduled with scheduled work on", func(t *testing.T) {
-		adapter, _ := settingsAdapter(t, plainReply)
-		u := &updater{loop: Loop{SettingsCmd: adapter}, req: Request{Trigger: "scheduled"}, stateDir: t.TempDir()}
+		u := loopAnswering(t, plainReply).updater(t, Request{Trigger: "scheduled"})
 		if err := u.run(); err != nil {
 			t.Fatalf("run = %v, want nil", err)
 		}
@@ -247,18 +279,18 @@ func TestASnapshotThatCannotBeReadFailsTheUpdateBeforeAnyLaterStage(t *testing.T
 	}
 }
 
-// WHEN Core admits an Update whose state carries the loop THEN the worker runs the loop, and the Update program is not
-// started; the loop reaches the worker in its request only, and the status the worker publishes has no loop member, so
-// that a Core that does not know the member can still read it.
+// WHEN Core admits an Update whose state carries the loop THEN the worker runs the loop, which starts the Update program
+// once, as the Outpost apply, with a version 2 request (issue #4038, sub-slice 9i); the loop reaches the worker in its
+// request only, and the status the worker publishes has no loop member, so that a Core that does not know the member can
+// still read it.
 func TestTheWorkerRunsTheLoopInsteadOfTheProgram(t *testing.T) {
-	adapter, _ := settingsAdapter(t, plainReply)
-	log := independentLog(t)
-	c, pdir := loopCommand(t, &Loop{SettingsCmd: adapter})
-	if _, err := runCmd(t, c, Request{Trigger: "manual", Scope: "both", Force: "none"}, log); err != nil {
+	fx := loopAnswering(t, plainReply)
+	adapter, log := fx.adapter, fx.log
+	if _, err := runCmd(t, fx.command(), Request{Trigger: "manual", Scope: "both", Force: "none"}, log); err != nil {
 		t.Fatalf("Run = %v, want success", err)
 	}
-	if _, err := os.Stat(filepath.Join(pdir, "runs")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the Update program ran (%v); the loop replaces it", err)
+	if fx.applyRuns(t) != 1 || fx.request(t)["version"] != float64(2) {
+		t.Errorf("the program ran %d times with %v; the loop runs it once, as the apply", fx.applyRuns(t), fx.request(t))
 	}
 	if text := logText(t, log); !strings.Contains(text, "settings revision 7") {
 		t.Errorf("transcript = %q, want the snapshot's revision line", text)
@@ -559,11 +591,11 @@ func TestAFailedSnapshotFailsTheUpdateAndPublishesNothing(t *testing.T) {
 
 // WHEN the loop runs with a main log THEN its lines go to the transcript and are appended to the main log as well.
 func TestTheLoopsLinesGoToTheTranscriptAndTheMainLog(t *testing.T) {
-	adapter, _ := settingsAdapter(t, plainReply)
+	fx := loopAnswering(t, plainReply)
 	mainLog := filepath.Join(t.TempDir(), "pfblockerng.log")
 	touch(t, mainLog, "earlier line\n")
-	log := independentLog(t)
-	c, _ := loopCommand(t, &Loop{SettingsCmd: adapter, MainLog: mainLog})
+	log, c := fx.log, fx.command()
+	c.Loop.MainLog = mainLog
 	if _, err := runCmd(t, c, Request{Trigger: "manual"}, log); err != nil {
 		t.Fatalf("Run = %v, want success", err)
 	}
@@ -631,10 +663,12 @@ func secretFields(path string, fields []settings.Field, into map[string]bool) {
 }
 
 // WHEN a snapshot holds a secret in every secret field of the schema THEN no secret, and not the pending token, appears in
-// the worker's state files, its transcript, its result file, the main log or any other file of the state directory.
+// the worker's state files, its transcript, its result file, the main log, any other file of the state directory, the
+// package's logs and folders, or the store; the apply alone gets the token, on its stdin. (The Updates are apply
+// Updates: the feeds of the snapshot are remote, and a test fetches nothing.)
 func TestNoSecretOfTheSnapshotIsWrittenAnywhere(t *testing.T) {
-	adapter, _ := settingsAdapter(t, secretReply)
-	u := &updater{loop: Loop{SettingsCmd: adapter}, req: Request{Trigger: "manual"}, stateDir: t.TempDir()}
+	fx := loopAnswering(t, secretReply)
+	u := fx.updater(t, Request{Trigger: "apply"})
 	if err := u.run(); err != nil {
 		t.Fatalf("run = %v, want nil", err)
 	}
@@ -658,14 +692,19 @@ func TestNoSecretOfTheSnapshotIsWrittenAnywhere(t *testing.T) {
 		}
 	}
 
+	u.lock.Close()                       // the in-process run ended: the worker takes the lock
+	os.Remove(fx.log.Name() + ".result") // the in-process run's, which no worker status settles
 	mainDir := t.TempDir()
-	log := independentLog(t)
-	c, _ := loopCommand(t, &Loop{SettingsCmd: adapter, MainLog: filepath.Join(mainDir, "pfblockerng.log")})
-	if _, err := runCmd(t, c, Request{Trigger: "manual"}, log); err != nil {
+	log, c := fx.log, fx.command()
+	c.Loop.MainLog = filepath.Join(mainDir, "pfblockerng.log")
+	if _, err := runCmd(t, c, Request{Trigger: "apply"}, log); err != nil {
 		t.Fatalf("Run = %v, want success", err)
 	}
+	if fx.request(t)["pendingToken"] != "TOKENsecret09" {
+		t.Errorf("the apply's request = %v, want the snapshot's token", fx.request(t))
+	}
 	scanned := 0
-	for _, dir := range []string{filepath.Dir(log.Name()), mainDir} {
+	for _, dir := range []string{filepath.Dir(log.Name()), mainDir, fx.store, fx.logs, fx.db} {
 		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return err

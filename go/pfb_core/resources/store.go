@@ -505,6 +505,60 @@ func (s *Store) FoldApplied(prefix string, report map[string]Cursor) error {
 	return errors.Join(errs...)
 }
 
+// Sweep deletes every file of an id the index no longer holds: what a RemovalApplied stopped between its index save and
+// its prune left, which no later call names (issue #4181). A baseline a stopped Applied left is pruned by the id's next
+// Publish or removal. It is a writer call.
+func (s *Store) Sweep() error {
+	idx, err := s.loadWriter()
+	if err != nil {
+		return err
+	}
+	files, err := os.ReadDir(s.dir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	for _, f := range files {
+		// A file of id is "<escaped id>.<rest>"; no id holds a dot.
+		escaped, _, ok := strings.Cut(f.Name(), ".")
+		id := strings.ReplaceAll(escaped, "~", "/")
+		if !ok || f.Name() == indexName || !ValidID(id) || idx.Resources[id] != nil {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.dir, f.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
+// Generation is id's current generation as the index records it, its body not read: ErrNotFound when the store does not
+// hold id or holds it as removed. A writer call, as IDs.
+func (s *Store) Generation(id string) (uint64, error) {
+	e, _, err := s.writerEntry(id)
+	if err != nil {
+		return 0, err
+	}
+	if e == nil || e.Removed {
+		return 0, fmt.Errorf("%w: %q", ErrNotFound, id)
+	}
+	return e.Current.Generation, nil
+}
+
+// Current is what the index records of id's current body, the body not read: its generation, digest, entries and
+// metadata, as Get answers them without a cursor. ErrNotFound when the store does not hold id or holds it as removed. A
+// writer call, as IDs.
+func (s *Store) Current(id string) (Reply, error) {
+	e, _, err := s.writerEntry(id)
+	if err != nil {
+		return Reply{}, err
+	}
+	if e == nil || e.Removed {
+		return Reply{}, fmt.Errorf("%w: %q", ErrNotFound, id)
+	}
+	c := e.Current
+	return Reply{Kind: KindFull, Generation: c.Generation, Digest: c.Digest, Entries: c.Entries, Metadata: c.Metadata}, nil
+}
+
 // IDs is every id under prefix the store holds and has not marked removed, in byte order. It is a writer call: an index
 // that cannot be read is cleared first, as by any write (loadWriter).
 func (s *Store) IDs(prefix string) ([]string, error) { return s.ids(prefix, false) }

@@ -593,6 +593,7 @@ test_smoke_tick.py::test_tick_verb_ignores_disable_flag 1.12
 test_smoke_tick.py::test_tick_wiped_ledger_regrows_no_duty_rows 8.46
 test_smoke_tld_wildcard.py 27.23
 test_smoke_tld_wildcard.py::test_tld_wildcard_toggle_governs_subdomain_blocking 27.23
+test_smoke_update_loop_corpus.py 0.05
 test_smoke_upstream_block.py 31.96
 test_smoke_upstream_block.py::TestUpstreamBlockAuthoritativeControl::test_authoritative_nxdomain_not_logged 0.90
 test_smoke_upstream_block.py::TestUpstreamBlockEDE15::test_ede15_block_detected_with_provider 0.32

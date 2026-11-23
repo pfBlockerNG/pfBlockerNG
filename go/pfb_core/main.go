@@ -1,7 +1,7 @@
 // pfb-core, the pfBlockerNG Core daemon (map #3813): the platform-neutral business logic behind a versioned HTTP+JSON API
 // that the co-located pfSense layer (PHP, native curl) calls over a Unix socket. docs/misc/core-api-protocol.md is the contract.
 //
-//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH [--update-loop]] [--main-log PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
+//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH [--update-loop]] [--main-log PATH] [--db-dir PATH] [--geoip-dir PATH] [--cc-dir PATH] [--log-dir PATH] [--pkg-dir PATH] [--asn-table PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
 //	pfb-core --run-hooks pre|post --hook-dir PATH (--settings-backend-cmd PATH | --state-dir DIR) [--python-wrapper PATH]
 //
 //	--socket PATH       the API's Unix socket: its directory is made 0700 and the socket 0600, the server's user's alone
@@ -17,13 +17,19 @@
 //	                    update.log and its result on fd 3. Without it those methods answer unavailable. Stopping Core ends
 //	                    scheduling and observation, not an admitted worker; a restarted Core observes or reconciles its receipt.
 //	                    Exit status 75 means the worker deferred the Update: its result is skipped and nothing is recorded
-//	--update-loop       run each Update through the Core Updater loop (issue #4038) instead of the --update-cmd program; off
-//	                    when absent, and the rc script does not pass it yet. The worker reads the settings itself and is
-//	                    given the path flags (--settings-backend-cmd, --resource-dir, --feed-local-dir, --script-dir,
-//	                    --rsync-bin, --hook-dir, --python-wrapper, --main-log) in its request (update.log.request). Needs --update-cmd
+//	--update-loop       run each Update through the Core Updater loop (issue #4038), which runs the --update-cmd program
+//	                    once as the Outpost apply (version 2); off when absent, and the rc script does not pass it yet. The
+//	                    worker reads the settings itself and is given the path flags (--settings-backend-cmd, --resource-dir,
+//	                    --feed-local-dir, --script-dir, --rsync-bin, --hook-dir, --python-wrapper, --main-log, --db-dir,
+//	                    --geoip-dir, --cc-dir, --log-dir, --pkg-dir, --asn-table, --zoneinfo) and --user-agent in its request
+//	                    (update.log.request). Needs --update-cmd; an Update fails without --resource-dir, --db-dir,
+//	                    --geoip-dir and --pkg-dir
 //	--main-log PATH     the absolute path of the package's main log, which the loop appends its lines to beside update.log.
 //	                    Needs --update-loop. With the switch on, every path the loop is given (--settings-backend-cmd too)
 //	                    must be absolute, clean, valid UTF-8 and hold no control character
+//	--db-dir, --geoip-dir, --cc-dir, --log-dir, --pkg-dir, --asn-table PATH
+//	                    the loop's folders: the package's database folder, the GeoIP share, its country folder, the log
+//	                    folder, the folder of the PSL and the SafeSearch lists, and the ASN choices file
 //	--maintenance-cmd PATH
 //	                    optional quarter-hour Outpost command, no arguments, in an independent maintenance worker; it uses
 //	                    maintenance.log and separate receipts/lock. Core reads the maintenance settings before each run and
@@ -119,11 +125,17 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	zoneinfo := fl.String("zoneinfo", "", "the host's time zone file the scheduler reads the schedule's zone from")
 	updateLoop := fl.Bool("update-loop", false, "run each Update through the Core Updater loop instead of the update program")
 	feed := addFeedFlags(fl)
-	var resourceDir, hookDir, pythonWrapper, mainLog, runHooksWhen string
+	var resourceDir, hookDir, pythonWrapper, mainLog, runHooksWhen, dbDir, geoipDir, ccDir, logDir, pkgDir, asnTable string
 	fl.Func("resource-dir", "the resource store's directory (an absolute path)", absolutePath(&resourceDir))
 	fl.Func("hook-dir", "the folder of the update hooks (an absolute path)", absolutePath(&hookDir))
 	fl.Func("python-wrapper", "the program a .py hook runs through (an absolute path)", absolutePath(&pythonWrapper))
 	fl.Func("main-log", "the package's main log the Update loop appends to (an absolute path)", absolutePath(&mainLog))
+	fl.Func("db-dir", "the package's database folder the Update loop builds in (an absolute path)", absolutePath(&dbDir))
+	fl.Func("geoip-dir", "the GeoIP share the Update loop converts into (an absolute path)", absolutePath(&geoipDir))
+	fl.Func("cc-dir", "the GeoIP country folder (an absolute path; default: cc in --geoip-dir)", absolutePath(&ccDir))
+	fl.Func("log-dir", "the package's log folder the Update loop logs to (an absolute path)", absolutePath(&logDir))
+	fl.Func("pkg-dir", "the package's folder of the PSL and the SafeSearch lists (an absolute path)", absolutePath(&pkgDir))
+	fl.Func("asn-table", "the ASN choices file the Update loop writes (an absolute path)", absolutePath(&asnTable))
 	fl.Func("run-hooks", "run the pre or post hooks once and exit", func(v string) error {
 		if v != "pre" && v != "post" {
 			return errors.New("must be pre or post")
@@ -197,7 +209,9 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 			paths []string
 		}{{"--settings-backend-cmd", []string{*backendCmd}}, {"--resource-dir", []string{resourceDir}}, {"--feed-local-dir", feed.LocalDirs},
 			{"--script-dir", feed.ScriptDirs}, {"--rsync-bin", []string{feed.RsyncBin}}, {"--hook-dir", []string{hookDir}},
-			{"--python-wrapper", []string{pythonWrapper}}, {"--main-log", []string{mainLog}}} {
+			{"--python-wrapper", []string{pythonWrapper}}, {"--main-log", []string{mainLog}}, {"--db-dir", []string{dbDir}},
+			{"--geoip-dir", []string{geoipDir}}, {"--cc-dir", []string{ccDir}}, {"--log-dir", []string{logDir}}, {"--pkg-dir", []string{pkgDir}},
+			{"--asn-table", []string{asnTable}}, {"--zoneinfo", []string{*zoneinfo}}} {
 			for _, p := range f.paths {
 				if err := update.CheckPath(p); p != "" && err != nil && reason == "" {
 					reason = fmt.Sprintf("%s %q %v", f.flag, p, err)
@@ -209,7 +223,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "pfb-core: "+reason)
 	}
 	if *socket == "" || *stateDir == "" || fl.NArg() != 0 || reason != "" {
-		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH [--update-loop]] [--main-log PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
+		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH [--update-loop]] [--main-log PATH] [--db-dir PATH] [--geoip-dir PATH] [--cc-dir PATH] [--log-dir PATH] [--pkg-dir PATH] [--asn-table PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
 		return 2
 	}
 	if ownSignals {
@@ -251,7 +265,8 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	var loop *update.Loop // nil: the switch is off and an Update runs the program
 	if *updateLoop {
 		loop = &update.Loop{SettingsCmd: *backendCmd, ResourceDir: resourceDir, FeedLocalDirs: feed.LocalDirs, ScriptDirs: feed.ScriptDirs,
-			RsyncBin: feed.RsyncBin, HookDir: hookDir, PythonWrapper: pythonWrapper, MainLog: mainLog}
+			RsyncBin: feed.RsyncBin, HookDir: hookDir, PythonWrapper: pythonWrapper, MainLog: mainLog, DBDir: dbDir, GeoIPDir: geoipDir,
+			CCDir: ccDir, LogDir: logDir, PkgDir: pkgDir, ASNTable: asnTable, Zoneinfo: *zoneinfo, UserAgent: feed.UserAgent}
 	}
 	sched, gate := newUpdates(updateCmd, maintenanceCmd, *zoneinfo, *stateDir, loop, store, lanes, logger.Printf) // nil without --update-cmd
 	methods := coreMethods(*stateDir, store, resourceStore, sched, gate)
