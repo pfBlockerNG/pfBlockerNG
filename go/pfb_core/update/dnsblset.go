@@ -40,9 +40,13 @@ type DNSBLInput struct {
 
 // DNSBLOut is what the DNSBL build gives the rest of the Update.
 type DNSBLOut struct {
-	DNSBL *apply.DNSBL // the apply request's dnsbl: the manifest's generation and the groups; nil while DNSBL is off
-	// DNSBLIP is IPInput.DNSBLIP for the IP sets (sub-slice 9h): never nil, empty while DNSBLIP or DNSBL is off, so that the
-	// IP sets' prune removes its lists from the class folders.
+	// DNSBL is the apply request's dnsbl: the manifest's generation and the groups; nil while DNSBL is not active. A group's
+	// Changed (a feed of it was parsed this Update) only drives statistics and is not recovered after a failure.
+	DNSBL *apply.DNSBL
+	// DNSBLIP is IPInput.DNSBLIP for the IP sets (sub-slice 9h): never nil, empty while DNSBLIP is off or DNSBL is not
+	// active, so that the IP sets' prune removes its lists from the class folders. A set's Changed is whether this Update
+	// rewrote its list: after a failed write it is not recovered (the next Update finds the list as written), so a consumer
+	// detects a content change itself, as the IP sets do by their inputs' digests.
 	DNSBLIP []GeoSet
 	Issues  []apply.Issue
 }
@@ -56,19 +60,20 @@ type dnsblipList struct {
 	body []byte
 }
 
-// Build runs the DNSBL build of one Update. With policy/dnsbl.enabled off it publishes nothing, removes every dnsbl/*
-// resource and DNSBLIP's lists: today DNSBLIP exists only while pfb_dnsbl_active() holds. Of that test's facts, pfBlockerNG's
-// switch holds whenever an Update runs, and the pfB-DNS switch (dns/pfb_dns) is in no projection, so it is not tested yet.
-// Every read and check runs before the first change, so a cancelled Update, settings that are absent or of the wrong shape,
-// or any read or publication error leave the disk as they found it. A failure after the publication (the feed folder's
-// cleanup, a DNSBLIP list's write) is returned too, and the next Update finishes it: both compare what is there.
+// Build runs the DNSBL build of one Update. DNSBL is active only while policy/dnsbl.enabled and dns.pfbDnsEnabled are on, as
+// pfb_dnsbl_active() decides (pfBlockerNG's own switch holds whenever an Update runs); while it is not, the build publishes
+// nothing, removes every dnsbl/* resource and DNSBLIP's lists. Every read and check runs before the first change, so a
+// cancelled Update, settings that are absent or of the wrong type, or a read error change nothing. The publication writes
+// the bodies before the manifest: if it fails, the store may hold new bodies, but the manifest, and so the data a client
+// assembles, is the one before. A failure after the publication (the feed folder's cleanup, a DNSBLIP list's write) is
+// returned too, and the next Update finishes it: both compare what is there.
 func (s DNSBLSet) Build(ctx context.Context, in DNSBLInput) (DNSBLOut, error) {
 	out := DNSBLOut{DNSBLIP: []GeoSet{}}
 	if err := checkDNSBLSettings(in.Settings); err != nil {
 		return out, err
 	}
 	policy := in.Settings["policy/dnsbl"]
-	enabled := settingBool(policy, "enabled")
+	enabled := settingBool(policy, "enabled") && settingBool(in.Settings["dns"], "pfbDnsEnabled")
 	feeds := dnsblFeeds(in.Settings)
 	var lists []dnsblipList
 	if enabled {
@@ -209,27 +214,54 @@ func publishIssues(feeds []dnsbl.Feed, refused map[string]bool, invalid, dropped
 }
 
 // checkDNSBLSettings refuses settings a build cannot take for what they say: a projection it reads that is absent, or a
-// field of the wrong type. Taking them would read a configured feed as removed and delete its files (today's
-// $config_complete guard, pfblockerng_apply.inc).
+// field of the wrong type among those that decide whether DNSBL is active and which feeds are configured. Taking them would
+// read a configured feed as removed and delete its files (today's $config_complete guard, pfblockerng_apply.inc).
 func checkDNSBLSettings(settings map[string]map[string]any) error {
-	type field struct{ projection, name, kind string }
-	fields := []field{{"feeds/dnsbl", "groups", "list"}, {"policy/dnsbl", "enabled", "bool"}, {"policy/dnsbl", "groups", "list"},
-		{"policy/dnsbl", "whitelist", "list"}, {"policy/dnsbl", "tldBlacklist", "list"}, {"policy/dnsbl", "tldExclusions", "list"},
-		{"policy/dnsbl", "top1m", "bool"}, {"policy/dnsbl", "safeSearchDohList", "list"}, {"dns", "tldWildcard", "bool"},
-		{"schedule", "categoryUpdates", "bool"}, {"schedule", "categoryProviders", "list"}}
-	for _, f := range fields {
-		p, ok := settings[f.projection]
-		if !ok {
-			return fmt.Errorf("the DNSBL build needs the %s settings", f.projection)
+	type field struct{ name, kind string }
+	check := func(where string, m map[string]any, fields ...field) error {
+		for _, f := range fields {
+			v := m[f.name]
+			_, isBool := v.(bool)
+			_, isText := v.(string)
+			if f.kind == "bool" && !isBool || f.kind == "text" && !isText || f.kind == "list" && !objectList(v) {
+				return fmt.Errorf("%s.%s is not a %s", where, f.name, f.kind)
+			}
 		}
-		v := p[f.name]
-		if _, isBool := v.(bool); f.kind == "bool" && !isBool || f.kind == "list" && !objectList(v) {
-			return fmt.Errorf("%s.%s is not a %s", f.projection, f.name, f.kind)
+		return nil
+	}
+	for _, p := range []struct {
+		id     string
+		fields []field
+	}{
+		{"feeds/dnsbl", []field{{"groups", "list"}}},
+		{"policy/dnsbl", []field{{"enabled", "bool"}, {"groups", "list"}, {"whitelist", "list"}, {"tldBlacklist", "list"},
+			{"tldExclusions", "list"}, {"top1m", "bool"}, {"safeSearchDohList", "list"}, {"dnsblIpAction", "text"}}},
+		{"dns", []field{{"tldWildcard", "bool"}, {"pfbDnsEnabled", "bool"}}},
+		{"schedule", []field{{"categoryUpdates", "bool"}, {"categoryProviders", "list"}}},
+	} {
+		m, ok := settings[p.id]
+		if !ok {
+			return fmt.Errorf("the DNSBL build needs the %s settings", p.id)
+		}
+		if err := check(p.id, m, p.fields...); err != nil {
+			return err
 		}
 	}
 	for i, g := range rows(settings["feeds/dnsbl"]["groups"]) {
-		if !objectList(g["feeds"]) {
-			return fmt.Errorf("feeds/dnsbl.groups[%d].feeds is not a list", i)
+		where := fmt.Sprintf("feeds/dnsbl.groups[%d]", i)
+		if err := check(where, g, field{"name", "text"}, field{"action", "text"}, field{"customList", "text"}, field{"feeds", "list"}); err != nil {
+			return err
+		}
+		for j, row := range rows(g["feeds"]) {
+			if err := check(fmt.Sprintf("%s.feeds[%d]", where, j), row, field{"header", "text"}, field{"state", "text"}, field{"url", "text"}); err != nil {
+				return err
+			}
+		}
+	}
+	for i, p := range rows(settings["schedule"]["categoryProviders"]) {
+		if err := check(fmt.Sprintf("schedule.categoryProviders[%d]", i), p, field{"title", "text"}, field{"selected", "bool"},
+			field{"categories", "text"}); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -295,7 +327,8 @@ func dnsblFeeds(settings map[string]map[string]any) []dnsbl.Feed {
 }
 
 // cleanup is today's removed-list cleanup of the DNSBL feed folder: every file of a feed whose parsed rows are there and
-// that is no configured feed now is removed, and its name returned; its resource left the store with the publication.
+// that is no configured feed now is removed, the parsed rows last, so a failed removal leaves the feed for the next Update
+// to find; the names of the feeds removed whole are returned. Its resource left the store with the publication.
 // Departure: a stored row the settings do not project (a header repeated in an earlier group, a hidden group) is still
 // configured today and keeps its files; Core cannot see it, so it counts as removed, and the caller raises an issue for it.
 func (s DNSBLSet) cleanup(feeds []dnsbl.Feed) ([]string, error) {
@@ -313,9 +346,10 @@ func (s DNSBLSet) cleanup(feeds []dnsbl.Feed) ([]string, error) {
 		if err != nil {
 			return removed, err
 		}
+		files = append(slices.DeleteFunc(files, func(f string) bool { return f == p }), p)
 		for _, f := range files {
 			if info, err := os.Lstat(f); err == nil && !info.IsDir() {
-				if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				if err := dnsblRemove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
 					return removed, err
 				}
 			}

@@ -203,6 +203,13 @@ The DNSBL resolver settings `pfb-dns` reads from `pfb_unbound.ini` today. `pfb-d
 | `noAaaa`, `groupPolicy` | bool, `false` |
 | `noAaaaList` | list keyed by `domain`, `[]`: a domain, with a leading `.` for a wildcard entry |
 | `groupPolicyBypassList` | list keyed by `cidr`, `[]`: an IP address or a CIDR |
+| `pfbDnsEnabled` (read-only) | bool, `false`: the pfB-DNS switch `dns/pfb_dns` is on, as `pfb_dnsbl_active()` reads it |
+
+`pfbDnsEnabled` (issue #4038) is the Outpost's answer: DNSBL is active only while it and `policy/dnsbl.enabled` are on, so
+the Core Updater publishes no `dnsbl/*` and no DNSBLIP while it is off. A write carries it as read; the adapter refuses a
+changed value (`dns.pfbDnsEnabled`, read-only: the DNS page owns it). Parity fixture:
+`tests/core/fixtures/settings_pfb_dns_parity.json`, frozen by `CoreSettingsPfbDnsParityTest`;
+`go/pfb_core/settings/pfb_dns_parity_test.go` runs Core against it.
 
 The noAAAA and Group Policy fields (issue #4036) are what `pfb-dns` takes from the `[noAAAA]` and `[GP_Bypass_List]`
 sections of `pfb_unbound.ini`. The ini carries a section only while its switch is on. Core holds the switch and the
