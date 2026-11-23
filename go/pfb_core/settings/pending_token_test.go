@@ -164,3 +164,14 @@ func TestTheStoreCarriesPendingApplyOfTheLastRead(t *testing.T) {
 		t.Error(`a read answering pendingApply "yes" succeeded`)
 	}
 }
+
+// WHEN the adapter's read answers platform.pendingApply as null or as no bool THEN the read fails: an absent member is false,
+// a present one is a JSON bool (issue #4038).
+func TestAPendingApplyThatIsNoBoolFailsTheRead(t *testing.T) {
+	for _, value := range []string{`null`, `"yes"`, `1`, `{}`} {
+		reply := tokenReply(t, 3, `{"pendingToken":null,"pendingApply":`+value+`}`)
+		if _, err := (&AdapterBackend{Path: newFakeAdapter(t, reply).path}).Read(context.Background()); err == nil {
+			t.Errorf("a read answering pendingApply %s succeeded", value)
+		}
+	}
+}
