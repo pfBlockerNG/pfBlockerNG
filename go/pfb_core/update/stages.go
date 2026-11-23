@@ -716,11 +716,12 @@ func (u *updater) unrequested() (bool, error) {
 			return false, err
 		}
 		for _, id := range ids {
-			reply, err := u.store.Get(id, nil)
+			// the index alone: a damaged body is the next publication's to repair, not a reason to fail the tick
+			current, err := u.store.Generation(id)
 			if err != nil {
 				return false, err
 			}
-			if g, ok := u.state.Requested[id]; !ok || g != reply.Generation {
+			if g, ok := u.state.Requested[id]; !ok || g != current {
 				return true, nil
 			}
 		}

@@ -531,6 +531,19 @@ func (s *Store) Sweep() error {
 	return nil
 }
 
+// Generation is id's current generation as the index records it, its body not read: ErrNotFound when the store does not
+// hold id or holds it as removed. A writer call, as IDs.
+func (s *Store) Generation(id string) (uint64, error) {
+	e, _, err := s.writerEntry(id)
+	if err != nil {
+		return 0, err
+	}
+	if e == nil || e.Removed {
+		return 0, fmt.Errorf("%w: %q", ErrNotFound, id)
+	}
+	return e.Current.Generation, nil
+}
+
 // IDs is every id under prefix the store holds and has not marked removed, in byte order. It is a writer call: an index
 // that cannot be read is cleared first, as by any write (loadWriter).
 func (s *Store) IDs(prefix string) ([]string, error) { return s.ids(prefix, false) }
