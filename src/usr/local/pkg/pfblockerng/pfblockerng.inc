@@ -4143,9 +4143,7 @@ function pfb_global() {
 	// ADR-11: opt-in per-type aggregate ("Uber") aliases. CSV scalar of the action types
 	// to aggregate (subset of PFB_AGGREGATE_TYPES), default NONE -> [] -> no-op pass.
 	// CSV (a single string, like blacklist_selected) so it round-trips with no '<0>' list XML.
-	$pfb['agg_types']	= array_values(array_intersect(
-					PFB_AGGREGATE_TYPES,
-					array_filter(explode(',', PfbConfig::read('gen/pfb_agg_types')))));
+	$pfb['agg_types']	= pfb_agg_types(PfbConfig::read('gen/pfb_agg_types'));
 
 	$pfb['supp']		= PfbConfig::read('ip/suppression');					// Enable Suppression (default on, issue #1907)
 	$pfb['supp_cidr']	= PfbConfig::read('ip/suppression_cidr');				// Global Suppression CIDR Limit, IPv4 (issue #3413)
@@ -5539,6 +5537,10 @@ function pfb_core_policy_ip_fields(): array {
 		'etMatch'                => ['rep/etmatch', 'csv', $token('category', '/^ET_[A-Za-z0-9_]+$/D')],
 		'suppressionV4'          => ['ip/v4suppression', 'text', ['cidr', static fn(string $entry): bool => pfb_core_policy_cidr_valid($entry, 'ipv4')]],
 		'suppressionV6'          => ['ip/v6suppression', 'text', ['cidr', static fn(string $entry): bool => pfb_core_policy_cidr_valid($entry, 'ipv6')]],
+		// the Uber aggregate selection, read as pfb_global() reads it; an array stored there selects nothing, without a warning
+		'aggregates'             => ['', 'derived', ['list', ['class', static fn(string $v): bool => in_array($v, ['deny', 'permit', 'match', 'native'], TRUE)],
+			static fn(callable $interfaces): array => array_map(static fn(string $type): array => ['class' => strtolower($type)],
+				pfb_agg_types(pfb_core_table_text('gen/pfb_agg_types')))]],
 	];
 }
 
@@ -14097,6 +14099,12 @@ function pfb_determine_list_detail($list='', $header='', $confconfig='', $key=''
 	}
 
 	return $pfbarr;
+}
+
+
+// ADR-11: the aggregate types a stored CSV selects, in PFB_AGGREGATE_TYPES order, each once. Core's policy/ip.aggregates is this.
+function pfb_agg_types(string $csv): array {
+	return array_values(array_intersect(PFB_AGGREGATE_TYPES, array_filter(explode(',', $csv))));
 }
 
 

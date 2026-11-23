@@ -382,7 +382,7 @@ func TestSaveWritesThroughTheAdapter(t *testing.T) {
 		`"policy/dnsbl":{"blacklistLogging":"disabled_log","dnsblIpAction":"Disabled","enabled":false,"groups":[],"logging":"disabled_log","regex":false,"regexList":[],` +
 		`"safeSearch":false,"safeSearchDoh":false,"safeSearchDohList":[],"safeSearchYoutube":"Disable","tldAllow":false,"tldAllowBgtld":[],"tldAllowCctld":[],"tldAllowGtld":[],` +
 		`"tldAllowItld":[],"tldBlacklist":[],"tldExclusions":[],"top1m":false,"top1mCount":1000,"top1mInclusions":[],"whitelist":[]},` +
-		`"policy/ip":{"aggregate":false,"countryBlacklistAction":"none","countryWhitelist":[],"countryWhitelistAction":"ignore","dMax":false,"dMaxLimit":0,` +
+		`"policy/ip":{"aggregate":false,"aggregates":[],"countryBlacklistAction":"none","countryWhitelist":[],"countryWhitelistAction":"ignore","dMax":false,"dMaxLimit":0,` +
 		`"dedup":false,"etBlock":[],"etMatch":[],"max":false,"maxLimit":0,"pMax":false,"pMaxLimit":0,"suppressionV4":[],"suppressionV6":[]},"schedule":{"categoryFrequency":"Never",` +
 		`"categoryProviders":[],"categoryUpdates":false,"groups":[],"hour":0,"minute":0,"scheduledUpdates":true,"weekday":7}}}`; f.lastWrite() != want {
 		t.Errorf("the adapter was sent\n %s\n want\n %s", f.lastWrite(), want)

@@ -38,7 +38,7 @@ func loopFlags(t *testing.T) (flags []string, paths map[string]any) {
 	if err := os.Mkdir(p("store"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	flags =[]string{"--resource-dir", p("store"), "--feed-local-dir", p("feeds1"), "--feed-local-dir", p("feeds2"),
+	flags = []string{"--resource-dir", p("store"), "--feed-local-dir", p("feeds1"), "--feed-local-dir", p("feeds2"),
 		"--script-dir", p("scripts"), "--rsync-bin", p("rsync"), "--hook-dir", p("hooks"), "--python-wrapper", p("python.sh"),
 		"--main-log", p("main.log")}
 	paths = map[string]any{"resourceDir": p("store"), "feedLocalDirs": []any{p("feeds1"), p("feeds2")}, "scriptDirs": []any{p("scripts")},

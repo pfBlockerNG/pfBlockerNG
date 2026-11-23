@@ -89,7 +89,7 @@ func TestTheProductionSchemaListsPolicyIpWritableAfterIngestWithTheFixturesField
 		names = append(names, f.Name)
 	}
 	want := []string{"dedup", "aggregate", "max", "maxLimit", "pMax", "pMaxLimit", "dMax", "dMaxLimit", "countryWhitelistAction", "countryBlacklistAction",
-		"countryWhitelist", "etBlock", "etMatch", "suppressionV4", "suppressionV6"}
+		"countryWhitelist", "etBlock", "etMatch", "suppressionV4", "suppressionV6", "aggregates"}
 	if !slices.Equal(names, want) {
 		t.Errorf("policy/ip fields = %v, want %v", names, want)
 	}

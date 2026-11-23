@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "projection": "policy/ip",
-  "defaults": {"dedup":false,"aggregate":false,"max":false,"maxLimit":0,"pMax":false,"pMaxLimit":0,"dMax":false,"dMaxLimit":0,"countryWhitelistAction":"ignore","countryBlacklistAction":"none","countryWhitelist":[],"etBlock":[],"etMatch":[],"suppressionV4":[],"suppressionV6":[]},
+  "defaults": {"dedup":false,"aggregate":false,"max":false,"maxLimit":0,"pMax":false,"pMaxLimit":0,"dMax":false,"dMaxLimit":0,"countryWhitelistAction":"ignore","countryBlacklistAction":"none","countryWhitelist":[],"etBlock":[],"etMatch":[],"suppressionV4":[],"suppressionV6":[],"aggregates":[]},
   "cases": [
     {"id":"defaults","description":"Nothing stored: no duplicate removal or aggregation, no reputation, no country action (today's PHP gives 'x' for every unset reputation variable, so Reputation does nothing), no suppression entry (pfb_create_suppression_file() writes no file).","config":{},"policyIp":{},"php":{"dup":false,"agg":false,"rep":false,"prep":false,"drep":false,"max":"x","dmax":"x","pmax":"x","ccwhite":"x","ccblack":"x","ccexclude":"x","etblock":"x","etmatch":"x","suppression":["",""]}},
     {"id":"dedup-on","description":"Deduplication (ip/enable_dup): stored on.","config":{"ip":{"enable_dup":"on"}},"policyIp":{"dedup":true},"php":{"dup":true}},

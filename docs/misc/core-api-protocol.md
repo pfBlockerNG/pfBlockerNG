@@ -437,6 +437,7 @@ the write validation and the merge, and Core's schema (`go/pfb_core/settings/pol
 | `etBlock`, `etMatch` | list keyed by `category`, `[]`; item `{category: string ET_[A-Za-z0-9_]+}` | Reputation `etblock`, `etmatch` (CSV) |
 | `suppressionV4` | list keyed by `cidr`, `[]`; item `{cidr: string}` | ip `v4suppression` (base64 text area) |
 | `suppressionV6` | list keyed by `cidr`, `[]`; item `{cidr: string}` | ip `v6suppression` (base64 text area) |
+| `aggregates` (derived) | list keyed by `class`, `[]`; item `{class: string}`, `deny` `permit` `match` `native` | General `pfb_agg_types` (CSV), the Uber aggregate selection (ADR-11) as `pfb_global()` reads it (`pfb_agg_types()`): each type once, in `PFB_AGGREGATE_TYPES` order, lower-cased |
 
 - **Limits.** A value that is no plain decimal 1 to 50 (`abc`, `-5`, `1e1`, `8.5`, `51`, `5,10`, `05`, a leading space, an array)
   reads as 0. Today's PHP passes on as typed to the shell script any value of the characters `[a-zA-Z0-9,_-]` (`abc`, `-5`,
@@ -453,6 +454,10 @@ the write validation and the merge, and Core's schema (`go/pfb_core/settings/pol
   (blank, comment, invalid) is kept, a line whose entry went is dropped and each new entry is appended as a line; a reorder alone
   writes nothing. Kept lines are written back as the text-area sanitizer leaves them (control characters stripped, line ends
   normalized), as every page save stores them.
+- **Uber aggregates.** `aggregates` is the Outpost's answer: a write never stores it, and the next read answers config.xml
+  again (issue #4038). A token today's reader ignores (lower case, unknown, padded with a space) selects nothing. Parity
+  fixture: `tests/core/fixtures/settings_aggregate_types_parity.json`, frozen by `CoreSettingsAggregateTypesParityTest`;
+  `go/pfb_core/settings/aggregate_types_parity_test.go` runs Core against it.
 - **Core refuses what it reads.** A limit outside 0 to 50, an action outside its tokens, a country code or ET category outside
   its pattern, a repeated item, and a suppression entry that is no CIDR of its family within its range, has a zone or an
   upper-case letter. The adapter's write validation names the same fields (`policy/ip.<field>[<i>].<item field>`).

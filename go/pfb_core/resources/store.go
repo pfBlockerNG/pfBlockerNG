@@ -409,8 +409,12 @@ func (s *Store) writeDelta(id string, g uint64, base gen) (*delta, error) {
 	return d, nil
 }
 
-// Writable reports whether the writer can write the store: its directory exists and takes a new file, which is removed.
+// Writable reports whether the writer can write the store: its directory, created as a write creates it when it is missing,
+// takes a new file, which is removed.
 func (s *Store) Writable() error {
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+		return err
+	}
 	f, err := os.CreateTemp(s.dir, ".writable.*")
 	if err != nil {
 		return err

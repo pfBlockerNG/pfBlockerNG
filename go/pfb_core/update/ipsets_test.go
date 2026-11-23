@@ -51,7 +51,7 @@ func resourceOf(out IPOut, id string) (apply.Resource, bool) {
 
 // WHEN groups of every action family are published THEN each id carries the group action's resource action and direction
 // as the Outpost reads config.xml, and its member count; WHEN the next Update finds nothing changed THEN no generation
-// moves and no id is reported changed.
+// moves; WHEN one feed changes THEN only its set's generation moves.
 func TestTheIPSetsCarryActionDirectionAndPublishNothingForAnUnchangedBody(t *testing.T) {
 	s := ipTree(t)
 	parsed(t, s, "D_v4", "192.0.2.1\n192.0.2.2\n")
@@ -68,19 +68,17 @@ func TestTheIPSetsCarryActionDirectionAndPublishNothingForAnUnchangedBody(t *tes
 	if !reflect.DeepEqual(first.Resources, want) {
 		t.Fatalf("first Update:\n have %+v\n want %+v", first.Resources, want)
 	}
-	if !slices.Equal(first.Changed, []string{"ip-set/Deny/ipv4", "ip-set/Pass/ipv4", "ip-set/Nat/ipv4"}) {
-		t.Errorf("first Update changed %q", first.Changed)
-	}
 	in.Changed = nil
 	second := build(t, s, in)
-	if len(second.Changed) != 0 || !reflect.DeepEqual(second.Resources, want) {
-		t.Errorf("unchanged Update: changed %q, resources %+v; want nothing changed, the same generations", second.Changed, second.Resources)
+	if !reflect.DeepEqual(second.Resources, want) {
+		t.Errorf("unchanged Update: resources %+v; want the same generations", second.Resources)
 	}
 	parsed(t, s, "P_v4", "198.51.100.2\n")
 	in.Changed = map[string]bool{"P_v4": true}
 	third := build(t, s, in)
-	if r, _ := resourceOf(third, "ip-set/Pass/ipv4"); !slices.Equal(third.Changed, []string{"ip-set/Pass/ipv4"}) || r.Generation != 2 {
-		t.Errorf("one feed changed: changed %q, Pass at generation %d; want Pass alone, at 2", third.Changed, r.Generation)
+	want[2].Generation = 2
+	if !reflect.DeepEqual(third.Resources, want) {
+		t.Errorf("one feed changed: resources %+v; want Pass alone at generation 2", third.Resources)
 	}
 }
 
@@ -90,17 +88,19 @@ func TestAGroupThatLeftIsRemoved(t *testing.T) {
 	s := ipTree(t)
 	parsed(t, s, "A_v4", "192.0.2.1\n")
 	parsed(t, s, "B_v4", "198.51.100.1\n")
-	in := IPInput{Settings: ipSettings([]any{group("A", "Deny_Both", "deny", "A"), group("B", "Deny_Both", "deny", "B")}, nil),
-		Aggregates: []string{"deny"}}
+	in := IPInput{Settings: ipSettings([]any{group("A", "Deny_Both", "deny", "A"), group("B", "Deny_Both", "deny", "B")}, nil)}
+	in.Settings["policy/ip"] = map[string]any{"aggregates": []any{map[string]any{"class": "deny"}}}
 	build(t, s, in)
 	in.Settings = ipSettings([]any{group("A", "Deny_Both", "deny", "A")}, nil)
-	in.Aggregates = nil
 	out := build(t, s, in)
 	if want := []string{"ip-aggregate/deny/ipv4", "ip-aggregate/deny/ipv6", "ip-set/B/ipv4"}; !slices.Equal(out.Removed, want) {
 		t.Errorf("removed = %q, want %q", out.Removed, want)
 	}
 	if _, ok := resourceOf(out, "ip-set/B/ipv4"); ok || len(out.Resources) != 1 {
 		t.Errorf("resources = %+v, want only A's", out.Resources)
+	}
+	if removed, err := s.Store.RemovedIDs("ip-set/"); err != nil || !slices.Equal(removed, []string{"ip-set/B/ipv4"}) {
+		t.Errorf("the store holds %q as removed (%v), want B's id", removed, err)
 	}
 }
 
@@ -170,7 +170,8 @@ func TestOneBodyPerIDAndAGeneratedSetWins(t *testing.T) {
 func TestTheIPSetsRefuseAFolderNotGiven(t *testing.T) {
 	s := ipTree(t)
 	delete(s.Folders, "match")
-	if _, err := s.Build(context.Background(), IPInput{Settings: ipSettings(nil, nil)}); err == nil {
+	parsed(t, s, "A_v4", "192.0.2.1\n")
+	if _, err := s.Build(context.Background(), IPInput{Settings: ipSettings([]any{group("A", "Deny_Both", "deny", "A")}, nil)}); err == nil {
 		t.Fatal("Build ran without the match folder")
 	}
 	if cur, _ := s.Store.IDs(""); cur != nil {

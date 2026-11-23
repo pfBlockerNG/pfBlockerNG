@@ -823,7 +823,7 @@ var passKeys = []string{"matrix", "ran", "canonical", "aggregate", "closing", "d
 func runPipeline(t *testing.T, c *corpusCase) {
 	in := c.In.(pipeIn)
 	cfg := PipelineConfig{
-		Settings: Settings{Dup: in.dup, Agg: in.agg, Rep: in.rep, DRep: in.drep, PRep: in.prep, Supp: in.supp, DMax: in.dmax, PMax: in.pmax,
+		Settings: Settings{Dup: in.dup, Agg: in.agg, Rep: in.rep, DRep: in.drep, PRep: in.prep, Supp: in.supp, Max: in.dmax, DMax: in.dmax, PMax: in.pmax,
 			CC: in.cc, CCWhite: in.ccwhite, CCBlack: in.ccblack, Geo: in.geo.lookup(), Placeholder: defaultPH},
 		Union: in.union,
 	}

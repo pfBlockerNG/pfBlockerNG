@@ -20,7 +20,7 @@ func TestAResumedPipelineGivesTheCorpusPasses(t *testing.T) {
 		cases++
 		in := c.In.(pipeIn)
 		cfg := PipelineConfig{Settings: Settings{Dup: in.dup, Agg: in.agg, Rep: in.rep, DRep: in.drep, PRep: in.prep, Supp: in.supp,
-			DMax: in.dmax, PMax: in.pmax, CC: in.cc, CCWhite: in.ccwhite, CCBlack: in.ccblack, Geo: in.geo.lookup(), Placeholder: defaultPH},
+			Max: in.dmax, DMax: in.dmax, PMax: in.pmax, CC: in.cc, CCWhite: in.ccwhite, CCBlack: in.ccblack, Geo: in.geo.lookup(), Placeholder: defaultPH},
 			Union: in.union}
 		if in.suppV4 != nil {
 			s := in.suppV4.String()

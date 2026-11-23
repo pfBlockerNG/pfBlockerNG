@@ -160,7 +160,7 @@ func TestTheIPSetsPublishTheMirrorTodaysPassWrites(t *testing.T) {
 		cases++
 		sw := c.Input.Switches
 		policy := map[string]any{"dedup": sw.Dup, "aggregate": sw.Agg, "max": sw.Rep, "dMax": sw.DRep, "pMax": sw.PRep,
-			"dMaxLimit": sw.DMax, "pMaxLimit": sw.PMax, "countryWhitelistAction": sw.CCWhite, "countryBlacklistAction": sw.CCBlack,
+			"maxLimit": sw.DMax, "dMaxLimit": sw.DMax, "pMaxLimit": sw.PMax, "countryWhitelistAction": sw.CCWhite, "countryBlacklistAction": sw.CCBlack,
 			"countryWhitelist": []any{map[string]any{"code": sw.CC}}, "suppressionV4": cidrs(c.Input.Suppression["v4"].Text),
 			"suppressionV6": cidrs(c.Input.Suppression["v6"].Text)}
 		settings := map[string]map[string]any{"policy/ip": policy, "ingest": {"suppression": sw.Supp},
@@ -169,10 +169,11 @@ func TestTheIPSetsPublishTheMirrorTodaysPassWrites(t *testing.T) {
 		if sw.Geo != nil {
 			s.Geo = func(octets string) string { return sw.Geo[octets] }
 		}
-		var aggregates []string
+		var aggregates []any
 		for _, a := range c.Input.AggTypes {
-			aggregates = append(aggregates, strings.ToLower(a))
+			aggregates = append(aggregates, map[string]any{"class": strings.ToLower(a)})
 		}
+		policy["aggregates"] = aggregates
 		texts := map[string]string{}
 		for _, f := range c.Input.Feeds {
 			texts[f.Name] = f.Text
@@ -190,7 +191,7 @@ func TestTheIPSetsPublishTheMirrorTodaysPassWrites(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := s.Build(context.Background(), IPInput{Settings: settings, Changed: changed, Aggregates: aggregates}); err != nil {
+			if _, err := s.Build(context.Background(), IPInput{Settings: settings, Changed: changed}); err != nil {
 				t.Fatalf("%s passes[%d]: %v", c.ID, i, err)
 			}
 			check := func(list, id string, mirror []string) {

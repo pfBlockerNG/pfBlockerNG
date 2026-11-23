@@ -2,6 +2,8 @@ package update
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,19 +48,16 @@ type IPInput struct {
 	// Changed are the feeds (their file stems) the per-feed stage parsed this Update.
 	Changed map[string]bool
 	GeoSets []GeoSet // stage 11's continent sets
-	// DNSBLIP are the DNSBLIP_v4 and _v6 lists, each a set the loop builds, joined after its family's groups as today's
-	// IP stage adds it: sub-slice 9g fills it.
+	// DNSBLIP are the DNSBLIP_v4 and _v6 lists (sub-slice 9g fills it), each a set the loop builds and a list like a feed's:
+	// joined after its family's groups and custom lists, which is where today's pass puts it in the recompute's member order
+	// ($pfb['existing'], pfblockerng_apply.inc:1833-1844) and in the IP stage (:3710, :4411).
 	DNSBLIP []GeoSet
-	// Aggregates are the classes whose Uber union is published (deny, permit, match, native). Today's gen/pfb_agg_types is
-	// in no projection yet: the caller supplies it.
-	Aggregates []string
 }
 
 // IPOut is what the IP sets published.
 type IPOut struct {
 	Resources []apply.Resource // every ip-set and ip-aggregate the store holds now, in id order
 	Removed   []string         // every ip-set and ip-aggregate the store holds as removed, in id order
-	Changed   []string         // the ids whose generation moved this Update
 	Issues    []apply.Issue
 	Closing   *ipset.Sanity // the closing pass's verdict, nil when it did not run: the closing report's
 }
@@ -79,9 +78,12 @@ type ipGroup struct {
 
 const ipStateName = "ipsets.state"
 
-// ipState is ipsets.state: the deny members in their order and the pipeline's state.
+// ipState is ipsets.state: the deny members in their order, a digest of each one's list and of the policy they were built
+// under, and the pipeline's state.
 type ipState struct {
 	Order  []string          `json:"order"`
+	Inputs map[string]string `json:"inputs"`
+	Policy string            `json:"policy"`
 	Snap   map[string]string `json:"snap"`
 	Deny   map[string]string `json:"deny"`
 	Master []string          `json:"master"`
@@ -102,7 +104,7 @@ func (s IPSets) Build(ctx context.Context, in IPInput) (IPOut, error) {
 	policy, ingest := in.Settings["policy/ip"], in.Settings["ingest"]
 	cfg := ipset.PipelineConfig{Settings: ipset.Settings{Dup: flag(policy, "dedup"), Agg: flag(policy, "aggregate"),
 		Rep: flag(policy, "max"), DRep: flag(policy, "dMax"), PRep: flag(policy, "pMax"), Supp: flag(ingest, "suppression"),
-		DMax: num(policy, "dMaxLimit"), PMax: num(policy, "pMaxLimit"), CCWhite: str(policy, "countryWhitelistAction"),
+		Max: num(policy, "maxLimit"), DMax: num(policy, "dMaxLimit"), PMax: num(policy, "pMaxLimit"), CCWhite: str(policy, "countryWhitelistAction"),
 		CCBlack: str(policy, "countryBlacklistAction"), Geo: s.Geo}}
 	var cc []string
 	for _, r := range rows(policy["countryWhitelist"]) {
@@ -111,12 +113,13 @@ func (s IPSets) Build(ctx context.Context, in IPInput) (IPOut, error) {
 	cfg.CC = strings.Join(cc, ",")
 	cfg.SuppV4, cfg.SuppV6 = holes(policy["suppressionV4"]), holes(policy["suppressionV6"])
 
-	groups, err := s.groups(in, cfg.Agg)
+	groups, err := s.groups(in, cfg.Agg, &out)
 	if err != nil {
 		return out, err
 	}
 	st := s.loadState()
 	var order, changed []string
+	inputs := map[string]string{}
 	for i, g := range groups {
 		if g.class != "deny" {
 			continue
@@ -125,21 +128,26 @@ func (s IPSets) Build(ctx context.Context, in IPInput) (IPOut, error) {
 			cfg.Feeds = append(cfg.Feeds, ipset.PipelineFeed{Name: l.name, Alias: strconv.Itoa(i), Text: l.text, Prepared: l.geo,
 				NoSuppress: l.geo || l.custom})
 			order = append(order, l.name)
-			if l.changed {
+			// a change the caller did not name (an Update that failed before its state was saved) is found here
+			if inputs[l.name] = digestOf(l.text); l.changed || st.Inputs[l.name] != inputs[l.name] {
 				changed = append(changed, l.name)
 			}
 		}
 	}
-	// A member that came, left or moved changes the recompute's ownership, which follows the member order: every member is
-	// changed. A lost state has no order, so the first Update and the one after a loss build every member.
-	if !slices.Equal(order, st.Order) {
+	// A member that came, left or moved changes the recompute's ownership, which follows the member order, and a policy
+	// change changes every member's processing: every member is changed. A lost state has no order, so the first Update and
+	// the one after a loss build every member. Today's pass waits for a feed change or a Force Reload after a policy change.
+	settings := cfg.Settings
+	settings.Geo = nil
+	policyDigest := digestOf(fmt.Sprintf("%+v %q %q", settings, deref(cfg.SuppV4), deref(cfg.SuppV6)))
+	if !slices.Equal(order, st.Order) || policyDigest != st.Policy {
 		changed = order
 	}
 	p := ipset.ResumePipeline(cfg, ipset.State{Snap: st.Snap, Deny: st.Deny, Master: st.Master})
 	pass := p.Pass(changed, nil)
 	out.Closing = pass.Closing
 	next := p.State()
-	if err := s.saveState(ipState{Order: order, Snap: next.Snap, Deny: next.Deny, Master: next.Master}); err != nil {
+	if err := s.saveState(ipState{Order: order, Inputs: inputs, Policy: policyDigest, Snap: next.Snap, Deny: next.Deny, Master: next.Master}); err != nil {
 		return out, err
 	}
 
@@ -166,12 +174,15 @@ func (s IPSets) Build(ctx context.Context, in IPInput) (IPOut, error) {
 	}
 	for _, g := range groups {
 		for _, l := range g.lists {
-			if !l.geo && !l.dnsblip {
+			if !l.geo { // a continent's list is the GeoIP stage's
 				if err := writeList(filepath.Join(s.Folders[g.class], l.name+".txt"), final[g.class][l.name]); err != nil {
 					return out, err
 				}
 			}
 		}
+	}
+	if err := s.prune(final); err != nil {
+		return out, err
 	}
 
 	type pub struct {
@@ -180,24 +191,28 @@ func (s IPSets) Build(ctx context.Context, in IPInput) (IPOut, error) {
 		meta    map[string]any
 	}
 	var pubs []pub
-	taken := map[string]bool{}
+	builtBy := map[string]bool{} // each id published, and whether a set the loop builds holds it
 	for _, generated := range []bool{true, false} {
 		for i, g := range groups {
 			if g.generated != generated {
 				continue
 			}
 			id, ok := apply.SetID(g.group, g.family)
+			byLoop, taken := builtBy[id]
 			switch {
 			case !ok:
 				out.Issues = append(out.Issues, apply.Issue{Resource: "ip-set/" + g.group + "/" + g.family, Stage: "apply",
 					Code: "set_unpublishable", Message: "the group's name maps to no alias the Outpost can load"})
 				continue
-			case taken[id]:
-				out.Issues = append(out.Issues, apply.Issue{Resource: id, Stage: "apply", Code: "set_id_taken",
-					Message: "a set the Core Updater builds itself takes this group's id; the group is not published"})
+			case taken:
+				msg := "another group of this family takes this id; the group is not published"
+				if byLoop {
+					msg = "a set the Core Updater builds itself takes this id; the group is not published"
+				}
+				out.Issues = append(out.Issues, apply.Issue{Resource: id, Stage: "apply", Code: "set_id_taken", Message: msg})
 				continue
 			}
-			taken[id] = true
+			builtBy[id] = generated
 			action, direction := actionOf(g.action)
 			meta := map[string]any{"action": action}
 			if direction != nil {
@@ -206,8 +221,12 @@ func (s IPSets) Build(ctx context.Context, in IPInput) (IPOut, error) {
 			pubs = append(pubs, pub{id, members(&out, id, g.family, bodies[i]), meta})
 		}
 	}
+	var aggregates []string
+	for _, r := range rows(policy["aggregates"]) {
+		aggregates = append(aggregates, str(r, "class"))
+	}
 	for _, c := range classes {
-		if !slices.Contains(in.Aggregates, c) {
+		if !slices.Contains(aggregates, c) {
 			continue
 		}
 		for _, family := range []string{"ipv4", "ipv6"} {
@@ -226,18 +245,11 @@ func (s IPSets) Build(ctx context.Context, in IPInput) (IPOut, error) {
 	}
 	published := map[string]bool{}
 	for _, p := range pubs {
-		before, err := s.Store.Get(p.id, nil)
-		if err != nil && !errors.Is(err, resources.ErrNotFound) {
-			return out, err
-		}
 		g, err := s.Store.Publish(p.id, p.members, p.meta)
 		if err != nil {
 			return out, fmt.Errorf("%s: %w", p.id, err)
 		}
 		published[p.id] = true
-		if g != before.Generation {
-			out.Changed = append(out.Changed, p.id)
-		}
 		r := apply.Resource{ID: p.id, Generation: g, Action: p.meta["action"].(string), Entries: len(p.members)}
 		r.Direction, _ = p.meta["direction"].([]string)
 		out.Resources = append(out.Resources, r)
@@ -248,17 +260,19 @@ func (s IPSets) Build(ctx context.Context, in IPInput) (IPOut, error) {
 		if err != nil {
 			return out, err
 		}
+		removed, err := s.Store.RemovedIDs(prefix)
+		if err != nil {
+			return out, err
+		}
 		for _, id := range current {
 			if !published[id] {
 				if err := s.Store.Remove(id); err != nil {
 					return out, err
 				}
+				removed = append(removed, id)
 			}
 		}
-		removed, err := s.Store.RemovedIDs(prefix)
-		if err != nil {
-			return out, err
-		}
+		slices.Sort(removed)
 		out.Removed = append(out.Removed, removed...)
 	}
 	return out, nil
@@ -267,8 +281,12 @@ func (s IPSets) Build(ctx context.Context, in IPInput) (IPOut, error) {
 // groups are the sets of the snapshot, IPv4 then IPv6: per family the continents in the package's order, then the
 // groups in config order (each group's feed rows, then its custom list), then DNSBLIP, as today's pass registers them.
 // A group that is Disabled, has no list class or has neither a feed row nor a custom list builds no set.
-func (s IPSets) groups(in IPInput, agg bool) ([]ipGroup, error) {
+func (s IPSets) groups(in IPInput, agg bool, res *IPOut) ([]ipGroup, error) {
 	var out []ipGroup
+	generatedName := map[string]bool{} // the lists of the sets the loop builds: no feed may take one's name
+	for _, g := range slices.Concat(in.GeoSets, in.DNSBLIP) {
+		generatedName[g.Alias] = true
+	}
 	for _, kind := range []string{"ipv4", "ipv6"} {
 		suffix := "_" + short(kind)
 		geoGroup := func(g GeoSet, dnsblip bool) error {
@@ -276,7 +294,8 @@ func (s IPSets) groups(in IPInput, agg bool) ([]ipGroup, error) {
 			if err != nil {
 				return err
 			}
-			if agg && kind == "ipv4" && !dnsblip {
+			// a continent is aggregated in any class (the GeoIP block), DNSBLIP as a feed is: outside deny
+			if agg && kind == "ipv4" && (!dnsblip || g.ListClass != "deny") {
 				text = lines(ipset.CIDRAggregate(text))
 			}
 			out = append(out, ipGroup{g.Group, kind, g.ListClass, g.Action, true,
@@ -306,6 +325,11 @@ func (s IPSets) groups(in IPInput, agg bool) ([]ipGroup, error) {
 				names = append(names, g.group+"_custom"+suffix)
 			}
 			for j, name := range names {
+				if generatedName[name] {
+					res.Issues = append(res.Issues, apply.Issue{Resource: "feed/" + kind + ":" + name, Stage: "apply", Code: "list_name_taken",
+						Message: "a set the Core Updater builds itself owns this list's name; the feed is left out of its group"})
+					continue
+				}
 				text, err := readList(filepath.Join(s.FeedDirs[kind], name+".parsed.ip"))
 				if err != nil {
 					return nil, err
@@ -316,7 +340,7 @@ func (s IPSets) groups(in IPInput, agg bool) ([]ipGroup, error) {
 				}
 				g.lists = append(g.lists, ipList{name: name, text: text, changed: in.Changed[name], custom: custom && j == len(names)-1})
 			}
-			if len(g.lists) > 0 {
+			if len(names) > 0 {
 				out = append(out, g)
 			}
 		}
@@ -329,6 +353,28 @@ func (s IPSets) groups(in IPInput, agg bool) ([]ipGroup, error) {
 		}
 	}
 	return out, nil
+}
+
+// prune deletes each list of a class folder that no list of that class names now, as today's orphan prune does
+// (pfblockerng_apply.inc:1962-2035, the <folder>/<name>.txt of a header $pfb['existing'] no longer holds). A continent's list
+// is the GeoIP stage's and is left to it.
+func (s IPSets) prune(final map[string]map[string]string) error {
+	for class, lists := range final {
+		files, err := filepath.Glob(filepath.Join(s.Folders[class], "*.txt"))
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
+			name := strings.TrimSuffix(filepath.Base(f), ".txt")
+			if _, ok := lists[name]; ok || slices.Contains(continents, strings.TrimSuffix(strings.TrimSuffix(name, "_v4"), "_v6")) {
+				continue
+			}
+			if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // members is a body in Core's spelling (apply.Member): a row it refuses is left out, with one issue for the set.
@@ -418,6 +464,18 @@ func holes(v any) *string {
 		return nil
 	}
 	return &text
+}
+
+func digestOf(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
+}
+
+func deref(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 func lines(rows []string) string {

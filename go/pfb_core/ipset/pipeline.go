@@ -44,11 +44,12 @@ func ClosingPass(dupOn, ranV4 bool) (invoke, dedup bool) {
 	return ranV4, false
 }
 
-// Settings are the switches of one update run. Dup, Agg, Rep, DRep, PRep and Supp are the toggles of the same names, DMax and
-// PMax the two thresholds, CC, CCWhite, CCBlack and Geo the dMax country setting, Placeholder the v4 spelling.
+// Settings are the switches of one update run. Dup, Agg, Rep, DRep, PRep and Supp are the toggles of the same names, Max the
+// per-feed reputation's threshold ($pfb['max']), DMax and PMax the recompute's, CC, CCWhite, CCBlack and Geo the dMax country
+// setting, Placeholder the v4 spelling.
 type Settings struct {
 	Dup, Agg, Rep, DRep, PRep, Supp bool
-	DMax, PMax                      int
+	Max, DMax, PMax                 int
 	CC, CCWhite, CCBlack            string
 	Geo                             GeoLookup
 	Placeholder                     string
@@ -176,7 +177,9 @@ func (p *Pipeline) Pass(changed []string, set map[string]string) PassOut {
 		text := p.text[f.Name]
 		if strings.HasSuffix(f.Name, "_v4") && !f.Prepared {
 			// A stage that leaves the rows as they are leaves the file as it is.
-			if pre := Preprocess(text, PrepIn{Dup: cfg.Dup, Agg: cfg.Agg, Rep: cfg.Rep, DRep: cfg.DRep, Reputation: rep}); !slices.Equal(pre.Members, textRows(text)) {
+			feedRep := rep
+			feedRep.Max = cfg.Max
+			if pre := Preprocess(text, PrepIn{Dup: cfg.Dup, Agg: cfg.Agg, Rep: cfg.Rep, DRep: cfg.DRep, Reputation: feedRep}); !slices.Equal(pre.Members, textRows(text)) {
 				text = fileOf(pre.Members)
 			}
 		}
