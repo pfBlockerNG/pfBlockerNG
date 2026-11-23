@@ -9,11 +9,15 @@ use PHPUnit\Framework\TestCase;
 /**
  * Issue #4036 slice 7a: freezes what today's manifest writer, pfb_unbound_python_sources(), makes of a feed's staged NDJSON
  * rows as the parity fixture tests/core/fixtures/dnsbl_resources_parity.json; go/pfb_core/dnsbl passes the same file. A case's
- * answer is the manifest's feed rows in order, each with the lines of its .raw file. Today's PHP gives old_expect where a case
- * has one (a departure Core makes on purpose), else expect.
+ * answer is the manifest's feed rows in order, each with the lines of its .raw file, and the DNSBL widget's count per group:
+ * the lines of each published feed's staging file (pfb_dnsbl_alias_count_verbatim()), summed per group in feed order. A
+ * writer that publishes nothing answers {"error": ...}. Today's PHP gives old_expect where a case has one (a departure Core
+ * makes on purpose), else expect. A staged line is a string, or {"b64": bytes}; "top1m": "missing" turns TOP1M on without
+ * its source file.
  */
 #[CoversFunction('pfb_unbound_python_sources')]
 #[CoversFunction('pfb_dnsbl_ndjson_parse_row')]
+#[CoversFunction('pfb_dnsbl_alias_count_verbatim')]
 final class DnsblResourcesParityTest extends TestCase
 {
 	private const FIXTURE = __DIR__ . '/../core/fixtures/dnsbl_resources_parity.json';
@@ -70,7 +74,7 @@ final class DnsblResourcesParityTest extends TestCase
 		$ids = array_column($doc['cases'], 'id');
 		$this->assertSame(array_values(array_unique($ids)), $ids, 'a case id appears once');
 		foreach ($doc['cases'] as $case) {
-			$this->assertSame([], array_diff(array_keys($case), ['id', 'description', 'feeds', 'expect', 'old_expect', 'refused', 'invalid', 'dropped']),
+			$this->assertSame([], array_diff(array_keys($case), ['id', 'description', 'feeds', 'top1m', 'expect', 'old_expect', 'refused', 'invalid', 'dropped']),
 				"{$case['id']}: only known keys");
 		}
 	}
@@ -80,15 +84,25 @@ final class DnsblResourcesParityTest extends TestCase
 	{
 		$feeds = [];
 		foreach ($case['feeds'] as $feed) {
-			$staged = implode('', array_map(static fn(string $line): string => "{$line}\n", $feed['staged']));
+			$staged = implode('', array_map(static fn(string|array $line): string => (is_array($line) ? base64_decode($line['b64'], TRUE) : $line) . "\n", $feed['staged']));
 			file_put_contents("{$this->tmp}/dnsbl/{$feed['header']}.txt", $staged);
 			$feeds[] = array_intersect_key($feed, array_flip(['header', 'group', 'log', 'provenance', 'mode', 'top1m']));
 		}
 
+		if (($case['top1m'] ?? NULL) === 'missing') {
+			$GLOBALS['pfb']['dnsbl_top1m'] = PfbToggle::On;
+		}
+		$want = $case['old_expect'] ?? $case['expect'];
+
 		$manifest = pfb_unbound_python_sources($feeds);
 
+		if (isset($want['error'])) {
+			$this->assertFalse($manifest, "{$case['id']}: the writer refuses to publish");
+			return;
+		}
 		$this->assertIsArray($manifest, "{$case['id']}: the writer published");
-		$answer = ['feeds' => []];
+		$answer = ['feeds' => [], 'groups' => []];
+		$groups = [];
 		foreach ($manifest['feeds'] as $row) {
 			$raw = (string) file_get_contents(dirname($GLOBALS['pfb']['unbound_py_sources']) . "/{$row['raw']}");
 			$answer['feeds'][] = [
@@ -100,7 +114,11 @@ final class DnsblResourcesParityTest extends TestCase
 				'top1m'      => $row['top1m'] ?? FALSE,
 				'rows'       => $raw === '' ? [] : explode("\n", substr($raw, 0, -1)),
 			];
+			$groups[$row['group']] = pfb_dnsbl_alias_count_verbatim("{$this->tmp}/dnsbl/{$row['feed']}.txt", $groups[$row['group']] ?? 0);
 		}
-		$this->assertSame($case['old_expect'] ?? $case['expect'], $answer, "{$case['id']}: today's manifest feed rows and .raw lines");
+		foreach ($groups as $name => $entries) {
+			$answer['groups'][] = ['name' => (string) $name, 'entries' => $entries];
+		}
+		$this->assertSame($want, $answer, "{$case['id']}: today's manifest feed rows, .raw lines and widget group counts");
 	}
 }

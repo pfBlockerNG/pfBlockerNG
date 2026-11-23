@@ -65,6 +65,7 @@ type Set struct {
 	Top1mEnabled   bool
 	Whitelist      []string
 	Unlock         []string
+	TLDWildcard    bool     // dns.tldWildcard
 	TLDBlacklist   []string // published by the caller only while dns.tldWildcard is on, as today
 	TLDExclusions  []string
 	Feeds          []Feed

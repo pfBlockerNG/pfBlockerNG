@@ -223,6 +223,7 @@ func publishModule(t *testing.T, name string, m module) goldenScenario {
 		BuiltinLogFlag: "0",
 		Whitelist:      list("user_whitelist"),
 		Unlock:         list("user_unlock"),
+		TLDWildcard:    true, // the manifest holds the lists today's writer let through
 		TLDBlacklist:   list("tld_wildcard_blacklist"),
 		TLDExclusions:  list("tld_wildcard_exclusion"),
 	}

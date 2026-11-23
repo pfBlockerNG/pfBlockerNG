@@ -1,8 +1,10 @@
 package dnsbl_test
 
 // The parity fixture of slice 7a (issue #4036): tests/core/fixtures/dnsbl_resources_parity.json, frozen against today's
-// pfb_unbound_python_sources() by tests/php/DnsblResourcesParityTest.php. This runner publishes each case through the
-// assembler and reads the answer back from the store: the manifest's feed rows in position order, each with its body.
+// pfb_unbound_python_sources() and the DNSBL widget's group counts by tests/php/DnsblResourcesParityTest.php. This runner
+// publishes each case through the assembler and reads the answer back from the store: the manifest's feed rows in
+// position order, each with its body, and the manifest metadata's group counts. A staged line is a string, or
+// {"b64": bytes} for one that is not UTF-8; "top1m": "missing" turns TOP1M on with no list.
 
 import (
 	"bytes"
@@ -30,23 +32,47 @@ type parityFeedOut struct {
 	Rows       []string `json:"rows"`
 }
 
+type parityGroup struct {
+	Name    string `json:"name"`
+	Entries int    `json:"entries"`
+}
+
 type parityAnswer struct {
-	Feeds []parityFeedOut `json:"feeds,omitempty"`
-	Error string          `json:"error,omitempty"`
+	Feeds  []parityFeedOut `json:"feeds,omitempty"`
+	Groups []parityGroup   `json:"groups,omitempty"`
+	Error  string          `json:"error,omitempty"`
+}
+
+// stagedLine is a staged line: a JSON string, or {"b64": bytes}.
+type stagedLine string
+
+func (l *stagedLine) UnmarshalJSON(data []byte) error {
+	var text string
+	if json.Unmarshal(data, &text) == nil {
+		*l = stagedLine(text)
+		return nil
+	}
+	var b struct{ B64 []byte }
+	if err := json.Unmarshal(data, &b); err != nil {
+		return err
+	}
+	*l = stagedLine(b.B64)
+	return nil
 }
 
 type parityCase struct {
 	ID          string `json:"id"`
 	Description string `json:"description"`
 	Feeds       []struct {
-		Header     string   `json:"header"`
-		Group      string   `json:"group"`
-		Log        string   `json:"log"`
-		Provenance string   `json:"provenance"`
-		Mode       string   `json:"mode"`
-		Top1m      bool     `json:"top1m"`
-		Staged     []string `json:"staged"`
+		Header     string       `json:"header"`
+		Group      string       `json:"group"`
+		Log        string       `json:"log"`
+		Provenance string       `json:"provenance"`
+		Mode       string       `json:"mode"`
+		Top1m      bool         `json:"top1m"`
+		Staged     []stagedLine `json:"staged"`
 	} `json:"feeds"`
+	Top1m     string         `json:"top1m"`
 	Expect    parityAnswer   `json:"expect"`
 	OldExpect *parityAnswer  `json:"old_expect"`
 	Refused   []string       `json:"refused"`
@@ -74,10 +100,14 @@ func TestAssemblerMatchesTheParityFixture(t *testing.T) {
 			if c.OldExpect != nil && reflect.DeepEqual(*c.OldExpect, c.Expect) {
 				t.Fatal("old_expect equals expect: not a departure")
 			}
-			var set dnsbl.Set
+			set := dnsbl.Set{Top1mEnabled: c.Top1m == "missing"}
 			invalid := map[string]int{}
 			for _, f := range c.Feeds {
-				rows, bad, err := dnsbl.ReadStaged(strings.NewReader(strings.Join(f.Staged, "\n") + "\n"))
+				var staged strings.Builder
+				for _, line := range f.Staged {
+					staged.WriteString(string(line) + "\n")
+				}
+				rows, bad, err := dnsbl.ReadStaged(strings.NewReader(staged.String()))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -97,6 +127,15 @@ func TestAssemblerMatchesTheParityFixture(t *testing.T) {
 				got.Error = err.Error()
 			} else {
 				got.Feeds = parityFeeds(t, store)
+				reply, err := store.Get(dnsbl.ManifestID, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var meta struct{ Groups []parityGroup }
+				if err := json.Unmarshal(reply.Metadata, &meta); err != nil {
+					t.Fatal(err)
+				}
+				got.Groups = meta.Groups
 			}
 			if !reflect.DeepEqual(got, c.Expect) {
 				g, _ := json.Marshal(got)

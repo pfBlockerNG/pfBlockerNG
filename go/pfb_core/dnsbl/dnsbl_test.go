@@ -7,6 +7,8 @@ import (
 	"io"
 	"maps"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -16,7 +18,7 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
 )
 
-const psl = "// comment before\n// ===BEGIN ICANN DOMAINS===\n// a comment\ncom\n\n  *.ck  \n!www.ck\n// ===END ICANN DOMAINS===\noutside.example\n// ===BEGIN PRIVATE DOMAINS===\ngithub.io\r\n// ===END PRIVATE DOMAINS===\n"
+const psl = "// comment before\n// ===BEGIN ICANN DOMAINS===\n// a comment\n# a hash comment\ncom\n\n  *.ck  \n!www.ck\n// ===END ICANN DOMAINS===\noutside.example\n// ===BEGIN PRIVATE DOMAINS===\ngithub.io\r\n// ===END PRIVATE DOMAINS===\n"
 
 // body is id's current body as lines, read back from the store.
 func body(t *testing.T, store *resources.Store, id string) []string {
@@ -61,6 +63,7 @@ func sampleSet() dnsbl.Set {
 		Top1mEnabled:   true,
 		Whitelist:      []string{".example.com", "a.example"},
 		Unlock:         []string{"u.example"},
+		TLDWildcard:    true,
 		TLDBlacklist:   []string{"zip"},
 		TLDExclusions:  []string{"ok.zip"},
 		Feeds: []dnsbl.Feed{
@@ -170,7 +173,6 @@ func TestPublishingTheSameSetTwiceAdvancesNoGeneration(t *testing.T) {
 	for trial := range 40 {
 		var set dnsbl.Set
 		set.BuiltinLogFlag = fmt.Sprint(r.IntN(7))
-		set.Top1mEnabled = r.IntN(2) == 0
 		for range r.IntN(4) {
 			set.Whitelist = append(set.Whitelist, word())
 		}
@@ -182,7 +184,7 @@ func TestPublishingTheSameSetTwiceAdvancesNoGeneration(t *testing.T) {
 			set.Feeds = append(set.Feeds, feed)
 		}
 		if r.IntN(2) == 0 {
-			set.Top1m = []string{word(), word()}
+			set.Top1mEnabled, set.Top1m = true, []string{word(), word()}
 		}
 		ids := []string{dnsbl.ManifestID, dnsbl.Top1mID}
 		for _, f := range set.Feeds {
@@ -231,7 +233,7 @@ func TestPublishingTheSameSetTwiceAdvancesNoGeneration(t *testing.T) {
 // stays keeps its generation.
 func TestPublishRemovesWhatTheNewManifestNoLongerNames(t *testing.T) {
 	store := resources.Open(t.TempDir())
-	set := dnsbl.Set{Feeds: []dnsbl.Feed{{Name: "Stay", Rows: []string{"s.example"}}, {Name: "Leave", Rows: []string{"l.example"}}}, Top1m: []string{"t.example"}}
+	set := dnsbl.Set{Feeds: []dnsbl.Feed{{Name: "Stay", Rows: []string{"s.example"}}, {Name: "Leave", Rows: []string{"l.example"}}}, Top1mEnabled: true, Top1m: []string{"t.example"}}
 	if _, err := dnsbl.Publish(store, set); err != nil {
 		t.Fatal(err)
 	}
@@ -266,8 +268,9 @@ func TestPublishDropsRowsTheStoreCannotHoldAndCountsThem(t *testing.T) {
 	store := resources.Open(t.TempDir())
 	long := strings.Repeat("a", resources.MaxMemberLength+1)
 	res, err := dnsbl.Publish(store, dnsbl.Set{
-		Feeds: []dnsbl.Feed{{Name: "F", Rows: []string{"ok.example", "nul\x00.example", "||tab\t.example^", "##.banner", "", long, "del\x7f.example", "ok.example"}}},
-		Top1m: []string{"top.example", "#x"},
+		Feeds:        []dnsbl.Feed{{Name: "F", Rows: []string{"ok.example", "nul\x00.example", "||tab\t.example^", "##.banner", "", long, "del\x7f.example", "ok.example"}}},
+		Top1mEnabled: true,
+		Top1m:        []string{"top.example", "#x"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -280,32 +283,72 @@ func TestPublishDropsRowsTheStoreCannotHoldAndCountsThem(t *testing.T) {
 	}
 }
 
-// Hostile rows: a feed whose name is not letters, digits and underscores (what today's writer refuses) is left out and
-// reported; a feed named twice refuses the whole set before anything is written.
+// Hostile rows: a feed whose name today's writer refuses (not letters, digits and underscores, or "0", which empty()
+// reads as false) is left out and reported, and the feed after it takes its place.
 func TestPublishRefusesFeedNamesTodaysWriterRefuses(t *testing.T) {
 	store := resources.Open(t.TempDir())
 	res, err := dnsbl.Publish(store, dnsbl.Set{Feeds: []dnsbl.Feed{
-		{Name: "bad-name"}, {Name: "bad.name"}, {Name: ""}, {Name: "../x"}, {Name: strings.Repeat("a", 120)}, {Name: "Good_1", Rows: []string{"g.example"}},
+		{Name: "bad-name"}, {Name: "bad.name"}, {Name: ""}, {Name: "../x"}, {Name: "0"}, {Name: "Good_1", Group: "G", Rows: []string{"g.example"}},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"bad-name", "bad.name", "", "../x", strings.Repeat("a", 120)}; !slices.Equal(res.Refused, want) {
+	if want := []string{"bad-name", "bad.name", "", "../x", "0"}; !slices.Equal(res.Refused, want) {
 		t.Errorf("Refused = %q, want %q", res.Refused, want)
 	}
 	manifest := body(t, store, dnsbl.ManifestID)
 	if len(manifest) != 2 || !strings.Contains(manifest[1], `"feed":"Good_1"`) || !strings.Contains(manifest[1], `"position":1`) {
 		t.Errorf("manifest = %q, want only Good_1, at position 1", manifest)
 	}
-
-	empty := resources.Open(t.TempDir())
-	_, err = dnsbl.Publish(empty, dnsbl.Set{Feeds: []dnsbl.Feed{{Name: "Dup", Rows: []string{"a.example"}}, {Name: "Dup", Rows: []string{"b.example"}}}})
-	if err == nil || err.Error() != `feed "Dup" is named twice` {
-		t.Errorf("a feed named twice: err = %v", err)
+	if reply, _ := store.Get(dnsbl.ManifestID, nil); string(reply.Metadata) != `{"entries":1,"feeds":1,"groups":[{"name":"G","entries":1}]}` {
+		t.Errorf("manifest metadata = %s, want one feed counted", reply.Metadata)
 	}
-	for _, id := range []string{dnsbl.ManifestID, "dnsbl/feed-Dup"} {
-		if _, err := empty.Get(id, nil); !errors.Is(err, resources.ErrNotFound) {
-			t.Errorf("after a refused set, Get(%s) = %v, want not found", id, err)
+}
+
+// Departure: a name too long for a resource id (dnsbl/feed-<name> over 128 bytes) is refused and reported, where
+// today's writer publishes it.
+func TestPublishRefusesANameTooLongForAResourceID(t *testing.T) {
+	store := resources.Open(t.TempDir())
+	fits, over := strings.Repeat("a", 117), strings.Repeat("b", 118)
+	res, err := dnsbl.Publish(store, dnsbl.Set{Feeds: []dnsbl.Feed{{Name: fits, Rows: []string{"a.example"}}, {Name: over, Rows: []string{"b.example"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(res.Refused, []string{over}) {
+		t.Errorf("Refused = %q, want only the 118-byte name", res.Refused)
+	}
+	if got := body(t, store, dnsbl.FeedPrefix+fits); !slices.Equal(got, []string{"a.example"}) {
+		t.Errorf("the 117-byte name's body = %q", got)
+	}
+}
+
+// Owner decision (2026-11-23): two feeds of one name share one body holding the rows of both, as they share one .raw
+// today; each keeps its own manifest row, naming that body.
+func TestPublishMergesTwoFeedsOfOneName(t *testing.T) {
+	store := resources.Open(t.TempDir())
+	first := []string{"b.example", "a.example"}
+	_, err := dnsbl.Publish(store, dnsbl.Set{Feeds: []dnsbl.Feed{
+		{Name: "Dup", Group: "G1", LogFlag: "1", Rows: first},
+		{Name: "Dup", Group: "G2", LogFlag: "0", Rows: []string{"c.example", "a.example"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := body(t, store, "dnsbl/feed-Dup"); !slices.Equal(got, []string{"a.example", "b.example", "c.example"}) {
+		t.Errorf("shared body = %q, want both feeds' rows", got)
+	}
+	var feedRows []string
+	for _, line := range body(t, store, dnsbl.ManifestID) {
+		if strings.Contains(line, `"kind":"feed"`) {
+			feedRows = append(feedRows, line)
+		}
+	}
+	if len(feedRows) != 2 || !strings.Contains(feedRows[0], `"position":1,"feed":"Dup","group":"G1"`) || !strings.Contains(feedRows[1], `"position":2,"feed":"Dup","group":"G2"`) {
+		t.Errorf("feed rows = %q, want one per feed", feedRows)
+	}
+	for _, row := range feedRows {
+		if !strings.Contains(row, `"resource":"dnsbl/feed-Dup","generation":"1"`) || !strings.Contains(row, `"entries":3}`) {
+			t.Errorf("feed row %s does not name the shared body", row)
 		}
 	}
 }
@@ -327,6 +370,7 @@ func TestPublishRefusesAPSLTextWithoutItsMarkers(t *testing.T) {
 		"NUL":              psl + "a\x00b\n",
 		"marker mid-line":  strings.Replace(psl, "// ===END ICANN DOMAINS===", "x // ===END ICANN DOMAINS===", 1),
 		"empty text given": "",
+		"hash marker":      strings.Replace(psl, "// ===END ICANN DOMAINS===", "# ===END ICANN DOMAINS===", 1),
 	} {
 		if _, err := dnsbl.Publish(store, dnsbl.Set{PSL: []byte(text)}); err == nil {
 			t.Errorf("%s: Publish accepted the PSL text", name)
@@ -334,6 +378,20 @@ func TestPublishRefusesAPSLTextWithoutItsMarkers(t *testing.T) {
 	}
 	if after := generations(t, store, []string{dnsbl.ManifestID, dnsbl.PSLID}); !maps.Equal(before, after) {
 		t.Errorf("a refused PSL changed the store: %v -> %v", before, after)
+	}
+}
+
+// The PSL text is split and stripped as the decider reads its authority (str.splitlines, str.strip): CR-only line ends,
+// a form feed between rules and markers padded with \x1f are all read.
+func TestPSLLinesAreSplitAsTheDeciderSplitsThem(t *testing.T) {
+	store := resources.Open(t.TempDir())
+	text := "\x1f// ===BEGIN ICANN DOMAINS===\x1f\rcom\fnet\r// ===END ICANN DOMAINS===\r// ===BEGIN PRIVATE DOMAINS===\u2028github.io\r\n// ===END PRIVATE DOMAINS===\r"
+	if _, err := dnsbl.Publish(store, dnsbl.Set{PSL: []byte(text)}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`{"section":"icann","rule":"com"}`, `{"section":"icann","rule":"net"}`, `{"section":"private","rule":"github.io"}`}
+	if got := body(t, store, dnsbl.PSLID); !slices.Equal(got, want) {
+		t.Errorf("psl body = %q, want %q", got, want)
 	}
 }
 
@@ -361,10 +419,10 @@ func TestManifestRowsEscapeEveryControlCharacter(t *testing.T) {
 	}
 }
 
-// ReadStaged takes the rows pfb_dnsbl_ndjson_emit_row() and feedparse write and skips, counting, every other shape, as
-// pfb_dnsbl_ndjson_parse_row() skips it: not JSON, not a two-string array, an unknown tag, an empty payload, and the
-// legacy object rows Core never writes.
-func TestReadStagedTakesCompactRowsOnly(t *testing.T) {
+// Owner decision (2026-11-23): ReadStaged takes what pfb_dnsbl_ndjson_parse_row() takes, the schema-v1 object rows
+// included, and skips, counting, what it skips: not JSON, not a two-string array, an unknown tag or kind, an empty or
+// missing field, a line that is not UTF-8 or holds a lone surrogate escape (json_decode() fails on both).
+func TestReadStagedTakesWhatTodaysReaderTakes(t *testing.T) {
 	staged := strings.Join([]string{
 		`["d","a.example"]`,
 		`["a","||b.example^"]`,
@@ -377,6 +435,16 @@ func TestReadStagedTakesCompactRowsOnly(t *testing.T) {
 		`[1,"a"]`,
 		`null`,
 		`{"kind":"domain","domain":"old.example","log":"1","feed":"F","group":"G"}`,
+		`{"kind":"abp","raw":"||old.example^"}`,
+		`{"kind":"domain","domain":"nolog.example","feed":"F","group":"G"}`,
+		`{"kind":"domain","domain":"emptylog.example","log":"","feed":"F","group":"G"}`,
+		`{"kind":"abp","raw":1}`,
+		`{"kind":"other","raw":"x"}`,
+		`{"domain":"nokind.example"}`,
+		"[\"d\",\"bad\xffutf8.example\"]",
+		`["d","\ud800lone.example"]`,
+		`["d","\udc00low.example"]`,
+		`["d","\ud83d\ude00pair.example"]`,
 		` ["d","spaced.example"] `,
 		`["d","last.example"]`, // no newline at the end
 	}, "\n")
@@ -384,11 +452,24 @@ func TestReadStagedTakesCompactRowsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"a.example", "||b.example^", "spaced.example", "last.example"}; !slices.Equal(rows, want) {
+	want := []string{"a.example", "||b.example^", "old.example", "||old.example^", "\U0001F600pair.example", "spaced.example", "last.example"}
+	if !slices.Equal(rows, want) {
 		t.Errorf("rows = %q, want %q", rows, want)
 	}
-	if invalid != 7 {
-		t.Errorf("invalid = %d, want 7", invalid)
+	if invalid != 14 {
+		t.Errorf("invalid = %d, want 14", invalid)
+	}
+}
+
+// Hostile rows: a line longer than a row can be is skipped and counted, without holding it, and the next line is read.
+func TestReadStagedSkipsALineOverTheBound(t *testing.T) {
+	long := `["d","` + strings.Repeat("a", 3*resources.MaxMemberLength) + `"]`
+	rows, invalid, err := dnsbl.ReadStaged(strings.NewReader(`["d","a.example"]` + "\n" + long + "\n" + `["d","b.example"]` + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rows, []string{"a.example", "b.example"}) || invalid != 1 {
+		t.Errorf("rows %q, invalid %d; want a.example, b.example and 1", rows, invalid)
 	}
 }
 
@@ -404,3 +485,109 @@ var errBroken = errors.New("broken")
 type errReader struct{}
 
 func (errReader) Read([]byte) (int, error) { return 0, errBroken }
+
+// Scenario: a set that cannot be published whole (a whitelist entry too long for a manifest row) is refused before any
+// body is written, so the live manifest keeps naming bodies the store holds.
+func TestAFailedPublishWritesNothing(t *testing.T) {
+	store := resources.Open(t.TempDir())
+	if _, err := dnsbl.Publish(store, dnsbl.Set{Feeds: []dnsbl.Feed{{Name: "A", Rows: []string{"a.example"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{dnsbl.ManifestID, "dnsbl/feed-A"}
+	before := generations(t, store, ids)
+	_, err := dnsbl.Publish(store, dnsbl.Set{Whitelist: []string{strings.Repeat("w", resources.MaxMemberLength)}, Feeds: []dnsbl.Feed{{Name: "A", Rows: []string{"changed.example"}}}})
+	if err == nil {
+		t.Fatal("a manifest row over 1 MiB was accepted")
+	}
+	if after := generations(t, store, ids); !maps.Equal(before, after) {
+		t.Errorf("a refused set changed the store: %v -> %v", before, after)
+	}
+	if got := body(t, store, "dnsbl/feed-A"); !slices.Equal(got, []string{"a.example"}) {
+		t.Errorf("dnsbl/feed-A = %q, want the published rows kept", got)
+	}
+}
+
+// Scenario: TOP1M on with no list refuses the set, as today's writer fails closed on a missing source; TOP1M off
+// publishes no TOP1M body, whatever list is given.
+func TestTop1mFollowsItsSwitch(t *testing.T) {
+	store := resources.Open(t.TempDir())
+	if _, err := dnsbl.Publish(store, dnsbl.Set{Top1mEnabled: true}); err == nil {
+		t.Error("TOP1M on with no list was accepted")
+	}
+	if _, err := store.Get(dnsbl.ManifestID, nil); !errors.Is(err, resources.ErrNotFound) {
+		t.Errorf("after the refusal, Get(manifest) = %v, want not found", err)
+	}
+	if _, err := dnsbl.Publish(store, dnsbl.Set{Top1m: []string{"t.example"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(dnsbl.Top1mID, nil); !errors.Is(err, resources.ErrNotFound) {
+		t.Errorf("TOP1M off: Get(top1m) = %v, want not found", err)
+	}
+}
+
+// Both TLD lists are published only while dns.tldWildcard is on, as today's writer empties both when it is off.
+func TestTLDListsFollowTheWildcardSwitch(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		store := resources.Open(t.TempDir())
+		if _, err := dnsbl.Publish(store, dnsbl.Set{TLDWildcard: on, TLDBlacklist: []string{"zip"}, TLDExclusions: []string{"ok.zip"}}); err != nil {
+			t.Fatal(err)
+		}
+		var tld []string
+		for _, line := range body(t, store, dnsbl.ManifestID) {
+			if strings.Contains(line, `"kind":"tld_`) {
+				tld = append(tld, line)
+			}
+		}
+		want := []string(nil)
+		if on {
+			want = []string{`{"kind":"tld_blacklist","tld":"zip"}`, `{"kind":"tld_exclusion","domain":"ok.zip"}`}
+		}
+		if !slices.Equal(tld, want) {
+			t.Errorf("tldWildcard %v: TLD rows = %q, want %q", on, tld, want)
+		}
+	}
+}
+
+// Scenario: a body no manifest names (left by a failed Publish or Remove) is removed by the next Publish, found in the
+// store's index rather than in the previous manifest.
+func TestPublishRemovesBodiesNoManifestNames(t *testing.T) {
+	store := resources.Open(t.TempDir())
+	if _, err := store.Publish("dnsbl/feed-Orphan", []string{"o.example"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dnsbl.Publish(store, dnsbl.Set{Feeds: []dnsbl.Feed{{Name: "A", Rows: []string{"a.example"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get("dnsbl/feed-Orphan", nil); !errors.Is(err, resources.ErrNotFound) {
+		t.Errorf("Get(orphan) = %v, want not found", err)
+	}
+}
+
+// Scenario: a damaged manifest body does not block the next Publish, which writes a new manifest and still removes what
+// the new set does not name.
+func TestPublishOverADamagedManifest(t *testing.T) {
+	dir := t.TempDir()
+	store := resources.Open(dir)
+	if _, err := dnsbl.Publish(store, dnsbl.Set{Feeds: []dnsbl.Feed{{Name: "A", Rows: []string{"a.example"}}, {Name: "B", Rows: []string{"b.example"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	damaged, err := filepath.Glob(filepath.Join(dir, "dnsbl~manifest.*.body"))
+	if err != nil || len(damaged) != 1 {
+		t.Fatalf("manifest body files %q, %v", damaged, err)
+	}
+	if err := os.WriteFile(damaged[0], []byte("garbage\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(dnsbl.ManifestID, nil); !errors.Is(err, resources.ErrUnavailable) {
+		t.Fatalf("before: Get(manifest) = %v, want unavailable", err)
+	}
+	if _, err := dnsbl.Publish(store, dnsbl.Set{Feeds: []dnsbl.Feed{{Name: "A", Rows: []string{"a.example"}}}}); err != nil {
+		t.Fatalf("Publish over a damaged manifest: %v", err)
+	}
+	if got := body(t, store, dnsbl.ManifestID); len(got) != 2 {
+		t.Errorf("manifest = %q, want config and one feed row", got)
+	}
+	if _, err := store.Get("dnsbl/feed-B", nil); !errors.Is(err, resources.ErrNotFound) {
+		t.Errorf("Get(feed-B) = %v, want not found", err)
+	}
+}
