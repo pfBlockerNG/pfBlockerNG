@@ -290,6 +290,18 @@ lists (`A1_<ISO>`, `A2_<ISO>`), which today's PHP conversion never writes, so to
 Reputation stage compares an offender's plain ISO code with the country list, now entry by entry rather than as a
 substring, so such an entry could never match. The plain `A1` and `A2` entries stay, as today.*
 
+*Amendment 2026-11-23 (issue #4036, slice 7a): `dnsbl/<scope>` is five kinds of resource, written by `go/pfb_core/dnsbl`
+(`Publish`): `dnsbl/feed-<feed>` per feed (plain text: the rows a `.raw` file holds, a domain or a verbatim ABP rule each),
+`dnsbl/top1m` (plain text), `dnsbl/safesearch` and `dnsbl/psl` (JSON Lines), and `dnsbl/manifest` (JSON Lines), published
+last: its rows carry the config, the whitelist, unlock and TLD entries, and one row per feed and per other body naming that
+body's generation and digest. A body can move on before a client fetches it (the store keeps only the current and the
+applied generation); the client then keeps its set and retries at its next poll. The per-group counts are the manifest's metadata. The generation
+of `dnsbl/manifest` is the `dnsbl.generation` of the apply request (8.1). A feed's rows are a sorted set (owner,
+2026-11-23): its irreducible regex rules are numbered and scanned in byte order, a row repeated in one feed is counted once,
+and of two ABP rules of one feed on the same key the later in byte order wins. A row the store cannot hold is left out and
+counted. The rows and the departures: `docs/misc/core-api-protocol.md` "DNSBL resources",
+`tests/core/fixtures/dnsbl_resources_parity.json`.*
+
 - **Canonical body:** members sorted and unique in byte order, one per line, the order `pfb_canonical_alias_set` produces
   (`pfb.inc:14880`; `docs/misc/architecture-notes.md:1194-1197`). `digest` is the xxh128 of that body.
 - **Generation:** a `uint64` per resource, written as a decimal string on the wire, as `GetUpdate`'s cursor is
@@ -444,6 +456,8 @@ The apply settles exactly that token (`apply.inc:5617`), so a change marked whil
   from fetched data. The build is not moved or redesigned.
   *Amendment 2026-11-18 (issue #4053, #4056): the HSTS preload list is removed; it only turned a VIP answer into a null
   answer. The reference lists are the PSL and TLD lists.*
+  *Amendment 2026-11-23 (issue #4036): the TLD lists are page arrays, not a pfB-DNS input; pfB-DNS gets only the chosen
+  TLDs, through `policy/dnsbl`. The PSL is the one reference list, published as `dnsbl/psl` (section 7).*
 - The Outpost apply keeps the VIP, NAT, certificate and webserver from `sinkholeRequired`, with the hold-down while the
   previous generation still answers (`apply.inc:3350-3384,3730`), the Resolver move, and the re-lock of temporary unlocks.
   *Amendment 2026-11-17 (issue #4053): the WebServer/VIP response is removed, so there is no VIP, NAT, certificate,
