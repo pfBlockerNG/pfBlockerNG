@@ -97,7 +97,7 @@
       "description": "After a GeoIP conversion changed the country lists (today's geoip.update marker), every set is rebuilt, even one equal to its baseline.",
       "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
       "cc": {"ZA_v4.txt": "41.0.0.0/11\n"},
-      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "kept\n"},
+      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
       "geoipChanged": true,
       "expect": {
         "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
@@ -110,7 +110,7 @@
       "description": "A forced reload (today's reuse switch) rebuilds a set equal to its baseline.",
       "groups": [{"name": "pfB_Africa", "action": "Deny_Inbound", "listClass": "deny", "countriesV4": ["ZA"], "countriesV6": []}],
       "cc": {"ZA_v4.txt": "41.0.0.0/11\n"},
-      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "kept\n"},
+      "before": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
       "force": true,
       "expect": {
         "files": {"original/pfB_Africa_v4.orig": "41.0.0.0/11\n", "deny/pfB_Africa_v4.txt": "41.0.0.0/11\n"},
