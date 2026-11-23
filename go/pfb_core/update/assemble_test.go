@@ -508,12 +508,14 @@ func TestAManualUpdateBuildsPublishesAppliesAndSettles(t *testing.T) {
 	// The settled generation is the baseline: once a newer one is published, a cursor at it gets a delta.
 	settled := generation(t, s, "ip-set/Abuse/ipv4")
 	touch(t, filepath.Join(fx.src, "A.txt"), "93.184.216.3\n")
-	if _, err := fx.run(t, Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}); err != nil {
-		t.Fatal(err)
+	touch(t, filepath.Join(fx.applyDir, "exit"), "75") // the newer generation is published, not settled
+	if _, err := fx.run(t, Request{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}); !errors.Is(err, ErrDeferred) {
+		t.Fatalf("run = %v, want ErrDeferred", err)
 	}
+	// only a settled baseline gives a delta: without one the store answers the cursor with the full body
 	if got, err := s.Get("ip-set/Abuse/ipv4", &resources.Cursor{Generation: settled.Generation, Digest: settled.Digest}); err != nil ||
-		got.Generation <= settled.Generation || got.Kind != resources.KindDelta && got.Kind != resources.KindFull {
-		t.Errorf("a cursor at the settled generation %d gets %+v, %v; want a delta or the new body", settled.Generation, got, err)
+		got.Generation <= settled.Generation || got.Kind != resources.KindDelta || got.From != settled.Generation {
+		t.Errorf("a cursor at the settled generation %d gets %+v, %v; want a delta from it", settled.Generation, got, err)
 	}
 	if res.GeoIPReady == nil || !*res.GeoIPReady {
 		t.Errorf("geoipReady = %v, want true: the loop's conversion ran or was not needed", res.GeoIPReady)
@@ -952,7 +954,12 @@ func TestAnUnreadableIPSetsStateRebuildsTheSameSets(t *testing.T) {
 	if after := generation(t, fx.storeOf(), "ip-set/Abuse/ipv4"); after.Generation != before.Generation || after.Digest != before.Digest {
 		t.Errorf("ip-set/Abuse/ipv4 moved from %+v to %+v", before, after)
 	}
-	if b, err := os.ReadFile(filepath.Join(fx.state, ipStateName)); err != nil || !json.Valid(b) {
-		t.Errorf("%s = %q, %v; want it replaced with a valid state", ipStateName, b, err)
+	var st ipState
+	b, err := os.ReadFile(filepath.Join(fx.state, ipStateName))
+	if err != nil || json.Unmarshal(b, &st) != nil {
+		t.Fatalf("%s = %q, %v; want it replaced with a valid state", ipStateName, b, err)
+	}
+	if st.Deny["A_v4"] != "93.184.216.1\n" || st.Deny["B_v4"] != "93.184.217.1\n" {
+		t.Errorf("%s holds deny %q, want the Abuse feeds' results A_v4 and B_v4", ipStateName, st.Deny)
 	}
 }
