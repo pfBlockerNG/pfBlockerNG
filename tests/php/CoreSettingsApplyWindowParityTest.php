@@ -19,6 +19,7 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_core_ingest_settings')]
 #[CoversFunction('pfb_quiet_hours_in_window')]
+#[CoversFunction('pfb_quiet_hours_bounds')]
 #[CoversFunction('pfb_core_settings_backend')]
 final class CoreSettingsApplyWindowParityTest extends TestCase
 {

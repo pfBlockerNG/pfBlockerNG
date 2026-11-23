@@ -404,7 +404,8 @@ once and reads again, and the Update's start reads the backend again ([Update an
   end exclusive, across midnight when the start is later. Today's reader also takes one-digit hours, any minute up to 59 and one
   trailing newline; the adapter answers that window zero-padded, without the newline. Every value today's reader takes as no
   window (empty, malformed, an hour beyond 23 or a minute beyond 59, start equal to end, an array where the string belongs) is
-  `""`. Core refuses any other spelling. Parity fixture: `tests/core/fixtures/settings_apply_window_parity.json`, frozen by
+  `""`. Core refuses any other spelling but a start equal to the end, which the adapter never sends and
+  `InApplyWindow` also takes as no window. Parity fixture: `tests/core/fixtures/settings_apply_window_parity.json`, frozen by
   `CoreSettingsApplyWindowParityTest`; `go/pfb_core/settings/apply_window_parity_test.go` proves `InApplyWindow` on `applyWindow`
   decides as today's PHP on the stored value.
 - **Core refuses what it reads.** `proxyUrl` must use `http`, `https`, `socks5` or `socks5h` with a port from 1 to 65535 and no userinfo; a listed self address an IP address that is not unspecified, link-local, IPv4-mapped or zoned; an allowlist entry an address or a CIDR without a zone. A backend answer that breaks a rule fails the read ([Settings backends](#settings-backends)).

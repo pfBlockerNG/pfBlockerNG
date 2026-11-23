@@ -59,6 +59,9 @@ func TestCoreReadsTheAdaptersApplyWindowBackAndDecidesAsTodaysPHPAtEveryInstant(
 	doc := loadApplyWindowFixture(t)
 	for _, c := range doc.Cases {
 		t.Run(c.ID, func(t *testing.T) {
+			if len(c.PHP) != len(doc.Instants) {
+				t.Fatalf("%d decisions for %d instants", len(c.PHP), len(doc.Instants))
+			}
 			st, err := Load(newRefreshBackend(1, map[string]map[string]any{"ingest": {"applyWindow": c.ApplyWindow}}), Production())
 			if err != nil {
 				t.Fatalf("%s\nCore refuses what the adapter reads: %v", c.Description, err)
