@@ -129,8 +129,9 @@ func (s IPSets) Build(ctx context.Context, in IPInput) (IPOut, error) {
 			cfg.Feeds = append(cfg.Feeds, ipset.PipelineFeed{Name: l.name, Alias: strconv.Itoa(i), Text: l.text, Prepared: l.geo,
 				NoSuppress: l.geo || l.custom})
 			order = append(order, l.name)
-			// a change the caller did not name (an Update that failed before its state was saved) is found here
-			if inputs[l.name] = digestOf(l.text); l.changed || st.Inputs[l.name] != inputs[l.name] {
+			// a change the caller did not name (an Update that failed before its state was saved) is found here, and so is a
+			// member whose processing flags changed with its list unchanged (a feed that became a custom list)
+			if inputs[l.name] = digestOf(fmt.Sprintf("prepared=%t nosuppress=%t\n", l.geo, l.geo || l.custom) + l.text); l.changed || st.Inputs[l.name] != inputs[l.name] {
 				changed = append(changed, l.name)
 			}
 		}
@@ -284,7 +285,11 @@ func (s IPSets) Build(ctx context.Context, in IPInput) (IPOut, error) {
 // A group that is Disabled, has no list class or has neither a feed row nor a custom list builds no set.
 func (s IPSets) groups(in IPInput, agg bool, res *IPOut) ([]ipGroup, error) {
 	var out []ipGroup
-	generatedName := map[string]bool{} // the lists of the sets the loop builds: no feed may take one's name
+	// the lists of the sets the loop builds, supplied or not: no feed may take one's name
+	generatedName := map[string]bool{"DNSBLIP_v4": true, "DNSBLIP_v6": true}
+	for _, c := range continents {
+		generatedName[c+"_v4"], generatedName[c+"_v6"] = true, true
+	}
 	for _, g := range slices.Concat(in.GeoSets, in.DNSBLIP) {
 		generatedName[g.Alias] = true
 	}
