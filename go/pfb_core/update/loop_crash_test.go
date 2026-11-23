@@ -22,16 +22,23 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
 )
 
-// e2eKillAt makes the worker kill itself with SIGKILL at the boundary the file kill of the replay folder names. It wraps
-// the recorder e2eWorkerStages installs, which it reads to be initialized after it, so the boundary is recorded first.
+// e2eKillAt makes a worker whose state directory holds the file kill record each boundary it reaches in the file reached
+// there, and kill itself with SIGKILL at the boundary kill names. It reads e2eWorkerStages to be initialized after it, so
+// that recorder, when set, still runs first.
 var e2eKillAt = func() bool {
-	if !e2eWorkerStages {
+	_ = e2eWorkerStages
+	if len(os.Args) != 3 || os.Args[1] != workerArg {
 		return false
 	}
-	dir, record := os.Getenv(e2eEnv), boundary
+	dir, record := filepath.Dir(os.Args[2]), boundary
 	boundary = func(name string) {
 		record(name)
-		if b, _ := os.ReadFile(filepath.Join(dir, "kill")); strings.TrimSpace(string(b)) == name {
+		b, err := os.ReadFile(filepath.Join(dir, "kill"))
+		if err != nil {
+			return
+		}
+		appendFile(filepath.Join(dir, "reached"), name+"\n")
+		if strings.TrimSpace(string(b)) == name {
 			_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
 			time.Sleep(time.Hour) // the signal ends the process before this returns
 		}
@@ -40,7 +47,9 @@ var e2eKillAt = func() bool {
 }()
 
 // e2eSandbox is one box of the replay: a feed server, the settings adapter's and the stand-in apply's folder, the
-// sandbox root the Loop's folders live under, and the Update log of its state directory.
+// sandbox root the Loop's folders live under, and the Update log of its state directory. self is a script that runs this
+// test binary as the settings adapter and the stand-in apply of the sandbox's folder, so that sandboxes run in parallel
+// without changing the test process's environment.
 type e2eSandbox struct {
 	dir, root, self string
 	feeds           *e2eFeeds
@@ -78,8 +87,11 @@ func newE2ESandbox(t *testing.T, c e2eCase, listen string) *e2eSandbox {
 	}
 	sb.server.Start()
 	t.Cleanup(sb.server.Close)
-	t.Setenv(e2eEnv, sb.dir)
-	sb.loop = e2eLoop(t, sb.root, self)
+	sb.self = filepath.Join(sb.dir, "stand-in")
+	if err := os.WriteFile(sb.self, []byte("#!/bin/sh\n"+e2eEnv+"='"+sb.dir+"' exec '"+self+"'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sb.loop = e2eLoop(t, sb.root, sb.self)
 	sb.store = resources.Open(filepath.Join(sb.root, "core/resources"))
 	sb.log = independentLog(t)
 	return sb
@@ -240,7 +252,9 @@ func TestAKilledUpdateLeavesTheStoreWholeAndTheNextConverges(t *testing.T) {
 	}
 	for _, at := range append(names, "end") {
 		t.Run(at, func(t *testing.T) {
+			t.Parallel()
 			sb := newE2ESandbox(t, c, "")
+			state := filepath.Dir(sb.log.Name())
 			if err := sb.run(t, c, first); err != nil {
 				t.Fatalf("the first Update: %v\n%s", err, logText(t, sb.log))
 			}
@@ -248,14 +262,14 @@ func TestAKilledUpdateLeavesTheStoreWholeAndTheNextConverges(t *testing.T) {
 			if len(before) == 0 {
 				t.Fatal("the first Update left no applied baseline: the kill would prove nothing about one")
 			}
-			if err := os.WriteFile(filepath.Join(sb.dir, "kill"), []byte(at), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(state, "kill"), []byte(at), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			err := sb.run(t, c, changed)
-			if reached := e2eLines(t, filepath.Join(sb.dir, "stages")); err == nil || len(reached) == 0 || reached[len(reached)-1] != at {
+			if reached := e2eLines(t, filepath.Join(state, "reached")); err == nil || len(reached) == 0 || reached[len(reached)-1] != at {
 				t.Fatalf("the worker was not killed at %s: Run = %v, boundaries reached %q", at, err, reached)
 			}
-			if err := os.Remove(filepath.Join(sb.dir, "kill")); err != nil {
+			if err := os.Remove(filepath.Join(state, "kill")); err != nil {
 				t.Fatal(err)
 			}
 			sb.whole(t)
