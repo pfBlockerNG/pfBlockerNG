@@ -241,8 +241,9 @@ func TestTheLoopReplaysTodaysUpdate(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+				before, _ := readWorkerState(log.Name() + ".status") // the previous step's, if any
 				res, err := runCmd(t, &Command{Path: self, Loop: loop}, step.Request, log)
-				if exit := e2eExit(t, log, err); exit != want.Exit {
+				if exit := e2eExit(t, log, before.Nonce, err); exit != want.Exit {
 					t.Errorf("step %d: exit status %d (Run = %v), want %d of today's Update\ntranscript:\n%s", i, exit, err, want.Exit, logText(t, log))
 				}
 				for _, d := range e2eCompare(t, store, dir, res, want) {
@@ -254,12 +255,13 @@ func TestTheLoopReplaysTodaysUpdate(t *testing.T) {
 }
 
 // e2eExit is the worker's exit status for the step as today's program would give it: the status it recorded, 1 for a
-// failure it recorded without one (the loop's own), and 1 when Run failed before the worker recorded anything.
-func e2eExit(t *testing.T, log *os.File, runErr error) int {
+// failure it recorded without one (the loop's own), and 1 when Run failed before the worker recorded anything, which a
+// status still holding the previous step's nonce shows.
+func e2eExit(t *testing.T, log *os.File, previous string, runErr error) int {
 	t.Helper()
 	state, err := readWorkerState(log.Name() + ".status")
 	switch {
-	case err != nil:
+	case err != nil, state.Nonce == previous:
 		return 1
 	case state.ExitCode != nil:
 		return *state.ExitCode
