@@ -17,6 +17,9 @@ use PHPUnit\Framework\TestCase;
  *     pfb_list_cidr_floors(), pfb_feed_filter_enabled(), pfb_feed_internal_allowlist(), pfb_ip_is_self(), the cURL proxy options),
  *     `ingest` (over the fixture's defaults) is what the settings adapter's read answers. Where PHP and Core differ (a value the
  *     page never offers, an entry Core's lists cannot hold) the case says why.
+ *   - Issue #4038: the inputs of the Core Updater loop no projection carried. `skipfeedCap` is today's retry cap at each of the
+ *     fixture's `skipFeedFailures` (pfb_global()'s skipfeed, compared as pfblockerng_cron.inc compares it), `feedSanity` the ADR-49
+ *     switch as its two readers test it, `pendingApply` pfb_core_update_pending_apply() on the case's pending marker and ledger.
  *   - A refused row is a value Core refuses to read; the adapter's write refuses it too, naming the field: the projection is
  *     read-only, config.xml and the platform own it.
  */
@@ -24,6 +27,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_core_ingest_faults')]
 #[CoversFunction('pfb_core_settings_backend')]
 #[CoversFunction('pfb_core_settings_request_refusal')]
+#[CoversFunction('pfb_core_update_pending_apply')]
 final class CoreSettingsIngestParityTest extends TestCase
 {
 	use ConfigXmlDiskTrait;
@@ -129,6 +133,17 @@ final class CoreSettingsIngestParityTest extends TestCase
 			'symlink'   => $this->assertTrue(file_put_contents("{$this->dir}/target", '') === 0 && symlink("{$this->dir}/target", $marker)),
 			NULL        => NULL,
 		};
+		$pending = $case['pending'] ?? [];
+		if (array_key_exists('marker', $pending)) {
+			$this->assertNotFalse(file_put_contents(pfb_pending_changes_marker(), $pending['marker']));
+		}
+		if (array_key_exists('applied', $pending)) {
+			$this->assertNotFalse(file_put_contents(pfb_pending_changes_marker() . '.applied', $pending['applied']));
+		}
+		if (array_key_exists('ledger', $pending)) {
+			$this->assertTrue(pfb_due_ledger_write_entry('cron', ['last_run' => 0, 'next_due' => 0, 'jitter' => 0, 'pending_apply' => $pending['ledger']],
+				$GLOBALS['pfb']['dbdir']));
+		}
 		$platform = $case['platform'] ?? ['ipv4' => [], 'ipv6' => []];
 		$GLOBALS['pfb_test_configured_ip_addresses'] = $platform['ipv4'];
 		$GLOBALS['pfb_test_configured_ipv6'] = $platform['ipv6'];
@@ -177,17 +192,21 @@ final class CoreSettingsIngestParityTest extends TestCase
 			'proxy-trailing-slash', 'proxy-path-is-ignored', 'proxy-query-is-ignored', 'proxy-fragment-is-ignored',
 			'self-interface-and-vip', 'self-link-local-excluded', 'self-hostile-addresses',
 			'scheduled-work-no-marker', 'scheduled-work-empty-marker', 'scheduled-work-marker-with-content', 'scheduled-work-marker-is-a-directory',
-			'scheduled-work-marker-is-a-symlink'] as $id) {
+			'scheduled-work-marker-is-a-symlink', 'skipfeed-blank', 'skipfeed-no-limit', 'skipfeed-lowest', 'skipfeed-fresh-default', 'skipfeed-highest',
+			'skipfeed-words', 'skipfeed-array', 'skipfeed-beyond-page', 'skipfeed-leading-zero', 'skipfeed-fraction', 'skipfeed-negative',
+			'feed-sanity-on', 'feed-sanity-off', 'feed-sanity-upper-case', 'feed-sanity-yes', 'pending-none', 'pending-marker', 'pending-marker-applied',
+			'pending-marker-newer', 'pending-empty-marker', 'pending-ledger', 'pending-ledger-cleared'] as $id) {
 			$this->assertContains($id, $ids, "the coverage matrix row {$id}");
 		}
 		$refused = array_column($doc['refused'], 'id');
 		$this->assertSame(array_values(array_unique($refused)), $refused, 'a refused row id appears once');
 		foreach (['proxy-url-with-userinfo', 'proxy-url-with-crlf', 'allowlist-with-spaces', 'allowlist-ipv6-zone', 'self-unspecified-v4', 'self-unspecified-v6', 'self-mapped-ipv4',
-			'scheduled-work-disabled-string'] as $id) {
+			'scheduled-work-disabled-string', 'skipfeed-limit-beyond-page', 'skipfeed-limit-negative', 'skipfeed-limit-string', 'feed-sanity-string',
+			'pending-apply-string'] as $id) {
 			$this->assertContains($id, $refused, "the hostile row {$id}");
 		}
 		$this->assertSame(['suppression', 'suppressionCidrV4', 'suppressionCidrV6', 'dnsblIp', 'dnsblLenient', 'feedHostFilter', 'feedHostAllowlist', 'selfAddresses',
-			'proxyUrl', 'proxyUser', 'proxyPassword', 'proxyUnusable', 'scheduledWorkDisabled', 'applyWindow'], array_keys($doc['defaults']), 'the defaults name every field in the protocol order');
+			'proxyUrl', 'proxyUser', 'proxyPassword', 'proxyUnusable', 'scheduledWorkDisabled', 'applyWindow', 'skipFeedLimit', 'feedSanity', 'pendingApply'], array_keys($doc['defaults']), 'the defaults name every field in the protocol order');
 	}
 
 	/** @param array<string, mixed> $case */
@@ -210,6 +229,11 @@ final class CoreSettingsIngestParityTest extends TestCase
 			'cronDisabled' => static fn(): bool => pfb_cron_disabled(),
 			'vip4'    => static fn(): string => $pfb['dnsbl_vip4'],
 			'vip6'    => static fn(): string => $pfb['dnsbl_vip6'],
+			// today's retry cap: pfb_global()'s skipfeed, compared as pfb_update_check() compares it (pfblockerng_cron.inc)
+			'skipfeedCap' => static fn(): array => array_map(static fn(int $failed): bool => $pfb['skipfeed'] != 0 && $failed >= $pfb['skipfeed'],
+				self::fixture()['skipFeedFailures']),
+			'feedSanity'   => static fn(): bool => PfbConfig::read('gen/pfb_feed_sanity') === PfbToggle::On,
+			'pendingApply' => static fn(): bool => pfb_core_update_pending_apply(),
 			'proxy'   => static fn(): array => ['host' => $curl[CURLOPT_PROXY] ?? NULL, 'port' => $curl[CURLOPT_PROXYPORT] ?? NULL, 'userpwd' => $curl[CURLOPT_PROXYUSERPWD] ?? NULL],
 		];
 		foreach ($case['php'] as $key => $expected) {
@@ -273,7 +297,8 @@ final class CoreSettingsIngestParityTest extends TestCase
 		$reply = $this->backend(['version' => 1, 'op' => 'write', 'expectedRevision' => $read['revision'], 'settings' => $settings]);
 
 		$this->assertSame('on', $this->onDisk('installedpackages/pfblockerngdnsblsettings/config/0/pfb_control'), 'the dns change reached config.xml');
-		$this->assertSame($read['settings']['ingest'], $this->read()['settings']['ingest'], 'ingest is as it was');
+		$this->assertSame(array_replace($read['settings']['ingest'], ['pendingApply' => TRUE]), $this->read()['settings']['ingest'],
+			'ingest is as it was, but for the change the write marked pending');
 		$this->assertSame($this->read()['revision'], $reply['revision'] ?? NULL, 'the reply is the revision config.xml projects now');
 		$this->assertSame('hunter2', $this->onDisk('system/proxypass'), 'the proxy the platform owns is untouched');
 	}
@@ -386,5 +411,19 @@ final class CoreSettingsIngestParityTest extends TestCase
 
 		unlink(pfb_cron_disable_path());
 		$this->assertSame($base['revision'], $this->read()['revision'], 'the marker going moves it back');
+	}
+
+	public function testTheRevisionMovesWhileAChangeWaitsForAnApply(): void
+	{
+		$base = $this->read();
+		$this->assertFalse($base['settings']['ingest']['pendingApply'], 'before-state: nothing pending');
+
+		pfb_mark_pending_changes();
+		$pending = $this->read();
+		$this->assertTrue($pending['settings']['ingest']['pendingApply']);
+		$this->assertNotSame($base['revision'], $pending['revision'], 'a change marked moves the revision, so Core reads it again');
+
+		pfb_settle_pending_changes($pending['platform']['pendingToken']);
+		$this->assertSame($base['revision'], $this->read()['revision'], 'the apply taking it moves the revision back');
 	}
 }

@@ -1,7 +1,8 @@
 {
   "schema": 1,
   "projection": "ingest",
-  "defaults": {"suppression": true, "suppressionCidrV4": 0, "suppressionCidrV6": 0, "dnsblIp": false, "dnsblLenient": false, "feedHostFilter": true, "feedHostAllowlist": [], "selfAddresses": [], "proxyUrl": "", "proxyUser": "", "proxyPassword": "", "proxyUnusable": false, "scheduledWorkDisabled": false, "applyWindow": ""},
+  "defaults": {"suppression": true, "suppressionCidrV4": 0, "suppressionCidrV6": 0, "dnsblIp": false, "dnsblLenient": false, "feedHostFilter": true, "feedHostAllowlist": [], "selfAddresses": [], "proxyUrl": "", "proxyUser": "", "proxyPassword": "", "proxyUnusable": false, "scheduledWorkDisabled": false, "applyWindow": "", "skipFeedLimit": 0, "feedSanity": false, "pendingApply": false},
+  "skipFeedFailures": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
   "cases": [
     {"id":"defaults","description":"Nothing stored: suppression on with no CIDR limit, the DNSBL IP action off and strict, the feed-host filter on with an empty allowlist, no address of the box, no proxy.","config":{},"ingest":{},"php":{"supp":true,"floors":["Disabled","Disabled"],"dnsblIp":false,"lenient":false,"filter":true,"allow":[],"proxy":{"host":null,"port":null,"userpwd":null}}},
     {"id":"suppression-on","description":"ip suppression on.","config":{"ip":{"suppression":"on"}},"ingest":{},"php":{"supp":true}},
@@ -85,7 +86,29 @@
     {"id":"scheduled-work-empty-marker","description":"An empty .pfb_cron_disable file disables scheduled work: only its presence counts.","config":{},"cronDisable":"empty","ingest":{"scheduledWorkDisabled":true},"php":{"cronDisabled":true}},
     {"id":"scheduled-work-marker-with-content","description":"The marker's content is ignored.","config":{},"cronDisable":"content","ingest":{"scheduledWorkDisabled":true},"php":{"cronDisabled":true}},
     {"id":"scheduled-work-marker-is-a-directory","description":"A directory at the marker's path is no marker.","config":{},"cronDisable":"directory","ingest":{},"php":{"cronDisabled":false}},
-    {"id":"scheduled-work-marker-is-a-symlink","description":"A symlink to a file is a marker.","config":{},"cronDisable":"symlink","ingest":{"scheduledWorkDisabled":true},"php":{"cronDisabled":true}}
+    {"id":"scheduled-work-marker-is-a-symlink","description":"A symlink to a file is a marker.","config":{},"cronDisable":"symlink","ingest":{"scheduledWorkDisabled":true},"php":{"cronDisabled":true}},
+    {"id":"skipfeed-blank","description":"An empty skipfeed (what setUp stores): no limit, as pfb_global() reads it.","config":{"gen":{"skipfeed":""}},"ingest":{},"php":{"skipfeedCap":[false,false,false,false,false,false,false,false,false,false,false,false]}},
+    {"id":"skipfeed-no-limit","description":"The General page's 'No Limit' stores 0: a feed is retried after any number of failures.","config":{"gen":{"skipfeed":"0"}},"ingest":{},"php":{"skipfeedCap":[false,false,false,false,false,false,false,false,false,false,false,false]}},
+    {"id":"skipfeed-lowest","description":"The page's lowest limit: one failed download today stops the retries.","config":{"gen":{"skipfeed":"1"}},"ingest":{"skipFeedLimit":1},"php":{"skipfeedCap":[false,true,true,true,true,true,true,true,true,true,true,true]}},
+    {"id":"skipfeed-fresh-default","description":"The fresh-install default 3.","config":{"gen":{"skipfeed":"3"}},"ingest":{"skipFeedLimit":3},"php":{"skipfeedCap":[false,false,false,true,true,true,true,true,true,true,true,true]}},
+    {"id":"skipfeed-highest","description":"The page's highest limit 6.","config":{"gen":{"skipfeed":"6"}},"ingest":{"skipFeedLimit":6},"php":{"skipfeedCap":[false,false,false,false,false,false,true,true,true,true,true,true]}},
+    {"id":"skipfeed-words","description":"Hostile: no number; today's comparison never reaches it, so no limit.","config":{"gen":{"skipfeed":"abc"}},"ingest":{},"php":{"skipfeedCap":[false,false,false,false,false,false,false,false,false,false,false,false]}},
+    {"id":"skipfeed-array","description":"Hostile: an array where the value belongs; today's comparison never reaches it, so no limit.","config":{"gen":{"skipfeed":["3"]}},"ingest":{},"php":{"skipfeedCap":[false,false,false,false,false,false,false,false,false,false,false,false]}},
+    {"id":"skipfeed-beyond-page","description":"Hand-edited 10, beyond what the page and the wizard offer: today's PHP applies it as typed, Core reads no limit, as a suppression limit out of its range reads as 0.","config":{"gen":{"skipfeed":"10"}},"ingest":{},"php":{"skipfeedCap":[false,false,false,false,false,false,false,false,false,false,true,true]},"departure":"a limit beyond 6 reads as no limit"},
+    {"id":"skipfeed-leading-zero","description":"Hand-edited 03: today's PHP compares it as 3, Core reads no limit (no plain decimal).","config":{"gen":{"skipfeed":"03"}},"ingest":{},"php":{"skipfeedCap":[false,false,false,true,true,true,true,true,true,true,true,true]},"departure":"a value that is no plain decimal reads as no limit"},
+    {"id":"skipfeed-fraction","description":"Hand-edited 2.5: today's PHP stops at 3 failures, Core reads no limit.","config":{"gen":{"skipfeed":"2.5"}},"ingest":{},"php":{"skipfeedCap":[false,false,false,true,true,true,true,true,true,true,true,true]},"departure":"a value that is no plain decimal reads as no limit"},
+    {"id":"skipfeed-negative","description":"Hand-edited -1: today's PHP never downloads the feed (0 failures already reach it), Core reads no limit.","config":{"gen":{"skipfeed":"-1"}},"ingest":{},"php":{"skipfeedCap":[true,true,true,true,true,true,true,true,true,true,true,true]},"departure":"a negative value reads as no limit"},
+    {"id":"feed-sanity-on","description":"The General page's ADR-49 feed sanity scan switched on.","config":{"gen":{"pfb_feed_sanity":"on"}},"ingest":{"feedSanity":true},"php":{"feedSanity":true}},
+    {"id":"feed-sanity-off","description":"The switch off stores an empty string.","config":{"gen":{"pfb_feed_sanity":""}},"ingest":{},"php":{"feedSanity":false}},
+    {"id":"feed-sanity-upper-case","description":"Hand-edited ON.","config":{"gen":{"pfb_feed_sanity":"ON"}},"ingest":{"feedSanity":true},"php":{"feedSanity":true}},
+    {"id":"feed-sanity-yes","description":"Hostile: yes is no toggle value.","config":{"gen":{"pfb_feed_sanity":"yes"}},"ingest":{},"php":{"feedSanity":false}},
+    {"id":"pending-none","description":"No pending marker and no ledger flag: nothing waits for an apply.","config":{},"pending":{},"ingest":{},"php":{"pendingApply":false}},
+    {"id":"pending-marker","description":"A save marked a change the apply has not taken.","config":{},"pending":{"marker":"0123456789abcdef"},"ingest":{"pendingApply":true},"php":{"pendingApply":true}},
+    {"id":"pending-marker-applied","description":"The apply took the marked version: nothing waits.","config":{},"pending":{"marker":"0123456789abcdef","applied":"0123456789abcdef"},"ingest":{},"php":{"pendingApply":false}},
+    {"id":"pending-marker-newer","description":"A save marked a newer version than the one applied.","config":{},"pending":{"marker":"fedcba9876543210","applied":"0123456789abcdef"},"ingest":{"pendingApply":true},"php":{"pendingApply":true}},
+    {"id":"pending-empty-marker","description":"An empty (pre-upgrade or touched) marker is always pending.","config":{},"pending":{"marker":""},"ingest":{"pendingApply":true},"php":{"pendingApply":true}},
+    {"id":"pending-ledger","description":"The due ledger's cron entry holds pending_apply.","config":{},"pending":{"ledger":true},"ingest":{"pendingApply":true},"php":{"pendingApply":true}},
+    {"id":"pending-ledger-cleared","description":"The due ledger's cron entry with pending_apply false.","config":{},"pending":{"ledger":false},"ingest":{},"php":{"pendingApply":false}}
   ],
   "refused": [
     {"id":"suppression-string","description":"suppression is a bool, not the stored token.","ingest":{"suppression":"on"},"field":"suppression"},
@@ -126,6 +149,11 @@
     {"id":"proxy-url-without-host","description":"The proxy URL names a host.","ingest":{"proxyUrl":"http://:3128"},"field":"proxyUrl"},
     {"id":"proxy-user-number","description":"proxyUser is a string.","ingest":{"proxyUser":5},"field":"proxyUser"},
     {"id":"proxy-password-bool","description":"proxyPassword is a string.","ingest":{"proxyPassword":true},"field":"proxyPassword"},
-    {"id":"scheduled-work-disabled-string","description":"scheduledWorkDisabled is a bool.","ingest":{"scheduledWorkDisabled":"yes"},"field":"scheduledWorkDisabled"}
+    {"id":"scheduled-work-disabled-string","description":"scheduledWorkDisabled is a bool.","ingest":{"scheduledWorkDisabled":"yes"},"field":"scheduledWorkDisabled"},
+    {"id":"skipfeed-limit-beyond-page","description":"skipFeedLimit is 0 to 6, as the page offers.","ingest":{"skipFeedLimit":7},"field":"skipFeedLimit"},
+    {"id":"skipfeed-limit-negative","description":"skipFeedLimit is 0 to 6.","ingest":{"skipFeedLimit":-1},"field":"skipFeedLimit"},
+    {"id":"skipfeed-limit-string","description":"skipFeedLimit is an int.","ingest":{"skipFeedLimit":"3"},"field":"skipFeedLimit"},
+    {"id":"feed-sanity-string","description":"feedSanity is a bool.","ingest":{"feedSanity":"on"},"field":"feedSanity"},
+    {"id":"pending-apply-string","description":"pendingApply is a bool.","ingest":{"pendingApply":"yes"},"field":"pendingApply"}
   ]
 }

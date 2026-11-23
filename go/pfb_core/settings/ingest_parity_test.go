@@ -18,7 +18,9 @@ type ingestFixture struct {
 	Schema     int            `json:"schema"`
 	Projection string         `json:"projection"`
 	Defaults   map[string]any `json:"defaults"`
-	Cases      []struct {
+	// SkipFeedFailures are the failure counts at which a case's php.skipfeedCap holds today's retry-cap decision.
+	SkipFeedFailures []int `json:"skipFeedFailures"`
+	Cases            []struct {
 		ID            string          `json:"id"`
 		Description   string          `json:"description"`
 		Config        json.RawMessage `json:"config"`
@@ -26,6 +28,8 @@ type ingestFixture struct {
 		Platform      json.RawMessage `json:"platform"`
 		CronDisable   json.RawMessage `json:"cronDisable"`
 		Vips          json.RawMessage `json:"vips"`
+		Pending       json.RawMessage `json:"pending"`
+		Departure     string          `json:"departure"`
 		Ingest        map[string]any  `json:"ingest"`
 		PHP           json.RawMessage `json:"php"`
 	} `json:"cases"`
@@ -104,5 +108,54 @@ func TestTheIngestProjectionRefusesTheFixturesHostileInputNamingTheField(t *test
 				t.Errorf("%s\nLoad = %v, %v, want no store and an error naming ingest.%s", c.Description, st, err, c.Field)
 			}
 		})
+	}
+}
+
+// WHEN the adapter answers ingest.skipFeedLimit THEN the Core Updater's retry cap (worklist: a limit that is not 0 and a failure
+// count at or past it) decides as today's pfb_update_check() at every count, except on a case that names its departure, where the
+// two must differ (issue #4038).
+func TestTheSkipFeedLimitCapsRetriesAsTodaysPHPAtEveryFailureCount(t *testing.T) {
+	doc := loadIngestFixture(t)
+	seen := 0
+	for _, c := range doc.Cases {
+		var php struct {
+			SkipfeedCap []bool `json:"skipfeedCap"`
+		}
+		if err := json.Unmarshal(c.PHP, &php); err != nil {
+			t.Fatal(err)
+		}
+		if php.SkipfeedCap == nil {
+			continue
+		}
+		seen++
+		t.Run(c.ID, func(t *testing.T) {
+			if len(php.SkipfeedCap) != len(doc.SkipFeedFailures) {
+				t.Fatalf("%d decisions for %d failure counts", len(php.SkipfeedCap), len(doc.SkipFeedFailures))
+			}
+			st, err := Load(newRefreshBackend(1, map[string]map[string]any{"ingest": doc.ingestOver(c.Ingest)}), Production())
+			if err != nil {
+				t.Fatalf("%s\nCore refuses what the adapter reads: %v", c.Description, err)
+			}
+			ingest, err := st.GetClear("ingest")
+			if err != nil {
+				t.Fatal(err)
+			}
+			limit := ingest["skipFeedLimit"].(int64)
+			same := true
+			for i, failed := range doc.SkipFeedFailures {
+				if (limit != 0 && int64(failed) >= limit) != php.SkipfeedCap[i] {
+					same = false
+				}
+			}
+			if c.Departure == "" && !same {
+				t.Errorf("%s\nlimit %d caps otherwise than today's PHP %v at %v", c.Description, limit, php.SkipfeedCap, doc.SkipFeedFailures)
+			}
+			if c.Departure != "" && same {
+				t.Errorf("%s\nthe case names a departure (%s), yet limit %d caps as today's PHP", c.Description, c.Departure, limit)
+			}
+		})
+	}
+	if seen == 0 {
+		t.Fatal("no case holds php.skipfeedCap")
 	}
 }
