@@ -400,8 +400,7 @@ func (u *updater) runFeeds(kinds ...string) error {
 			continue
 		}
 		r := u.stages[item.Feed.Kind].Run(context.Background(), item.Feed, item.Change)
-		// A failed transfer counts against the retry cap, as pfb_download_failure() logs its FAIL line; a cancelled one does not.
-		if r.Disposition == "failed" && r.Stage == "fetch" && r.Reason != "cancelled" {
+		if failedTransfer(r) {
 			if u.state.Failures == nil {
 				u.state.Failures = map[string]int{}
 			}
@@ -431,6 +430,12 @@ func (u *updater) runFeeds(kinds ...string) error {
 		}
 	}
 	return nil
+}
+
+// failedTransfer is whether r counts against the retry cap: a failed transfer, as pfb_download_failure() logs its FAIL line;
+// not a cancelled one, nor a feed that fails at another stage.
+func failedTransfer(r feedstage.Result) bool {
+	return r.Disposition == "failed" && r.Stage == "fetch" && r.Reason != "cancelled"
 }
 
 // issueResource is what a feed's issue names: an IP feed's group set, as the ADR-61 ledger names the table today
