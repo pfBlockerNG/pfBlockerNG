@@ -409,6 +409,16 @@ func (s *Store) writeDelta(id string, g uint64, base gen) (*delta, error) {
 	return d, nil
 }
 
+// Writable reports whether the writer can write the store: its directory exists and takes a new file, which is removed.
+func (s *Store) Writable() error {
+	f, err := os.CreateTemp(s.dir, ".writable.*")
+	if err != nil {
+		return err
+	}
+	f.Close()
+	return os.Remove(f.Name())
+}
+
 // Applied records that the consumer applied generation g of id. A generation the store does not hold clears the baseline.
 func (s *Store) Applied(id string, g uint64) error {
 	e, idx, err := s.writerEntry(id)
