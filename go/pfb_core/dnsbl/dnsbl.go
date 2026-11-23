@@ -182,7 +182,7 @@ func loneSurrogate(b []byte) bool {
 		if i+4 > len(b) {
 			return -1
 		}
-		n, err := strconv.ParseUint(string(b[i:i+4]), 16, 32)
+		n, err := strconv.ParseUint(string(b[i:i+4]), 16, 16)
 		if err != nil {
 			return -1
 		}
