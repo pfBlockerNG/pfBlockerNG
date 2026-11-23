@@ -5389,9 +5389,10 @@ function pfb_core_ingest_entry_valid(string $entry): bool {
  * are the addresses pfb_ip_is_self() calls the box's own beyond the loopbacks, each once and without the ones Core refuses to list (unspecified,
  * link-local, IPv4-mapped): the interfaces' addresses, the virtual IPs and the PPPoE server's, IPv4 then IPv6, as pfSense lists them.
  *
- * `scheduledWorkDisabled` is pfb_cron_disabled().
+ * `scheduledWorkDisabled` is pfb_cron_disabled(). `applyWindow` is the apply window `gen/pfb_quiet_hours` as pfb_quiet_hours_bounds() reads it,
+ * zero-padded, or '' for every value today's reader takes as no window (tests/core/fixtures/settings_apply_window_parity.json).
  *
- * @return array<string, mixed> the 13 fields, in the protocol's order
+ * @return array<string, mixed> the 14 fields, in the protocol's order
  */
 function pfb_core_ingest_settings(): array {
 	$on = static fn(string $key): bool => PfbConfig::read($key) === PfbToggle::On;
@@ -5401,6 +5402,7 @@ function pfb_core_ingest_settings(): array {
 	};
 	$listed = static fn(array $values, callable $valid): array => array_values(array_unique(array_filter(array_map('strval', $values), $valid)));
 	$self = $listed(array_merge(array_values(get_configured_ip_addresses()), array_values(get_configured_ipv6_addresses())), 'pfb_core_ingest_self_valid');
+	$window = pfb_quiet_hours_bounds(pfb_core_table_text('gen/pfb_quiet_hours'));	// an array stored there is no window, and no warning
 	return [
 		'suppression'       => $on('ip/suppression'),
 		'suppressionCidrV4' => $limit('ip/suppression_cidr', 17),
@@ -5412,6 +5414,7 @@ function pfb_core_ingest_settings(): array {
 		'selfAddresses'     => array_map(static fn(string $address): array => ['address' => $address], $self),
 	] + pfb_core_proxy_settings() + [
 		'scheduledWorkDisabled' => pfb_cron_disabled(),
+		'applyWindow'           => $window === NULL ? '' : sprintf('%02d:%02d-%02d:%02d', intdiv($window[0], 60), $window[0] % 60, intdiv($window[1], 60), $window[1] % 60),
 	];
 }
 

@@ -381,6 +381,7 @@ once and reads again, and the Update's start reads the backend again ([Update an
 | `proxyPassword` | secret string, `""` | System `proxypass`, or decoded proxy URL userinfo |
 | `proxyUnusable` | bool, `false` | A configured proxy that Core cannot represent; remote transfers refuse instead of bypassing it |
 | `scheduledWorkDisabled` | bool, `false` | The `.pfb_cron_disable` marker is a file (`pfb_cron_disabled()`); its content is ignored (issue #4031) |
+| `applyWindow` | string `HH:MM-HH:MM` (zero-padded, local time) or `""`; `""` | General `pfb_quiet_hours` as `pfb_quiet_hours_in_window()` reads it (`pfb_quiet_hours_bounds()`); `""` is no window (issue #4038) |
 
 - **Suppression limits.** A limit beyond what the IP page offers (hand-edited config.xml: 18, 8.5, `1e1`, negative) reads as
   0, as a group's own `suppressionCidr` reads a value out of its range; today's PHP applies such a number as typed. A limit
@@ -399,6 +400,13 @@ once and reads again, and the Update's start reads the backend again ([Update an
 - **Sinkhole addresses.** What `pfb_global()` resolves from the stored VIP ids, whatever the DNSBL state. A VIP id that resolves to
   nothing, or to an address of the other family or with a zone (a link-local VIP: today's PHP writes it as typed), reads as `""`.
   *Withdrawn 2026-11-18 (issue #4053): the fields are removed with the VIP response; see the amendment above.*
+- **Apply window.** Outside it, stage 7 defers an Update's apply (`schedule.InApplyWindow`): start inclusive,
+  end exclusive, across midnight when the start is later. Today's reader also takes one-digit hours, any minute up to 59 and one
+  trailing newline; the adapter answers that window zero-padded, without the newline. Every value today's reader takes as no
+  window (empty, malformed, an hour beyond 23 or a minute beyond 59, start equal to end, an array where the string belongs) is
+  `""`. Core refuses any other spelling. Parity fixture: `tests/core/fixtures/settings_apply_window_parity.json`, frozen by
+  `CoreSettingsApplyWindowParityTest`; `go/pfb_core/settings/apply_window_parity_test.go` proves `InApplyWindow` on `applyWindow`
+  decides as today's PHP on the stored value.
 - **Core refuses what it reads.** `proxyUrl` must use `http`, `https`, `socks5` or `socks5h` with a port from 1 to 65535 and no userinfo; a listed self address an IP address that is not unspecified, link-local, IPv4-mapped or zoned; an allowlist entry an address or a CIDR without a zone. A backend answer that breaks a rule fails the read ([Settings backends](#settings-backends)).
 
 Parity fixture: `tests/core/fixtures/settings_ingest_parity.json`. `CoreSettingsIngestParityTest` (PHPUnit) freezes it

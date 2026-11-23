@@ -6195,6 +6195,24 @@ function pfb_schedule_extra_run(string $job, string $argument = '', bool &$chang
 // ---------------------------------------------------------------------------
 
 /**
+ * The window "HH:MM-HH:MM" as [start, end] in minutes after midnight, or NULL for no window: empty, malformed, out of range
+ * (the pattern allows hour 25 or minute 99) or zero-width. No window applies at once, so a bad value never defers forever.
+ * One trailing newline still matches (no D modifier). Core's ingest.applyWindow is this, zero-padded (pfb_core_ingest_settings()).
+ *
+ * @return array{0: int, 1: int}|null
+ */
+function pfb_quiet_hours_bounds(string $window): ?array
+{
+	if (!preg_match('/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/', $window, $m)
+	    || (int)$m[1] > 23 || (int)$m[2] > 59 || (int)$m[3] > 23 || (int)$m[4] > 59) {
+		return NULL;
+	}
+	$start = (int)$m[1] * 60 + (int)$m[2];
+	$end   = (int)$m[3] * 60 + (int)$m[4];
+	return $start === $end ? NULL : [$start, $end];
+}
+
+/**
  * pfb_quiet_hours_in_window — is $now inside the configured apply-on-change window?
  *
  * When set, detected changes are only applied INSIDE the window; outside they are
@@ -6211,24 +6229,12 @@ function pfb_schedule_extra_run(string $job, string $argument = '', bool &$chang
  */
 function pfb_quiet_hours_in_window(int $now, string $window): bool
 {
-	if ($window === '') {
+	$bounds = pfb_quiet_hours_bounds($window);
+	if ($bounds === NULL) {
 		return TRUE;
 	}
-	if (!preg_match('/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/', $window, $m)) {
-		return TRUE;	// malformed → fail-safe: apply immediately
-	}
-	// Validate hour ≤ 23 and minute ≤ 59 for both endpoints; the regex allows h=25/m=99.
-	// Out-of-range → fail-safe: apply immediately (defers forever otherwise).
-	if ((int)$m[1] > 23 || (int)$m[2] > 59 || (int)$m[3] > 23 || (int)$m[4] > 59) {
-		return TRUE;	// out-of-range → fail-safe: apply immediately
-	}
-	$start = (int)$m[1] * 60 + (int)$m[2];
-	$end   = (int)$m[3] * 60 + (int)$m[4];
-	$cur   = (int)date('G', $now) * 60 + (int)date('i', $now);
-
-	if ($start === $end) {
-		return TRUE;	// zero-width window = no deferral
-	}
+	[$start, $end] = $bounds;
+	$cur = (int)date('G', $now) * 60 + (int)date('i', $now);
 	if ($start < $end) {
 		return $cur >= $start && $cur < $end;	// normal window e.g. 02:00–06:00
 	}
