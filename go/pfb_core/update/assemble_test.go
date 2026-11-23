@@ -491,8 +491,8 @@ func TestAManualUpdateBuildsPublishesAppliesAndSettles(t *testing.T) {
 		t.Errorf("request dnsbl = %v, want the manifest's generation %d", req["dnsbl"], manifest.Generation)
 	}
 	issues, _ := json.Marshal(req["issues"])
-	if !strings.Contains(string(issues), "feed/ipv4:C_v4") {
-		t.Errorf("request issues = %s, want one for the feed whose source is missing", issues)
+	if !strings.Contains(string(issues), `"resource":"ip-set/Abuse/ipv4","stage":"download"`) {
+		t.Errorf("request issues = %s, want one for the feed whose source is missing, naming its group's set", issues)
 	}
 	for _, id := range ids {
 		reply := generation(t, s, id)
