@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "projection": "ingest",
+  "field": "applyWindow",
+  "description": "The apply window gen/pfb_quiet_hours (issue #4038, sub-slice 9c). A case's stored value is what config.xml holds (absent when the case has none); php is today's reader, pfb_quiet_hours_in_window(now, (string) PfbConfig::read('gen/pfb_quiet_hours')), at each of the instants (minutes after local midnight); applyWindow is what the settings adapter answers in ingest. schedule.InApplyWindow on applyWindow gives php at every instant. A refused row is a value Core refuses to read.",
+  "instants": [0, 59, 60, 119, 120, 121, 359, 360, 361, 720, 1379, 1380, 1439],
+  "cases": [
+    {"id":"absent","description":"Nothing stored: no window, an Update applies at once.","applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]},
+    {"id":"empty","description":"The General page's window switched off stores an empty string: no window.","stored":"","applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]},
+    {"id":"quarter-hours","description":"What the General page stores: a window from 02:00 to 06:00, start inclusive, end exclusive.","stored":"02:00-06:00","applyWindow":"02:00-06:00","php":[false,false,false,false,true,true,true,false,false,false,false,false,false]},
+    {"id":"wraps-midnight","description":"A window across midnight, 23:00 to 01:00.","stored":"23:00-01:00","applyWindow":"23:00-01:00","php":[true,true,false,false,false,false,false,false,false,false,false,true,true]},
+    {"id":"ends-at-midnight","description":"A window that ends at midnight, 22:00 to 00:00.","stored":"22:00-00:00","applyWindow":"22:00-00:00","php":[false,false,false,false,false,false,false,false,false,false,true,true,true]},
+    {"id":"single-digit-hours","description":"A hand-edited window with one-digit hours: today's reader takes it, the adapter answers it zero-padded.","stored":"2:00-6:00","applyWindow":"02:00-06:00","php":[false,false,false,false,true,true,true,false,false,false,false,false,false]},
+    {"id":"any-minute","description":"A hand-edited window off the quarter hour: today's reader takes any minute up to 59.","stored":"01:59-06:01","applyWindow":"01:59-06:01","php":[false,false,false,true,true,true,true,true,false,false,false,false,false]},
+    {"id":"trailing-newline","description":"One trailing newline: today's pattern has no D modifier, so it still reads as the window; the adapter drops it.","stored":"02:00-06:00\n","applyWindow":"02:00-06:00","php":[false,false,false,false,true,true,true,false,false,false,false,false,false]},
+    {"id":"zero-width","description":"Start equal to end: today's reader never defers, so it is no window.","stored":"03:00-03:00","applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]},
+    {"id":"spaces-around-dash","description":"Hostile: not HH:MM-HH:MM (spaces around the dash): today's reader applies at once, so no window.","stored":"02:00 - 06:00","applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]},
+    {"id":"words","description":"Hostile: not HH:MM-HH:MM at all.","stored":"2am-6am","applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]},
+    {"id":"three-digit-hour","description":"Hostile: a three-digit hour.","stored":"002:00-06:00","applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]},
+    {"id":"one-digit-minute","description":"Hostile: a one-digit minute.","stored":"02:0-06:00","applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]},
+    {"id":"hour-24","description":"Hostile: hour 24 is out of range: today's reader applies at once.","stored":"24:00-06:00","applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]},
+    {"id":"minute-60","description":"Hostile: minute 60 is out of range.","stored":"02:00-06:60","applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]},
+    {"id":"leading-space","description":"Hostile: a leading space.","stored":" 02:00-06:00","applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]},
+    {"id":"two-trailing-newlines","description":"Hostile: two trailing newlines no longer match today's pattern.","stored":"02:00-06:00\n\n","applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]},
+    {"id":"trailing-carriage-return","description":"Hostile: a trailing carriage return.","stored":"02:00-06:00\r","applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]},
+    {"id":"non-ascii-digits","description":"Hostile: Arabic-Indic digits, which neither PHP's nor Go's \\d takes.","stored":"٠٢:٠٠-٠٦:٠٠","applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]},
+    {"id":"array","description":"Hostile: an array where the scalar is stored. Today's reader casts it to the string Array (with a warning) and applies at once; the adapter answers no window, without a warning.","stored":["02:00-06:00"],"applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]},
+    {"id":"empty-array","description":"Hostile: an empty array where the scalar is stored.","stored":[],"applyWindow":"","php":[true,true,true,true,true,true,true,true,true,true,true,true,true]}
+  ],
+  "refused": [
+    {"id":"spaces-around-dash","description":"Not HH:MM-HH:MM.","applyWindow":"02:00 - 06:00"},
+    {"id":"single-digit-hours","description":"Core holds a window zero-padded only: the adapter pads it.","applyWindow":"2:00-6:00"},
+    {"id":"trailing-newline","description":"Core holds no newline: the adapter drops it.","applyWindow":"02:00-06:00\n"},
+    {"id":"hour-24","description":"An hour beyond 23.","applyWindow":"24:00-06:00"},
+    {"id":"minute-60","description":"A minute beyond 59.","applyWindow":"02:00-06:60"},
+    {"id":"array","description":"An array where the string belongs.","applyWindow":["02:00-06:00"]},
+    {"id":"number","description":"A number where the string belongs.","applyWindow":200}
+  ]
+}
