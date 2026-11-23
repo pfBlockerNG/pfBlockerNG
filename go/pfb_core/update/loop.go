@@ -118,11 +118,14 @@ type updater struct {
 	program, logPath  string
 	lock, result, log *os.File
 
-	snap                                         map[string]map[string]any // the projections the stages read
-	state                                        updaterState              // the Updater's state, as read and as written
-	pending                                      []string                  // the Updater state's pending feeds
-	inWindow                                     bool                      // now is inside the apply window
-	geoMarker, geoFailed                         bool                      // geoip.update at the work list; a GeoIP consumer failed
+	snap     map[string]map[string]any // the projections the stages read
+	state    updaterState              // the Updater's state, as read and as written
+	pending  []string                  // the Updater state's pending feeds
+	inWindow bool                      // now is inside the apply window, at the change detection
+	zone     *time.Location
+	// requested is the request of an apply that ran to its end, recorded in state once the settle succeeds
+	requested                                    *apply.Request
+	geoMarker, geoFailed                         bool // geoip.update at the work list; a GeoIP consumer failed
 	store                                        *resources.Store
 	stages                                       map[string]*feedstage.Stage
 	extras                                       Extras

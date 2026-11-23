@@ -64,6 +64,7 @@ func readUpdaterState(dir string) updaterState {
 var (
 	extrasRun    = (*feedfetch.Fetcher).RunExtras
 	publishDNSBL = dnsbl.Publish
+	loopNow      = time.Now
 )
 
 // db is a path under the package's database folder.
@@ -169,7 +170,9 @@ func (u *updater) lineWriter() io.Writer {
 // fetcherFor on the #3977 branch). A selected Blacklist provider's folder is a local folder its categories are read from.
 func (u *updater) fetcher() (*feedfetch.Fetcher, error) {
 	ingest, policy := u.snap["ingest"], u.snap["policy/ip"]
-	f := &feedfetch.Fetcher{Policy: feedfetch.Policy{NoFilter: !flag(ingest, "feedHostFilter"), LocalDirs: slices.Clone(u.loop.FeedLocalDirs)},
+	// the country folder holds the lists geoip-format feeds read as local files
+	f := &feedfetch.Fetcher{Policy: feedfetch.Policy{NoFilter: !flag(ingest, "feedHostFilter"),
+		LocalDirs: append(slices.Clone(u.loop.FeedLocalDirs), u.ccDir())},
 		UserAgent: u.loop.UserAgent, RsyncBin: u.loop.RsyncBin, ProxyUnusable: flag(ingest, "proxyUnusable"),
 		ASNCSV: filepath.Join(u.loop.GeoIPDir, "asn.csv"), ETDir: u.db("ET"), ETMatchFile: u.db("match", "generated", "pfB_Match_ET_v4.txt")}
 	for _, p := range rows(u.snap["schedule"]["categoryProviders"]) {
@@ -296,7 +299,8 @@ func (u *updater) changeDetection() error {
 	}
 	_, manifestErr := u.store.Get(dnsbl.ManifestID, nil)
 	// A manual request without a force is none, as the update program reads it.
-	u.inWindow = schedule.InApplyWindow(time.Now().Unix(), settingText(u.snap["ingest"], "applyWindow"), zone)
+	u.zone = zone
+	u.inWindow = schedule.InApplyWindow(loopNow().Unix(), settingText(u.snap["ingest"], "applyWindow"), zone)
 	plan, err := worklist.Build(context.Background(), worklist.Input{Trigger: u.req.Trigger, Scope: u.scope(),
 		Force: cmp.Or(u.req.Force, "none"),
 		Feeds: u.req.Feeds, PendingFeeds: u.pending, Settings: u.snap, Stages: u.stages,
@@ -590,7 +594,7 @@ func (u *updater) request() (apply.Request, error) {
 				return r, err
 			}
 			for _, id := range ids {
-				reply, err := u.store.Get(id, nil)
+				reply, err := u.store.Current(id) // the index alone: the apply reads and checks the bodies itself
 				if err != nil {
 					return r, err
 				}
@@ -683,14 +687,7 @@ func (u *updater) applyStage() error {
 		}
 	}
 	if exit == apply.Succeeded && !req.PendingOutsideWindow && req.Scope != "dnsbl" {
-		// What it was requested to load is not requested again: an id it refused is its own issue to raise.
-		u.state.Requested, u.state.RequestedRemoved = map[string]uint64{}, req.Removed
-		for _, r := range req.Resources {
-			u.state.Requested[r.ID] = r.Generation
-		}
-		if err := u.saveState(); err != nil {
-			return err
-		}
+		u.requested = &req // recorded once the settle reconciled the result
 	}
 	res, err := apply.ReadResult(result, req)
 	if err != nil && !errors.Is(err, apply.ErrCut) {
@@ -707,7 +704,8 @@ func (u *updater) applyStage() error {
 // unrequested reports whether, inside the apply window and outside a dnsbl scope, the store holds an ip-set, ip-aggregate
 // or geo-catalog generation, or a removal, that no apply that ran to its end was requested to load.
 func (u *updater) unrequested() (bool, error) {
-	if !u.inWindow || u.scope() == "dnsbl" {
+	// the window is read again now: the change detection's reading may have gone stale
+	if !schedule.InApplyWindow(loopNow().Unix(), settingText(u.snap["ingest"], "applyWindow"), u.zone) || u.scope() == "dnsbl" {
 		return false, nil
 	}
 	for _, prefix := range []string{"geo-catalog", "ip-aggregate/", "ip-set/"} {
@@ -777,7 +775,14 @@ func (u *updater) settle() error {
 	if err := errors.Join(append(errs, u.applyErr)...); err != nil {
 		return err
 	}
-	// Settled: the plan's pending feeds stand, and the markers whose consumers all succeeded are consumed.
+	// Settled: what the apply was requested to load is not requested again (an id it refused is its own issue to raise),
+	// the plan's pending feeds stand, and the markers whose consumers all succeeded are consumed.
+	if r := u.requested; r != nil {
+		u.state.Requested, u.state.RequestedRemoved = map[string]uint64{}, r.Removed
+		for _, res := range r.Resources {
+			u.state.Requested[res.ID] = res.Generation
+		}
+	}
 	if err := u.pendingAfter(u.plan.PendingFeeds); err != nil {
 		return err
 	}

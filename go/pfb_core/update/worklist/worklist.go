@@ -380,8 +380,9 @@ func (b *builder) walk(cands []candidate, forceAll bool, pending map[string]bool
 		switch {
 		case c.marker != "":
 			// A category is never checked: built after its provider's download, or by a Force Check.
-			if forceAll || c.downloaded() {
-				found = found || !forceAll
+			// a stopped one stays in the plan, carrying the marker, which keeps it unconsumed
+			if forceAll || present(c.marker) {
+				found = found || !forceAll && c.stop == ""
 				plan.Items = append(plan.Items, b.prepare(c, feedstage.Change{Verdict: feedstage.VerdictChanged, Force: force}))
 			}
 			continue

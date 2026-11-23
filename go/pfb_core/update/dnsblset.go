@@ -421,7 +421,7 @@ func standingDNSBLIP(settings map[string]map[string]any, listDir string) []GeoSe
 		return sets
 	}
 	for _, v := range []ipset.Family{ipset.V4, ipset.V6} {
-		if _, err := os.Stat(filepath.Join(listDir, "DNSBLIP_"+string(v)+".txt")); err != nil {
+		if _, err := os.Stat(filepath.Join(listDir, "DNSBLIP_"+string(v)+".txt")); errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		sets = append(sets, GeoSet{Alias: "DNSBLIP_" + string(v), Group: "DNSBLIP", Family: "ip" + string(v), Action: action,

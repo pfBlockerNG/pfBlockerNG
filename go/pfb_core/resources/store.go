@@ -544,6 +544,21 @@ func (s *Store) Generation(id string) (uint64, error) {
 	return e.Current.Generation, nil
 }
 
+// Current is what the index records of id's current body, the body not read: its generation, digest, entries and
+// metadata, as Get answers them without a cursor. ErrNotFound when the store does not hold id or holds it as removed. A
+// writer call, as IDs.
+func (s *Store) Current(id string) (Reply, error) {
+	e, _, err := s.writerEntry(id)
+	if err != nil {
+		return Reply{}, err
+	}
+	if e == nil || e.Removed {
+		return Reply{}, fmt.Errorf("%w: %q", ErrNotFound, id)
+	}
+	c := e.Current
+	return Reply{Kind: KindFull, Generation: c.Generation, Digest: c.Digest, Entries: c.Entries, Metadata: c.Metadata}, nil
+}
+
 // IDs is every id under prefix the store holds and has not marked removed, in byte order. It is a writer call: an index
 // that cannot be read is cleared first, as by any write (loadWriter).
 func (s *Store) IDs(prefix string) ([]string, error) { return s.ids(prefix, false) }
