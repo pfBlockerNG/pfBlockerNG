@@ -17,13 +17,19 @@
 //	                    update.log and its result on fd 3. Without it those methods answer unavailable. Stopping Core ends
 //	                    scheduling and observation, not an admitted worker; a restarted Core observes or reconciles its receipt.
 //	                    Exit status 75 means the worker deferred the Update: its result is skipped and nothing is recorded
-//	--update-loop       run each Update through the Core Updater loop (issue #4038) instead of the --update-cmd program; off
-//	                    when absent, and the rc script does not pass it yet. The worker reads the settings itself and is
-//	                    given the path flags (--settings-backend-cmd, --resource-dir, --feed-local-dir, --script-dir,
-//	                    --rsync-bin, --hook-dir, --python-wrapper, --main-log) in its request (update.log.request). Needs --update-cmd
+//	--update-loop       run each Update through the Core Updater loop (issue #4038), which runs the --update-cmd program
+//	                    once as the Outpost apply (version 2); off when absent, and the rc script does not pass it yet. The
+//	                    worker reads the settings itself and is given the path flags (--settings-backend-cmd, --resource-dir,
+//	                    --feed-local-dir, --script-dir, --rsync-bin, --hook-dir, --python-wrapper, --main-log, --db-dir,
+//	                    --geoip-dir, --log-dir, --pkg-dir, --asn-table, --zoneinfo) and --user-agent in its request
+//	                    (update.log.request). Needs --update-cmd; an Update fails without --resource-dir, --db-dir,
+//	                    --geoip-dir, --log-dir and --pkg-dir
 //	--main-log PATH     the absolute path of the package's main log, which the loop appends its lines to beside update.log.
 //	                    Needs --update-loop. With the switch on, every path the loop is given (--settings-backend-cmd too)
 //	                    must be absolute, clean, valid UTF-8 and hold no control character
+//	--db-dir, --geoip-dir, --log-dir, --pkg-dir, --asn-table PATH
+//	                    the loop's folders: the package's database folder, the GeoIP share, the log folder, the folder of
+//	                    the PSL and the SafeSearch lists, and the ASN choices file
 //	--maintenance-cmd PATH
 //	                    optional quarter-hour Outpost command, no arguments, in an independent maintenance worker; it uses
 //	                    maintenance.log and separate receipts/lock. Core reads the maintenance settings before each run and

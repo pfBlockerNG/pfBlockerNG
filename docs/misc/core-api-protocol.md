@@ -819,8 +819,10 @@ member. The rc script does not pass the flag.
 
 - **Paths.** Core copies its path flags into the worker's request as a `loop` object: `settingsCmd`
   (`--settings-backend-cmd`; absent means `settings.json` in `--state-dir`), `resourceDir`, `feedLocalDirs`, `scriptDirs`,
-  `rsyncBin`, `hookDir`, `pythonWrapper` and `mainLog` (`--main-log PATH`, the package's main log, which needs
-  `--update-loop`). Settings never go there. A path must be absolute, clean, valid UTF-8 and free of control characters; an empty
+  `rsyncBin`, `hookDir`, `pythonWrapper`, `mainLog` (`--main-log PATH`, the package's main log, which needs
+  `--update-loop`), `dbDir` (`--db-dir`, the package's database folder), `geoipDir` (`--geoip-dir`, the GeoIP share),
+  `logDir` (`--log-dir`), `pkgDir` (`--pkg-dir`, the folder of the PSL and the SafeSearch lists), `asnTable`
+  (`--asn-table`), `zoneinfo` (`--zoneinfo`) and the user agent (`--user-agent`). Settings never go there. A path must be absolute, clean, valid UTF-8 and free of control characters; an empty
   single path means none, an empty list item is refused. With the switch on, Core refuses to start (exit status 2, a line
   naming the flag) when a flag, `--settings-backend-cmd` among them, gives such a path. An Update whose loop holds one is
   refused at admission, before the schedule occurrence is committed or `update.log` is replaced, and the worker refuses a
@@ -836,10 +838,18 @@ member. The rc script does not pass the flag.
   bytes of reason; the same text is the receipt's failure. A missing main log is created as the PHP logger creates it:
   mode 0666 less the umask. A main log that is a symbolic link, not a regular file (a FIFO is refused without waiting
   for a reader) or a file with more than one hard link fails the Update before the snapshot.
-- **Stages.** The stages after the snapshot are empty for now, so an Update reports success with an empty result and
-  starts no program.
-- **Lock.** In loop mode the worker itself holds the Update lock, so killing the worker frees the lock while processes
-  it started may still run. The limit stays until sub-slices 9i and 9j-2 of issue #4038.
+- **Stages.** The stages of the spec's section 3 run in order (issue #4038). An Update whose loop lacks `resourceDir`,
+  `dbDir`, `geoipDir`, `logDir` or `pkgDir` fails at the work list, before any stage publishes. Feed outcomes are written
+  to `update.log.result` in the version 1 shape as each feed finishes; the Extras line also carries `attempted` and
+  `"geoipReady": true`. The `--update-cmd` program is the Outpost apply: it runs once, with a version 2 request on stdin
+  (also outside the apply window, with `pendingOutsideWindow: true`) and `update.log.apply` as its fd 3, read with the
+  version 2 rules; an Update the work list finds nothing due for runs no apply. Exit status 75 of the apply makes the
+  Update `skipped`, 2 fails it; what an apply that failed otherwise reported is settled before the Update fails. The
+  pending token handed to the apply is the Core Updater's own snapshot's. The Core Updater's own state, the feeds left
+  pending, is `updater.json` in the state directory.
+- **Lock.** In loop mode the worker itself holds the Update lock, and the apply's holder holds it too while the apply
+  runs; killing the worker frees the lock while other processes it started may still run. The limit stays until
+  sub-slice 9j-2 of issue #4038.
 
 ### Update command, version 2
 
