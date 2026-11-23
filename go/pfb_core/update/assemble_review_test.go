@@ -223,8 +223,11 @@ func TestAnAppliedRecordWithTrailingDataIsNotFolded(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(fx.state, "applied.json"))
 	touch(t, filepath.Join(fx.state, "applied.json"), string(b)+`{"format":1}`)
 	touch(t, filepath.Join(fx.src, "D.txt"), "other.example\n")
-	if _, err := fx.run(t, manual()); err != nil {
+	if _, err := fx.run(t, Request{Trigger: "scheduled", Feeds: []string{"dnsbl:D"}}); err != nil {
 		t.Fatal(err)
+	}
+	if now := generation(t, fx.storeOf(), id); now.Generation == applied.Generation {
+		t.Fatalf("%s did not move from generation %d: the test needs a new publication", id, now.Generation)
 	}
 	if _, _, err := fx.storeOf().Body(id, applied.Generation, resources.PartMembers, 0); !errors.Is(err, resources.ErrNotFound) {
 		t.Errorf("generation %d was kept as applied from a record the Core API refuses (%v)", applied.Generation, err)
