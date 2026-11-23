@@ -500,7 +500,7 @@ func (s *Store) IDs(prefix string) ([]string, error) {
 	}
 	var ids []string
 	for _, id := range slices.Sorted(maps.Keys(idx.Resources)) {
-		if strings.HasPrefix(id, prefix) && !idx.Resources[id].Removed {
+		if e := idx.Resources[id]; e != nil && strings.HasPrefix(id, prefix) && !e.Removed {
 			ids = append(ids, id)
 		}
 	}
