@@ -36,11 +36,13 @@ type Loop struct {
 	MainLog       string   `json:"mainLog,omitempty"` // the package's main log the loop's lines are appended to; empty: none
 	// The package's folders the stages work in: the database folder ($pfb['dbdir']: the class folders deny, permit, match
 	// and native, original for IP feeds and baselines, dnsbl for DNSBL feeds, the Blacklist providers), the GeoIP share
-	// ($pfb['geoipshare'], the country folder cc in it), the log folder ($pfb['logdir']) and the package's own files
-	// (dnsbl_psl and the SafeSearch lists). ASNTable is the ASN choices file (pfblockerng_asn.txt), Zoneinfo the time zone
-	// file the apply window is read in (--zoneinfo; empty: the local zone).
+	// ($pfb['geoipshare']), the country folder ($pfb['ccdir']; empty: cc in the share), the log folder ($pfb['logdir'];
+	// empty: the error, Extras and parse-error logs are not written) and the package's own files (dnsbl_psl and the
+	// SafeSearch lists). ASNTable is the ASN choices file (pfblockerng_asn.txt), Zoneinfo the time zone file the apply
+	// window is read in (--zoneinfo; empty: the local zone).
 	DBDir    string `json:"dbDir,omitempty"`
-	GeoIPDir string `json:"geoipDir,omitempty"`
+	GeoIPDir string `json:"geoipShareDir,omitempty"`
+	CCDir    string `json:"ccDir,omitempty"`
 	LogDir   string `json:"logDir,omitempty"`
 	PkgDir   string `json:"pkgDir,omitempty"`
 	ASNTable string `json:"asnTable,omitempty"`
@@ -64,7 +66,7 @@ func (l *Loop) validate() error {
 		return errors.New("the loop's user agent holds a control character or is not UTF-8")
 	}
 	for _, p := range []string{l.SettingsCmd, l.ResourceDir, l.RsyncBin, l.HookDir, l.PythonWrapper, l.MainLog, l.DBDir, l.GeoIPDir,
-		l.LogDir, l.PkgDir, l.ASNTable, l.Zoneinfo} {
+		l.CCDir, l.LogDir, l.PkgDir, l.ASNTable, l.Zoneinfo} {
 		if err := CheckPath(p); p != "" && err != nil {
 			return fmt.Errorf("the loop path %q %w", p, err)
 		}

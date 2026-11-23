@@ -46,7 +46,7 @@ func loopFlags(t *testing.T) (flags []string, paths map[string]any) {
 		"--main-log", p("main.log")}
 	paths = map[string]any{"resourceDir": p("store"), "feedLocalDirs": []any{p("feeds1"), p("feeds2")}, "scriptDirs": []any{p("scripts")},
 		"rsyncBin": p("rsync"), "hookDir": p("hooks"), "pythonWrapper": p("python.sh"), "mainLog": p("main.log"), "dbDir": p("db"),
-		"geoipDir": p("GeoIP"), "logDir": p("log"), "pkgDir": p("pkg"), "asnTable": p("asn.txt")}
+		"geoipShareDir": p("GeoIP"), "logDir": p("log"), "pkgDir": p("pkg"), "asnTable": p("asn.txt")}
 	return flags, paths
 }
 

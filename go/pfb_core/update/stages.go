@@ -69,10 +69,14 @@ func (u *updater) db(names ...string) string {
 	return filepath.Join(append([]string{u.loop.DBDir}, names...)...)
 }
 
-func (u *updater) ccDir() string { return filepath.Join(u.loop.GeoIPDir, "cc") }
+func (u *updater) ccDir() string { return cmp.Or(u.loop.CCDir, filepath.Join(u.loop.GeoIPDir, "cc")) }
 
-// openLog opens a log of the log folder for appending, as the main log is opened, and closes it when the loop ends.
+// openLog opens a log of the log folder for appending, as the main log is opened, and closes it when the loop ends;
+// without a log folder it is nil, which discards.
 func (u *updater) openLog(name string) (io.Writer, error) {
+	if u.loop.LogDir == "" {
+		return nil, nil
+	}
 	f, err := openMainLog(filepath.Join(u.loop.LogDir, name))
 	if err != nil {
 		return nil, err
@@ -90,7 +94,7 @@ func (u *updater) dnsblActive() bool {
 // decision itself is stage 6's, which probes: it needs the Extras of stage 5 first.
 func (u *updater) workList() error {
 	for _, p := range []struct{ flag, path string }{{"--resource-dir", u.loop.ResourceDir}, {"--db-dir", u.loop.DBDir},
-		{"--geoip-dir", u.loop.GeoIPDir}, {"--log-dir", u.loop.LogDir}, {"--pkg-dir", u.loop.PkgDir}} {
+		{"--geoip-dir", u.loop.GeoIPDir}, {"--pkg-dir", u.loop.PkgDir}} {
 		if p.path == "" {
 			return fmt.Errorf("the loop needs %s: the %s path is not set", p.flag, strings.TrimPrefix(p.flag, "--"))
 		}
