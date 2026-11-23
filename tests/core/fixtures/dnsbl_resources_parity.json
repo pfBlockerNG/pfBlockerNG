@@ -1,0 +1,132 @@
+{
+  "schema": 1,
+  "description": "Issue #4036 slice 7a: a feed's staged NDJSON rows and attributes in; what today's pfb_unbound_python_sources() writes (the manifest's feed rows and each .raw file's lines) and what go/pfb_core/dnsbl publishes (the dnsbl/manifest feed rows and each dnsbl/feed-<name> body) out. tests/php/DnsblResourcesParityTest.php asserts today's PHP against old_expect when a case has one, else expect; go/pfb_core/dnsbl/parity_test.go asserts expect, plus refused, invalid and dropped, and refuses an old_expect equal to expect. Every old_expect is a departure the owner decided on #4036 (2026-11-23: a feed body is a sorted set) or that the plan records (section 2.4: a row the store cannot hold).",
+  "cases": [
+    {
+      "id": "rows-already-a-sorted-set",
+      "description": "Domains and ABP rules already unique and in byte order, and every feed attribute (permit mode, Custom_List provenance, the TOP1M box): both writers give the same rows and the same feed rows, in configuration order.",
+      "feeds": [
+        {"header": "Ads", "group": "AdsGroup", "log": "1", "staged": ["[\"a\",\"@@||ok.b.example^\"]", "[\"d\",\"a.example\"]", "[\"d\",\"b.example\"]", "[\"a\",\"||c.example^\"]"]},
+        {"header": "Allow", "group": "AllowGroup", "log": "0", "provenance": "user", "mode": "permit", "top1m": true, "staged": ["[\"d\",\"allow.example\"]", "[\"d\",\"bücher.example\"]"]}
+      ],
+      "expect": {"feeds": [
+        {"feed": "Ads", "group": "AdsGroup", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["@@||ok.b.example^", "a.example", "b.example", "||c.example^"]},
+        {"feed": "Allow", "group": "AllowGroup", "logFlag": "0", "provenance": "user", "mode": "permit", "top1m": true, "rows": ["allow.example", "bücher.example"]}
+      ]}
+    },
+    {
+      "id": "rows-in-feed-order",
+      "description": "Departure (owner, 2026-11-23): a body holds the rows in byte order, so the irreducible regex rules of a feed are numbered and scanned in byte order, where today's .raw keeps the feed's order.",
+      "feeds": [
+        {"header": "Regex", "group": "G", "log": "1", "staged": ["[\"a\",\"/z[0-9]+\\\\.example/\"]", "[\"d\",\"z.example\"]", "[\"a\",\"/a[0-9]+\\\\.example/\"]", "[\"d\",\"a.example\"]"]}
+      ],
+      "expect": {"feeds": [
+        {"feed": "Regex", "group": "G", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["/a[0-9]+\\.example/", "/z[0-9]+\\.example/", "a.example", "z.example"]}
+      ]},
+      "old_expect": {"feeds": [
+        {"feed": "Regex", "group": "G", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["/z[0-9]+\\.example/", "z.example", "/a[0-9]+\\.example/", "a.example"]}
+      ]}
+    },
+    {
+      "id": "a-repeated-row-counts-once",
+      "description": "Departure (owner, 2026-11-23): a row repeated inside one feed is one member, so the reject tally and the regex count count it once.",
+      "feeds": [
+        {"header": "Dups", "group": "G", "log": "1", "staged": ["[\"d\",\"a.example\"]", "[\"d\",\"a.example\"]", "[\"a\",\"/r+/\"]", "[\"a\",\"/r+/\"]", "[\"d\",\"b..bad\"]", "[\"d\",\"b..bad\"]"]}
+      ],
+      "expect": {"feeds": [
+        {"feed": "Dups", "group": "G", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["/r+/", "a.example", "b..bad"]}
+      ]},
+      "old_expect": {"feeds": [
+        {"feed": "Dups", "group": "G", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["a.example", "a.example", "/r+/", "/r+/", "b..bad", "b..bad"]}
+      ]}
+    },
+    {
+      "id": "same-key-abp-rules-in-byte-order",
+      "description": "Departure (owner, 2026-11-23): of two ABP rules of one feed on the same key, the build keeps the later one; in a body the later is the later in byte order, where today it is the later in the feed.",
+      "feeds": [
+        {"header": "Abp", "group": "G", "log": "1", "staged": ["[\"a\",\"||x.example^$important\"]", "[\"a\",\"||x.example^\"]"]}
+      ],
+      "expect": {"feeds": [
+        {"feed": "Abp", "group": "G", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["||x.example^", "||x.example^$important"]}
+      ]},
+      "old_expect": {"feeds": [
+        {"feed": "Abp", "group": "G", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["||x.example^$important", "||x.example^"]}
+      ]}
+    },
+    {
+      "id": "rows-the-store-cannot-hold",
+      "description": "Departure (plan-4036 section 2.4): a row holding a NUL or another control character, or starting with '#', cannot be a member. Core leaves it out and counts it, where today the .raw carries it to the build, which rejects or ignores it (the decision is the same; the reject tally differs).",
+      "feeds": [
+        {"header": "Odd", "group": "G", "log": "1", "staged": ["[\"d\",\"ok.example\"]", "[\"d\",\"nul\\u0000.example\"]", "[\"a\",\"||tab\\t.example^\"]", "[\"a\",\"##.banner\"]", "[\"d\",\"del\\u007f.example\"]"]}
+      ],
+      "dropped": {"dnsbl/feed-Odd": 4},
+      "expect": {"feeds": [
+        {"feed": "Odd", "group": "G", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["ok.example"]}
+      ]},
+      "old_expect": {"feeds": [
+        {"feed": "Odd", "group": "G", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["ok.example", "nul\u0000.example", "||tab\t.example^", "##.banner", "del\u007f.example"]}
+      ]}
+    },
+    {
+      "id": "staged-rows-both-skip",
+      "description": "Staged lines that are no row: not JSON, an unknown tag, an empty payload, three elements, a number, null, a blank line. Both writers skip them; Core counts every non-blank one.",
+      "feeds": [
+        {"header": "Junk", "group": "G", "log": "1", "staged": ["[\"d\",\"x\"", "[\"x\",\"c.example\"]", "[\"d\",\"\"]", "[\"d\",\"a\",\"b\"]", "[1,\"a\"]", "null", "", " [\"d\",\"ok.example\"] "]}
+      ],
+      "invalid": {"Junk": 6},
+      "expect": {"feeds": [
+        {"feed": "Junk", "group": "G", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["ok.example"]}
+      ]}
+    },
+    {
+      "id": "legacy-object-rows",
+      "description": "Departure: the self-describing object rows of issue #1083, which today's reader accepts from a staging file written before issue #1177. Core writes compact rows only, so it skips and counts them.",
+      "feeds": [
+        {"header": "Old", "group": "G", "log": "1", "staged": ["{\"kind\":\"domain\",\"domain\":\"old.example\",\"log\":\"1\",\"feed\":\"Old\",\"group\":\"G\"}", "{\"kind\":\"abp\",\"raw\":\"||old.example^\"}", "[\"d\",\"new.example\"]"]}
+      ],
+      "invalid": {"Old": 2},
+      "expect": {"feeds": [
+        {"feed": "Old", "group": "G", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["new.example"]}
+      ]},
+      "old_expect": {"feeds": [
+        {"feed": "Old", "group": "G", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["old.example", "||old.example^", "new.example"]}
+      ]}
+    },
+    {
+      "id": "a-feed-named-twice",
+      "description": "Departure: two feeds with one header share one staging file and one .raw today, so the manifest names that file twice. A resource id names one body, so Core refuses the whole set.",
+      "feeds": [
+        {"header": "Dup", "group": "G1", "log": "1", "staged": ["[\"d\",\"a.example\"]"]},
+        {"header": "Dup", "group": "G2", "log": "0", "staged": ["[\"d\",\"a.example\"]"]}
+      ],
+      "expect": {"error": "feed \"Dup\" is named twice"},
+      "old_expect": {"feeds": [
+        {"feed": "Dup", "group": "G1", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["a.example"]},
+        {"feed": "Dup", "group": "G2", "logFlag": "0", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["a.example"]}
+      ]}
+    },
+    {
+      "id": "headers-that-are-no-word",
+      "description": "A header outside letters, digits and underscore (PFB_FILTER_WORD) is skipped by both writers; Core reports it. The feed after it keeps its place.",
+      "feeds": [
+        {"header": "bad-name", "group": "G", "log": "1", "staged": ["[\"d\",\"a.example\"]"]},
+        {"header": "bad.name", "group": "G", "log": "1", "staged": ["[\"d\",\"a.example\"]"]},
+        {"header": "Good_1", "group": "G", "log": "1", "staged": ["[\"d\",\"g.example\"]"]}
+      ],
+      "refused": ["bad-name", "bad.name"],
+      "expect": {"feeds": [
+        {"feed": "Good_1", "group": "G", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": ["g.example"]}
+      ]}
+    },
+    {
+      "id": "an-empty-staging-file",
+      "description": "A feed whose staging file holds no row still gets its feed row, with an empty body.",
+      "feeds": [
+        {"header": "Empty", "group": "G", "log": "1", "staged": []}
+      ],
+      "expect": {"feeds": [
+        {"feed": "Empty", "group": "G", "logFlag": "1", "provenance": "feed", "mode": "deny", "top1m": false, "rows": []}
+      ]}
+    }
+  ]
+}
