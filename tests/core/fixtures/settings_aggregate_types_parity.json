@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "projection": "policy/ip",
+  "field": "aggregates",
+  "description": "The Uber aggregate selection gen/pfb_agg_types (ADR-11; issue #4038, sub-slice 9h). A case's stored value is what config.xml holds (absent when the case has none); php is today's reader, pfb_global()'s $pfb['agg_types'] (the types of PFB_AGGREGATE_TYPES the stored CSV names, in that constant's order); aggregates is what the settings adapter answers in policy/ip: the same types, each as its lower-case class, a derived field the Outpost answers and ignores on a write. A refused row is a value Core refuses to read.",
+  "cases": [
+    {"id":"absent","description":"Nothing stored: no Uber aggregate.","php":[],"aggregates":[]},
+    {"id":"empty","description":"The IP page with nothing selected stores an empty CSV.","stored":"","php":[],"aggregates":[]},
+    {"id":"deny","description":"Deny selected.","stored":"Deny","php":["Deny"],"aggregates":[{"class":"deny"}]},
+    {"id":"all-four","description":"Every type selected, as the IP page stores them.","stored":"Deny,Permit,Match,Native","php":["Deny","Permit","Match","Native"],"aggregates":[{"class":"deny"},{"class":"permit"},{"class":"match"},{"class":"native"}]},
+    {"id":"other-order","description":"A hand-edited order: the reader keeps the constant's order.","stored":"Native,Deny","php":["Deny","Native"],"aggregates":[{"class":"deny"},{"class":"native"}]},
+    {"id":"repeated","description":"A type named twice is selected once.","stored":"Deny,Deny","php":["Deny"],"aggregates":[{"class":"deny"}]},
+    {"id":"unknown-and-empty-tokens","description":"Hostile: an unknown type and empty tokens are ignored.","stored":"Deny,,Bogus,","php":["Deny"],"aggregates":[{"class":"deny"}]},
+    {"id":"lower-case","description":"Hostile: the reader compares case-sensitively, so a lower-case type selects nothing.","stored":"deny","php":[],"aggregates":[]},
+    {"id":"space","description":"Hostile: a token with a leading space selects nothing; the others stand.","stored":"Deny, Permit","php":["Deny"],"aggregates":[{"class":"deny"}]}
+  ],
+  "refused": [
+    {"id":"upper-case-class","description":"Core holds the class in lower case.","aggregates":[{"class":"Deny"}]},
+    {"id":"unknown-class","description":"No such class.","aggregates":[{"class":"geoip"}]},
+    {"id":"repeated-class","description":"A class listed twice.","aggregates":[{"class":"deny"},{"class":"deny"}]},
+    {"id":"not-a-list","description":"A string where the list belongs.","aggregates":"Deny"},
+    {"id":"item-not-an-object","description":"A string where an item belongs.","aggregates":["deny"]}
+  ]
+}

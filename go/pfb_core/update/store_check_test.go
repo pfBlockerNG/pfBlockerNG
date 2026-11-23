@@ -9,19 +9,19 @@ import (
 	"testing"
 )
 
-// Issue #4038, hostile row: the resource store directory missing or read-only fails the Update before any stage
-// publishes. The loop checks the store right after the snapshot, so no stage after it runs.
+// Issue #4038, hostile row: a resource store that cannot be written (read-only, or a file in its folder's place) fails the
+// Update before any stage publishes. The loop checks the store right after the snapshot, so no stage after it runs.
 
-// WHEN the loop's resource store is missing, is a file, or is a directory Core cannot write THEN the Update fails at the
-// snapshot boundary, names the store, and no later stage runs; a store Core can write lets every stage run and is left as
-// it was.
+// WHEN the loop's resource store is a file, or a directory Core cannot write THEN the Update fails at the snapshot boundary,
+// names the store, and no later stage runs. A store Core can write lets every stage run and is left as it was, and a missing
+// one is created first, as the store creates its folder itself, so a fresh install is not stuck.
 func TestAStoreThatCannotBeWrittenFailsTheUpdateBeforeAnyStagePublishes(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		store func(t *testing.T) string
 		fails bool
 	}{
-		{"missing", func(t *testing.T) string { return filepath.Join(t.TempDir(), "resources") }, true},
+		{"missing", func(t *testing.T) string { return filepath.Join(t.TempDir(), "var", "resources") }, false},
 		{"a file", func(t *testing.T) string {
 			p := filepath.Join(t.TempDir(), "resources")
 			touch(t, p, "")
