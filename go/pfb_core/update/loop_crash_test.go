@@ -88,6 +88,14 @@ func newE2ESandbox(t *testing.T, c e2eCase, listen string) *e2eSandbox {
 // run runs step i of c as the replay does, and returns what Run returned.
 func (sb *e2eSandbox) run(t *testing.T, c e2eCase, i int) error {
 	t.Helper()
+	sb.prepare(t, c, i)
+	_, err := runCmd(t, &Command{Path: sb.self, Loop: sb.loop}, c.Steps[i].Request, sb.log)
+	return err
+}
+
+// prepare serves step i's bodies and answers the settings read with its snapshot.
+func (sb *e2eSandbox) prepare(t *testing.T, c e2eCase, i int) {
+	t.Helper()
 	sb.feeds.set(c.Steps[i].Serve)
 	reply := strings.ReplaceAll(string(c.Expect[i].Snapshot), "{{FEEDS}}", sb.server.URL)
 	reply = strings.ReplaceAll(reply, "192.168.89.0/24", "127.0.0.0/8")
@@ -99,8 +107,6 @@ func (sb *e2eSandbox) run(t *testing.T, c e2eCase, i int) error {
 			t.Fatal(err)
 		}
 	}
-	_, err := runCmd(t, &Command{Path: sb.self, Loop: sb.loop}, c.Steps[i].Request, sb.log)
-	return err
 }
 
 // published is what a client of the store is served: the desired sets by alias and the DNSBL data, as JSON.
