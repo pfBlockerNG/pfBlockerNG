@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/output"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
 )
 
@@ -125,6 +126,12 @@ func (u *updater) snapshot() error {
 	if u.req.Trigger == "scheduled" && snap.Projections[0].Value["scheduledWorkDisabled"] == true {
 		u.sinks.Line(false, "Core Updater: the scheduled Update is skipped: scheduled work is disabled\n")
 		return ErrDeferred
+	}
+	// A store that cannot be written fails the Update here, before any stage publishes (issue #4038).
+	if u.loop.ResourceDir != "" {
+		if err := resources.Open(u.loop.ResourceDir).Writable(); err != nil {
+			return fmt.Errorf("the resource store cannot be written: %w", err)
+		}
 	}
 	return nil
 }

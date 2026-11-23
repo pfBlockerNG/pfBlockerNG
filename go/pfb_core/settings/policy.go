@@ -34,6 +34,9 @@ func policyIPProjection() Projection {
 		stringList("etMatch", "category", `^ET_[A-Za-z0-9_]+$`),
 		cidrs("suppressionV4", false),
 		cidrs("suppressionV6", true),
+		// The Uber aggregate selection gen/pfb_agg_types (ADR-11), derived: the Outpost answers it and ignores it on a write.
+		// tests/core/fixtures/settings_aggregate_types_parity.json is its parity fixture.
+		stringList("aggregates", "class", `^(?:deny|permit|match|native)$`),
 	}}
 }
 

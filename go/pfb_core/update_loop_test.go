@@ -34,6 +34,10 @@ func loopFlags(t *testing.T) (flags []string, paths map[string]any) {
 	t.Helper()
 	dir := scratchDir(t)
 	p := func(name string) string { return filepath.Join(dir, name) }
+	// the loop fails an Update whose store it cannot write (issue #4038), so the store is a real folder
+	if err := os.Mkdir(p("store"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	flags = []string{"--resource-dir", p("store"), "--feed-local-dir", p("feeds1"), "--feed-local-dir", p("feeds2"),
 		"--script-dir", p("scripts"), "--rsync-bin", p("rsync"), "--hook-dir", p("hooks"), "--python-wrapper", p("python.sh"),
 		"--main-log", p("main.log")}

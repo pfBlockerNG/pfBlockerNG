@@ -191,7 +191,7 @@ final class CoreSettingsPolicyIpParityTest extends TestCase
 			$this->assertContains($id, $refused, "the hostile row {$id}");
 		}
 		$this->assertSame(['dedup', 'aggregate', 'max', 'maxLimit', 'pMax', 'pMaxLimit', 'dMax', 'dMaxLimit', 'countryWhitelistAction', 'countryBlacklistAction',
-			'countryWhitelist', 'etBlock', 'etMatch', 'suppressionV4', 'suppressionV6'], array_keys($doc['defaults']), 'the defaults name every field in the protocol order');
+			'countryWhitelist', 'etBlock', 'etMatch', 'suppressionV4', 'suppressionV6', 'aggregates'], array_keys($doc['defaults']), 'the defaults name every field in the protocol order');
 	}
 
 	public function testTheSyncBlockStillReadsTheReputationKeysWithTheFallbackAndTheCsvFilter(): void

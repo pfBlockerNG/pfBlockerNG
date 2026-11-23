@@ -638,7 +638,8 @@ type PMaxOut struct {
 }
 
 // PMax is the pmax verb: every /24 holding more than max rows across the deny feeds (none named "pfB..." or ending "_v6")
-// becomes one "x.y.z.0/24" row in the first feed, in byte order of name, that held it. A feed left empty gets the placeholder.
+// becomes one "x.y.z.0/24" row in the first feed, in byte order of name, that held it. A feed left empty gets the placeholder,
+// unless placeholder is "" (none: Core's, #4038).
 // The masterfile loses the rows of those /24s and gains the new ones; when it held none of them it is emptied first.
 func PMax(deny []Feed, master []string, max int, placeholder string) PMaxOut {
 	out := PMaxOut{Lists: make([]List, len(deny)), Master: slices.Clone(master)}
@@ -684,7 +685,7 @@ func PMax(deny []Feed, master []string, max int, placeholder string) PMaxOut {
 		return slices.ContainsFunc(held, func(h string) bool { return strings.HasPrefix(r, h) })
 	}), added...)
 	for i := range out.Lists {
-		if len(out.Lists[i].Lines) == 0 {
+		if len(out.Lists[i].Lines) == 0 && placeholder != "" {
 			out.Lists[i].Lines = []string{placeholder}
 		}
 	}

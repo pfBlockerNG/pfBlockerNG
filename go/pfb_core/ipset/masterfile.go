@@ -62,7 +62,7 @@ func Remove(headers, master []string, dirs [][]string) RemoveOut {
 
 // ClosingIn is the closing report's input. Deny is the deny folder by alias. AggCounts are the texts of the v4 aggregation
 // count files and Origs those of the v4 original feeds, which stand in when the counts sum to 0. Dedup on adds the masterfile
-// check. Placeholder is the v4 spelling.
+// check. Placeholder is the v4 spelling; "" is none (Core's, #4038): an empty list stays empty.
 type ClosingIn struct {
 	Deny        []Feed
 	Master      []string
@@ -98,12 +98,12 @@ func Closing(in ClosingIn) ClosingOut {
 	for i, f := range in.Deny {
 		// A deny file of size 0 gets the placeholder, written as the v4 spelling for either family.
 		out.Lists[i] = List{f.Name, textRows(f.Text)}
-		if f.Text == "" {
+		if f.Text == "" && in.Placeholder != "" {
 			out.Lists[i].Lines = []string{in.Placeholder}
 		}
 		denyRows = append(denyRows, out.Lists[i].Lines...)
 		for _, l := range out.Lists[i].Lines {
-			if l == in.Placeholder {
+			if in.Placeholder != "" && l == in.Placeholder {
 				out.Sanity.Empty = append(out.Sanity.Empty, f.Name)
 			}
 		}

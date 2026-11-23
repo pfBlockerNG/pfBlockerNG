@@ -1,0 +1,136 @@
+{
+ "about": "Lists of the ipset corpus (testdata/ipset.json) that the Core Updater writes differently because it runs the algebra without a placeholder (Placeholder \"\"). Each row names a corpus case and a list in it, today's list as old_expect and Core's as expect. Run by TestCoreRunsTheCorpusWithoutAPlaceholderAsTheDepartureFixtureSays; the corpus itself keeps today's answers, which the smoke VM replays.",
+ "lists": [
+  {
+   "case": "pmax_basic",
+   "list": "deny/B_v4.txt",
+   "old_expect": [
+    "127.1.7.7"
+   ],
+   "expect": [],
+   "departure": "No placeholder (#4038, owner decision of 2026-11-23, question 1): Core writes no placeholder, so a list today's pass refills with the placeholder address stays empty; the Outpost pads its own mirror."
+  },
+  {
+   "case": "pmax_emptied_gets_placeholder",
+   "list": "deny/B_v4.txt",
+   "old_expect": [
+    "127.1.7.7"
+   ],
+   "expect": [],
+   "departure": "No placeholder (#4038, owner decision of 2026-11-23, question 1): Core writes no placeholder, so a list today's pass refills with the placeholder address stays empty; the Outpost pads its own mirror."
+  },
+  {
+   "case": "pmax_placeholder_prefix",
+   "list": "deny/A_v4.txt",
+   "old_expect": [
+    "127.1.7.1",
+    "127.1.7.2",
+    "127.1.7.3",
+    "127.1.7.4"
+   ],
+   "expect": [
+    "127.1.7.0/24"
+   ],
+   "departure": "No placeholder (#4038, owner decision of 2026-11-23, question 1): today's pMax never counts the /24 of the placeholder address; without a placeholder that /24 is counted as any other, so these feed rows collapse to the /24 like any offender."
+  },
+  {
+   "case": "pmax_no_final_newline",
+   "list": "deny/B_v4.txt",
+   "old_expect": [
+    "127.1.7.7"
+   ],
+   "expect": [],
+   "departure": "No placeholder (#4038, owner decision of 2026-11-23, question 1): Core writes no placeholder, so a list today's pass refills with the placeholder address stays empty; the Outpost pads its own mirror."
+  },
+  {
+   "case": "pmax_crlf",
+   "list": "deny/B_v4.txt",
+   "old_expect": [
+    "127.1.7.7"
+   ],
+   "expect": [],
+   "departure": "No placeholder (#4038, owner decision of 2026-11-23, question 1): Core writes no placeholder, so a list today's pass refills with the placeholder address stays empty; the Outpost pads its own mirror."
+  },
+  {
+   "case": "pmax_shared_host",
+   "list": "deny/B_v4.txt",
+   "old_expect": [
+    "127.1.7.7"
+   ],
+   "expect": [],
+   "departure": "No placeholder (#4038, owner decision of 2026-11-23, question 1): Core writes no placeholder, so a list today's pass refills with the placeholder address stays empty; the Outpost pads its own mirror."
+  },
+  {
+   "case": "pmax_two_offenders",
+   "list": "deny/B_v4.txt",
+   "old_expect": [
+    "127.1.7.7"
+   ],
+   "expect": [],
+   "departure": "No placeholder (#4038, owner decision of 2026-11-23, question 1): Core writes no placeholder, so a list today's pass refills with the placeholder address stays empty; the Outpost pads its own mirror."
+  },
+  {
+   "case": "clos_empty_file_gets_placeholder",
+   "list": "deny/A_v4.txt",
+   "old_expect": [
+    "127.1.7.7"
+   ],
+   "expect": [],
+   "departure": "No placeholder (#4038, owner decision of 2026-11-23, question 1): Core writes no placeholder, so a list today's pass refills with the placeholder address stays empty; the Outpost pads its own mirror."
+  },
+  {
+   "case": "clos_empty_v6_file_placeholder_spelling",
+   "list": "deny/A_v6.txt",
+   "old_expect": [
+    "127.1.7.7"
+   ],
+   "expect": [],
+   "departure": "No placeholder (#4038, owner decision of 2026-11-23, question 1): Core writes no placeholder, so a list today's pass refills with the placeholder address stays empty; the Outpost pads its own mirror."
+  },
+  {
+   "case": "clos_custom_ph",
+   "list": "deny/A_v4.txt",
+   "old_expect": [
+    "127.9.9.9"
+   ],
+   "expect": [],
+   "departure": "No placeholder (#4038, owner decision of 2026-11-23, question 1): Core writes no placeholder, so a list today's pass refills with the placeholder address stays empty; the Outpost pads its own mirror."
+  },
+  {
+   "case": "clos_dedup_off",
+   "list": "deny/A_v4.txt",
+   "old_expect": [
+    "127.1.7.7"
+   ],
+   "expect": [],
+   "departure": "No placeholder (#4038, owner decision of 2026-11-23, question 1): Core writes no placeholder, so a list today's pass refills with the placeholder address stays empty; the Outpost pads its own mirror."
+  },
+  {
+   "case": "pipe_all_suppressed_v4",
+   "list": "passes[0].deny_final/A_v4.txt",
+   "old_expect": [
+    "127.1.7.7"
+   ],
+   "expect": [],
+   "departure": "No placeholder (#4038, owner decision of 2026-11-23, question 1): Core writes no placeholder, so a list today's pass refills with the placeholder address stays empty; the Outpost pads its own mirror."
+  },
+  {
+   "case": "pipe_all_suppressed_v4",
+   "list": "passes[1].deny_final/A_v4.txt",
+   "old_expect": [
+    "127.1.7.7"
+   ],
+   "expect": [],
+   "departure": "No placeholder (#4038, owner decision of 2026-11-23, question 1): Core writes no placeholder, so a list today's pass refills with the placeholder address stays empty; the Outpost pads its own mirror."
+  },
+  {
+   "case": "pipe_all_suppressed_v6",
+   "list": "passes[0].deny_final/A_v6.txt",
+   "old_expect": [
+    "127.1.7.7"
+   ],
+   "expect": [],
+   "departure": "No placeholder (#4038, owner decision of 2026-11-23, question 1): Core writes no placeholder, so a list today's pass refills with the placeholder address stays empty; the Outpost pads its own mirror."
+  }
+ ]
+}
