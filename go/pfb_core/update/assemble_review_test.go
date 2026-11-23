@@ -143,18 +143,29 @@ func TestTheMarkersStayUntilTheSettleSucceeds(t *testing.T) {
 	})
 }
 
-// Required fix 4: a stopped category keeps its provider's marker.
+// Required fix 4: a stopped category keeps its provider's marker, though another category of the provider ran.
+//
+// GIVEN a provider with the categories ads and games and its update marker, and a DNSBL feed holding the name UT1_ads
+// WHEN a manual Update runs
+// THEN games runs, ads is stopped (feed_name_taken), and the marker stays for ads.
 func TestAStoppedCategoryKeepsItsProvidersMarker(t *testing.T) {
 	fx := newLoopFixture(t)
 	fx.settings["schedule"] = map[string]any{"categoryUpdates": true, "categoryProviders": []any{
-		map[string]any{"id": "UT1", "title": "U T", "selected": true, "categories": "ads"}}}
+		map[string]any{"id": "UT1", "title": "UT1", "selected": true, "categories": "ads,games"}}}
+	group := fx.settings["feeds/dnsbl"]["groups"].([]any)[0].(map[string]any)
+	group["feeds"] = append(group["feeds"].([]any), map[string]any{"header": "UT1_ads", "state": "enabled",
+		"url": "file://" + filepath.Join(fx.src, "UT1_ads.txt"), "action": "deny"})
 	fx.reply(t)
+	touch(t, filepath.Join(fx.src, "UT1_ads.txt"), "feed.example\n")
 	mkdirs(t, filepath.Join(fx.db, "UT1"))
-	touch(t, filepath.Join(fx.db, "UT1", "UT1_ads"), "category.example\n")
+	for _, c := range []string{"ads", "games"} {
+		touch(t, filepath.Join(fx.db, "UT1", "UT1_"+c), c+".example\n")
+	}
 	touch(t, filepath.Join(fx.db, "UT1", "UT1.update"), "")
 	if _, err := fx.run(t, manual()); err != nil {
 		t.Fatal(err)
 	}
+	generation(t, fx.storeOf(), dnsbl.FeedPrefix+"UT1_games") // the other category ran
 	if _, err := os.Stat(filepath.Join(fx.db, "UT1", "UT1.update")); err != nil {
 		t.Errorf("the marker of a provider whose category was stopped was consumed: %v", err)
 	}
