@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "projection": "ingest",
-  "defaults": {"suppression": true, "suppressionCidrV4": 0, "suppressionCidrV6": 0, "dnsblIp": false, "dnsblLenient": false, "feedHostFilter": true, "feedHostAllowlist": [], "selfAddresses": [], "proxyUrl": "", "proxyUser": "", "proxyPassword": "", "proxyUnusable": false, "scheduledWorkDisabled": false, "applyWindow": "", "skipFeedLimit": 0, "feedSanity": false, "pendingApply": false},
+  "defaults": {"suppression": true, "suppressionCidrV4": 0, "suppressionCidrV6": 0, "dnsblIp": false, "dnsblLenient": false, "feedHostFilter": true, "feedHostAllowlist": [], "selfAddresses": [], "proxyUrl": "", "proxyUser": "", "proxyPassword": "", "proxyUnusable": false, "scheduledWorkDisabled": false, "applyWindow": "", "skipFeedLimit": 0, "feedSanity": false},
   "skipFeedFailures": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
   "cases": [
     {"id":"defaults","description":"Nothing stored: suppression on with no CIDR limit, the DNSBL IP action off and strict, the feed-host filter on with an empty allowlist, no address of the box, no proxy.","config":{},"ingest":{},"php":{"supp":true,"floors":["Disabled","Disabled"],"dnsblIp":false,"lenient":false,"filter":true,"allow":[],"proxy":{"host":null,"port":null,"userpwd":null}}},
@@ -103,11 +103,11 @@
     {"id":"feed-sanity-upper-case","description":"Hand-edited ON.","config":{"gen":{"pfb_feed_sanity":"ON"}},"ingest":{"feedSanity":true},"php":{"feedSanity":true}},
     {"id":"feed-sanity-yes","description":"Hostile: yes is no toggle value.","config":{"gen":{"pfb_feed_sanity":"yes"}},"ingest":{},"php":{"feedSanity":false}},
     {"id":"pending-none","description":"No pending marker and no ledger flag: nothing waits for an apply.","config":{},"pending":{},"ingest":{},"php":{"pendingApply":false}},
-    {"id":"pending-marker","description":"A save marked a change the apply has not taken.","config":{},"pending":{"marker":"0123456789abcdef"},"ingest":{"pendingApply":true},"php":{"pendingApply":true}},
+    {"id":"pending-marker","description":"A save marked a change the apply has not taken.","config":{},"pending":{"marker":"0123456789abcdef"},"ingest":{},"php":{"pendingApply":true}},
     {"id":"pending-marker-applied","description":"The apply took the marked version: nothing waits.","config":{},"pending":{"marker":"0123456789abcdef","applied":"0123456789abcdef"},"ingest":{},"php":{"pendingApply":false}},
-    {"id":"pending-marker-newer","description":"A save marked a newer version than the one applied.","config":{},"pending":{"marker":"fedcba9876543210","applied":"0123456789abcdef"},"ingest":{"pendingApply":true},"php":{"pendingApply":true}},
-    {"id":"pending-empty-marker","description":"An empty (pre-upgrade or touched) marker is always pending.","config":{},"pending":{"marker":""},"ingest":{"pendingApply":true},"php":{"pendingApply":true}},
-    {"id":"pending-ledger","description":"The due ledger's cron entry holds pending_apply.","config":{},"pending":{"ledger":true},"ingest":{"pendingApply":true},"php":{"pendingApply":true}},
+    {"id":"pending-marker-newer","description":"A save marked a newer version than the one applied.","config":{},"pending":{"marker":"fedcba9876543210","applied":"0123456789abcdef"},"ingest":{},"php":{"pendingApply":true}},
+    {"id":"pending-empty-marker","description":"An empty (pre-upgrade or touched) marker is always pending.","config":{},"pending":{"marker":""},"ingest":{},"php":{"pendingApply":true}},
+    {"id":"pending-ledger","description":"The due ledger's cron entry holds pending_apply.","config":{},"pending":{"ledger":true},"ingest":{},"php":{"pendingApply":true}},
     {"id":"pending-ledger-cleared","description":"The due ledger's cron entry with pending_apply false.","config":{},"pending":{"ledger":false},"ingest":{},"php":{"pendingApply":false}}
   ],
   "refused": [
@@ -153,7 +153,6 @@
     {"id":"skipfeed-limit-beyond-page","description":"skipFeedLimit is 0 to 6, as the page offers.","ingest":{"skipFeedLimit":7},"field":"skipFeedLimit"},
     {"id":"skipfeed-limit-negative","description":"skipFeedLimit is 0 to 6.","ingest":{"skipFeedLimit":-1},"field":"skipFeedLimit"},
     {"id":"skipfeed-limit-string","description":"skipFeedLimit is an int.","ingest":{"skipFeedLimit":"3"},"field":"skipFeedLimit"},
-    {"id":"feed-sanity-string","description":"feedSanity is a bool.","ingest":{"feedSanity":"on"},"field":"feedSanity"},
-    {"id":"pending-apply-string","description":"pendingApply is a bool.","ingest":{"pendingApply":"yes"},"field":"pendingApply"}
+    {"id":"feed-sanity-string","description":"feedSanity is a bool.","ingest":{"feedSanity":"on"},"field":"feedSanity"}
   ]
 }

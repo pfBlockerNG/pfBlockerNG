@@ -743,11 +743,11 @@ final class CoreSettingsBackendTest extends TestCase
 		$revision = json_decode($run['stdout'], TRUE)['revision'] ?? NULL;
 		$this->assertIsInt($revision, $run['stdout']);
 		$this->assertGreaterThan(0, $revision);
-		// The pending token is the sandbox marker's own (issue #4031): none or one version, the rest is exact
+		// The pending token is the sandbox marker's own (issue #4031): none or one version, the rest is exact; a token nothing applied is pending (#4038)
 		$token = json_decode($run['stdout'], TRUE)['platform']['pendingToken'] ?? NULL;
 		$this->assertMatchesRegularExpression('/^(?:[0-9a-f]{16})?$/D', (string) $token, $run['stdout']);
 		$this->assertSame(
-			json_encode(['version' => 1, 'revision' => $revision, 'settings' => self::settings($defaults, 'disabled_log'), 'platform' => ['pendingToken' => $token]]),
+			json_encode(['version' => 1, 'revision' => $revision, 'settings' => self::settings($defaults, 'disabled_log'), 'platform' => ['pendingToken' => $token, 'pendingApply' => $token !== NULL]]),
 			$run['stdout'],
 			'nothing but the reply on stdout: ' . $run['stderr']
 		);

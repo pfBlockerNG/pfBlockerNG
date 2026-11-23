@@ -58,7 +58,7 @@ final class CoreSettingsPendingTokenTest extends TestCase
 		$reply = $this->read();
 
 		$this->assertArrayHasKey('settings', $reply, json_encode($reply));
-		$this->assertSame(['pendingToken' => NULL], $reply['platform'] ?? 'no platform member', 'no marker, no token');
+		$this->assertSame(['pendingToken' => NULL, 'pendingApply' => FALSE], $reply['platform'] ?? 'no platform member', 'no marker, no token, nothing pending');
 		$this->assertFileDoesNotExist($this->marker, 'a read creates no marker');
 		$this->assertSame([], $GLOBALS['pfb_test_lock_events'], 'a read takes no lock');
 	}
@@ -69,7 +69,7 @@ final class CoreSettingsPendingTokenTest extends TestCase
 
 		$reply = $this->read();
 
-		$this->assertSame(['pendingToken' => '0123456789abcdef'], $reply['platform'] ?? 'no platform member');
+		$this->assertSame(['pendingToken' => '0123456789abcdef', 'pendingApply' => TRUE], $reply['platform'] ?? 'no platform member');
 		$this->assertSame('0123456789abcdef', file_get_contents($this->marker), 'the marker is as it was');
 		$this->assertFileDoesNotExist("{$this->marker}.applied", 'a read settles nothing');
 	}
@@ -111,6 +111,22 @@ final class CoreSettingsPendingTokenTest extends TestCase
 
 		$this->assertSame($none, $one, 'a token appearing moves no revision');
 		$this->assertSame($one, $this->read()['revision'], 'a token changing moves no revision');
+	}
+
+	public function testPendingApplyFollowsTheMarkerAndTheApplyWithoutMovingTheRevision(): void
+	{
+		$none = $this->read();
+		$this->assertFalse($none['platform']['pendingApply'] ?? NULL, 'before-state: nothing pending');
+
+		pfb_mark_pending_changes();
+		$marked = $this->read();
+		$this->assertTrue($marked['platform']['pendingApply'] ?? NULL, 'a change marked waits for an apply');
+		$this->assertSame($none['revision'], $marked['revision'], 'pending state is no setting: the revision stays');
+
+		pfb_settle_pending_changes($marked['platform']['pendingToken']);
+		$settled = $this->read();
+		$this->assertFalse($settled['platform']['pendingApply'] ?? NULL, 'the apply took it');
+		$this->assertSame($none['revision'], $settled['revision']);
 	}
 
 	public function testAWriteReplyCarriesNoPlatform(): void
