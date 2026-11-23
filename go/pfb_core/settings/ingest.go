@@ -28,6 +28,10 @@ func ingestProjection() Projection {
 		{Name: "proxyPassword", Type: TypeString, Default: "", Secret: true},
 		{Name: "proxyUnusable", Type: TypeBool, Default: false},
 		{Name: "scheduledWorkDisabled", Type: TypeBool, Default: false},
+		// The apply window gen/pfb_quiet_hours (schedule.InApplyWindow): "" for none, else zero-padded HH:MM-HH:MM. The Outpost
+		// answers "" for every value today's reader takes as no window (tests/core/fixtures/settings_apply_window_parity.json);
+		// a start equal to the end passes the pattern and is no window too, though the Outpost never sends one.
+		{Name: "applyWindow", Type: TypeString, Default: "", Pattern: `^(?:(?:[01][0-9]|2[0-3]):[0-5][0-9]-(?:[01][0-9]|2[0-3]):[0-5][0-9])?$`},
 	}, Retired: []string{"sinkholeV4", "sinkholeV6"}} // #4054
 }
 

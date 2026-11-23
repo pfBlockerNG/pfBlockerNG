@@ -61,8 +61,8 @@ type Input struct {
 	// Stages are the per-feed stages by kind (ipv4, ipv6, dnsbl): their Paths.FeedDir is the kind's feed folder, their
 	// Fetcher makes the probe. Two kinds may share a folder.
 	Stages map[string]*feedstage.Stage
-	// InWindow is stage 7's window test for now (schedule.InApplyWindow), the caller's while the window is in no
-	// projection (sub-slice 9c).
+	// InWindow is stage 7's window test for now, the caller's: schedule.InApplyWindow on the snapshot's
+	// ingest.applyWindow, in the zone today's date() reads (the scheduler's), once sub-slice 9i wires the loop.
 	InWindow bool
 	// ExtrasChanged: an Extra of this Update changed its data (today's $dcc_changed). PendingApply: the Outpost holds a
 	// change that waits for an apply (pfb_core_update_pending_apply()).
