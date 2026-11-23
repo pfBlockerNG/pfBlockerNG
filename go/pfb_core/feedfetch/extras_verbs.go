@@ -26,12 +26,15 @@ type ExtrasSettings struct {
 	Top1M                      bool // policy/dnsbl top1m
 	Top1MProvider, Top1MToken  string
 	Providers                  []BlacklistProvider // schedule's categoryProviders, in their order
+	BlacklistEnabled           bool                // schedule's categoryUpdates: blacklist_enable set and not Disable
 }
 
-// BlacklistProvider is one of schedule's categoryProviders: Selected is its membership of blacklist_selected.
+// BlacklistProvider is one of schedule's categoryProviders: Selected is its membership of blacklist_selected, Categories
+// the categories selected of it (the item's selected, a CSV).
 type BlacklistProvider struct {
 	ID, Title, Feed, Username, Password string
 	Selected                            bool
+	Categories                          string
 }
 
 // ExtrasVerb is one run of a verb.

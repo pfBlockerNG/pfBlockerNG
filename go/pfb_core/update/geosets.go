@@ -3,17 +3,17 @@ package update
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
-	"unicode"
 
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/geoip"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
 )
 
@@ -49,6 +49,17 @@ type GeoSet struct {
 	Changed   bool   // the set was rebuilt and published this Update
 }
 
+// ErrNoCountryData: the country folder holds no ISO list, so no conversion has published country lists (today's pass
+// stops before the continent block when MaxMind processing failed, apply.inc:3445-3460). No set is built.
+var ErrNoCountryData = errors.New("the country folder holds no country data")
+
+// isoCode is the projection's country code pattern (docs/misc/core-api-protocol.md, feeds/geoip): only such a code is
+// joined into a path.
+var isoCode = regexp.MustCompile(`^(A[12]_)?[A-Z][A-Z0-9](_rep)?$`)
+
+// geoRename publishes a staged file: a test seam for a rename that fails.
+var geoRename = os.Rename
+
 // geoWrite writes a staged set: a test seam for a disk without room.
 var geoWrite = func(f *os.File, b []byte) error {
 	_, err := f.Write(b)
@@ -60,9 +71,9 @@ var continents = []string{"pfB_Top", "pfB_Africa", "pfB_Antarctica", "pfB_Asia",
 	"pfB_SAmerica", "pfB_PS"}
 
 // Build builds the sets of geoip, the settings/feeds/geoip projection, in the package's continent order whatever the
-// order of its groups (a name outside the nine is no continent), IPv4 before IPv6. A set
-// that could not be published keeps its previous baseline and list, is not reported changed, and its error is joined
-// to the others; the other sets are still built.
+// order of its groups (a name outside the nine is no continent), IPv4 before IPv6. A country code outside the
+// projection's pattern is skipped. A set that could not be published is not reported changed and its error is joined
+// to the others; the other sets are still built. Without country data no set is built (ErrNoCountryData).
 func (g GeoSets) Build(ctx context.Context, geoip map[string]any) ([]GeoSet, error) {
 	if !g.Enabled {
 		return nil, nil
@@ -96,6 +107,11 @@ func (g GeoSets) Build(ctx context.Context, geoip map[string]any) ([]GeoSet, err
 			if err := ctx.Err(); err != nil {
 				return sets, errors.Join(append(errs, err)...)
 			}
+			if len(sets) == 0 {
+				if _, err := os.Stat(filepath.Join(g.CCDir, ".geoip_isos")); err != nil {
+					return nil, ErrNoCountryData
+				}
+			}
 			s := GeoSet{Alias: name + fam.suffix, Group: strings.TrimPrefix(name, "pfB_"), Family: fam.family, Action: action,
 				ListClass: class, Path: filepath.Join(folder, name+fam.suffix+".txt")}
 			changed, err := g.build(s, isos, fam.suffix)
@@ -109,9 +125,9 @@ func (g GeoSets) Build(ctx context.Context, geoip map[string]any) ([]GeoSet, err
 	return sets, errors.Join(errs...)
 }
 
-// build publishes one set when it changed: the list and the baseline are staged beside their targets, then renamed,
-// the list first. A run killed between the two renames leaves the old baseline, so the next Update finds the set
-// changed and publishes both again (roll forward); its staged files are removed first.
+// build publishes one set when it differs from its baseline or its list: the list and the baseline are staged beside
+// their targets, then renamed, the list first. A run killed or failing between the two renames leaves the old baseline,
+// so the next Update finds the set changed and publishes both again (roll forward); its staged files are removed first.
 func (g GeoSets) build(s GeoSet, isos []string, suffix string) (bool, error) {
 	orig := filepath.Join(g.OrigDir, s.Alias+".orig")
 	for _, target := range []string{orig, s.Path} {
@@ -122,6 +138,9 @@ func (g GeoSets) build(s GeoSet, isos []string, suffix string) (bool, error) {
 	}
 	var body []byte
 	for _, iso := range isos {
+		if !isoCode.MatchString(iso) {
+			continue
+		}
 		b, err := os.ReadFile(filepath.Join(g.CCDir, iso+suffix+".txt"))
 		if err != nil {
 			if g.Log != nil {
@@ -134,10 +153,8 @@ func (g GeoSets) build(s GeoSet, isos []string, suffix string) (bool, error) {
 	if len(body) > 0 && body[len(body)-1] != '\n' {
 		body = append(body, '\n')
 	}
-	if old, err := os.ReadFile(orig); err == nil && bytes.Equal(old, body) && !g.Force && !g.GeoIPChanged {
-		if _, err := os.Stat(s.Path); err == nil {
-			return false, nil
-		}
+	if !g.Force && !g.GeoIPChanged && sameContent(orig, body) && sameContent(s.Path, body) {
+		return false, nil
 	}
 	var staged []string
 	defer func() {
@@ -153,12 +170,18 @@ func (g GeoSets) build(s GeoSet, isos []string, suffix string) (bool, error) {
 		staged = append(staged, p)
 	}
 	for i, target := range []string{s.Path, orig} {
-		if err := os.Rename(staged[i], target); err != nil {
+		if err := geoRename(staged[i], target); err != nil {
 			return false, err
 		}
 	}
 	staged = nil
 	return true, nil
+}
+
+// sameContent reports whether path is a file that holds body.
+func sameContent(path string, body []byte) bool {
+	b, err := os.ReadFile(path)
+	return err == nil && bytes.Equal(b, body)
 }
 
 // stageFile writes body to a new file of mode 0644 beside target, synced, and returns its name.
@@ -196,15 +219,22 @@ func rows(v any) []map[string]any {
 	return out
 }
 
+// geoCatalogMax is the largest geo-catalog body: the Outpost's PFB_GEOIP_CATALOG_MAX (pfblockerng_geoip.inc), 16 MiB.
+var geoCatalogMax = 16 << 20
+
+// asnTableMax bounds the read of the ASN table (today's table is a few MiB).
+const asnTableMax = 64 << 20
+
 // GeoCatalog is the geo-catalog resource body (spec §7): the rows of the country folder's .geo_catalog, which the GeoIP
 // conversion publishes with the country lists, and an "asn" row per line of the ASN table asnTable
 // (pfblockerng_asn.txt), {"kind": "asn", "asn": <number>, "name": <text>}, canonical (members in byte order, each once).
 // The Outpost renders the GeoIP pages from the page, country and reputation rows and skips the asn rows
 // (pfb_geoip_render_catalog()); "AS<asn> [ <name> ]" is the table's line. A table line of another shape, or whose number
-// is not a 32-bit AS number written as Go writes it, is left out; a name that is not UTF-8 has each bad byte replaced by
-// U+FFFD. A missing table gives no asn row; a missing .geo_catalog is an error (no conversion has published one).
+// is not a 32-bit AS number written as Go writes it, is left out, as is a row longer than a resource member; a name that
+// is not UTF-8 has each bad byte replaced by U+FFFD. A missing table gives no asn row; a missing .geo_catalog is an
+// error (no conversion has published one), and so is a body over geoCatalogMax or a table over asnTableMax.
 func GeoCatalog(ccDir, asnTable string) ([]string, error) {
-	b, err := os.ReadFile(filepath.Join(ccDir, ".geo_catalog"))
+	b, err := readBounded(filepath.Join(ccDir, ".geo_catalog"), geoCatalogMax)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +242,7 @@ func GeoCatalog(ccDir, asnTable string) ([]string, error) {
 	if s := strings.TrimSuffix(string(b), "\n"); s != "" {
 		members = strings.Split(s, "\n")
 	}
-	table, err := os.ReadFile(asnTable)
+	table, err := readBounded(asnTable, asnTableMax)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
@@ -224,21 +254,39 @@ func GeoCatalog(ccDir, asnTable string) ([]string, error) {
 		if !ok || !ok2 || !ok3 || err != nil || strconv.FormatUint(n, 10) != num {
 			continue
 		}
-		row, _ := json.Marshal(struct {
+		row := geoip.JSONMember(struct {
 			Kind string `json:"kind"`
 			ASN  uint64 `json:"asn"`
 			Name string `json:"name"`
 		}{"asn", n, name})
-		// A member holds no control character: JSON escapes those below U+0020, not DEL and the C1 controls.
-		var line strings.Builder
-		for _, r := range string(row) {
-			if unicode.IsControl(r) {
-				fmt.Fprintf(&line, `\u%04x`, r)
-			} else {
-				line.WriteRune(r)
-			}
+		if len(row) <= resources.MaxMemberLength {
+			members = append(members, row)
 		}
-		members = append(members, line.String())
 	}
-	return resources.Canonical(members)
+	members, err = resources.Canonical(members)
+	if err != nil {
+		return nil, err
+	}
+	size := 0
+	for _, m := range members {
+		size += len(m) + 1
+	}
+	if size > geoCatalogMax {
+		return nil, fmt.Errorf("the geo-catalog body is %d bytes, over %d", size, geoCatalogMax)
+	}
+	return members, nil
+}
+
+// readBounded reads path whole, refusing a file over max bytes.
+func readBounded(path string, max int) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, int64(max)+1))
+	if err == nil && len(b) > max {
+		err = fmt.Errorf("%s is over %d bytes", path, max)
+	}
+	return b, err
 }

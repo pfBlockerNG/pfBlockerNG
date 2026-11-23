@@ -625,20 +625,7 @@ type page struct {
 // the string it sits in.
 func catalog(pages map[string]page, reputation []option) []byte {
 	var lines []string
-	add := func(row any) {
-		b, _ := json.Marshal(row) // strings and numbers, the strings valid UTF-8 (build refuses others): nothing to fail
-		// A resource member holds no control character: JSON escapes those below U+0020 and leaves DEL and the C1
-		// controls as they are, so escape them too.
-		var line strings.Builder
-		for _, r := range string(b) {
-			if unicode.IsControl(r) {
-				fmt.Fprintf(&line, `\u%04x`, r)
-			} else {
-				line.WriteRune(r)
-			}
-		}
-		lines = append(lines, line.String())
-	}
+	add := func(row any) { lines = append(lines, JSONMember(row)) }
 	type countryRow struct {
 		Kind     string `json:"kind"`
 		Page     string `json:"page,omitempty"`
@@ -667,6 +654,22 @@ func catalog(pages map[string]page, reputation []option) []byte {
 	// fails; the Core Updater that publishes it (#4038) reports that.
 	slices.Sort(lines)
 	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+// JSONMember is row as one resource member of a JSON Lines body: its JSON, with every control character escaped, as
+// JSON escapes those below U+0020 and leaves DEL and the C1 controls as they are. Row holds strings and numbers: invalid
+// UTF-8 in a string becomes U+FFFD, and nothing fails.
+func JSONMember(row any) string {
+	b, _ := json.Marshal(row)
+	var line strings.Builder
+	for _, r := range string(b) {
+		if unicode.IsControl(r) {
+			fmt.Fprintf(&line, `\u%04x`, r)
+		} else {
+			line.WriteRune(r)
+		}
+	}
+	return line.String()
 }
 
 // englishContinent is the continent's English name as `grep -m1 ",en,<code>" <English Locations> | cut -d, -f4`
