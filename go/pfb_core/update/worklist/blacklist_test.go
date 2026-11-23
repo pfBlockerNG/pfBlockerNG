@@ -78,7 +78,7 @@ func TestTheBlacklistCategoriesAreFeedsOfThePerFeedStage(t *testing.T) {
 		t.Fatalf("category items = %+v, want UT1_ads and UT1_porn_x only", got)
 	}
 	ads := got["UT1_ads"]
-	want := feedstage.Feed{ID: "dnsbl:UT1_ads", Kind: "dnsbl", Name: "UT1_ads", State: "enabled", Format: "auto",
+	want := feedstage.Feed{ID: "blacklist:UT1:ads", Kind: "dnsbl", Name: "UT1_ads", State: "enabled", Format: "auto",
 		Source: "file://" + filepath.Join(c.db, "UT1", "UT1_ads")}
 	if ads.Feed != want {
 		t.Errorf("feed = %+v\n want %+v", ads.Feed, want)

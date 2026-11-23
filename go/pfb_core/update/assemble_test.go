@@ -813,12 +813,16 @@ func TestAnApplyThatDefersMakesTheUpdateSkipped(t *testing.T) {
 func TestAnApplyThatRefusesFailsTheUpdate(t *testing.T) {
 	fx := newLoopFixture(t)
 	touch(t, filepath.Join(fx.applyDir, "exit"), "2")
+	seen := recordBoundaries(t)
 	_, err := fx.run(t, manual())
-	if err == nil || !strings.Contains(err.Error(), "apply") {
+	if err == nil || !strings.Contains(err.Error(), "the apply refused the request (exit status 2)") {
 		t.Fatalf("run = %v, want the apply's refusal", err)
 	}
 	if _, ran := readHook(t, fx, "post"); ran {
 		t.Error("the post hook ran after a refused apply")
+	}
+	if slices.Contains(*seen, "settle") {
+		t.Errorf("boundaries %q: the settle ran after a refused apply", *seen)
 	}
 }
 
@@ -892,12 +896,29 @@ func TestWhileDNSBLIsOffTheRemovedDNSBLBodiesAreDeleted(t *testing.T) {
 	writeApplied(t, fx, held...)
 	fx.settings["policy/dnsbl"]["enabled"] = false
 	fx.reply(t)
+	var marked []string
+	prev := boundary
+	t.Cleanup(func() { boundary = prev })
+	boundary = func(name string) {
+		if name == "settle" {
+			marked, _ = fx.storeOf().RemovedIDs("dnsbl/")
+		}
+	}
 	if _, err := fx.run(t, manual()); err != nil {
 		t.Fatal(err)
+	}
+	if !slices.Equal(marked, held) {
+		t.Errorf("removed before the settle = %q, want every dnsbl id %q marked removed", marked, held)
 	}
 	removed, err := fx.storeOf().RemovedIDs("dnsbl/")
 	if err != nil || len(removed) != 0 {
 		t.Errorf("removed dnsbl ids = %q, %v; want every one deleted", removed, err)
+	}
+	entries, _ := os.ReadDir(fx.store)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "dnsbl~") {
+			t.Errorf("the store still holds %s", e.Name())
+		}
 	}
 }
 
