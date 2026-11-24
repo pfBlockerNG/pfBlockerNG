@@ -19,6 +19,9 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/coreinput"
 )
 
+// CORE_POLL_INTERVAL is how often the poller asks Core whether the DNSBL data changed (owner, 2026-11-24).
+const CORE_POLL_INTERVAL = 10 * time.Second
+
 // coreSyncCap ends a Sync or a report that Core leaves hanging, so that the poller goes on; it orders nothing.
 const coreSyncCap = 10 * time.Minute
 
@@ -27,7 +30,7 @@ type coreFeed struct {
 	m      *pfbUnbound
 	client *coreinput.Client
 	dir    string                            // the module directory
-	tick   func() (<-chan time.Time, func()) // nil: a RELOAD_POLL_INTERVAL ticker
+	tick   func() (<-chan time.Time, func()) // the poller's tick source
 	disk   coreinput.State                   // what the module directory holds: the last Sync's state
 	served map[string]coreinput.Cursor       // what the live snapshot was built from; nil: nothing
 	// reported is whether Core has been told what is served; lastErr is the last Sync error logged, so that a Core that
@@ -36,8 +39,15 @@ type coreFeed struct {
 	lastErr  string
 }
 
-// bootCore boots the module in moduleDir on the Core API at socket. tick is the poller's tick source (nil: a ticker).
+// bootCore boots the module in moduleDir on the Core API at socket. tick is the poller's tick source (nil: a
+// CORE_POLL_INTERVAL ticker).
 func bootCore(moduleDir, logDir, socket string, tick func() (<-chan time.Time, func())) (*pfbUnbound, error) {
+	if tick == nil {
+		tick = func() (<-chan time.Time, func()) {
+			ticker := time.NewTicker(CORE_POLL_INTERVAL)
+			return ticker.C, ticker.Stop
+		}
+	}
 	feed := &coreFeed{client: coreinput.New(socket), dir: moduleDir, tick: tick, disk: coreinput.Load(moduleDir)}
 	if !feed.trusted() {
 		if _, err := os.Lstat(filepath.Join(moduleDir, "pfb_py_sources.json")); err == nil {

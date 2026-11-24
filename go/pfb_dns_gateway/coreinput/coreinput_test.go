@@ -292,9 +292,10 @@ func TestAHostileReplyLeavesTheModuleAsItWas(t *testing.T) {
 				t.Fatalf("Sync of the good generation: %v", err)
 			}
 			before := tree(t, dir)
-			srv.Set(c.res)
-			srv.SetBody(c.body)
-			state, changed, err := coreinput.Sync(context.Background(), cl, dir, coreinput.Load(dir))
+			// A Core without the good generation as its baseline: every changed body is fetched whole.
+			hostile := coretest.Start(t, c.res)
+			hostile.SetBody(c.body)
+			state, changed, err := coreinput.Sync(context.Background(), coreinput.New(hostile.Socket), dir, coreinput.Load(dir))
 			if err == nil || changed || c.want != nil && !errors.Is(err, c.want) {
 				t.Fatalf("Sync = changed %v, %v; want a refusal %v", changed, err, c.want)
 			}

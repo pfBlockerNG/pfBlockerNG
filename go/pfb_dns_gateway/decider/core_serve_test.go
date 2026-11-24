@@ -196,16 +196,18 @@ func TestOnCoreTheCacheServedIsReportedOnceAtStart(t *testing.T) {
 // the manifest's, and Core's data gone.
 func TestOnCoreAHostileReplyLeavesTheSnapshotUnchanged(t *testing.T) {
 	for name, change := range map[string]func(srv *coretest.Server){
-		"a body that is not its digest's": func(srv *coretest.Server) {
+		"a delta and a body that are not their digest's": func(srv *coretest.Server) {
 			srv.Set(coreData("2", "b.example"))
-			srv.SetBody(func(id string, w http.ResponseWriter) bool {
+			hostile := func(id string, w http.ResponseWriter) bool {
 				if id != "dnsbl/feed-F" {
 					return false
 				}
 				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 				w.Write([]byte("c.example\n"))
 				return true
-			})
+			}
+			srv.SetBody(hostile)
+			srv.SetPart(func(id, _ string, w http.ResponseWriter) bool { return hostile(id, w) })
 		},
 		"Core's data gone": func(srv *coretest.Server) { srv.Set(map[string]coretest.Resource{}) },
 	} {

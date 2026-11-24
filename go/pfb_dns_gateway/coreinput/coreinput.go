@@ -9,6 +9,7 @@
 package coreinput
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -123,11 +124,15 @@ func (c *Client) ReportApplied(ctx context.Context, served map[string]Cursor) er
 
 // item is a GetResources item.
 type item struct {
-	Kind       string    `json:"kind"`
-	Generation string    `json:"generation"`
-	Digest     string    `json:"digest"`
-	Entries    int       `json:"entries"`
-	Error      *APIError `json:"error"`
+	Kind       string `json:"kind"`
+	Generation string `json:"generation"`
+	Digest     string `json:"digest"`
+	Entries    int    `json:"entries"`
+	// From, AddEntries and RemoveEntries describe a delta: the cursor's generation, and the line counts of its parts.
+	From          string    `json:"from"`
+	AddEntries    int       `json:"addEntries"`
+	RemoveEntries int       `json:"removeEntries"`
+	Error         *APIError `json:"error"`
 }
 
 func (c *Client) resource(ctx context.Context, id string, cur Cursor) (item, error) {
@@ -214,20 +219,28 @@ func Load(dir string) State {
 		if id == manifestID {
 			continue
 		}
-		path := memberFile[id]
-		if strings.HasPrefix(id, feedPrefix) {
-			path = filepath.Join(rawDir, s.Folder, rawName(id))
-		}
-		if path == "" || !own(filepath.Join(dir, path)) {
+		path := cachedPath(dir, s, id)
+		if path == "" || !own(path) {
 			return State{}
 		}
 		if id != ssID && id != pslID {
-			if digest, err := fileDigest(filepath.Join(dir, path)); err != nil || digest != cur.Digest {
+			if digest, err := fileDigest(path); err != nil || digest != cur.Digest {
 				return State{}
 			}
 		}
 	}
 	return s
+}
+
+// cachedPath is where s keeps the body of id in dir; "" for an id it cannot keep.
+func cachedPath(dir string, s State, id string) string {
+	if strings.HasPrefix(id, feedPrefix) {
+		return filepath.Join(dir, rawDir, s.Folder, rawName(id))
+	}
+	if memberFile[id] == "" {
+		return ""
+	}
+	return filepath.Join(dir, memberFile[id])
 }
 
 // own is whether path is a regular file of this user that neither its group nor others may write: a symbolic link is not
@@ -397,16 +410,20 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 	}()
 	state := State{Manifest: cur, Resources: map[string]Cursor{manifestID: cur}, Folder: filepath.Base(folder)}
 	files := map[string][]byte{} // the SafeSearch and PSL files this generation has, empty ones included
-	// ponytail: every body is fetched again whenever the manifest moves; link an unchanged one from the last folder if the
-	// transfer of a large DNSBL set on each Update matters.
+	kept := map[string]bool{}    // the SafeSearch and PSL files that stay as they are
 	for _, id := range slices.Sorted(maps.Keys(m.bodies)) {
 		r := m.bodies[id]
 		at := Cursor{r.Generation, r.Digest}
 		state.Resources[id] = at
+		have := prev.Resources[id]
 		if id != ssID && id != pslID {
-			if err := fetchFile(ctx, c, id, at, r.Entries, filepath.Join(folder, rawName(id))); err != nil {
+			if err := fetchBody(ctx, c, id, at, r.Entries, have, cachedPath(dir, prev, id), filepath.Join(folder, rawName(id))); err != nil {
 				return prev, false, err
 			}
+			continue
+		}
+		if have == at {
+			kept[memberFile[id]] = true
 			continue
 		}
 		var b bytes.Buffer
@@ -459,7 +476,9 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 		return fail(err)
 	}
 	for _, name := range []string{memberFile[ssID], memberFile[pslID]} {
-		if body, ok := files[name]; ok {
+		if body, ok := files[name]; kept[name] {
+			continue
+		} else if ok {
 			err = writeFile(filepath.Join(dir, name), body)
 		} else {
 			err = removeFile(filepath.Join(dir, name))
@@ -513,6 +532,140 @@ func manifestFolder(dir string) string {
 		}
 	}
 	return ""
+}
+
+// errDelta is a delta that does not turn the cached body into the current one: the full body is fetched instead.
+var errDelta = errors.New("the delta does not apply")
+
+// fetchBody writes the body of id at want to a new file at path, from the body at have cached at cached: linked when it is
+// the same body, merged with Core's delta from have when Core holds one that applies, fetched whole otherwise. have is a
+// body the last Sync wrote and Load trusts, never one changed since.
+func fetchBody(ctx context.Context, c *Client, id string, want Cursor, entries int, have Cursor, cached, path string) error {
+	if have == want && os.Link(cached, path) == nil {
+		return nil
+	}
+	if have != (Cursor{}) && cached != "" {
+		it, err := c.resource(ctx, id, have)
+		switch {
+		case errors.Is(err, ErrNoData):
+			return ErrMoved
+		case err != nil:
+			return err
+		case Cursor{it.Generation, it.Digest} != want:
+			return ErrMoved
+		case it.Kind == "delta" && it.From == have.Generation:
+			err := merge(ctx, c, id, it, cached, path)
+			if !errors.Is(err, errDelta) {
+				return err
+			}
+			os.Remove(path)
+		}
+	}
+	return fetchFile(ctx, c, id, want, entries, path)
+}
+
+// merge writes the body at it to a new file at path: the cached body with Core's delta applied, line by line in byte
+// order. It is errDelta unless each part is canonical, every removed member is there, no added one is, and the result is
+// it's digest and entries.
+// ponytail: each part is held in memory while it merges; stream the parts from files if a delta reaches the size of a body.
+func merge(ctx context.Context, c *Client, id string, it item, cached, path string) error {
+	add, err := c.part(ctx, id, it, "add", it.AddEntries)
+	if err != nil {
+		return err
+	}
+	remove, err := c.part(ctx, id, it, "remove", it.RemoveEntries)
+	if err != nil {
+		return err
+	}
+	old, err := os.Open(cached)
+	if err != nil {
+		return errDelta
+	}
+	defer old.Close()
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	h, n := xxh3.New128(), 0
+	w := bufio.NewWriter(io.MultiWriter(f, h))
+	emit := func(line string) {
+		w.WriteString(line)
+		w.WriteByte('\n')
+		n++
+	}
+	sc := bufio.NewScanner(old)
+	sc.Buffer(make([]byte, 64<<10), maxMember+1)
+	for sc.Scan() {
+		line := sc.Text()
+		for len(add) > 0 && add[0] < line {
+			emit(add[0])
+			add = add[1:]
+		}
+		switch {
+		case len(add) > 0 && add[0] == line, len(remove) > 0 && remove[0] < line:
+			return errDelta // adds a member that is there, or removes one that is not
+		case len(remove) > 0 && remove[0] == line:
+			remove = remove[1:]
+		default:
+			emit(line)
+		}
+	}
+	if sc.Err() != nil || len(remove) > 0 {
+		return errDelta
+	}
+	for _, line := range add {
+		emit(line)
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if n != it.Entries || hex.EncodeToString(h.Sum(nil)) != it.Digest {
+		return errDelta
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// part is the lines of a delta part of id, errDelta unless there are count of them, each a member, in byte order, none
+// repeated, or when Core no longer holds the delta.
+func (c *Client) part(ctx context.Context, id string, it item, part string, count int) ([]string, error) {
+	resp, err := c.post(ctx, "GetResourceBody", map[string]string{"id": id, "generation": it.Generation, "part": part, "from": it.From})
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.Code == "not_found" {
+		return nil, errDelta
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/plain") {
+		return nil, errDelta
+	}
+	bound := int64(count) * (maxMember + 1)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, bound+1))
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("%s %s: %w", id, part, err)
+	case int64(len(data)) > bound:
+		return nil, errDelta
+	case len(data) == 0 && count == 0:
+		return nil, nil
+	case len(data) == 0 || data[len(data)-1] != '\n':
+		return nil, errDelta
+	}
+	lines := strings.Split(string(data[:len(data)-1]), "\n")
+	if len(lines) != count {
+		return nil, errDelta
+	}
+	for i, line := range lines {
+		if line == "" || i > 0 && lines[i-1] >= line {
+			return nil, errDelta
+		}
+	}
+	return lines, nil
 }
 
 // fetchFile writes the body of id at cur to a new file at path and syncs it.
