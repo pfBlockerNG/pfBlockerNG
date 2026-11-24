@@ -188,20 +188,19 @@ func cursorOK(c Cursor) bool {
 func Load(dir string) State {
 	var s State
 	data, err := os.ReadFile(filepath.Join(dir, stateFile))
-	if err != nil || json.Unmarshal(data, &s) != nil || !cursorOK(s.Manifest) || !strings.HasPrefix(s.Folder, "g") ||
-		strings.ContainsAny(s.Folder, "/\\") {
+	if err != nil || json.Unmarshal(data, &s) != nil || !cursorOK(s.Manifest) {
 		return State{}
 	}
-	if info, err := os.Stat(filepath.Join(dir, "pfb_py_sources.json")); err != nil || !info.Mode().IsRegular() {
+	if info, err := os.Lstat(filepath.Join(dir, "pfb_py_sources.json")); err != nil || !info.Mode().IsRegular() {
 		return State{}
 	}
 	for id, cur := range s.Resources {
 		if id == manifestID {
 			continue
 		}
-		path := map[string]string{top1mID: "pfb_py_top1m.txt", ssID: "pfb_py_ss.txt", pslID: "dnsbl_psl"}[id]
+		path := memberFile[id]
 		if strings.HasPrefix(id, feedPrefix) {
-			path = filepath.Join(rawDir, s.Folder, strings.TrimPrefix(id, "dnsbl/")+".txt")
+			path = filepath.Join(rawDir, s.Folder, rawName(id))
 		}
 		info, err := os.Lstat(filepath.Join(dir, path))
 		if path == "" || err != nil || !info.Mode().IsRegular() {
@@ -236,6 +235,12 @@ type row struct {
 	Entries        int    `json:"entries"`
 }
 
+// memberFile is the module file of each member body.
+var memberFile = map[string]string{top1mID: "pfb_py_top1m.txt", ssID: "pfb_py_ss.txt", pslID: "dnsbl_psl"}
+
+// rawName is the name of a body's file in a Sync's folder.
+func rawName(id string) string { return strings.TrimPrefix(id, "dnsbl/") + ".txt" }
+
 // listKey is the file manifest's config key of each list row kind.
 var listKey = map[string]string{"whitelist": "user_whitelist", "unlock": "user_unlock", "tld_exclusion": "tld_wildcard_exclusion",
 	"tld_blacklist": "tld_wildcard_blacklist"}
@@ -249,7 +254,10 @@ type manifest struct {
 
 func parseManifest(data []byte) (manifest, error) {
 	m := manifest{bodies: map[string]row{}}
-	lists := map[string][]string{"user_whitelist": {}, "user_unlock": {}, "tld_wildcard_blacklist": {}, "tld_wildcard_exclusion": {}}
+	lists := map[string][]string{}
+	for _, key := range listKey {
+		lists[key] = []string{}
+	}
 	configs, top1m := 0, false
 	for _, line := range strings.SplitAfter(string(data), "\n") {
 		if line == "" {
@@ -323,14 +331,14 @@ func word(s string) bool {
 //
 // Every body is fetched into a new folder of the manifest's generation and checked before dir changes. The state file goes
 // first, so that a Sync interrupted from there on leaves Load nothing to trust and the next Sync fetches everything; then
-// TOP1M, SafeSearch and the PSL are replaced, the manifest naming the new folder, and the state last. The previous folder
-// stays, for a build that may still read it, until the next Sync. When Core publishes no DNSBL data, every file a Sync
-// wrote goes and Sync answers ErrNoData.
+// TOP1M, SafeSearch and the PSL are replaced, the manifest naming the new folder, and the state last. The folder the
+// manifest on disk named stays, for a build that may still read it, until the next Sync. TOP1M, SafeSearch and the PSL
+// keep their fixed names, so a caller never builds while a Sync runs, builds only from a dir whose Load is not the zero
+// State, and does not build after a Sync that returned an error, whatever it reports changed. When Core publishes no
+// DNSBL data, which is also a store not rebuilt yet, Sync answers ErrNoData and keeps every file: DNSBL switched off reaches
+// pfB-DNS through its settings.
 func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, error) {
 	it, err := c.resource(ctx, manifestID, prev.Manifest)
-	if errors.Is(err, ErrNoData) {
-		return State{}, clear(dir), err
-	}
 	if err != nil {
 		return prev, false, err
 	}
@@ -362,13 +370,15 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 		}
 	}()
 	state := State{Manifest: cur, Resources: map[string]Cursor{manifestID: cur}, Folder: filepath.Base(folder)}
-	files := map[string][]byte{"pfb_py_ss.txt": nil, "dnsbl_psl": nil}
+	files := map[string][]byte{} // the SafeSearch and PSL files this generation has, empty ones included
+	// ponytail: every body is fetched again whenever the manifest moves; link an unchanged one from the last folder if the
+	// transfer of a large DNSBL set on each Update matters.
 	for _, id := range slices.Sorted(maps.Keys(m.bodies)) {
 		r := m.bodies[id]
 		at := Cursor{r.Generation, r.Digest}
 		state.Resources[id] = at
 		if id != ssID && id != pslID {
-			if err := fetchFile(ctx, c, id, at, r.Entries, filepath.Join(folder, strings.TrimPrefix(id, "dnsbl/")+".txt")); err != nil {
+			if err := fetchFile(ctx, c, id, at, r.Entries, filepath.Join(folder, rawName(id))); err != nil {
 				return prev, false, err
 			}
 			continue
@@ -378,9 +388,9 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 			return prev, false, err
 		}
 		if id == ssID {
-			files["pfb_py_ss.txt"], err = safeSearchCSV(b.Bytes())
+			files[memberFile[id]], err = safeSearchCSV(b.Bytes())
 		} else {
-			files["dnsbl_psl"], err = pslText(b.Bytes())
+			files[memberFile[id]], err = pslText(b.Bytes())
 		}
 		if err != nil {
 			return prev, false, err
@@ -388,7 +398,7 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 	}
 	feeds := []map[string]any{}
 	for _, f := range m.feeds {
-		feeds = append(feeds, map[string]any{"raw": rawDir + "/" + state.Folder + "/" + strings.TrimPrefix(f.Resource, "dnsbl/") + ".txt",
+		feeds = append(feeds, map[string]any{"raw": rawDir + "/" + state.Folder + "/" + rawName(f.Resource),
 			"feed": f.Feed, "group": f.Group, "log_flag": f.LogFlag, "provenance": f.Provenance, "mode": f.Mode, "top1m": f.Top1m})
 	}
 	doc, err := json.Marshal(map[string]any{"version": 1, "config": m.config, "feeds": feeds})
@@ -402,6 +412,7 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 	if err := syncDir(folder); err != nil {
 		return prev, false, err
 	}
+	onDisk := manifestFolder(dir)
 
 	// Everything is fetched and checked: from here on dir changes, and an error leaves no state.
 	committed = true
@@ -412,20 +423,20 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 	if err := syncDir(dir); err != nil {
 		return fail(err)
 	}
-	top1m := filepath.Join(dir, "pfb_py_top1m.txt")
+	top1m := filepath.Join(dir, memberFile[top1mID])
 	if _, ok := m.bodies[top1mID]; ok {
-		err = os.Rename(filepath.Join(folder, "top1m.txt"), top1m)
+		err = os.Rename(filepath.Join(folder, rawName(top1mID)), top1m)
 	} else {
 		err = removeFile(top1m)
 	}
 	if err != nil {
 		return fail(err)
 	}
-	for _, name := range []string{"pfb_py_ss.txt", "dnsbl_psl"} {
-		if files[name] == nil {
-			err = removeFile(filepath.Join(dir, name))
+	for _, name := range []string{memberFile[ssID], memberFile[pslID]} {
+		if body, ok := files[name]; ok {
+			err = writeFile(filepath.Join(dir, name), body)
 		} else {
-			err = writeFile(filepath.Join(dir, name), files[name])
+			err = removeFile(filepath.Join(dir, name))
 		}
 		if err != nil {
 			return fail(err)
@@ -447,23 +458,35 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 	}
 	entries, _ := os.ReadDir(raw)
 	for _, e := range entries {
-		if n := e.Name(); n != state.Folder && n != prev.Folder && strings.HasPrefix(n, "g") {
+		if n := e.Name(); n != state.Folder && n != onDisk && strings.HasPrefix(n, "g") {
 			os.RemoveAll(filepath.Join(raw, n))
+		}
+	}
+	// The temporary files a writeFile cut short left.
+	entries, _ = os.ReadDir(dir)
+	for _, e := range entries {
+		for _, name := range []string{memberFile[ssID], memberFile[pslID], "pfb_py_sources.json", stateFile} {
+			if strings.HasPrefix(e.Name(), "."+name+".") {
+				os.Remove(filepath.Join(dir, e.Name()))
+			}
 		}
 	}
 	return state, true, nil
 }
 
-// clear removes every file a Sync writes, and reports whether there was one.
-func clear(dir string) bool {
-	changed := false
-	for _, name := range []string{stateFile, "pfb_py_sources.json", "pfb_py_top1m.txt", "pfb_py_ss.txt", "dnsbl_psl", rawDir} {
-		if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
-			changed = true
-			os.RemoveAll(filepath.Join(dir, name))
+// manifestFolder is the folder of pfb_py_raw the manifest in dir names, "" when there is none.
+func manifestFolder(dir string) string {
+	var doc struct{ Feeds []struct{ Raw string } }
+	data, err := os.ReadFile(filepath.Join(dir, "pfb_py_sources.json"))
+	if err != nil || json.Unmarshal(data, &doc) != nil {
+		return ""
+	}
+	for _, f := range doc.Feeds {
+		if folder, _, ok := strings.Cut(strings.TrimPrefix(f.Raw, rawDir+"/"), "/"); ok && folder != "" {
+			return folder
 		}
 	}
-	return changed
+	return ""
 }
 
 // fetchFile writes the body of id at cur to a new file at path and syncs it.
@@ -541,7 +564,7 @@ func removeFile(path string) error {
 // safeSearchCSV is dnsbl/safesearch as pfb_py_ss.txt: one row per host, host,a,aaaa and v4,v6 when Core gives them, unquoted
 // as PHP writes the file (loadSafesearchDb relies on that), so a value that would need quoting is refused.
 func safeSearchCSV(body []byte) ([]byte, error) {
-	var out bytes.Buffer
+	out := bytes.NewBuffer([]byte{})
 	for _, line := range strings.SplitAfter(string(body), "\n") {
 		if line == "" {
 			continue
@@ -579,7 +602,7 @@ func pslText(body []byte) ([]byte, error) {
 		}
 		rules[r.Section] = append(rules[r.Section], r.Rule)
 	}
-	var out strings.Builder
+	var out bytes.Buffer
 	for _, s := range []struct{ name, title string }{{"icann", "ICANN"}, {"private", "PRIVATE"}} {
 		out.WriteString("// ===BEGIN " + s.title + " DOMAINS===\n")
 		for _, rule := range rules[s.name] {
@@ -587,7 +610,7 @@ func pslText(body []byte) ([]byte, error) {
 		}
 		out.WriteString("// ===END " + s.title + " DOMAINS===\n")
 	}
-	return []byte(out.String()), nil
+	return out.Bytes(), nil
 }
 
 // pySpace is str.isspace(), what the decider strips from a PSL line.

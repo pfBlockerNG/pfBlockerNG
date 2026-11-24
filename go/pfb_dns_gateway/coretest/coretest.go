@@ -111,13 +111,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for id, cur := range req.Resources {
 			s.record("GetResources " + id)
 			res, ok := resources[id]
+			digest := Digest(res.Body)
 			switch {
 			case !ok:
 				items[id] = map[string]any{"error": map[string]string{"code": "not_found", "message": "not found"}}
-			case cur.Generation == res.Generation && cur.Digest == Digest(res.Body):
+			case cur.Generation == res.Generation && cur.Digest == digest:
 				items[id] = map[string]any{"kind": "unchanged", "generation": res.Generation}
 			default:
-				items[id] = map[string]any{"kind": "full", "generation": res.Generation, "digest": Digest(res.Body),
+				items[id] = map[string]any{"kind": "full", "generation": res.Generation, "digest": digest,
 					"entries": strings.Count(string(res.Body), "\n"), "metadata": map[string]any{}}
 			}
 		}
