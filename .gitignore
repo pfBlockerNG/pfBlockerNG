@@ -64,12 +64,6 @@ test-results/
 .grok/worktrees/
 .codex/local-notes.md
 .ua/
-*.graphify-bak
-graphify-out/*
-!graphify-out/graph.json
-# Records accumulate across tickets, so they outlive the worktree that wrote them. The
-# re-include names the DIRECTORY on purpose — contract pinned by test_cross_agent_tooling.
-!graphify-out/memory/
 
 # Per-machine Claude Code / Grok overrides — never committed
 .claude/settings.local.json

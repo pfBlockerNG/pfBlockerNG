@@ -566,7 +566,6 @@ def test_no_stale_dev_tooling_hook_path_reference() -> None:
             "--exclude-dir=.git",
             "--exclude-dir=legacy",
             "--exclude-dir=.codegraph",
-            "--exclude-dir=graphify-out",
             "--exclude-dir=__pycache__",
         ],
         capture_output=True,

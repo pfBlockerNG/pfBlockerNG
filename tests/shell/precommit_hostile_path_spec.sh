@@ -25,9 +25,8 @@ Describe '.githooks/pre-commit with a C-quoted path'
     cp "$PFB_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"
     cp "$PFB_ROOT/.githooks/check-commit-identity.sh" "$repo/.githooks/" \
       && chmod +x "$repo/.githooks/check-commit-identity.sh"
-    printf '#!/bin/sh\nmkdir -p graphify-out && true > graphify-out/graph.json\n' > "$repo/scripts/agent/check-graph-fresh.sh"
-    # The staged checker makes staged_sh=1, so the shell gates run; create their
-    # scan roots so the sandbox stays silent (the spec pins classification only).
+    # Shell gates run when a .sh is staged; create their scan roots so the sandbox
+    # stays silent (the spec pins classification only).
     mkdir -p "$repo/scripts" "$repo/tests" "$repo/.claude/hooks"
     # Stubs stand in for the real analysis tools: this spec pins WHICH gates the
     # hook decides to run and what its own scans see, not what those tools conclude.

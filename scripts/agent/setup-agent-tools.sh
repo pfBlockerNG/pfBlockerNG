@@ -172,11 +172,6 @@ setup_serena_client() {
 	serena setup "$2"
 }
 
-setup_graphify_client() {
-	# Integration and platform-skill installers are separate update surfaces.
-	(cd "$HOME" && "$graphify_bin" "$1" install && "$graphify_bin" install --platform "$1")
-}
-
 install_receiving_code_review() {
 	source=$root/scripts/agent/skills/receiving-code-review
 	destination_parent=$HOME/.agents/skills
@@ -206,31 +201,18 @@ install_receiving_code_review() {
 }
 
 configure_agents() {
-	# Run both Graphify update surfaces for every detected harness mapping so neither
-	# its integration nor its skill copy stays on the previous package release.
 	if command -v claude >/dev/null 2>&1; then
 		setup_serena_client claude claude-code
-		setup_graphify_client claude
 	fi
 	if command -v codex >/dev/null 2>&1; then
 		setup_serena_client codex codex
-		setup_graphify_client codex
 	fi
 	if command -v grok >/dev/null 2>&1; then
-		(cd "$HOME" && "$graphify_bin" agents install)
 		setup_serena_client grok grok
-		(cd "$HOME" && "$graphify_bin" install --platform agents)
 		if ! grok mcp doctor codegraph --json >/dev/null 2>&1; then
 			grok mcp remove codegraph >/dev/null 2>&1 || true
 			grok mcp add codegraph -- codegraph serve --mcp
 		fi
-	fi
-	if command -v copilot >/dev/null 2>&1; then
-		setup_graphify_client copilot
-	fi
-	if command -v pi >/dev/null 2>&1 ||
-		command -v omp >/dev/null 2>&1; then
-		setup_graphify_client pi
 	fi
 }
 
@@ -239,8 +221,6 @@ main() {
 
 	# shellcheck source=scripts/agent/agent_env.sh
 	. "$(dirname "$0")/agent_env.sh"
-	# shellcheck source=scripts/agent/resolve-graphify.sh
-	. "$(dirname "$0")/resolve-graphify.sh"
 	scrub_git_env "$0"
 	require_tool uname
 	platform=$(uname -s)
@@ -257,10 +237,8 @@ main() {
 		fail "'$target' is not a git worktree"
 	root=$(CDPATH='' cd "$root" && pwd -P) || exit 2
 	setup_hooks=$root/scripts/setup-hooks.sh
-	ensure_graphify=$root/scripts/agent/ensure-graphify.sh
 	init_tools=$root/scripts/agent/init-worktree-tools.sh
 	[ -f "$setup_hooks" ] || fail "required repository helper '$setup_hooks' is missing"
-	[ -f "$ensure_graphify" ] || fail "required repository helper '$ensure_graphify' is missing"
 	[ -f "$init_tools" ] || fail "required repository helper '$init_tools' is missing"
 
 	if [ -n "${XDG_BIN_HOME:-}" ]; then
@@ -301,8 +279,6 @@ main() {
 	uv tool install --upgrade ast-grep-cli
 	uv tool install --upgrade semgrep
 	require_tool serena
-	graphify_bin=$(resolve_graphify_launcher) ||
-		fail 'cannot resolve the installed Graphify launcher'
 	require_tool ast-grep
 	require_tool semgrep
 

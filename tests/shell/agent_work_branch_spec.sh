@@ -91,30 +91,7 @@ case "$1" in
   *) exit 9 ;;
 esac
 CODEGRAPH
-    graphify_package="$fixture/toolvenv/package/graphify"
-    mkdir -p "$graphify_package"
-    interpreter="$fixture/toolvenv/bin/python3"
-    mkdir -p "$fixture/toolvenv/bin"
-    cat > "$interpreter" <<'INTERPRETER'
-#!/bin/sh
-case "$*" in
-  *os.path.dirname*) printf '%s\n' "$WB_GRAPHIFY_PACKAGE"; exit 0 ;;
-  *activate_language_overrides*) exit 0 ;;
-esac
-exec sh "$@"
-INTERPRETER
-    chmod +x "$interpreter"
-    printf '#!%s\n' "$interpreter" > "$stubdir/graphify"
-    cat >> "$stubdir/graphify" <<'GRAPHIFY'
-case "$1" in
-  update)
-    [ "$#" -eq 2 ] || exit 9
-    printf 'graphify:%s:%s\n' "$1" "$2" >> "$WB_DEFAULT_TOOL_LOG"
-    ;;
-  *) exit 9 ;;
-esac
-GRAPHIFY
-    chmod +x "$stubdir/codegraph" "$stubdir/graphify"
+    chmod +x "$stubdir/codegraph"
     export WB_REAL_GIT="$(command -v git)"
     cat > "$stubdir/git" <<'GIT'
 #!/bin/sh
@@ -179,7 +156,7 @@ WT
     chmod +x "$stubdir/wt"
     export WB_TOOL_EVENTS="$events"
     default_tool_log="$fixture/default-tools"
-    export WB_DEFAULT_TOOL_LOG="$default_tool_log" WB_GRAPHIFY_PACKAGE="$graphify_package"
+    export WB_DEFAULT_TOOL_LOG="$default_tool_log"
     export PFB_INIT_WORKTREE_TOOLS="$stubdir/init-worktree-tools"
     PATH="$stubdir:$PATH"; export PATH
   }
@@ -215,7 +192,6 @@ WT
     The stderr should include 'Initializing CodeGraph in'
     The contents of file "$events" should equal "$(printf 'fetch\nwt')"
     The contents of file "$default_tool_log" should equal "codegraph:init:$fixture/default-init"
-    The stderr should include 'run /graphify'
   End
 
   It 'aborts a configured origin fetch failure before add or initialization'

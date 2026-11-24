@@ -112,7 +112,7 @@ def _sources_quoting_a_phpstan_limit() -> list[tuple[str, str]]:
     """(where, text) for every tracked surface that tells someone how to run PHPStan
     over the whole tree. `tests/php/NoEmptyOnStringRuleTest.php` is not one of them:
     it analyses a three-file fixture directory and carries its own limit."""
-    skip = {"node_modules", ".venv", "vendor", "plugins", ".git", "graphify-out"}
+    skip = {"node_modules", ".venv", "vendor", "plugins", ".git"}
     worktrees = ROOT / ".claude" / "worktrees"
     candidates = [
         *ROOT.rglob("*.md"),
