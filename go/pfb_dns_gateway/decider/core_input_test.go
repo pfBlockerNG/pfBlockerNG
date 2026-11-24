@@ -95,7 +95,7 @@ func TestParityCorpusFromCore(t *testing.T) {
 		}
 		ran++
 		t.Run(name, func(t *testing.T) {
-			boot := func(t *testing.T, s *paritycorpus.Scenario) (*pfbUnbound, *Frontend) {
+			bootFromCore := func(t *testing.T, s *paritycorpus.Scenario) (*pfbUnbound, *Frontend) {
 				t.Helper()
 				dir := t.TempDir()
 				if err := paritycorpus.WriteModule(dir, s.Module); err != nil {
@@ -123,7 +123,7 @@ func TestParityCorpusFromCore(t *testing.T) {
 				stopModule(t, module)
 				return module, newFrontend(module)
 			}
-			runScenarioWith(t, file, source, boot, func(t *testing.T, line string) { t.Error(line) })
+			runScenarioWith(t, file, source, bootFromCore, func(t *testing.T, line string) { t.Error(line) })
 		})
 	}
 	if ran < 60 {

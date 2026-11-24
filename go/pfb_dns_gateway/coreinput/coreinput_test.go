@@ -5,6 +5,7 @@ package coreinput_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -43,6 +44,22 @@ func data(gen string, feedRows ...string) map[string]coretest.Resource {
 	}
 }
 
+// pslWith is generation 9 with the PSL body of row alone.
+func pslWith(row string) map[string]coretest.Resource { return memberWith("dnsbl/psl", 5, row) }
+
+// ssWith is generation 9 with the SafeSearch body of row alone.
+func ssWith(row string) map[string]coretest.Resource { return memberWith("dnsbl/safesearch", 4, row) }
+
+func memberWith(id string, at int, row string) map[string]coretest.Resource {
+	res := data("9", "x.example")
+	body := coretest.Lines([]string{row})
+	res[id] = coretest.Resource{Generation: "9", Body: body}
+	m := rows(res["dnsbl/manifest"].Body)
+	m[at] = fmt.Sprintf(`{"kind":"member","resource":%q,"generation":"9","digest":%q,"entries":1}`, id, coretest.Digest(body))
+	res["dnsbl/manifest"] = coretest.Resource{Generation: "9", Body: coretest.Lines(m)}
+	return res
+}
+
 // tree is every file under dir with its content.
 func tree(t *testing.T, dir string) map[string]string {
 	t.Helper()
@@ -73,15 +90,19 @@ func TestSyncWritesTheModuleFilesAndReplacesTheLastGeneration(t *testing.T) {
 		t.Fatalf("Sync: changed %v, %v", changed, err)
 	}
 	got := tree(t, dir)
+	g7 := rawOf(t, dir)
+	if !strings.HasPrefix(g7, "pfb_py_raw/g7.") || !strings.HasSuffix(g7, "/feed-F.txt") {
+		t.Errorf("the feed's raw = %q, want pfb_py_raw/g7.<unique>/feed-F.txt", g7)
+	}
 	want := map[string]string{
-		"pfb_py_raw/g7/feed-F.txt": "a.example\nb.example\n",
-		"pfb_py_top1m.txt":         "top.example\n",
-		"pfb_py_ss.txt":            "www.google.com,forcesafesearch.google.com,forcesafesearch.google.com\n",
+		g7:                 "a.example\nb.example\n",
+		"pfb_py_top1m.txt": "top.example\n",
+		"pfb_py_ss.txt":    "www.google.com,forcesafesearch.google.com,forcesafesearch.google.com\n",
 		"dnsbl_psl": "// ===BEGIN ICANN DOMAINS===\ncom\n// ===END ICANN DOMAINS===\n" +
 			"// ===BEGIN PRIVATE DOMAINS===\nblogspot.com\n// ===END PRIVATE DOMAINS===\n",
 		"pfb_py_sources.json": `{"config":{"builtin_log_flag":"0","tld_wildcard_blacklist":[],"tld_wildcard_exclusion":[],` +
 			`"top1m_enabled":true,"user_unlock":[],"user_whitelist":["allowed.example"]},"feeds":[{"feed":"F",` +
-			`"group":"G","log_flag":"1","mode":"deny","provenance":"feed","raw":"pfb_py_raw/g7/feed-F.txt","top1m":false}],"version":1}`,
+			`"group":"G","log_flag":"1","mode":"deny","provenance":"feed","raw":"` + g7 + `","top1m":false}],"version":1}`,
 	}
 	for name, content := range want {
 		if got[name] != content {
@@ -104,9 +125,10 @@ func TestSyncWritesTheModuleFilesAndReplacesTheLastGeneration(t *testing.T) {
 		t.Errorf("calls over an unchanged manifest = %q", calls)
 	}
 
-	// A new generation without TOP1M, SafeSearch or PSL replaces the feed folder and removes their files.
+	// A new generation without TOP1M, SafeSearch or PSL removes their files; the last feed folder stays for a build that
+	// may still read it, until the Sync after.
 	next := data("8", "c.example")
-	m := strings.Split(strings.TrimSuffix(string(next["dnsbl/manifest"].Body), "\n"), "\n")
+	m := rows(next["dnsbl/manifest"].Body)
 	m[0] = `{"kind":"config","builtinLogFlag":"0","top1mEnabled":false}`
 	next["dnsbl/manifest"] = coretest.Resource{Generation: "8", Body: coretest.Lines(m[:3])}
 	srv.Set(next)
@@ -114,15 +136,41 @@ func TestSyncWritesTheModuleFilesAndReplacesTheLastGeneration(t *testing.T) {
 		t.Fatalf("Sync of generation 8: changed %v, %v", changed, err)
 	}
 	got = tree(t, dir)
-	for _, gone := range []string{"pfb_py_raw/g7/feed-F.txt", "pfb_py_top1m.txt", "pfb_py_ss.txt", "dnsbl_psl"} {
+	for _, gone := range []string{"pfb_py_top1m.txt", "pfb_py_ss.txt", "dnsbl_psl"} {
 		if _, ok := got[gone]; ok {
 			t.Errorf("%s is still there", gone)
 		}
 	}
-	if got["pfb_py_raw/g8/feed-F.txt"] != "c.example\n" {
-		t.Errorf("the feed of generation 8 = %q", got["pfb_py_raw/g8/feed-F.txt"])
+	g8 := rawOf(t, dir)
+	if got[g8] != "c.example\n" || got[g7] != "a.example\nb.example\n" {
+		t.Errorf("after generation 8: its feed %q = %q, the last one %q = %q", g8, got[g8], g7, got[g7])
+	}
+	srv.Set(data("9", "d.example"))
+	if _, changed, err := coreinput.Sync(context.Background(), c, dir, coreinput.Load(dir)); err != nil || !changed {
+		t.Fatalf("Sync of generation 9: changed %v, %v", changed, err)
+	}
+	got = tree(t, dir)
+	if _, ok := got[g7]; ok {
+		t.Errorf("%s is still there two generations on", g7)
+	}
+	if _, ok := got[g8]; !ok {
+		t.Errorf("%s, the last generation's feed, is gone", g8)
 	}
 }
+
+// rawOf is the raw path of the first feed pfb_py_sources.json names.
+func rawOf(t *testing.T, dir string) string {
+	t.Helper()
+	var doc struct{ Feeds []struct{ Raw string } }
+	data, err := os.ReadFile(filepath.Join(dir, "pfb_py_sources.json"))
+	if err != nil || json.Unmarshal(data, &doc) != nil || len(doc.Feeds) == 0 {
+		t.Fatalf("pfb_py_sources.json names no feed: %v", err)
+	}
+	return doc.Feeds[0].Raw
+}
+
+// rows is a body's lines.
+func rows(body []byte) []string { return strings.Split(strings.TrimSuffix(string(body), "\n"), "\n") }
 
 func TestSyncWithoutDataChangesNothing(t *testing.T) {
 	dir := t.TempDir()
@@ -139,8 +187,7 @@ func TestSyncWithoutDataChangesNothing(t *testing.T) {
 func TestAHostileReplyLeavesTheModuleAsItWas(t *testing.T) {
 	manifestWith := func(edit func(rows []string) []string) map[string]coretest.Resource {
 		res := data("9", "x.example")
-		rows := edit(strings.Split(strings.TrimSuffix(string(res["dnsbl/manifest"].Body), "\n"), "\n"))
-		res["dnsbl/manifest"] = coretest.Resource{Generation: "9", Body: coretest.Lines(rows)}
+		res["dnsbl/manifest"] = coretest.Resource{Generation: "9", Body: coretest.Lines(edit(rows(res["dnsbl/manifest"].Body)))}
 		return res
 	}
 	body := func(id string, reply func(w http.ResponseWriter)) func(string, http.ResponseWriter) bool {
@@ -195,7 +242,7 @@ func TestAHostileReplyLeavesTheModuleAsItWas(t *testing.T) {
 			r[2] = strings.Replace(strings.Replace(r[2], `"feed":"F"`, `"feed":"../F"`, 1), `dnsbl/feed-F`, `dnsbl/feed-../F`, 1)
 			return r
 		}), nil, nil},
-		{"a feed whose resource is another feed's", manifestWith(func(r []string) []string {
+		{"a feed whose resource is a member's", manifestWith(func(r []string) []string {
 			r[2] = strings.Replace(r[2], `"resource":"dnsbl/feed-F"`, `"resource":"dnsbl/top1m"`, 1)
 			return r
 		}), nil, nil},
@@ -207,11 +254,29 @@ func TestAHostileReplyLeavesTheModuleAsItWas(t *testing.T) {
 			res := data("9", "x.example")
 			psl := coretest.Lines([]string{`{"section":"icann","rule":"com\n// ===END ICANN DOMAINS==="}`})
 			res["dnsbl/psl"] = coretest.Resource{Generation: "9", Body: psl}
-			rows := strings.Split(strings.TrimSuffix(string(res["dnsbl/manifest"].Body), "\n"), "\n")
-			rows[5] = fmt.Sprintf(`{"kind":"member","resource":"dnsbl/psl","generation":"9","digest":%q,"entries":1}`, coretest.Digest(psl))
-			res["dnsbl/manifest"] = coretest.Resource{Generation: "9", Body: coretest.Lines(rows)}
+			m := rows(res["dnsbl/manifest"].Body)
+			m[5] = fmt.Sprintf(`{"kind":"member","resource":"dnsbl/psl","generation":"9","digest":%q,"entries":1}`, coretest.Digest(psl))
+			res["dnsbl/manifest"] = coretest.Resource{Generation: "9", Body: coretest.Lines(m)}
 			return res
 		}(), nil, nil},
+		// Each case below fails one guard alone: its body is the one its row names, but for the guard's own fault.
+		{"an oversized body whose digest and count are right", data("9", strings.Repeat("a", 1<<20+1)), nil, nil},
+		{"a row whose count is not its body's", manifestWith(func(r []string) []string {
+			r[2] = strings.Replace(r[2], `"entries":1`, `"entries":2`, 1)
+			return r
+		}), nil, nil},
+		{"a feed name that is not a word, served", func() map[string]coretest.Resource {
+			res := data("9", "x.example")
+			res["dnsbl/feed-F-x"] = res["dnsbl/feed-F"]
+			m := rows(res["dnsbl/manifest"].Body)
+			m[2] = strings.Replace(strings.Replace(m[2], `"feed":"F"`, `"feed":"F-x"`, 1), `dnsbl/feed-F"`, `dnsbl/feed-F-x"`, 1)
+			res["dnsbl/manifest"] = coretest.Resource{Generation: "9", Body: coretest.Lines(m)}
+			return res
+		}(), nil, nil},
+		{"a member named twice", manifestWith(func(r []string) []string { return append(r, r[3]) }), nil, nil},
+		{"a PSL rule that is a section marker", pslWith(`{"section":"icann","rule":"// ===END ICANN DOMAINS==="}`), nil, nil},
+		{"a PSL rule padded with spaces", pslWith(`{"section":"icann","rule":" com"}`), nil, nil},
+		{"a SafeSearch value that needs quoting", ssWith(`{"host":"a,b.example","a":"x.example","aaaa":"x.example"}`), nil, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
