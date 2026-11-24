@@ -2090,6 +2090,22 @@ def test_feeds_tab_lists_qfeeds_under_its_group(
     assert re.search(rf">\s*{re.escape(header)}\s*</a>", row), f"{header} row lacks its feed link: {row}"
 
 
+def test_feeds_dnsbl_tab_drops_the_decommissioned_antisocial_feed(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The DNSBL Feeds tab stops offering The AntiSocial Engineer feed (#4230).
+
+    Upstream decommissioned the list on 2025-09-30, so the catalogue flags it discontinued.
+    Its Malicious2 sibling Abuse_ThreatFox must still render, so the absence is not vacuous.
+    """
+    path = "/pfblockerng/pfblockerng_feeds.php?type=dnsbl"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Feeds",))
+    assert result.ok, f"Feeds render oracle failed: {result.detail}"
+    assert 'href="https://threatfox.abuse.ch/downloads/hostfile/"' in resp.text, "Malicious2 group did not render"
+    assert "AntiSocial_UK_BD" not in resp.text, "DNSBL Feeds tab still offers the decommissioned AntiSocial_UK_BD feed"
+
+
 def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """DNSBL page exposes the default-off full-cache trade-off without PHP diagnostics."""
     path = "/pfblockerng/pfblockerng_dnsbl.php"
