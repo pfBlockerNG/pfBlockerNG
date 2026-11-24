@@ -606,6 +606,11 @@ BIGFFT_COMMIT = BIGFFT_REVISION + "0123456789abcdef0123456789ab"
 NETIPX = ("go4.org/netipx", "v0.0.0-20260823151212-3075585bcbeb")  # no tags: only pseudo-versions (#4033)
 NETIPX_REVISION = "3075585bcbeb"
 NETIPX_COMMIT = "3075585bcbeb7a9f042662e543b03efe900018be"
+# upstream xxh3 pinned to an untagged commit (owner decision 2026-11-24, #4036): a gateway module, like bigfft
+XXH3 = ("github.com/zeebo/xxh3", "v1.1.1-0.20261118193009-e05079abbd7d")
+XXH3_REVISION = "e05079abbd7d"
+XXH3_COMMIT = XXH3_REVISION + "0123456789abcdef0123456789ab"
+XXH3_FORK = ("github.com/pfBlockerNG/xxh3", "v1.1.1-pfblockerng.1")  # retired (#3925 -> #4036)
 PSEUDO_AFTER_A_TAG = ("example.test/dep", "v1.2.4-0.20260101000000-0123456789ab")
 PSEUDO_AFTER_A_PRERELEASE = ("example.test/dep", "v1.2.3-pre.0.20260101000000-0123456789ab")
 PSEUDO_LONG_REVISION = ("example.test/dep", "v0.0.0-20260101000000-0123456789abcdef")
@@ -736,6 +741,12 @@ PARITY_FAILURES = [
         "pseudo-version",
     ),
     (
+        "upstream-xxh3-pseudo-version-with-another-revision",
+        gh_tuples_for((XXH3[0], "ffffffffffff")),
+        modules_txt_for(XXH3),
+        "revision",
+    ),
+    (
         "github-pseudo-version-off-the-allowlist-by-revision",
         gh_tuples_for((PSEUDO[0], "0123456789ab")),
         modules_txt_for(PSEUDO),
@@ -755,6 +766,8 @@ PARITY_ACCEPTED = [
     ),
     ("allowlisted-pseudo-version-by-revision", gh_tuples_for((BIGFFT[0], BIGFFT_REVISION)), modules_txt_for(BIGFFT)),
     ("allowlisted-pseudo-version-by-commit", gh_tuples_for((BIGFFT[0], BIGFFT_COMMIT)), modules_txt_for(BIGFFT)),
+    ("upstream-xxh3-pseudo-version-by-revision", gh_tuples_for((XXH3[0], XXH3_REVISION)), modules_txt_for(XXH3)),
+    ("upstream-xxh3-pseudo-version-by-commit", gh_tuples_for((XXH3[0], XXH3_COMMIT)), modules_txt_for(XXH3)),
 ]
 
 
@@ -803,8 +816,8 @@ def test_tuples_that_match_modules_txt_go_on_to_the_go_build(
 
 
 CORE_VENDOR = "../go/pfb_core/vendor"
-XXH3 = ("github.com/pfBlockerNG/xxh3", "v1.1.1-pfblockerng.1")
-OLDER_XXH3 = ("github.com/pfBlockerNG/xxh3", "v1.1.0-pfblockerng.1")
+OWN = ("go4.org/netipx", "v1.0.0")  # Core's own module at a tag
+OLDER_OWN = ("go4.org/netipx", "v0.9.0")
 PIRES = ("github.com/pires/go-proxyproto", "v0.8.0")
 OTHER_NETIPX = ("go4.org/netipx", "v0.0.0-20260101000000-0123456789ab")
 GO4_MEM = ("go4.org/mem", "v0.0.0-20260823151212-3075585bcbeb")
@@ -823,36 +836,61 @@ def core_go_mod(*requires: tuple[str, str]) -> str:
 
 # (id, the GH_TUPLE and GL_TUPLE entries beside the gateway's, the source's go/pfb_core/go.mod, what the error says)
 CORE_PARITY_FAILURES = [
-    ("core-requires-xxh3-and-the-recipe-has-no-tuple", (), core_go_mod(XXH3), f"go.mod only: {XXH3[0]} {XXH3[1]}"),
+    (
+        "core-requires-an-own-module-and-the-recipe-has-no-tuple",
+        (),
+        core_go_mod(OWN),
+        f"go.mod only: {OWN[0]} {OWN[1]}",
+    ),
     (
         "core-tuple-at-another-tag-than-go-mod",
-        gh_tuples_for(OLDER_XXH3, vendor=CORE_VENDOR),
-        core_go_mod(XXH3),
-        f"GH_TUPLE only: {OLDER_XXH3[0]} {OLDER_XXH3[1]}",
+        gh_tuples_for(OLDER_OWN, vendor=CORE_VENDOR),
+        core_go_mod(OWN),
+        f"GH_TUPLE only: {OLDER_OWN[0]} {OLDER_OWN[1]}",
     ),
     (
         "core-tuple-for-a-module-that-is-not-core-own",
-        gh_tuples_for(XXH3, PIRES, vendor=CORE_VENDOR),
-        core_go_mod(XXH3, PIRES),
+        gh_tuples_for(OWN, PIRES, vendor=CORE_VENDOR),
+        core_go_mod(OWN, PIRES),
         f"GH_TUPLE only: {PIRES[0]} {PIRES[1]}",
     ),
     (
         "core-tuple-for-an-own-module-core-does-not-require",
-        gh_tuples_for(XXH3, vendor=CORE_VENDOR),
+        gh_tuples_for(OWN, vendor=CORE_VENDOR),
         core_go_mod(),
-        f"GH_TUPLE only: {XXH3[0]} {XXH3[1]}",
+        f"GH_TUPLE only: {OWN[0]} {OWN[1]}",
     ),
     (
         "core-tuple-for-an-own-module-the-go-mod-only-comments-out",
-        gh_tuples_for(XXH3, vendor=CORE_VENDOR),
-        core_go_mod().replace(")\n", f"\t// {XXH3[0]} {XXH3[1]}\n)\n"),
-        f"GH_TUPLE only: {XXH3[0]} {XXH3[1]}",
+        gh_tuples_for(OWN, vendor=CORE_VENDOR),
+        core_go_mod().replace(")\n", f"\t// {OWN[0]} {OWN[1]}\n)\n"),
+        f"GH_TUPLE only: {OWN[0]} {OWN[1]}",
     ),
     (
         "gitlab-tuple-under-the-core-vendor-tree",
-        (*gh_tuples_for(XXH3, vendor=CORE_VENDOR), f"cznic:p:{COMMIT}:g/{CORE_VENDOR}/{XXH3[0]}"),
-        core_go_mod(XXH3),
+        (*gh_tuples_for(OWN, vendor=CORE_VENDOR), f"cznic:p:{COMMIT}:g/{CORE_VENDOR}/{OWN[0]}"),
+        core_go_mod(OWN),
         "GL_TUPLE entry",
+    ),
+    # the xxh3 fork is retired (#4036): Core takes upstream github.com/zeebo/xxh3 from the gateway's vendor/, so a
+    # fork tuple under Core's vendor/ is one no own module needs (build-pfb-dns.py refuses a Core requiring the fork)
+    (
+        "core-requires-the-retired-xxh3-fork-and-the-recipe-has-its-tuple",
+        gh_tuples_for(XXH3_FORK, vendor=CORE_VENDOR),
+        core_go_mod(XXH3_FORK),
+        f"GH_TUPLE only: {XXH3_FORK[0]} {XXH3_FORK[1]}",
+    ),
+    (
+        "retired-xxh3-fork-tuple-under-cores-vendor-dir",
+        gh_tuples_for(XXH3_FORK, vendor=CORE_VENDOR),
+        core_go_mod(XXH3),
+        f"GH_TUPLE only: {XXH3_FORK[0]} {XXH3_FORK[1]}",
+    ),
+    (
+        "upstream-xxh3-tuple-under-cores-vendor-dir",  # a gateway module: Core's vendor/ takes it from the gateway's
+        core_tuple(XXH3[0], XXH3_REVISION),
+        core_go_mod(XXH3),
+        f"GH_TUPLE only: {XXH3[0]} {XXH3_REVISION}",
     ),
 ]
 
@@ -989,23 +1027,23 @@ CORE_PARITY_FAILURES += [
 
 # (id, the GH_TUPLE entries beside the gateway's, the source's go/pfb_core/go.mod) the builder accepts
 CORE_PARITY_ACCEPTED = [
-    ("core-own-module-at-the-go-mod-tag", gh_tuples_for(XXH3, vendor=CORE_VENDOR), core_go_mod(XXH3)),
+    ("core-own-module-at-the-go-mod-tag", gh_tuples_for(OWN, vendor=CORE_VENDOR), core_go_mod(OWN)),
     ("core-requires-no-own-module", (), core_go_mod(NET)),
     (
         "core-own-module-required-on-a-single-line",
-        gh_tuples_for(XXH3, vendor=CORE_VENDOR),
-        f"module example.test/pfbcore\n\ngo 1.21\n\nrequire {XXH3[0]} {XXH3[1]} // indirect\n",
+        gh_tuples_for(OWN, vendor=CORE_VENDOR),
+        f"module example.test/pfbcore\n\ngo 1.21\n\nrequire {OWN[0]} {OWN[1]} // indirect\n",
     ),
     (
         "core-own-module-required-in-a-block-with-no-space",  # Go reads `require(` as `require (` (#3930)
-        gh_tuples_for(XXH3, vendor=CORE_VENDOR),
-        core_go_mod(XXH3).replace("require (", "require("),
+        gh_tuples_for(OWN, vendor=CORE_VENDOR),
+        core_go_mod(OWN).replace("require (", "require("),
     ),
     ("netipx-by-the-revision-its-pseudo-version-ends-in", core_tuple(_NETIPX, NETIPX_REVISION), core_go_mod(NETIPX)),
     ("netipx-by-the-commit-that-starts-with-it", core_tuple(_NETIPX, NETIPX_COMMIT), core_go_mod(NETIPX)),
     (
-        "netipx-beside-xxh3",
-        (*gh_tuples_for(XXH3, vendor=CORE_VENDOR), *core_tuple(_NETIPX, NETIPX_REVISION)),
+        "netipx-beside-upstream-xxh3",  # xxh3 is a gateway module (#4036): no tuple under Core's vendor/
+        core_tuple(_NETIPX, NETIPX_REVISION),
         core_go_mod(XXH3, NETIPX),
     ),
     (
@@ -1139,10 +1177,10 @@ def real_gateway_fixture(root: Path, modules_txt: str) -> Fixture:
     """The go recipe over the real gateway, its tuples naming ``modules_txt``'s modules as modules2tuple does."""
     modules = [tuple(line[2:].split()) for line in modules_txt.splitlines() if line.startswith("# ")]
     gl = gl_tuples_for(*(path for path, _version in modules if _gitlab_hosted(path)))
-    # the untagged bigfft is named by the revision its pseudo-version ends in
+    # the untagged bigfft and xxh3 are named by the revision their pseudo-versions end in
     gh = gh_tuples_for(
         *(
-            (path, version.rsplit("-", 1)[1] if path == BIGFFT[0] else version)
+            (path, version.rsplit("-", 1)[1] if path in (BIGFFT[0], XXH3[0]) else version)
             for path, version in modules
             if not _gitlab_hosted(path)
         )

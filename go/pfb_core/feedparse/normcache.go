@@ -8,7 +8,7 @@ import (
 	"syscall"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
-	"github.com/pfBlockerNG/xxh3"
+	"github.com/zeebo/xxh3"
 )
 
 // NormResult is pfb_feed_normalize()'s answer: the file to parse, whether its content changed since the last pass and

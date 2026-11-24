@@ -1136,16 +1136,19 @@ _DO_BUILD_LINE = re.compile(
 )
 _VENDOR_PREFIX = "../go/pfb_dns_gateway/vendor/"
 _CORE_VENDOR_PREFIX = "../go/pfb_core/vendor/"
-# Owner decisions (#3925, #4033): the only modules Core vendors itself, from a GH_TUPLE under Core's own vendor/ (the
-# rest of Core's vendor/ is cut from the gateway's). Widening is an owner call, like the GL_TUPLE allow-list below.
-_CORE_OWN_MODULES = frozenset({"github.com/pfBlockerNG/xxh3", "go4.org/netipx"})
+# Owner decision (#4033): the only module Core vendors itself, from a GH_TUPLE under Core's own vendor/ (the rest of
+# Core's vendor/ is cut from the gateway's). Widening is an owner call, like the GL_TUPLE allow-list below. The
+# pfBlockerNG xxh3 fork (#3925) left this list when upstream github.com/zeebo/xxh3 replaced it (owner decision
+# 2026-11-24, #4036): Core takes that from the gateway's vendor/.
+_CORE_OWN_MODULES = frozenset({"go4.org/netipx"})
 # Go's three pseudo-version forms: vX.0.0-<ts>-<rev>, vX.Y.Z-0.<ts>-<rev>, vX.Y.Z-pre.0.<ts>-<rev> (any rev).
 _PSEUDO_VERSION = re.compile(r"^v\d+\.(?:0\.0-|\d+\.\d+-(?:[^+]*\.)?0\.)\d{14}-[0-9A-Za-z]+(?:\+.*)?$")
 # Owner decision (#3511/#3779): the only modules GL_TUPLE may supply (their `go-import` is gitlab.com/cznic/<project>)
-# and the only module of the gateway's vendor/ whose untagged pseudo-version a GH_TUPLE may name (by revision).
+# and the modules of the gateway's vendor/ whose untagged pseudo-version a GH_TUPLE may name (by revision); owner
+# decision 2026-11-24 (#4036) adds github.com/zeebo/xxh3, pinned to an untagged upstream commit.
 # Widening either is an owner call. Only the vendor/ destination names the module: a vanity path needs no table.
 _GITLAB_MODULE_HOSTS = frozenset({"modernc.org"})  # first path element of a module GL_TUPLE may fetch
-_PSEUDO_VERSION_MODULES = frozenset({"github.com/remyoudompheng/bigfft"})
+_PSEUDO_VERSION_MODULES = frozenset({"github.com/remyoudompheng/bigfft", "github.com/zeebo/xxh3"})
 # Owner decision (#4033): the only module of Core's own vendor/ whose pseudo-version a GH_TUPLE may name (by revision).
 _CORE_PSEUDO_VERSION_MODULES = frozenset({"go4.org/netipx"})
 _GITLAB_SITE = "https://gitlab.com:"

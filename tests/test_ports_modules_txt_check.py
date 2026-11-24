@@ -6,8 +6,9 @@ things there must follow devel, or the build rejects the source:
 * `files/modules.txt` must be byte-equal to `go mod vendor`'s for go/pfb_dns_gateway. #3987 bumped
   golang.org/x/sys to v0.50.0 while the recipe still listed v0.49.0; FreeBSD-ports#22 followed.
 * the GH_TUPLE entries under go/pfb_core/vendor must be the modules go/pfb_core's own go.mod requires beyond the
-  gateway's (github.com/pfBlockerNG/xxh3). #3929 made Core require xxh3 before the recipe carried it;
-  FreeBSD-ports#20 followed.
+  gateway's (go4.org/netipx). #3929 made Core require the github.com/pfBlockerNG/xxh3 fork before the recipe carried
+  it; FreeBSD-ports#20 followed. #4036 retired the fork: Core now takes upstream github.com/zeebo/xxh3 from the
+  gateway's vendor tree, and a Core go.mod requiring the fork fails the check.
 
 `.github/workflows/ports-modules-txt.yml` catches both on the devel PR. These tests run the workflow's REAL check
 step under bash, with `curl` and `go` replaced by stubs that serve fixture files (recipe files at the named
@@ -35,9 +36,10 @@ I3929 = ROOT / FIXTURES / "issue3929"
 PORTS_BEFORE_22 = I3987 / "ports-nightly-modules.txt"  # x/sys v0.49.0
 VENDOR_AT_3987 = I3987 / "go-mod-vendor-modules.txt"  # x/sys v0.50.0, == the recipe's modules.txt at #22
 MAKEFILE_AT_22 = I3987 / "ports-nightly-Makefile-at-22"  # x/sys v0.50.0 and the xxh3 tuple
-MAKEFILE_BEFORE_20 = I3929 / "ports-nightly-Makefile-before-20"  # no xxh3 tuple
-MODULES_BEFORE_20 = I3929 / "ports-nightly-modules.txt"  # the recipe's modules.txt then (== #20's)
 CORE_GO_MOD_AT_3929 = I3929 / "source/go/pfb_core/go.mod"  # requires xxh3 v1.1.1-pfblockerng.1
+FORK_TUPLE = "pfBlockerNG:xxh3:v1.1.1-pfblockerng.1:pfblockerng_xxh3/../go/pfb_core/vendor/github.com/pfBlockerNG/xxh3"
+NETIPX_TUPLE = "inetaf:netipx:3075585bcbeb:inetaf_netipx/../go/pfb_core/vendor/go4.org/netipx"
+NETIPX_REQUIRE = "go4.org/netipx v0.0.0-20260823151212-3075585bcbeb"
 _CONTENTS = "https://api.github.com/repos/pfBlockerNG/FreeBSD-ports/contents/net/pfSense-pkg-pfBlockerNG-nightly/"
 MODULES_URL = _CONTENTS + "files/modules.txt?ref=pfblockerng/use-github"
 MAKEFILE_URL = _CONTENTS + "Makefile?ref=pfblockerng/use-github"
@@ -57,6 +59,20 @@ printf 'go %s in %s\\n' "$*" "$PWD" >> "$STUB_LOG"
 mkdir -p "$4"
 cp "$VENDOR_SERVED" "$4/modules.txt"
 """
+
+
+def _devel_after_4036(tmp_path: Path) -> tuple[Path, Path]:
+    """The recipe at FreeBSD-ports#22 and Core's go.mod at #3929, moved to #4036: Core requires upstream zeebo/xxh3
+    (a gateway module, no Core tuple) and go4.org/netipx (its own module, by the revision its tuple names)."""
+    makefile, go_mod = tmp_path / "Makefile", tmp_path / "go.mod"
+    makefile.write_text(MAKEFILE_AT_22.read_text().replace(FORK_TUPLE, NETIPX_TUPLE))
+    go_mod.write_text(
+        CORE_GO_MOD_AT_3929.read_text().replace(
+            "github.com/pfBlockerNG/xxh3 v1.1.1-pfblockerng.1",
+            f"github.com/zeebo/xxh3 v1.1.1-0.20261118193009-e05079abbd7d\n\t{NETIPX_REQUIRE}",
+        )
+    )
+    return makefile, go_mod
 
 
 def _check_script() -> str:
@@ -128,19 +144,24 @@ def test_the_3987_drift_fails_the_devel_pr_naming_the_ports_follow_up(tmp_path: 
         assert named in error, error
 
 
-def test_the_3929_core_drift_fails_the_devel_pr_naming_the_ports_follow_up(tmp_path: Path) -> None:
-    """Scenario: Core requires github.com/pfBlockerNG/xxh3 (#3929) while the recipe has no GH_TUPLE for it yet.
-    Given a gateway whose modules.txt matches the recipe (so only Core drifts),
-    Then the check fails naming the module and the recipe Makefile change that must follow (FreeBSD-ports#20)."""
+def test_a_core_own_module_drift_fails_the_devel_pr_naming_the_ports_follow_up(tmp_path: Path) -> None:
+    """Scenario: Core requires its own module go4.org/netipx while the recipe has no GH_TUPLE for it (the drift #3929
+    had with the xxh3 fork, which #4036 retired). Given a gateway whose modules.txt matches the recipe (so only Core
+    drifts), Then the check fails naming the module and the recipe Makefile change."""
+    drift = ROOT / FIXTURES / "core-own-drift"
     result, log, _tree = _run_check(
-        tmp_path, modules=MODULES_BEFORE_20, vendor=MODULES_BEFORE_20, makefile=MAKEFILE_BEFORE_20
+        tmp_path,
+        modules=drift / "ports-nightly-modules.txt",
+        vendor=drift / "ports-nightly-modules.txt",
+        makefile=drift / "ports-nightly-Makefile",
+        core_go_mod=drift / "source/go/pfb_core/go.mod",
     )
     out = result.stdout + result.stderr
     assert result.returncode != 0, out
     assert MAKEFILE_URL in log, log
     error = _one_error(out)
     for named in (
-        "github.com/pfBlockerNG/xxh3 v1.1.1-pfblockerng.1",
+        "go.mod only: go4.org/netipx v0.0.0-20260823151212-3075585bcbeb",
         "pfBlockerNG/FreeBSD-ports",
         "pfblockerng/use-github",
         "net/pfSense-pkg-pfBlockerNG-nightly/Makefile",
@@ -150,21 +171,40 @@ def test_the_3929_core_drift_fails_the_devel_pr_naming_the_ports_follow_up(tmp_p
 
 
 def test_a_pr_moving_cores_own_module_fails_against_the_unchanged_recipe(tmp_path: Path) -> None:
-    """Scenario: this PR's go/pfb_core/go.mod bumps xxh3 while the recipe (FreeBSD-ports#22) still names the old tag.
+    """Scenario: this PR's go/pfb_core/go.mod bumps netipx while the recipe still names the old revision.
     Then the check reads the PR tree's Core go.mod, not a fixture's, and fails naming both versions."""
-    bumped = tmp_path / "go.mod"
-    bumped.write_text(CORE_GO_MOD_AT_3929.read_text().replace("xxh3 v1.1.1-pfblockerng.1", "xxh3 v1.2.0-pfblockerng.1"))
-    result, _log, _tree = _run_check(tmp_path, modules=VENDOR_AT_3987, vendor=VENDOR_AT_3987, core_go_mod=bumped)
+    makefile, go_mod = _devel_after_4036(tmp_path)
+    bumped = "go4.org/netipx v0.0.0-20261001000000-0123456789ab"
+    go_mod.write_text(go_mod.read_text().replace(NETIPX_REQUIRE, bumped))
+    result, _log, _tree = _run_check(
+        tmp_path, modules=VENDOR_AT_3987, vendor=VENDOR_AT_3987, makefile=makefile, core_go_mod=go_mod
+    )
     out = result.stdout + result.stderr
     assert result.returncode != 0, out
     error = _one_error(out)
-    assert "go.mod only: github.com/pfBlockerNG/xxh3 v1.2.0-pfblockerng.1" in error, error
+    assert f"go.mod only: {bumped}" in error, error
+    assert "GH_TUPLE only: go4.org/netipx 3075585bcbeb" in error, error
+
+
+def test_a_recipe_still_carrying_the_retired_xxh3_fork_fails_against_devel(tmp_path: Path) -> None:
+    """Scenario: devel takes upstream zeebo/xxh3 from the gateway (#4036) while the recipe (FreeBSD-ports#22) still
+    unpacks the fork under Core's vendor/. Then the check fails naming the fork's tuple as the one to drop."""
+    _makefile, go_mod = _devel_after_4036(tmp_path)
+    result, _log, _tree = _run_check(tmp_path, modules=VENDOR_AT_3987, vendor=VENDOR_AT_3987, core_go_mod=go_mod)
+    out = result.stdout + result.stderr
+    assert result.returncode != 0, out
+    error = _one_error(out)
     assert "GH_TUPLE only: github.com/pfBlockerNG/xxh3 v1.1.1-pfblockerng.1" in error, error
+    assert "go.mod only: go4.org/netipx" in error, error
 
 
 def test_a_recipe_matching_devel_passes_and_compares_the_live_branch(tmp_path: Path) -> None:
-    """The recipe at FreeBSD-ports#22 against devel at #3987: modules.txt and Core's xxh3 tuple both agree."""
-    result, log, tree = _run_check(tmp_path, modules=VENDOR_AT_3987, vendor=VENDOR_AT_3987)
+    """The recipe at FreeBSD-ports#22 against devel at #3987, both moved to #4036: modules.txt and Core's netipx
+    tuple agree, and upstream xxh3 needs no Core tuple."""
+    makefile, go_mod = _devel_after_4036(tmp_path)
+    result, log, tree = _run_check(
+        tmp_path, modules=VENDOR_AT_3987, vendor=VENDOR_AT_3987, makefile=makefile, core_go_mod=go_mod
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     assert MODULES_URL in log, log
     assert MAKEFILE_URL in log, log
@@ -176,7 +216,7 @@ def test_a_recipe_matching_devel_passes_and_compares_the_live_branch(tmp_path: P
     [
         ("issue3987/ports-nightly-modules.txt", "issue3987/go-mod-vendor-modules.txt"),
         ("issue3987/go-mod-vendor-modules.txt", "issue3987/ports-nightly-modules.txt"),
-        ("issue3929/ports-nightly-Makefile-before-20", "issue3929/ports-nightly-Makefile-after-20"),
+        ("core-own-drift/ports-nightly-Makefile", "core-own-drift/ports-nightly-Makefile-with-netipx"),
     ],
 )
 def test_a_red_canary_stops_the_job_when_its_drift_no_longer_fails(

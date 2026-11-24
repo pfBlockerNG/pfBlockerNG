@@ -304,13 +304,14 @@ marker is ever published, and the activation's readiness wait fails with the Res
 
 **pfb-core** (issue #3841, the Core API daemon). A source that also carries `go/pfb_core` gets it
 built the same way, by the same helper, into `freebsd-<arch>/pfb-core` beside `pfb-dns`; the helper
-records it under `pfb_core`. Core may require `golang.org/x/net`, `golang.org/x/sys`, `golang.org/x/text` and
-`github.com/oschwald/maxminddb-golang/v2` (the dMax country lookup, #4038) at
+records it under `pfb_core`. Core may require `golang.org/x/net`, `golang.org/x/sys`, `golang.org/x/text`,
+`github.com/oschwald/maxminddb-golang/v2` (the dMax country lookup, #4038) and `github.com/zeebo/xxh3` (the feed
+content digest; upstream pinned to a commit, which replaced the `github.com/pfBlockerNG/xxh3` fork of #3925, #4036) at
 exactly the versions the gateway's `go.mod` requires; the helper builds it from a scratch copy whose `vendor/` is cut
-from the gateway's (those modules' packages, licenses and `modules.txt` sections). Core's own modules,
-`github.com/pfBlockerNG/xxh3` (#3925) and `go4.org/netipx` (#4033), which the gateway does not use, are added to that
+from the gateway's (those modules' packages, licenses and `modules.txt` sections). Core's own module,
+`go4.org/netipx` (#4033), which the gateway does not use, is added to that
 `vendor/` from the module cache (`go mod download`, checked against `go.sum`), or under `--vendored` from `go/pfb_core/vendor/<module>`, where
-the go recipe's Core `GH_TUPLE` entries unpack them; the builder checks those entries against Core's `go.mod`. Any other
+the go recipe's Core `GH_TUPLE` entry unpacks it; the builder checks those entries against Core's `go.mod`. Any other
 `require`, a `replace`, any other `vendor/` of Core's own, or a package the gateway's vendor tree lacks fails the
 build. A recipe
 without `do-build` has the builder stage it at `/usr/local/pkg/pfblockerng/core/bin/freebsd-<arch>/pfb-core`,
@@ -390,9 +391,10 @@ line carries `go/`) has these parts:
   binaries stripped already; `INSTALL_PROGRAM` must not rewrite the bytes `do-build` checked).
 - `GH_TUPLE`: one entry per module the gateway vendors, each unpacked to
   `../go/pfb_dns_gateway/vendor/<module path>` (the module sits beside `src/`, which is
-  `WRKSRC`), plus one per module Core vendors itself (`github.com/pfBlockerNG/xxh3`, #3925, and
-  `go4.org/netipx`, #4033), unpacked to `../go/pfb_core/vendor/<module path>` at the tag (for netipx the
-  revision) Core's `go.mod` requires.
+  `WRKSRC`), plus one per module Core vendors itself (only `go4.org/netipx`, #4033), unpacked to
+  `../go/pfb_core/vendor/<module path>` at the revision Core's `go.mod` requires.
+  (`github.com/pfBlockerNG/xxh3`, #3925, was Core's own until upstream `github.com/zeebo/xxh3` replaced it, #4036;
+  it is now one of the gateway's modules.)
 - `files/modules.txt`: Go's own `vendor/modules.txt` for that tree. GH_TUPLE alone does
   not build, because Go 1.23 and later refuse a vendor tree without it.
 - `do-build`, exactly this one line (its continuation lines are indented with tabs in the
@@ -426,7 +428,8 @@ narrow exceptions, both allowlists in the builder (`_GITLAB_MODULE_HOSTS`,
 - `GL_TUPLE` (`[https://gitlab.com:]account:project:<40 lower-case hex commit>:group/subdir`) may supply
   modules under `modernc.org/` only (the first path element, never the bare host). A module listed twice in `modules.txt` is refused. A commit cannot be compared with a tag offline, so only its
   shape is checked, and the module counts at the version `modules.txt` lists.
-- `github.com/remyoudompheng/bigfft` has no tags: its `GH_TUPLE` entry names the 12-hex
+- `github.com/remyoudompheng/bigfft` has no tags, and `github.com/zeebo/xxh3` is pinned to an untagged upstream
+  commit (owner decision 2026-11-24, #4036): each one's `GH_TUPLE` entry names the 12-hex
   revision its pseudo-version ends in (or the full commit that starts with it). Core's own `go4.org/netipx` (#4033)
   is the same for Core's `vendor/` only (`_CORE_PSEUDO_VERSION_MODULES`); the gateway may not vendor it.
 

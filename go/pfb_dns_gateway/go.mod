@@ -6,6 +6,7 @@ require (
 	github.com/oschwald/maxminddb-golang/v2 v2.9.0
 	github.com/pires/go-proxyproto v0.15.0
 	github.com/quic-go/quic-go v0.64.0
+	github.com/zeebo/xxh3 v1.1.1-0.20261118193009-e05079abbd7d
 	golang.org/x/net v0.56.0
 	golang.org/x/sys v0.50.0
 	golang.org/x/text v0.44.0

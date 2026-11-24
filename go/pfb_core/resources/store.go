@@ -27,7 +27,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/pfBlockerNG/xxh3"
+	"github.com/zeebo/xxh3"
 )
 
 // MaxIDLength is the longest resource id, in bytes.
