@@ -1577,7 +1577,6 @@ $tld_list['gTLD'] = array(
 'world' => 'WORLD',
 'wow' => 'WOW',
 'wtf' => 'WTF',
-'xihuan' => '(de) XIHUAN',
 'xin' => 'XIN (HiChina)',
 'xxx' => '(s) XXX',
 'xyz' => 'XYZ',
