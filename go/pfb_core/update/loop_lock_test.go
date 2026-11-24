@@ -196,9 +196,15 @@ func workerOf(t *testing.T, pid int) int {
 	return 0
 }
 
-// alive is whether pid runs; a zombie does not.
+// alive is whether pid runs; a zombie does not. Without /proc, whether pid can be signalled.
 func alive(pid int) bool {
 	fields, err := procStat(pid)
+	if errors.Is(err, os.ErrNotExist) {
+		if _, statErr := os.Stat("/proc/self/stat"); statErr != nil {
+			return syscall.Kill(pid, 0) == nil
+		}
+		return false
+	}
 	if err != nil {
 		return false
 	}
