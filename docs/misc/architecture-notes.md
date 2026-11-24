@@ -386,6 +386,18 @@ manifest and excludes stages; legacy fixed `pfb_py_raw/` manifests remain readab
   Unbound. A data-path restart fallback never restores the pre-update cache.
 - **Fail-closed:** a bad/partial build keeps the last-good snapshot serving.
 
+**On the Core input** (issue #4036; `--core-socket`, not yet started by the rc script): pfB-DNS takes the DNSBL data from
+the Core API instead of PHP's files. `go/pfb_dns_gateway/coreinput` caches the `dnsbl/*` resources in the module directory
+in the same file shapes, and the decider builds from them unchanged (`decider/pfb_core_input.go`). There is no sentinel and
+no applied marker. Every 10 s a poller asks Core whether the manifest changed and fetches only what changed. A body the last
+generation already had is linked again, and a feed or TOP1M body Core holds a delta for arrives as that delta, merged into
+the cached body and checked against its digest. Anything else, or a delta that does not apply, is fetched whole. The new
+generation then goes through the same RAM-gated swap, and the poller reports what is served to Core's `ReportApplied`
+once after the start and after each swap. That report is what lets Core keep the delta from the served generation. Boot
+never waits for Core: it builds from the cache only when `coreinput.Load` trusts it (every file there, of pfB-DNS's own
+user, writable by no other user, each body at its digest). Otherwise it serves no DNSBL, reported degraded, until the
+first poll brings the data.
+
 Pinned by `tests/test_adr10_*` (snapshot equivalence, fail-closed swap, watcher); idle
 decision-identity stays guarded by `tests/test_adr06_*`/`tests/test_adr07_*`. See
 `legacy/ADRs/ADR_10_Zero_Downtime_DNSBL/`.
