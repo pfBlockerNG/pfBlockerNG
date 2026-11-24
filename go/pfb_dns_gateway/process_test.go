@@ -297,7 +297,7 @@ func TestStartBootsTheDeciderWithTheModeFlagsItWasGiven(t *testing.T) {
 
 // issue #4036: --core-socket boots the decider on the Core input, from the Core API listening there.
 func TestStartBootsTheDeciderOnTheCoreSocketItWasGiven(t *testing.T) {
-	cfg, err := parseConfig([]string{"--core-socket", "/var/run/pfb_core/api.sock"}, os.Stderr)
+	cfg, err := parse(t, "--core-socket", "/var/run/pfb_core/api.sock")
 	if err != nil {
 		t.Fatal(err)
 	}

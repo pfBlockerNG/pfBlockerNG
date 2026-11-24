@@ -11,6 +11,7 @@ package coreinput
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"unicode"
 
 	"github.com/zeebo/xxh3"
@@ -106,6 +108,19 @@ func (c *Client) post(ctx context.Context, method string, req any) (*http.Respon
 	return nil, fmt.Errorf("%s: %w", method, env.Error)
 }
 
+// ReportApplied tells Core the dnsbl/* resources pfB-DNS serves, each at the cursor of the body it applied: Core makes
+// them the applied baseline. A report replaces the last one whole; nil reports that it serves none.
+func (c *Client) ReportApplied(ctx context.Context, served map[string]Cursor) error {
+	if served == nil {
+		served = map[string]Cursor{}
+	}
+	resp, err := c.post(ctx, "ReportApplied", map[string]any{"requestId": rand.Text(), "resources": served})
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}
+
 // item is a GetResources item.
 type item struct {
 	Kind       string    `json:"kind"`
@@ -183,15 +198,16 @@ func cursorOK(c Cursor) bool {
 	return len(c.Digest) == 32 && strings.Trim(c.Digest, "0123456789abcdef") == ""
 }
 
-// Load is the State the last Sync left in dir, once every file it wrote is still there and each body written as Core sent
-// it (the feeds, TOP1M) still has its digest; the zero State otherwise, so that the next Sync fetches everything.
+// Load is the State the last Sync left in dir, once every file it wrote is still there, is pfB-DNS's own (a regular file
+// of this user that no other user may write), and each body written as Core sent it (the feeds, TOP1M) still has its
+// digest; the zero State otherwise, so that the next Sync fetches everything.
 func Load(dir string) State {
 	var s State
-	data, err := os.ReadFile(filepath.Join(dir, stateFile))
-	if err != nil || json.Unmarshal(data, &s) != nil || !cursorOK(s.Manifest) {
+	if !own(filepath.Join(dir, stateFile)) || !own(filepath.Join(dir, "pfb_py_sources.json")) {
 		return State{}
 	}
-	if info, err := os.Lstat(filepath.Join(dir, "pfb_py_sources.json")); err != nil || !info.Mode().IsRegular() {
+	data, err := os.ReadFile(filepath.Join(dir, stateFile))
+	if err != nil || json.Unmarshal(data, &s) != nil || !cursorOK(s.Manifest) {
 		return State{}
 	}
 	for id, cur := range s.Resources {
@@ -202,8 +218,7 @@ func Load(dir string) State {
 		if strings.HasPrefix(id, feedPrefix) {
 			path = filepath.Join(rawDir, s.Folder, rawName(id))
 		}
-		info, err := os.Lstat(filepath.Join(dir, path))
-		if path == "" || err != nil || !info.Mode().IsRegular() {
+		if path == "" || !own(filepath.Join(dir, path)) {
 			return State{}
 		}
 		if id != ssID && id != pslID {
@@ -213,6 +228,17 @@ func Load(dir string) State {
 		}
 	}
 	return s
+}
+
+// own is whether path is a regular file of this user that neither its group nor others may write: a symbolic link is not
+// followed.
+func own(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int(st.Uid) == os.Geteuid()
 }
 
 // row is one manifest row, every kind's fields together.

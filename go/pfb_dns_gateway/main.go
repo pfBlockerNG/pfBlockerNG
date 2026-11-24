@@ -76,6 +76,7 @@ type config struct {
 	doqPort6           int
 	moduleDir          string // --module-dir: the DNSBL module's directory (and the observer socket's)
 	logDir             string // --log-dir: where the decider writes dnsbl.log and dns_reply.log
+	coreSocket         string // --core-socket: the Core API's socket, the DNSBL data's source; "" = the module dir's files
 	noModule           bool   // pfB-DNS modes: decider.Options' fields of the same names
 	observer           bool
 	replyLog           bool
@@ -147,6 +148,7 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.IntVar(&cfg.doqPort6, "doq-port6", 0, "IPv6 DoQ port; 0 inherits --doq-port")
 	fs.StringVar(&cfg.moduleDir, "module-dir", defaultModuleDir, "the DNSBL module's directory: its ini, manifest and feed files; the observer's socket is made here")
 	fs.StringVar(&cfg.logDir, "log-dir", defaultLogDir, "where the decider writes dnsbl.log and dns_reply.log")
+	fs.StringVar(&cfg.coreSocket, "core-socket", "", "the Core API's socket: take the DNSBL data from Core, cached in --module-dir; empty = the files in --module-dir")
 	fs.BoolVar(&cfg.noModule, "no-module", false, "pfB-DNS without DNSBL: boot no module and forward every query")
 	fs.BoolVar(&cfg.observer, "observer", false, "DNSBL on, Resolver forwarding: listen for the upstream observer's reports")
 	fs.BoolVar(&cfg.replyLog, "reply-log", false, "log each relayed reply to dns_reply.log (needs --no-module)")
@@ -449,7 +451,7 @@ func bootDecider(cfg config) (frontend, error) {
 		if open == nil {
 			open = openDecider
 		}
-		f, err := open(decider.Options{ModuleDir: cfg.moduleDir, LogDir: cfg.logDir, NoModule: cfg.noModule, ReplyLog: cfg.replyLog, Observer: cfg.observer})
+		f, err := open(decider.Options{ModuleDir: cfg.moduleDir, LogDir: cfg.logDir, NoModule: cfg.noModule, ReplyLog: cfg.replyLog, Observer: cfg.observer, CoreSocket: cfg.coreSocket})
 		done <- booted{f, err}
 	}()
 	timer := cfg.bootTimer

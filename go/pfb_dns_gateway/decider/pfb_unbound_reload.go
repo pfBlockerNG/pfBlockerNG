@@ -262,12 +262,16 @@ func (w *reloadWatcher) run(stop <-chan struct{}, tick <-chan time.Time) {
 	pollLoop(stop, tick, w.drainAndSwap)
 }
 
-// startReloadWatcher starts the watcher (pfb["reload_watcher"] True: reloadStop is set) unless it already runs.
+// startReloadWatcher starts the watcher (pfb["reload_watcher"] True: reloadStop is set) unless it already runs: on the Core
+// input, the Core poller in its place.
 func (m *pfbUnbound) startReloadWatcher() {
-	if m.reloadStop != nil {
-		return
+	switch {
+	case m.reloadStop != nil:
+	case m.core != nil:
+		m.reloadStop = startPoller("Core input", m.core.tick, m.core.run)
+	default:
+		m.reloadStop = startPoller("reload", m.reloadTick, m.newReloadWatcher().run)
 	}
-	m.reloadStop = startPoller("reload", m.reloadTick, m.newReloadWatcher().run)
 }
 
 // stopReloadWatcher is deinit's stop of the watcher: it returns once the watcher has ended, or after watcherStopWait.
