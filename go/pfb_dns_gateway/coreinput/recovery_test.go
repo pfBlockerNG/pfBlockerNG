@@ -254,3 +254,68 @@ func TestACacheFileAnotherUserCouldWriteIsNotTrusted(t *testing.T) {
 		})
 	}
 }
+
+// The SafeSearch and PSL files are written converted, not as Core sent them: Load checks them against what the Sync
+// wrote, so a truncated or emptied one is not trusted either.
+func TestATruncatedSafeSearchOrPSLFileIsNotTrusted(t *testing.T) {
+	for name, content := range map[string]string{"pfb_py_ss.txt": "www.goo", "dnsbl_psl": ""} {
+		t.Run(name, func(t *testing.T) {
+			dir, _, _, _ := synced(t)
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := coreinput.Load(dir); got.Manifest != (coreinput.Cursor{}) {
+				t.Errorf("Load = %+v, want no state", got.Manifest)
+			}
+		})
+	}
+}
+
+// A state file of another version, or of none (a cache an older binary wrote), is not trusted.
+func TestAStateOfAnotherVersionIsNotTrusted(t *testing.T) {
+	for name, version := range map[string]any{"none": nil, "a later one": 2} {
+		t.Run(name, func(t *testing.T) {
+			dir, _, _, _ := synced(t)
+			path := filepath.Join(dir, "pfb_py_core.json")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]any
+			if err := json.Unmarshal(data, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := doc["version"]; !ok {
+				t.Fatalf("the state file has no version: %s", data)
+			}
+			if version == nil {
+				delete(doc, "version")
+			} else {
+				doc["version"] = version
+			}
+			if data, err = json.Marshal(doc); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := coreinput.Load(dir); got.Manifest != (coreinput.Cursor{}) {
+				t.Errorf("Load = %+v, want no state", got.Manifest)
+			}
+		})
+	}
+}
+
+// A generation lower than the one cached (a store Core rebuilt) is taken as a full manifest whose bodies all verify
+// (#4036, 2026-11-21).
+func TestALowerGenerationIsTakenWhenItsBodiesVerify(t *testing.T) {
+	dir, _, _, _ := synced(t)
+	rebuilt := coretest.Start(t, data("5", "b.example"))
+	got, changed, err := coreinput.Sync(context.Background(), coreinput.New(rebuilt.Socket), dir, coreinput.Load(dir))
+	if err != nil || !changed || got.Manifest.Generation != "5" {
+		t.Fatalf("Sync of the rebuilt store: %+v, changed %v, %v", got.Manifest, changed, err)
+	}
+	if feed := tree(t, dir)[rawOf(t, dir)]; feed != "b.example\n" {
+		t.Errorf("the feed = %q", feed)
+	}
+}

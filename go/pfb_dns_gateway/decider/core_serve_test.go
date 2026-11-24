@@ -303,6 +303,9 @@ func TestOnCoreADeclinedSwapIsTriedAgain(t *testing.T) {
 	if serves(m, "b.example") {
 		t.Fatal("generation 2 is served though the swap was declined")
 	}
+	if got := srv.Applied(); !reflect.DeepEqual(got, []map[string]coretest.Cursor{cursors(gen1)}) {
+		t.Errorf("reports after the declined swap = %v, want generation 1's only", got)
+	}
 	m.totalRAM = func() (uint64, bool) { return 1 << 40, true }
 	m.core.drain(nil)
 	if !serves(m, "b.example") {
@@ -359,5 +362,20 @@ func TestOnCoreSafeSearchIsCoresData(t *testing.T) {
 	m, _ = bootOnCore(t, dir, deadSocket(t))
 	if redirects(m) {
 		t.Error("the SafeSearch file of an untrusted cache is applied")
+	}
+}
+
+// While Core is down, the failed report is logged once, not on every poll.
+func TestOnCoreAReportCoreDoesNotTakeIsLoggedOnce(t *testing.T) {
+	log := evCaptureLog(t)
+	dir := coreModuleDir(t)
+	cacheFrom(t, dir, coreData("1", "a.example"))
+	m, _ := bootOnCore(t, dir, deadSocket(t))
+	m.stopReloadWatcher() // the test drains by hand from here
+	for range 3 {
+		m.core.drain(nil)
+	}
+	if n := strings.Count(log.String(), "reporting the generation served to Core failed"); n != 1 {
+		t.Errorf("the failed report is logged %d times, want once:\n%s", n, log.String())
 	}
 }
