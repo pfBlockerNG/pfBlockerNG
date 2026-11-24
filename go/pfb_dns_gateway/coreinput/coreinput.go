@@ -45,7 +45,8 @@ type State struct {
 	Manifest  Cursor            `json:"manifest"`
 	Resources map[string]Cursor `json:"resources"`
 	Folder    string            `json:"folder"` // the folder of pfb_py_raw that holds the feeds
-	// Files is the digest of each file written converted (SafeSearch, PSL), which Core's digest does not describe.
+	// Files is the digest of each file Sync writes in a shape of its own (SafeSearch, PSL, the manifest), which no
+	// digest of Core's describes.
 	Files map[string]string `json:"files,omitempty"`
 }
 
@@ -213,11 +214,15 @@ func cursorOK(c Cursor) bool {
 // digest; the zero State otherwise, so that the next Sync fetches everything.
 func Load(dir string) State {
 	var s State
-	if !own(filepath.Join(dir, stateFile)) || !own(filepath.Join(dir, "pfb_py_sources.json")) {
+	sources := filepath.Join(dir, "pfb_py_sources.json")
+	if !own(filepath.Join(dir, stateFile)) || !own(sources) {
 		return State{}
 	}
 	data, err := os.ReadFile(filepath.Join(dir, stateFile))
 	if err != nil || json.Unmarshal(data, &s) != nil || s.Version != stateVersion || !cursorOK(s.Manifest) {
+		return State{}
+	}
+	if digest, err := fileDigest(sources); err != nil || digest != s.Files["pfb_py_sources.json"] {
 		return State{}
 	}
 	for id, cur := range s.Resources {
@@ -458,6 +463,7 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 	if err != nil {
 		return prev, false, err
 	}
+	state.Files["pfb_py_sources.json"] = digestOf(doc)
 	st, err := json.Marshal(state)
 	if err != nil {
 		return prev, false, err

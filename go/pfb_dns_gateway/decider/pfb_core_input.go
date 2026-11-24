@@ -131,7 +131,10 @@ func (f *coreFeed) build() (*snapshot, error) {
 	if next != nil {
 		next.safeSearchDB, next.freshSafeSearch = map[string]safeSearchEntry{}, true
 		if !f.m.readSafesearch(next.safeSearchDB) {
-			next.safeSearchDB = nil
+			if isFile(f.m.pfb.pfbPySs) {
+				return nil, errors.New("SafeSearch: " + f.m.pfb.pfbPySs + " could not be read")
+			}
+			next.safeSearchDB = nil // Core publishes none
 		}
 	}
 	return next, err
