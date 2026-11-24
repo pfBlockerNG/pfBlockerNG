@@ -400,13 +400,16 @@ func TestShippedPslAuthorityLoadsAsPythonDoes(t *testing.T) { // oracle: the shi
 	if err != nil {
 		t.Fatalf("the shipped PSL authority no longer loads (a UTS #46 table change refusing one of its ~460 xn-- rules fails the whole authority): %v", err)
 	}
+	// The counts follow the file, which the PSL sync replaces (#4236): each is read here without the loader.
+	want := shippedPslCounts(t)
 	for _, c := range []struct {
 		field string
 		got   []string
 		want  int
 	}{
-		{"icannExact", rules.icannExact, 6927}, {"icannWildcard", rules.icannWildcard, 16}, {"icannException", rules.icannException, 8},
-		{"privateExact", rules.privateExact, 3204}, {"privateWildcard", rules.privateWildcard, 298}, {"privateException", rules.privateException, 0},
+		{"icannExact", rules.icannExact, want["icannExact"]}, {"icannWildcard", rules.icannWildcard, want["icannWildcard"]},
+		{"icannException", rules.icannException, want["icannException"]}, {"privateExact", rules.privateExact, want["privateExact"]},
+		{"privateWildcard", rules.privateWildcard, want["privateWildcard"]}, {"privateException", rules.privateException, want["privateException"]},
 	} {
 		if len(c.got) != c.want {
 			t.Errorf("len(%s) = %d, want %d", c.field, len(c.got), c.want)
@@ -785,4 +788,51 @@ func TestSelectedTldRoots(t *testing.T) { // oracle: _selected_tld_roots
 			t.Errorf("selectedTldRoots(%q) = %q, want %q", c.values, got, c.want)
 		}
 	}
+}
+
+// shippedPslCounts is how many distinct rules of each kind each section of the shipped dnsbl_psl holds, read line by line:
+// "!" starts an exception, "*." a wildcard, anything else is an exact rule; blank and "//" lines are not rules.
+func shippedPslCounts(t *testing.T) map[string]int {
+	t.Helper()
+	data, err := os.ReadFile(pslShippedAuthority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]map[string]bool{}
+	section := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		switch line {
+		case "// ===BEGIN ICANN DOMAINS===":
+			section = "icann"
+			continue
+		case "// ===BEGIN PRIVATE DOMAINS===":
+			section = "private"
+			continue
+		case "// ===END ICANN DOMAINS===", "// ===END PRIVATE DOMAINS===":
+			section = ""
+			continue
+		}
+		if section == "" || line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+		kind := section + "Exact"
+		if strings.HasPrefix(line, "!") {
+			kind = section + "Exception"
+		} else if strings.HasPrefix(line, "*.") {
+			kind = section + "Wildcard"
+		}
+		if seen[kind] == nil {
+			seen[kind] = map[string]bool{}
+		}
+		seen[kind][line] = true
+	}
+	counts := map[string]int{}
+	for kind, rules := range seen {
+		counts[kind] = len(rules)
+	}
+	if counts["icannExact"] < 1000 || counts["privateExact"] < 1000 {
+		t.Fatalf("the shipped PSL reads as %v: its section markers moved", counts)
+	}
+	return counts
 }
