@@ -379,3 +379,22 @@ func TestOnCoreAReportCoreDoesNotTakeIsLoggedOnce(t *testing.T) {
 		t.Errorf("the failed report is logged %d times, want once:\n%s", n, log.String())
 	}
 }
+
+// A swap that keeps being declined is tried again less and less often: after 1, 2, 4, ... polls, so a box the RAM gate
+// declines does not rebuild and log on every poll.
+func TestOnCoreASwapThatKeepsBeingDeclinedBacksOff(t *testing.T) {
+	log := evCaptureLog(t)
+	dir := coreModuleDir(t)
+	cacheFrom(t, dir, coreData("1", "a.example"))
+	srv := coretest.Start(t, coreData("1", "a.example"))
+	m, _ := bootOnCore(t, dir, srv.Socket)
+	m.stopReloadWatcher() // the test drains by hand from here
+	srv.Set(coreData("2", "b.example"))
+	m.totalRAM = func() (uint64, bool) { return 0, true }
+	for range 8 {
+		m.core.drain(nil)
+	}
+	if n := strings.Count(log.String(), "DNSBL reload DECLINED"); n != 4 {
+		t.Errorf("8 polls tried the declined swap %d times, want 4 (polls 1, 2, 4 and 8)", n)
+	}
+}
