@@ -872,14 +872,19 @@ member. The rc script does not pass the flag.
   otherwise reported is settled before the Update fails. The pending token handed to the apply is the Core Updater's own
   snapshot's, as the settings read gave it: until the Outpost repairs a pending-changes marker that holds no valid token
   (#3977, slice 10), such a marker makes the apply exit 2 on every Update. The Core Updater's own state is
-  `updater.json` in the state directory: the last request as above, and the feeds left pending, which keep, until an Update's settle succeeds, the earlier
+  `updater.json` in the state directory: the last request as above (`requested`, each id and the generation the apply was
+  asked to load; `requestedRemoved`, each removal), and the feeds left pending (`pendingFeeds`), which keep, until an Update's settle succeeds, the earlier
   ones and every feed that Update ran. The Blacklist providers' `.update` markers and `geoip.update` are consumed only
   once the settle succeeded, `geoip.update` only when no geoip-format feed failed or was out of scope. Departure: the
   loop keeps DNSBL downloads in `dnsbl` under `dbDir`, where the PHP pass keeps them in `dnsblorig`, so its first run
   downloads every DNSBL feed again; the cutover (#3977) decides.
-- **Lock.** In loop mode the worker itself holds the Update lock, and the apply's holder holds it too while the apply
-  runs; killing the worker frees the lock while other processes it started may still run. The limit stays until
-  sub-slice 9j-2 of issue #4038.
+- **Lock.** In loop mode the worker itself holds the Update lock, and no process it starts inherits it. Two holders keep
+  it on purpose: the apply's holder (`--update-hold`) while the apply runs, and each hook's holder (`--hook-hold`), which
+  keeps it until the hook's own process exits, so a worker killed during a hook admits no next Update while the hook still
+  runs. The holder closes the lock before the hook starts, so a service the hook leaves running never holds it; it
+  passes TERM on to the hook, and the hook dies with the holder (parent-death signal). The worker's rsync dies with the
+  worker. Two departures stay: a killed worker's settings adapter call is left to finish, and a pre-script that its
+  watchdog is ending may outlive the lock for the watchdog's TERM grace (issue #4038, sub-slice 9j-2, #4226).
 
 ### Update command, version 2
 
@@ -1108,7 +1113,13 @@ in a newline. Its `digest` is the xxh128 of that body, 32 lower-case hexadecimal
 members. A member is not empty, is valid UTF-8, holds no control character, does not start with `#` and is at most 1 MiB
 long. A body whose records carry one value each (IP or CIDR members, domains) holds that value per line; a body whose
 records carry several fields (a `dnsbl/*` scope with per-entry flags, the `geo-catalog` rows) holds one JSON object per
-line (JSON Lines), each line a member like any other (owner, 2026-11-17, #4049). A **generation** is a number the Core Updater advances when a body or its `metadata` changes. `metadata` is an object the
+line (JSON Lines), each line a member like any other (owner, 2026-11-17, #4049). An `ip-set` or `ip-aggregate` member is
+one address or prefix of the resource's family in one spelling per network, what Go's `netip.Prefix.Masked()` prints: a
+bare address for a host, `address/length` without host bits for a prefix, the length in canonical decimal (`/024` is
+published as `/24`, as pfctl reads it). A row that is no address or prefix of the family (a range, a netmask, a host name,
+a zone) is left out with an issue, and so is one the address guard of #1922 refuses, judged on the masked network: an
+IPv4 network whose first octet is 0, the IPv6 network `::`, and so any prefix length of 0 (issue #4038, sub-slice 9b;
+`go/pfb_core/update/apply/member.go`). A **generation** is a number the Core Updater advances when a body or its `metadata` changes. `metadata` is an object the
 Core Updater publishes with the body (for an IP set, its action and direction). A change of metadata alone is a new generation,
 answered as a `delta` whose `addEntries` and `removeEntries` are `0`.
 
