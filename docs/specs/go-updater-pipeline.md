@@ -138,6 +138,20 @@ The three hazards the Option A comments raised are kept by construction:
 | DNSBLIP is built mid-sync | side files `apply.inc:3001-3019`, assembly `apply.inc:3209-3266`, use `apply.inc:4022` | Stages 8, 9 and 12 are sequential in one process |
 | The work list is decided under the locks | `apply.inc:1226-1227`; `cron.inc:271-309` | Stage 3 runs after the lifetime lock and the snapshot |
 
+*Amendment 2026-11-24 (issue #4038, sub-slice 9k): what slice 9 built, where it differs from the list above. Stage 3 keeps
+the per-feed `.fail` marker but no per-feed `.update` marker: the feeds a `Pending` decision leaves are kept in the Core
+Updater's own state, `updater.json` in Core's state directory (`pendingFeeds`; also `requested` and `requestedRemoved`,
+what the last apply that ran to its end was asked to load and remove), and an `apply` Update builds exactly those feeds,
+with no change detection and no Extras. The Blacklist providers' `.update` markers and `geoip.update` stay, consumed only
+once the settle succeeded. The `pre` hook (stage 4) fires after the Extras, the change detection and the apply-window
+check, and only when a pass runs, where today's pass fires it: today the Extras run before the pass
+(`extra.inc:6875`), so the order above put it too early. The loop's stages are therefore snapshot, work list, Extras,
+change detection, apply window, `pre` hook, then stages 8 to 20 (`go/pfb_core/update/loop.go`). Stage 7: outside the apply window nothing is built, but the Outpost apply is still invoked
+once, with `pendingOutsideWindow: true`, so that it records the pending work. A narrow-scope manual Update runs only its
+own side's stages. DNSBL downloads are kept in `dnsbl` under the database folder, not `dnsblorig`; the cutover (#3977)
+decides. The loop runs only with the `pfb-core` flag `--update-loop`, which the rc script does not pass: it passes the
+loop's folders, so a real Update still runs the `--update-cmd` program alone (`protocol.md` "On pfSense").*
+
 ### 4. Locks
 
 | Lock today | Where | After |
@@ -151,6 +165,13 @@ The three hazards the Option A comments raised are kept by construction:
 | Normalization cache lock | `go/pfb_core/feedparse/normcache.go` | Kept, internal to the Core Updater. |
 
 No lock crosses a process boundary: the Core Updater holds Core's lock, the Outpost apply takes its own.
+
+*Amendment 2026-11-24 (issue #4038, sub-slice 9k): `update.log.lock` does cross into two holder processes, on purpose
+(#4226). No child of the Core Updater inherits it, except through a holder: the apply's holder keeps it while the apply
+runs, and each hook runs under a holder (`--hook-hold`) that keeps it until the hook's own process exits and closes it
+before the hook starts, so a service the hook leaves running never holds it. The hook dies with its holder. rsync dies
+with the Core Updater (parent-death signal). A killed Core Updater's settings adapter call is left to finish, and a
+pre-script being ended by its watchdog may outlive the lock for the watchdog's TERM grace.*
 
 ### 5. Scripts and hooks: the Core Updater runs them
 
@@ -314,6 +335,13 @@ counted. The rows and the departures: `docs/misc/core-api-protocol.md` "DNSBL re
   bodies per resource. A resource that left the configuration is kept until the consumer reports its removal applied.
 - **Empty set:** a valid desired state with its own generation. The placeholder is an Outpost detail.
 
+*Amendment 2026-11-24 (issue #4038, sub-slice 9k): "canonical IP/CIDR members" is one spelling per network, what Go's
+`netip.Prefix.Masked()` prints: a bare address for a host, `address/length` without host bits for a prefix, the length in
+canonical decimal (`/024` is published as `/24`). A row that is no address or prefix of the family is left out with an
+issue, as is one the #1922 address guard refuses on the masked network: an IPv4 network whose first octet is 0, the IPv6
+network `::`, and so any prefix length of 0. The guard is applied at publication (`go/pfb_core/update/apply/member.go`).
+Core writes no placeholder: an empty set is published empty (owner, 2026-11-23).*
+
 ### 8. The apply contract
 
 #### 8.1 Invocation
@@ -422,6 +450,15 @@ fd 3, result lines as today, each one JSON object, written as each step finishes
 Exit status: 0 success; 75 deferred (the apply lock or a config lock is held, or the Core API did not answer
 `GetResources`): the Update is `skipped`, nothing is settled, the work stays pending; anything else is failure, and complete
 result lines still count (as #4002 established).
+
+*Amendment 2026-11-24 (issue #4038, sub-slice 9k): a result line also carries `removed`, the removals applied, beside
+`applied` (`{"version": 2, "applied": {"ip-set/Abuse/ipv4": "42"}, "removed": ["ip-set/Old/ipv4"], "changedAliases":
+["pfB_Abuse_v4"]}`). The apply's fd 3 is a file of its own, `update.log.apply` beside the
+Update log; the Core Updater's feed outcomes keep `update.log.result` in the version 1 shape (§8.1's "durable result
+file" is that one). Exit status 2 means the apply refused the request and ran nothing: the Update fails and nothing is
+settled. Core holds the apply to three rules of the whole file: an id is named on one result line only; `changedAliases`
+names only aliases of ids the request holds; the file stays within 1 MiB, and when it is longer Core keeps the complete
+lines inside the first 1 MiB and reports the rest as cut (`protocol.md` "Update command, version 2").*
 
 #### 8.5 Failure and retry
 

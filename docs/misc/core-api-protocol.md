@@ -872,14 +872,20 @@ member. The rc script does not pass the flag.
   otherwise reported is settled before the Update fails. The pending token handed to the apply is the Core Updater's own
   snapshot's, as the settings read gave it: until the Outpost repairs a pending-changes marker that holds no valid token
   (#3977, slice 10), such a marker makes the apply exit 2 on every Update. The Core Updater's own state is
-  `updater.json` in the state directory: the last request as above, and the feeds left pending, which keep, until an Update's settle succeeds, the earlier
-  ones and every feed that Update ran. The Blacklist providers' `.update` markers and `geoip.update` are consumed only
+  `updater.json` in the state directory: the last request as above (`requested`, each id and the generation the apply was
+  asked to load; `requestedRemoved`, each removal), and the feeds left pending (`pendingFeeds`), which keep, until an Update's settle succeeds, the earlier
+  ones and every feed that Update ran, and the retry cap's ledger (`failures`, each feed's failed downloads on the local
+  day `failuresDay`). The Blacklist providers' `.update` markers and `geoip.update` are consumed only
   once the settle succeeded, `geoip.update` only when no geoip-format feed failed or was out of scope. Departure: the
   loop keeps DNSBL downloads in `dnsbl` under `dbDir`, where the PHP pass keeps them in `dnsblorig`, so its first run
   downloads every DNSBL feed again; the cutover (#3977) decides.
-- **Lock.** In loop mode the worker itself holds the Update lock, and the apply's holder holds it too while the apply
-  runs; killing the worker frees the lock while other processes it started may still run. The limit stays until
-  sub-slice 9j-2 of issue #4038.
+- **Lock.** In loop mode the worker itself holds the Update lock, and no process it starts inherits it. Two holders keep
+  it on purpose: the apply's holder (`--update-hold`) while the apply runs, and each hook's holder (`--hook-hold`), which
+  keeps it until the hook's own process exits, so a worker killed during a hook admits no next Update while the hook still
+  runs. The holder closes the lock before the hook starts, so a service the hook leaves running never holds it; it
+  passes TERM on to the hook, and the hook dies with the holder (parent-death signal). The worker's rsync dies with the
+  worker. Two departures stay: a killed worker's settings adapter call is left to finish, and a pre-script that its
+  watchdog is ending may outlive the lock for the watchdog's TERM grace (issue #4038, sub-slice 9j-2, #4226).
 
 ### Update command, version 2
 
@@ -1108,7 +1114,13 @@ in a newline. Its `digest` is the xxh128 of that body, 32 lower-case hexadecimal
 members. A member is not empty, is valid UTF-8, holds no control character, does not start with `#` and is at most 1 MiB
 long. A body whose records carry one value each (IP or CIDR members, domains) holds that value per line; a body whose
 records carry several fields (a `dnsbl/*` scope with per-entry flags, the `geo-catalog` rows) holds one JSON object per
-line (JSON Lines), each line a member like any other (owner, 2026-11-17, #4049). A **generation** is a number the Core Updater advances when a body or its `metadata` changes. `metadata` is an object the
+line (JSON Lines), each line a member like any other (owner, 2026-11-17, #4049). An `ip-set` or `ip-aggregate` member is
+one address or prefix of the resource's family in one spelling per network, what Go's `netip.Prefix.Masked()` prints: a
+bare address for a host, `address/length` without host bits for a prefix, the length in canonical decimal (`/024` is
+published as `/24`, as pfctl reads it). A row that is no address or prefix of the family (a range, a netmask, a host name,
+a zone) is left out with an issue, and so is one the address guard of #1922 refuses, judged on the masked network: an
+IPv4 network whose first octet is 0, the IPv6 network `::`, and so any prefix length of 0 (issue #4038, sub-slice 9b;
+`go/pfb_core/update/apply/member.go`). A **generation** is a number the Core Updater advances when a body or its `metadata` changes. `metadata` is an object the
 Core Updater publishes with the body (for an IP set, its action and direction). A change of metadata alone is a new generation,
 answered as a `delta` whose `addEntries` and `removeEntries` are `0`.
 
@@ -1375,7 +1387,8 @@ a replay memory of its own.*
 | What | Where |
 |---|---|
 | Binary | `/usr/local/pkg/pfblockerng/core/bin/freebsd-amd64/pfb-core`, `.../freebsd-arm64/pfb-core` (static, `CGO_ENABLED=0`; built by `scripts/build-pfb-dns.py`) |
-| rc script | `/usr/local/etc/rc.d/pfb_core.sh`, written by `pfb_core_service()`; pfSense service `pfb_core`; it starts pfb-core with `--settings-backend-cmd`, `--update-cmd`, `--maintenance-cmd`, `--metrics-cmd`, `--counters-cmd`, `--zoneinfo /etc/localtime` (the host's zone, which the scheduler reads local time in) and the feed phase's flags below |
+| rc script | `/usr/local/etc/rc.d/pfb_core.sh`, written by `pfb_core_service()`; pfSense service `pfb_core`; it starts pfb-core with `--settings-backend-cmd`, `--update-cmd`, `--maintenance-cmd`, `--metrics-cmd`, `--counters-cmd`, `--zoneinfo /etc/localtime` (the host's zone, which the scheduler reads local time in), the Core Updater loop's folders below and the feed phase's flags below |
+| Loop folders | Issue #4038: `--resource-dir /var/db/pfblockerng/store`, `--hook-dir /usr/local/pkg/pfblockerng/hooks`, `--python-wrapper /usr/local/pkg/pfblockerng/pfb_python.sh`, `--db-dir /var/db/pfblockerng`, `--geoip-dir /usr/local/share/GeoIP`, `--cc-dir /usr/local/share/GeoIP/cc`, `--log-dir /var/log/pfblockerng`, `--pkg-dir /usr/local/pkg/pfblockerng` and `--asn-table /usr/local/www/pfblockerng/pfblockerng_asn.txt`, each `escapeshellarg()`-quoted. The switch stays off: the script passes neither `--update-loop` nor `--main-log` (which Core refuses without the switch), so an Update runs `--update-cmd` alone, and of these flags only `--resource-dir` is read (`GetResources`) |
 | Feed phase flags | `--feed-local-dir` once per folder a `file://` feed may sit directly in: the 14 of `pfb_filter()`'s local-path rule (`/var/db/pfblockerng` and its `deny`, `permit`, `match`, `native`, `original`, `dnsbl`, `dnsblorig`, `ET`, `ut1` and `shallalist` folders, `/usr/local/www`, `/usr/local/share/GeoIP`, `…/GeoIP/cc`) and the real path of the database folder (resolved when the script is generated, when it exists); `--script-dir` twice, in search order (`/usr/local/pkg/pfblockerng/list_scripts`, then `/usr/local/pkg/pfblockerng`); `--rsync-bin /usr/local/bin/rsync`; `--user-agent` the cURL user agent of the package, `pfSense/pfBlockerNG cURL download agent-<unique id>`, as one quoted argument without the line break an id may end with. Each value is `escapeshellarg()`-quoted; Core refuses a relative path and a user agent with a control character as a usage error (exit status 2) |
 | Supervisor | `daemon(8) -r -R 5 -t pfb_core`, pidfiles `/var/run/pfb_core_daemon.pid` (supervisor) and `/var/run/pfb_core.pid` (pfb-core) |
 | Log | `/var/log/pfblockerng/core.log` (pfb-core's stderr, through `daemon -o`) |
@@ -1403,7 +1416,7 @@ a replay memory of its own.*
   `/usr/local/etc` and the schedule entries of `/var/db/pfblockerng/pfb_due_ledger.json` (`extra:dcc`, `extra:bl`, the cache
   stamp and the times of `cron`; its `pending_apply` flag, `ss_refresh` and `apply_reconcile` stay). With Keep Settings off, a removal also deletes the state
   directory once `pfb_core` is stopped (`pfb_core_state_teardown()`).
-- **Paths.** Core reads every path from a flag (`--resource-dir`, `--feed-local-dir`, `--script-dir` and `--rsync-bin` must be absolute: a relative one is a usage error; the rc script does not pass `--resource-dir` yet, as nothing publishes into the store, so `GetResources` answers `unavailable` on pfSense for now). It names no pfSense path and imports nothing but the standard library, its
+- **Paths.** Core reads every path from a flag (`--resource-dir`, `--feed-local-dir`, `--script-dir` and `--rsync-bin` must be absolute: a relative one is a usage error; the rc script passes `--resource-dir`, but with the switch off nothing publishes into the store, so `GetResources` answers `not_found` on pfSense for now). It names no pfSense path and imports nothing but the standard library, its
   own packages, `golang.org/x/net` and `golang.org/x/text` (the feed parser's UTS #46 conversion), `golang.org/x/sys` (CPU
   feature detection for xxh128), all pinned in `go.mod` to the versions of `go/pfb_dns_gateway`, and
   `github.com/pfBlockerNG/xxh3` (the feed content digest, xxh128 as PHP writes it; the pfBlockerNG fork of `zeebo/xxh3`,

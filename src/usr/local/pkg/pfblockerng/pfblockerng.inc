@@ -4375,6 +4375,14 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	}
 	$feedFlags .= ' --rsync-bin ' . escapeshellarg($pfb['rsync_bin'] ?? PFB_RSYNC_BIN);
 	$feedFlags .= ' --user-agent ' . escapeshellarg(trim((string) $pfb['curl_defaults'][CURLOPT_USERAGENT]));
+	// issue #4038: the Core Updater loop's folders, given with its switch off: without --update-loop an Update still runs --update-cmd
+	// alone, and --main-log, which Core refuses without the switch, waits for the cutover (#3977); only --resource-dir is read today (GetResources)
+	$loopFlags = '';
+	foreach (['resource-dir' => "{$pfb['dbdir']}/store", 'hook-dir' => PFB_HOOK_SCRIPT_DIR, 'python-wrapper' => PFB_PYTHON_WRAPPER,
+	    'db-dir' => $pfb['dbdir'], 'geoip-dir' => $pfb['geoipshare'], 'cc-dir' => $pfb['ccdir'], 'log-dir' => $pfb['logdir'],
+	    'pkg-dir' => '/usr/local/pkg/pfblockerng', 'asn-table' => '/usr/local/www/pfblockerng/pfblockerng_asn.txt'] as $flag => $path) {
+		$loopFlags .= " --{$flag} " . escapeshellarg($path);
+	}
 	$dir = escapeshellarg($coreDir);
 	$lockfile = escapeshellarg($pfb['core_lockfile']);
 	// pgrep/pkill -f patterns (extended regular expressions): the supervisor, by daemon(8)'s title or, until it is set, by its own command
@@ -4436,7 +4444,7 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	# Anything the daemon runs that starts this service again must take the lock
 	unset PFB_CORE_START_LOCKED
 	# Detach std fds (#662): the caller's pipe (the package-manager capture during an install) must not stay open in the daemon
-	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} --maintenance-cmd {$maintenanceCmd} --metrics-cmd {$metricsCmd} --counters-cmd {$countersCmd} --zoneinfo /etc/localtime{$feedFlags} </dev/null >/dev/null 2>&1
+	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} --maintenance-cmd {$maintenanceCmd} --metrics-cmd {$metricsCmd} --counters-cmd {$countersCmd} --zoneinfo /etc/localtime{$loopFlags}{$feedFlags} </dev/null >/dev/null 2>&1
 	daemonstatus="\$?"
 	if [ "\${daemonstatus}" -ne 0 ]; then
 		/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: daemon(8) failed with status \${daemonstatus} - not started"

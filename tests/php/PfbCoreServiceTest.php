@@ -48,6 +48,7 @@ final class PfbCoreServiceTest extends TestCase
 				'core_socket'         => 'run/pfb_core/api.sock',
 				'core_state'          => 'db/pfb_core',
 				'dbdir'               => 'dbdir',
+				'logdir'              => 'log',
 				'schedule_state_dir'  => 'etc',
 				'core_log'            => 'log/core.log',
 				'core_pidfile'        => 'run/pfb_core.pid',
@@ -144,6 +145,7 @@ final class PfbCoreServiceTest extends TestCase
 			'--metrics-cmd', '/usr/local/pkg/pfblockerng/pfb_core_metrics.sh',
 			'--counters-cmd', '/usr/local/pkg/pfblockerng/pfb_core_counters.sh',
 			'--zoneinfo', '/etc/localtime',
+			...$this->loopFlags(),
 			...$this->feedFlags(),
 		], $this->lines('daemon.argv'));
 		$this->assertSame(['0 1 2 '], $this->lines('fds'), 'the daemon inherited a descriptor of the caller (stdio must be /dev/null)');
@@ -182,6 +184,20 @@ final class PfbCoreServiceTest extends TestCase
 
 		$text = (string) file_get_contents("{$this->dir}/rc/pfb_core.sh");
 		$this->assertStringContainsString("--maintenance-cmd '/usr/local/pkg/pfblockerng/pfb_core_maintenance.sh' --metrics-cmd '/usr/local/pkg/pfblockerng/pfb_core_metrics.sh' --counters-cmd '/usr/local/pkg/pfblockerng/pfb_core_counters.sh' --zoneinfo", $text);
+	}
+
+	/**
+	 * Issue #4038 (9k): the Core Updater loop's path flags, passed with the switch off: no --update-loop, so a real Update still runs
+	 * the update program, and no --main-log, which Core refuses without the switch.
+	 *
+	 * @return list<string>
+	 */
+	private function loopFlags(): array
+	{
+		$pfb = $GLOBALS['pfb'];
+		return ['--resource-dir', "{$pfb['dbdir']}/store", '--hook-dir', '/usr/local/pkg/pfblockerng/hooks', '--python-wrapper', PFB_PYTHON_WRAPPER,
+			'--db-dir', $pfb['dbdir'], '--geoip-dir', '/usr/local/share/GeoIP', '--cc-dir', '/usr/local/share/GeoIP/cc', '--log-dir', $pfb['logdir'],
+			'--pkg-dir', '/usr/local/pkg/pfblockerng', '--asn-table', '/usr/local/www/pfblockerng/pfblockerng_asn.txt'];
 	}
 
 	/** @param list<string> $dirs @return list<string> the flags of the feed phase (issue #3975) Core is started with */
