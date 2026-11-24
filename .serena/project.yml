@@ -43,6 +43,7 @@ language_servers:
 - php
 - python
 - bash
+- go
 
 # advanced configuration option allowing to configure language server-specific options.
 # Maps the language key to the options.
