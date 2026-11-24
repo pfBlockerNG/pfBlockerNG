@@ -143,7 +143,10 @@ the per-feed `.fail` marker but no per-feed `.update` marker: the feeds a `Pendi
 Updater's own state, `updater.json` in Core's state directory (`pendingFeeds`; also `requested` and `requestedRemoved`,
 what the last apply that ran to its end was asked to load and remove), and an `apply` Update builds exactly those feeds,
 with no change detection and no Extras. The Blacklist providers' `.update` markers and `geoip.update` stay, consumed only
-once the settle succeeded. Stage 7: outside the apply window nothing is built, but the Outpost apply is still invoked
+once the settle succeeded. The `pre` hook (stage 4) fires after the Extras, the change detection and the apply-window
+check, and only when a pass runs, where today's pass fires it: today the Extras run before the pass
+(`extra.inc:6875`), so the order above put it too early. The loop's stages are therefore snapshot, work list, Extras,
+change detection, apply window, `pre` hook, then stages 8 to 20 (`go/pfb_core/update/loop.go`). Stage 7: outside the apply window nothing is built, but the Outpost apply is still invoked
 once, with `pendingOutsideWindow: true`, so that it records the pending work. A narrow-scope manual Update runs only its
 own side's stages. DNSBL downloads are kept in `dnsbl` under the database folder, not `dnsblorig`; the cutover (#3977)
 decides. The loop runs only with the `pfb-core` flag `--update-loop`, which the rc script does not pass: it passes the
@@ -448,7 +451,9 @@ Exit status: 0 success; 75 deferred (the apply lock or a config lock is held, or
 `GetResources`): the Update is `skipped`, nothing is settled, the work stays pending; anything else is failure, and complete
 result lines still count (as #4002 established).
 
-*Amendment 2026-11-24 (issue #4038, sub-slice 9k): the apply's fd 3 is a file of its own, `update.log.apply` beside the
+*Amendment 2026-11-24 (issue #4038, sub-slice 9k): a result line also carries `removed`, the removals applied, beside
+`applied` (`{"version": 2, "applied": {"ip-set/Abuse/ipv4": "42"}, "removed": ["ip-set/Old/ipv4"], "changedAliases":
+["pfB_Abuse_v4"]}`). The apply's fd 3 is a file of its own, `update.log.apply` beside the
 Update log; the Core Updater's feed outcomes keep `update.log.result` in the version 1 shape (§8.1's "durable result
 file" is that one). Exit status 2 means the apply refused the request and ran nothing: the Update fails and nothing is
 settled. Core holds the apply to three rules of the whole file: an id is named on one result line only; `changedAliases`
