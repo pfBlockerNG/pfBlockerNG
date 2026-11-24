@@ -874,7 +874,8 @@ member. The rc script does not pass the flag.
   (#3977, slice 10), such a marker makes the apply exit 2 on every Update. The Core Updater's own state is
   `updater.json` in the state directory: the last request as above (`requested`, each id and the generation the apply was
   asked to load; `requestedRemoved`, each removal), and the feeds left pending (`pendingFeeds`), which keep, until an Update's settle succeeds, the earlier
-  ones and every feed that Update ran. The Blacklist providers' `.update` markers and `geoip.update` are consumed only
+  ones and every feed that Update ran, and the retry cap's ledger (`failures`, each feed's failed downloads on the local
+  day `failuresDay`). The Blacklist providers' `.update` markers and `geoip.update` are consumed only
   once the settle succeeded, `geoip.update` only when no geoip-format feed failed or was out of scope. Departure: the
   loop keeps DNSBL downloads in `dnsbl` under `dbDir`, where the PHP pass keeps them in `dnsblorig`, so its first run
   downloads every DNSBL feed again; the cutover (#3977) decides.
