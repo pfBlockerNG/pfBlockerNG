@@ -191,3 +191,22 @@ func TestADeltaIsNotMergedIntoACachedBodyThatChanged(t *testing.T) {
 		t.Errorf("the feed = %q", got)
 	}
 }
+
+// A body whose cached file cannot be linked is fetched whole, not taken for one that moved on.
+func TestABodyThatCannotBeLinkedIsFetchedWhole(t *testing.T) {
+	dir, state, srv, c := synced(t)
+	if err := os.Remove(filepath.Join(dir, rawOf(t, dir))); err != nil {
+		t.Fatal(err)
+	}
+	next := data("7", "a.example")
+	m := rows(next["dnsbl/manifest"].Body)
+	m[1] = `{"kind":"whitelist","domain":"other.example"}`
+	next["dnsbl/manifest"] = coretest.Resource{Generation: "8", Body: coretest.Lines(m)}
+	srv.Set(next)
+	if _, changed, err := coreinput.Sync(context.Background(), c, dir, state); err != nil || !changed {
+		t.Fatalf("Sync: changed %v, %v", changed, err)
+	}
+	if got := tree(t, dir)[rawOf(t, dir)]; got != "a.example\n" {
+		t.Errorf("the feed = %q", got)
+	}
+}
