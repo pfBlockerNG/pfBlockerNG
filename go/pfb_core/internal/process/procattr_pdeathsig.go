@@ -10,3 +10,7 @@ import "syscall"
 func procAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setpgid: true, Pdeathsig: coreDied}
 }
+
+// DieWithParent has the kernel KILL the command when the process that started it dies, so that it does not run on as an
+// orphan of a killed Core.
+func DieWithParent(a *syscall.SysProcAttr) { a.Pdeathsig = syscall.SIGKILL }

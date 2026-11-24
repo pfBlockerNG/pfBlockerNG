@@ -242,7 +242,8 @@ func (u *updater) hooks(ctx context.Context, when string, vars map[string]string
 		return
 	}
 	vars["TRIGGER"] = u.hookTrigger()
-	runner := hooks.Runner{Dir: u.loop.HookDir, Python: u.loop.PythonWrapper, Log: u.sinks.Log, Errors: u.errors, Transcript: u.sinks.Transcript}
+	runner := hooks.Runner{Dir: u.loop.HookDir, Python: u.loop.PythonWrapper, Log: u.sinks.Log, Errors: u.errors, Transcript: u.sinks.Transcript,
+		Hold: u.lock}
 	runner.Run(ctx, when, hooks.Rows(u.snap["hooks"]), hooks.Context{Lifecycle: u.req.Lifecycle, PkgOp: u.req.PkgOp, Vars: vars})
 }
 

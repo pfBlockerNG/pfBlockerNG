@@ -89,6 +89,9 @@ type Runner struct {
 	// as failed rather than cut short: a signal sent to the whole process group can end the hook before its handler has
 	// cancelled ctx. 0 waits not at all: only whether ctx has ended when the hook does counts.
 	SignalLag time.Duration
+	// Hold, when set, is a lock each hook's holder keeps until the hook's own process exits, so that a caller killed
+	// while a hook runs does not free it early; the hook and what it starts never get it (issue #4225).
+	Hold *os.File
 }
 
 // Run runs the enabled hooks of when (pre or post) among rows, one after another in list order, and returns when the
@@ -259,6 +262,14 @@ func (r Runner) exec(ctx context.Context, argv, env []string, timeout time.Durat
 		func(hook *os.File) {
 			start := func(argv []string) process.Outcome {
 				cmd := exec.Command(argv[0], argv[1:]...)
+				if r.Hold != nil {
+					self, err := os.Executable()
+					if err != nil {
+						return process.Outcome{CommandErr: err}
+					}
+					cmd = exec.Command(self, append([]string{holdArg}, argv...)...)
+					cmd.ExtraFiles = []*os.File{r.Hold}
+				}
 				cmd.Env, cmd.Stdout, cmd.Stderr = env, hook, hook
 				return process.RunSurvivor(ctx, cmd, r.grace())
 			}

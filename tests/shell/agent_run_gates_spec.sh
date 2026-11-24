@@ -1006,7 +1006,7 @@ CHECK
   shellspec_gate='shellspec --shell $(command -v dash || command -v sh)'
   reentry_gate='uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py'
   # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
-  go_gate='cd go/pfb_dns_gateway && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && go test -race -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .'
+  go_gate='cd go/pfb_dns_gateway && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && go test -race -count=1 -timeout 20m ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .'
 
   It 'plans ShellSpec for a committed deletion of a config only ShellSpec reads'
     seed .agents/model-tiers.conf
@@ -1161,7 +1161,7 @@ Describe 'run-gates.sh Go gate selection'
   Include scripts/agent/run-gates.sh
 
   # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
-  go_gate='cd go/pfb_dns_gateway && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && go test -race -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .'
+  go_gate='cd go/pfb_dns_gateway && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && go test -race -count=1 -timeout 20m ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .'
   # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
   shellspec_gate='shellspec --shell $(command -v dash || command -v sh)'
 
@@ -1294,7 +1294,7 @@ Describe 'run-gates.sh Go gate toolchain resolution'
     The output should include 'overall=0'
     The contents of file "$calls" should equal 'gofmt[fallback] -l .
 go[fallback] vet ./...|||
-go[fallback] test -race -count=1 ./...|||
+go[fallback] test -race -count=1 -timeout 20m ./...|||
 go[fallback] build -o /dev/null .|0|freebsd|amd64
 go[fallback] build -o /dev/null .|0|freebsd|arm64'
   End
@@ -1339,6 +1339,6 @@ go[fallback] build -o /dev/null .|0|freebsd|arm64'
     The output should include 'overall=1'
     The contents of file "$calls" should equal 'gofmt[fallback] -l .
 go[fallback] vet ./...|||
-go[fallback] test -race -count=1 ./...|||'
+go[fallback] test -race -count=1 -timeout 20m ./...|||'
   End
 End

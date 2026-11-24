@@ -317,3 +317,88 @@ def test_case_matches_todays_update(case: dict[str, Any], deployed_vm: SmokeVM, 
     assert "expect" in case, f"{case['id']}: no frozen expect (freeze it from {ACTUAL})"
     found = mismatches(case["expect"], records)
     assert found == [], f"{case['id']}: {len(found)} difference(s) against today's Update:\n" + "\n".join(found)
+
+
+# The native run (sub-slice 9j-2): one Update of a corpus case through the Core Updater loop on the box itself, a second
+# pfb-core started with --update-loop in a sandbox. The settings adapter answers the case's frozen snapshot, and the
+# apply is the replay's stand-in (go/pfb_core/update/e2e_replay_test.go): it records the version 2 request and reports
+# every resource and removal applied, so the box's pf tables and resolver stay untouched. On demand, like the capture.
+NATIVE_ENV = "PFB_SMOKE_UPDATE_LOOP_NATIVE"
+NATIVE = "/var/tmp/pfb_smoke_update_loop_native"
+CORE_BIN = "/usr/local/pkg/pfblockerng/core/bin/freebsd-$(uname -p | sed s/aarch64/arm64/)/pfb-core"
+STAND_IN_APPLY = r"""<?php
+$in = stream_get_contents(STDIN);
+file_put_contents(__DIR__ . '/requests', trim($in) . "\n", FILE_APPEND);
+$req = json_decode($in, TRUE);
+if (!is_array($req)) {
+	exit(2);
+}
+$applied = array();
+foreach ($req['resources'] ?? array() as $r) {
+	$applied[$r['id']] = $r['generation'];
+}
+$line = array('version' => 2, 'applied' => (object)$applied, 'removed' => $req['removed'] ?? array(),
+	'changedAliases' => array(), 'ipChanged' => FALSE, 'dnsblChanged' => FALSE, 'reloadLaunched' => FALSE,
+	'failed' => array());
+file_put_contents('php://fd/3', json_encode($line, JSON_UNESCAPED_SLASHES) . "\n");
+"""
+
+
+@pytest.mark.skipif(os.environ.get(NATIVE_ENV) != "1", reason=f"on-demand native loop run: set {NATIVE_ENV}=1")
+def test_the_loop_runs_one_update_natively(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    vm = deployed_vm
+    case = next(c for c in corpus()["cases"] if c["id"] == "both_first_run_then_unchanged_then_changed")
+    h.unblock_egress()
+    base = mock_feeds.feed_url("")
+    serve(mock_feeds, case["serve"])
+    serve(mock_feeds, case["steps"][0].get("serve", {}))
+    reply = json.dumps(case["expect"][0]["snapshot"]).replace(FEEDS_TOKEN, base.rstrip("/"))
+    db = f"{NATIVE}/db"
+    setup = vm.ssh(
+        f"rm -rf {NATIVE} && mkdir -p -m 700 {NATIVE}/state {NATIVE}/run {NATIVE}/store {NATIVE}/log "
+        f"{NATIVE}/geoip/cc && mkdir -p {db}/deny {db}/permit {db}/match/generated {db}/native {db}/original "
+        f"{db}/snapshot {db}/dnsbl {db}/dnsblorig {db}/ET && "
+        f"printf %s {shlex.quote(reply)} > {NATIVE}/reply.json && "
+        f"printf '#!/bin/sh\\ncat >/dev/null\\nexec cat {NATIVE}/reply.json\\n' > {NATIVE}/adapter.sh && "
+        f"cat > {NATIVE}/apply.php <<'EOF'\n{STAND_IN_APPLY}\nEOF\n"
+        f"printf '#!/bin/sh\\nexec /usr/local/bin/php {NATIVE}/apply.php\\n' > {NATIVE}/apply.sh && "
+        f"chmod 700 {NATIVE}/adapter.sh {NATIVE}/apply.sh",
+        timeout=60,
+    )
+    assert setup.returncode == 0, f"the sandbox was not made: {setup.stdout}{setup.stderr}"
+    api = f"{NATIVE}/run/api.sock"
+    command = (
+        f"{CORE_BIN} --socket {api} --state-dir {NATIVE}/state --settings-backend-cmd {NATIVE}/adapter.sh "
+        f"--update-cmd {NATIVE}/apply.sh --update-loop --resource-dir {NATIVE}/store --db-dir {db} "
+        f"--geoip-dir {NATIVE}/geoip --cc-dir {NATIVE}/geoip/cc --log-dir {NATIVE}/log "
+        f"--main-log {NATIVE}/log/pfblockerng.log --pkg-dir /usr/local/pkg/pfblockerng"
+    )
+    curl = f"/usr/local/bin/curl -s --unix-socket {api} -X POST -H 'Content-Type: application/json'"
+    with h.start_core(vm, command, api, f"{NATIVE}/core.log"):
+        start = vm.ssh(
+            f'{curl} -d \'{{"requestId":"native-1","trigger":"manual","scope":"both","force":"none"}}\' '
+            "http://localhost/v1/StartUpdate",
+            timeout=60,
+        )
+        assert start.returncode == 0 and start.stdout.strip() == "{}", f"StartUpdate: {start.stdout}{start.stderr}"
+        # Bounded on the box: GetUpdate until the Update has ended, at most 300 s.
+        done = vm.ssh(
+            f"i=0; while [ $i -lt 300 ]; do v=$({curl} -d '{{}}' http://localhost/v1/GetUpdate); "
+            'case "$v" in *\'"running":false\'*\'"finishedAt"\'*) echo "$v"; exit 0;; esac; '
+            'i=$((i+1)); sleep 1; done; echo "STUCK: $v"; exit 1',
+            timeout=360,
+        )
+        evidence = vm.ssh(
+            f"cat {NATIVE}/state/update.log; echo ==requests; cat {NATIVE}/requests; echo ==index; "
+            f"cat {NATIVE}/store/index.json; echo ==core; tail -n 20 {NATIVE}/core.log",
+            timeout=60,
+        ).stdout
+    h.DIAG_DIR.mkdir(parents=True, exist_ok=True)
+    (h.DIAG_DIR / "update_loop_native.txt").write_text(f"{done.stdout}\n{evidence}", encoding="utf-8")
+    assert done.returncode == 0, f"the Update did not end: {done.stdout}\n{evidence}"
+    view = json.loads(done.stdout)
+    assert view["update"]["result"] == "success", f"the native Update did not succeed: {view}\n{evidence}"
+    requests = [json.loads(line) for line in evidence.split("==requests\n", 1)[1].split("\n==index", 1)[0].splitlines()]
+    assert len(requests) == 1 and requests[0]["version"] == 2, f"the stand-in apply was not run once: {evidence}"
+    ids = {r["id"] for r in requests[0]["resources"]}
+    assert {"ip-set/E2EOneDeny/ipv4", "ip-set/E2EOneSix/ipv6"} <= ids and requests[0].get("dnsbl"), evidence
