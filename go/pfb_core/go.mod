@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/oschwald/maxminddb-golang/v2 v2.9.0
-	github.com/pfBlockerNG/xxh3 v1.1.1-pfblockerng.1
+	github.com/zeebo/xxh3 v1.1.1-0.20261118193009-e05079abbd7d
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb
 	golang.org/x/net v0.56.0
 )

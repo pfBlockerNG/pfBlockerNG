@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pfBlockerNG/xxh3"
+	"github.com/zeebo/xxh3"
 )
 
 // Resource is one body the server holds: its current generation and its bytes, each line ending in a newline.

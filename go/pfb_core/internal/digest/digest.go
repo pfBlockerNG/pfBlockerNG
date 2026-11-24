@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/pfBlockerNG/xxh3"
+	"github.com/zeebo/xxh3"
 )
 
 // The algorithms of a sidecar, named by the suffix of its file.

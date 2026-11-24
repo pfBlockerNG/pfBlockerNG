@@ -20,12 +20,13 @@ const coreModule = "github.com/pfBlockerNG/pfBlockerNG/go/pfb_core"
 
 // The owner-approved module list (.agents/policy/coding.md "Third-party libraries"): a library comes from a reputable
 // source or is a thoroughly reviewed pfBlockerNG fork, and joins this list only with the owner's approval of that library.
-// golang.org/x/net and x/text: the feed parser's UTS #46 conversion (#3906); x/sys: the xxh3 fork's CPU detection; all
-// three pinned in go.mod to the versions of go/pfb_dns_gateway. github.com/pfBlockerNG/xxh3: the xxh128 feed digest the
-// PHP side writes (#3925), vendored by Core itself. go4.org/netipx: IP set union and subtraction (#4033), vendored by
+// golang.org/x/net and x/text: the feed parser's UTS #46 conversion (#3906); x/sys: xxh3's CPU detection; all three
+// pinned in go.mod to the versions of go/pfb_dns_gateway. github.com/zeebo/xxh3: the xxh128 feed digest the PHP side
+// writes (#3925), upstream at a pinned commit since it took the fork's CPU-detection change (owner, 2026-11-24, #4036),
+// pinned to the version of go/pfb_dns_gateway, which checks Core's resource digests with it. go4.org/netipx: IP set union and subtraction (#4033), vendored by
 // Core itself at a pinned pseudo-version. github.com/oschwald/maxminddb-golang/v2: dMax's country lookup (#4038, owner
 // decision of 2026-11-23), pinned to the version of go/pfb_dns_gateway, the same reader pfB-DNS uses.
-var allowedModules = []string{"golang.org/x/net", "golang.org/x/sys", "golang.org/x/text", "github.com/pfBlockerNG/xxh3", "go4.org/netipx",
+var allowedModules = []string{"golang.org/x/net", "golang.org/x/sys", "golang.org/x/text", "github.com/zeebo/xxh3", "go4.org/netipx",
 	"github.com/oschwald/maxminddb-golang/v2"}
 
 func moduleAllowed(path string) bool {
@@ -172,7 +173,7 @@ func TestCoreImportsNothingPfSenseSpecificAndNamesNoPfSensePath(t *testing.T) {
 }
 
 // The rule on synthetic modules: the modules of allowedModules, in imports and in go.mod, are the only third-party code
-// Core may take; everything else, lookalikes, upstream xxh3 and other go4.org modules included, still fails.
+// Core may take; everything else, lookalikes, the retired xxh3 fork and other go4.org modules included, still fails.
 func TestBoundaryRuleAllowsOnlyTheNamedModules(t *testing.T) {
 	const idnImport = "import _ \"golang.org/x/net/idna\"\n"
 	cases := []struct {
@@ -187,14 +188,14 @@ func TestBoundaryRuleAllowsOnlyTheNamedModules(t *testing.T) {
 		{"other module in a require block", "module m\n\nrequire (\n\tgolang.org/x/net v0.56.0\n\tgithub.com/pires/go-proxyproto v0.15.0\n)\n", "", "go.mod: require github.com/pires/go-proxyproto"},
 		{"x/sys required", "module m\n\nrequire golang.org/x/sys v0.49.0 // indirect\n", "", ""},
 		{"x/sys imported", "module m\n", "import _ \"golang.org/x/sys/cpu\"\n", ""},
-		{"xxh3 fork import and require", "module m\n\nrequire github.com/pfBlockerNG/xxh3 v1.1.1-pfblockerng.1\n", "import _ \"github.com/pfBlockerNG/xxh3\"\n", ""},
+		{"xxh3 import and require", "module m\n\nrequire github.com/zeebo/xxh3 v1.1.1-0.20261118193009-e05079abbd7d\n", "import _ \"github.com/zeebo/xxh3\"\n", ""},
 		{"other golang.org/x module required", "module m\n\nrequire golang.org/x/crypto v0.1.0\n", "", "go.mod: require golang.org/x/crypto"},
-		{"upstream xxh3 required", "module m\n\nrequire github.com/zeebo/xxh3 v1.0.2\n", "", "go.mod: require github.com/zeebo/xxh3"},
-		{"lookalike of the xxh3 fork required", "module m\n\nrequire github.com/pfBlockerNG/xxh3x v1.0.0\n", "", "go.mod: require github.com/pfBlockerNG/xxh3x"},
+		{"the retired xxh3 fork required", "module m\n\nrequire github.com/pfBlockerNG/xxh3 v1.1.1-pfblockerng.1\n", "", "go.mod: require github.com/pfBlockerNG/xxh3"},
+		{"lookalike of xxh3 required", "module m\n\nrequire github.com/zeebo/xxh3x v1.0.0\n", "", "go.mod: require github.com/zeebo/xxh3x"},
 		{"other module imported", "module m\n", "import _ \"github.com/pires/go-proxyproto\"\n", "imports github.com/pires/go-proxyproto"},
 		{"other golang.org/x module imported", "module m\n", "import _ \"golang.org/x/crypto/ssh\"\n", "imports golang.org/x/crypto/ssh"},
-		{"upstream xxh3 imported", "module m\n", "import _ \"github.com/zeebo/xxh3\"\n", "imports github.com/zeebo/xxh3"},
-		{"lookalike of the xxh3 fork imported", "module m\n", "import _ \"github.com/pfBlockerNG/xxh3x\"\n", "imports github.com/pfBlockerNG/xxh3x"},
+		{"the retired xxh3 fork imported", "module m\n", "import _ \"github.com/pfBlockerNG/xxh3\"\n", "imports github.com/pfBlockerNG/xxh3"},
+		{"lookalike of xxh3 imported", "module m\n", "import _ \"github.com/zeebo/xxh3x\"\n", "imports github.com/zeebo/xxh3x"},
 		{"lookalike module path", "module m\n", "import _ \"golang.org/x/netx/idna\"\n", "imports golang.org/x/netx/idna"},
 		{"netipx import and require", "module m\n\nrequire go4.org/netipx v0.0.0-20260823151212-3075585bcbeb\n", "import _ \"go4.org/netipx\"\n", ""},
 		{"other go4.org module required", "module m\n\nrequire go4.org/mem v0.0.0-20240501181205-ae6ca9944745\n", "", "go.mod: require go4.org/mem"},

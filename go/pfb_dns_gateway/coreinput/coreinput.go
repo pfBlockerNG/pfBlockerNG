@@ -26,7 +26,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/pfBlockerNG/xxh3"
+	"github.com/zeebo/xxh3"
 )
 
 // Cursor is the generation and digest of a body, the strings GetResources gave.
