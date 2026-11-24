@@ -157,7 +157,6 @@ func (u *updater) run() error {
 		if s.run == nil {
 			continue
 		}
-		u.inheritLock(!slices.Contains(survivorStages, s.name))
 		if err := s.run(u); err != nil {
 			if !errors.Is(err, ErrDeferred) {
 				err = fmt.Errorf("%s failed: %s", s.name, output.OneLine(err.Error(), maxFailure))
@@ -168,26 +167,6 @@ func (u *updater) run() error {
 	}
 	boundary("end")
 	return nil
-}
-
-// survivorStages start children that may leave a service running, which must never hold the Update lock: the apply, whose
-// holder keeps the lock until the program itself exits (runNative), and the hooks.
-// ponytail: a hook's own process does not keep the lock, so a worker killed during a hook admits the next Update while the
-// hook still runs; run the hooks through the apply's holder if that matters.
-var survivorStages = []string{"pre-hook", "apply", "post-hook"}
-
-// inheritLock decides whether the children the worker starts from now on inherit the Update lock. One that inherits it
-// holds it until it exits, so that a killed worker does not admit the next Update while its rsync, pre-script or settings
-// adapter still runs (issue #4038).
-func (u *updater) inheritLock(on bool) {
-	if u.lock == nil {
-		return
-	}
-	flag := uintptr(syscall.FD_CLOEXEC)
-	if on {
-		flag = 0
-	}
-	_, _, _ = syscall.Syscall(syscall.SYS_FCNTL, u.lock.Fd(), syscall.F_SETFD, flag)
 }
 
 // snapshot reads the settings once, under the lifetime lock the worker holds, and keeps them with the pending token.

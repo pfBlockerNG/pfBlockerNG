@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/process"
 )
 
 // fetchRsync runs rsync (no rsync client exists in the standard library, and the protocol is far larger than this
@@ -38,6 +40,7 @@ func (f *Fetcher) fetchRsync(ctx context.Context, src *source, req Request, dst 
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", `ulimit -f "$1" || exit 1; shift; exec "$@"`, "sh",
 		strconv.FormatInt(limit/256, 10), f.RsyncBin, "--timeout=5", from, dst)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	process.DieWithParent(cmd.SysProcAttr) // a killed Core Updater leaves no rsync writing into the feed folder
 	var kill *time.Timer
 	cmd.Cancel = func() error {
 		pgid := -cmd.Process.Pid

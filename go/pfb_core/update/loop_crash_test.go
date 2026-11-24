@@ -248,7 +248,9 @@ func TestAKilledUpdateLeavesTheStoreWholeAndTheNextConverges(t *testing.T) {
 	}
 	var names []string
 	for _, s := range stages {
-		names = append(names, s.name)
+		if s.run != nil { // a stage with nothing to run has the same kill point as the boundary after it
+			names = append(names, s.name)
+		}
 	}
 	for _, at := range append(names, "end") {
 		t.Run(at, func(t *testing.T) {
