@@ -1745,10 +1745,11 @@
 					"header":	"Abuse_ThreatFox"
 				},
 				{
+					"status":	"discontinued",
 					"feed":		"The AntiSocial Engineer",
 					"website":	"https://theantisocialengineer.com/blacklist/",
 					"url":		"https://theantisocialengineer.com/AntiSocial_Blacklist_Community_V1.txt",
-					"info":		"Note: This feed is United Kingdom centric, and can cause False Positives for other Country users!",
+					"info":		"Discontinued: the publisher decommissioned this blocklist on 30 September 2025.",
 					"header":	"AntiSocial_UK_BD"
 				},
 				{
