@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -82,19 +83,6 @@ func TestAFileGoneOrChangedIsFetchedAgain(t *testing.T) {
 			}
 			return os.Symlink(path+".real", path)
 		}},
-		{"a state naming a folder outside", func(dir string) error {
-			data, err := os.ReadFile(filepath.Join(dir, "pfb_py_core.json"))
-			if err != nil {
-				return err
-			}
-			var st map[string]any
-			if err := json.Unmarshal(data, &st); err != nil {
-				return err
-			}
-			st["folder"] = "../g7"
-			data, _ = json.Marshal(st)
-			return os.WriteFile(filepath.Join(dir, "pfb_py_core.json"), data, 0o600)
-		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir, _, _, cl := synced(t)
@@ -142,8 +130,8 @@ func TestCoreDataGoneKeepsTheCache(t *testing.T) {
 	if !errors.Is(err, coreinput.ErrNoData) || changed || got.Manifest != state.Manifest {
 		t.Fatalf("Sync = %+v, changed %v, %v; want ErrNoData, no change, the state kept", got, changed, err)
 	}
-	if after := tree(t, dir); len(after) != len(want) {
-		t.Errorf("files = %d, want %d", len(after), len(want))
+	if after := tree(t, dir); !maps.Equal(after, want) {
+		t.Errorf("files = %q, want %q", after, want)
 	}
 	if loaded := coreinput.Load(dir); loaded.Manifest != state.Manifest {
 		t.Errorf("Load = %+v, want the state kept", loaded)

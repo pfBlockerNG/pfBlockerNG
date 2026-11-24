@@ -36,8 +36,6 @@ I3929 = ROOT / FIXTURES / "issue3929"
 PORTS_BEFORE_22 = I3987 / "ports-nightly-modules.txt"  # x/sys v0.49.0
 VENDOR_AT_3987 = I3987 / "go-mod-vendor-modules.txt"  # x/sys v0.50.0, == the recipe's modules.txt at #22
 MAKEFILE_AT_22 = I3987 / "ports-nightly-Makefile-at-22"  # x/sys v0.50.0 and the xxh3 tuple
-MAKEFILE_BEFORE_20 = I3929 / "ports-nightly-Makefile-before-20"  # no xxh3 tuple
-MODULES_BEFORE_20 = I3929 / "ports-nightly-modules.txt"  # the recipe's modules.txt then (== #20's)
 CORE_GO_MOD_AT_3929 = I3929 / "source/go/pfb_core/go.mod"  # requires xxh3 v1.1.1-pfblockerng.1
 FORK_TUPLE = "pfBlockerNG:xxh3:v1.1.1-pfblockerng.1:pfblockerng_xxh3/../go/pfb_core/vendor/github.com/pfBlockerNG/xxh3"
 NETIPX_TUPLE = "inetaf:netipx:3075585bcbeb:inetaf_netipx/../go/pfb_core/vendor/go4.org/netipx"
@@ -146,20 +144,24 @@ def test_the_3987_drift_fails_the_devel_pr_naming_the_ports_follow_up(tmp_path: 
         assert named in error, error
 
 
-def test_the_3929_core_drift_fails_the_devel_pr_naming_the_ports_follow_up(tmp_path: Path) -> None:
-    """Scenario: Core requires github.com/pfBlockerNG/xxh3 (#3929) while the recipe has no GH_TUPLE for it yet.
-    Given a gateway whose modules.txt matches the recipe (so only Core drifts),
-    Then the check fails naming the module (since #4036 as the retired fork) and the recipe Makefile change."""
+def test_a_core_own_module_drift_fails_the_devel_pr_naming_the_ports_follow_up(tmp_path: Path) -> None:
+    """Scenario: Core requires its own module go4.org/netipx while the recipe has no GH_TUPLE for it (the drift #3929
+    had with the xxh3 fork, which #4036 retired). Given a gateway whose modules.txt matches the recipe (so only Core
+    drifts), Then the check fails naming the module and the recipe Makefile change."""
+    drift = ROOT / FIXTURES / "core-own-drift"
     result, log, _tree = _run_check(
-        tmp_path, modules=MODULES_BEFORE_20, vendor=MODULES_BEFORE_20, makefile=MAKEFILE_BEFORE_20
+        tmp_path,
+        modules=drift / "ports-nightly-modules.txt",
+        vendor=drift / "ports-nightly-modules.txt",
+        makefile=drift / "ports-nightly-Makefile",
+        core_go_mod=drift / "source/go/pfb_core/go.mod",
     )
     out = result.stdout + result.stderr
     assert result.returncode != 0, out
     assert MAKEFILE_URL in log, log
     error = _one_error(out)
     for named in (
-        "github.com/pfBlockerNG/xxh3 v1.1.1-pfblockerng.1",
-        "the retired xxh3 fork",
+        "go.mod only: go4.org/netipx v0.0.0-20260823151212-3075585bcbeb",
         "pfBlockerNG/FreeBSD-ports",
         "pfblockerng/use-github",
         "net/pfSense-pkg-pfBlockerNG-nightly/Makefile",
@@ -214,20 +216,16 @@ def test_a_recipe_matching_devel_passes_and_compares_the_live_branch(tmp_path: P
     [
         ("issue3987/ports-nightly-modules.txt", "issue3987/go-mod-vendor-modules.txt"),
         ("issue3987/go-mod-vendor-modules.txt", "issue3987/ports-nightly-modules.txt"),
-        # since #4036 the #3929 canary fails on the retired fork itself: only dropping Core's go.mod neuters it
-        ("issue3929/source/go/pfb_core/go.mod", None),
+        ("core-own-drift/ports-nightly-Makefile", "core-own-drift/ports-nightly-Makefile-with-netipx"),
     ],
 )
 def test_a_red_canary_stops_the_job_when_its_drift_no_longer_fails(
-    tmp_path: Path, fixture: str, replacement: str | None
+    tmp_path: Path, fixture: str, replacement: str
 ) -> None:
     """Each in-job canary must refuse to grade the tree once its comparison cannot fail on its recorded drift."""
     neutered = tmp_path / "fixtures"
     shutil.copytree(ROOT / FIXTURES, neutered)
-    if replacement is None:
-        (neutered / fixture).unlink()
-    else:
-        shutil.copy(neutered / replacement, neutered / fixture)
+    shutil.copy(neutered / replacement, neutered / fixture)
     result, log, _tree = _run_check(tmp_path, modules=VENDOR_AT_3987, vendor=VENDOR_AT_3987, fixtures=neutered)
     out = result.stdout + result.stderr
     assert result.returncode != 0, out

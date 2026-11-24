@@ -872,13 +872,13 @@ CORE_PARITY_FAILURES = [
         core_go_mod(OWN),
         "GL_TUPLE entry",
     ),
-    # the xxh3 fork is retired (#4036): Core takes upstream github.com/zeebo/xxh3 from the gateway's vendor/
-    ("core-requires-the-retired-xxh3-fork", (), core_go_mod(XXH3_FORK), "the retired xxh3 fork"),
+    # the xxh3 fork is retired (#4036): Core takes upstream github.com/zeebo/xxh3 from the gateway's vendor/, so a
+    # fork tuple under Core's vendor/ is one no own module needs (build-pfb-dns.py refuses a Core requiring the fork)
     (
         "core-requires-the-retired-xxh3-fork-and-the-recipe-has-its-tuple",
         gh_tuples_for(XXH3_FORK, vendor=CORE_VENDOR),
         core_go_mod(XXH3_FORK),
-        "the retired xxh3 fork",
+        f"GH_TUPLE only: {XXH3_FORK[0]} {XXH3_FORK[1]}",
     ),
     (
         "retired-xxh3-fork-tuple-under-cores-vendor-dir",

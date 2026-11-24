@@ -65,17 +65,16 @@ jobs:
               "https://api.github.com/repos/pfBlockerNG/FreeBSD-ports/contents/net/pfSense-pkg-pfBlockerNG-nightly/$1?ref=pfblockerng/use-github"
           }
           fixtures=tests/fixtures/ports_modules_txt
-          # Red canaries: #3987's drift (recipe at x/sys v0.49.0, devel vendoring v0.50.0) and #3929's
-          # (Core requiring pfBlockerNG/xxh3 before the recipe had its tuple) must each fail. That fork is retired
-          # (#4036: Core takes upstream zeebo/xxh3 from the gateway), so the #3929 tree now fails on the fork itself;
-          # go4.org/netipx is Core's only own module.
+          # Red canaries: #3987's drift (recipe at x/sys v0.49.0, devel vendoring v0.50.0) and a Core-own module's
+          # (Core requiring go4.org/netipx while the recipe lacks its tuple, the drift #3929 had with the xxh3 fork
+          # that #4036 retired) must each fail.
           if check_modules_txt "$fixtures/issue3987/ports-nightly-modules.txt" "$fixtures/issue3987/go-mod-vendor-modules.txt" > /dev/null; then
             echo "::error::red canary: the #3987 modules.txt drift passed the check"
             exit 1
           fi
-          if python3 scripts/check_nightly_core_tuples.py "$fixtures/issue3929/ports-nightly-Makefile-before-20" \
-            "$fixtures/issue3929/ports-nightly-modules.txt" "$fixtures/issue3929/source" > /dev/null; then
-            echo "::error::red canary: the #3929 pfb_core tuple drift passed the check"
+          if python3 scripts/check_nightly_core_tuples.py "$fixtures/core-own-drift/ports-nightly-Makefile" \
+            "$fixtures/core-own-drift/ports-nightly-modules.txt" "$fixtures/core-own-drift/source" > /dev/null; then
+            echo "::error::red canary: the pfb_core own-module tuple drift passed the check"
             exit 1
           fi
           work="$(mktemp -d)"

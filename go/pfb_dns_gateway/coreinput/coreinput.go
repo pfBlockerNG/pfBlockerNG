@@ -564,7 +564,7 @@ func removeFile(path string) error {
 // safeSearchCSV is dnsbl/safesearch as pfb_py_ss.txt: one row per host, host,a,aaaa and v4,v6 when Core gives them, unquoted
 // as PHP writes the file (loadSafesearchDb relies on that), so a value that would need quoting is refused.
 func safeSearchCSV(body []byte) ([]byte, error) {
-	out := bytes.NewBuffer([]byte{})
+	var out bytes.Buffer
 	for _, line := range strings.SplitAfter(string(body), "\n") {
 		if line == "" {
 			continue
