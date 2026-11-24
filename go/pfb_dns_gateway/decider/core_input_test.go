@@ -163,6 +163,14 @@ func TestDnsblBuildFromCoreMatchesTheFileInput(t *testing.T) {
 			if m.pfb.pfbPyPsl != "" {
 				m.pfb.pfbPyPsl = filepath.Join(coreDir, "dnsbl_psl")
 			}
+			// The regex cap is a setting: a manifest's config.regex_cap (today's writer puts it in the ini only) reaches the
+			// Core input as the ini setting it overrides.
+			if manifest, _ := row.Manifest.(map[string]any); manifest != nil {
+				config, _ := manifest["config"].(map[string]any)
+				if regexCap, ok := config["regex_cap"].(bool); ok {
+					m.pfb.regexCap = regexCap
+				}
+			}
 			got := m.dnsblBuildFromManifest(filepath.Join(coreDir, "pfb_py_sources.json"))
 			if got == nil {
 				t.Fatalf("the Core input builds nothing; ledger %q", bldLedger(t, coreDir))

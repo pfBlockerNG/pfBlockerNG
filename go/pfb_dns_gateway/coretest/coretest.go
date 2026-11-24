@@ -44,9 +44,8 @@ type Server struct {
 
 	mu        sync.Mutex
 	resources map[string]Resource
-	// Body, when set, replaces the reply to a GetResourceBody of id: a test's hostile body.
-	Body  func(id string, w http.ResponseWriter) bool
-	calls []string
+	body      func(id string, w http.ResponseWriter) bool
+	calls     []string
 }
 
 // Start serves resources on a socket in a fresh short directory until the test ends.
@@ -75,6 +74,13 @@ func (s *Server) Set(resources map[string]Resource) {
 	s.resources = resources
 }
 
+// SetBody has reply answer a GetResourceBody first, a test's hostile body: when it reports true it has answered.
+func (s *Server) SetBody(reply func(id string, w http.ResponseWriter) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.body = reply
+}
+
 // Calls is every call served so far, "<method> <id>" each.
 func (s *Server) Calls() []string {
 	s.mu.Lock()
@@ -90,7 +96,7 @@ func fail(w http.ResponseWriter, status int, code string) {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	resources := s.resources
+	resources, body := s.resources, s.body
 	s.mu.Unlock()
 	switch r.URL.Path {
 	case "/v1/GetResources":
@@ -124,7 +130,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.record("GetResourceBody " + req.ID)
-		if s.Body != nil && s.Body(req.ID, w) {
+		if body != nil && body(req.ID, w) {
 			return
 		}
 		res, ok := resources[req.ID]
