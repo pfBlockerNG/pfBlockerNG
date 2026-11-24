@@ -73,4 +73,16 @@ final class FeedsDiscontinuedTest extends TestCase
 		$this->assertSame('discontinued', $cct['status'] ?? NULL);
 		$this->assertSame('https://cybercrime-tracker.net/csv.php', $cct['url'] ?? NULL);
 	}
+
+	// The AntiSocial Engineer blocklist was decommissioned upstream on 2025-09-30; its URL now 404s (#4230).
+	public function testAntiSocialFeedIsDiscontinued(): void
+	{
+		$matches = array_values(array_filter(
+			$this->loadFeeds()['dnsbl']['Malicious2']['feeds'],
+			static fn (array $feed): bool => ($feed['header'] ?? '') === 'AntiSocial_UK_BD'
+		));
+
+		$this->assertCount(1, $matches, 'AntiSocial_UK_BD must remain in dnsbl/Malicious2 (flagged, not deleted)');
+		$this->assertSame('discontinued', $matches[0]['status'] ?? NULL, 'AntiSocial_UK_BD must be marked discontinued (#4230)');
+	}
 }
