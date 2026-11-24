@@ -1418,9 +1418,9 @@ a replay memory of its own.*
   directory once `pfb_core` is stopped (`pfb_core_state_teardown()`).
 - **Paths.** Core reads every path from a flag (`--resource-dir`, `--feed-local-dir`, `--script-dir` and `--rsync-bin` must be absolute: a relative one is a usage error; the rc script passes `--resource-dir`, but with the switch off nothing publishes into the store, so `GetResources` answers `not_found` on pfSense for now). It names no pfSense path and imports nothing but the standard library, its
   own packages, `golang.org/x/net` and `golang.org/x/text` (the feed parser's UTS #46 conversion), `golang.org/x/sys` (CPU
-  feature detection for xxh128), all pinned in `go.mod` to the versions of `go/pfb_dns_gateway`, and
-  `github.com/pfBlockerNG/xxh3` (the feed content digest, xxh128 as PHP writes it; the pfBlockerNG fork of `zeebo/xxh3`,
-  #3925). `go/pfb_core/boundary_test.go` enforces this, build-constrained files included, and fails on a violation. The CI Go gate (`test.yml` `go-quality`, `scripts/agent/run-gates.sh`) runs it.
+  feature detection for xxh128) and `github.com/zeebo/xxh3` (the feed content digest, xxh128 as PHP writes it; upstream
+  pinned to a commit, which replaced the pfBlockerNG fork of #3925, #4036), all pinned in `go.mod` to the versions of
+  `go/pfb_dns_gateway`. `go/pfb_core/boundary_test.go` enforces this, build-constrained files included, and fails on a violation. The CI Go gate (`test.yml` `go-quality`, `scripts/agent/run-gates.sh`) runs it.
 
 Log lines (stderr): `serving API v1 on <socket> for uid <uid>, clients [<uids>]` once it listens; `refused a caller of uid
 <uid>: ...` per refused request; `<Method> failed: ...` for an internal error; `stopped` after a clean stop.

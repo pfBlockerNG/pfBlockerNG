@@ -30,12 +30,12 @@
 # "size", "freebsd_abi_note"}, ...}, "pfb_core": the same per target for pfb-core, {} for a tree without
 # go/pfb_core, "pfb_crowdsec": the same for pfb_crowdsec}. go/pfb_crowdsec is standard library only: a go.mod with any
 # `require` or `replace`, or a vendor/ there, exits 1 before anything is built, and it is built in place.
-# --modules-txt and --vendored concern the gateway. Core may require golang.org/x/net, x/sys, x/text and
-# github.com/oschwald/maxminddb-golang/v2 (the dMax country lookup, #4038),
-# at the versions the gateway's go.mod requires, and github.com/pfBlockerNG/xxh3 and go4.org/netipx (which the gateway
-# does not carry) at any version, and nothing else: it is built from a scratch copy of its module whose vendor/ is cut
-# from the gateway's (those modules' packages and licenses, and their vendor/modules.txt sections) plus each own
-# module's root package, from `go mod download` (go.sum verifies it) or, with --vendored, from
+# --modules-txt and --vendored concern the gateway. Core may require golang.org/x/net, x/sys, x/text,
+# github.com/oschwald/maxminddb-golang/v2 (the dMax country lookup, #4038) and github.com/zeebo/xxh3 (the feed content
+# digest, #4036) at the versions the gateway's go.mod requires, and go4.org/netipx (which the gateway does not carry)
+# at any version, and nothing else: it is built from a scratch copy of its module whose vendor/ is cut from the
+# gateway's (those modules' packages and licenses, and their vendor/modules.txt sections) plus the own module's
+# root package, from `go mod download` (go.sum verifies it) or, with --vendored, from
 # go/pfb_core/vendor/<module> (a ports recipe's GH_TUPLE extraction), the only things a Core vendor/ may then hold.
 # Any other `require`, a `replace`, or any other vendor/ of Core's own exits 1, as does a package Core imports that
 # the vendor trees lack. Everything else goes to stderr.
@@ -76,10 +76,17 @@ CORE_MODULE = Path("go") / "pfb_core"
 CORE_BINARY = "pfb-core"
 # Core's allowed dependencies, at the versions the gateway's go.mod requires: the ports recipe's vendor tree is the
 # gateway's, so Core's vendor/ is cut from it.
-CORE_MODULES = ("golang.org/x/net", "golang.org/x/sys", "golang.org/x/text", "github.com/oschwald/maxminddb-golang/v2")
-# Modules Core vendors itself, at any version, because the gateway does not carry them: the xxh3 fork (issue #3925)
-# and go4.org/netipx (issue #4033).
-CORE_OWN_MODULES = ("github.com/pfBlockerNG/xxh3", "go4.org/netipx")
+# Upstream github.com/zeebo/xxh3 (pinned to a commit, issue #4036) replaced the pfBlockerNG fork (issue #3925), which
+# Core vendored itself; the gateway uses xxh3 too, so Core now takes it at the gateway's version.
+CORE_MODULES = (
+    "golang.org/x/net",
+    "golang.org/x/sys",
+    "golang.org/x/text",
+    "github.com/oschwald/maxminddb-golang/v2",
+    "github.com/zeebo/xxh3",
+)
+# Modules Core vendors itself, at any version, because the gateway does not carry them: go4.org/netipx (issue #4033).
+CORE_OWN_MODULES = ("go4.org/netipx",)
 # The CrowdSec bouncer (issue #4069): standard library only, so it is built in place with nothing to vendor.
 CROWDSEC_MODULE = Path("go") / "pfb_crowdsec"
 CROWDSEC_BINARY = "pfb_crowdsec"
