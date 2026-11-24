@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,13 +43,16 @@ func Digest(body []byte) string {
 type Cursor struct{ Generation, Digest string }
 
 // Server answers GetResources and GetResourceBody from Resources, and records each ReportApplied; every other method is
-// not_found.
+// not_found. Like Core's store it keeps one baseline per resource besides the current body, the body Set replaced, and
+// answers a cursor at the baseline with the delta from it.
 type Server struct {
 	Socket string
 
 	mu        sync.Mutex
 	resources map[string]Resource
+	baselines map[string]Resource
 	body      func(id string, w http.ResponseWriter) bool
+	part      func(id, part string, w http.ResponseWriter) bool
 	calls     []string
 	applied   []map[string]Cursor
 }
@@ -72,11 +76,55 @@ func Start(t testing.TB, resources map[string]Resource) *Server {
 	return s
 }
 
-// Set replaces the resources served.
+// Set replaces the resources served; a body it replaces becomes that resource's baseline.
 func (s *Server) Set(resources map[string]Resource) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.resources = resources
+	baselines := map[string]Resource{}
+	for id, r := range resources {
+		if old, ok := s.resources[id]; ok && old.Generation != r.Generation {
+			baselines[id] = old
+		} else if old, ok := s.baselines[id]; ok {
+			baselines[id] = old
+		}
+	}
+	s.resources, s.baselines = resources, baselines
+}
+
+// SetPart has reply answer a GetResourceBody for a delta part ("add" or "remove") first, a test's hostile part: when it
+// reports true it has answered.
+func (s *Server) SetPart(reply func(id, part string, w http.ResponseWriter) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.part = reply
+}
+
+// delta is what turns base into cur: the lines cur has that base has not, and those base has that cur has not, each in
+// byte order.
+func delta(base, cur []byte) (add, remove []string) {
+	in := func(body []byte) map[string]bool {
+		set := map[string]bool{}
+		for _, line := range strings.Split(strings.TrimSuffix(string(body), "\n"), "\n") {
+			if line != "" {
+				set[line] = true
+			}
+		}
+		return set
+	}
+	b, c := in(base), in(cur)
+	for line := range c {
+		if !b[line] {
+			add = append(add, line)
+		}
+	}
+	for line := range b {
+		if !c[line] {
+			remove = append(remove, line)
+		}
+	}
+	slices.Sort(add)
+	slices.Sort(remove)
+	return add, remove
 }
 
 // SetBody has reply answer a GetResourceBody first, a test's hostile body: when it reports true it has answered.
@@ -108,7 +156,7 @@ func fail(w http.ResponseWriter, status int, code string) {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	resources, body := s.resources, s.body
+	resources, baselines, body, part := s.resources, s.baselines, s.body, s.part
 	s.mu.Unlock()
 	switch r.URL.Path {
 	case "/v1/GetResources":
@@ -129,6 +177,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				items[id] = map[string]any{"error": map[string]string{"code": "not_found", "message": "not found"}}
 			case cur.Generation == res.Generation && cur.Digest == digest:
 				items[id] = map[string]any{"kind": "unchanged", "generation": res.Generation}
+			case cur.Generation == baselines[id].Generation && cur.Digest == Digest(baselines[id].Body):
+				add, remove := delta(baselines[id].Body, res.Body)
+				items[id] = map[string]any{"kind": "delta", "generation": res.Generation, "from": cur.Generation, "digest": digest,
+					"entries": strings.Count(string(res.Body), "\n"), "addEntries": len(add), "removeEntries": len(remove),
+					"metadata": map[string]any{}}
 			default:
 				items[id] = map[string]any{"kind": "full", "generation": res.Generation, "digest": digest,
 					"entries": strings.Count(string(res.Body), "\n"), "metadata": map[string]any{}}
@@ -137,12 +190,30 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"resources": items})
 	case "/v1/GetResourceBody":
-		var req struct{ ID, Generation, Part string }
-		if json.NewDecoder(r.Body).Decode(&req) != nil || req.Part != "members" {
+		var req struct{ ID, Generation, Part, From string }
+		if json.NewDecoder(r.Body).Decode(&req) != nil || req.Part != "members" && req.Part != "add" && req.Part != "remove" {
 			fail(w, 400, "invalid_argument")
 			return
 		}
-		s.record("GetResourceBody " + req.ID)
+		s.record("GetResourceBody " + req.ID + " " + req.Part)
+		if req.Part != "members" {
+			if part != nil && part(req.ID, req.Part, w) {
+				return
+			}
+			res, base := resources[req.ID], baselines[req.ID]
+			if res.Generation != req.Generation || base.Generation == "" || base.Generation != req.From {
+				fail(w, 404, "not_found")
+				return
+			}
+			add, remove := delta(base.Body, res.Body)
+			lines := Lines(add)
+			if req.Part == "remove" {
+				lines = Lines(remove)
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Write(lines)
+			return
+		}
 		if body != nil && body(req.ID, w) {
 			return
 		}
