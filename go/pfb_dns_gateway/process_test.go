@@ -295,6 +295,29 @@ func TestStartBootsTheDeciderWithTheModeFlagsItWasGiven(t *testing.T) {
 	}
 }
 
+// issue #4036: --core-socket boots the decider on the Core input, from the Core API listening there.
+func TestStartBootsTheDeciderOnTheCoreSocketItWasGiven(t *testing.T) {
+	cfg, err := parse(t, "--core-socket", "/var/run/pfb_core/api.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.coreSocket != "/var/run/pfb_core/api.sock" {
+		t.Fatalf("--core-socket gave %q", cfg.coreSocket)
+	}
+	lifecycle, logs := lifecycleConfig(t)
+	var got decider.Options
+	lifecycle.open = func(opts decider.Options) (frontend, error) { got = opts; return echoFrontend{}, nil }
+	lifecycle.coreSocket = cfg.coreSocket
+	srv, err := start(lifecycle, logs.logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.shutdown()
+	if got.CoreSocket != "/var/run/pfb_core/api.sock" {
+		t.Fatalf("the decider was booted with %+v, want the Core socket", got)
+	}
+}
+
 // G18: no address binds -> exit 1, and the decider is never booted.
 func TestGatewayExitsWhenNoListenAddressBinds(t *testing.T) {
 	gw := startGatewayProcess(t, []string{"--listen", "192.0.2.1", "--listen", "192.0.2.2", "--port", "0"})

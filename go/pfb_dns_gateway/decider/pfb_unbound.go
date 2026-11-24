@@ -174,6 +174,8 @@ type pfbUnbound struct {
 	reloadTick    func() (tick <-chan time.Time, stop func())
 	reloadBuilder func() (*snapshot, error)
 	totalRAM      func() (uint64, bool)
+	// core is the Core input (bootCore): nil on the file input.
+	core *coreFeed
 
 	// logs is the log writer (pfb["log_listener"]), nil when none runs: rows are then appended directly. logDir is the
 	// directory it writes. logSink, when set, takes every row instead (Python's tests replace pfb_log).
@@ -284,7 +286,16 @@ func mainOptionError(option string, err error) error {
 // initStandard builds the module from the ini and the files in moduleDir. An error is what makes init_standard
 // raise in Python: a MAIN value that is no boolean, or an interpolation error in a value that is read.
 func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err error) {
-	m := &pfbUnbound{regexRuntime: newRegexRuntime(), readFile: os.ReadFile, logDir: logDir}
+	return initStandardWith(id, moduleDir, logDir, nil)
+}
+
+// initStandardWith is initStandard on the Core input when core is not nil: the DNSBL files are built from only when the
+// cache is trusted, and core's poller replaces the reload watcher.
+func initStandardWith(id int, moduleDir, logDir string, core *coreFeed) (module *pfbUnbound, err error) {
+	m := &pfbUnbound{regexRuntime: newRegexRuntime(), readFile: os.ReadFile, logDir: logDir, core: core}
+	if core != nil {
+		core.m = m
+	}
 	m.redirectStderr() // sys.stderr is py_error.log from here on, as in init_standard
 	defer func() {
 		if err != nil {
@@ -527,15 +538,27 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 			// Collect user-defined Group Policy Global Bypass List
 			m.loadGpBypassList(config, scratch)
 
-			// Collect SafeSearch Redirection list
-			m.loadSafesearchDb(scratch.safeSearchDB)
+			// Collect SafeSearch Redirection list; on the Core input, only from a cache Load trusts.
+			if core == nil || core.trusted() {
+				m.loadSafesearchDb(scratch.safeSearchDB)
+			}
 
 			// ADR-65: the manifest is the SOLE DNSBL source: an absent, unparseable or unbuildable manifest leaves the
 			// dicts EMPTY (no fallback); the ledger entry the build opens, and snapshot.dnsblUnbuilt, signal the failure instead.
-			build, unbuilt := m.dnsblBuildFromManifestWhy(pfb.pfbPySources)
+			var build *buildResult
+			unbuilt := "No DNSBL data from Core yet -- DNSBL not loaded"
+			if core == nil || core.trusted() {
+				build, unbuilt = m.dnsblBuildFromManifestWhy(pfb.pfbPySources)
+			}
 			if build == nil {
 				scratch.dnsblUnbuilt = unbuilt
+				if core != nil {
+					core.refetch()
+				}
 			} else {
+				if core != nil {
+					core.served = core.disk.Resources
+				}
 				scratch.dataDB = build.dataDB
 				scratch.zoneDB = build.zoneDB
 				scratch.feedGroupIndexDB = build.feedGroupIndexDB
@@ -771,10 +794,17 @@ func pyListRepr(row []string) string {
 // padded fields) reads alike. PHP writes the file as one unquoted row per domain, so neither difference can occur;
 // upgrade to a port of the excel dialect if the file ever has another writer.
 func (m *pfbUnbound) loadSafesearchDb(safeSearchDB map[string]safeSearchEntry) {
+	if m.readSafesearch(safeSearchDB) {
+		m.pfb.safeSearchDB = true
+	}
+}
+
+// readSafesearch is loadSafesearchDb without setting the module's switch: whether the file was read.
+func (m *pfbUnbound) readSafesearch(safeSearchDB map[string]safeSearchEntry) bool {
 	pfb := &m.pfb
 	if !isFile(pfb.pfbPySs) {
 		m.pfbPyStatusClose("dnsbl", pfb.pfbPySs, "parse")
-		return
+		return false
 	}
 	data, err := m.readFile(pfb.pfbPySs)
 	if err == nil {
@@ -804,10 +834,10 @@ func (m *pfbUnbound) loadSafesearchDb(safeSearchDB map[string]safeSearchEntry) {
 		failure := fmt.Sprintf("Failed to load: %s: %v", pfb.pfbPySs, err)
 		pyStderr("[pfBlockerNG]: " + failure)
 		m.pfbPyStatusOpen("dnsbl", pfb.pfbPySs, "parse", failure)
-		return
+		return false
 	}
-	pfb.safeSearchDB = true
 	m.pfbPyStatusClose("dnsbl", pfb.pfbPySs, "parse")
+	return true
 }
 
 // safesearchEntry looks up, and memoizes on the Decision, the SafeSearch entry for a name: the matched entry, or
@@ -1087,8 +1117,15 @@ func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emi
 	next.settings = &settings
 	if next.carryRuntime {
 		if live := m.snapshot.Load(); live != nil {
+			safeSearch := next.safeSearchDB
 			next.noAAAADB, next.safeSearchDB, next.gpListDB, next.gpNetDB = live.noAAAADB, live.safeSearchDB, live.gpListDB, live.gpNetDB
+			if next.freshSafeSearch {
+				next.safeSearchDB = safeSearch
+			}
 		}
+	}
+	if next.freshSafeSearch {
+		settings.safeSearchDB = next.safeSearchDB != nil
 	}
 
 	m.snapshot.Store(next)

@@ -9,8 +9,10 @@
 package coreinput
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,6 +26,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"unicode"
 
 	"github.com/zeebo/xxh3"
@@ -38,9 +41,13 @@ type Cursor struct {
 // State is what the module directory holds from Core: the manifest's cursor, and every dnsbl/* body it serves (the
 // manifest included), as ReportApplied takes them.
 type State struct {
+	Version   int               `json:"version"` // stateVersion; a state of another version is not trusted
 	Manifest  Cursor            `json:"manifest"`
 	Resources map[string]Cursor `json:"resources"`
 	Folder    string            `json:"folder"` // the folder of pfb_py_raw that holds the feeds
+	// Files is the digest of each file Sync writes in a shape of its own (SafeSearch, PSL, the manifest), which no
+	// digest of Core's describes.
+	Files map[string]string `json:"files,omitempty"`
 }
 
 var (
@@ -60,6 +67,8 @@ const (
 	maxMember = 1 << 20 // the longest member a body may hold (docs/misc/core-api-protocol.md "Body and digest")
 	rawDir    = "pfb_py_raw"
 	stateFile = "pfb_py_core.json"
+
+	stateVersion = 1
 )
 
 // Client calls the Core API on its Unix socket.
@@ -106,13 +115,30 @@ func (c *Client) post(ctx context.Context, method string, req any) (*http.Respon
 	return nil, fmt.Errorf("%s: %w", method, env.Error)
 }
 
+// ReportApplied tells Core the dnsbl/* resources pfB-DNS serves, each at the cursor of the body it applied: Core makes
+// them the applied baseline. A report replaces the last one whole; nil reports that it serves none.
+func (c *Client) ReportApplied(ctx context.Context, served map[string]Cursor) error {
+	if served == nil {
+		served = map[string]Cursor{}
+	}
+	resp, err := c.post(ctx, "ReportApplied", map[string]any{"requestId": rand.Text(), "resources": served})
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}
+
 // item is a GetResources item.
 type item struct {
-	Kind       string    `json:"kind"`
-	Generation string    `json:"generation"`
-	Digest     string    `json:"digest"`
-	Entries    int       `json:"entries"`
-	Error      *APIError `json:"error"`
+	Kind       string `json:"kind"`
+	Generation string `json:"generation"`
+	Digest     string `json:"digest"`
+	Entries    int    `json:"entries"`
+	// From, AddEntries and RemoveEntries describe a delta: the cursor's generation, and the line counts of its parts.
+	From          string    `json:"from"`
+	AddEntries    int       `json:"addEntries"`
+	RemoveEntries int       `json:"removeEntries"`
+	Error         *APIError `json:"error"`
 }
 
 func (c *Client) resource(ctx context.Context, id string, cur Cursor) (item, error) {
@@ -183,36 +209,61 @@ func cursorOK(c Cursor) bool {
 	return len(c.Digest) == 32 && strings.Trim(c.Digest, "0123456789abcdef") == ""
 }
 
-// Load is the State the last Sync left in dir, once every file it wrote is still there and each body written as Core sent
-// it (the feeds, TOP1M) still has its digest; the zero State otherwise, so that the next Sync fetches everything.
+// Load is the State the last Sync left in dir, once every file it wrote is still there, is pfB-DNS's own (a regular file
+// of this user that no other user may write), and each body written as Core sent it (the feeds, TOP1M) still has its
+// digest; the zero State otherwise, so that the next Sync fetches everything.
 func Load(dir string) State {
 	var s State
-	data, err := os.ReadFile(filepath.Join(dir, stateFile))
-	if err != nil || json.Unmarshal(data, &s) != nil || !cursorOK(s.Manifest) {
+	sources := filepath.Join(dir, "pfb_py_sources.json")
+	if !own(filepath.Join(dir, stateFile)) || !own(sources) {
 		return State{}
 	}
-	if info, err := os.Lstat(filepath.Join(dir, "pfb_py_sources.json")); err != nil || !info.Mode().IsRegular() {
+	data, err := os.ReadFile(filepath.Join(dir, stateFile))
+	if err != nil || json.Unmarshal(data, &s) != nil || s.Version != stateVersion || !cursorOK(s.Manifest) {
+		return State{}
+	}
+	if digest, err := fileDigest(sources); err != nil || digest != s.Files["pfb_py_sources.json"] {
 		return State{}
 	}
 	for id, cur := range s.Resources {
 		if id == manifestID {
 			continue
 		}
-		path := memberFile[id]
-		if strings.HasPrefix(id, feedPrefix) {
-			path = filepath.Join(rawDir, s.Folder, rawName(id))
-		}
-		info, err := os.Lstat(filepath.Join(dir, path))
-		if path == "" || err != nil || !info.Mode().IsRegular() {
+		path := cachedPath(dir, s, id)
+		if path == "" || !own(path) {
 			return State{}
 		}
-		if id != ssID && id != pslID {
-			if digest, err := fileDigest(filepath.Join(dir, path)); err != nil || digest != cur.Digest {
-				return State{}
-			}
+		want := cur.Digest
+		if id == ssID || id == pslID {
+			want = s.Files[memberFile[id]]
+		}
+		if digest, err := fileDigest(path); err != nil || digest != want {
+			return State{}
 		}
 	}
 	return s
+}
+
+// cachedPath is where s keeps the body of id in dir; "" for an id it cannot keep.
+func cachedPath(dir string, s State, id string) string {
+	if strings.HasPrefix(id, feedPrefix) {
+		return filepath.Join(dir, rawDir, s.Folder, rawName(id))
+	}
+	if memberFile[id] == "" {
+		return ""
+	}
+	return filepath.Join(dir, memberFile[id])
+}
+
+// own is whether path is a regular file of this user that neither its group nor others may write: a symbolic link is not
+// followed.
+func own(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int(st.Uid) == os.Geteuid()
 }
 
 // row is one manifest row, every kind's fields together.
@@ -369,18 +420,24 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 			os.RemoveAll(folder)
 		}
 	}()
-	state := State{Manifest: cur, Resources: map[string]Cursor{manifestID: cur}, Folder: filepath.Base(folder)}
+	state := State{Version: stateVersion, Manifest: cur, Resources: map[string]Cursor{manifestID: cur}, Folder: filepath.Base(folder),
+		Files: map[string]string{}}
 	files := map[string][]byte{} // the SafeSearch and PSL files this generation has, empty ones included
-	// ponytail: every body is fetched again whenever the manifest moves; link an unchanged one from the last folder if the
-	// transfer of a large DNSBL set on each Update matters.
+	kept := map[string]bool{}    // the SafeSearch and PSL files that stay as they are
 	for _, id := range slices.Sorted(maps.Keys(m.bodies)) {
 		r := m.bodies[id]
 		at := Cursor{r.Generation, r.Digest}
 		state.Resources[id] = at
+		have := prev.Resources[id]
 		if id != ssID && id != pslID {
-			if err := fetchFile(ctx, c, id, at, r.Entries, filepath.Join(folder, rawName(id))); err != nil {
+			if err := fetchBody(ctx, c, id, at, r.Entries, have, cachedPath(dir, prev, id), filepath.Join(folder, rawName(id))); err != nil {
 				return prev, false, err
 			}
+			continue
+		}
+		if have == at {
+			kept[memberFile[id]] = true
+			state.Files[memberFile[id]] = prev.Files[memberFile[id]]
 			continue
 		}
 		var b bytes.Buffer
@@ -395,6 +452,7 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 		if err != nil {
 			return prev, false, err
 		}
+		state.Files[memberFile[id]] = digestOf(files[memberFile[id]])
 	}
 	feeds := []map[string]any{}
 	for _, f := range m.feeds {
@@ -405,6 +463,7 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 	if err != nil {
 		return prev, false, err
 	}
+	state.Files["pfb_py_sources.json"] = digestOf(doc)
 	st, err := json.Marshal(state)
 	if err != nil {
 		return prev, false, err
@@ -426,6 +485,7 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 	top1m := filepath.Join(dir, memberFile[top1mID])
 	if _, ok := m.bodies[top1mID]; ok {
 		err = os.Rename(filepath.Join(folder, rawName(top1mID)), top1m)
+		os.Remove(filepath.Join(folder, rawName(top1mID))) // left by a rename onto the link it came from, or by a failed one
 	} else {
 		err = removeFile(top1m)
 	}
@@ -433,6 +493,9 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 		return fail(err)
 	}
 	for _, name := range []string{memberFile[ssID], memberFile[pslID]} {
+		if kept[name] {
+			continue
+		}
 		if body, ok := files[name]; ok {
 			err = writeFile(filepath.Join(dir, name), body)
 		} else {
@@ -489,6 +552,127 @@ func manifestFolder(dir string) string {
 	return ""
 }
 
+// errDelta is a delta that does not turn the cached body into the current one: the full body is fetched instead.
+var errDelta = errors.New("the delta does not apply")
+
+// fetchBody writes the body of id at want to a new file at path, from the body at have cached at cached: linked when it is
+// the same body, merged with Core's delta from have when Core holds one that applies, fetched whole otherwise. have is a
+// body the last Sync wrote and Load trusts, never one changed since.
+func fetchBody(ctx context.Context, c *Client, id string, want Cursor, entries int, have Cursor, cached, path string) error {
+	if have == want {
+		if os.Link(cached, path) == nil {
+			return nil
+		}
+	} else if have != (Cursor{}) && cached != "" {
+		it, err := c.resource(ctx, id, have)
+		switch {
+		case errors.Is(err, ErrNoData):
+			return ErrMoved
+		case err != nil:
+			return err
+		case Cursor{it.Generation, it.Digest} != want:
+			return ErrMoved
+		case it.Kind == "delta" && it.From == have.Generation:
+			err := merge(ctx, c, id, it, cached, path)
+			if !errors.Is(err, errDelta) {
+				return err
+			}
+			os.Remove(path)
+		}
+	}
+	return fetchFile(ctx, c, id, want, entries, path)
+}
+
+// merge writes the body at it to a new file at path: the cached body with Core's delta applied, line by line in byte
+// order. It is errDelta unless the result has the digest and entries it names: that check alone stands for every
+// other, a part out of order, a member added twice or removed though absent.
+// ponytail: each part is held in memory while it merges; stream the parts from files if a delta reaches the size of a body.
+func merge(ctx context.Context, c *Client, id string, it item, cached, path string) error {
+	add, err := c.part(ctx, id, it, "add", it.AddEntries)
+	if err != nil {
+		return err
+	}
+	remove, err := c.part(ctx, id, it, "remove", it.RemoveEntries)
+	if err != nil {
+		return err
+	}
+	old, err := os.Open(cached)
+	if err != nil {
+		return errDelta
+	}
+	defer old.Close()
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	h, n := xxh3.New128(), 0
+	w := bufio.NewWriter(io.MultiWriter(f, h))
+	emit := func(line string) {
+		w.WriteString(line)
+		w.WriteByte('\n')
+		n++
+	}
+	sc := bufio.NewScanner(old)
+	sc.Buffer(make([]byte, 64<<10), maxMember+1)
+	for sc.Scan() {
+		line := sc.Text()
+		for len(add) > 0 && add[0] < line {
+			emit(add[0])
+			add = add[1:]
+		}
+		if len(remove) > 0 && remove[0] == line {
+			remove = remove[1:]
+		} else {
+			emit(line)
+		}
+	}
+	if sc.Err() != nil {
+		return errDelta
+	}
+	for _, line := range add {
+		emit(line)
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if n != it.Entries || hex.EncodeToString(h.Sum(nil)) != it.Digest {
+		return errDelta
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// part is the lines of a delta part of id, errDelta when it runs past count lines' bound or is not plain text, or when Core
+// no longer holds the delta. merge checks what the lines make.
+func (c *Client) part(ctx context.Context, id string, it item, part string, count int) ([]string, error) {
+	resp, err := c.post(ctx, "GetResourceBody", map[string]string{"id": id, "generation": it.Generation, "part": part, "from": it.From})
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.Code == "not_found" {
+		return nil, errDelta
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/plain") {
+		return nil, errDelta
+	}
+	bound := int64(count) * (maxMember + 1)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, bound+1))
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("%s %s: %w", id, part, err)
+	case int64(len(data)) > bound:
+		return nil, errDelta
+	case len(data) == 0:
+		return nil, nil
+	}
+	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n"), nil
+}
+
 // fetchFile writes the body of id at cur to a new file at path and syncs it.
 func fetchFile(ctx context.Context, c *Client, id string, cur Cursor, entries int, path string) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -516,6 +700,12 @@ func syncDir(dir string) error {
 		err = cerr
 	}
 	return err
+}
+
+// digestOf is the digest of data, as Core writes a body's.
+func digestOf(data []byte) string {
+	sum := xxh3.Hash128(data).Bytes()
+	return hex.EncodeToString(sum[:])
 }
 
 // fileDigest is the digest of the file at path, as Core writes a body's.

@@ -15,6 +15,9 @@ type Options struct {
 	ReplyLog  bool   // with NoModule: log each relayed reply to dns_reply.log (Python --reply-log)
 	Observer  bool   // listen for pfb_upstream_observer.py's reports on <ModuleDir>/pfb_upstream.sock
 	LogDir    string // where the module and the reply log write dnsbl.log and dns_reply.log; empty is /var/log/pfblockerng
+	// CoreSocket is the Core API's socket: the module takes its DNSBL data from Core, caching it in ModuleDir (issue
+	// #4036). Empty: the files PHP writes into ModuleDir.
+	CoreSocket string
 }
 
 // Open boots the decider: the module (unless NoModule), then the reply log (ReplyLog), then the observer socket
@@ -31,7 +34,12 @@ func Open(opts Options) (*Frontend, error) {
 	var module *pfbUnbound
 	if !opts.NoModule {
 		var err error
-		if module, err = boot(opts.ModuleDir, opts.LogDir); err != nil {
+		if opts.CoreSocket != "" {
+			module, err = bootCore(opts.ModuleDir, opts.LogDir, opts.CoreSocket, nil)
+		} else {
+			module, err = boot(opts.ModuleDir, opts.LogDir)
+		}
+		if err != nil {
 			return nil, err
 		}
 	}

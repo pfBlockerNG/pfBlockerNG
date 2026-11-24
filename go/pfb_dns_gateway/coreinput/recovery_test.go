@@ -10,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/coreinput"
@@ -197,5 +198,146 @@ func TestSyncRemovesTheTemporaryFilesAnInterruptedWriteLeft(t *testing.T) {
 	}
 	if _, ok := got["pfb_unbound.ini"]; !ok {
 		t.Error("a file Sync does not write is gone")
+	}
+}
+
+// A cache file another user could have written, or that is not the file itself, is not trusted (issue #4036's hostile
+// cache rows): Load answers no state, so that pfB-DNS does not build from it and the next Sync fetches everything.
+func TestACacheFileAnotherUserCouldWriteIsNotTrusted(t *testing.T) {
+	chmod := func(rel func(t *testing.T, dir string) string, mode os.FileMode) func(t *testing.T, dir string) {
+		return func(t *testing.T, dir string) {
+			if err := os.Chmod(filepath.Join(dir, rel(t, dir)), mode); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	chown := func(rel func(t *testing.T, dir string) string) func(t *testing.T, dir string) {
+		return func(t *testing.T, dir string) {
+			if os.Geteuid() != 0 {
+				t.Skip("changing a file's owner needs root")
+			}
+			if err := os.Lchown(filepath.Join(dir, rel(t, dir)), 65534, 65534); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	named := func(name string) func(*testing.T, string) string {
+		return func(*testing.T, string) string { return name }
+	}
+	for name, spoil := range map[string]func(t *testing.T, dir string){
+		"the state file is world-writable":       chmod(named("pfb_py_core.json"), 0o606),
+		"the manifest is group-writable":         chmod(named("pfb_py_sources.json"), 0o620),
+		"a feed file is world-writable":          chmod(rawOf, 0o602),
+		"the TOP1M file is group-writable":       chmod(named("pfb_py_top1m.txt"), 0o660),
+		"the PSL file is world-writable":         chmod(named("dnsbl_psl"), 0o606),
+		"the state file belongs to another user": chown(named("pfb_py_core.json")),
+		"a feed file belongs to another user":    chown(rawOf),
+		"the SafeSearch file belongs to another": chown(named("pfb_py_ss.txt")),
+		"the state file is a symbolic link": func(t *testing.T, dir string) {
+			state := filepath.Join(dir, "pfb_py_core.json")
+			if err := os.Rename(state, state+".real"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(state+".real", state); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir, state, _, _ := synced(t)
+			if got := coreinput.Load(dir); got.Manifest != state.Manifest {
+				t.Fatalf("Load before the change = %+v, want %+v", got.Manifest, state.Manifest)
+			}
+			spoil(t, dir)
+			if got := coreinput.Load(dir); got.Manifest != (coreinput.Cursor{}) {
+				t.Errorf("Load = %+v, want no state", got)
+			}
+		})
+	}
+}
+
+// The SafeSearch and PSL files are written converted, not as Core sent them: Load checks them against what the Sync
+// wrote, so a truncated or emptied one is not trusted either.
+func TestATruncatedSafeSearchOrPSLFileIsNotTrusted(t *testing.T) {
+	for name, content := range map[string]string{"pfb_py_ss.txt": "www.goo", "dnsbl_psl": ""} {
+		t.Run(name, func(t *testing.T) {
+			dir, _, _, _ := synced(t)
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := coreinput.Load(dir); got.Manifest != (coreinput.Cursor{}) {
+				t.Errorf("Load = %+v, want no state", got.Manifest)
+			}
+		})
+	}
+}
+
+// A state file of another version, or of none (a cache an older binary wrote), is not trusted.
+func TestAStateOfAnotherVersionIsNotTrusted(t *testing.T) {
+	for name, version := range map[string]any{"none": nil, "a later one": 2} {
+		t.Run(name, func(t *testing.T) {
+			dir, _, _, _ := synced(t)
+			path := filepath.Join(dir, "pfb_py_core.json")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]any
+			if err := json.Unmarshal(data, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := doc["version"]; !ok {
+				t.Fatalf("the state file has no version: %s", data)
+			}
+			if version == nil {
+				delete(doc, "version")
+			} else {
+				doc["version"] = version
+			}
+			if data, err = json.Marshal(doc); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := coreinput.Load(dir); got.Manifest != (coreinput.Cursor{}) {
+				t.Errorf("Load = %+v, want no state", got.Manifest)
+			}
+		})
+	}
+}
+
+// A generation lower than the one cached (a store Core rebuilt) is taken as a full manifest whose bodies all verify
+// (#4036, 2026-11-21).
+func TestALowerGenerationIsTakenWhenItsBodiesVerify(t *testing.T) {
+	dir, _, _, _ := synced(t)
+	rebuilt := coretest.Start(t, data("5", "b.example"))
+	got, changed, err := coreinput.Sync(context.Background(), coreinput.New(rebuilt.Socket), dir, coreinput.Load(dir))
+	if err != nil || !changed || got.Manifest.Generation != "5" {
+		t.Fatalf("Sync of the rebuilt store: %+v, changed %v, %v", got.Manifest, changed, err)
+	}
+	if feed := tree(t, dir)[rawOf(t, dir)]; feed != "b.example\n" {
+		t.Errorf("the feed = %q", feed)
+	}
+}
+
+// The manifest Sync generates is checked like the files it converts: one changed since (a feed's mode turned) is not
+// trusted.
+func TestAChangedGeneratedManifestIsNotTrusted(t *testing.T) {
+	dir, _, _, _ := synced(t)
+	path := filepath.Join(dir, "pfb_py_sources.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := strings.Replace(string(data), `"mode":"deny"`, `"mode":"permit"`, 1)
+	if changed == string(data) {
+		t.Fatalf("no deny mode in %s", data)
+	}
+	if err := os.WriteFile(path, []byte(changed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := coreinput.Load(dir); got.Manifest != (coreinput.Cursor{}) {
+		t.Errorf("Load = %+v, want no state", got.Manifest)
 	}
 }
