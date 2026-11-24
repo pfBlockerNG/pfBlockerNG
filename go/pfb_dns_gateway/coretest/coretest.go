@@ -38,7 +38,11 @@ func Digest(body []byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// Server answers GetResources and GetResourceBody from Resources; every other method is not_found.
+// Cursor is a generation and digest as a ReportApplied request names them.
+type Cursor struct{ Generation, Digest string }
+
+// Server answers GetResources and GetResourceBody from Resources, and records each ReportApplied; every other method is
+// not_found.
 type Server struct {
 	Socket string
 
@@ -46,6 +50,7 @@ type Server struct {
 	resources map[string]Resource
 	body      func(id string, w http.ResponseWriter) bool
 	calls     []string
+	applied   []map[string]Cursor
 }
 
 // Start serves resources on a socket in a fresh short directory until the test ends.
@@ -86,6 +91,13 @@ func (s *Server) Calls() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.calls...)
+}
+
+// Applied is every report ReportApplied recorded so far, in order.
+func (s *Server) Applied() []map[string]Cursor {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]map[string]Cursor(nil), s.applied...)
 }
 
 func fail(w http.ResponseWriter, status int, code string) {
@@ -142,6 +154,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Content-Length", strconv.Itoa(len(res.Body)))
 		w.Write(res.Body)
+	case "/v1/ReportApplied":
+		// Core refuses a request without its requestId, with an unknown parameter, or with resources missing or null.
+		var req struct {
+			RequestID string            `json:"requestId"`
+			Resources map[string]Cursor `json:"resources"`
+		}
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if dec.Decode(&req) != nil || req.RequestID == "" || req.Resources == nil {
+			fail(w, 400, "invalid_argument")
+			return
+		}
+		s.record("ReportApplied")
+		s.mu.Lock()
+		s.applied = append(s.applied, req.Resources)
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
 	default:
 		fail(w, 404, "not_found")
 	}

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -310,5 +311,32 @@ func TestAHostileReplyLeavesTheModuleAsItWas(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ReportApplied sends the cursors of what pfB-DNS serves, as Core's ReportApplied takes them; serving nothing is the empty
+// object, never null, which Core refuses.
+func TestReportAppliedSendsTheServedCursors(t *testing.T) {
+	srv := coretest.Start(t, data("7", "a.example"))
+	c := coreinput.New(srv.Socket)
+	state, _, err := coreinput.Sync(context.Background(), c, t.TempDir(), coreinput.State{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ReportApplied(context.Background(), state.Resources); err != nil {
+		t.Fatalf("ReportApplied: %v", err)
+	}
+	if err := c.ReportApplied(context.Background(), nil); err != nil {
+		t.Fatalf("ReportApplied of nothing: %v", err)
+	}
+	want := map[string]coretest.Cursor{}
+	for id, cur := range state.Resources {
+		want[id] = coretest.Cursor{Generation: cur.Generation, Digest: cur.Digest}
+	}
+	if len(want) != 5 {
+		t.Fatalf("the state holds %d resources, want the manifest and its four bodies", len(want))
+	}
+	if got := srv.Applied(); !reflect.DeepEqual(got, []map[string]coretest.Cursor{want, {}}) {
+		t.Errorf("reports = %v, want %v and then none", got, want)
 	}
 }
