@@ -69,6 +69,7 @@ type Store struct {
 	revision     uint64
 	values       map[string]map[string]any // projection → field → value; replaced whole, never changed in place
 	pendingToken json.RawMessage           // Stored.PendingToken of the last read
+	pendingApply bool                      // Stored.PendingApply of the last read
 }
 
 // Load reads b once. An empty FileBackend is an uninitialized Core; a configuration that does not read whole under schema
@@ -111,7 +112,7 @@ func (s *Store) fetch(ctx context.Context) error {
 	}
 	s.set(stored.Initialized, stored.Revision, values)
 	s.mu.Lock()
-	s.pendingToken = stored.PendingToken
+	s.pendingToken, s.pendingApply = stored.PendingToken, stored.PendingApply
 	s.mu.Unlock()
 	return nil
 }
@@ -171,6 +172,13 @@ func (s *Store) PendingToken() json.RawMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.pendingToken)
+}
+
+// PendingApply is whether the platform held a change that waits for an apply at the last backend read (issue #4038).
+func (s *Store) PendingApply() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pendingApply
 }
 
 func (s *Store) set(initialized bool, revision uint64, values map[string]map[string]any) {

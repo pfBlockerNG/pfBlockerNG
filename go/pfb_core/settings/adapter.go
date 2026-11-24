@@ -27,7 +27,7 @@ const (
 // reaches it by running Path once per call: one JSON request on stdin, one JSON reply on stdout, exit status 0.
 //
 //	request {"version":1,"op":"read"} or {"version":1,"op":"write","expectedRevision":N,"settings":{<projection>:{<field>:<value>}}}
-//	reply   {"version":1,"revision":N,"settings":{...},"platform":{"pendingToken":...}} for a read, {"version":1,"revision":N} for a write, or
+//	reply   {"version":1,"revision":N,"settings":{...},"platform":{"pendingToken":...,"pendingApply":bool}} for a read, {"version":1,"revision":N} for a write, or
 //	        {"version":1,"error":{"code":"conflict"|"invalid_argument"|"unavailable","message":"...","fieldErrors":[{"field","message"}]}}
 //
 // Its settings always exist, so Read is always Initialized. Every failure is a *BackendError: a non-zero exit (with the
@@ -58,6 +58,7 @@ type reply struct {
 	Settings map[string]map[string]json.RawMessage `json:"settings"`
 	Platform *struct {
 		PendingToken json.RawMessage `json:"pendingToken"`
+		PendingApply json.RawMessage `json:"pendingApply"` // absent is false; present, a JSON bool (null is no bool)
 	} `json:"platform"`
 	Error *replyError `json:"error"`
 }
@@ -73,6 +74,13 @@ func (a *AdapterBackend) Read(ctx context.Context) (Stored, error) {
 	stored := Stored{Initialized: true, Revision: r.Revision, Projections: r.Settings}
 	if r.Platform != nil {
 		stored.PendingToken = r.Platform.PendingToken
+		switch string(r.Platform.PendingApply) {
+		case "", "false":
+		case "true":
+			stored.PendingApply = true
+		default:
+			return Stored{}, backendErr("platform.pendingApply is not a JSON bool")
+		}
 	}
 	return stored, nil
 }

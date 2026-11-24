@@ -142,7 +142,7 @@ Protocol, version 1:
 
 | Request | Reply |
 |---|---|
-| `{"version": 1, "op": "read"}` | `{"version": 1, "revision": N, "settings": {"dns": {...}, "feeds/ipv4": {...}, "feeds/ipv6": {...}, "feeds/dnsbl": {...}, "schedule": {...}, "ingest": {...}, "policy/ip": {...}, "feeds/geoip": {...}, "policy/dnsbl": {...}, "extras": {...}, "hooks": {...}, "maintenance": {...}}, "platform": {"pendingToken": "..."}}` |
+| `{"version": 1, "op": "read"}` | `{"version": 1, "revision": N, "settings": {"dns": {...}, "feeds/ipv4": {...}, "feeds/ipv6": {...}, "feeds/dnsbl": {...}, "schedule": {...}, "ingest": {...}, "policy/ip": {...}, "feeds/geoip": {...}, "policy/dnsbl": {...}, "extras": {...}, "hooks": {...}, "maintenance": {...}}, "platform": {"pendingToken": "...", "pendingApply": false}}` |
 | `{"version": 1, "op": "write", "expectedRevision": N, "settings": {...every projection, every field}}` | `{"version": 1, "revision": M}` |
 
 A read also answers `platform.pendingToken` (issue #4031): the Outpost's pending-changes token (`pfb_pending_changes_token()`), a
@@ -151,6 +151,12 @@ marked meanwhile stays pending. It is not a setting and not part of the revision
 it (`Store.PendingToken`, in-process only), hands it back to the platform in the apply request and never parses, compares or logs
 it; no API method answers it. A token JSON cannot carry unaltered (bytes that are not UTF-8) refuses the read whole
 (`unavailable`). A write's reply holds no `platform`.
+
+A read also answers `platform.pendingApply` (issue #4038): a JSON bool, whether the Outpost holds a change that waits for an
+apply (`pfb_core_update_pending_apply()`: the pending marker not yet applied, or the due ledger's `pending_apply`). Like the
+token, it is not a setting and not part of the revision. Core keeps it from its last read (`Store.PendingApply`, `false` when the
+member is absent), and the Core Updater reads it at the start of an Update instead of interpreting the token. A value that is
+not a JSON bool fails the read.
 
 A read carries secrets (feed credentials, the proxy password, the Blacklist providers' passwords) to Core; only Core's API hides them. A write carries `ingest`
 as Core read it; the adapter never writes it, and refuses (`invalid_argument`, field errors `ingest.<field>`) a write whose
@@ -391,6 +397,8 @@ once and reads again, and the Update's start reads the backend again ([Update an
 | `proxyUnusable` | bool, `false` | A configured proxy that Core cannot represent; remote transfers refuse instead of bypassing it |
 | `scheduledWorkDisabled` | bool, `false` | The `.pfb_cron_disable` marker is a file (`pfb_cron_disabled()`); its content is ignored (issue #4031) |
 | `applyWindow` | string `HH:MM-HH:MM` (zero-padded, local time) or `""`; `""` | General `pfb_quiet_hours` as `pfb_quiet_hours_in_window()` reads it (`pfb_quiet_hours_bounds()`); `""` is no window (issue #4038) |
+| `skipFeedLimit` | int 0 to 6 (0: no limit), `0` | General `skipfeed`, the retry cap `pfb_update_check()` compares a feed's failed downloads today with (issue #4038) |
+| `feedSanity` | bool, `false` | General `pfb_feed_sanity` is `on`, the ADR-49 feed sanity scan (issue #4038) |
 
 - **Suppression limits.** A limit beyond what the IP page offers (hand-edited config.xml: 18, 8.5, `1e1`, negative) reads as
   0, as a group's own `suppressionCidr` reads a value out of its range; today's PHP applies such a number as typed. A limit
@@ -417,6 +425,16 @@ once and reads again, and the Update's start reads the backend again ([Update an
   `InApplyWindow` also takes as no window. Parity fixture: `tests/core/fixtures/settings_apply_window_parity.json`, frozen by
   `CoreSettingsApplyWindowParityTest`; `go/pfb_core/settings/apply_window_parity_test.go` proves `InApplyWindow` on `applyWindow`
   decides as today's PHP on the stored value.
+- **Retry cap.** A value the General page and the wizard never write (hand-edited config.xml: 10, `03`, 2.5, negative, a
+  leading or trailing space as in `" 3"` or `"3 "`, which PHP 8 compares as 3) reads
+  as 0, no limit, as a suppression limit out of its range does; today's PHP compares such a value as typed (`-1` stops every
+  download of the feed). A non-numeric value or an array reads as 0, which is what today's comparison makes of it. Core counts a
+  feed's failed downloads of the day (a transfer that failed, not one cancelled) in the Core Updater's own state
+  (`updater.json`), not from the PHP error log, and starts again when the local date changes, as `pfb_failures()` reads only
+  today's lines. Departures: today's count also drops when the error log is trimmed or cleared, and when the widget's Clear
+  Failed Downloads rewrites the log's `FAIL` to `Fail` (`pfb_failures()` greps `FAIL` case-sensitively); Core's count drops at
+  local midnight only, so a capped feed stays capped until then. The cutover (slice 10) must make that clear reset Core's count
+  too.
 - **Core refuses what it reads.** `proxyUrl` must use `http`, `https`, `socks5` or `socks5h` with a port from 1 to 65535 and no userinfo; a listed self address an IP address that is not unspecified, link-local, IPv4-mapped or zoned; an allowlist entry an address or a CIDR without a zone. A backend answer that breaks a rule fails the read ([Settings backends](#settings-backends)).
 
 Parity fixture: `tests/core/fixtures/settings_ingest_parity.json`. `CoreSettingsIngestParityTest` (PHPUnit) freezes it

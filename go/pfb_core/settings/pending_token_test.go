@@ -139,3 +139,39 @@ func TestNoCoreCodeInterpretsThePendingToken(t *testing.T) {
 		t.Error("no production line names the pending token: the scan found nothing to judge")
 	}
 }
+
+// WHEN the adapter's read answers platform.pendingApply THEN the store carries it until the next read, false when the member
+// is absent; a value that is no JSON bool fails the read (issue #4038).
+func TestTheStoreCarriesPendingApplyOfTheLastRead(t *testing.T) {
+	f := newFakeAdapter(t, tokenReply(t, 7, `{"pendingToken":"0123456789abcdef","pendingApply":true}`))
+	st := loadFake(t, f, 0)
+	if !st.PendingApply() {
+		t.Fatal("after Load PendingApply = false, want the adapter's true")
+	}
+	f.reply(tokenReply(t, 7, `{"pendingToken":null,"pendingApply":false}`))
+	if _, err := st.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st.PendingApply() {
+		t.Error("after Reload PendingApply = true, want the false of the read that just ran")
+	}
+	for name, platform := range map[string]string{"no platform member": "", "no pendingApply": `{"pendingToken":null}`} {
+		if loadFake(t, newFakeAdapter(t, tokenReply(t, 3, platform)), 0).PendingApply() {
+			t.Errorf("%s: PendingApply = true, want false", name)
+		}
+	}
+	if _, err := (&AdapterBackend{Path: newFakeAdapter(t, tokenReply(t, 3, `{"pendingApply":"yes"}`)).path}).Read(context.Background()); err == nil {
+		t.Error(`a read answering pendingApply "yes" succeeded`)
+	}
+}
+
+// WHEN the adapter's read answers platform.pendingApply as null or as no bool THEN the read fails: an absent member is false,
+// a present one is a JSON bool (issue #4038).
+func TestAPendingApplyThatIsNoBoolFailsTheRead(t *testing.T) {
+	for _, value := range []string{`null`, `"yes"`, `1`, `{}`} {
+		reply := tokenReply(t, 3, `{"pendingToken":null,"pendingApply":`+value+`}`)
+		if _, err := (&AdapterBackend{Path: newFakeAdapter(t, reply).path}).Read(context.Background()); err == nil {
+			t.Errorf("a read answering pendingApply %s succeeded", value)
+		}
+	}
+}

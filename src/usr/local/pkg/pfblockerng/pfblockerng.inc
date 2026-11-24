@@ -5392,8 +5392,10 @@ function pfb_core_ingest_entry_valid(string $entry): bool {
  *
  * `scheduledWorkDisabled` is pfb_cron_disabled(). `applyWindow` is the apply window `gen/pfb_quiet_hours` as pfb_quiet_hours_bounds() reads it,
  * zero-padded, or '' for every value today's reader takes as no window (tests/core/fixtures/settings_apply_window_parity.json).
+ * `skipFeedLimit` is the retry cap `gen/skipfeed` (0: none) when it is one the General page offers, else 0. `feedSanity` is the ADR-49
+ * switch `gen/pfb_feed_sanity`.
  *
- * @return array<string, mixed> the 14 fields, in the protocol's order
+ * @return array<string, mixed> the 16 fields, in the protocol's order
  */
 function pfb_core_ingest_settings(): array {
 	$on = static fn(string $key): bool => PfbConfig::read($key) === PfbToggle::On;
@@ -5416,6 +5418,8 @@ function pfb_core_ingest_settings(): array {
 	] + pfb_core_proxy_settings() + [
 		'scheduledWorkDisabled' => pfb_cron_disabled(),
 		'applyWindow'           => $window === NULL ? '' : sprintf('%02d:%02d-%02d:%02d', intdiv($window[0], 60), $window[0] % 60, intdiv($window[1], 60), $window[1] % 60),
+		'skipFeedLimit'         => (int) (pfb_schedule_numeric_token(pfb_core_table_text('gen/skipfeed'), 0, 6) ?? 0),
+		'feedSanity'            => $on('gen/pfb_feed_sanity'),
 	];
 }
 
@@ -6916,7 +6920,13 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 			return pfb_core_settings_refusal('unavailable', 'the pending-changes marker does not hold text');
 		}
 		$settings = pfb_core_settings($interfaces);
-		return ['version' => 1, 'revision' => pfb_core_settings_revision($settings), 'settings' => $settings, 'platform' => ['pendingToken' => $token]];
+		// issue #4038: pending state beside the token, outside the settings and their revision; Core never reads the token to decide it.
+		// pfb_core_update_pending_apply() on the token just taken, reading no file that is absent: a read must not warn
+		$applied = pfb_pending_changes_marker() . '.applied';
+		$pending = ($token !== NULL && $token !== (is_file($applied) ? @file_get_contents($applied) : FALSE))
+			|| pfb_due_ledger_is_pending('cron', (string) $pfb['dbdir']);
+		return ['version' => 1, 'revision' => pfb_core_settings_revision($settings), 'settings' => $settings,
+			'platform' => ['pendingToken' => $token, 'pendingApply' => $pending]];
 	}
 	$fields = pfb_core_dns_fields();
 	$dnsLists = pfb_core_dns_list_fields();

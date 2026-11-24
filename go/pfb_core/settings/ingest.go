@@ -32,6 +32,10 @@ func ingestProjection() Projection {
 		// answers "" for every value today's reader takes as no window (tests/core/fixtures/settings_apply_window_parity.json);
 		// a start equal to the end passes the pattern and is no window too, though the Outpost never sends one.
 		{Name: "applyWindow", Type: TypeString, Default: "", Pattern: `^(?:(?:[01][0-9]|2[0-3]):[0-5][0-9]-(?:[01][0-9]|2[0-3]):[0-5][0-9])?$`},
+		// The retry cap gen/skipfeed (0: none): a feed's failed downloads today at or past it stop its retries (issue #4038).
+		{Name: "skipFeedLimit", Type: TypeInt, Default: int64(0), Min: new(int64(0)), Max: new(int64(6))},
+		// The ADR-49 feed sanity scan gen/pfb_feed_sanity.
+		{Name: "feedSanity", Type: TypeBool, Default: false},
 	}, Retired: []string{"sinkholeV4", "sinkholeV6"}} // #4054
 }
 
