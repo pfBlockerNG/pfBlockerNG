@@ -479,7 +479,7 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 	top1m := filepath.Join(dir, memberFile[top1mID])
 	if _, ok := m.bodies[top1mID]; ok {
 		err = os.Rename(filepath.Join(folder, rawName(top1mID)), top1m)
-		os.Remove(filepath.Join(folder, rawName(top1mID))) // left by a rename onto the link it came from
+		os.Remove(filepath.Join(folder, rawName(top1mID))) // left by a rename onto the link it came from, or by a failed one
 	} else {
 		err = removeFile(top1m)
 	}

@@ -25,6 +25,9 @@ const CORE_POLL_INTERVAL = 10 * time.Second
 // coreSyncCap ends a Sync or a report that Core leaves hanging, so that the poller goes on; it orders nothing.
 const coreSyncCap = 10 * time.Minute
 
+// maxRetryEvery is the most polls between two tries of a swap that keeps failing: about 10 min.
+const maxRetryEvery = 64
+
 // coreFeed is the poller's state. Only init, before the poller starts, and the poller touch it.
 type coreFeed struct {
 	m      *pfbUnbound
@@ -36,6 +39,9 @@ type coreFeed struct {
 	// pending is whether the module directory holds data the live snapshot was not built from: a swap declined or failed is
 	// tried again on the next poll.
 	pending bool
+	// retryIn is how many polls to skip before the next try, retryEvery the gap after it: a swap that keeps failing is
+	// tried after 1, 2, 4, ... polls, at most every maxRetryEvery.
+	retryIn, retryEvery int
 	// reported is whether Core has been told what is served; lastErr is the last Sync error logged, so that a Core that
 	// stays down is logged once.
 	reported bool
@@ -92,10 +98,16 @@ func (f *coreFeed) drain(stop <-chan struct{}) {
 	f.logSync(err)
 	if changed {
 		f.disk = state // the zero State after a Sync cut short in its commit: the next one fetches everything
-		f.pending = err == nil
+		f.pending, f.retryIn, f.retryEvery = err == nil, 0, 1
 	}
-	if f.pending && f.m.reloadRunSwap(f.build) {
+	switch {
+	case !f.pending:
+	case f.retryIn > 0:
+		f.retryIn--
+	case f.m.reloadRunSwap(f.build):
 		f.served, f.reported, f.pending = f.disk.Resources, false, false
+	default:
+		f.retryIn, f.retryEvery = f.retryEvery-1, min(2*f.retryEvery, maxRetryEvery)
 	}
 	if !f.reported {
 		err := f.client.ReportApplied(ctx, f.served)

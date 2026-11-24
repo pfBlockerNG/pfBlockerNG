@@ -1120,9 +1120,12 @@ func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emi
 			safeSearch := next.safeSearchDB
 			next.noAAAADB, next.safeSearchDB, next.gpListDB, next.gpNetDB = live.noAAAADB, live.safeSearchDB, live.gpListDB, live.gpNetDB
 			if next.freshSafeSearch {
-				next.safeSearchDB, settings.safeSearchDB = safeSearch, safeSearch != nil
+				next.safeSearchDB = safeSearch
 			}
 		}
+	}
+	if next.freshSafeSearch {
+		settings.safeSearchDB = next.safeSearchDB != nil
 	}
 
 	m.snapshot.Store(next)
