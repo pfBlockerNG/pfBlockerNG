@@ -10,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/coreinput"
@@ -317,5 +318,26 @@ func TestALowerGenerationIsTakenWhenItsBodiesVerify(t *testing.T) {
 	}
 	if feed := tree(t, dir)[rawOf(t, dir)]; feed != "b.example\n" {
 		t.Errorf("the feed = %q", feed)
+	}
+}
+
+// The manifest Sync generates is checked like the files it converts: one changed since (a feed's mode turned) is not
+// trusted.
+func TestAChangedGeneratedManifestIsNotTrusted(t *testing.T) {
+	dir, _, _, _ := synced(t)
+	path := filepath.Join(dir, "pfb_py_sources.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := strings.Replace(string(data), `"mode":"deny"`, `"mode":"permit"`, 1)
+	if changed == string(data) {
+		t.Fatalf("no deny mode in %s", data)
+	}
+	if err := os.WriteFile(path, []byte(changed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := coreinput.Load(dir); got.Manifest != (coreinput.Cursor{}) {
+		t.Errorf("Load = %+v, want no state", got.Manifest)
 	}
 }

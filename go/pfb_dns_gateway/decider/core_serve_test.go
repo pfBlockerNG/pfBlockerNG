@@ -398,3 +398,37 @@ func TestOnCoreASwapThatKeepsBeingDeclinedBacksOff(t *testing.T) {
 		t.Errorf("8 polls tried the declined swap %d times, want 4 (polls 1, 2, 4 and 8)", n)
 	}
 }
+
+// A SafeSearch file that is there but cannot be read fails the swap, which is tried again, rather than serving without
+// SafeSearch and reporting it served.
+func TestOnCoreASafeSearchFileThatCannotBeReadFailsTheSwap(t *testing.T) {
+	dir := coreModuleDir(t)
+	gen1 := coreData("1", "a.example")
+	cacheFrom(t, dir, gen1)
+	srv := coretest.Start(t, gen1)
+	m, _ := bootOnCore(t, dir, srv.Socket)
+	m.stopReloadWatcher() // the test drains by hand from here
+	ss := map[string]coretest.Resource{"dnsbl/safesearch": {Generation: "2", Body: coretest.Lines([]string{
+		`{"host":"www.google.com","a":"forcesafesearch.google.com","aaaa":"forcesafesearch.google.com"}`})}}
+	gen2 := coreDataWith("2", ss, "b.example")
+	srv.Set(gen2)
+	read := m.readFile
+	m.readFile = func(path string) ([]byte, error) {
+		if filepath.Base(path) == "pfb_py_ss.txt" {
+			return nil, os.ErrPermission
+		}
+		return read(path)
+	}
+	m.core.drain(nil)
+	if serves(m, "b.example") {
+		t.Fatal("generation 2 is served without its SafeSearch")
+	}
+	m.readFile = read
+	m.core.drain(nil)
+	if !serves(m, "b.example") || m.snapshot.Load().safeSearchDB["www.google.com"] == (safeSearchEntry{}) {
+		t.Error("generation 2 and its SafeSearch are not served once the file reads")
+	}
+	if got := srv.Applied(); !reflect.DeepEqual(got[len(got)-1], cursors(gen2)) {
+		t.Errorf("reports = %v, want generation 2's last", got)
+	}
+}
