@@ -33,6 +33,9 @@ type coreFeed struct {
 	tick   func() (<-chan time.Time, func()) // the poller's tick source
 	disk   coreinput.State                   // what the module directory holds: the last Sync's state
 	served map[string]coreinput.Cursor       // what the live snapshot was built from; nil: nothing
+	// pending is whether the module directory holds data the live snapshot was not built from: a swap declined or failed is
+	// tried again on the next poll.
+	pending bool
 	// reported is whether Core has been told what is served; lastErr is the last Sync error logged, so that a Core that
 	// stays down is logged once.
 	reported bool
@@ -85,15 +88,12 @@ func (f *coreFeed) drain(stop <-chan struct{}) {
 	}()
 	state, changed, err := coreinput.Sync(ctx, f.client, f.dir, f.disk)
 	f.logSync(err)
-	if err == nil && changed {
-		f.disk = state
-		build := f.m.reloadBuilder
-		if build == nil {
-			build = f.m.reloadBuildSnapshot
-		}
-		if f.m.reloadRunSwap(build) {
-			f.served, f.reported = state.Resources, false
-		}
+	if changed {
+		f.disk = state // the zero State after a Sync cut short in its commit: the next one fetches everything
+		f.pending = err == nil
+	}
+	if f.pending && f.m.reloadRunSwap(f.build) {
+		f.served, f.reported, f.pending = f.disk.Resources, false, false
 	}
 	if !f.reported {
 		if err := f.client.ReportApplied(ctx, f.served); err != nil {
@@ -102,6 +102,25 @@ func (f *coreFeed) drain(stop <-chan struct{}) {
 			f.reported = true
 		}
 	}
+}
+
+// refetch has the next Sync fetch everything whole: a trusted cache that did not build.
+func (f *coreFeed) refetch() { f.disk = coreinput.State{} }
+
+// build is the reload builder, with SafeSearch read from the module directory, where Sync keeps Core's.
+func (f *coreFeed) build() (*snapshot, error) {
+	build := f.m.reloadBuilder
+	if build == nil {
+		build = f.m.reloadBuildSnapshot
+	}
+	next, err := build()
+	if next != nil {
+		next.safeSearchDB, next.freshSafeSearch = map[string]safeSearchEntry{}, true
+		if !f.m.readSafesearch(next.safeSearchDB) {
+			next.safeSearchDB = nil
+		}
+	}
+	return next, err
 }
 
 // logSync logs a Sync error once until it changes, and that Core answers again.

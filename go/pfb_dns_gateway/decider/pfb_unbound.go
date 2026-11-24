@@ -538,8 +538,10 @@ func initStandardWith(id int, moduleDir, logDir string, core *coreFeed) (module 
 			// Collect user-defined Group Policy Global Bypass List
 			m.loadGpBypassList(config, scratch)
 
-			// Collect SafeSearch Redirection list
-			m.loadSafesearchDb(scratch.safeSearchDB)
+			// Collect SafeSearch Redirection list; on the Core input, only from a cache Load trusts.
+			if core == nil || core.trusted() {
+				m.loadSafesearchDb(scratch.safeSearchDB)
+			}
 
 			// ADR-65: the manifest is the SOLE DNSBL source: an absent, unparseable or unbuildable manifest leaves the
 			// dicts EMPTY (no fallback); the ledger entry the build opens, and snapshot.dnsblUnbuilt, signal the failure instead.
@@ -550,6 +552,9 @@ func initStandardWith(id int, moduleDir, logDir string, core *coreFeed) (module 
 			}
 			if build == nil {
 				scratch.dnsblUnbuilt = unbuilt
+				if core != nil {
+					core.refetch()
+				}
 			} else {
 				if core != nil {
 					core.served = core.disk.Resources
@@ -789,10 +794,17 @@ func pyListRepr(row []string) string {
 // padded fields) reads alike. PHP writes the file as one unquoted row per domain, so neither difference can occur;
 // upgrade to a port of the excel dialect if the file ever has another writer.
 func (m *pfbUnbound) loadSafesearchDb(safeSearchDB map[string]safeSearchEntry) {
+	if m.readSafesearch(safeSearchDB) {
+		m.pfb.safeSearchDB = true
+	}
+}
+
+// readSafesearch is loadSafesearchDb without setting the module's switch: whether the file was read.
+func (m *pfbUnbound) readSafesearch(safeSearchDB map[string]safeSearchEntry) bool {
 	pfb := &m.pfb
 	if !isFile(pfb.pfbPySs) {
 		m.pfbPyStatusClose("dnsbl", pfb.pfbPySs, "parse")
-		return
+		return false
 	}
 	data, err := m.readFile(pfb.pfbPySs)
 	if err == nil {
@@ -822,10 +834,10 @@ func (m *pfbUnbound) loadSafesearchDb(safeSearchDB map[string]safeSearchEntry) {
 		failure := fmt.Sprintf("Failed to load: %s: %v", pfb.pfbPySs, err)
 		pyStderr("[pfBlockerNG]: " + failure)
 		m.pfbPyStatusOpen("dnsbl", pfb.pfbPySs, "parse", failure)
-		return
+		return false
 	}
-	pfb.safeSearchDB = true
 	m.pfbPyStatusClose("dnsbl", pfb.pfbPySs, "parse")
+	return true
 }
 
 // safesearchEntry looks up, and memoizes on the Decision, the SafeSearch entry for a name: the matched entry, or
@@ -1105,7 +1117,11 @@ func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emi
 	next.settings = &settings
 	if next.carryRuntime {
 		if live := m.snapshot.Load(); live != nil {
+			safeSearch := next.safeSearchDB
 			next.noAAAADB, next.safeSearchDB, next.gpListDB, next.gpNetDB = live.noAAAADB, live.safeSearchDB, live.gpListDB, live.gpNetDB
+			if next.freshSafeSearch {
+				next.safeSearchDB, settings.safeSearchDB = safeSearch, safeSearch != nil
+			}
 		}
 	}
 

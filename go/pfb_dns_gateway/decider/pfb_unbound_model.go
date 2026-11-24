@@ -221,9 +221,12 @@ type snapshot struct {
 
 	noAAAADB     map[string]bool // Python values are the wildcard flag
 	safeSearchDB map[string]safeSearchEntry
-	gpListDB     map[string]int
-	gpNetDB      []netip.Prefix
-	settings     *pfbSettings
+	// freshSafeSearch marks a reload's safeSearchDB as read for it (the Core input: SafeSearch is Core's data): the swap
+	// keeps it, nil when the file was not read, instead of the live one.
+	freshSafeSearch bool
+	gpListDB        map[string]int
+	gpNetDB         []netip.Prefix
+	settings        *pfbSettings
 
 	// carryRuntime marks a snapshot a reload built from the files: noAAAADB, safeSearchDB, gpListDB and gpNetDB are runtime
 	// state in Python (module globals a swap never touches), so rebuildAndSwap gives it the live snapshot's tables when it

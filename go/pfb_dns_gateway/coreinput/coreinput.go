@@ -469,6 +469,7 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 	top1m := filepath.Join(dir, memberFile[top1mID])
 	if _, ok := m.bodies[top1mID]; ok {
 		err = os.Rename(filepath.Join(folder, rawName(top1mID)), top1m)
+		os.Remove(filepath.Join(folder, rawName(top1mID))) // left by a rename onto the link it came from
 	} else {
 		err = removeFile(top1m)
 	}
@@ -476,9 +477,10 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 		return fail(err)
 	}
 	for _, name := range []string{memberFile[ssID], memberFile[pslID]} {
-		if body, ok := files[name]; kept[name] {
+		if kept[name] {
 			continue
-		} else if ok {
+		}
+		if body, ok := files[name]; ok {
 			err = writeFile(filepath.Join(dir, name), body)
 		} else {
 			err = removeFile(filepath.Join(dir, name))
@@ -541,10 +543,11 @@ var errDelta = errors.New("the delta does not apply")
 // the same body, merged with Core's delta from have when Core holds one that applies, fetched whole otherwise. have is a
 // body the last Sync wrote and Load trusts, never one changed since.
 func fetchBody(ctx context.Context, c *Client, id string, want Cursor, entries int, have Cursor, cached, path string) error {
-	if have == want && os.Link(cached, path) == nil {
-		return nil
-	}
-	if have != (Cursor{}) && cached != "" {
+	if have == want {
+		if os.Link(cached, path) == nil {
+			return nil
+		}
+	} else if have != (Cursor{}) && cached != "" {
 		it, err := c.resource(ctx, id, have)
 		switch {
 		case errors.Is(err, ErrNoData):
@@ -566,7 +569,7 @@ func fetchBody(ctx context.Context, c *Client, id string, want Cursor, entries i
 
 // merge writes the body at it to a new file at path: the cached body with Core's delta applied, line by line in byte
 // order. It is errDelta unless each part is canonical, every removed member is there, no added one is, and the result is
-// it's digest and entries.
+// its digest and entries.
 // ponytail: each part is held in memory while it merges; stream the parts from files if a delta reaches the size of a body.
 func merge(ctx context.Context, c *Client, id string, it item, cached, path string) error {
 	add, err := c.part(ctx, id, it, "add", it.AddEntries)
