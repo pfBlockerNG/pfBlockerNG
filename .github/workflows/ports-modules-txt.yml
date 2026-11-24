@@ -67,7 +67,8 @@ jobs:
           fixtures=tests/fixtures/ports_modules_txt
           # Red canaries: #3987's drift (recipe at x/sys v0.49.0, devel vendoring v0.50.0) and #3929's
           # (Core requiring pfBlockerNG/xxh3 before the recipe had its tuple) must each fail. That fork is retired
-          # (#4036: Core takes upstream zeebo/xxh3 from the gateway); go4.org/netipx is now Core's only own module.
+          # (#4036: Core takes upstream zeebo/xxh3 from the gateway), so the #3929 tree now fails on the fork itself;
+          # go4.org/netipx is Core's only own module.
           if check_modules_txt "$fixtures/issue3987/ports-nightly-modules.txt" "$fixtures/issue3987/go-mod-vendor-modules.txt" > /dev/null; then
             echo "::error::red canary: the #3987 modules.txt drift passed the check"
             exit 1

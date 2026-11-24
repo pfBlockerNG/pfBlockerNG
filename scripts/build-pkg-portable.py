@@ -1141,6 +1141,7 @@ _CORE_VENDOR_PREFIX = "../go/pfb_core/vendor/"
 # pfBlockerNG xxh3 fork (#3925) left this list when upstream github.com/zeebo/xxh3 replaced it (owner decision
 # 2026-11-24, #4036): Core takes that from the gateway's vendor/.
 _CORE_OWN_MODULES = frozenset({"go4.org/netipx"})
+_RETIRED_XXH3_FORK = "github.com/pfBlockerNG/xxh3"  # a Core go.mod requiring it is refused, tuple or not
 # Go's three pseudo-version forms: vX.0.0-<ts>-<rev>, vX.Y.Z-0.<ts>-<rev>, vX.Y.Z-pre.0.<ts>-<rev> (any rev).
 _PSEUDO_VERSION = re.compile(r"^v\d+\.(?:0\.0-|\d+\.\d+-(?:[^+]*\.)?0\.)\d{14}-[0-9A-Za-z]+(?:\+.*)?$")
 # Owner decision (#3511/#3779): the only modules GL_TUPLE may supply (their `go-import` is gitlab.com/cznic/<project>)
@@ -1190,7 +1191,10 @@ def _read_modules_txt(path: Path | None) -> str:
 
 
 def _core_own_requires(source_tree: Path | None) -> set[tuple[str, str]]:
-    """The (module, version) of each _CORE_OWN_MODULES module the source's go/pfb_core/go.mod requires."""
+    """The (module, version) of each _CORE_OWN_MODULES module the source's go/pfb_core/go.mod requires.
+
+    A require of the retired xxh3 fork (#3925) is refused: Core takes upstream github.com/zeebo/xxh3 from the
+    gateway's vendor/ (#4036), so no recipe tuple can supply the fork any more."""
     go_mod = None if source_tree is None else source_tree / _CORE_MODULE / "go.mod"
     if go_mod is None or not go_mod.is_file():
         return set()
@@ -1211,6 +1215,11 @@ def _core_own_requires(source_tree: Path | None) -> set[tuple[str, str]]:
             block = fields[0]
         else:
             directive, args = (block, fields) if block else (fields[0], fields[1:])
+            if directive == "require" and len(args) >= 2 and args[0] == _RETIRED_XXH3_FORK:
+                raise BuildError(
+                    f"{_CORE_MODULE}/go.mod requires {args[0]} {args[1]}, the retired xxh3 fork (#3925): "
+                    "Core takes github.com/zeebo/xxh3 from the gateway's vendor/ (#4036)"
+                )
             if directive == "require" and len(args) >= 2 and args[0] in _CORE_OWN_MODULES:
                 required.add((args[0], args[1]))
     return required
