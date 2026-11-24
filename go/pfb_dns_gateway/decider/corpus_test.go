@@ -39,11 +39,17 @@ func TestParityCorpus(t *testing.T) {
 // runScenario runs the scenario file's cases in file order, each as a subtest of t, and hands every mismatch to report
 // with that subtest.
 func runScenario(t *testing.T, file string, families map[string]string, report func(t *testing.T, line string)) {
+	runScenarioWith(t, file, families, bootScenario, report)
+}
+
+// runScenarioWith is runScenario with the scenario's module booted by boot.
+func runScenarioWith(t *testing.T, file string, families map[string]string,
+	boot func(*testing.T, *paritycorpus.Scenario) (*pfbUnbound, *Frontend), report func(t *testing.T, line string)) {
 	s, err := paritycorpus.LoadScenario(file, families)
 	if err != nil {
 		t.Fatal(err)
 	}
-	module, f := bootScenario(t, s)
+	module, f := boot(t, s)
 	for i := range s.Cases {
 		c := &s.Cases[i]
 		t.Run(c.ID, func(t *testing.T) {
