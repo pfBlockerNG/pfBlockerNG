@@ -395,7 +395,7 @@ func TestResolvePublicSuffixDoesNotRebuildTheIndex(t *testing.T) { // test_resol
 	}
 }
 
-func TestShippedPslAuthorityLoadsAsPythonDoes(t *testing.T) { // oracle: the shipped dnsbl_psl under Python 3.11
+func TestShippedPslAuthorityLoadsAsPythonDoes(t *testing.T) { // oracle: the shipped dnsbl_psl under Python 3.11; the counts are read from the file
 	rules, err := loadPslAuthority(pslShippedAuthority, true)
 	if err != nil {
 		t.Fatalf("the shipped PSL authority no longer loads (a UTS #46 table change refusing one of its ~460 xn-- rules fails the whole authority): %v", err)
