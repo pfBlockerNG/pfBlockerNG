@@ -41,9 +41,12 @@ type Cursor struct {
 // State is what the module directory holds from Core: the manifest's cursor, and every dnsbl/* body it serves (the
 // manifest included), as ReportApplied takes them.
 type State struct {
+	Version   int               `json:"version"` // stateVersion; a state of another version is not trusted
 	Manifest  Cursor            `json:"manifest"`
 	Resources map[string]Cursor `json:"resources"`
 	Folder    string            `json:"folder"` // the folder of pfb_py_raw that holds the feeds
+	// Files is the digest of each file written converted (SafeSearch, PSL), which Core's digest does not describe.
+	Files map[string]string `json:"files,omitempty"`
 }
 
 var (
@@ -63,6 +66,8 @@ const (
 	maxMember = 1 << 20 // the longest member a body may hold (docs/misc/core-api-protocol.md "Body and digest")
 	rawDir    = "pfb_py_raw"
 	stateFile = "pfb_py_core.json"
+
+	stateVersion = 1
 )
 
 // Client calls the Core API on its Unix socket.
@@ -212,7 +217,7 @@ func Load(dir string) State {
 		return State{}
 	}
 	data, err := os.ReadFile(filepath.Join(dir, stateFile))
-	if err != nil || json.Unmarshal(data, &s) != nil || !cursorOK(s.Manifest) {
+	if err != nil || json.Unmarshal(data, &s) != nil || s.Version != stateVersion || !cursorOK(s.Manifest) {
 		return State{}
 	}
 	for id, cur := range s.Resources {
@@ -223,10 +228,12 @@ func Load(dir string) State {
 		if path == "" || !own(path) {
 			return State{}
 		}
-		if id != ssID && id != pslID {
-			if digest, err := fileDigest(path); err != nil || digest != cur.Digest {
-				return State{}
-			}
+		want := cur.Digest
+		if id == ssID || id == pslID {
+			want = s.Files[memberFile[id]]
+		}
+		if digest, err := fileDigest(path); err != nil || digest != want {
+			return State{}
 		}
 	}
 	return s
@@ -408,7 +415,8 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 			os.RemoveAll(folder)
 		}
 	}()
-	state := State{Manifest: cur, Resources: map[string]Cursor{manifestID: cur}, Folder: filepath.Base(folder)}
+	state := State{Version: stateVersion, Manifest: cur, Resources: map[string]Cursor{manifestID: cur}, Folder: filepath.Base(folder),
+		Files: map[string]string{}}
 	files := map[string][]byte{} // the SafeSearch and PSL files this generation has, empty ones included
 	kept := map[string]bool{}    // the SafeSearch and PSL files that stay as they are
 	for _, id := range slices.Sorted(maps.Keys(m.bodies)) {
@@ -424,6 +432,7 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 		}
 		if have == at {
 			kept[memberFile[id]] = true
+			state.Files[memberFile[id]] = prev.Files[memberFile[id]]
 			continue
 		}
 		var b bytes.Buffer
@@ -438,6 +447,7 @@ func Sync(ctx context.Context, c *Client, dir string, prev State) (State, bool, 
 		if err != nil {
 			return prev, false, err
 		}
+		state.Files[memberFile[id]] = digestOf(files[memberFile[id]])
 	}
 	feeds := []map[string]any{}
 	for _, f := range m.feeds {
@@ -568,8 +578,8 @@ func fetchBody(ctx context.Context, c *Client, id string, want Cursor, entries i
 }
 
 // merge writes the body at it to a new file at path: the cached body with Core's delta applied, line by line in byte
-// order. It is errDelta unless each part is canonical, every removed member is there, no added one is, and the result is
-// its digest and entries.
+// order. It is errDelta unless the result has the digest and entries it names: that check alone stands for every
+// other, a part out of order, a member added twice or removed though absent.
 // ponytail: each part is held in memory while it merges; stream the parts from files if a delta reaches the size of a body.
 func merge(ctx context.Context, c *Client, id string, it item, cached, path string) error {
 	add, err := c.part(ctx, id, it, "add", it.AddEntries)
@@ -605,16 +615,13 @@ func merge(ctx context.Context, c *Client, id string, it item, cached, path stri
 			emit(add[0])
 			add = add[1:]
 		}
-		switch {
-		case len(add) > 0 && add[0] == line, len(remove) > 0 && remove[0] < line:
-			return errDelta // adds a member that is there, or removes one that is not
-		case len(remove) > 0 && remove[0] == line:
+		if len(remove) > 0 && remove[0] == line {
 			remove = remove[1:]
-		default:
+		} else {
 			emit(line)
 		}
 	}
-	if sc.Err() != nil || len(remove) > 0 {
+	if sc.Err() != nil {
 		return errDelta
 	}
 	for _, line := range add {
@@ -632,8 +639,8 @@ func merge(ctx context.Context, c *Client, id string, it item, cached, path stri
 	return f.Close()
 }
 
-// part is the lines of a delta part of id, errDelta unless there are count of them, each a member, in byte order, none
-// repeated, or when Core no longer holds the delta.
+// part is the lines of a delta part of id, errDelta when it runs past count lines' bound or is not plain text, or when Core
+// no longer holds the delta. merge checks what the lines make.
 func (c *Client) part(ctx context.Context, id string, it item, part string, count int) ([]string, error) {
 	resp, err := c.post(ctx, "GetResourceBody", map[string]string{"id": id, "generation": it.Generation, "part": part, "from": it.From})
 	var apiErr *APIError
@@ -654,21 +661,10 @@ func (c *Client) part(ctx context.Context, id string, it item, part string, coun
 		return nil, fmt.Errorf("%s %s: %w", id, part, err)
 	case int64(len(data)) > bound:
 		return nil, errDelta
-	case len(data) == 0 && count == 0:
+	case len(data) == 0:
 		return nil, nil
-	case len(data) == 0 || data[len(data)-1] != '\n':
-		return nil, errDelta
 	}
-	lines := strings.Split(string(data[:len(data)-1]), "\n")
-	if len(lines) != count {
-		return nil, errDelta
-	}
-	for i, line := range lines {
-		if line == "" || i > 0 && lines[i-1] >= line {
-			return nil, errDelta
-		}
-	}
-	return lines, nil
+	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n"), nil
 }
 
 // fetchFile writes the body of id at cur to a new file at path and syncs it.
@@ -698,6 +694,12 @@ func syncDir(dir string) error {
 		err = cerr
 	}
 	return err
+}
+
+// digestOf is the digest of data, as Core writes a body's.
+func digestOf(data []byte) string {
+	sum := xxh3.Hash128(data).Bytes()
+	return hex.EncodeToString(sum[:])
 }
 
 // fileDigest is the digest of the file at path, as Core writes a body's.

@@ -40,6 +40,8 @@ type coreFeed struct {
 	// stays down is logged once.
 	reported bool
 	lastErr  string
+	// reportFailed is whether the last report failed and was logged: a Core that stays down is logged once.
+	reportFailed bool
 }
 
 // bootCore boots the module in moduleDir on the Core API at socket. tick is the poller's tick source (nil: a
@@ -96,11 +98,11 @@ func (f *coreFeed) drain(stop <-chan struct{}) {
 		f.served, f.reported, f.pending = f.disk.Resources, false, false
 	}
 	if !f.reported {
-		if err := f.client.ReportApplied(ctx, f.served); err != nil {
+		err := f.client.ReportApplied(ctx, f.served)
+		if err != nil && !f.reportFailed {
 			logWarn("[pfBlockerNG]: DNSBL: reporting the generation served to Core failed: " + err.Error())
-		} else {
-			f.reported = true
 		}
+		f.reported, f.reportFailed = err == nil, err != nil
 	}
 }
 
