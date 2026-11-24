@@ -277,6 +277,11 @@ func TestAHostileReplyLeavesTheModuleAsItWas(t *testing.T) {
 		{"a PSL rule that is a section marker", pslWith(`{"section":"icann","rule":"// ===END ICANN DOMAINS==="}`), nil, nil},
 		{"a PSL rule padded with spaces", pslWith(`{"section":"icann","rule":" com"}`), nil, nil},
 		{"a SafeSearch value that needs quoting", ssWith(`{"host":"a,b.example","a":"x.example","aaaa":"x.example"}`), nil, nil},
+		{"a SafeSearch value padded with a space", ssWith(`{"host":"www.example","a":" x.example","aaaa":"x.example"}`), nil, nil},
+		{"a SafeSearch row without a host", ssWith(`{"host":"","a":"x.example","aaaa":"x.example"}`), nil, nil},
+		{"a PSL rule that is a comment", pslWith(`{"section":"icann","rule":"# com"}`), nil, nil},
+		{"a PSL rule holding a carriage return", pslWith(`{"section":"icann","rule":"com\rnet"}`), nil, nil},
+		{"an empty PSL rule", pslWith(`{"section":"icann","rule":""}`), nil, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()

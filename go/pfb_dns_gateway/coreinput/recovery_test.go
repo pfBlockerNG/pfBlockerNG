@@ -74,6 +74,27 @@ func TestAFileGoneOrChangedIsFetchedAgain(t *testing.T) {
 		{"SafeSearch gone", func(dir string) error { return os.Remove(filepath.Join(dir, "pfb_py_ss.txt")) }},
 		{"the PSL gone", func(dir string) error { return os.Remove(filepath.Join(dir, "dnsbl_psl")) }},
 		{"the state file gone", func(dir string) error { return os.Remove(filepath.Join(dir, "pfb_py_core.json")) }},
+		{"the manifest gone", func(dir string) error { return os.Remove(filepath.Join(dir, "pfb_py_sources.json")) }},
+		{"the manifest a link", func(dir string) error {
+			path := filepath.Join(dir, "pfb_py_sources.json")
+			if err := os.Rename(path, path+".real"); err != nil {
+				return err
+			}
+			return os.Symlink(path+".real", path)
+		}},
+		{"a state naming a folder outside", func(dir string) error {
+			data, err := os.ReadFile(filepath.Join(dir, "pfb_py_core.json"))
+			if err != nil {
+				return err
+			}
+			var st map[string]any
+			if err := json.Unmarshal(data, &st); err != nil {
+				return err
+			}
+			st["folder"] = "../g7"
+			data, _ = json.Marshal(st)
+			return os.WriteFile(filepath.Join(dir, "pfb_py_core.json"), data, 0o600)
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir, _, _, cl := synced(t)
@@ -111,17 +132,82 @@ func rawOfDir(dir string) string {
 	return doc.Feeds[0].Raw
 }
 
-func TestCoreDataGoneRemovesTheCoreFiles(t *testing.T) {
+// Core answering not_found for the manifest is also a store not rebuilt yet (a RAM disk after a reboot), when the cache is
+// what keeps DNSBL up: DNSBL switched off reaches pfB-DNS through its settings, so Sync keeps every file.
+func TestCoreDataGoneKeepsTheCache(t *testing.T) {
 	dir, state, srv, c := synced(t)
+	want := tree(t, dir)
 	srv.Set(map[string]coretest.Resource{})
-	_, changed, err := coreinput.Sync(context.Background(), c, dir, state)
-	if !errors.Is(err, coreinput.ErrNoData) || !changed {
-		t.Fatalf("Sync = changed %v, %v; want ErrNoData and a change", changed, err)
+	got, changed, err := coreinput.Sync(context.Background(), c, dir, state)
+	if !errors.Is(err, coreinput.ErrNoData) || changed || got.Manifest != state.Manifest {
+		t.Fatalf("Sync = %+v, changed %v, %v; want ErrNoData, no change, the state kept", got, changed, err)
 	}
-	if got := tree(t, dir); len(got) != 0 {
-		t.Errorf("dir still holds %q", got)
+	if after := tree(t, dir); len(after) != len(want) {
+		t.Errorf("files = %d, want %d", len(after), len(want))
 	}
-	if got := coreinput.Load(dir); got.Manifest != (coreinput.Cursor{}) {
-		t.Errorf("Load = %+v, want no state", got)
+	if loaded := coreinput.Load(dir); loaded.Manifest != state.Manifest {
+		t.Errorf("Load = %+v, want the state kept", loaded)
+	}
+}
+
+// The folder the manifest on disk names stays through the next Sync even when Load trusts nothing: a build may read it.
+func TestTheFolderTheManifestNamesOutlivesALostState(t *testing.T) {
+	dir, _, srv, c := synced(t)
+	g7 := rawOf(t, dir)
+	if err := os.Remove(filepath.Join(dir, "pfb_py_core.json")); err != nil {
+		t.Fatal(err)
+	}
+	srv.Set(data("8", "b.example"))
+	if _, changed, err := coreinput.Sync(context.Background(), c, dir, coreinput.Load(dir)); err != nil || !changed {
+		t.Fatalf("Sync: changed %v, %v", changed, err)
+	}
+	if got := tree(t, dir)[g7]; got != "a.example\n" {
+		t.Errorf("%s = %q, want it kept", g7, got)
+	}
+}
+
+func TestAnEmptySafeSearchBodyIsAnEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	srv := coretest.Start(t, memberWith("dnsbl/safesearch", 4, ""))
+	res := memberWith("dnsbl/safesearch", 4, "")
+	res["dnsbl/safesearch"] = coretest.Resource{Generation: "9", Body: []byte{}}
+	m := rows(res["dnsbl/manifest"].Body)
+	m[4] = `{"kind":"member","resource":"dnsbl/safesearch","generation":"9","digest":"` + coretest.Digest(nil) + `","entries":0}`
+	res["dnsbl/manifest"] = coretest.Resource{Generation: "9", Body: coretest.Lines(m)}
+	srv.Set(res)
+	state, _, err := coreinput.Sync(context.Background(), coreinput.New(srv.Socket), dir, coreinput.State{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := tree(t, dir)["pfb_py_ss.txt"]; !ok || got != "" {
+		t.Errorf("pfb_py_ss.txt = %q (present %v), want an empty file", got, ok)
+	}
+	if loaded := coreinput.Load(dir); loaded.Manifest != state.Manifest {
+		t.Errorf("Load = %+v, want %+v", loaded, state.Manifest)
+	}
+}
+
+func TestSyncRemovesTheTemporaryFilesAnInterruptedWriteLeft(t *testing.T) {
+	dir, _, srv, c := synced(t)
+	for _, name := range []string{".pfb_py_ss.txt.123", ".pfb_py_sources.json.9", ".pfb_py_core.json.1", ".dnsbl_psl.5"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pfb_unbound.ini"), []byte("[MAIN]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv.Set(data("8", "b.example"))
+	if _, _, err := coreinput.Sync(context.Background(), c, dir, coreinput.Load(dir)); err != nil {
+		t.Fatal(err)
+	}
+	got := tree(t, dir)
+	for _, name := range []string{".pfb_py_ss.txt.123", ".pfb_py_sources.json.9", ".pfb_py_core.json.1", ".dnsbl_psl.5"} {
+		if _, ok := got[name]; ok {
+			t.Errorf("%s is still there", name)
+		}
+	}
+	if _, ok := got["pfb_unbound.ini"]; !ok {
+		t.Error("a file Sync does not write is gone")
 	}
 }
