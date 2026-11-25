@@ -149,6 +149,9 @@ func TestSweepRemovesTheBaselineAStoppedClearingAppliedLeft(t *testing.T) {
 	if got, want := storeFiles(t, dir), []string{"dnsbl~kept.2.body", "index.json"}; !slices.Equal(got, want) {
 		t.Errorf("after the sweep:\n have %q\n want %q", got, want)
 	}
+	if got := bodyLines(t, s, "dnsbl/kept", 2); !slices.Equal(got, []string{"2.2.2.2"}) {
+		t.Errorf("the current body serves %q, want [2.2.2.2]", got)
+	}
 }
 
 // GIVEN an id removed from the configuration whose RemovalApplied has not come yet, with a baseline and a delta
