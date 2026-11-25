@@ -344,7 +344,7 @@ def test_pfb_dns_user_reads_only_the_dnsbl_resources(core_vm: SmokeVM) -> None:
             f"--client-uid {ids[0]} --socket-group {ids[1]}"
         )
         with h.start_core(core_vm, command, api, log, watchdog=READY_WATCHDOG):
-            ask = {"resources": {dnsbl: {}, ipset: {}}}
+            ask: dict[str, Any] = {"resources": {dnsbl: {}, ipset: {}}}
             # Before: root is served both, so a not_found below is the client limit, not an empty store
             status, body = call_as(core_vm, "root", "GetResources", ask, api)
             items = json.loads(body).get("resources", {})
