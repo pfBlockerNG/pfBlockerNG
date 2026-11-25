@@ -42,7 +42,7 @@ func TestDecisionCacheShrinksToItsNewBound(t *testing.T) {
 		c.set(k, i)
 	}
 	c.get("a")
-	c.setMaxsize(2)
+	c.resize(2)
 	if c.len() != 2 || !c.contains("a") || !c.contains("d") {
 		t.Errorf("len %d, a %v, d %v; want the two most recently used", c.len(), c.contains("a"), c.contains("d"))
 	}

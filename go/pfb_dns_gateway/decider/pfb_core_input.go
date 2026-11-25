@@ -258,7 +258,7 @@ func (m *pfbUnbound) applyLiveSettings(prev *pfbSettings) {
 		return
 	}
 	set := m.snapshot.Load().settings
-	m.decisionDB.setMaxsize(intOf(set.decisiondbMax))
+	m.decisionDB.resize(intOf(set.decisiondbMax))
 	if set.pythonControl {
 		m.startControlWatcher()
 	} else {

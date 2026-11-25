@@ -475,13 +475,20 @@ func (c *lruCache[V]) clear() {
 	c.order.Init()
 }
 
-// setMaxsize stands in for Python's `decisionDB.maxsize = n`, but evicts the entries past the new bound at once, where
-// Python waits for the next set: a Core settings swap that shrinks the cache leaves it within the bound.
+// setMaxsize stands in for Python's `decisionDB.maxsize = n`; it evicts nothing until the next set.
 func (c *lruCache[V]) setMaxsize(maxsize int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.maxsize = maxsize
-	for 0 < c.maxsize && c.maxsize < len(c.items) { // the least recently used entries past the new bound go
+}
+
+// resize is setMaxsize evicting the least recently used entries past the new bound at once, as a Core settings swap
+// that shrinks the cache needs: a set evicts one entry only, so a cache filled past the bound would stay past it.
+func (c *lruCache[V]) resize(maxsize int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.maxsize = maxsize
+	for 0 < c.maxsize && c.maxsize < len(c.items) {
 		oldest := c.order.Front()
 		c.order.Remove(oldest)
 		delete(c.items, oldest.Value.(*lruItem[V]).key)
