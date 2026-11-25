@@ -1,6 +1,6 @@
-// The ini options nothing set to another value (issue #4036, owner 2026-11-25): python_blocking (always on),
-// python_tld_seg (always 1), python_idn (a copy of idn_mode) and regex_warn_ms (never written) are not read. A module
-// behaves as the writer's constants made it behave, whatever an ini says for them.
+// The ini options that carried nothing of their own (issue #4036, owner 2026-11-25): python_blocking (always on),
+// python_tld_seg (always 1), regex_warn_ms (never written) and python_idn (derived from idn_mode, on exactly for All)
+// are not read. A module behaves as the writer's values made it behave, whatever an ini says for them.
 package decider
 
 import (

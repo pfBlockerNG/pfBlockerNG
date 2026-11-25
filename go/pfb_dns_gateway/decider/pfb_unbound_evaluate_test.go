@@ -1514,7 +1514,8 @@ func TestEvaluateCfgGatesFollowTheSnapshot(t *testing.T) {
 	}
 }
 
-// _evaluate_cfg: idn_mode is the stored mode (evaluateDomain decides any other value as Off); tld_allow_list is the snapshot's frozen roots, else the settings' list normalised.
+// _evaluate_cfg: idn_mode is the stored mode, passed through as stored (evaluateDomain decides any value but on and
+// confusable as Off); tld_allow_list is the snapshot's frozen roots, else the settings' list normalised.
 func TestEvaluateCfgIdnModeAndTldRoots(t *testing.T) {
 	m := &pfbUnbound{regexRuntime: newRegexRuntime()}
 	for _, row := range []struct {
@@ -1523,6 +1524,7 @@ func TestEvaluateCfgIdnModeAndTldRoots(t *testing.T) {
 		want IdnMode
 	}{
 		{"off", IdnModeOff, IdnModeOff},
+		{"empty passes through", "", ""},
 		{"confusable is kept", IdnModeConfusable, IdnModeConfusable},
 	} {
 		if got := m.evaluateCfg(evSnapshot(&pfbSettings{idnMode: row.mode})).idnMode; got != row.want {

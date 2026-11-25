@@ -65,7 +65,8 @@ func regexTimedSearch(re *regexp.Regexp, qName string) (bool, float64) {
 	return matched, float64(time.Since(start)) / float64(time.Millisecond)
 }
 
-// warnSlow logs ONE warning per rule when a match of rule name of the list label took elapsedMs, over warnMs. Rule
+// warnSlow logs ONE warning per rule when a match of rule name of the list label took elapsedMs, over warnMs (always
+// REGEX_WARN_MS_DEFAULT in a scan; a parameter so that the tests can pin the log line under any ceiling). Rule
 // names repeat across lists, so a rule is known by its list and its name. Warn only: the rule stays loaded.
 func (r *regexRuntime) warnSlow(name string, elapsedMs, warnMs float64, label string) {
 	if elapsedMs <= warnMs || !r.firstWarning(label+":"+name) {
@@ -499,7 +500,8 @@ func evaluateDomain(qName, qNameOriginal, tld string, isCname bool, cfg evaluate
 			// band, so augment the first-discovered block's band with a full scan over every matching block. When a
 			// STRICTLY higher band wins, re-attribute feed/group/log_type/b_type/b_eval to that entry (issue #47): the
 			// band decides priority, but reporting AND the response shape must follow the rule that actually won. A tie
-			// keeps the discovered attribution (block bands are distinct odds, so a tie is the same entry / priority).
+			// keeps the discovered attribution, also against another entry of the same band (a built-in TLD_Allow or IDN
+			// block tied by a feed regex: pfb_unbound_evaluate_gaps_test.go E1, E2).
 			scanBand, scanMeta := scanBlockBand(qName, cfg, containers.dataDB, containers.zoneDB, containers.regexDB, containers.userRegexDB)
 			if scanMeta != nil && scanBand > blockBand {
 				blockBand = scanBand

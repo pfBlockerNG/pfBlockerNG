@@ -1,6 +1,6 @@
-// Rows added after a mutation run over pfb_unbound_evaluate_test.go left them alive: the built-in strata's feed band
-// under the numeric path, the tie order inside scanBlockBand, and the CNAME allow band taking the higher of the two
-// names. The expected decisions of the evaluate
+// Rows added after a mutation run over pfb_unbound_evaluate_test.go left them alive: the band ties between the
+// discovery and the re-scan, the built-in strata's feed band under the numeric path, the tie order inside
+// scanBlockBand, and the CNAME allow band taking the higher of the two names. The expected decisions of the evaluate
 // rows were produced by running evaluate_domain in Python (uv run python, Python 3.11, this worktree).
 package decider
 

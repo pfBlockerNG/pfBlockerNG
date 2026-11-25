@@ -289,8 +289,9 @@ func mainOptionError(option string, err error) error {
 // tables into scratch: what init_standard loads from the ini before the DNSBL data. An error is what makes init_standard
 // raise. Init loads the module's settings with it, and a Core settings swap loads the settings it brings.
 func (m *pfbUnbound) loadIniSettings(config *configParser, pfb *pfbSettings, scratch *snapshot) error {
-	// python_blocking (always on), python_tld_seg (always 1), python_idn (a copy of idn_mode) and regex_warn_ms (never
-	// written) are not read, and since #4036 not written either: they only ever held one value (owner, 2026-11-25).
+	// python_blocking (always on), python_tld_seg (always 1) and regex_warn_ms (never written) only ever held one value,
+	// and python_idn was derived from idn_mode (on exactly for All): none is read, nor written since #4036 (owner,
+	// 2026-11-25).
 	if config.hasSection("MAIN") {
 		mainBool := func(option string, dst *bool) error {
 			if !config.hasOption("MAIN", option) {
