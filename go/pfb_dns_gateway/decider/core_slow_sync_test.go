@@ -13,7 +13,7 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/coretest"
 )
 
-// roundTrip answers a request with the handler, in memory.
+// roundTrip is a function as an http.RoundTripper.
 type roundTrip func(*http.Request) (*http.Response, error)
 
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

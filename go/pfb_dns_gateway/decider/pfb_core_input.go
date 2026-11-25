@@ -97,20 +97,9 @@ func bootCore(moduleDir, logDir string, client *coreinput.Client, observer bool,
 func (f *coreFeed) trusted() bool { return f.disk.Manifest != (coreinput.Cursor{}) }
 
 // run is the poller's body: drain, then wait for the next tick, until stop is closed. A panic ends only the poller, as
-// one ends only the reload watcher.
+// one ends only the reload watcher. Only stop ends a call to Core: a slow transfer runs to its end, and a Core that dies
+// drops the connection (owner, 2026-11-25).
 func (f *coreFeed) run(stop <-chan struct{}, tick <-chan time.Time) {
-	defer func() {
-		if err := recover(); err != nil {
-			fmt.Fprintf(logOutput, "[pfBlockerNG]: Core input poller error: %v\n", err)
-		}
-	}()
-	pollLoop(stop, tick, f.drain)
-}
-
-// drain syncs with Core, swaps a new generation in, and reports what is served until Core has taken a report. A Sync that
-// fails changes nothing served: the live snapshot stays, and so does the module directory's last good state. Only stop
-// ends a call to Core: a slow transfer runs to its end, and a Core that dies drops the connection (owner, 2026-11-25).
-func (f *coreFeed) drain(stop <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -120,6 +109,17 @@ func (f *coreFeed) drain(stop <-chan struct{}) {
 		case <-ctx.Done():
 		}
 	}()
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Fprintf(logOutput, "[pfBlockerNG]: Core input poller error: %v\n", err)
+		}
+	}()
+	pollLoop(stop, tick, func(<-chan struct{}) { f.drain(ctx) })
+}
+
+// drain syncs with Core, swaps a new generation in, and reports what is served until Core has taken a report. A Sync that
+// fails changes nothing served: the live snapshot stays, and so does the module directory's last good state.
+func (f *coreFeed) drain(ctx context.Context) {
 	state, changed, err := coreinput.Sync(ctx, f.client, f.dir, f.disk)
 	f.logSync(err)
 	if changed {

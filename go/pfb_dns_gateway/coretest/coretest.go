@@ -60,7 +60,7 @@ type Server struct {
 	revision  int
 }
 
-// New is a Server of resources that a test serves itself, on a listener of its own.
+// New is a Server of resources whose ServeHTTP a test calls itself.
 func New(resources map[string]Resource) *Server { return &Server{resources: resources} }
 
 // Start serves resources on a socket in a fresh short directory until the test ends.
