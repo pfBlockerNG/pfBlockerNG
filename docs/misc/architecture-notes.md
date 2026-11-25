@@ -398,6 +398,15 @@ never waits for Core: it builds from the cache only when `coreinput.Load` trusts
 user, writable by no other user, each body at its digest). Otherwise it serves no DNSBL, reported degraded, until the
 first poll brings the data.
 
+The settings come the same way (owner, 2026-11-25). Each poll reads Core's `settings/dns` and `settings/policy/dnsbl` and
+writes them as the module directory's `pfb_unbound.ini`, in the shape `pfb_unbound_python_ini()` gives, so init reads them
+unchanged and a start without Core takes the settings Core last gave. The file's name keeps it in the RAM-disk archive of
+`pfblockerng.sh dnsbl_cache save`, like the data. Three departures from today's writer: no creation time, no `forwarding`
+(it is whether pfB-DNS was started with `--observer`, which the Outpost passes only while the Resolver forwards), and a `%`
+in a value written `%%`. A settings change is no restart: the next swap builds the snapshot from the new settings, as init
+does, and then the module applies what lives outside the snapshot (the control-channel reader, the decision cache's size,
+the client metrics authority). Like a restart, it drops what control commands changed at runtime; a data change keeps them.
+
 Pinned by `tests/test_adr10_*` (snapshot equivalence, fail-closed swap, watcher); idle
 decision-identity stays guarded by `tests/test_adr06_*`/`tests/test_adr07_*`. See
 `legacy/ADRs/ADR_10_Zero_Downtime_DNSBL/`.

@@ -616,7 +616,7 @@ func TestUpstreamBlockEnqueuesTheUpstreamCounterTask(t *testing.T) {
 			r := newObserverRig(t, "forwarding = true\n")
 			drain, epoch := counterEvents(t, r)
 			if tc.privacy {
-				r.m.metricsPrivacyEpochs = map[int]string{dbDnsbl: "privacy"}
+				r.m.metricsPrivacyEpochs.Store(&map[int]string{dbDnsbl: "privacy"})
 			}
 			r.relay(t, observerReport(t, tc.over))
 			if got, want := drain(), []dbEvent{tc.want(epoch)}; !reflect.DeepEqual(got, want) {

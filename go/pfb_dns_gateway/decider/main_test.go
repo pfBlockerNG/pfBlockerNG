@@ -21,6 +21,14 @@ func stopModule(t *testing.T, m *pfbUnbound) {
 	t.Cleanup(m.stopReloadWatcher) // registered last, it runs first: a watcher mid-build must not meet a closed database
 }
 
+// privacyEpochs is the client metrics authority the module holds.
+func privacyEpochs(m *pfbUnbound) map[int]string {
+	if epochs := m.metricsPrivacyEpochs.Load(); epochs != nil {
+		return *epochs
+	}
+	return nil
+}
+
 // testLogDir is where every module of these tests writes its logs: a directory of its own, never /var/log/pfblockerng.
 var testLogDir string
 

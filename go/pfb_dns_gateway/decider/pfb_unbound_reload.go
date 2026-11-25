@@ -167,6 +167,11 @@ func (m *pfbUnbound) reloadBuildSnapshot() (*snapshot, error) {
 	if live := m.snapshot.Load(); live != nil {
 		settings = live.settings
 	}
+	return m.reloadBuildSnapshotWith(settings, func() *regexDB { return m.reloadUserRegex(settings) })
+}
+
+// reloadBuildSnapshotWith is reloadBuildSnapshot from settings, with the user regex userRegex gives.
+func (m *pfbUnbound) reloadBuildSnapshotWith(settings *pfbSettings, userRegex func() *regexDB) (*snapshot, error) {
 	build := m.dnsblBuildFromManifest(settings.pfbPySources)
 	if build == nil {
 		return nil, nil
@@ -178,7 +183,7 @@ func (m *pfbUnbound) reloadBuildSnapshot() (*snapshot, error) {
 	regexDBUpdate(next.regexDB, build.regexDB)
 	regexDBUpdate(next.allowRegexDB, build.allowRegexDB)
 	// The user regex of the ini come first; the Custom_List rows of the manifest follow them.
-	regexDBUpdate(next.userRegexDB, m.reloadUserRegex(settings))
+	regexDBUpdate(next.userRegexDB, userRegex())
 	regexDBUpdate(next.userRegexDB, build.userRegexDB)
 	regexDBUpdate(next.userAllowRegexDB, build.userAllowRegexDB)
 	next.importantRules = build.importantRules || next.userRegexDB.len() > 0

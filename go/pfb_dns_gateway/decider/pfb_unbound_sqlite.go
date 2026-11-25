@@ -486,12 +486,18 @@ func missingEpochOwners(epochs map[[2]string]string, s *snapshot) [][2]string {
 	return out
 }
 
-// dbCapturePrivacyEpochs is _db_capture_privacy_epochs: only init grants client-address authority, from an ini opt-in
+// dbCapturePrivacyEpochs is _db_capture_privacy_epochs: dbCapturePrivacyEpochsFor the module's own opt-in.
+func (m *pfbUnbound) dbCapturePrivacyEpochs() { m.dbCapturePrivacyEpochsFor(m.pfb.metricsClientIp) }
+
+// dbCapturePrivacyEpochsFor is _db_capture_privacy_epochs: only init grants client-address authority, from an ini opt-in
 // that the database's own opt-in (client_ip = 1) confirms; a reload or reconnect cannot authorize old events. A database
 // that cannot be read grants none, and DNS is unaffected.
-func (m *pfbUnbound) dbCapturePrivacyEpochs() {
+//
+// On the Core input a settings swap that turns the opt-in on or off captures again: off grants none at once, on grants
+// the epochs the databases hold then, so events counted before are never authorized.
+func (m *pfbUnbound) dbCapturePrivacyEpochsFor(optIn bool) {
 	epochs := map[int]string{}
-	if m.pfb.metricsClientIp {
+	if optIn {
 		m.dbMu.Lock()
 		for _, d := range []struct {
 			db   int
@@ -520,14 +526,14 @@ func (m *pfbUnbound) dbCapturePrivacyEpochs() {
 		}
 		m.dbMu.Unlock()
 	}
-	m.metricsPrivacyEpochs = epochs
+	m.metricsPrivacyEpochs.Store(&epochs)
 }
 
 // metricClient is _metric_client: the client address to count and the epoch it was granted under, or blanks when this
 // process holds no authority for the database.
 func (m *pfbUnbound) metricClient(db int, qIP string) (string, string) {
-	if epoch := m.metricsPrivacyEpochs[db]; epoch != "" {
-		return metricIp(qIP), epoch
+	if epochs := m.metricsPrivacyEpochs.Load(); epochs != nil && (*epochs)[db] != "" {
+		return metricIp(qIP), (*epochs)[db]
 	}
 	return "", ""
 }
