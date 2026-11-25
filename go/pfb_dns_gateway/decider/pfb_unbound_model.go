@@ -609,12 +609,10 @@ func whitelistLookupDomain(name string, whiteDB map[string]whiteEntry) (bool, bo
 			return true, whiteEntryImportant(entry)
 		}
 	}
-	q := dropFirstLabel(name)
-	for range strings.Count(q, ".") + 1 {
+	for q := range iterDomainSuffixes(dropFirstLabel(name)) {
 		if entry, ok := whiteDB[q]; ok && whiteEntryWildcard(entry) {
 			return true, whiteEntryImportant(entry)
 		}
-		q = dropFirstLabel(q)
 	}
 	return false, false
 }
@@ -650,12 +648,10 @@ func whitelistLookupBand(name string, whiteDB map[string]whiteEntry) int {
 			}
 		}
 	}
-	q := dropFirstLabel(name)
-	for range strings.Count(q, ".") + 1 {
+	for q := range iterDomainSuffixes(dropFirstLabel(name)) {
 		if entry, ok := whiteDB[q]; ok && whiteEntryWildcard(entry) {
 			best = max(best, whiteEntryBand(entry))
 		}
-		q = dropFirstLabel(q)
 	}
 	return best
 }

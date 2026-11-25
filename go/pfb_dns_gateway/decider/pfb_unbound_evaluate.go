@@ -80,7 +80,6 @@ func (r *regexRuntime) warnSlow(name string, elapsedMs, warnMs float64, label st
 type regexScan struct {
 	rt        *regexRuntime
 	label     string
-	warnMs    float64
 	rules     int
 	totalMs   float64
 	slowest   string
@@ -89,17 +88,17 @@ type regexScan struct {
 
 // newRegexScan starts a pass over the list of group; a user list is labelled apart from the feed list of the same
 // group, and warns for its rules apart too.
-func newRegexScan(rt *regexRuntime, group string, warnMs float64, user bool) regexScan {
+func newRegexScan(rt *regexRuntime, group string, user bool) regexScan {
 	label := group
 	if user {
 		label = "user " + group
 	}
-	return regexScan{rt: rt, label: label, warnMs: warnMs}
+	return regexScan{rt: rt, label: label}
 }
 
 func (s *regexScan) search(name string, rule *regexEntry, qName string) bool {
 	matched, elapsedMs := s.rt.timedSearch(rule.re, qName)
-	s.rt.warnSlow(name, elapsedMs, s.warnMs, s.label)
+	s.rt.warnSlow(name, elapsedMs, REGEX_WARN_MS_DEFAULT, s.label)
 	s.rules++
 	s.totalMs += elapsedMs
 	if elapsedMs > s.slowestMs {
@@ -109,11 +108,11 @@ func (s *regexScan) search(name string, rule *regexEntry, qName string) bool {
 }
 
 func (s *regexScan) report() {
-	if s.totalMs <= s.warnMs || !s.rt.firstWarning("list:"+s.label) {
+	if s.totalMs <= REGEX_WARN_MS_DEFAULT || !s.rt.firstWarning("list:"+s.label) {
 		return
 	}
 	pyStderr(fmt.Sprintf("[pfBlockerNG]: slow %s regex list scan took %.1f ms over %d rules (warn ceiling %.1f ms); slowest [ %s ] %.1f ms\n",
-		s.label, s.totalMs, s.rules, s.warnMs, s.slowest, s.slowestMs))
+		s.label, s.totalMs, s.rules, REGEX_WARN_MS_DEFAULT, s.slowest, s.slowestMs))
 }
 
 // regexCandidates is the names of the rules of regexDB that can match qName.
@@ -204,11 +203,11 @@ func scanBlockBand(qName string, cfg evaluateConfig, dataDB, zoneDB map[string]*
 		// Each match is timed (ADR-07): a rule over the warn ceiling logs once, a list over it in total logs once, the
 		// same policy as the discovery scan; no rule is removed from the live DBs.
 		if cfg.userRegexDB {
-			scan := newRegexScan(cfg.regex, "DNSBL_Regex", REGEX_WARN_MS_DEFAULT, true)
+			scan := newRegexScan(cfg.regex, "DNSBL_Regex", true)
 			best, bestMeta = bestBlockRegex(userRegexDB, regexCandidates(userRegexDB, qName), qName, &scan, best, bestMeta)
 		}
 		if cfg.regexDB {
-			scan := newRegexScan(cfg.regex, "DNSBL_Regex", REGEX_WARN_MS_DEFAULT, false)
+			scan := newRegexScan(cfg.regex, "DNSBL_Regex", false)
 			best, bestMeta = bestBlockRegex(regexDB, regexCandidates(regexDB, qName), qName, &scan, best, bestMeta)
 		}
 	}
@@ -217,17 +216,17 @@ func scanBlockBand(qName string, cfg evaluateConfig, dataDB, zoneDB map[string]*
 
 // scanAllowRegexBand is the highest allow band over the allow-regex (@@/re/) entries, the user list then the feed
 // list, that match qName; 0 if none match. Each match is timed like scanBlockBand's.
-func scanAllowRegexBand(rt *regexRuntime, qName string, allowRegexDB, userAllowRegexDB *regexDB, warnMs float64) int {
+func scanAllowRegexBand(rt *regexRuntime, qName string, allowRegexDB, userAllowRegexDB *regexDB) int {
 	if qName == "" {
 		return 0
 	}
 	best := 0
 	if userAllowRegexDB.len() > 0 {
-		scan := newRegexScan(rt, "DNSBL_AllowRegex", warnMs, true)
+		scan := newRegexScan(rt, "DNSBL_AllowRegex", true)
 		best = bestAllowRegex(userAllowRegexDB, regexCandidates(userAllowRegexDB, qName), qName, &scan, best)
 	}
 	if allowRegexDB.len() > 0 {
-		scan := newRegexScan(rt, "DNSBL_AllowRegex", warnMs, false)
+		scan := newRegexScan(rt, "DNSBL_AllowRegex", false)
 		best = bestAllowRegex(allowRegexDB, regexCandidates(allowRegexDB, qName), qName, &scan, best)
 	}
 	return best
@@ -261,7 +260,7 @@ func resolveNumericAllow(qName, qNameOriginal string, isCname bool, cfg evaluate
 		}
 	}
 	if cfg.userAllowRegexDB || cfg.allowRegexDB {
-		allowBand = max(allowBand, scanAllowRegexBand(cfg.regex, qName, allowRegexDB, userAllowRegexDB, REGEX_WARN_MS_DEFAULT))
+		allowBand = max(allowBand, scanAllowRegexBand(cfg.regex, qName, allowRegexDB, userAllowRegexDB))
 	}
 	return allowBand >= blockBand
 }
@@ -408,14 +407,9 @@ func evaluateDomain(qName, qNameOriginal, tld string, isCname bool, cfg evaluate
 			blockBand = PRIO_FEED_BLOCK
 		}
 
-		// ADR-08: the IDN feed. idn_mode is the three-valued selector; an unrecognised one is Off.
+		// ADR-08: the IDN feed. idn_mode is the three-valued selector; any other value decides as Off.
 		if !isFound {
 			idnMode := cfg.idnMode
-			switch idnMode {
-			case IdnModeOff, IdnModeAll, IdnModeConfusable:
-			default:
-				idnMode = IdnModeOff
-			}
 			// All-IDN / Off arm: idn_mode_decision blocks IFF All-IDN on an xn-- query.
 			if idnModeDecision(qName, idnMode) {
 				isFound = true
@@ -465,7 +459,7 @@ func evaluateDomain(qName, qNameOriginal, tld string, isCname bool, cfg evaluate
 				if !l.loaded {
 					continue
 				}
-				scan := newRegexScan(cfg.regex, "DNSBL_Regex", REGEX_WARN_MS_DEFAULT, l.isUser)
+				scan := newRegexScan(cfg.regex, "DNSBL_Regex", l.isUser)
 				if name, rule := firstRegexMatch(l.db, qName, &scan); rule != nil {
 					isFound = true
 					feed = name
@@ -573,16 +567,12 @@ func (m *pfbUnbound) evaluateCfg(snap *snapshot) evaluateConfig {
 	if !snap.hasTldAllowRoots {
 		tldAllowList = selectedTldRoots(settings.tldAllowList)
 	}
-	idnMode := settings.idnMode
-	if idnMode == "" {
-		idnMode = IdnModeOff
-	}
 	return evaluateConfig{
 		dataDB:                      len(snap.dataDB) > 0,
 		zoneDB:                      len(snap.zoneDB) > 0,
 		tldAllow:                    settings.tldAllow,
 		tldAllowList:                tldAllowList,
-		idnMode:                     idnMode,
+		idnMode:                     settings.idnMode,
 		pythonIdnBlockMalicious:     settings.pythonIdnBlockMalicious,
 		pythonIdnEscalateSuspicious: settings.pythonIdnEscalateSuspicious,
 		regexDB:                     snap.regexDB.len() > 0,

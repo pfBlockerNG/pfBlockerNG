@@ -183,7 +183,7 @@ func TestEvaluateDomainAllowBlockPrecedence(t *testing.T) {
 
 // test_adr65_decision_oracle.py A10, A11, A12 and oracle rows for the arms around them: the Confusable BLOCK of a
 // suspicious name when escalated, the ALERT of a malicious name when blocking is off, the All-IDN block under the
-// numeric path, and the legacy python_idn fallback when idn_mode is absent or unrecognised.
+// numeric path, and an absent or unrecognised idn_mode deciding as Off.
 func TestEvaluateDomainIdnArms(t *testing.T) {
 	const malicious, suspicious = "xn--pple-43d.com", "xn--bnk-1ce.com"
 
@@ -876,14 +876,14 @@ func TestScanAllowRegexBand(t *testing.T) {
 		{"user list alone", nil, user, PRIO_USER_ALLOW},
 		{"feed list alone", feed, nil, PRIO_FEED_ALLOW_IMPORTANT},
 	} {
-		if got := scanAllowRegexBand(rt, "evil.example", row.feed, row.user, 10.0); got != row.want {
+		if got := scanAllowRegexBand(rt, "evil.example", row.feed, row.user); got != row.want {
 			t.Errorf("%s: band = %d, want %d", row.name, got, row.want)
 		}
 	}
-	if got := scanAllowRegexBand(rt, "", evRegexDB(evRx("R", "x", PRIO_FEED_ALLOW)), nil, 10.0); got != 0 {
+	if got := scanAllowRegexBand(rt, "", evRegexDB(evRx("R", "x", PRIO_FEED_ALLOW)), nil); got != 0 {
 		t.Errorf("an empty query name: band = %d, want 0", got)
 	}
-	if got := scanAllowRegexBand(rt, "benign.example", feed, user, 10.0); got != 0 {
+	if got := scanAllowRegexBand(rt, "benign.example", feed, user); got != 0 {
 		t.Errorf("no match: band = %d, want 0", got)
 	}
 }
@@ -928,16 +928,16 @@ func TestResolveNumericAllow(t *testing.T) {
 func TestFirstRegexMatch(t *testing.T) {
 	rt := newRegexRuntime()
 	db := evRegexDB(evRx("one", "nomatch", 1), evRx("two", "evil", 1), evRx("three", "evil", 5))
-	scan := newRegexScan(rt, "DNSBL_Regex", 10.0, false)
+	scan := newRegexScan(rt, "DNSBL_Regex", false)
 	name, rule := firstRegexMatch(db, "evil.com", &scan)
 	if name != "two" || rule != mustGet(t, db, "two") || scan.rules != 2 {
 		t.Errorf("got (%q, %v) after %d rules timed, want (two, the second rule) after 2", name, rule, scan.rules)
 	}
-	scan = newRegexScan(rt, "DNSBL_Regex", 10.0, false)
+	scan = newRegexScan(rt, "DNSBL_Regex", false)
 	if name, rule := firstRegexMatch(db, "benign.org", &scan); name != "" || rule != nil || scan.rules != 3 {
 		t.Errorf("no match: got (%q, %v) after %d rules timed, want (\"\", nil) after 3", name, rule, scan.rules)
 	}
-	scan = newRegexScan(rt, "DNSBL_Regex", 10.0, false)
+	scan = newRegexScan(rt, "DNSBL_Regex", false)
 	if name, rule := firstRegexMatch(nil, "evil.com", &scan); name != "" || rule != nil {
 		t.Errorf("a nil list: got (%q, %v), want (\"\", nil)", name, rule)
 	}
@@ -1060,7 +1060,7 @@ func TestSlowRegexIsWarnedAndKept(t *testing.T) {
 		rt.timedSearch = evScripted(t, slowMs, slowMs)
 		db := evRegexDB(evRx("A#0", `slow\.example$`, PRIO_FEED_ALLOW))
 		for i := range 2 {
-			if got := scanAllowRegexBand(rt, "slow.example", db, nil, 10.0); got != PRIO_FEED_ALLOW {
+			if got := scanAllowRegexBand(rt, "slow.example", db, nil); got != PRIO_FEED_ALLOW {
 				t.Errorf("scan %d: band = %d, want %d", i+1, got, PRIO_FEED_ALLOW)
 			}
 		}
@@ -1111,7 +1111,7 @@ func TestSlowRegexIsWarnedAndKept(t *testing.T) {
 		rt := newRegexRuntime()
 		rt.timedSearch = evScripted(t, 2.0)
 		db := evRegexDB(evRx("A#0", `slow\.example$`, PRIO_FEED_ALLOW))
-		if got := scanAllowRegexBand(rt, "slow.example", db, nil, 10.0); got != PRIO_FEED_ALLOW {
+		if got := scanAllowRegexBand(rt, "slow.example", db, nil); got != PRIO_FEED_ALLOW {
 			t.Errorf("band = %d, want %d", got, PRIO_FEED_ALLOW)
 		}
 		if log.String() != "" {
@@ -1223,14 +1223,14 @@ func TestSlowListScanIsReported(t *testing.T) {
 		rt := newRegexRuntime()
 		m := newEvMeasured(rt)
 		db := m.db("A", PRIO_FEED_ALLOW, []float64{3, 4, 5}, -1)
-		if got := scanAllowRegexBand(rt, "slow.example", db, nil, 10.0); got != 0 {
+		if got := scanAllowRegexBand(rt, "slow.example", db, nil); got != 0 {
 			t.Errorf("band = %d, want 0", got)
 		}
 		want := evListLine("DNSBL_AllowRegex", "12.0", 3, "A#2", "5.0")
 		if log.String() != want {
 			t.Errorf("log = %q, want %q", log.String(), want)
 		}
-		scanAllowRegexBand(rt, "slow.example", db, nil, 10.0)
+		scanAllowRegexBand(rt, "slow.example", db, nil)
 		if log.String() != want {
 			t.Errorf("the second scan wrote %q, want nothing", strings.TrimPrefix(log.String(), want))
 		}
@@ -1240,7 +1240,7 @@ func TestSlowListScanIsReported(t *testing.T) {
 		cfg := feedCfg()
 		m := newEvMeasured(cfg.regex)
 		scanBlockBand("slow.example", cfg, nil, nil, m.db("F", PRIO_FEED_BLOCK, []float64{3, 4, 5}, -1), nil)
-		scanAllowRegexBand(cfg.regex, "slow.example", m.db("A", PRIO_FEED_ALLOW, []float64{3, 5, 4}, -1), nil, 10.0)
+		scanAllowRegexBand(cfg.regex, "slow.example", m.db("A", PRIO_FEED_ALLOW, []float64{3, 5, 4}, -1), nil)
 		want := evListLine("DNSBL_Regex", "12.0", 3, "F#2", "5.0") + evListLine("DNSBL_AllowRegex", "12.0", 3, "A#1", "5.0")
 		if log.String() != want {
 			t.Errorf("log = %q, want %q", log.String(), want)
@@ -1278,7 +1278,7 @@ func TestSlowListScanIsReported(t *testing.T) {
 		cfg.regexDB, cfg.userRegexDB = true, true
 		m := newEvMeasured(cfg.regex)
 		discover(cfg, matcherContainers{regexDB: m.db("X", PRIO_FEED_BLOCK, []float64{20}, -1), userRegexDB: m.db("X", PRIO_USER_BLOCK, []float64{20}, -1)})
-		scanAllowRegexBand(cfg.regex, "slow.example", m.db("X", PRIO_FEED_ALLOW, []float64{20}, -1), m.db("X", PRIO_USER_ALLOW, []float64{20}, -1), 10.0)
+		scanAllowRegexBand(cfg.regex, "slow.example", m.db("X", PRIO_FEED_ALLOW, []float64{20}, -1), m.db("X", PRIO_USER_ALLOW, []float64{20}, -1))
 		var got []string
 		for _, line := range strings.Split(strings.TrimSuffix(log.String(), "\n"), "\n") {
 			if strings.Contains(line, "regex [ X#0 ]") {
@@ -1325,7 +1325,7 @@ func TestSlowListScanIsReported(t *testing.T) {
 		m := newEvMeasured(rt)
 		feed := m.db("A", PRIO_FEED_ALLOW, []float64{3, 5, 4}, -1)
 		user := m.db("UA", PRIO_USER_ALLOW, []float64{3, 4, 5}, -1)
-		if got := scanAllowRegexBand(rt, "slow.example", feed, user, 10.0); got != 0 {
+		if got := scanAllowRegexBand(rt, "slow.example", feed, user); got != 0 {
 			t.Errorf("band = %d, want 0", got)
 		}
 		want := evListLine("user DNSBL_AllowRegex", "12.0", 3, "UA#2", "5.0") + evListLine("DNSBL_AllowRegex", "12.0", 3, "A#1", "5.0")

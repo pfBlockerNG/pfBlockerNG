@@ -8,6 +8,27 @@ import "testing"
 
 func TestEvaluateDomainBandTiesAndBuiltinBands(t *testing.T) {
 	fg := map[int]feedGroup{1: {"FeedA", "GroupA"}}
+	// On a band tie the numeric re-scan keeps the discovered attribution; a strictly higher band takes over. Data and zone
+	// hits are discovered first, so the ties left are a built-in discovery against a feed regex of its band.
+	tied := func(over func(*evaluateConfig)) evaluateConfig {
+		cfg := evCfg()
+		cfg.importantRules, cfg.regexDB = true, true
+		over(&cfg)
+		return cfg
+	}
+	tldAllow := func(c *evaluateConfig) { c.tldAllow, c.tldAllowList = true, []string{"com"} }
+	evCheck(t, "E1 a tie with the TLD_Allow discovery", evEval("x.example.net", "net", false, tied(tldAllow),
+		matcherContainers{regexDB: evRegexDB(evRx("F#0", "example", PRIO_FEED_BLOCK)), feedGroupIndexDB: fg}),
+		dd{isFound: true, nullBlocking: true, logType: "0", bType: "Python", pType: "Python", feed: "TLD_Allow", group: "DNSBL_TLD_Allow", bEval: "x.example.net", groupOwner: "DNSBL_TLD_Allow", groupOrigin: "builtin"})
+	evCheck(t, "E2 a tie with the IDN discovery", evEval("xn--abc.example.com", "com", false,
+		tied(func(c *evaluateConfig) { c.idnMode = IdnModeAll }),
+		matcherContainers{regexDB: evRegexDB(evRx("F#0", "example", PRIO_FEED_BLOCK)), feedGroupIndexDB: fg}),
+		dd{isFound: true, nullBlocking: true, logType: "0", bType: "Python", pType: "Python", feed: "IDN", group: "DNSBL_IDN", bEval: "xn--abc.example.com", groupOwner: "DNSBL_IDN", groupOrigin: "builtin"})
+	if got := evEval("x.example.net", "net", false, tied(tldAllow),
+		matcherContainers{regexDB: evRegexDB(evRx("F#0", "example", PRIO_FEED_BLOCK_IMPORTANT)), feedGroupIndexDB: fg}); !got.isFound || got.feed != "F#0" || got.group != "DNSBL_Regex" {
+		t.Errorf("E1b a higher band takes over from the TLD_Allow discovery: got %+v, want the regex F#0", *got)
+	}
+
 	// The IDN blocks carry the feed band, so under the numeric path with no allow they stand (band 1 > 0), where a
 	// band of 0 would read as already overridden.
 	cfg := evCfg()
@@ -46,10 +67,10 @@ func TestScanBlockBandTieOrder(t *testing.T) {
 func TestScanAllowRegexBandEmptyNameMatchesNothing(t *testing.T) {
 	rt := newRegexRuntime()
 	matchAll := evRegexDB(evRx("R", "", PRIO_FEED_ALLOW))
-	if got := scanAllowRegexBand(rt, "", matchAll, matchAll, 10.0); got != 0 {
+	if got := scanAllowRegexBand(rt, "", matchAll, matchAll); got != 0 {
 		t.Errorf("band = %d, want 0 for an empty query name", got)
 	}
-	if got := scanAllowRegexBand(rt, "x.example", matchAll, nil, 10.0); got != PRIO_FEED_ALLOW {
+	if got := scanAllowRegexBand(rt, "x.example", matchAll, nil); got != PRIO_FEED_ALLOW {
 		t.Errorf("control: band = %d, want %d for a named query", got, PRIO_FEED_ALLOW)
 	}
 }

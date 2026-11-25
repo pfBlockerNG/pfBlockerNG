@@ -289,6 +289,8 @@ func mainOptionError(option string, err error) error {
 // tables into scratch: what init_standard loads from the ini before the DNSBL data. An error is what makes init_standard
 // raise. Init loads the module's settings with it, and a Core settings swap loads the settings it brings.
 func (m *pfbUnbound) loadIniSettings(config *configParser, pfb *pfbSettings, scratch *snapshot) error {
+	// python_blocking (always on), python_tld_seg (always 1), python_idn (a copy of idn_mode) and regex_warn_ms (never
+	// written) are not read, and since #4036 not written either: they only ever held one value (owner, 2026-11-25).
 	if config.hasSection("MAIN") {
 		mainBool := func(option string, dst *bool) error {
 			if !config.hasOption("MAIN", option) {
@@ -329,8 +331,7 @@ func (m *pfbUnbound) loadIniSettings(config *configParser, pfb *pfbSettings, scr
 		if err := mainBool("python_tld_wildcard", &pfb.pythonTldWildcard); err != nil {
 			return err
 		}
-		// ADR-08: the IDN mode; '' and an absent or unrecognised one are Off. python_idn, the legacy switch PHP still
-		// writes as a copy of idn_mode, is not read (owner, 2026-11-25).
+		// ADR-08: the IDN mode; '' and an absent or unrecognised one are Off.
 		if config.hasOption("MAIN", "idn_mode") {
 			raw, err := config.get("MAIN", "idn_mode")
 			if err != nil {
@@ -347,8 +348,7 @@ func (m *pfbUnbound) loadIniSettings(config *configParser, pfb *pfbSettings, scr
 		if err := mainBool("python_idn_escalate_suspicious", &pfb.pythonIdnEscalateSuspicious); err != nil {
 			return err
 		}
-		// issue #713: a malformed decisiondb_max keeps the current value. python_blocking (always on), python_tld_seg
-		// (always 1), python_idn and regex_warn_ms (never written) are not read (owner, 2026-11-25).
+		// issue #713: a malformed decisiondb_max keeps the current value.
 		if config.hasOption("MAIN", "decisiondb_max") {
 			parsedDecisiondbMax, ok, err := parseIniInt(config, "MAIN", "decisiondb_max")
 			if err != nil {

@@ -138,9 +138,8 @@ func settingsIni(dns, policy map[string]any) ([]byte, error) {
 		return "off"
 	}
 	escape := func(s string) string { return strings.ReplaceAll(s, "%", "%%") }
-	idnMode := d.text("idnMode")
-	storedIdn := idnMode
-	if idnMode == "off" {
+	storedIdn := d.text("idnMode")
+	if storedIdn == "off" {
 		storedIdn = ""
 	}
 	control := d.flag("control")

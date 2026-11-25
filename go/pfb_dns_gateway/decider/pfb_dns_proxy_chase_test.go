@@ -53,7 +53,7 @@ var ssCsv = []string{
 	`odd.example,cname,safe\.duck.example,198.51.100.14,2001:db8::14`,
 }
 
-// ssBoot is a module dir shaped like /var/unbound, as write_module_dir shapes it: python_blocking and python_cname on,
+// ssBoot is a module dir shaped like /var/unbound, as write_module_dir shapes it: python_cname on,
 // blocked.example on a feed, and ssCsv as the SafeSearch list.
 func ssBoot(t *testing.T) *pfbUnbound {
 	t.Helper()
