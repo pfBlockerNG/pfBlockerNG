@@ -2,7 +2,11 @@
 
 * PHP gets the documented version reply through pfb_core_call() (docs/misc/core-api-protocol.md);
 * pfb-core holds no network socket, so no other host can reach it: its only listener is the Unix socket;
-* the socket's directory is root's alone, so an unprivileged local user cannot connect, while root can;
+* the socket's directory is open only to root and unbound's group, so an unprivileged local user cannot connect, while
+  root can;
+* issue #4250: pfB-DNS's user, ``unbound``, is admitted as a further local client: the read methods it is served
+  answer it, limited to the ``dns`` and ``policy/dnsbl`` projections and the ``dnsbl/*`` resources, and any other
+  method is refused;
 * ``--socket-group`` opens the socket to a group, never the API: on a second Core opened to nobody's group, ``nobody``
   connects and is refused with ``401 unauthenticated`` (who is served stays decided by uid), while root is served;
 * issue #3924: config.xml is the only store of ``settings/dns``: Core keeps no settings file and reads config.xml
@@ -243,8 +247,11 @@ def test_an_unprivileged_user_cannot_reach_the_api_and_root_can(core_vm: SmokeVM
     # Before: root reaches it, so the refusal below is the permission, not a dead socket
     root = core_vm.ssh(call, timeout=30)
     assert (root.returncode, root.stdout) == (0, "200"), f"root could not call the API: {root.stdout} {root.stderr}"
-    modes = core_vm.ssh(f"/usr/bin/stat -f '%Sp %Su' {SOCKET.rsplit('/', 1)[0]} {SOCKET}", timeout=30)
-    assert modes.stdout.split("\n")[:2] == ["drwx------ root", "srw------- root"], f"modes: {modes.stdout}"
+    # issue #4250: the socket is open to unbound's group, pfB-DNS's, and to no one else
+    modes = core_vm.ssh(f"/usr/bin/stat -f '%Sp %Su %Sg' {SOCKET.rsplit('/', 1)[0]} {SOCKET}", timeout=30)
+    assert modes.stdout.split("\n")[:2] == ["drwxr-x--- root unbound", "srw-rw---- root unbound"], (
+        f"modes: {modes.stdout}"
+    )
     nobody = core_vm.ssh(f"/usr/bin/su -m nobody -c {shlex.quote(call)}", timeout=30)
     # curl's exit 7 (could not connect) with no HTTP status: the connect itself was refused
     assert (nobody.returncode, nobody.stdout) == (7, "000"), (
@@ -253,6 +260,42 @@ def test_an_unprivileged_user_cannot_reach_the_api_and_root_can(core_vm: SmokeVM
     # ...because the socket's directory is closed to it
     entry = core_vm.ssh(f"/usr/bin/su -m nobody -c {shlex.quote('ls ' + SOCKET)}", timeout=30)
     assert entry.returncode != 0 and "Permission denied" in entry.stderr, f"{entry.returncode} {entry.stderr}"
+
+
+def unbound_calls(vm: SmokeVM, method: str, params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """``method`` called on the package's Core as ``unbound``: the HTTP status and the reply."""
+    call = (
+        f"/usr/local/bin/curl -sS -w '\\n%{{http_code}}' --unix-socket {SOCKET} -X POST "
+        f"-H 'Content-Type: application/json' --data {shlex.quote(json.dumps(params))} http://localhost/v1/{method}"
+    )
+    done = vm.ssh(f"/usr/bin/su -m unbound -c {shlex.quote(call)}", timeout=30)
+    body, _, status = done.stdout.rpartition("\n")
+    # curl exit 0 with a status: unbound connected and Core answered
+    assert done.returncode == 0 and status.isdigit(), (
+        f"unbound could not call {method}: rc={done.returncode} {done.stdout}{done.stderr}"
+    )
+    return int(status), json.loads(body)
+
+
+def test_pfb_dns_user_is_served_its_read_methods_and_refused_the_rest(core_vm: SmokeVM) -> None:
+    """issue #4250: Core admits unbound, pfB-DNS's user, as a further local client, limited as the protocol says."""
+    # Served: the settings pfB-DNS builds from
+    status, reply = unbound_calls(core_vm, "GetSettings", {"projectionIds": ["dns", "policy/dnsbl"]})
+    assert status == 200, f"GetSettings(dns, policy/dnsbl) as unbound: {status} {reply}"
+    assert {p["resourceId"] for p in reply.get("projections", [])} <= {"settings/dns", "settings/policy/dnsbl"}, reply
+    # Served, but a resource outside dnsbl/* does not exist for it
+    status, reply = unbound_calls(core_vm, "GetResources", {"resources": {"ip-set/Smoke/ipv4": {}}})
+    assert status == 200, f"GetResources as unbound: {status} {reply}"
+    assert reply["resources"]["ip-set/Smoke/ipv4"]["error"]["code"] == "not_found", reply
+    # Admitted: a report without its requestId is refused for its parameters, not for who sent it, and records nothing
+    status, reply = unbound_calls(core_vm, "ReportApplied", {})
+    assert (status, reply["error"]["code"]) == (400, "invalid_argument"), f"ReportApplied as unbound: {status} {reply}"
+    # Refused: another projection, as one that does not exist
+    status, reply = unbound_calls(core_vm, "GetSettings", {"projectionIds": ["maintenance"]})
+    assert (status, reply["error"]["code"]) == (400, "invalid_argument"), f"GetSettings(maintenance): {status} {reply}"
+    # Refused: a method a client may not call, before it runs
+    status, reply = unbound_calls(core_vm, "SaveSettings", {})
+    assert (status, reply["error"]["code"]) == (401, "unauthenticated"), f"SaveSettings as unbound: {status} {reply}"
 
 
 def await_group_socket(vm: SmokeVM, api: str, pid: str, log: str) -> None:
