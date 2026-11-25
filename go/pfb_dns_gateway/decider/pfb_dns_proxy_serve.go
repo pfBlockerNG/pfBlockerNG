@@ -12,12 +12,12 @@ import (
 
 // Options are the flags of pfb_dns_proxy.py (removed in #3791).
 type Options struct {
-	ModuleDir string // the module dir (/var/unbound): pfb_unbound.ini, manifest, feed files; observer socket lives here
+	ModuleDir string // the module dir (/var/unbound): pfb_unbound.ini, manifest, feed files (on the Core input, in its pfb_dns folder); observer socket lives here
 	NoModule  bool   // boot no module: every query is forwarded (Python --no-module)
 	ReplyLog  bool   // with NoModule: log each relayed reply to dns_reply.log (Python --reply-log)
 	Observer  bool   // listen for pfb_upstream_observer.py's reports on <ModuleDir>/pfb_upstream.sock
 	LogDir    string // where the module and the reply log write dnsbl.log and dns_reply.log; empty is /var/log/pfblockerng
-	// CoreSocket is the Core API's socket: the module takes its DNSBL data from Core, caching it in ModuleDir (issue
+	// CoreSocket is the Core API's socket: the module takes its DNSBL data from Core, caching it in ModuleDir's pfb_dns folder (issue
 	// #4036). Empty: the files PHP writes into ModuleDir.
 	CoreSocket string
 }

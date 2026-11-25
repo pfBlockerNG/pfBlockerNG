@@ -53,7 +53,7 @@ type State struct {
 var (
 	// ErrNoData: Core publishes no dnsbl/manifest (DNSBL is off, or no Update has run yet).
 	ErrNoData = errors.New("core publishes no DNSBL data")
-	// ErrMoved: a body the manifest names moved on before it was fetched; the module directory is unchanged.
+	// ErrMoved: a body the manifest names moved on before it was fetched; the cache folder is unchanged.
 	ErrMoved = errors.New("a DNSBL body moved on while it was fetched")
 )
 
