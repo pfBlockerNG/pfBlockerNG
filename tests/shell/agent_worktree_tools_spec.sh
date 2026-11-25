@@ -62,35 +62,18 @@ SERENA
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'runs CodeGraph, skips the first Graphify build, and skips Serena when OMP marks the invoking harness'
+  It 'runs CodeGraph and skips Serena when OMP marks the invoking harness'
     When run env OMP_CLI=1 sh "$script_abs" "$worktree"
     The status should equal 0
     The contents of file "$tool_log" should equal "$(printf 'codegraph:init:%s' "$worktree")"
     The stderr should include 'Initializing CodeGraph in'
-    The stderr should include 'run /graphify'
   End
 
-  It 'runs CodeGraph, skips the first Graphify build, and skips Serena when PI marks the invoking harness'
+  It 'runs CodeGraph and skips Serena when PI marks the invoking harness'
     When run env PI_CLI=1 sh "$script_abs" "$worktree"
     The status should equal 0
     The contents of file "$tool_log" should equal "$(printf 'codegraph:init:%s' "$worktree")"
     The stderr should include 'Initializing CodeGraph in'
-    The stderr should include 'run /graphify'
-  End
-
-  It 'leaves a tracked root graph byte-identical so a fresh cut is born clean (issue #3091)'
-    mkdir -p "$worktree/graphify-out"
-    printf 'committed graph\n' > "$worktree/graphify-out/graph.json"
-    git_fixture -C "$worktree" add graphify-out/graph.json
-    git_fixture -C "$worktree" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
-      commit -q -m graph
-    When run env OMP_CLI=1 sh "$script_abs" "$worktree"
-    The status should equal 0
-    The stderr should include 'Initializing CodeGraph in'
-    The stderr should not include 'run /graphify'
-    The contents of file "$tool_log" should equal "$(printf 'codegraph:init:%s' "$worktree")"
-    The contents of file "$worktree/graphify-out/graph.json" should equal 'committed graph'
-    Assert [ -z "$(git_fixture -C "$worktree" status --porcelain -- graphify-out)" ]
   End
 
   It 'fails nonzero when mandatory CodeGraph is missing'
@@ -100,7 +83,7 @@ SERENA
     The file "$tool_log" should not be exist
   End
 
-  It 'stops before Graphify when mandatory CodeGraph initialization fails'
+  It 'stops when mandatory CodeGraph initialization fails'
     When run env OMP_CLI=1 CODEGRAPH_RC=17 sh "$script_abs" "$worktree"
     The status should not equal 0
     The contents of file "$tool_log" should equal "codegraph:init:$worktree"

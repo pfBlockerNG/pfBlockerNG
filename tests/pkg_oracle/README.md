@@ -39,7 +39,7 @@ package manager. What it does **not** prove: that the FreeBSD `pfb-dns` payloads
 an appliance. The staged binary is a Linux ELF under a FreeBSD path name, so this is not FreeBSD-native binary evidence; the appliance
 proof is the live smoke (`test_an_aborted_removal_*`).
 
-`run.sh` runs against a staged copy of the working tree (`OUT/stage`: no `.git`, `.codegraph` or `graphify-out`); REPO is only read.
+`run.sh` runs against a staged copy of the working tree (`OUT/stage`: no `.git` or `.codegraph`); REPO is only read.
 `PFB_ORACLE_IMAGE` (default `pfb-pkg-oracle:2`) names the image that `build.sh` builds and `run.sh` runs, so a scratch run does not
 replace a shared tag.
 

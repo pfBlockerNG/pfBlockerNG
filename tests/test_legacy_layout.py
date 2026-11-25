@@ -1,6 +1,5 @@
 """Historical material stays isolated from active repository checks."""
 
-from fnmatch import fnmatchcase
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +24,6 @@ def test_active_repository_checks_exclude_legacy() -> None:
     shellspec = (ROOT / ".shellspec").read_text()
     phpunit = (ROOT / "phpunit.xml").read_text()
     workflow = (ROOT / ".github/workflows/test.yml").read_text()
-    graphify = (ROOT / ".graphifyignore").read_text().splitlines()
 
     assert '"!legacy/**"' in coderabbit
     assert "legacy/** linguist-documentation" in attributes
@@ -41,32 +39,3 @@ def test_active_repository_checks_exclude_legacy() -> None:
     assert "legacy/*) continue" in workflow
     assert workflow.count("- 'legacy/**'") == 2
     assert "python legacy/benchmarks/" in workflow
-    suffixes = (
-        "md mdx qmd skill txt rst html yaml yml pdf png jpg jpeg gif webp svg docx xlsx "
-        "mp4 mov webm mkv avi m4v mp3 wav m4a ogg gdoc gsheet gslides"
-    )
-    patterns = [
-        "*."
-        + "".join(
-            f"[{character.lower()}{character.upper()}]" if character.isalpha() else character for character in suffix
-        )
-        for suffix in suffixes.split()
-    ]
-    expected_graphify = [
-        "*",
-        "!src/",
-        "!src/**",
-        "!tests/",
-        "!tests/**",
-        "!stubs/",
-        "!stubs/**",
-        "src/**/vendor/",
-        "src/**/vendor/**",
-        *patterns,
-    ]
-    assert graphify == expected_graphify
-    for suffix, pattern in zip(suffixes.split(), patterns, strict=True):
-        mixed = "".join(character.upper() if index % 2 else character for index, character in enumerate(suffix))
-        assert fnmatchcase(f"fixture.{suffix.upper()}", pattern)
-        assert fnmatchcase(f"fixture.{mixed}", pattern)
-    assert not any(line.startswith("!legacy") for line in graphify)

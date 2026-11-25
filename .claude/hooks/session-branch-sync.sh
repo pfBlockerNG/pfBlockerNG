@@ -15,8 +15,8 @@
 #   shallow history gap      -> unshallow once, then require a visible merge
 #                               base; otherwise report + touch nothing
 #   dirty tree               -> touch nothing; tell the agent to sync by hand. Only
-#                               TRACKED changes count (untracked graphify-out/memory/
-#                               records never block a sync)
+#                               TRACKED changes count (untracked scratch files never
+#                               block a sync)
 #   rebase conflict (~1%)    -> abort cleanly; tell the agent to resolve by hand
 #   untracked path collision -> git refuses the ff/rebase itself; reported as such
 #                               (a failed abort is reported as stuck mid-rebase)

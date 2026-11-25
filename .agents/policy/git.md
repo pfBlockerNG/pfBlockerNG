@@ -31,10 +31,10 @@ wt --yes switch --create <branch> --base origin/devel   # cut off the latest bas
 wt remove --foreground --yes <branch>   # run from any directory OUTSIDE it
 ```
 
-`wt` runs the tracked `.config/wt.toml` `pre-start` hook, which initializes CodeGraph,
-Graphify, and enabled Serena tools. Run `init-worktree-tools.sh <path>` by hand only for
+`wt` runs the tracked `.config/wt.toml` `pre-start` hook, which initializes CodeGraph
+and enabled Serena tools. Run `init-worktree-tools.sh <path>` by hand only for
 a cut that came back without a CodeGraph index (fallback route, or a pre-start that did
-not run). CodeGraph and Graphify are mandatory; Serena is skipped when absent or under OMP.
+not run). CodeGraph is mandatory; Serena is skipped when absent or under OMP.
 
 `work-branch.sh … --worktree` fetches, cuts below
 `<repo-parent>/.<repo-name>_worktrees/<sanitized-branch>`, and initializes tools. It
@@ -99,12 +99,10 @@ exact-root index. Any GitHub Actions workflow that commits code runs it after ch
 
 - **`pre-commit`** — fast lint, style, and policy checks, path-scoped to staged file types
   (Python → ruff; Markdown → markdownlint; shell → shebang gate + `sh -n` +
-  shellcheck; PHP → `php -l` + PHPCS; URL-encoding check when `*.sh`/`*.md` staged);
-  rebuilds and stages `graphify-out/graph.json` (`scripts/agent/check-graph-fresh.sh --refresh`)
-  unless the staged set is only `graphify-out/graph.json` and/or `legacy/`; a memory
-  record alone triggers it. NOT unit suites — run
+  shellcheck; PHP → `php -l` + PHPCS; URL-encoding check when `*.sh`/`*.md` staged).
+  NOT unit suites — run
   `python3 -m pytest` yourself; tests and static analysis run in CI only. Missing tool =
-  reported + skipped; Graphify steps fail closed. `--no-verify` bypass is for humans, not
+  reported + skipped. `--no-verify` bypass is for humans, not
   agents. Release-line trees lacking the checker corpus opt out per gate via a committed
   root `.githooks-exempt` manifest (#2633) instead of bypassing.
 - **`prepare-commit-msg`** — first aborts agent commit (`CLAUDECODE=1`,
@@ -120,12 +118,7 @@ exact-root index. Any GitHub Actions workflow that commits code runs it after ch
 - **`pre-push`** — enforces release tag scheme via `scripts/release-version.sh`; denies
   agent branch rewrites over unfetched remote history (#1307); validates the final
   message of every outgoing commit and each outgoing agent commit's author/committer
-  identity (same rule) and good signature from the configured user email; and
-  refuses a push whose `graphify-out/graph.json` differs from a rebuild
-  (`scripts/agent/check-graph-fresh.sh`, #3139) — one grade per pushed tip, in a scratch
-  worktree, decided by that tip's own tree and this host's Graphify. Refresh and commit
-  the graph after every rebase: a rebase replays commits without the pre-commit rebuild,
-  and only a pushed tip is ever proven. Contract: `repository-intelligence.md`.
+  identity (same rule) and good signature from the configured user email.
 
 ## Rebase and diff hygiene
 

@@ -61,12 +61,6 @@ jobs:
           ref: devel
           fetch-depth: 0   # full history so the pre-push rebase can replay cleanly
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v10.2.0
-
-      - name: Install the Graphify merge driver
-        run: sh scripts/agent/ensure-graphify-merge-driver.sh .
-
       # Automated commits must hit the same local gates as a human commit.
       - name: Activate git hooks
         run: sh scripts/setup-hooks.sh

@@ -1,4 +1,0 @@
-# pfSense ships PHP include files as .inc; Graphify's suffix map calls them Pascal.
-# The pfBlockerNG fork package's rcfile implementation reads this override from the
-# repository root and dispatches the includes as PHP.
-language.inc=php

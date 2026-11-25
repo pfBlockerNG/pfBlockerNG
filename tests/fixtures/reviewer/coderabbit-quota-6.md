@@ -45,9 +45,8 @@
 > </details>
 > 
 > <details>
-> <summary>📒 Files selected for processing (4)</summary>
+> <summary>📒 Files selected for processing (3)</summary>
 > 
-> * `graphify-out/graph.json`
 > * `sgconfig.yml`
 > * `tests/skip-allowlist.txt`
 > * `tests/test_cross_agent_tooling.py`
