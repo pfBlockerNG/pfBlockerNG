@@ -76,11 +76,14 @@ type Client struct{ http *http.Client }
 
 // New is a client of the Core API listening on socket.
 func New(socket string) *Client {
-	return &Client{&http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	return NewTransport(&http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		var d net.Dialer
 		return d.DialContext(ctx, "unix", socket)
-	}}}}
+	}})
 }
+
+// NewTransport is a client of the Core API whose requests rt carries.
+func NewTransport(rt http.RoundTripper) *Client { return &Client{&http.Client{Transport: rt}} }
 
 // APIError is a refusal in the Core API's error envelope.
 type APIError struct {

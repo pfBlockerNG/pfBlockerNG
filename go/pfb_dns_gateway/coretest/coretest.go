@@ -60,6 +60,9 @@ type Server struct {
 	revision  int
 }
 
+// New is a Server of resources whose ServeHTTP a test calls itself.
+func New(resources map[string]Resource) *Server { return &Server{resources: resources} }
+
 // Start serves resources on a socket in a fresh short directory until the test ends.
 func Start(t testing.TB, resources map[string]Resource) *Server {
 	t.Helper()
@@ -68,7 +71,8 @@ func Start(t testing.TB, resources map[string]Resource) *Server {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	s := &Server{Socket: filepath.Join(dir, "api.sock"), resources: resources}
+	s := New(resources)
+	s.Socket = filepath.Join(dir, "api.sock")
 	ln, err := net.Listen("unix", s.Socket)
 	if err != nil {
 		t.Fatal(err)

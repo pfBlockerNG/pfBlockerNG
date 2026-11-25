@@ -6,6 +6,8 @@ package decider
 import (
 	"errors"
 	"fmt"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/coreinput"
 )
 
 // Options are the flags of pfb_dns_proxy.py (removed in #3791).
@@ -35,7 +37,7 @@ func Open(opts Options) (*Frontend, error) {
 	if !opts.NoModule {
 		var err error
 		if opts.CoreSocket != "" {
-			module, err = bootCore(opts.ModuleDir, opts.LogDir, opts.CoreSocket, opts.Observer, nil)
+			module, err = bootCore(opts.ModuleDir, opts.LogDir, coreinput.New(opts.CoreSocket), opts.Observer, nil)
 		} else {
 			module, err = boot(opts.ModuleDir, opts.LogDir)
 		}

@@ -28,9 +28,6 @@ import (
 // CORE_POLL_INTERVAL is how often the poller asks Core whether the DNSBL data changed (owner, 2026-11-24).
 const CORE_POLL_INTERVAL = 10 * time.Second
 
-// coreSyncCap ends a Sync or a report that Core leaves hanging, so that the poller goes on; it orders nothing.
-const coreSyncCap = 10 * time.Minute
-
 // maxRetryEvery is the most polls between two tries of a swap that keeps failing: about 10 min.
 const maxRetryEvery = 64
 
@@ -72,16 +69,16 @@ type readSettings struct {
 	tables *snapshot
 }
 
-// bootCore boots the module in moduleDir on the Core API at socket. tick is the poller's tick source (nil: a
+// bootCore boots the module in moduleDir on the Core API that client calls. tick is the poller's tick source (nil: a
 // CORE_POLL_INTERVAL ticker).
-func bootCore(moduleDir, logDir, socket string, observer bool, tick func() (<-chan time.Time, func())) (*pfbUnbound, error) {
+func bootCore(moduleDir, logDir string, client *coreinput.Client, observer bool, tick func() (<-chan time.Time, func())) (*pfbUnbound, error) {
 	if tick == nil {
 		tick = func() (<-chan time.Time, func()) {
 			ticker := time.NewTicker(CORE_POLL_INTERVAL)
 			return ticker.C, ticker.Stop
 		}
 	}
-	feed := &coreFeed{client: coreinput.New(socket), dir: moduleDir, tick: tick, disk: coreinput.Load(moduleDir), observer: observer}
+	feed := &coreFeed{client: client, dir: moduleDir, tick: tick, disk: coreinput.Load(moduleDir), observer: observer}
 	if ini := filepath.Join(moduleDir, coreinput.IniFile); !coreinput.Owned(ini) {
 		if _, err := os.Lstat(ini); err == nil {
 			logWarn("[pfBlockerNG]: the settings cache " + ini + " is not trusted and is not loaded; it is fetched from Core again")
@@ -100,20 +97,10 @@ func bootCore(moduleDir, logDir, socket string, observer bool, tick func() (<-ch
 func (f *coreFeed) trusted() bool { return f.disk.Manifest != (coreinput.Cursor{}) }
 
 // run is the poller's body: drain, then wait for the next tick, until stop is closed. A panic ends only the poller, as
-// one ends only the reload watcher.
+// one ends only the reload watcher. Only stop ends a call to Core: a slow transfer runs to its end, and a Core that dies
+// drops the connection (owner, 2026-11-25).
 func (f *coreFeed) run(stop <-chan struct{}, tick <-chan time.Time) {
-	defer func() {
-		if err := recover(); err != nil {
-			fmt.Fprintf(logOutput, "[pfBlockerNG]: Core input poller error: %v\n", err)
-		}
-	}()
-	pollLoop(stop, tick, f.drain)
-}
-
-// drain syncs with Core, swaps a new generation in, and reports what is served until Core has taken a report. A Sync that
-// fails changes nothing served: the live snapshot stays, and so does the module directory's last good state.
-func (f *coreFeed) drain(stop <-chan struct{}) {
-	ctx, cancel := context.WithTimeout(context.Background(), coreSyncCap)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
 		select {
@@ -122,6 +109,17 @@ func (f *coreFeed) drain(stop <-chan struct{}) {
 		case <-ctx.Done():
 		}
 	}()
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Fprintf(logOutput, "[pfBlockerNG]: Core input poller error: %v\n", err)
+		}
+	}()
+	pollLoop(stop, tick, func(<-chan struct{}) { f.drain(ctx) })
+}
+
+// drain syncs with Core, swaps a new generation in, and reports what is served until Core has taken a report. A Sync that
+// fails changes nothing served: the live snapshot stays, and so does the module directory's last good state.
+func (f *coreFeed) drain(ctx context.Context) {
 	state, changed, err := coreinput.Sync(ctx, f.client, f.dir, f.disk)
 	f.logSync(err)
 	if changed {

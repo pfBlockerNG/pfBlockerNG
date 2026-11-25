@@ -77,7 +77,7 @@ func (c coreTicks) settle() {
 func bootOnCore(t *testing.T, dir, socket string) (*pfbUnbound, coreTicks) {
 	t.Helper()
 	ticks := make(coreTicks)
-	m, err := bootCore(dir, testLogDir, socket, false, ticks.source)
+	m, err := bootCore(dir, testLogDir, coreinput.New(socket), false, ticks.source)
 	if err != nil {
 		t.Fatalf("bootCore: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestOnCoreADeclinedSwapIsTriedAgain(t *testing.T) {
 	gen2 := coreData("2", "b.example")
 	srv.Set(gen2)
 	m.totalRAM = func() (uint64, bool) { return 0, true }
-	m.core.drain(nil)
+	m.core.drain(context.Background())
 	if serves(m, "b.example") {
 		t.Fatal("generation 2 is served though the swap was declined")
 	}
@@ -307,7 +307,7 @@ func TestOnCoreADeclinedSwapIsTriedAgain(t *testing.T) {
 		t.Errorf("reports after the declined swap = %v, want generation 1's only", got)
 	}
 	m.totalRAM = func() (uint64, bool) { return 1 << 40, true }
-	m.core.drain(nil)
+	m.core.drain(context.Background())
 	if !serves(m, "b.example") {
 		t.Error("the declined swap was not tried again")
 	}
@@ -373,7 +373,7 @@ func TestOnCoreAReportCoreDoesNotTakeIsLoggedOnce(t *testing.T) {
 	m, _ := bootOnCore(t, dir, deadSocket(t))
 	m.stopReloadWatcher() // the test drains by hand from here
 	for range 3 {
-		m.core.drain(nil)
+		m.core.drain(context.Background())
 	}
 	if n := strings.Count(log.String(), "reporting the generation served to Core failed"); n != 1 {
 		t.Errorf("the failed report is logged %d times, want once:\n%s", n, log.String())
@@ -392,7 +392,7 @@ func TestOnCoreASwapThatKeepsBeingDeclinedBacksOff(t *testing.T) {
 	srv.Set(coreData("2", "b.example"))
 	m.totalRAM = func() (uint64, bool) { return 0, true }
 	for range 8 {
-		m.core.drain(nil)
+		m.core.drain(context.Background())
 	}
 	if n := strings.Count(log.String(), "DNSBL reload DECLINED"); n != 4 {
 		t.Errorf("8 polls tried the declined swap %d times, want 4 (polls 1, 2, 4 and 8)", n)
@@ -419,12 +419,12 @@ func TestOnCoreASafeSearchFileThatCannotBeReadFailsTheSwap(t *testing.T) {
 		}
 		return read(path)
 	}
-	m.core.drain(nil)
+	m.core.drain(context.Background())
 	if serves(m, "b.example") {
 		t.Fatal("generation 2 is served without its SafeSearch")
 	}
 	m.readFile = read
-	m.core.drain(nil)
+	m.core.drain(context.Background())
 	if !serves(m, "b.example") || m.snapshot.Load().safeSearchDB["www.google.com"] == (safeSearchEntry{}) {
 		t.Error("generation 2 and its SafeSearch are not served once the file reads")
 	}

@@ -214,7 +214,7 @@ func TestOnCoreForwardingIsTheObserverFlag(t *testing.T) {
 		srv := coretest.Start(t, coreData("1", "a.example"))
 		srv.SetSettings(coretest.Settings())
 		ticks := make(coreTicks)
-		m, err := bootCore(t.TempDir(), testLogDir, srv.Socket, observer, ticks.source)
+		m, err := bootCore(t.TempDir(), testLogDir, coreinput.New(srv.Socket), observer, ticks.source)
 		if err != nil {
 			t.Fatalf("bootCore: %v", err)
 		}
