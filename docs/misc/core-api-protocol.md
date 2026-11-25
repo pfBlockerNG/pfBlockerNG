@@ -1384,6 +1384,10 @@ have let any process of that user call `SaveSettings` or `StartUpdate`. It is no
 and `ReportApplied` only, reads only the `dns` and `policy/dnsbl` projections and the `dnsbl/*` resources, and has
 a replay memory of its own.*
 
+*Amendment 2026-11-25 (issue #4250): Core's rc line passes `--client-uid` and `--socket-group` with `unbound`'s uid and
+gid, read from the system at each start (owner, 2026-11-24: pfB-DNS may call Core as `unbound`; no dedicated user). A
+system without that user starts Core with no client.*
+
 ## On pfSense
 
 | What | Where |
