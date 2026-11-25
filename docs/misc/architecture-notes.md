@@ -387,8 +387,8 @@ manifest and excludes stages; legacy fixed `pfb_py_raw/` manifests remain readab
 - **Fail-closed:** a bad/partial build keeps the last-good snapshot serving.
 
 **On the Core input** (issue #4036; `--core-socket`, not yet started by the rc script): pfB-DNS takes the DNSBL data from
-the Core API instead of PHP's files. `go/pfb_dns_gateway/coreinput` caches the `dnsbl/*` resources in the module directory
-in the same file shapes, and the decider builds from them unchanged (`decider/pfb_core_input.go`). There is no sentinel and
+the Core API instead of PHP's files. `go/pfb_dns_gateway/coreinput` caches the `dnsbl/*` resources in a folder of its own,
+`pfb_dns` in the module directory (0700; issue #4251), in the same file shapes, and the decider builds from them unchanged (`decider/pfb_core_input.go`). There is no sentinel and
 no applied marker. Every 10 s a poller asks Core whether the manifest changed and fetches only what changed. A body the last
 generation already had is linked again, and a feed or TOP1M body Core holds a delta for arrives as that delta, merged into
 the cached body and checked against its digest. Anything else, or a delta that does not apply, is fetched whole. The new
@@ -399,9 +399,9 @@ user, writable by no other user, each body at its digest). Otherwise it serves n
 first poll brings the data.
 
 The settings come the same way (owner, 2026-11-25). Each poll reads Core's `settings/dns` and `settings/policy/dnsbl` and
-writes them as the module directory's `pfb_unbound.ini`, in the shape `pfb_unbound_python_ini()` gives, so init reads them
-unchanged and a start without Core takes the settings Core last gave. The file's name keeps it in the RAM-disk archive of
-`pfblockerng.sh dnsbl_cache save`, like the data. Three departures from today's writer: no creation time, no `forwarding`
+writes them as the cache folder's `pfb_unbound.ini`, in the shape `pfb_unbound_python_ini()` gives, so init reads them
+unchanged and a start without Core takes the settings Core last gave. `pfblockerng.sh dnsbl_cache save` archives the cache
+folder whole, so the settings ride the RAM-disk archive with the data. Three departures from today's writer: no creation time, no `forwarding`
 (it is whether pfB-DNS was started with `--observer`, which the Outpost passes only while the Resolver forwards), and a `%`
 in a value written `%%`. A settings change is no restart: the next swap builds the snapshot from the new settings, as init
 does, and then the module applies what lives outside the snapshot (the control-channel reader, the decision cache's size,

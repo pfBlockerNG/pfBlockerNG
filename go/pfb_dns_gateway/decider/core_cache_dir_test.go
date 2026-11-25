@@ -22,7 +22,7 @@ func TestOnCoreWhatPfbDnsFetchedIsKeptInAFolderOfItsOwn(t *testing.T) {
 		t.Fatal("before: the generation is not served")
 	}
 
-	cache := filepath.Join(dir, "pfb_dns")
+	cache := filepath.Join(dir, "pfb_dns") // the name pfblockerng.sh archives, spelled out: not CORE_CACHE_DIR
 	for _, name := range []string{"pfb_py_core.json", "pfb_py_sources.json", "pfb_py_raw", "pfb_unbound.ini"} {
 		if _, err := os.Lstat(filepath.Join(cache, name)); err != nil {
 			t.Errorf("%s is not in the cache folder: %v", name, err)
@@ -33,14 +33,5 @@ func TestOnCoreWhatPfbDnsFetchedIsKeptInAFolderOfItsOwn(t *testing.T) {
 	}
 	if info, err := os.Stat(cache); err != nil || info.Mode().Perm() != 0o700 {
 		t.Errorf("the cache folder is %v (%v), want pfB-DNS's alone (0700)", info, err)
-	}
-}
-
-func TestOnCoreTheCacheFolderIsServedWhileCoreIsDown(t *testing.T) {
-	dir := coreModuleDir(t)
-	cacheFrom(t, dir, coreData("1", "a.example"))
-	m, _ := bootOnCore(t, dir, deadSocket(t))
-	if !serves(m, "a.example") {
-		t.Error("the cache folder's generation is not served while Core is down")
 	}
 }

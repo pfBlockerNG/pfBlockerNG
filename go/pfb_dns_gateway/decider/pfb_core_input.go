@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -42,9 +41,8 @@ type coreFeed struct {
 	m      *pfbUnbound
 	client *coreinput.Client
 	dir    string                            // the cache folder, CORE_CACHE_DIR in the module directory
-	module string                            // the module directory
 	tick   func() (<-chan time.Time, func()) // the poller's tick source
-	disk   coreinput.State                   // what the module directory holds: the last Sync's state
+	disk   coreinput.State                   // what the cache folder holds: the last Sync's state
 	served map[string]coreinput.Cursor       // what the live snapshot was built from; nil: nothing
 	// pending is whether the module directory holds data the live snapshot was not built from: a swap declined or failed is
 	// tried again on the next poll.
@@ -86,10 +84,12 @@ func bootCore(moduleDir, logDir string, client *coreinput.Client, observer bool,
 		}
 	}
 	cache := filepath.Join(moduleDir, CORE_CACHE_DIR)
-	if err := os.Mkdir(cache, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+	if err := os.MkdirAll(cache, 0o700); err != nil {
 		logWarn("[pfBlockerNG]: the DNSBL cache folder " + cache + " cannot be made: " + err.Error())
+	} else if info, err := os.Lstat(cache); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 && os.Chmod(cache, 0o700) != nil {
+		logWarn("[pfBlockerNG]: the DNSBL cache folder " + cache + " is not a folder of pfB-DNS's alone")
 	}
-	feed := &coreFeed{client: client, dir: cache, module: moduleDir, tick: tick, disk: coreinput.Load(cache), observer: observer}
+	feed := &coreFeed{client: client, dir: cache, tick: tick, disk: coreinput.Load(cache), observer: observer}
 	if ini := filepath.Join(cache, coreinput.IniFile); !coreinput.Owned(ini) {
 		if _, err := os.Lstat(ini); err == nil {
 			logWarn("[pfBlockerNG]: the settings cache " + ini + " is not trusted and is not loaded; it is fetched from Core again")
@@ -106,9 +106,9 @@ func bootCore(moduleDir, logDir string, client *coreinput.Client, observer bool,
 
 // cachePaths points the settings' inputs at the cache folder: what Sync and SyncSettings write there.
 func (f *coreFeed) cachePaths(p *pfbSettings) {
-	in := func(name string) string { return filepath.Join(f.dir, name) }
-	p.pfbUnboundIni, p.pfbPySources, p.pfbPyTop1m, p.pfbPyPsl, p.pfbPySs =
-		in(coreinput.IniFile), in("pfb_py_sources.json"), in("pfb_py_top1m.txt"), in("dnsbl_psl"), in("pfb_py_ss.txt")
+	for _, path := range []*string{&p.pfbUnboundIni, &p.pfbPySources, &p.pfbPyTop1m, &p.pfbPyPsl, &p.pfbPySs} {
+		*path = filepath.Join(f.dir, filepath.Base(*path))
+	}
 }
 
 // trusted is whether init may build from the cache folder: Load trusts what the last Sync left there.
@@ -238,7 +238,7 @@ func (f *coreFeed) readSettings() (*pfbSettings, *snapshot, error) {
 	if config == nil {
 		return nil, nil, errors.New("settings: " + f.m.pfb.pfbUnboundIni + " is gone")
 	}
-	set, tables := newModuleSettings(f.module), newSnapshot()
+	set, tables := newModuleSettings(filepath.Dir(f.dir)), newSnapshot()
 	f.cachePaths(&set)
 	if err := f.m.loadIniSettings(config, &set, tables); err != nil {
 		return nil, nil, err

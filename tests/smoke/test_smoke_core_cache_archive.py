@@ -49,6 +49,9 @@ def test_the_core_input_cache_folder_comes_back_with_its_owner_and_modes(cache_v
     )
     files = (CACHE, f"{CACHE}/pfb_py_core.json", f"{CACHE}/dnsbl_psl", f"{CACHE}/pfb_py_raw/g7.abc/feed-F")
     stat = f"/usr/bin/stat -f '%Lp %Su %Sg' {' '.join(files)}"
+    # The box's own archive is set aside and put back: the save below replaces it
+    aside = vm.ssh(" && ".join(f"mv {a} {a}.aside4251" for a in had) or "true", timeout=30)
+    assert aside.returncode == 0, f"could not set the box's archive aside: {aside.stderr}"
     try:
         planted = vm.ssh(plant, timeout=30)
         assert planted.returncode == 0, f"could not plant {CACHE}: {planted.stdout}{planted.stderr}"
@@ -67,6 +70,6 @@ def test_the_core_input_cache_folder_comes_back_with_its_owner_and_modes(cache_v
         said = vm.ssh(f"cat {CACHE}/dnsbl_psl {CACHE}/pfb_py_raw/g7.abc/feed-F", timeout=30).stdout.split()
         assert said == ["core-psl", "feed-body"], f"the restored folder holds {said}: Core's PSL must stay Core's"
     finally:
-        vm.ssh(f"rm -rf {CACHE}", timeout=30)
-        if not had:
-            vm.ssh(f"rm -f {ARCHIVE}.zst {ARCHIVE}.bz2", timeout=30)
+        vm.ssh(f"rm -rf {CACHE}; rm -f {ARCHIVE}.zst {ARCHIVE}.bz2", timeout=30)
+        for a in had:
+            vm.ssh(f"mv {a}.aside4251 {a}", timeout=30)

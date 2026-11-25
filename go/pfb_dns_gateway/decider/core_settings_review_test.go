@@ -89,10 +89,7 @@ func TestOnCoreAnUntrustedSettingsCacheIsNotLoaded(t *testing.T) {
 		"group-writable": func(ini string) error { return os.Chmod(ini, 0o620) },
 	} {
 		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			if err := os.Mkdir(cacheOf(dir), 0o700); err != nil {
-				t.Fatal(err)
-			}
+			dir := coreModuleDir(t)
 			ini := filepath.Join(cacheOf(dir), "pfb_unbound.ini")
 			if err := os.WriteFile(ini, []byte("[MAIN]\npython_enable = on\n[noAAAA]\n0 = v6.example,0\n"), 0o600); err != nil {
 				t.Fatal(err)

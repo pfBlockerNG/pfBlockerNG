@@ -18,7 +18,7 @@ import (
 // ErrNoSettings: Core holds no settings yet (an uninitialized Core).
 var ErrNoSettings = errors.New("core holds no settings")
 
-// IniFile is the module directory's file SyncSettings keeps the settings in.
+// IniFile is the cache folder's file SyncSettings keeps the settings in.
 const IniFile = "pfb_unbound.ini"
 
 // SyncSettings brings dir's pfb_unbound.ini to the settings/dns and settings/policy/dnsbl Core serves, written in the
