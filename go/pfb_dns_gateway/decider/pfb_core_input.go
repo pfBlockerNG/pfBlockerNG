@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -41,10 +42,12 @@ const maxRetryEvery = 64
 type coreFeed struct {
 	m      *pfbUnbound
 	client *coreinput.Client
-	dir    string                            // the cache folder, CORE_CACHE_DIR in the module directory
-	tick   func() (<-chan time.Time, func()) // the poller's tick source
-	disk   coreinput.State                   // what the cache folder holds: the last Sync's state
-	served map[string]coreinput.Cursor       // what the live snapshot was built from; nil: nothing
+	dir    string // the cache folder, CORE_CACHE_DIR in the module directory
+	// unusable is why the cache folder could not be made pfB-DNS's own (nil: it is): nothing is fetched into it then.
+	unusable error
+	tick     func() (<-chan time.Time, func()) // the poller's tick source
+	disk     coreinput.State                   // what the cache folder holds: the last Sync's state
+	served   map[string]coreinput.Cursor       // what the live snapshot was built from; nil: nothing
 	// pending is whether the cache folder holds data the live snapshot was not built from: a swap declined or failed is
 	// tried again on the next poll.
 	pending bool
@@ -85,10 +88,13 @@ func bootCore(moduleDir, logDir string, client *coreinput.Client, observer bool,
 		}
 	}
 	cache := filepath.Join(moduleDir, CORE_CACHE_DIR)
-	if err := ownFolder(cache); err != nil {
-		logWarn("[pfBlockerNG]: the DNSBL cache folder " + cache + " is not pfB-DNS's own, so nothing is cached: " + err.Error())
+	feed := &coreFeed{client: client, dir: cache, tick: tick, observer: observer}
+	if feed.unusable = ownFolder(cache); feed.unusable != nil {
+		logWarn("[pfBlockerNG]: the DNSBL cache folder " + cache + " is not pfB-DNS's own, so nothing is fetched or served from it: " +
+			feed.unusable.Error())
+	} else {
+		feed.disk = coreinput.Load(cache)
 	}
-	feed := &coreFeed{client: client, dir: cache, tick: tick, disk: coreinput.Load(cache), observer: observer}
 	if ini := filepath.Join(cache, coreinput.IniFile); !coreinput.Owned(ini) {
 		if _, err := os.Lstat(ini); err == nil {
 			logWarn("[pfBlockerNG]: the settings cache " + ini + " is not trusted and is not loaded; it is fetched from Core again")
@@ -114,11 +120,15 @@ func ownFolder(path string) error {
 		}
 	}
 	if err != nil || !info.IsDir() {
-		if err := os.Mkdir(path, 0o700); err != nil {
+		// Something made in between is checked as it stands
+		if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 			return err
 		}
 		if info, err = os.Lstat(path); err != nil {
 			return err
+		}
+		if !info.IsDir() {
+			return errors.New("it is not a folder")
 		}
 	}
 	if st, ok := info.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Geteuid() {
@@ -164,6 +174,9 @@ func (f *coreFeed) run(stop <-chan struct{}, tick <-chan time.Time) {
 // drain syncs with Core, swaps a new generation in, and reports what is served until Core has taken a report. A Sync that
 // fails changes nothing served: the live snapshot stays, and so does the cache folder's last good state.
 func (f *coreFeed) drain(ctx context.Context) {
+	if f.unusable != nil {
+		return
+	}
 	state, changed, err := coreinput.Sync(ctx, f.client, f.dir, f.disk)
 	f.logSync(err)
 	if changed {

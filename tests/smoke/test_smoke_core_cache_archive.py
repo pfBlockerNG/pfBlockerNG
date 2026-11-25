@@ -50,10 +50,12 @@ def test_the_core_input_cache_folder_comes_back_with_its_owner_and_modes(cache_v
     files = (CACHE, f"{CACHE}/pfb_py_core.json", f"{CACHE}/dnsbl_psl", f"{CACHE}/pfb_py_raw/g7.abc/feed-F")
     stat = f"/usr/bin/stat -f '%Lp %Su %Sg' {' '.join(files)}"
     moved: list[str] = []  # the box's own archives, set aside because the save below replaces them; put back after
+    passed = False
     try:
         for a in had:
-            aside = vm.ssh(f"mv {a} {a}.aside4251", timeout=30)
-            assert aside.returncode == 0, f"could not set {a} aside: {aside.stderr}"
+            # an earlier run's set-aside copy is the box's own: never overwritten
+            aside = vm.ssh(f"test ! -e {a}.aside4251 && mv {a} {a}.aside4251", timeout=30)
+            assert aside.returncode == 0, f"could not set {a} aside (or {a}.aside4251 exists): {aside.stderr}"
             moved.append(a)
         planted = vm.ssh(plant, timeout=30)
         assert planted.returncode == 0, f"could not plant {CACHE}: {planted.stdout}{planted.stderr}"
@@ -71,7 +73,13 @@ def test_the_core_input_cache_folder_comes_back_with_its_owner_and_modes(cache_v
         assert after.stdout.split("\n")[:4] == before, f"after the restore: {after.stdout}{after.stderr}"
         said = vm.ssh(f"cat {CACHE}/dnsbl_psl {CACHE}/pfb_py_raw/g7.abc/feed-F", timeout=30).stdout.split()
         assert said == ["core-psl", "feed-body"], f"the restored folder holds {said}: Core's PSL must stay Core's"
+        passed = True
     finally:
-        vm.ssh(f"rm -rf {CACHE}; rm -f {ARCHIVE}.zst {ARCHIVE}.bz2", timeout=30)
+        vm.ssh(f"rm -rf {CACHE}", timeout=30)
+        # Only what this test wrote goes: an archive the box had and that was not set aside stays where it is
+        if len(moved) == len(had):
+            vm.ssh(f"rm -f {ARCHIVE}.zst {ARCHIVE}.bz2", timeout=30)
         back = [a for a in moved if vm.ssh(f"mv {a}.aside4251 {a}", timeout=30).returncode != 0]
-        assert not back, f"the box's archive was not put back: {back} (still at .aside4251)"
+        if back:
+            print(f"WARNING: the box's archive was not put back: {back} (still at .aside4251)")
+    assert passed and not back, f"the box's archive was not put back: {back} (still at .aside4251)"
