@@ -204,11 +204,14 @@ type pfbUnbound struct {
 	sqlite3ResolverCon   atomic.Bool
 	sqlite3DnsblCon      atomic.Bool
 	metricsPrivacyEpochs atomic.Pointer[map[int]string]
-	// buildWith, when set, is the settings dnsblConfigFromManifest builds with instead of the module's: a Core settings swap
-	// builds from the settings it brings. Only the builder sets it, around its build.
+	// buildWith, when set, is the settings dnsblConfigFromManifest builds with instead of the module's: a reload builds
+	// from the live settings, which a Core settings swap changes. Only the builder sets it, around its build.
 	buildWith *pfbSettings
-	dbWorker  atomic.Pointer[dbWorker]
-	dbDropped atomic.Int64
+	// settingsMu orders a Core settings change's effects outside the snapshot (the control reader) before deinit's stop of
+	// the control reader.
+	settingsMu sync.Mutex
+	dbWorker   atomic.Pointer[dbWorker]
+	dbDropped  atomic.Int64
 
 	// What the module serves without besides the DNSBL build (Frontend.Degraded): the ini that could not be parsed, and the
 	// stats databases that could not be opened.
@@ -410,7 +413,6 @@ func (m *pfbUnbound) loadIniSettings(config *configParser, pfb *pfbSettings, scr
 		if err := mainBool("python_control_legacy", &pfb.pythonControlLegacy); err != nil {
 			return err
 		}
-		warnIfLegacyControlEnabled(pfb.pythonControlLegacy)
 
 		if err := mainBool("forwarding", &pfb.forwarding); err != nil {
 			return err
@@ -472,7 +474,7 @@ func (m *pfbUnbound) loadIniSettings(config *configParser, pfb *pfbSettings, scr
 		}
 
 		// Collect user-defined Group Policy Global Bypass List
-		m.loadGpBypassListTo(config, pfb, scratch)
+		m.loadGpBypassList(config, pfb, scratch)
 	}
 	return nil
 }
@@ -551,18 +553,16 @@ func initStandardWith(id int, moduleDir, logDir string, core *coreFeed) (module 
 	pfb := &m.pfb
 
 	*pfb = newModuleSettings(moduleDir)
-	if core != nil {
-		m.rcodeDB = rcodeNames() // a start without settings still logs replies
-	}
 
 	config := m.loadIniConfig()
+	if core != nil || config != nil && config.hasSection("MAIN") {
+		m.rcodeDB = rcodeNames() // on the Core input a start without settings still logs replies
+	}
 	if config != nil {
-		if config.hasSection("MAIN") {
-			m.rcodeDB = rcodeNames()
-		}
 		if err := m.loadIniSettings(config, pfb, scratch); err != nil {
 			return nil, err
 		}
+		warnIfLegacyControlEnabled(pfb.pythonControlLegacy)
 		if core != nil {
 			pfb.forwarding = core.observer // whether the observer's reports arrive: the Resolver forwards
 		}
@@ -656,6 +656,9 @@ func initStandardWith(id int, moduleDir, logDir string, core *coreFeed) (module 
 	} else {
 		// issue #3870: with no ini python_enable stays off and nothing is blocked: report the DNSBL as lost.
 		scratch.dnsblUnbuilt = "Failed to load ini configuration. Ini file missing."
+		if core != nil {
+			scratch.dnsblUnbuilt = "No settings from Core yet -- DNSBL not loaded"
+		}
 		logInfo("[pfBlockerNG]: " + scratch.dnsblUnbuilt)
 	}
 
@@ -733,7 +736,9 @@ func (m *pfbUnbound) deinit() {
 	m.retired.Store(true) // before the stops: a watcher that outlives its bound publishes and opens nothing, and writes no log row, from here on
 	m.publishMu.Unlock()
 	m.stopReloadWatcher()
+	m.settingsMu.Lock()
 	m.stopControlWatcher()
+	m.settingsMu.Unlock()
 	m.closeDb()
 	m.stopLogging()
 	m.closeMaxmind()
@@ -979,15 +984,10 @@ func ipNetwork(text string) (ipNet, bool) {
 	return ipNet{netip.PrefixFrom(network, prefixLen), false, network.String()}, true
 }
 
-// loadGpBypassList loads [GP_Bypass_List]. A full-length entry (a bare IP, /32, /128) is an exact gpListDB key, the
-// one structure a runtime add/removebypass edits, and a shorter prefix is a gpNetDB network. An unparseable row is
-// reported and skipped, never aborting the rest of the load.
-func (m *pfbUnbound) loadGpBypassList(config *configParser, snap *snapshot) {
-	m.loadGpBypassListTo(config, &m.pfb, snap)
-}
-
-// loadGpBypassListTo is loadGpBypassList setting pfb's gpListDB flag.
-func (m *pfbUnbound) loadGpBypassListTo(config *configParser, pfb *pfbSettings, snap *snapshot) {
+// loadGpBypassList loads [GP_Bypass_List], setting pfb's gpListDB flag. A full-length entry (a bare IP, /32, /128) is an
+// exact gpListDB key, the one structure a runtime add/removebypass edits, and a shorter prefix is a gpNetDB network. An
+// unparseable row is reported and skipped, never aborting the rest of the load.
+func (m *pfbUnbound) loadGpBypassList(config *configParser, pfb *pfbSettings, snap *snapshot) {
 	if !config.hasSection("GP_Bypass_List") {
 		return
 	}

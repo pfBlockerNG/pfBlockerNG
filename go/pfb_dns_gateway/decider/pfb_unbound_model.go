@@ -462,18 +462,6 @@ func (c *lruCache[V]) delete(key string) bool {
 	return ok
 }
 
-// resize bounds the cache to maxsize, evicting the least recently used entries past it.
-func (c *lruCache[V]) resize(maxsize int) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.maxsize = maxsize
-	for 0 < c.maxsize && c.maxsize < len(c.items) {
-		oldest := c.order.Front()
-		c.order.Remove(oldest)
-		delete(c.items, oldest.Value.(*lruItem[V]).key)
-	}
-}
-
 func (c *lruCache[V]) len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

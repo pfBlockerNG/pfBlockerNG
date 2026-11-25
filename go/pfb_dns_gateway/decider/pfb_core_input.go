@@ -73,7 +73,7 @@ func bootCore(moduleDir, logDir, socket string, observer bool, tick func() (<-ch
 		}
 	}
 	feed := &coreFeed{client: coreinput.New(socket), dir: moduleDir, tick: tick, disk: coreinput.Load(moduleDir), observer: observer}
-	if ini := filepath.Join(moduleDir, "pfb_unbound.ini"); !coreinput.Owned(ini) {
+	if ini := filepath.Join(moduleDir, coreinput.IniFile); !coreinput.Owned(ini) {
 		if _, err := os.Lstat(ini); err == nil {
 			logWarn("[pfBlockerNG]: the settings cache " + ini + " is not trusted and is not loaded; it is fetched from Core again")
 			os.Remove(ini)
@@ -123,8 +123,11 @@ func (f *coreFeed) drain(stop <-chan struct{}) {
 	f.logSettings(err)
 	if newSettings {
 		f.newSettings, f.retryIn, f.retryEvery = true, 0, 1
+		if set, _, err := f.readSettings(); err == nil {
+			f.m.applyOptOuts(set)
+		}
 	}
-	fresh := f.newSettings
+	fresh, prev := f.newSettings, f.m.snapshot.Load().settings
 	switch {
 	case !f.pending && !(fresh && f.trusted()): // new settings wait for data to build with
 	case f.retryIn > 0:
@@ -133,7 +136,7 @@ func (f *coreFeed) drain(stop <-chan struct{}) {
 		f.served, f.reported, f.pending = f.disk.Resources, false, false
 		if fresh {
 			f.newSettings = false
-			f.m.applyLiveSettings()
+			f.m.applyLiveSettings(prev)
 		}
 	default:
 		f.retryIn, f.retryEvery = f.retryEvery-1, min(2*f.retryEvery, maxRetryEvery)
@@ -177,17 +180,9 @@ func (f *coreFeed) build() (*snapshot, error) {
 // ones. What init opens with the settings is opened first, so that the snapshot says what is open.
 func (f *coreFeed) buildSettings() (*snapshot, error) {
 	m := f.m
-	config := m.loadIniConfig()
-	if config == nil {
-		return nil, errors.New("settings: " + m.pfb.pfbUnboundIni + " is gone")
-	}
-	set, tables := newModuleSettings(f.dir), newSnapshot()
-	if err := m.loadIniSettings(config, &set, tables); err != nil {
+	set, tables, err := f.readSettings()
+	if err != nil {
 		return nil, err
-	}
-	set.forwarding = f.observer
-	if !set.pythonEnable {
-		return nil, errors.New("settings: python_enable is off")
 	}
 	if !m.sqlite3ResolverCon.Load() {
 		if m.validateDbWithRecovery(dbResolver) {
@@ -199,31 +194,67 @@ func (f *coreFeed) buildSettings() (*snapshot, error) {
 	}
 	set.pythonMaxmind = m.maxmindFor(set.pythonReply)
 
-	m.buildWith = &set
-	defer func() { m.buildWith = nil }()
-	next, err := m.reloadBuildSnapshotWith(&set, func() *regexDB { return tables.userRegexDB })
+	next, err := m.reloadBuildSnapshotWith(set, func() *regexDB { return tables.userRegexDB })
 	if next != nil {
-		next.settings, next.carryRuntime = &set, false
+		next.settings, next.carryRuntime = set, false
 		next.noAAAADB, next.gpListDB, next.gpNetDB = tables.noAAAADB, tables.gpListDB, tables.gpNetDB
 	}
 	return next, err
 }
 
-// applyLiveSettings applies what a settings swap changes outside the snapshot, from the live settings; nothing once the
-// module is closing.
-func (m *pfbUnbound) applyLiveSettings() {
+// readSettings is the settings and tables the module directory's ini gives, as init loads them.
+func (f *coreFeed) readSettings() (*pfbSettings, *snapshot, error) {
+	config := f.m.loadIniConfig()
+	if config == nil {
+		return nil, nil, errors.New("settings: " + f.m.pfb.pfbUnboundIni + " is gone")
+	}
+	set, tables := newModuleSettings(f.dir), newSnapshot()
+	if err := f.m.loadIniSettings(config, &set, tables); err != nil {
+		return nil, nil, err
+	}
+	set.forwarding = f.observer
+	if !set.pythonEnable {
+		return nil, nil, errors.New("settings: python_enable is off")
+	}
+	return &set, tables, nil
+}
+
+// applyOptOuts turns client metrics and the control reader off as soon as new settings turn them off, ahead of the swap
+// that applies the rest, which may wait (no data yet, the RAM gate).
+func (m *pfbUnbound) applyOptOuts(set *pfbSettings) {
+	m.settingsMu.Lock()
+	defer m.settingsMu.Unlock()
+	if m.retired.Load() {
+		return
+	}
+	if !set.metricsClientIp {
+		m.dbCapturePrivacyEpochsFor(false)
+	}
+	if !set.pythonControl {
+		m.stopControlWatcher()
+	}
+}
+
+// applyLiveSettings applies what a settings swap changes outside the snapshot, from the live settings that replaced prev;
+// nothing once the module is closing.
+func (m *pfbUnbound) applyLiveSettings(prev *pfbSettings) {
+	m.settingsMu.Lock()
+	defer m.settingsMu.Unlock()
 	if m.retired.Load() {
 		return
 	}
 	set := m.snapshot.Load().settings
-	m.decisionDB.resize(intOf(set.decisiondbMax))
+	m.decisionDB.setMaxsize(intOf(set.decisiondbMax))
 	if set.pythonControl {
 		m.startControlWatcher()
 	} else {
 		m.stopControlWatcher()
 	}
-	if epochs := m.metricsPrivacyEpochs.Load(); set.metricsClientIp != (epochs != nil && len(*epochs) > 0) {
-		m.dbCapturePrivacyEpochsFor(set.metricsClientIp)
+	if set.metricsClientIp && !prev.metricsClientIp {
+		m.dbCapturePrivacyEpochsFor(true)
+	}
+	if set.pythonControlLegacy && !prev.pythonControlLegacy {
+		warnIfLegacyControlEnabled(true)
 	}
 }
 
@@ -236,14 +267,20 @@ func (f *coreFeed) logSettings(err error) {
 	case err != nil:
 		msg = "fetching the settings from Core failed, keeping the settings loaded: " + err.Error()
 	}
-	if msg != f.lastSettingsErr {
-		if msg != "" {
-			logWarn("[pfBlockerNG]: " + msg)
-		} else if f.lastSettingsErr != "" {
-			logInfo("[pfBlockerNG]: settings from Core: Core answers again")
-		}
-		f.lastSettingsErr = msg
+	logChange(&f.lastSettingsErr, msg, "settings from Core: Core answers again")
+}
+
+// logChange logs msg, an error, unless it is last's; an empty msg after an error logs recovered.
+func logChange(last *string, msg, recovered string) {
+	if msg == *last {
+		return
 	}
+	if msg != "" {
+		logWarn("[pfBlockerNG]: " + msg)
+	} else {
+		logInfo("[pfBlockerNG]: " + recovered)
+	}
+	*last = msg
 }
 
 // logSync logs a Sync error once until it changes, and that Core answers again.
@@ -255,12 +292,5 @@ func (f *coreFeed) logSync(err error) {
 	case err != nil:
 		msg = "fetching the DNSBL data from Core failed, serving what is loaded: " + err.Error()
 	}
-	if msg != f.lastErr {
-		if msg != "" {
-			logWarn("[pfBlockerNG]: " + msg)
-		} else {
-			logInfo("[pfBlockerNG]: DNSBL data from Core: Core answers again")
-		}
-		f.lastErr = msg
-	}
+	logChange(&f.lastErr, msg, "DNSBL data from Core: Core answers again")
 }

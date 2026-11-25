@@ -215,7 +215,7 @@ func cursorOK(c Cursor) bool {
 func Load(dir string) State {
 	var s State
 	sources := filepath.Join(dir, "pfb_py_sources.json")
-	if !own(filepath.Join(dir, stateFile)) || !own(sources) {
+	if !Owned(filepath.Join(dir, stateFile)) || !Owned(sources) {
 		return State{}
 	}
 	data, err := os.ReadFile(filepath.Join(dir, stateFile))
@@ -230,7 +230,7 @@ func Load(dir string) State {
 			continue
 		}
 		path := cachedPath(dir, s, id)
-		if path == "" || !own(path) {
+		if path == "" || !Owned(path) {
 			return State{}
 		}
 		want := cur.Digest
@@ -255,9 +255,9 @@ func cachedPath(dir string, s State, id string) string {
 	return filepath.Join(dir, memberFile[id])
 }
 
-// own is whether path is a regular file of this user that neither its group nor others may write: a symbolic link is not
-// followed.
-func own(path string) bool {
+// Owned is whether path is a regular file of this user that neither its group nor others may write: a symbolic link is
+// not followed. Load trusts no other file.
+func Owned(path string) bool {
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
 		return false

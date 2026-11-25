@@ -373,7 +373,7 @@ func opGpLoad(t *testing.T, rows ...string) (*pfbUnbound, *snapshot) {
 	t.Helper()
 	m := modMust(t, t.TempDir())
 	snap := newSnapshot()
-	m.loadGpBypassList(opGpConfig(t, rows...), snap)
+	m.loadGpBypassList(opGpConfig(t, rows...), &m.pfb, snap)
 	return m, snap
 }
 
@@ -460,7 +460,7 @@ func TestGroupPolicyGateStaysOffWhenNoRowParses(t *testing.T) {
 	}
 	m = modMust(t, t.TempDir())
 	snap = newSnapshot()
-	m.loadGpBypassList(cfgParse(t, "[MAIN]\nk = v\n"), snap)
+	m.loadGpBypassList(cfgParse(t, "[MAIN]\nk = v\n"), &m.pfb, snap)
 	if m.pfb.gpListDB {
 		t.Errorf("a config without the section turned the gate on")
 	}
@@ -496,7 +496,7 @@ func TestGpNetMatch(t *testing.T) {
 func TestOperateGroupPolicyBypass(t *testing.T) {
 	m := modMust(t, t.TempDir())
 	probe := newSnapshot()
-	m.loadGpBypassList(opGpConfig(t, "10.0.0.0/24", "192.0.2.7", "fe80::1%em0", "2001:db8:1::/64"), probe)
+	m.loadGpBypassList(opGpConfig(t, "10.0.0.0/24", "192.0.2.7", "fe80::1%em0", "2001:db8:1::/64"), &m.pfb, probe)
 	opInstall(t, m, func(s *pfbSettings) { opEnable(s); s.gpListDB = true }, func(s *snapshot) {
 		opBlockData(s, "evil.com", "1", 0)
 		opFeed(s, 0, "TestFeed", "TestGroup")

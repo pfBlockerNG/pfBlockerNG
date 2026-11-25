@@ -2,6 +2,7 @@ package coreinput
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -17,11 +18,8 @@ import (
 // ErrNoSettings: Core holds no settings yet (an uninitialized Core).
 var ErrNoSettings = errors.New("core holds no settings")
 
-const iniFile = "pfb_unbound.ini"
-
-// Owned is whether path is a regular file of this user that neither its group nor others may write, as Load requires of
-// every file it trusts.
-func Owned(path string) bool { return own(path) }
+// IniFile is the module directory's file SyncSettings keeps the settings in.
+const IniFile = "pfb_unbound.ini"
 
 // SyncSettings brings dir's pfb_unbound.ini to the settings/dns and settings/policy/dnsbl Core serves, written in the
 // shape pfb_unbound_python_ini() gives (settingsIni), and reports whether the file changed. Settings Core does not hold,
@@ -53,8 +51,8 @@ func SyncSettings(ctx context.Context, c *Client, dir string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("GetSettings: %w", err)
 	}
-	path := filepath.Join(dir, iniFile)
-	if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, text) && own(path) {
+	path := filepath.Join(dir, IniFile)
+	if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, text) && Owned(path) {
 		return false, nil
 	}
 	if err := writeFile(path, text); err != nil {
@@ -130,10 +128,10 @@ func (f *fields) list(name, key string) []string {
 // python_enable, python_blocking and python_tld_seg are the constants today's writer gives on a box where pfB-DNS hosts
 // DNSBL.
 func settingsIni(dns, policy map[string]any) ([]byte, error) {
-	d, p := &fields{where: "dns", v: dns}, &fields{where: "policy/dnsbl", v: policy}
 	if dns == nil || policy == nil {
 		return nil, errors.New("the dns or policy/dnsbl projection is missing")
 	}
+	d, p := &fields{where: "dns", v: dns}, &fields{where: "policy/dnsbl", v: policy}
 	onOff := func(b bool) string {
 		if b {
 			return "on"
@@ -191,8 +189,12 @@ func settingsIni(dns, policy map[string]any) ([]byte, error) {
 	if domains := d.list("noAaaaList", "domain"); d.flag("noAaaa") && len(domains) > 0 {
 		b.WriteString("\n[noAAAA]\n")
 		for i, domain := range domains {
+			flag := "0"
 			name, wildcard := strings.CutPrefix(domain, ".")
-			fmt.Fprintf(&b, "%d = %s,%d\n", i, escape(name), map[bool]int{false: 0, true: 1}[wildcard])
+			if wildcard {
+				flag = "1"
+			}
+			fmt.Fprintf(&b, "%d = %s,%s\n", i, escape(name), flag)
 		}
 	}
 	if cidrs := d.list("groupPolicyBypassList", "cidr"); d.flag("groupPolicy") && len(cidrs) > 0 {
@@ -201,10 +203,8 @@ func settingsIni(dns, policy map[string]any) ([]byte, error) {
 			fmt.Fprintf(&b, "%d = %s\n", i, cidr)
 		}
 	}
-	for _, f := range []*fields{d, p} {
-		if f.err != nil {
-			return nil, f.err
-		}
+	if err := cmp.Or(d.err, p.err); err != nil {
+		return nil, err
 	}
 	return []byte(b.String()), nil
 }

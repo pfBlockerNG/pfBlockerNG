@@ -172,6 +172,8 @@ func (m *pfbUnbound) reloadBuildSnapshot() (*snapshot, error) {
 
 // reloadBuildSnapshotWith is reloadBuildSnapshot from settings, with the user regex userRegex gives.
 func (m *pfbUnbound) reloadBuildSnapshotWith(settings *pfbSettings, userRegex func() *regexDB) (*snapshot, error) {
+	m.buildWith = settings
+	defer func() { m.buildWith = nil }()
 	build := m.dnsblBuildFromManifest(settings.pfbPySources)
 	if build == nil {
 		return nil, nil
