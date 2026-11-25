@@ -45,6 +45,8 @@ PHP = "/usr/local/bin/php"
 PORT = 15353
 # Outer bounds that only salvage a stuck run, never an assertion about duration
 READY_WATCHDOG = 60.0
+# where the package's own pfB-DNS writes its ready file, under a name of this module's
+READY = "/var/unbound/pfb_dns_ready_smoke4252"
 SERVE_WATCHDOG = 120.0
 MEASURE_ENTRIES = 5_000_000
 MEASURE_MIN_RAM = 4 << 30
@@ -123,15 +125,16 @@ def start_dns(vm: SmokeVM, fence: str, log: str) -> str:
     """pfB-DNS on the Core input, as unbound, on 127.0.0.1:PORT; its pid once it serves."""
     command = (
         f"{DNS_BIN} --listen 127.0.0.1 --port {PORT} --upstream 127.0.0.1:5353 --ctl-socket {fence}/ctl.sock "
-        f"--module-dir {fence}/mod --core-socket {fence}/core/api.sock --user unbound --ready-file {fence}/mod/ready"
+        f"--module-dir {fence}/mod --core-socket {fence}/core/api.sock --user unbound --ready-file {READY}"
     )
     start = vm.ssh(f"nohup {command} </dev/null >{log} 2>&1 & echo $!", timeout=30)
     pid = start.stdout.strip()
     assert start.returncode == 0 and pid.isdigit(), f"pfB-DNS did not start: {start.stdout}{start.stderr}"
     deadline = time.monotonic() + READY_WATCHDOG
-    while vm.ssh(f"test -s {fence}/mod/ready", timeout=30).returncode != 0:  # the real condition: it serves
+    while vm.ssh(f'test -s {READY} && test "$(cat {READY})" = {pid}', timeout=30).returncode != 0:  # it serves
         if vm.ssh(f"kill -0 {pid}", timeout=30).returncode != 0 or time.monotonic() > deadline:
-            pytest.fail(f"STUCK: pfB-DNS never became ready:\n{vm.ssh(f'tail -n 30 {log}', timeout=30).stdout}")
+            said = vm.ssh(f"tail -n 30 {log}; ls -ld {fence} {fence}/mod; id unbound", timeout=30).stdout
+            pytest.fail(f"STUCK: pfB-DNS never became ready:\n{said}")
         time.sleep(1)
     return pid
 
@@ -157,9 +160,12 @@ def fence(box: SmokeVM) -> Iterator[str]:
     made = box.ssh("mktemp -d /tmp/pfbcoreinput.XXXXXX", timeout=30)
     path = made.stdout.strip()
     assert made.returncode == 0 and path.startswith("/tmp/pfbcoreinput."), f"no scratch: {made.stdout}{made.stderr}"
-    box.ssh(f"chmod 711 {path} && mkdir -m 700 {path}/core {path}/mod && chown unbound:unbound {path}/mod", timeout=30)
+    made = box.ssh(
+        f"chmod 711 {path} && mkdir -m 700 {path}/core {path}/mod && chown unbound:unbound {path}/mod", timeout=30
+    )
+    assert made.returncode == 0, f"could not make the fence: {made.stderr}"
     yield path
-    box.ssh(f"rm -rf {path}", timeout=120)
+    box.ssh(f"rm -rf {path} {READY}", timeout=120)
 
 
 def core_command(fence: str) -> str:
