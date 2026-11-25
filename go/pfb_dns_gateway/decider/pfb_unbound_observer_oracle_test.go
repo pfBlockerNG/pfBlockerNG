@@ -144,7 +144,7 @@ func TestObserverReportsMatchPython(t *testing.T) {
 				frontend = newFrontend(m)
 			}
 			start()
-			t.Cleanup(func() { m.closeDb(); m.stopLogging() })
+			t.Cleanup(func() { m.closeDb(); m.stopLogging(); m.restoreStderr() })
 			// probe is Frontend.Resolve's answer to the fixed query; the rows the query itself writes are not the scenario's.
 			probe := func() *string {
 				mark := len(rows)

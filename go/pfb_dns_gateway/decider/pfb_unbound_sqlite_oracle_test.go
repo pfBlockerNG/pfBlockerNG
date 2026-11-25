@@ -372,7 +372,7 @@ func TestSqliteStatsMatchPython(t *testing.T) {
 				}
 			}
 			start()
-			t.Cleanup(func() { m.closeDb(); m.stopLogging() })
+			t.Cleanup(func() { m.closeDb(); m.stopLogging(); m.restoreStderr() })
 			number := map[string]int{"resolver": dbResolver, "dnsbl": dbDnsbl}
 			for i := range sc.Steps {
 				step := &sc.Steps[i]

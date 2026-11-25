@@ -69,7 +69,7 @@ func newSqlRig(t *testing.T, main string, presql map[string][]string) *sqlRig {
 	r.m = m
 	m.logSink = func(string, string) {}
 	m.stopDbWorker()
-	t.Cleanup(func() { m.closeDb(); m.stopLogging() })
+	stopModule(t, m)
 	return r
 }
 
@@ -888,7 +888,7 @@ func statsOutageModule(t *testing.T) *pfbUnbound {
 		t.Fatalf("a stats database that cannot open failed the boot: %v", err)
 	}
 	m.logSink = func(string, string) {}
-	t.Cleanup(func() { m.closeDb(); m.stopLogging() })
+	stopModule(t, m)
 	return m
 }
 
