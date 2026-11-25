@@ -152,6 +152,23 @@ final class PfbCoreServiceTest extends TestCase
 		$this->assertSame(['0 1 2 '], $this->lines('fds'), 'the daemon inherited a descriptor of the caller (stdio must be /dev/null)');
 	}
 
+	/** Issue #4250: an id that is no number is not passed on: Core would refuse its flags and daemon(8) restart it every 5 s. */
+	public function testAnUnboundIdThatIsNoNumberStartsCoreWithNoClient(): void
+	{
+		// Given an id(1) that succeeds but prints no number
+		$this->arrangeInstalled(scenario: ['UNBOUND_UID' => 'unbound', 'UNBOUND_GID' => '']);
+
+		// When the service starts
+		[$status, $out] = $this->rc('start');
+
+		// Then Core starts with no client and no socket group
+		$this->assertSame(0, $status, $out);
+		$argv = $this->lines('daemon.argv');
+		$this->assertContains('--socket', $argv, 'Core was not started');
+		$this->assertNotContains('--client-uid', $argv);
+		$this->assertNotContains('--socket-group', $argv);
+	}
+
 	/** Issue #4250: a system without the unbound user still starts Core, with no client. */
 	public function testWithoutAnUnboundUserCoreStartsAndAdmitsNoClient(): void
 	{
