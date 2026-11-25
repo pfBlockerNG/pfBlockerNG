@@ -53,17 +53,14 @@ func TestSettingsIniMainIsWhatTodaysWriterGives(t *testing.T) {
 		"python_enable\t= on",
 		"metrics_client_ip\t= on",
 		"python_reply\t= off",
-		"python_blocking\t= on",
 		"python_tld_wildcard\t= on",
 		"psl_include_private\t= off",
 		"psl_allow_private\t= on",
 		"psl_feed_private_policy\t= apex",
 		"psl_feed_icann_policy\t= ignore",
-		"python_idn\t= on",
 		"idn_mode\t= on",
 		"python_idn_block_malicious\t= off",
 		"python_idn_escalate_suspicious\t= on",
-		"python_tld_seg\t= 1",
 		"decisiondb_max\t= 0",
 		"tld_allow\t= on",
 		"tld_allow_list\t= com,net,x%%y",
@@ -97,7 +94,7 @@ func TestSettingsIniMainIsWhatTodaysWriterGives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settingsIni: %v", err)
 	}
-	for _, line := range []string{"idn_mode\t= \n", "python_idn\t= off\n", "python_control_legacy\t= off\n", "tld_allow\t= off\n", "tld_allow_list\t= \n"} {
+	for _, line := range []string{"idn_mode\t= \n", "python_control_legacy\t= off\n", "tld_allow\t= off\n", "tld_allow_list\t= \n"} {
 		if !strings.Contains(string(text), line) {
 			t.Errorf("ini lacks %q:\n%s", line, text)
 		}

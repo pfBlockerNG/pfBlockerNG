@@ -1106,8 +1106,8 @@ func TestReloadReadsOnlyTheRegexListFromTheIni(t *testing.T) {
 		t.Errorf("(pslFeedPrivatePolicy, tldAllowRoots) = (%q, %v), want the init values (honor, none)", snap.pslFeedPrivatePolicy, snap.tldAllowRoots)
 	}
 	s := snap.settings
-	if s.regexCap || s.tldAllow || s.pythonTldSeg != 0 || s.decisiondbMax != 10000 {
-		t.Errorf("settings (regexCap, tldAllow, pythonTldSeg, decisiondbMax) = (%v, %v, %d, %d), want the init values", s.regexCap, s.tldAllow, s.pythonTldSeg, s.decisiondbMax)
+	if s.regexCap || s.tldAllow || s.decisiondbMax != 10000 {
+		t.Errorf("settings (regexCap, tldAllow, decisiondbMax) = (%v, %v, %d), want the init values", s.regexCap, s.tldAllow, s.decisiondbMax)
 	}
 }
 

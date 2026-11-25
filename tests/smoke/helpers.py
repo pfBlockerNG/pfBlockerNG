@@ -4271,7 +4271,7 @@ def snap_state(vm: SmokeVM, tag: str, *, timeout: float = 30.0) -> None:
         # Secret-scrub config.xml: the same sed program as collect_host_diagnostics.
         f"sed -E '{scrub_prog}' {CONFIG_XML} > {dest_sh}/config.xml 2>/dev/null; "
         f"cp {UNBOUND_CONF} {dest_sh}/unbound.conf 2>/dev/null; "
-        # The DNSBL python ini (python_blocking flag the module reads) + the
+        # The DNSBL module's ini (pfb_unbound.ini) + the
         # unbound-mode block file (local-zone/local-data) + the python blocklist.
         f"cp /var/unbound/pfb_unbound.ini {dest_sh}/ 2>/dev/null; "
         f"cp /var/unbound/pfb_dnsbl.conf {dest_sh}/ 2>/dev/null; "
@@ -6075,7 +6075,7 @@ def dump_diagnostics(vm: SmokeVM) -> None:
             # THE enable gate: pfb_unbound.ini drives the module. python_enable=on
             # (mode=='enabled') is what makes operate() load the blocklist + block;
             # if it's off, every name is forwarded (SERVFAIL under egress block).
-            "pfb_unbound.ini ([MAIN] — python_enable / python_blocking / VIPs)",
+            "pfb_unbound.ini ([MAIN] — python_enable and the DNSBL settings)",
             "cat /var/unbound/pfb_unbound.ini 2>/dev/null | head -60 || true",
         ),
         (

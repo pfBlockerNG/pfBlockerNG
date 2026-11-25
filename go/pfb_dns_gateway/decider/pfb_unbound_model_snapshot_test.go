@@ -184,7 +184,7 @@ func TestSnapshotSwapRace(t *testing.T) {
 					t.Errorf("torn read: settings/safeSearchDB not from snapshot %d", tag)
 					return
 				}
-				if band := whitelistLookupBand("www.white.example", snap.whiteDB, 1); band != PRIO_USER_ALLOW {
+				if band := whitelistLookupBand("www.white.example", snap.whiteDB); band != PRIO_USER_ALLOW {
 					t.Errorf("whitelistLookupBand = %d, want %d", band, PRIO_USER_ALLOW)
 					return
 				}

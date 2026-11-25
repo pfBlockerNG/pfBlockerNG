@@ -158,108 +158,49 @@ func TestWhitelistOracleRows(t *testing.T) {
 	db := mwWhiteFixture()
 	for _, r := range []struct {
 		name      string
-		seg       int64
 		matched   bool
 		important bool
 		band      int
 	}{
-		{"legacy-wild.com", 1, true, false, 2},
-		{"sub.legacy-wild.com", 1, true, false, 2},
-		{"www.legacy-wild.com", 1, true, false, 2},
-		{"a.b.legacy-wild.com", 1, true, false, 2},
-		{"legacy-exact.org", 1, true, false, 2},
-		{"www.legacy-exact.org", 1, true, false, 2},
-		{"sub.legacy-exact.org", 1, false, false, 0},
-		{"user.example", 1, true, true, 6},
-		{"a.user.example", 1, true, true, 6},
-		{"www.user.example", 1, true, true, 6},
-		{"feed.example", 1, true, false, 2},
-		{"www.feed.example", 1, true, false, 2},
-		{"x.feed.example", 1, false, false, 0},
-		{"a.feedimp.example", 1, true, true, 4},
-		{"a.b.feedimp.example", 1, true, true, 4},
-		{"noband.example", 1, true, true, 6},
-		{"x.noband.example", 1, true, true, 6},
-		{"bandonly.example", 1, true, false, 4},
-		{"x.bandonly.example", 1, false, false, 0},
-		{"printer.lan", 1, true, true, 6},
-		{"a.b.internal", 1, false, false, 0},
-		{"lan", 1, true, true, 6},
-		{"cdn.shared.example", 1, true, false, 6},
-		{"www.cdn.shared.example", 1, true, false, 6},
-		{"deep.cdn.shared.example", 1, true, true, 6},
-		{"unmatched.net", 1, false, false, 0},
-		{"", 1, false, false, 0},
-		{"www.", 1, false, false, 0},
-		{"a..user.example", 1, true, true, 6},
-		{"legacy-wild.com", 2, true, false, 2},
-		{"sub.legacy-wild.com", 2, true, false, 2},
-		{"www.legacy-wild.com", 2, true, false, 2},
-		{"a.b.legacy-wild.com", 2, true, false, 2},
-		{"legacy-exact.org", 2, true, false, 2},
-		{"www.legacy-exact.org", 2, true, false, 2},
-		{"sub.legacy-exact.org", 2, false, false, 0},
-		{"user.example", 2, true, true, 6},
-		{"a.user.example", 2, true, true, 6},
-		{"www.user.example", 2, true, true, 6},
-		{"feed.example", 2, true, false, 2},
-		{"www.feed.example", 2, true, false, 2},
-		{"x.feed.example", 2, false, false, 0},
-		{"a.feedimp.example", 2, true, true, 4},
-		{"a.b.feedimp.example", 2, true, true, 4},
-		{"noband.example", 2, true, true, 6},
-		{"x.noband.example", 2, true, true, 6},
-		{"bandonly.example", 2, true, false, 4},
-		{"x.bandonly.example", 2, false, false, 0},
-		{"printer.lan", 2, false, false, 0},
-		{"a.b.internal", 2, false, false, 0},
-		{"lan", 2, true, true, 6},
-		{"cdn.shared.example", 2, true, false, 6},
-		{"www.cdn.shared.example", 2, true, false, 6},
-		{"deep.cdn.shared.example", 2, true, true, 6},
-		{"unmatched.net", 2, false, false, 0},
-		{"", 2, false, false, 0},
-		{"www.", 2, false, false, 0},
-		{"a..user.example", 2, true, true, 6},
-		{"legacy-wild.com", 3, true, false, 2},
-		{"sub.legacy-wild.com", 3, false, false, 0},
-		{"www.legacy-wild.com", 3, true, false, 2},
-		{"a.b.legacy-wild.com", 3, false, false, 0},
-		{"legacy-exact.org", 3, true, false, 2},
-		{"www.legacy-exact.org", 3, true, false, 2},
-		{"sub.legacy-exact.org", 3, false, false, 0},
-		{"user.example", 3, true, true, 6},
-		{"a.user.example", 3, false, false, 0},
-		{"www.user.example", 3, true, true, 6},
-		{"feed.example", 3, true, false, 2},
-		{"www.feed.example", 3, true, false, 2},
-		{"x.feed.example", 3, false, false, 0},
-		{"a.feedimp.example", 3, false, false, 0},
-		{"a.b.feedimp.example", 3, false, false, 0},
-		{"noband.example", 3, true, true, 6},
-		{"x.noband.example", 3, false, false, 0},
-		{"bandonly.example", 3, true, false, 4},
-		{"x.bandonly.example", 3, false, false, 0},
-		{"printer.lan", 3, false, false, 0},
-		{"a.b.internal", 3, false, false, 0},
-		{"lan", 3, true, true, 6},
-		{"cdn.shared.example", 3, true, false, 2},
-		{"www.cdn.shared.example", 3, true, false, 2},
-		{"deep.cdn.shared.example", 3, false, false, 0},
-		{"unmatched.net", 3, false, false, 0},
-		{"", 3, false, false, 0},
-		{"www.", 3, false, false, 0},
-		{"a..user.example", 3, false, false, 0},
+		{"legacy-wild.com", true, false, 2},
+		{"sub.legacy-wild.com", true, false, 2},
+		{"www.legacy-wild.com", true, false, 2},
+		{"a.b.legacy-wild.com", true, false, 2},
+		{"legacy-exact.org", true, false, 2},
+		{"www.legacy-exact.org", true, false, 2},
+		{"sub.legacy-exact.org", false, false, 0},
+		{"user.example", true, true, 6},
+		{"a.user.example", true, true, 6},
+		{"www.user.example", true, true, 6},
+		{"feed.example", true, false, 2},
+		{"www.feed.example", true, false, 2},
+		{"x.feed.example", false, false, 0},
+		{"a.feedimp.example", true, true, 4},
+		{"a.b.feedimp.example", true, true, 4},
+		{"noband.example", true, true, 6},
+		{"x.noband.example", true, true, 6},
+		{"bandonly.example", true, false, 4},
+		{"x.bandonly.example", false, false, 0},
+		{"printer.lan", true, true, 6},
+		{"a.b.internal", false, false, 0},
+		{"lan", true, true, 6},
+		{"cdn.shared.example", true, false, 6},
+		{"www.cdn.shared.example", true, false, 6},
+		{"deep.cdn.shared.example", true, true, 6},
+		{"unmatched.net", false, false, 0},
+		{"", false, false, 0},
+		{"www.", false, false, 0},
+		{"a..user.example", true, true, 6},
 	} {
-		matched, important := whitelistLookupDomain(r.name, db, r.seg)
+		matched, important := whitelistLookupDomain(r.name, db)
 		if matched != r.matched || important != r.important {
-			t.Errorf("whitelistLookupDomain(%q, seg %d) = (%v, %v), want (%v, %v)", r.name, r.seg, matched, important, r.matched, r.important)
+			t.Errorf("whitelistLookupDomain(%q) = (%v, %v), want (%v, %v)", r.name, matched, important, r.matched, r.important)
 		}
-		if got := whitelistCheckDomain(r.name, db, r.seg); got != r.matched {
-			t.Errorf("whitelistCheckDomain(%q, seg %d) = %v, want %v", r.name, r.seg, got, r.matched)
+		if got := whitelistCheckDomain(r.name, db); got != r.matched {
+			t.Errorf("whitelistCheckDomain(%q) = %v, want %v", r.name, got, r.matched)
 		}
-		if got := whitelistLookupBand(r.name, db, r.seg); got != r.band {
-			t.Errorf("whitelistLookupBand(%q, seg %d) = %d, want %d", r.name, r.seg, got, r.band)
+		if got := whitelistLookupBand(r.name, db); got != r.band {
+			t.Errorf("whitelistLookupBand(%q) = %d, want %d", r.name, got, r.band)
 		}
 	}
 }
@@ -277,7 +218,7 @@ func TestWhitelistLookupDomainShapes(t *testing.T) {
 		{"bare bool matches, not important", map[string]whiteEntry{"allowed.com": mwLegacy(false)}, "allowed.com", true, false},
 		{"miss", map[string]whiteEntry{"x.com": mwLegacy(true)}, "nope.com", false, false},
 	} {
-		matched, important := whitelistLookupDomain(c.query, c.white, 2)
+		matched, important := whitelistLookupDomain(c.query, c.white)
 		if matched != c.matched || important != c.important {
 			t.Errorf("%s: whitelistLookupDomain = (%v, %v), want (%v, %v)", c.name, matched, important, c.matched, c.important)
 		}
@@ -293,7 +234,7 @@ func TestWhitelistLookupDomainShapes(t *testing.T) {
 		{"non-wildcard dict not via walk", map[string]whiteEntry{"evil.com": mwDict(false, true)}, "sub.evil.com", false},
 		{"exact regardless of wildcard", map[string]whiteEntry{"evil.com": mwDict(false, true)}, "evil.com", true},
 	} {
-		if got := whitelistCheckDomain(c.query, c.white, 2); got != c.want {
+		if got := whitelistCheckDomain(c.query, c.white); got != c.want {
 			t.Errorf("%s: whitelistCheckDomain(%q) = %v, want %v", c.name, c.query, got, c.want)
 		}
 	}
@@ -304,13 +245,9 @@ func TestWhitelistLookupBuildModuleRows(t *testing.T) {
 	user := mwBand(true, true, PRIO_USER_ALLOW)
 	lan := map[string]whiteEntry{"lan": user, "internal": user}
 	// test_single_label_wildcard_is_kept_and_matches_children
-	for _, c := range []struct {
-		name string
-		seg  int64
-		want bool
-	}{{"printer.lan", 1, true}, {"a.b.internal", 1, true}, {"printer.lan", 2, false}} {
-		if got, _ := whitelistLookupDomain(c.name, lan, c.seg); got != c.want {
-			t.Errorf("whitelistLookupDomain(%q, seg %d) = %v, want %v", c.name, c.seg, got, c.want)
+	for _, name := range []string{"printer.lan", "a.b.internal"} {
+		if got, _ := whitelistLookupDomain(name, lan); !got {
+			t.Errorf("whitelistLookupDomain(%q) = false, want true", name)
 		}
 	}
 	// test_leading_dot_then_www_keeps_wildcard / test_www_then_bare_apex_stays_exact (issue #3191).
@@ -322,18 +259,18 @@ func TestWhitelistLookupBuildModuleRows(t *testing.T) {
 	}{{"wildcard apex covers deep names", user, true}, {"exact apex does not", mwBand(false, true, PRIO_USER_ALLOW), false}} {
 		db := map[string]whiteEntry{apex: c.entry}
 		for _, q := range []string{"stun.l." + apex, "a.b." + apex} {
-			if got := whitelistCheckDomain(q, db, 1); got != c.want {
+			if got := whitelistCheckDomain(q, db); got != c.want {
 				t.Errorf("%s: whitelistCheckDomain(%q) = %v, want %v", c.name, q, got, c.want)
 			}
 		}
 	}
 	// test_mixed_case_entry_matches_lowercase_query, test_trailing_dot_entry_stored_without_dot_and_matches
-	if got, _ := whitelistLookupDomain("example.com", map[string]whiteEntry{"example.com": user}, 2); !got {
+	if got, _ := whitelistLookupDomain("example.com", map[string]whiteEntry{"example.com": user}); !got {
 		t.Error("whitelistLookupDomain(example.com) = false, want true")
 	}
 	// test_www_single_label_remainder_keeps_matching
 	for _, name := range []string{"www.com", "www.org", "www.example"} {
-		if got, _ := whitelistLookupDomain(name, map[string]whiteEntry{name: user}, 2); !got {
+		if got, _ := whitelistLookupDomain(name, map[string]whiteEntry{name: user}); !got {
 			t.Errorf("whitelistLookupDomain(%q) = false, want true", name)
 		}
 	}
@@ -345,20 +282,18 @@ func TestWhitelistCheckDomain(t *testing.T) {
 		name  string
 		white map[string]whiteEntry
 		query string
-		seg   int64
 		want  bool
 	}{
-		{"exact match", map[string]whiteEntry{"allowed.com": mwLegacy(false)}, "allowed.com", 2, true},
-		{"no match", map[string]whiteEntry{"other.com": mwLegacy(false)}, "allowed.com", 2, false},
-		{"www strip", map[string]whiteEntry{"allowed.com": mwLegacy(false)}, "www.allowed.com", 2, true},
-		{"www strip not triggered for non-www", map[string]whiteEntry{"allowed.com": mwLegacy(false)}, "sub.allowed.com", 2, false},
-		{"suffix walk at tld_seg boundary matches", map[string]whiteEntry{"evil.com": mwLegacy(true)}, "sub.evil.com", 2, true},
-		{"suffix walk below tld_seg does not match", map[string]whiteEntry{"com": mwLegacy(true)}, "evil.com", 2, false},
-		{"high tld_seg blocks intermediate", map[string]whiteEntry{"example.com": mwLegacy(true)}, "a.b.example.com", 3, false},
-		{"tld_seg allows higher", map[string]whiteEntry{"b.example.com": mwLegacy(true)}, "a.b.example.com", 3, true},
+		{"exact match", map[string]whiteEntry{"allowed.com": mwLegacy(false)}, "allowed.com", true},
+		{"no match", map[string]whiteEntry{"other.com": mwLegacy(false)}, "allowed.com", false},
+		{"www strip", map[string]whiteEntry{"allowed.com": mwLegacy(false)}, "www.allowed.com", true},
+		{"www strip not triggered for non-www", map[string]whiteEntry{"allowed.com": mwLegacy(false)}, "sub.allowed.com", false},
+		{"suffix walk matches a wildcard parent", map[string]whiteEntry{"evil.com": mwLegacy(true)}, "sub.evil.com", true},
+		{"suffix walk matches a deeper wildcard parent", map[string]whiteEntry{"example.com": mwLegacy(true)}, "a.b.example.com", true},
+		{"suffix walk reaches the TLD", map[string]whiteEntry{"com": mwLegacy(true)}, "evil.com", true},
 	} {
-		if got := whitelistCheckDomain(c.query, c.white, c.seg); got != c.want {
-			t.Errorf("%s: whitelistCheckDomain(%q, seg %d) = %v, want %v", c.name, c.query, c.seg, got, c.want)
+		if got := whitelistCheckDomain(c.query, c.white); got != c.want {
+			t.Errorf("%s: whitelistCheckDomain(%q) = %v, want %v", c.name, c.query, got, c.want)
 		}
 	}
 }
@@ -382,7 +317,7 @@ func TestWhitelistLookupBand(t *testing.T) {
 			"cdn.shared.example": mwBand(false, false, PRIO_FEED_ALLOW), "shared.example": mwBand(true, true, PRIO_USER_ALLOW),
 		}, "www.cdn.shared.example", PRIO_USER_ALLOW},
 	} {
-		if got := whitelistLookupBand(c.query, c.white, 2); got != c.want {
+		if got := whitelistLookupBand(c.query, c.white); got != c.want {
 			t.Errorf("%s: whitelistLookupBand(%q) = %d, want %d", c.name, c.query, got, c.want)
 		}
 	}
@@ -720,7 +655,6 @@ func TestPureMatcherProperties(t *testing.T) {
 		for range mwEntries {
 			white[mwRandDomain(rng)] = mwLegacy(rng.IntN(2) == 0)
 		}
-		const tldSeg = 2
 		for range mwQueries {
 			q := mwRandDomain(rng)
 			_, want := white[q]
@@ -731,9 +665,9 @@ func TestPureMatcherProperties(t *testing.T) {
 			for i := 1; !want && i < len(parts); i++ {
 				// i labels dropped leaves len(parts)-i labels in the suffix; only wildcard entries match here.
 				e, ok := white[strings.Join(parts[i:], ".")]
-				want = ok && len(parts)-i >= tldSeg && e.wildcard
+				want = ok && e.wildcard
 			}
-			if got := whitelistCheckDomain(q, white, tldSeg); got != want {
+			if got := whitelistCheckDomain(q, white); got != want {
 				t.Errorf("whitelistCheckDomain(%q) = %v, want %v", q, got, want)
 			}
 		}

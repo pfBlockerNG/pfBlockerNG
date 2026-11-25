@@ -449,7 +449,7 @@ func TestBuildUserWildcardNotOverwrittenByTop1m(t *testing.T) {
 		t.Fatalf("whiteDB[%q] = %+v, want the user's wildcard", apex, result.whiteDB[apex])
 	}
 	for _, name := range []string{"stun.l." + apex, "a.b." + apex} {
-		if !whitelistCheckDomain(name, result.whiteDB, 1) {
+		if !whitelistCheckDomain(name, result.whiteDB) {
 			t.Errorf("%s is not covered by the user's .%s", name, apex)
 		}
 	}

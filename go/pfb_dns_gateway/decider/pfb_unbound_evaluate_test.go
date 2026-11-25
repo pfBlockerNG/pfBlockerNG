@@ -51,9 +51,6 @@ func evCaptureLog(t *testing.T) *evSyncBuffer {
 // evCfg is the per-query cfg of the Python tests' _cfg() with every presence gate off.
 func evCfg() evaluateConfig {
 	return evaluateConfig{
-		pythonBlocking:          true,
-		regexWarnMs:             REGEX_WARN_MS_DEFAULT,
-		pythonTldSeg:            2,
 		builtinLogFlag:          "0",
 		pythonIdnBlockMalicious: true,
 		regex:                   newRegexRuntime(),
@@ -186,7 +183,7 @@ func TestEvaluateDomainAllowBlockPrecedence(t *testing.T) {
 
 // test_adr65_decision_oracle.py A10, A11, A12 and oracle rows for the arms around them: the Confusable BLOCK of a
 // suspicious name when escalated, the ALERT of a malicious name when blocking is off, the All-IDN block under the
-// numeric path, and the legacy python_idn fallback when idn_mode is absent or unrecognised.
+// numeric path, and an absent or unrecognised idn_mode deciding as Off.
 func TestEvaluateDomainIdnArms(t *testing.T) {
 	const malicious, suspicious = "xn--pple-43d.com", "xn--bnk-1ce.com"
 
@@ -222,20 +219,19 @@ func TestEvaluateDomainIdnArms(t *testing.T) {
 		evEval("xn--any1234.uuid1011.com", "com", false, cfg, matcherContainers{whiteDB: map[string]whiteEntry{"xn--any1234.uuid1011.com": evWhite(false, false, 2)}}),
 		dd{isFound: true, inWhitelist: true, nullBlocking: true, logType: "0", bType: "Python", pType: "Python", feed: "IDN", group: "DNSBL_IDN", bEval: "xn--any1234.uuid1011.com", groupOwner: "DNSBL_IDN", groupOrigin: "builtin"})
 
-	// oracle: cfg.get("idn_mode") absent (None) or unrecognised falls back to python_idn; an explicit "off" is not bypassed.
+	// An absent or unrecognised idn_mode is Off (python_idn is not read, owner 2026-11-25).
 	for _, row := range []struct {
-		name      string
-		mode      IdnMode
-		pythonIdn bool
-		blocked   bool
+		name    string
+		mode    IdnMode
+		blocked bool
 	}{
-		{"mode absent, python_idn on", "", true, true},
-		{"mode absent, python_idn off", "", false, false},
-		{"mode unrecognised, python_idn on", "bogus", true, true},
-		{"mode off wins over python_idn on", IdnModeOff, true, false},
+		{"mode absent", "", false},
+		{"mode unrecognised", "bogus", false},
+		{"mode off", IdnModeOff, false},
+		{"mode on", IdnModeAll, true},
 	} {
 		cfg := evCfgAll()
-		cfg.idnMode, cfg.pythonIdn = row.mode, row.pythonIdn
+		cfg.idnMode = row.mode
 		if got := evEval("xn--any1234.uuid1011.com", "com", false, cfg, matcherContainers{}); got.isFound != row.blocked {
 			t.Errorf("%s: isFound = %v, want %v", row.name, got.isFound, row.blocked)
 		}
@@ -246,7 +242,6 @@ func TestEvaluateDomainIdnArms(t *testing.T) {
 func TestEvaluateDomainTldAllow(t *testing.T) {
 	tldCfg := func(enabled bool, list ...string) evaluateConfig {
 		cfg := evCfg()
-		cfg.pythonBlocking = false
 		cfg.tldAllow, cfg.tldAllowList = enabled, list
 		return cfg
 	}
@@ -293,7 +288,7 @@ func TestEvaluateDomainTldAllow(t *testing.T) {
 
 	// A10: a dataDB hit wins outright.
 	cfg = tldCfg(true, "com")
-	cfg.pythonBlocking, cfg.dataDB = true, true
+	cfg.dataDB = true
 	if got := evEval("uuid-a10.org", "org", false, cfg, matcherContainers{}); !got.isFound || got.feed != "TLD_Allow" {
 		t.Errorf("A10 control: got %+v, want TLD_Allow", *got)
 	}
@@ -553,7 +548,7 @@ func evPslContainers(t *testing.T, roots []string, allowPrivate bool) matcherCon
 
 func evAllowCfg(list ...string) evaluateConfig {
 	cfg := evCfg()
-	cfg.pythonBlocking, cfg.tldAllow, cfg.tldAllowList = false, true, list
+	cfg.tldAllow, cfg.tldAllowList = true, list
 	return cfg
 }
 
@@ -730,13 +725,6 @@ func TestEvaluateDomainOracleRows(t *testing.T) {
 		dataDB: map[string]*blockEntry{"evil.com": evBlk("3", 1, PRIO_FEED_BLOCK)}, feedGroupIndexDB: fg}),
 		dd{isFound: true, nxdomain: true, nullBlocking: true, logType: "3", bType: "DNSBL_CNAME", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"})
 
-	// R8: python_blocking gates data and zone, not TLD-Allow.
-	evCheck(t, "R8 python_blocking off", evEval("evil.com", "com", false,
-		cfgOf(func(c *evaluateConfig) {
-			c.pythonBlocking, c.dataDB, c.tldAllow, c.tldAllowList = false, true, true, []string{"net"}
-		}),
-		matcherContainers{dataDB: dataEvil, feedGroupIndexDB: fg}),
-		dd{isFound: true, nullBlocking: true, logType: "0", bType: "Python", pType: "Python", feed: "TLD_Allow", group: "DNSBL_TLD_Allow", bEval: "evil.com", groupOwner: "DNSBL_TLD_Allow", groupOrigin: "builtin"})
 	// R9: the presence gates.
 	evCheck(t, "R9a dataDB gate off", evEval("evil.com", "com", false, evCfg(), matcherContainers{dataDB: dataEvil, feedGroupIndexDB: fg}), evNone)
 	evCheck(t, "R9b zoneDB gate off", evEval("a.evil.com", "com", false, evCfg(), matcherContainers{zoneDB: dataEvil, feedGroupIndexDB: fg}), evNone)
@@ -888,14 +876,14 @@ func TestScanAllowRegexBand(t *testing.T) {
 		{"user list alone", nil, user, PRIO_USER_ALLOW},
 		{"feed list alone", feed, nil, PRIO_FEED_ALLOW_IMPORTANT},
 	} {
-		if got := scanAllowRegexBand(rt, "evil.example", row.feed, row.user, 10.0); got != row.want {
+		if got := scanAllowRegexBand(rt, "evil.example", row.feed, row.user); got != row.want {
 			t.Errorf("%s: band = %d, want %d", row.name, got, row.want)
 		}
 	}
-	if got := scanAllowRegexBand(rt, "", evRegexDB(evRx("R", "x", PRIO_FEED_ALLOW)), nil, 10.0); got != 0 {
+	if got := scanAllowRegexBand(rt, "", evRegexDB(evRx("R", "x", PRIO_FEED_ALLOW)), nil); got != 0 {
 		t.Errorf("an empty query name: band = %d, want 0", got)
 	}
-	if got := scanAllowRegexBand(rt, "benign.example", feed, user, 10.0); got != 0 {
+	if got := scanAllowRegexBand(rt, "benign.example", feed, user); got != 0 {
 		t.Errorf("no match: band = %d, want 0", got)
 	}
 }
@@ -940,16 +928,16 @@ func TestResolveNumericAllow(t *testing.T) {
 func TestFirstRegexMatch(t *testing.T) {
 	rt := newRegexRuntime()
 	db := evRegexDB(evRx("one", "nomatch", 1), evRx("two", "evil", 1), evRx("three", "evil", 5))
-	scan := newRegexScan(rt, "DNSBL_Regex", 10.0, false)
+	scan := newRegexScan(rt, "DNSBL_Regex", false)
 	name, rule := firstRegexMatch(db, "evil.com", &scan)
 	if name != "two" || rule != mustGet(t, db, "two") || scan.rules != 2 {
 		t.Errorf("got (%q, %v) after %d rules timed, want (two, the second rule) after 2", name, rule, scan.rules)
 	}
-	scan = newRegexScan(rt, "DNSBL_Regex", 10.0, false)
+	scan = newRegexScan(rt, "DNSBL_Regex", false)
 	if name, rule := firstRegexMatch(db, "benign.org", &scan); name != "" || rule != nil || scan.rules != 3 {
 		t.Errorf("no match: got (%q, %v) after %d rules timed, want (\"\", nil) after 3", name, rule, scan.rules)
 	}
-	scan = newRegexScan(rt, "DNSBL_Regex", 10.0, false)
+	scan = newRegexScan(rt, "DNSBL_Regex", false)
 	if name, rule := firstRegexMatch(nil, "evil.com", &scan); name != "" || rule != nil {
 		t.Errorf("a nil list: got (%q, %v), want (\"\", nil)", name, rule)
 	}
@@ -1072,7 +1060,7 @@ func TestSlowRegexIsWarnedAndKept(t *testing.T) {
 		rt.timedSearch = evScripted(t, slowMs, slowMs)
 		db := evRegexDB(evRx("A#0", `slow\.example$`, PRIO_FEED_ALLOW))
 		for i := range 2 {
-			if got := scanAllowRegexBand(rt, "slow.example", db, nil, 10.0); got != PRIO_FEED_ALLOW {
+			if got := scanAllowRegexBand(rt, "slow.example", db, nil); got != PRIO_FEED_ALLOW {
 				t.Errorf("scan %d: band = %d, want %d", i+1, got, PRIO_FEED_ALLOW)
 			}
 		}
@@ -1123,7 +1111,7 @@ func TestSlowRegexIsWarnedAndKept(t *testing.T) {
 		rt := newRegexRuntime()
 		rt.timedSearch = evScripted(t, 2.0)
 		db := evRegexDB(evRx("A#0", `slow\.example$`, PRIO_FEED_ALLOW))
-		if got := scanAllowRegexBand(rt, "slow.example", db, nil, 10.0); got != PRIO_FEED_ALLOW {
+		if got := scanAllowRegexBand(rt, "slow.example", db, nil); got != PRIO_FEED_ALLOW {
 			t.Errorf("band = %d, want %d", got, PRIO_FEED_ALLOW)
 		}
 		if log.String() != "" {
@@ -1235,14 +1223,14 @@ func TestSlowListScanIsReported(t *testing.T) {
 		rt := newRegexRuntime()
 		m := newEvMeasured(rt)
 		db := m.db("A", PRIO_FEED_ALLOW, []float64{3, 4, 5}, -1)
-		if got := scanAllowRegexBand(rt, "slow.example", db, nil, 10.0); got != 0 {
+		if got := scanAllowRegexBand(rt, "slow.example", db, nil); got != 0 {
 			t.Errorf("band = %d, want 0", got)
 		}
 		want := evListLine("DNSBL_AllowRegex", "12.0", 3, "A#2", "5.0")
 		if log.String() != want {
 			t.Errorf("log = %q, want %q", log.String(), want)
 		}
-		scanAllowRegexBand(rt, "slow.example", db, nil, 10.0)
+		scanAllowRegexBand(rt, "slow.example", db, nil)
 		if log.String() != want {
 			t.Errorf("the second scan wrote %q, want nothing", strings.TrimPrefix(log.String(), want))
 		}
@@ -1252,7 +1240,7 @@ func TestSlowListScanIsReported(t *testing.T) {
 		cfg := feedCfg()
 		m := newEvMeasured(cfg.regex)
 		scanBlockBand("slow.example", cfg, nil, nil, m.db("F", PRIO_FEED_BLOCK, []float64{3, 4, 5}, -1), nil)
-		scanAllowRegexBand(cfg.regex, "slow.example", m.db("A", PRIO_FEED_ALLOW, []float64{3, 5, 4}, -1), nil, 10.0)
+		scanAllowRegexBand(cfg.regex, "slow.example", m.db("A", PRIO_FEED_ALLOW, []float64{3, 5, 4}, -1), nil)
 		want := evListLine("DNSBL_Regex", "12.0", 3, "F#2", "5.0") + evListLine("DNSBL_AllowRegex", "12.0", 3, "A#1", "5.0")
 		if log.String() != want {
 			t.Errorf("log = %q, want %q", log.String(), want)
@@ -1290,7 +1278,7 @@ func TestSlowListScanIsReported(t *testing.T) {
 		cfg.regexDB, cfg.userRegexDB = true, true
 		m := newEvMeasured(cfg.regex)
 		discover(cfg, matcherContainers{regexDB: m.db("X", PRIO_FEED_BLOCK, []float64{20}, -1), userRegexDB: m.db("X", PRIO_USER_BLOCK, []float64{20}, -1)})
-		scanAllowRegexBand(cfg.regex, "slow.example", m.db("X", PRIO_FEED_ALLOW, []float64{20}, -1), m.db("X", PRIO_USER_ALLOW, []float64{20}, -1), 10.0)
+		scanAllowRegexBand(cfg.regex, "slow.example", m.db("X", PRIO_FEED_ALLOW, []float64{20}, -1), m.db("X", PRIO_USER_ALLOW, []float64{20}, -1))
 		var got []string
 		for _, line := range strings.Split(strings.TrimSuffix(log.String(), "\n"), "\n") {
 			if strings.Contains(line, "regex [ X#0 ]") {
@@ -1337,7 +1325,7 @@ func TestSlowListScanIsReported(t *testing.T) {
 		m := newEvMeasured(rt)
 		feed := m.db("A", PRIO_FEED_ALLOW, []float64{3, 5, 4}, -1)
 		user := m.db("UA", PRIO_USER_ALLOW, []float64{3, 4, 5}, -1)
-		if got := scanAllowRegexBand(rt, "slow.example", feed, user, 10.0); got != 0 {
+		if got := scanAllowRegexBand(rt, "slow.example", feed, user); got != 0 {
 			t.Errorf("band = %d, want 0", got)
 		}
 		want := evListLine("user DNSBL_AllowRegex", "12.0", 3, "UA#2", "5.0") + evListLine("DNSBL_AllowRegex", "12.0", 3, "A#1", "5.0")
@@ -1481,11 +1469,9 @@ func evCfgDiff(got, want evaluateConfig) string {
 // settings (never from the pfbUnbound the swap does not refresh), the TLD-Allow list from the snapshot's frozen roots.
 func TestEvaluateCfg(t *testing.T) {
 	m := &pfbUnbound{regexRuntime: newRegexRuntime()}
-	m.pfb.pythonBlocking = false // a swap does not refresh this; the snapshot's settings decide
 	settings := &pfbSettings{
-		pythonBlocking: true, tldAllow: true, tldAllowList: []string{"com"},
-		pythonIdn: true, idnMode: IdnModeConfusable, pythonIdnBlockMalicious: false, pythonIdnEscalateSuspicious: true,
-		regexWarnMs: 7.5, pythonTldSeg: 3,
+		tldAllow: true, tldAllowList: []string{"com"},
+		idnMode: IdnModeConfusable, pythonIdnBlockMalicious: false, pythonIdnEscalateSuspicious: true,
 	}
 	snap := evSnapshot(settings)
 	snap.dataDB = map[string]*blockEntry{"evil.com": evBlk("1", 0, 1)}
@@ -1496,20 +1482,15 @@ func TestEvaluateCfg(t *testing.T) {
 	snap.hasTldAllowRoots, snap.tldAllowRoots = true, []string{"io"}
 
 	want := evaluateConfig{
-		pythonBlocking: true, dataDB: true, zoneDB: false, tldAllow: true, tldAllowList: []string{"io"},
-		pythonIdn: true, idnMode: IdnModeConfusable,
+		dataDB: true, zoneDB: false, tldAllow: true, tldAllowList: []string{"io"},
+		idnMode:                 IdnModeConfusable,
 		pythonIdnBlockMalicious: false, pythonIdnEscalateSuspicious: true,
 		regexDB: true, whiteDB: true, allowRegexDB: false, userRegexDB: true, userAllowRegexDB: false,
-		importantRules: true, regexWarnMs: 7.5, pythonTldSeg: 3,
+		importantRules: true,
 		builtinLogFlag: "1", regex: m.regexRuntime,
 	}
 	if diff := evCfgDiff(m.evaluateCfg(snap), want); diff != "" {
 		t.Errorf("evaluateCfg: %s", diff)
-	}
-
-	// test_adr07_regex_safety.py TestNoRuntimeEviction: the cfg carries the settings' warn ceiling.
-	if got := m.evaluateCfg(snap).regexWarnMs; got != settings.regexWarnMs {
-		t.Errorf("regexWarnMs = %v, want %v", got, settings.regexWarnMs)
 	}
 }
 
@@ -1517,7 +1498,7 @@ func TestEvaluateCfg(t *testing.T) {
 // settings.
 func TestEvaluateCfgGatesFollowTheSnapshot(t *testing.T) {
 	m := &pfbUnbound{regexRuntime: newRegexRuntime()}
-	settings := &pfbSettings{pythonBlocking: true}
+	settings := &pfbSettings{}
 	empty := evSnapshot(settings)
 	if cfg := m.evaluateCfg(empty); cfg.dataDB || cfg.zoneDB || cfg.whiteDB || cfg.regexDB || cfg.allowRegexDB || cfg.userRegexDB || cfg.userAllowRegexDB || cfg.importantRules {
 		t.Errorf("an empty snapshot: got gates %+v, want all off", cfg)
@@ -1533,22 +1514,20 @@ func TestEvaluateCfgGatesFollowTheSnapshot(t *testing.T) {
 	}
 }
 
-// _evaluate_cfg: idn_mode is the stored mode unless it is absent, then the legacy python_idn (the explicit Off is not
-// bypassed, ADR-28); tld_allow_list is the snapshot's frozen roots, else the settings' list normalised.
+// _evaluate_cfg: idn_mode is the stored mode, passed through as stored (evaluateDomain decides any value but on and
+// confusable as Off); tld_allow_list is the snapshot's frozen roots, else the settings' list normalised.
 func TestEvaluateCfgIdnModeAndTldRoots(t *testing.T) {
 	m := &pfbUnbound{regexRuntime: newRegexRuntime()}
 	for _, row := range []struct {
-		name      string
-		mode      IdnMode
-		pythonIdn bool
-		want      IdnMode
+		name string
+		mode IdnMode
+		want IdnMode
 	}{
-		{"absent, python_idn on", "", true, IdnModeAll},
-		{"absent, python_idn off", "", false, IdnModeOff},
-		{"off wins over python_idn on", IdnModeOff, true, IdnModeOff},
-		{"confusable is kept", IdnModeConfusable, false, IdnModeConfusable},
+		{"off", IdnModeOff, IdnModeOff},
+		{"empty passes through", "", ""},
+		{"confusable is kept", IdnModeConfusable, IdnModeConfusable},
 	} {
-		if got := m.evaluateCfg(evSnapshot(&pfbSettings{idnMode: row.mode, pythonIdn: row.pythonIdn})).idnMode; got != row.want {
+		if got := m.evaluateCfg(evSnapshot(&pfbSettings{idnMode: row.mode})).idnMode; got != row.want {
 			t.Errorf("idn_mode %s: got %q, want %q", row.name, got, row.want)
 		}
 	}

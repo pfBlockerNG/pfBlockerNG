@@ -599,8 +599,8 @@ func whiteWidenEntry(existing, newEntry whiteEntry) whiteEntry {
 }
 
 // whitelistLookupDomain resolves a whitelist hit to (matched, important): exact, then www.-strip, then a
-// parent-suffix walk gated by tldSeg that only honours WILDCARD entries.
-func whitelistLookupDomain(name string, whiteDB map[string]whiteEntry, tldSeg int64) (bool, bool) {
+// parent-suffix walk, up to the TLD, that only honours WILDCARD entries.
+func whitelistLookupDomain(name string, whiteDB map[string]whiteEntry) (bool, bool) {
 	if entry, ok := whiteDB[name]; ok {
 		return true, whiteEntryImportant(entry)
 	}
@@ -609,20 +609,16 @@ func whitelistLookupDomain(name string, whiteDB map[string]whiteEntry, tldSeg in
 			return true, whiteEntryImportant(entry)
 		}
 	}
-	q := dropFirstLabel(name)
-	for x := int64(strings.Count(q, ".") + 1); x > 0; x-- {
-		if x >= tldSeg {
-			if entry, ok := whiteDB[q]; ok && whiteEntryWildcard(entry) {
-				return true, whiteEntryImportant(entry)
-			}
+	for q := range iterDomainSuffixes(dropFirstLabel(name)) {
+		if entry, ok := whiteDB[q]; ok && whiteEntryWildcard(entry) {
+			return true, whiteEntryImportant(entry)
 		}
-		q = dropFirstLabel(q)
 	}
 	return false, false
 }
 
-func whitelistCheckDomain(name string, whiteDB map[string]whiteEntry, tldSeg int64) bool {
-	matched, _ := whitelistLookupDomain(name, whiteDB, tldSeg)
+func whitelistCheckDomain(name string, whiteDB map[string]whiteEntry) bool {
+	matched, _ := whitelistLookupDomain(name, whiteDB)
 	return matched
 }
 
@@ -634,9 +630,9 @@ func resolveFeedGroup(index int, feedGroupIndexDB map[int]feedGroup) (string, st
 }
 
 // whitelistLookupBand is the highest whiteDB allow band that matches name (exact, www.-strip, then the wildcard
-// suffix walk gated by tldSeg); 0 if none matches. All matching entries compete, so an exact feed allow cannot hide
+// suffix walk up to the TLD); 0 if none matches. All matching entries compete, so an exact feed allow cannot hide
 // a higher-band user wildcard (#3648).
-func whitelistLookupBand(name string, whiteDB map[string]whiteEntry, tldSeg int64) int {
+func whitelistLookupBand(name string, whiteDB map[string]whiteEntry) int {
 	best := 0
 	if entry, ok := whiteDB[name]; ok {
 		best = whiteEntryBand(entry)
@@ -652,14 +648,10 @@ func whitelistLookupBand(name string, whiteDB map[string]whiteEntry, tldSeg int6
 			}
 		}
 	}
-	q := dropFirstLabel(name)
-	for x := int64(strings.Count(q, ".") + 1); x > 0; x-- {
-		if x >= tldSeg {
-			if entry, ok := whiteDB[q]; ok && whiteEntryWildcard(entry) {
-				best = max(best, whiteEntryBand(entry))
-			}
+	for q := range iterDomainSuffixes(dropFirstLabel(name)) {
+		if entry, ok := whiteDB[q]; ok && whiteEntryWildcard(entry) {
+			best = max(best, whiteEntryBand(entry))
 		}
-		q = dropFirstLabel(q)
 	}
 	return best
 }

@@ -412,8 +412,8 @@ Authorization = property of **write**, not call site (generalises
     limit takes effect on the next IP reparse (Run Now with Force: Parse, scope IP or Both).
 - **Gateway decider** (Go, `decider/pfb_unbound_idn.go`): **`IdnMode` enum** keeps internal cases
   `All = 'on'`, `Confusable = 'confusable'`, `Off = 'off'`. Present empty or legacy
-  `'off'` ini value reads Off; absent `idn_mode` and unrecognised junk retain legacy
-  `python_idn` fallback. Toggle enum has
+  `'off'` ini value reads Off, and so do an absent `idn_mode` and unrecognised junk: the legacy
+  `python_idn` is neither written nor read (issue #4036, owner 2026-11-25). Toggle enum has
   **no Python consumer** (`config.getboolean()` reads all bool toggles), so PHP-only adapter.
 
 ## Adding a new registered field
