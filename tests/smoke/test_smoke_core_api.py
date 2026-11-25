@@ -262,40 +262,101 @@ def test_an_unprivileged_user_cannot_reach_the_api_and_root_can(core_vm: SmokeVM
     assert entry.returncode != 0 and "Permission denied" in entry.stderr, f"{entry.returncode} {entry.stderr}"
 
 
-def unbound_calls(vm: SmokeVM, method: str, params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    """``method`` called on the package's Core as ``unbound``: the HTTP status and the reply."""
+def call_as(vm: SmokeVM, user: str, method: str, params: dict[str, Any]) -> tuple[int, str]:
+    """``method`` called on the package's Core as ``user`` (root: no su): the HTTP status and the body as sent."""
     call = (
         f"{CURL} -sS -w '\\n%{{http_code}}' --unix-socket {SOCKET} -X POST "
         f"-H 'Content-Type: application/json' --data {shlex.quote(json.dumps(params))} http://localhost/v1/{method}"
     )
-    done = vm.ssh(f"/usr/bin/su -m unbound -c {shlex.quote(call)}", timeout=30)
+    done = vm.ssh(call if user == "root" else f"/usr/bin/su -m {user} -c {shlex.quote(call)}", timeout=30)
     body, _, status = done.stdout.rpartition("\n")
-    # curl exit 0 with a status: unbound connected and Core answered
+    # curl exit 0 with a status: the user connected and Core answered
     assert done.returncode == 0 and status.isdigit(), (
-        f"unbound could not call {method}: rc={done.returncode} {done.stdout}{done.stderr}"
+        f"{user} could not call {method}: rc={done.returncode} {done.stdout}{done.stderr}"
     )
-    return int(status), json.loads(body)
+    return int(status), body
+
+
+def unbound_calls(vm: SmokeVM, method: str, params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """``method`` called as ``unbound``: the HTTP status and the JSON reply."""
+    status, body = call_as(vm, "unbound", method, params)
+    return status, json.loads(body)
 
 
 def test_pfb_dns_user_is_served_its_read_methods_and_refused_the_rest(core_vm: SmokeVM) -> None:
     """issue #4250: Core admits unbound, pfB-DNS's user, as a further local client, limited as the protocol says."""
-    # Served: the settings pfB-DNS builds from
+    # Served: the health check, and the settings pfB-DNS builds from
+    status, reply = unbound_calls(core_vm, "GetVersion", {})
+    assert (status, reply) == (200, VERSION), f"GetVersion as unbound: {status} {reply}"
     status, reply = unbound_calls(core_vm, "GetSettings", {"projectionIds": ["dns", "policy/dnsbl"]})
     assert status == 200, f"GetSettings(dns, policy/dnsbl) as unbound: {status} {reply}"
     assert {p["resourceId"] for p in reply["projections"]} == {"settings/dns", "settings/policy/dnsbl"}, reply
-    # Served, but a resource outside dnsbl/* does not exist for it
-    status, reply = unbound_calls(core_vm, "GetResources", {"resources": {"ip-set/Smoke/ipv4": {}}})
-    assert status == 200, f"GetResources as unbound: {status} {reply}"
-    assert reply["resources"]["ip-set/Smoke/ipv4"]["error"]["code"] == "not_found", reply
     # Admitted: a report without its requestId is refused for its parameters, not for who sent it, and records nothing
     status, reply = unbound_calls(core_vm, "ReportApplied", {})
     assert (status, reply["error"]["code"]) == (400, "invalid_argument"), f"ReportApplied as unbound: {status} {reply}"
     # Refused: another projection, as one that does not exist
     status, reply = unbound_calls(core_vm, "GetSettings", {"projectionIds": ["maintenance"]})
     assert (status, reply["error"]["code"]) == (400, "invalid_argument"), f"GetSettings(maintenance): {status} {reply}"
-    # Refused: a method a client may not call, before it runs
-    status, reply = unbound_calls(core_vm, "SaveSettings", {})
-    assert (status, reply["error"]["code"]) == (401, "unauthenticated"), f"SaveSettings as unbound: {status} {reply}"
+    # Refused, before it runs: a method a client may not call, and one that does not exist
+    for method in ("SaveSettings", "NoSuchMethod"):
+        status, reply = unbound_calls(core_vm, method, {})
+        assert (status, reply["error"]["code"]) == (401, "unauthenticated"), f"{method} as unbound: {status} {reply}"
+
+
+# issue #4250: one dnsbl/* resource and one outside it, generation 1 each, written into the package Core's store as the
+# store holds them (index.json + <id with / as ~>.<generation>.body)
+SEED_PHP = r"""<?php
+[, $dir, $dnsbl, $domain, $ipset] = $argv;
+$resources = [];
+foreach ([$dnsbl => "$domain\n", $ipset => "192.0.2.1\n"] as $id => $body) {
+    $name = str_replace('/', '~', $id) . '.1.body';
+    file_put_contents("$dir/$name", $body);
+    chmod("$dir/$name", 0600);
+    $resources[$id] = ['current' => ['generation' => '1', 'digest' => hash('xxh128', $body), 'length' => strlen($body),
+        'entries' => 1, 'metadata' => new stdClass()]];
+}
+file_put_contents("$dir/index.json", json_encode(['version' => 1, 'resources' => $resources], JSON_UNESCAPED_SLASHES));
+chmod("$dir/index.json", 0600);
+echo '@OPEN@ok@CLOSE@';
+"""
+STORE_DIR = "/var/db/pfblockerng/store"
+
+
+def test_pfb_dns_user_reads_only_the_dnsbl_resources(core_vm: SmokeVM) -> None:
+    """issue #4250: of the resources Core holds, unbound is served the dnsbl/* ones and nothing else."""
+    dnsbl, ipset, domain = "dnsbl/feed-Smoke4250", "ip-set/Smoke4250/ipv4", h.unique_domain()
+    fresh = core_vm.ssh(f"test -e {STORE_DIR}/index.json", timeout=30).returncode != 0
+    assert fresh, f"{STORE_DIR} already holds an index before the cutover: this test seeds its own"
+    existed = core_vm.ssh(f"test -d {STORE_DIR}", timeout=30).returncode == 0
+    seed = "/root/pfb_seed_4250.php"
+    try:
+        core_vm.ssh(f"mkdir -p -m 700 {STORE_DIR}", timeout=30)
+        put_script(core_vm, seed, SEED_PHP)
+        seeded = core_vm.ssh(f"{PHP} {seed} {STORE_DIR} {dnsbl} {domain} {ipset}", timeout=60)
+        assert OPEN in seeded.stdout, f"the store was not seeded: rc={seeded.returncode} {seeded.stdout}{seeded.stderr}"
+        ask = {"resources": {dnsbl: {}, ipset: {}}}
+
+        # Before: root is served both, so a not_found below is the client limit, not an empty store
+        status, body = call_as(core_vm, "root", "GetResources", ask)
+        items = json.loads(body)["resources"]
+        assert status == 200 and {items[dnsbl]["kind"], items[ipset]["kind"]} == {"full"}, f"root: {status} {body}"
+
+        status, reply = unbound_calls(core_vm, "GetResources", ask)
+        assert status == 200, f"GetResources as unbound: {status} {reply}"
+        assert reply["resources"][dnsbl]["kind"] == "full", reply
+        assert reply["resources"][ipset]["error"]["code"] == "not_found", reply
+
+        status, body = call_as(
+            core_vm, "unbound", "GetResourceBody", {"id": dnsbl, "generation": "1", "part": "members"}
+        )
+        assert (status, body.strip()) == (200, domain), f"GetResourceBody({dnsbl}) as unbound: {status} {body!r}"
+        status, reply = unbound_calls(core_vm, "GetResourceBody", {"id": ipset, "generation": "1", "part": "members"})
+        assert (status, reply["error"]["code"]) == (404, "not_found"), f"GetResourceBody({ipset}): {status} {reply}"
+    finally:
+        names = " ".join(f"{STORE_DIR}/{i.replace('/', '~')}.1.body" for i in (dnsbl, ipset))
+        core_vm.ssh(f"rm -f {seed} {STORE_DIR}/index.json {names}", timeout=30)
+        if not existed:
+            core_vm.ssh(f"rmdir {STORE_DIR}", timeout=30)
 
 
 def await_group_socket(vm: SmokeVM, api: str, pid: str, log: str) -> None:
