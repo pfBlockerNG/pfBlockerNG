@@ -6,6 +6,7 @@ package decider
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -45,5 +46,34 @@ func TestOnCoreNoRequestOfThePollerHasADeadline(t *testing.T) {
 	}
 	if n := deadlines.Load(); n != 0 {
 		t.Errorf("%d of the poller's requests to Core carry a deadline: a slow Sync would be cut", n)
+	}
+}
+
+// With no time limit, stop alone ends a call that a stuck Core never answers: the poller's goroutine has ended once the stop
+// returns, so the call had ended first.
+func TestOnCoreStopEndsACallCoreNeverAnswers(t *testing.T) {
+	entered, ended := make(chan struct{}), make(chan struct{})
+	var first sync.Once
+	client := coreinput.NewTransport(roundTrip(func(r *http.Request) (*http.Response, error) {
+		first.Do(func() { close(entered) })
+		<-r.Context().Done()
+		select {
+		case <-ended:
+		default:
+			close(ended)
+		}
+		return nil, r.Context().Err()
+	}))
+	m, err := bootCore(coreModuleDir(t), testLogDir, client, false, make(coreTicks).source)
+	if err != nil {
+		t.Fatalf("bootCore: %v", err)
+	}
+	stopModule(t, m)
+	<-entered
+	m.stopReloadWatcher()
+	select {
+	case <-ended:
+	default:
+		t.Error("the stop returned with the call to Core still waiting")
 	}
 }
