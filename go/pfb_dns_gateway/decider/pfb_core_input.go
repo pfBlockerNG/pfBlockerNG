@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/coreinput"
@@ -84,10 +85,8 @@ func bootCore(moduleDir, logDir string, client *coreinput.Client, observer bool,
 		}
 	}
 	cache := filepath.Join(moduleDir, CORE_CACHE_DIR)
-	if err := os.MkdirAll(cache, 0o700); err != nil {
-		logWarn("[pfBlockerNG]: the DNSBL cache folder " + cache + " cannot be made: " + err.Error())
-	} else if info, err := os.Lstat(cache); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 && os.Chmod(cache, 0o700) != nil {
-		logWarn("[pfBlockerNG]: the DNSBL cache folder " + cache + " is not a folder of pfB-DNS's alone")
+	if err := ownFolder(cache); err != nil {
+		logWarn("[pfBlockerNG]: the DNSBL cache folder " + cache + " is not pfB-DNS's own, so nothing is cached: " + err.Error())
 	}
 	feed := &coreFeed{client: client, dir: cache, tick: tick, disk: coreinput.Load(cache), observer: observer}
 	if ini := filepath.Join(cache, coreinput.IniFile); !coreinput.Owned(ini) {
@@ -104,12 +103,38 @@ func bootCore(moduleDir, logDir string, client *coreinput.Client, observer bool,
 	return initStandardWith(MODULE_ID, moduleDir, logDir, feed)
 }
 
+// ownFolder makes path a folder of this process's user alone (0700) before anything is written there: a link or a file
+// standing at its name is replaced by a folder, so nothing is written through a link, and a looser folder is tightened.
+// A folder of another user is refused: Owned would refuse every file in it.
+func ownFolder(path string) error {
+	info, err := os.Lstat(path)
+	if err == nil && !info.IsDir() {
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	}
+	if err != nil || !info.IsDir() {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			return err
+		}
+		if info, err = os.Lstat(path); err != nil {
+			return err
+		}
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Geteuid() {
+		return fmt.Errorf("it belongs to uid %d", st.Uid)
+	}
+	if info.Mode().Perm() != 0o700 {
+		return os.Chmod(path, 0o700)
+	}
+	return nil
+}
+
 // cachePaths points the settings' inputs at the cache folder: what Sync and SyncSettings write there.
 func (f *coreFeed) cachePaths(p *pfbSettings) {
-	// TOP1M needs no path here: the manifest names it, read beside the manifest.
-	for _, path := range []*string{&p.pfbUnboundIni, &p.pfbPySources, &p.pfbPyPsl, &p.pfbPySs} {
-		*path = filepath.Join(f.dir, filepath.Base(*path))
-	}
+	in := func(name string) string { return filepath.Join(f.dir, name) }
+	p.pfbUnboundIni, p.pfbPySources, p.pfbPyPsl, p.pfbPySs =
+		in(coreinput.IniFile), in("pfb_py_sources.json"), in("dnsbl_psl"), in("pfb_py_ss.txt")
 }
 
 // trusted is whether init may build from the cache folder: Load trusts what the last Sync left there.

@@ -96,7 +96,6 @@ type pfbSettings struct {
 	pfbPyWhitelist      string
 	pfbPyZone           string
 	pfbPyData           string
-	pfbPyTop1m          string
 	pfbPyPsl            string
 	pfbPySs             string
 	pfbPySources        string
@@ -463,7 +462,6 @@ func newModuleSettings(moduleDir string) pfbSettings {
 	p.pfbPyWhitelist = in("pfb_py_whitelist.txt")
 	p.pfbPyZone = in("pfb_py_zone.txt")
 	p.pfbPyData = in("pfb_py_data.txt")
-	p.pfbPyTop1m = in("pfb_py_top1m.txt")
 	p.pfbPyPsl = in("dnsbl_psl")
 	p.pfbPySs = in("pfb_py_ss.txt")
 	p.pfbPySources = in("pfb_py_sources.json")
