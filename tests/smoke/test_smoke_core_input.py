@@ -53,6 +53,7 @@ SERVE_WATCHDOG = 120.0
 MEASURE_ENTRIES = 5_000_000
 MEASURE_MIN_RAM = 4 << 30
 OPEN, CLOSE = "<<<SEED>>>", "<<<SEED-END>>>"
+MANIFEST_ASK = json.dumps({"resources": {"dnsbl/manifest": {}}})
 
 # The store Core serves: a dnsbl/manifest naming one feed, both generation 1, written as Core's store holds them
 # (index.json + <id with / as ~>.<generation>.body). argv: the store, the feed's domains file, the count it holds.
@@ -200,7 +201,11 @@ def observed(box: SmokeVM) -> Iterator[Observation]:
                             f"tail -n 12 {fence}/dns.log; ls -ld {fence} {fence}/core {rig.api}; "
                             f"/usr/bin/su -m unbound -c '/usr/local/bin/curl -sS -o /dev/null -w %{{http_code}} "
                             f"--unix-socket {rig.api} -X POST http://localhost/v1/GetVersion'; echo; "
-                            f"procstat -s $(pgrep -f 'pfb-dns --listen 127.0.0.1 --port {PORT}') 2>&1 | tail -2"
+                            f"procstat -s $(pgrep -f 'pfb-dns --listen 127.0.0.1 --port {PORT}') 2>&1 | tail -2; "
+                            f"/usr/local/bin/curl -sS --unix-socket {rig.api} -X POST "
+                            f"-H 'Content-Type: application/json' --data {shlex.quote(MANIFEST_ASK)} "
+                            f"http://localhost/v1/GetResources; echo; "
+                            f"ls -la {fence}/mod {fence}/mod/pfb_dns {fence}/store; tail -n 5 {fence}/core.log"
                         )
                         said = box.ssh(probe, timeout=30).stdout + box.ssh(probe, timeout=30).stderr
                         pytest.fail(f"STUCK: {listed} was never blocked from Core's data:\n{said}")
