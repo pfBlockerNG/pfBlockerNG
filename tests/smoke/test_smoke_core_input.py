@@ -197,7 +197,13 @@ def observed(box: SmokeVM) -> Iterator[Observation]:
                 deadline = time.monotonic() + SERVE_WATCHDOG
                 while not rig.blocked(listed):  # the real condition: the generation is served
                     if time.monotonic() > deadline:
-                        said = box.ssh(f"tail -n 30 {fence}/dns.log", timeout=30).stdout
+                        probe = (
+                            f"tail -n 12 {fence}/dns.log; ls -ld {fence} {fence}/core {rig.api}; "
+                            f"/usr/bin/su -m unbound -c '/usr/local/bin/curl -sS -o /dev/null -w %{{http_code}} "
+                            f"--unix-socket {rig.api} -X POST http://localhost/v1/GetVersion'; echo; "
+                            f"procstat -s $(pgrep -f 'pfb-dns --listen 127.0.0.1 --port {PORT}') 2>&1 | tail -2"
+                        )
+                        said = box.ssh(probe, timeout=30).stdout + box.ssh(probe, timeout=30).stderr
                         pytest.fail(f"STUCK: {listed} was never blocked from Core's data:\n{said}")
                     time.sleep(2)
                 other_blocked = rig.blocked(other)
