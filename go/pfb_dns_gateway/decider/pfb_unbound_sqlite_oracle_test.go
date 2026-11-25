@@ -372,7 +372,7 @@ func TestSqliteStatsMatchPython(t *testing.T) {
 				}
 			}
 			start()
-			t.Cleanup(func() { m.closeDb(); m.stopLogging() })
+			t.Cleanup(func() { m.stopReloadWatcher(); m.closeDb(); m.stopLogging(); m.closeMaxmind(); m.restoreStderr() }) // stopModule's order, on the module booted last
 			number := map[string]int{"resolver": dbResolver, "dnsbl": dbDnsbl}
 			for i := range sc.Steps {
 				step := &sc.Steps[i]
@@ -402,8 +402,10 @@ func TestSqliteStatsMatchPython(t *testing.T) {
 						os.Remove(filepath.Join(dir, sqlFileNames[step.DB]) + suffix)
 					}
 				case "reboot":
+					m.stopReloadWatcher()
 					m.closeDb()
 					m.stopLogging()
+					m.closeMaxmind()
 					start()
 				case "stop":
 					m.stopDbWorker()

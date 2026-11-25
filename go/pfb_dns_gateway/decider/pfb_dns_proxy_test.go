@@ -170,6 +170,9 @@ func TestBootReportsAModuleThatCannotInitialise(t *testing.T) {
 		t.Fatal(err)
 	}
 	module, err := boot(dir, testLogDir)
+	if module != nil {
+		stopModule(t, module)
+	}
 	if err == nil || module != nil || !strings.Contains(err.Error(), "python_enable") {
 		t.Errorf("boot of a non-boolean python_enable = (%v, %v), want (nil, an error naming python_enable)", module, err)
 	}

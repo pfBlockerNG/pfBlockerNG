@@ -144,7 +144,7 @@ func TestObserverReportsMatchPython(t *testing.T) {
 				frontend = newFrontend(m)
 			}
 			start()
-			t.Cleanup(func() { m.closeDb(); m.stopLogging() })
+			t.Cleanup(func() { m.stopReloadWatcher(); m.closeDb(); m.stopLogging(); m.closeMaxmind(); m.restoreStderr() }) // stopModule's order, on the module booted last
 			// probe is Frontend.Resolve's answer to the fixed query; the rows the query itself writes are not the scenario's.
 			probe := func() *string {
 				mark := len(rows)
@@ -233,8 +233,10 @@ func TestObserverReportsMatchPython(t *testing.T) {
 				case "sql":
 					sqlExec(t, filepath.Join(dir, sqlFileNames[step.DB]), step.Statements...)
 				case "reboot":
+					m.stopReloadWatcher()
 					m.closeDb()
 					m.stopLogging()
+					m.closeMaxmind()
 					start()
 				case "gate_off":
 					m.sqlite3DnsblCon.Store(false)
