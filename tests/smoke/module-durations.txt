@@ -218,6 +218,7 @@ test_smoke_core_api.py::test_php_gets_the_version_reply 59.72
 test_smoke_core_api.py::test_an_unprivileged_user_cannot_reach_the_api_and_root_can 8.02
 test_smoke_core_api.py::test_pfb_core_holds_no_network_socket 0.29
 test_smoke_core_cache_archive.py 68.70
+test_smoke_core_input.py 120.00
 test_smoke_counters_lane.py 179.56
 test_smoke_counters_lane.py::test_core_clears_the_counters_at_a_day_change[sunday-daily-weekly] 77.37
 test_smoke_counters_lane.py::test_core_clears_the_counters_at_a_day_change[weekday-daily-weekly] 76.02

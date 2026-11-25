@@ -154,8 +154,7 @@ def box(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
     yield smoke_vm
 
 
-@pytest.fixture
-def fence(box: SmokeVM) -> Iterator[str]:
+def make_fence(box: SmokeVM) -> str:
     """A scratch folder unbound can pass through (0711), with a module directory of unbound's own."""
     made = box.ssh("mktemp -d /tmp/pfbcoreinput.XXXXXX", timeout=30)
     path = made.stdout.strip()
@@ -164,8 +163,7 @@ def fence(box: SmokeVM) -> Iterator[str]:
         f"chmod 711 {path} && mkdir -m 700 {path}/core {path}/mod && chown unbound:unbound {path}/mod", timeout=30
     )
     assert made.returncode == 0, f"could not make the fence: {made.stderr}"
-    yield path
-    box.ssh(f"rm -rf {path} {READY}", timeout=120)
+    return path
 
 
 def core_command(fence: str) -> str:
@@ -175,80 +173,116 @@ def core_command(fence: str) -> str:
     )
 
 
-def test_pfb_dns_serves_what_core_publishes_and_keeps_serving_without_core(box: SmokeVM, fence: str) -> None:
-    blocked, other = h.unique_domain(), h.unique_domain()
-    seed_store(box, fence, [blocked])
-    rig = Rig(box, fence)
-    with h.start_core(box, core_command(fence), rig.api, f"{fence}/core.log", watchdog=READY_WATCHDOG) as core:
-        dns = start_dns(box, fence, f"{fence}/dns.log")
+@dataclass
+class Observation:
+    blocked: bool  # the feed's domain, after the first poll
+    other_blocked: bool  # a domain no feed lists
+    report: str  # Core's applied.json
+    blocked_while_core_stopped: bool
+    cache_folder: str  # mode and owner of <module dir>/pfb_dns
+    blocked_after_restart_without_core: bool
+
+
+@pytest.fixture(scope="module")
+def observed(box: SmokeVM) -> Iterator[Observation]:
+    """All the box work, in the fixture (the smoke tier caps a test body at 30 s): what pfB-DNS did, for the tests."""
+    fence = make_fence(box)
+    try:
+        listed, other = h.unique_domain(), h.unique_domain()
+        seed_store(box, fence, [listed])
+        rig = Rig(box, fence)
+        with h.start_core(box, core_command(fence), rig.api, f"{fence}/core.log", watchdog=READY_WATCHDOG) as core:
+            dns = start_dns(box, fence, f"{fence}/dns.log")
+            try:
+                deadline = time.monotonic() + SERVE_WATCHDOG
+                while not rig.blocked(listed):  # the real condition: the generation is served
+                    if time.monotonic() > deadline:
+                        said = box.ssh(f"tail -n 30 {fence}/dns.log", timeout=30).stdout
+                        pytest.fail(f"STUCK: {listed} was never blocked from Core's data:\n{said}")
+                    time.sleep(2)
+                other_blocked = rig.blocked(other)
+                report = box.ssh(f"cat {fence}/state/applied.json 2>&1", timeout=30).stdout
+                box.ssh(f"kill -STOP {core}", timeout=30)
+                while_stopped = rig.blocked(listed)
+                box.ssh(f"kill -CONT {core}", timeout=30)
+            finally:
+                stop(box, dns)
+        cache = box.ssh(f"/usr/bin/stat -f '%Lp %Su' {fence}/mod/pfb_dns 2>&1", timeout=30).stdout.strip()
+        dns = start_dns(box, fence, f"{fence}/dns2.log")
         try:
-            # Served after the first poll; a name the feed does not list is not blocked
-            deadline = time.monotonic() + SERVE_WATCHDOG
-            while not rig.blocked(blocked):  # the real condition: the generation is served
-                if time.monotonic() > deadline:
-                    said = box.ssh(f"tail -n 30 {fence}/dns.log", timeout=30).stdout
-                    pytest.fail(f"STUCK: {blocked} was never blocked from Core's data:\n{said}")
-                time.sleep(2)
-            assert not rig.blocked(other), f"{other}, which no feed lists, is blocked"
-
-            # Reported: Core keeps the generation pfB-DNS serves
-            report = box.ssh(f"cat {fence}/state/applied.json", timeout=30)
-            assert report.returncode == 0, f"no report reached Core: {report.stderr}"
-            assert json.loads(report.stdout)["resources"]["dnsbl/feed-F"]["generation"] == "1", report.stdout
-
-            # Core stuck: pfB-DNS keeps serving the generation it has
-            box.ssh(f"kill -STOP {core}", timeout=30)
-            assert rig.blocked(blocked), "pfB-DNS stopped blocking while Core was stopped"
-            box.ssh(f"kill -CONT {core}", timeout=30)
+            after_restart = rig.blocked(listed)
         finally:
             stop(box, dns)
-
-    # Core down: a restart of pfB-DNS serves the cache it kept in its folder
-    cache = box.ssh(f"/usr/bin/stat -f '%Lp %Su' {fence}/mod/pfb_dns", timeout=30).stdout.strip()
-    assert cache == "700 unbound", f"the cache folder is {cache!r}, want unbound's alone"
-    dns = start_dns(box, fence, f"{fence}/dns2.log")
-    try:
-        assert rig.blocked(blocked), "a restart with Core down does not serve the cached generation"
+        yield Observation(True, other_blocked, report, while_stopped, cache, after_restart)
     finally:
-        stop(box, dns)
+        box.ssh(f"rm -rf {fence} {READY}", timeout=120)
 
 
-def test_measure_a_start_from_a_cache_of_five_million_domains(box: SmokeVM, fence: str) -> None:
-    """The start time and peak memory of pfB-DNS building 5,000,000 domains from its cache: printed, never asserted."""
+def test_pfb_dns_blocks_what_core_publishes_and_only_that(observed: Observation) -> None:
+    assert observed.blocked
+    assert not observed.other_blocked, "a domain no feed lists is blocked"
+
+
+def test_pfb_dns_reports_the_generation_it_serves_to_core(observed: Observation) -> None:
+    resources = json.loads(observed.report)["resources"]
+    assert resources["dnsbl/feed-F"]["generation"] == "1", observed.report
+
+
+def test_pfb_dns_keeps_serving_while_core_is_stopped(observed: Observation) -> None:
+    assert observed.blocked_while_core_stopped, "pfB-DNS stopped blocking while Core was stopped"
+
+
+def test_pfb_dns_keeps_its_cache_in_a_folder_of_unbounds_alone(observed: Observation) -> None:
+    assert observed.cache_folder == "700 unbound", f"the cache folder is {observed.cache_folder!r}"
+
+
+def test_a_restart_with_core_down_serves_the_cache(observed: Observation) -> None:
+    assert observed.blocked_after_restart_without_core, "a restart with Core down does not serve the cache"
+
+
+@pytest.fixture(scope="module")
+def measured(box: SmokeVM) -> Iterator[dict[str, object]]:
+    """The 5,000,000-domain start, timed in the fixture: from Core, then from the cache."""
     ram = int(box.ssh("sysctl -n hw.physmem", timeout=30).stdout.strip() or 0)
     if ram < MEASURE_MIN_RAM:
         pytest.skip(f"the box has {ram >> 20} MiB; the measurement needs {MEASURE_MIN_RAM >> 20} MiB")
-    seed_store(box, fence, None, MEASURE_ENTRIES)
-    rig = Rig(box, fence)
-    probe = "d1.pfbmeasure.com"
-    with h.start_core(box, core_command(fence), rig.api, f"{fence}/core.log", watchdog=READY_WATCHDOG):
+    fence = make_fence(box)
+    try:
+        seed_store(box, fence, None, MEASURE_ENTRIES)
+        rig = Rig(box, fence)
+        probe = "d1.pfbmeasure.com"
+        with h.start_core(box, core_command(fence), rig.api, f"{fence}/core.log", watchdog=READY_WATCHDOG):
+            began = time.monotonic()
+            dns = start_dns(box, fence, f"{fence}/dns.log")
+            try:
+                deadline = time.monotonic() + 1800
+                while not rig.blocked(probe):  # the real condition: the five million are served
+                    assert time.monotonic() < deadline, "STUCK: the measured generation was never served"
+                    time.sleep(5)
+                from_core = time.monotonic() - began
+            finally:
+                stop(box, dns)
         began = time.monotonic()
-        dns = start_dns(box, fence, f"{fence}/dns.log")
+        dns = start_dns(box, fence, f"{fence}/dns2.log")
         try:
-            deadline = time.monotonic() + 1800
-            while not rig.blocked(probe):  # the real condition: the five million are served
-                assert time.monotonic() < deadline, "STUCK: the measured generation was never served"
-                time.sleep(5)
-            from_core = time.monotonic() - began
+            served = rig.blocked(probe)
+            from_cache = time.monotonic() - began
+            rss = box.ssh(f"/usr/bin/procstat -r {dns} | awk '/maximum RSS/ {{print $NF}}'", timeout=30).stdout.strip()
         finally:
             stop(box, dns)
-    began = time.monotonic()
-    dns = start_dns(box, fence, f"{fence}/dns2.log")
-    try:
-        assert rig.blocked(probe), "a start from the cache does not serve the measured generation"
-        from_cache = time.monotonic() - began
-        rss = box.ssh(f"/usr/bin/procstat -r {dns} | awk '/maximum RSS/ {{print $NF}}'", timeout=30).stdout.strip()
+        yield {
+            "entries": MEASURE_ENTRIES,
+            "first_start_s": round(from_core, 1),
+            "cached_start_s": round(from_cache, 1),
+            "cached_max_rss_kb": rss,
+            "box_ram_mib": ram >> 20,
+            "served": served,
+        }
     finally:
-        stop(box, dns)
-    print(
-        "PFB_CORE_INPUT_MEASURE "
-        + json.dumps(
-            {
-                "entries": MEASURE_ENTRIES,
-                "first_start_s": round(from_core, 1),
-                "cached_start_s": round(from_cache, 1),
-                "cached_max_rss_kb": rss,
-                "box_ram_mib": ram >> 20,
-            }
-        )
-    )
+        box.ssh(f"rm -rf {fence} {READY}", timeout=120)
+
+
+def test_measure_a_start_from_a_cache_of_five_million_domains(measured: dict[str, object]) -> None:
+    """The start time and peak memory of pfB-DNS building 5,000,000 domains: printed, never asserted."""
+    print("PFB_CORE_INPUT_MEASURE " + json.dumps(measured))
+    assert measured["served"], "a start from the cache does not serve the measured generation"
