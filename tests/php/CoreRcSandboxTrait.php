@@ -267,7 +267,7 @@ trait CoreRcSandboxTrait
 		$state = "{$this->dir}/state";
 		$vars += ['MACHINE' => 'amd64', 'TERM_AFTER' => '1', 'SUPERVISOR_AT' => '0', 'DAEMON_EXIT' => '0', 'LOCKF_EXIT' => '', 'KILL_IGNORED' => '',
 			'LOCK_VAR' => static::rcService()['lock_var'], 'DAEMON_PIDFILE' => $this->rcPath('daemon_pidfile'), 'SUPERVISOR_PID' => '3001',
-			'UNBOUND_UID' => '59', 'UNBOUND_GID' => '59'];
+			'UNBOUND_UID' => '59', 'UNBOUND_GID' => '60'];
 		file_put_contents("{$state}/scenario", implode('', array_map(
 			static fn (string $k, string $v): string => "{$k}=" . escapeshellarg($v) . "\n",
 			array_keys($vars),

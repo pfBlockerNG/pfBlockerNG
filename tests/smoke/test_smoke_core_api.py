@@ -265,7 +265,7 @@ def test_an_unprivileged_user_cannot_reach_the_api_and_root_can(core_vm: SmokeVM
 def unbound_calls(vm: SmokeVM, method: str, params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     """``method`` called on the package's Core as ``unbound``: the HTTP status and the reply."""
     call = (
-        f"/usr/local/bin/curl -sS -w '\\n%{{http_code}}' --unix-socket {SOCKET} -X POST "
+        f"{CURL} -sS -w '\\n%{{http_code}}' --unix-socket {SOCKET} -X POST "
         f"-H 'Content-Type: application/json' --data {shlex.quote(json.dumps(params))} http://localhost/v1/{method}"
     )
     done = vm.ssh(f"/usr/bin/su -m unbound -c {shlex.quote(call)}", timeout=30)
@@ -282,7 +282,7 @@ def test_pfb_dns_user_is_served_its_read_methods_and_refused_the_rest(core_vm: S
     # Served: the settings pfB-DNS builds from
     status, reply = unbound_calls(core_vm, "GetSettings", {"projectionIds": ["dns", "policy/dnsbl"]})
     assert status == 200, f"GetSettings(dns, policy/dnsbl) as unbound: {status} {reply}"
-    assert {p["resourceId"] for p in reply.get("projections", [])} <= {"settings/dns", "settings/policy/dnsbl"}, reply
+    assert {p["resourceId"] for p in reply["projections"]} == {"settings/dns", "settings/policy/dnsbl"}, reply
     # Served, but a resource outside dnsbl/* does not exist for it
     status, reply = unbound_calls(core_vm, "GetResources", {"resources": {"ip-set/Smoke/ipv4": {}}})
     assert status == 200, f"GetResources as unbound: {status} {reply}"
