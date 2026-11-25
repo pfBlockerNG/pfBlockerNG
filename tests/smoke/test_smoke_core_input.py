@@ -55,8 +55,8 @@ MEASURE_MIN_RAM = 4 << 30
 OPEN, CLOSE = "<<<SEED>>>", "<<<SEED-END>>>"
 MANIFEST_ASK = json.dumps({"resources": {"dnsbl/manifest": {}}})
 
-# The store Core serves: a dnsbl/manifest naming one feed, both generation 1, written as Core's store holds them
-# (index.json + <id with / as ~>.<generation>.body). argv: the store, the feed's domains file, the count it holds.
+# The store Core serves: a dnsbl/manifest naming one feed and the PSL, all generation 1, written as Core's store holds
+# them (index.json + <id with / as ~>.<generation>.body). argv: the store, the feed's domains file, the count it holds.
 SEED_PHP = r"""<?php
 [, $dir, $domains, $n] = $argv;
 $put = function (string $id, string $file) use ($dir): array {
@@ -68,17 +68,24 @@ $put = function (string $id, string $file) use ($dir): array {
 };
 $feed = $put('dnsbl/feed-F', $domains);
 $feed['entries'] = (int) $n;
+// The PSL Core always publishes: the build refuses to run without one. One ICANN rule is enough here.
+file_put_contents("$dir/psl.tmp", json_encode(['section' => 'icann', 'rule' => 'com']) . "\n");
+$psl = $put('dnsbl/psl', "$dir/psl.tmp");
+$psl['entries'] = 1;
 $rows = [
     json_encode(['kind' => 'config', 'builtinLogFlag' => '0', 'top1mEnabled' => false]),
     json_encode(['kind' => 'feed', 'position' => 1, 'feed' => 'F', 'group' => 'G', 'logFlag' => '1',
         'provenance' => 'feed', 'mode' => 'deny', 'top1m' => false, 'resource' => 'dnsbl/feed-F', 'generation' => '1',
         'digest' => $feed['digest'], 'entries' => (int) $n]),
+    json_encode(['kind' => 'member', 'resource' => 'dnsbl/psl', 'generation' => '1', 'digest' => $psl['digest'],
+        'entries' => 1]),
 ];
 sort($rows, SORT_STRING);
 file_put_contents("$dir/manifest.tmp", implode("\n", $rows) . "\n");
 $manifest = $put('dnsbl/manifest', "$dir/manifest.tmp");
 $manifest['entries'] = count($rows);
-$index = ['dnsbl/feed-F' => ['current' => $feed], 'dnsbl/manifest' => ['current' => $manifest]];
+$index = ['dnsbl/feed-F' => ['current' => $feed], 'dnsbl/psl' => ['current' => $psl],
+    'dnsbl/manifest' => ['current' => $manifest]];
 file_put_contents("$dir/index.json", json_encode(['version' => 1, 'resources' => $index], JSON_UNESCAPED_SLASHES));
 chmod("$dir/index.json", 0600);
 echo '@OPEN@ok@CLOSE@';
