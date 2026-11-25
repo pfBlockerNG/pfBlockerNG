@@ -115,7 +115,9 @@ func TestSettingsIniRefusesAValueOfTheWrongShape(t *testing.T) {
 		"a string for a bool": func(dns, _ map[string]any) { dns["tldWildcard"] = "on" },
 		"a fraction":          func(dns, _ map[string]any) { dns["decisionCacheMax"] = 1.5 },
 		"a list item":         func(_, policy map[string]any) { policy["tldAllowGtld"] = []any{"com"} },
-		"a line break":        func(dns, _ map[string]any) { dns["groupPolicyBypassList"] = []any{map[string]any{"cidr": "10.0.0.1\nx = y"}} },
+		"a line break": func(dns, _ map[string]any) {
+			dns["groupPolicyBypassList"] = []any{map[string]any{"cidr": "10.0.0.1\nx = y"}}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dns, policy := coretest.Settings()
