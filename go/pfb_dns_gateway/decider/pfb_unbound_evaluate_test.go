@@ -1514,8 +1514,7 @@ func TestEvaluateCfgGatesFollowTheSnapshot(t *testing.T) {
 	}
 }
 
-// _evaluate_cfg: idn_mode is the stored mode, Off when it is absent (python_idn is not read, owner 2026-11-25);
-// tld_allow_list is the snapshot's frozen roots, else the settings' list normalised.
+// _evaluate_cfg: idn_mode is the stored mode (evaluateDomain decides any other value as Off); tld_allow_list is the snapshot's frozen roots, else the settings' list normalised.
 func TestEvaluateCfgIdnModeAndTldRoots(t *testing.T) {
 	m := &pfbUnbound{regexRuntime: newRegexRuntime()}
 	for _, row := range []struct {
@@ -1523,7 +1522,6 @@ func TestEvaluateCfgIdnModeAndTldRoots(t *testing.T) {
 		mode IdnMode
 		want IdnMode
 	}{
-		{"absent", "", IdnModeOff},
 		{"off", IdnModeOff, IdnModeOff},
 		{"confusable is kept", IdnModeConfusable, IdnModeConfusable},
 	} {
