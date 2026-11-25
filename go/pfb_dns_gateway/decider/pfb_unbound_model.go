@@ -482,6 +482,19 @@ func (c *lruCache[V]) setMaxsize(maxsize int) {
 	c.maxsize = maxsize
 }
 
+// resize is setMaxsize evicting the least recently used entries past the new bound at once, as a Core settings swap
+// that shrinks the cache needs: a set evicts one entry only, so a cache filled past the bound would stay past it.
+func (c *lruCache[V]) resize(maxsize int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.maxsize = maxsize
+	for 0 < c.maxsize && c.maxsize < len(c.items) {
+		oldest := c.order.Front()
+		c.order.Remove(oldest)
+		delete(c.items, oldest.Value.(*lruItem[V]).key)
+	}
+}
+
 // top1mListed reports whether TOP1M names name: the listed domain itself or its www. form, never a deeper
 // subdomain (#1542).
 func top1mListed(name string, top1m map[string]struct{}) bool {

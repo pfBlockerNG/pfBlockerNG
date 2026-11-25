@@ -195,8 +195,9 @@ not loaded yet. A pass says the values are valid, not that a later `SaveSettings
 
 ### Projection `dns`
 
-The DNSBL resolver settings `pfb-dns` reads from `pfb_unbound.ini` today. `pfb-dns` will fetch them as `settings/dns`
-(map #3813, owner 2026-11-12). The field list with registry keys is on [#3842](https://github.com/pfBlockerNG/pfBlockerNG/issues/3842#issuecomment-6834529521).
+The DNSBL resolver settings `pfb-dns` reads from `pfb_unbound.ini` today. On the Core input (`--core-socket`, issue #4036)
+`pfb-dns` fetches them as `settings/dns` on its poll and keeps them in its own `pfb_unbound.ini`
+(`docs/misc/architecture-notes.md` ADR-10, "On the Core input"; map #3813, owner 2026-11-12). The field list with registry keys is on [#3842](https://github.com/pfBlockerNG/pfBlockerNG/issues/3842#issuecomment-6834529521).
 
 | Field | Type, default |
 |---|---|
@@ -535,7 +536,8 @@ hostile rows included.
 The DNSBL build policy the Update loop applies (issue #4031), published as `settings/policy/dnsbl`; writable. The adapter builds
 it from the field table `pfb_core_policy_dnsbl_fields()` (field, config.xml key, kind), the mechanism of `policy/ip` extended with
 kinds for the Enable/Disable switches, a bounded count, CSVs without the whole-CSV rule, text areas with their own line reading and
-derived fields; Core's schema (`go/pfb_core/settings/policy.go`) holds the same rules. Nothing reads it yet. `dns.idnMode` stays
+derived fields; Core's schema (`go/pfb_core/settings/policy.go`) holds the same rules. `pfb-dns` on the Core input reads
+`tldAllow` with its four lists, `regex` and `regexList` (issue #4036). `dns.idnMode` stays
 the only projection of the IDN mode.
 
 | Field | Type, default | config.xml (PHP reader) |

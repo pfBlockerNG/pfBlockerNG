@@ -1229,17 +1229,21 @@ func stringList(value any) []string {
 // rule set); with all OFF it is never opened. The manifest is already validated; baseDir is unused, as in Python.
 func (m *pfbUnbound) dnsblConfigFromManifest(manifest map[string]any, _ string) (buildConfig, error) {
 	config, _ := manifest["config"].(map[string]any)
+	set := &m.pfb
+	if m.buildWith != nil {
+		set = m.buildWith
+	}
 
-	privatePolicy := m.pfb.pslFeedPrivatePolicy
-	icannPolicy := m.pfb.pslFeedIcannPolicy
-	rules, err := loadPslAuthority(m.pfb.pfbPyPsl, m.pfb.pythonTldWildcard || m.pfb.tldAllow || privatePolicy != "honor" || icannPolicy != "honor")
+	privatePolicy := set.pslFeedPrivatePolicy
+	icannPolicy := set.pslFeedIcannPolicy
+	rules, err := loadPslAuthority(set.pfbPyPsl, set.pythonTldWildcard || set.tldAllow || privatePolicy != "honor" || icannPolicy != "honor")
 	if err != nil {
 		return buildConfig{}, err
 	}
 
 	// ADR-07: the static-cap flag reaches build() via the ini-derived pfb setting (the cap setting lives in
 	// pfb_unbound.ini MAIN, not the manifest); a manifest config.regex_cap (if present) takes precedence.
-	regexCap := m.pfb.regexCap
+	regexCap := set.regexCap
 	if value, ok := config["regex_cap"].(bool); ok {
 		regexCap = value
 	}
@@ -1250,8 +1254,8 @@ func (m *pfbUnbound) dnsblConfigFromManifest(manifest map[string]any, _ string) 
 
 	return buildConfig{
 		pslRules:             rules,
-		pslWildcardEnabled:   m.pfb.pythonTldWildcard,
-		pslIncludePrivate:    m.pfb.pslIncludePrivate,
+		pslWildcardEnabled:   set.pythonTldWildcard,
+		pslIncludePrivate:    set.pslIncludePrivate,
 		pslFeedPrivatePolicy: privatePolicy,
 		pslFeedIcannPolicy:   icannPolicy,
 		tldWildcardBlacklist: stringList(config["tld_wildcard_blacklist"]),

@@ -35,7 +35,7 @@ func Open(opts Options) (*Frontend, error) {
 	if !opts.NoModule {
 		var err error
 		if opts.CoreSocket != "" {
-			module, err = bootCore(opts.ModuleDir, opts.LogDir, opts.CoreSocket, nil)
+			module, err = bootCore(opts.ModuleDir, opts.LogDir, opts.CoreSocket, opts.Observer, nil)
 		} else {
 			module, err = boot(opts.ModuleDir, opts.LogDir)
 		}

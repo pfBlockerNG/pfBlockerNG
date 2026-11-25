@@ -42,9 +42,10 @@ func Digest(body []byte) string {
 // Cursor is a generation and digest as a ReportApplied request names them.
 type Cursor struct{ Generation, Digest string }
 
-// Server answers GetResources and GetResourceBody from Resources, and records each ReportApplied; every other method is
-// not_found. Like Core's store it keeps one baseline per resource besides the current body, the body Set replaced, and
-// answers a cursor at the baseline with the delta from it.
+// Server answers GetResources and GetResourceBody from Resources, GetSettings from the settings SetSettings gave (an
+// uninitialized Core until then), and records each ReportApplied; every other method is not_found. Like Core's store it
+// keeps one baseline per resource besides the current body, the body Set replaced, and answers a cursor at the baseline
+// with the delta from it.
 type Server struct {
 	Socket string
 
@@ -55,6 +56,8 @@ type Server struct {
 	part      func(id, part string, w http.ResponseWriter) bool
 	calls     []string
 	applied   []map[string]Cursor
+	settings  map[string]map[string]any // projection id → value; nil: uninitialized
+	revision  int
 }
 
 // Start serves resources on a socket in a fresh short directory until the test ends.
@@ -132,6 +135,34 @@ func (s *Server) SetBody(reply func(id string, w http.ResponseWriter) bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.body = reply
+}
+
+// Settings is the dns and policy/dnsbl values of a Core that holds the defaults, with the fields pfB-DNS reads.
+func Settings() (dns, policy map[string]any) {
+	dns = map[string]any{
+		"replyLogging": true, "pslIncludePrivate": true, "idnBlockMalicious": true, "tldWildcard": false, "pslAllowPrivate": false,
+		"idnEscalateSuspicious": false, "cnameValidation": false, "control": false, "controlLegacy": false, "regexCap": false,
+		"metricsClientIp": false, "pslFeedPrivatePolicy": "honor", "pslFeedIcannPolicy": "honor", "idnMode": "off",
+		"decisionCacheMax": 10000, "noAaaa": false, "noAaaaList": []any{}, "groupPolicy": false, "groupPolicyBypassList": []any{},
+		"pfbDnsEnabled": true,
+	}
+	policy = map[string]any{
+		"enabled": true, "tldAllow": false, "tldAllowGtld": []any{}, "tldAllowCctld": []any{}, "tldAllowItld": []any{},
+		"tldAllowBgtld": []any{}, "regex": false, "regexList": []any{},
+	}
+	return dns, policy
+}
+
+// SetSettings has GetSettings answer dns and policy as the dns and policy/dnsbl projections, at a new revision; nil
+// dns: an uninitialized Core.
+func (s *Server) SetSettings(dns, policy map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.revision++
+	s.settings = nil
+	if dns != nil {
+		s.settings = map[string]map[string]any{"dns": dns, "policy/dnsbl": policy}
+	}
 }
 
 // Calls is every call served so far, "<method> <id>" each.
@@ -225,6 +256,33 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Content-Length", strconv.Itoa(len(res.Body)))
 		w.Write(res.Body)
+	case "/v1/GetSettings":
+		var req struct {
+			ProjectionIDs []string `json:"projectionIds"`
+		}
+		if json.NewDecoder(r.Body).Decode(&req) != nil {
+			fail(w, 400, "invalid_argument")
+			return
+		}
+		s.record("GetSettings")
+		s.mu.Lock()
+		reply := map[string]any{"initialized": s.settings != nil, "revision": s.revision, "projections": []any{}}
+		if s.settings != nil {
+			var projections []any
+			for _, id := range req.ProjectionIDs {
+				projections = append(projections, map[string]any{"resourceId": "settings/" + id, "generation": strconv.Itoa(s.revision),
+					"value": s.settings[id]})
+			}
+			reply["projections"] = projections
+		}
+		data, err := json.Marshal(reply)
+		s.mu.Unlock()
+		if err != nil {
+			fail(w, 500, "internal")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
 	case "/v1/ReportApplied":
 		// Core refuses a request without its requestId, with an unknown parameter, or with resources missing or null.
 		var req struct {

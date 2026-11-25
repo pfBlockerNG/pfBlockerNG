@@ -19,18 +19,30 @@ var maxmindDBPath = "/usr/local/share/GeoIP/GeoLite2-Country.mmdb"
 // openMaxmind is init_standard's open of the reader for DNS Reply GeoIP logging: only when DNS Reply Logging is on and
 // the database is installed. A database that does not open is reported and the module runs without GeoIP.
 func (m *pfbUnbound) openMaxmind() {
-	if !m.pfb.pythonReply || !isFile(maxmindDBPath) {
-		return
+	if m.maxmindFor(m.pfb.pythonReply) {
+		m.pfb.pythonMaxmind = true
+	}
+}
+
+// maxmindFor is whether the reader is open once DNS Reply Logging is on or off as replyLogging says: it opens it when the
+// logging is on and it is not open yet. A Core settings swap that turns the logging on opens it so; one that turns it
+// off leaves it open for the next time, unused.
+func (m *pfbUnbound) maxmindFor(replyLogging bool) bool {
+	m.maxmindMu.RLock()
+	open := m.maxmind != nil
+	m.maxmindMu.RUnlock()
+	if open || !replyLogging || !isFile(maxmindDBPath) {
+		return open && replyLogging
 	}
 	reader, err := maxminddb.Open(maxmindDBPath)
 	if err != nil {
 		pyStderr("[pfBlockerNG]: Failed to open MaxMind DB: " + err.Error())
-		return
+		return false
 	}
 	m.maxmindMu.Lock()
 	m.maxmind = reader
 	m.maxmindMu.Unlock()
-	m.pfb.pythonMaxmind = true
+	return true
 }
 
 // closeMaxmind is deinit's close of the reader. It waits for the lookups in flight, which are short, and a lookup that

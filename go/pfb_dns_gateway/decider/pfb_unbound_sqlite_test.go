@@ -338,7 +338,7 @@ func TestSqliteFailedBatchCannotResurrectClients(t *testing.T) {
 	dropDbConnections(r.m)
 	r.m.dbCapturePrivacyEpochs()
 	for _, db := range []int{dbResolver, dbDnsbl} {
-		if got := r.m.metricsPrivacyEpochs[db]; got != old {
+		if got := privacyEpochs(r.m)[db]; got != old {
 			t.Fatalf("db %d: captured epoch %q, want the opted-in %q", db, got, old)
 		}
 	}
@@ -625,8 +625,8 @@ func TestSqliteConcurrentRecoveryKeepsTheWinnersDatabase(t *testing.T) {
 // The ini's opt-in alone grants no authority: only a database that is itself opted in (client_ip = 1) yields its epoch.
 func TestSqliteIniOptInNeedsTheDatabasesOwnOptIn(t *testing.T) {
 	r := newSqlRig(t, "metrics_client_ip = true\nforwarding = true\n", nil)
-	if len(r.m.metricsPrivacyEpochs) != 0 {
-		t.Fatalf("epochs = %v from databases with client_ip = 0", r.m.metricsPrivacyEpochs)
+	if len(privacyEpochs(r.m)) != 0 {
+		t.Fatalf("epochs = %v from databases with client_ip = 0", privacyEpochs(r.m))
 	}
 	for _, db := range []int{dbResolver, dbDnsbl} {
 		sqlExec(t, r.path(db), "UPDATE dns_metric_settings SET client_ip=1 WHERE row=0")
@@ -634,7 +634,7 @@ func TestSqliteIniOptInNeedsTheDatabasesOwnOptIn(t *testing.T) {
 	r.m.dbCapturePrivacyEpochs()
 	for _, db := range []int{dbResolver, dbDnsbl} {
 		want := sqlValue(t, r.path(db), "SELECT epoch FROM dns_metric_settings WHERE row=0")
-		if got := r.m.metricsPrivacyEpochs[db]; got != want {
+		if got := privacyEpochs(r.m)[db]; got != want {
 			t.Errorf("db %d: epoch %q after the opt-in, want %q", db, got, want)
 		}
 	}
@@ -904,8 +904,8 @@ func TestSqliteDnsKeepsAnsweringWhenTheStatsDatabasesCannotOpen(t *testing.T) {
 			t.Errorf("py_error.log lacks %q:\n%s", want, stderr)
 		}
 	}
-	if len(m.metricsPrivacyEpochs) != 0 {
-		t.Errorf("privacy epochs = %v: no database granted authority", m.metricsPrivacyEpochs)
+	if len(privacyEpochs(m)) != 0 {
+		t.Errorf("privacy epochs = %v: no database granted authority", privacyEpochs(m))
 	}
 	f := newFrontend(m)
 	wire := qtypeWire(t, "lf1.example.", 1)
@@ -983,8 +983,8 @@ func TestSqlitePrivacyAuthorityFailureNeverBreaksDns(t *testing.T) {
 		}
 	}
 	r.m.dbCapturePrivacyEpochs()
-	if len(r.m.metricsPrivacyEpochs) != 0 {
-		t.Errorf("epochs = %v from databases that cannot be read", r.m.metricsPrivacyEpochs)
+	if len(privacyEpochs(r.m)) != 0 {
+		t.Errorf("epochs = %v from databases that cannot be read", privacyEpochs(r.m))
 	}
 	if got := drainPyError(); !strings.Contains(got, "Client metric authority unavailable") {
 		t.Errorf("the failure was not reported:\n%s", got)
@@ -995,7 +995,8 @@ func TestSqlitePrivacyAuthorityFailureNeverBreaksDns(t *testing.T) {
 }
 
 func TestSqliteMetricClientNeedsTheCapturedEpoch(t *testing.T) {
-	m := &pfbUnbound{metricsPrivacyEpochs: map[int]string{dbResolver: "e1"}}
+	m := &pfbUnbound{}
+	m.metricsPrivacyEpochs.Store(&map[int]string{dbResolver: "e1"})
 	for _, c := range []struct {
 		db         int
 		ip         string
@@ -1056,7 +1057,7 @@ func TestSqliteRowWritersEnqueueTheMetricDimensions(t *testing.T) {
 			t.Cleanup(func() { m.dbWorker.Store(nil) })
 			m.sqlite3ResolverCon.Store(true)
 			m.sqlite3DnsblCon.Store(true)
-			m.metricsPrivacyEpochs = map[int]string{dbResolver: "pe", dbDnsbl: "pe"}
+			m.metricsPrivacyEpochs.Store(&map[int]string{dbResolver: "pe", dbDnsbl: "pe"})
 			settings := *m.snapshot.Load().settings
 			snap := *m.snapshot.Load()
 			snap.settings = &settings

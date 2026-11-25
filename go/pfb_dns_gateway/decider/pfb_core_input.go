@@ -6,6 +6,12 @@
 // otherwise serves no DNSBL and reports it degraded. A poller takes the reload sentinel's place: on each tick it syncs,
 // swaps a new generation in through the RAM-gated reload, and reports what the live snapshot serves to Core's
 // ReportApplied, once after the start and after each swap.
+//
+// The settings come the same way: coreinput.SyncSettings writes Core's settings/dns and settings/policy/dnsbl as the
+// module directory's pfb_unbound.ini, which init reads, so a start without Core takes the settings Core last gave. A
+// settings change is no restart: the next swap builds the snapshot from the new settings, as init would, and then the
+// module applies what lives outside the snapshot (the control-channel reader, the decision cache's size, the client
+// metrics authority). Like a restart, it drops what control commands changed at runtime.
 package decider
 
 import (
@@ -48,18 +54,40 @@ type coreFeed struct {
 	lastErr  string
 	// reportFailed is whether the last report failed and was logged: a Core that stays down is logged once.
 	reportFailed bool
+	// observer is whether pfB-DNS was started with --observer, which the Outpost passes only while the Resolver forwards:
+	// the module's forwarding setting.
+	observer bool
+	// newSettings is whether the module directory's ini holds settings the live snapshot was not built from;
+	// lastSettingsErr is the last settings sync error logged.
+	newSettings     bool
+	lastSettingsErr string
+	// read is the settings and tables the ini gave when it last changed, which each try of the swap builds with: read once,
+	// so that what the read logs is logged once. nil: read at the build.
+	read *readSettings
+}
+
+// readSettings is what coreFeed.readSettings gives.
+type readSettings struct {
+	set    *pfbSettings
+	tables *snapshot
 }
 
 // bootCore boots the module in moduleDir on the Core API at socket. tick is the poller's tick source (nil: a
 // CORE_POLL_INTERVAL ticker).
-func bootCore(moduleDir, logDir, socket string, tick func() (<-chan time.Time, func())) (*pfbUnbound, error) {
+func bootCore(moduleDir, logDir, socket string, observer bool, tick func() (<-chan time.Time, func())) (*pfbUnbound, error) {
 	if tick == nil {
 		tick = func() (<-chan time.Time, func()) {
 			ticker := time.NewTicker(CORE_POLL_INTERVAL)
 			return ticker.C, ticker.Stop
 		}
 	}
-	feed := &coreFeed{client: coreinput.New(socket), dir: moduleDir, tick: tick, disk: coreinput.Load(moduleDir)}
+	feed := &coreFeed{client: coreinput.New(socket), dir: moduleDir, tick: tick, disk: coreinput.Load(moduleDir), observer: observer}
+	if ini := filepath.Join(moduleDir, coreinput.IniFile); !coreinput.Owned(ini) {
+		if _, err := os.Lstat(ini); err == nil {
+			logWarn("[pfBlockerNG]: the settings cache " + ini + " is not trusted and is not loaded; it is fetched from Core again")
+			os.Remove(ini)
+		}
+	}
 	if !feed.trusted() {
 		if _, err := os.Lstat(filepath.Join(moduleDir, "pfb_py_sources.json")); err == nil {
 			logWarn("[pfBlockerNG]: the DNSBL cache in " + moduleDir + " is not trusted and is not loaded; it is fetched from Core again")
@@ -100,12 +128,26 @@ func (f *coreFeed) drain(stop <-chan struct{}) {
 		f.disk = state // the zero State after a Sync cut short in its commit: the next one fetches everything
 		f.pending, f.retryIn, f.retryEvery = err == nil, 0, 1
 	}
+	newSettings, err := coreinput.SyncSettings(ctx, f.client, f.dir)
+	f.logSettings(err)
+	if newSettings {
+		f.newSettings, f.retryIn, f.retryEvery, f.read = true, 0, 1, nil
+		if set, tables, err := f.readSettings(); err == nil {
+			f.read = &readSettings{set, tables}
+			f.m.applyOptOuts(set)
+		}
+	}
+	fresh, prev := f.newSettings, f.m.snapshot.Load().settings
 	switch {
-	case !f.pending:
+	case !f.pending && !(fresh && f.trusted()): // new settings wait for data to build with
 	case f.retryIn > 0:
 		f.retryIn--
 	case f.m.reloadRunSwap(f.build):
 		f.served, f.reported, f.pending = f.disk.Resources, false, false
+		if fresh {
+			f.newSettings, f.read = false, nil
+			f.m.applyLiveSettings(prev)
+		}
 	default:
 		f.retryIn, f.retryEvery = f.retryEvery-1, min(2*f.retryEvery, maxRetryEvery)
 	}
@@ -121,11 +163,15 @@ func (f *coreFeed) drain(stop <-chan struct{}) {
 // refetch has the next Sync fetch everything whole: a trusted cache that did not build.
 func (f *coreFeed) refetch() { f.disk = coreinput.State{} }
 
-// build is the reload builder, with SafeSearch read from the module directory, where Sync keeps Core's.
+// build is the reload builder, with SafeSearch read from the module directory, where Sync keeps Core's. After a settings
+// change it builds from the new settings, with the tables they bring, instead of the live ones.
 func (f *coreFeed) build() (*snapshot, error) {
 	build := f.m.reloadBuilder
 	if build == nil {
 		build = f.m.reloadBuildSnapshot
+	}
+	if f.newSettings {
+		build = f.buildSettings
 	}
 	next, err := build()
 	if next != nil {
@@ -140,6 +186,117 @@ func (f *coreFeed) build() (*snapshot, error) {
 	return next, err
 }
 
+// buildSettings builds the snapshot from the module directory's ini, as init does: its settings and tables, not the live
+// ones. What init opens with the settings is opened first, so that the snapshot says what is open.
+func (f *coreFeed) buildSettings() (*snapshot, error) {
+	m := f.m
+	if f.read == nil {
+		set, tables, err := f.readSettings()
+		if err != nil {
+			return nil, err
+		}
+		f.read = &readSettings{set, tables}
+	}
+	set, tables := f.read.set, f.read.tables
+	if !m.sqlite3ResolverCon.Load() {
+		if m.validateDbWithRecovery(dbResolver) {
+			m.sqlite3ResolverCon.Store(true)
+			m.resolverDbFailure.clear()
+		} else {
+			m.dbOpenFailed(&m.resolverDbFailure, "Failed to open pfb_py_resolver.sqlite database")
+		}
+	}
+	set.pythonMaxmind = m.maxmindFor(set.pythonReply)
+
+	next, err := m.reloadBuildSnapshotWith(set, func() *regexDB { return tables.userRegexDB })
+	if next != nil {
+		next.settings, next.carryRuntime = set, false
+		next.noAAAADB, next.gpListDB, next.gpNetDB = tables.noAAAADB, tables.gpListDB, tables.gpNetDB
+	}
+	return next, err
+}
+
+// readSettings is the settings and tables the module directory's ini gives, as init loads them.
+func (f *coreFeed) readSettings() (*pfbSettings, *snapshot, error) {
+	config := f.m.loadIniConfig()
+	if config == nil {
+		return nil, nil, errors.New("settings: " + f.m.pfb.pfbUnboundIni + " is gone")
+	}
+	set, tables := newModuleSettings(f.dir), newSnapshot()
+	if err := f.m.loadIniSettings(config, &set, tables); err != nil {
+		return nil, nil, err
+	}
+	set.forwarding = f.observer
+	if !set.pythonEnable {
+		return nil, nil, errors.New("settings: python_enable is off")
+	}
+	return &set, tables, nil
+}
+
+// applyOptOuts turns client metrics and the control reader off as soon as new settings turn them off, ahead of the swap
+// that applies the rest, which may wait (no data yet, the RAM gate).
+func (m *pfbUnbound) applyOptOuts(set *pfbSettings) {
+	m.settingsMu.Lock()
+	defer m.settingsMu.Unlock()
+	if m.retired.Load() {
+		return
+	}
+	if !set.metricsClientIp {
+		m.dbCapturePrivacyEpochsFor(false)
+	}
+	if !set.pythonControl {
+		m.stopControlWatcher()
+	}
+}
+
+// applyLiveSettings applies what a settings swap changes outside the snapshot, from the live settings that replaced prev;
+// nothing once the module is closing.
+func (m *pfbUnbound) applyLiveSettings(prev *pfbSettings) {
+	m.settingsMu.Lock()
+	defer m.settingsMu.Unlock()
+	if m.retired.Load() {
+		return
+	}
+	set := m.snapshot.Load().settings
+	m.decisionDB.resize(intOf(set.decisiondbMax))
+	if set.pythonControl {
+		m.startControlWatcher()
+	} else {
+		m.stopControlWatcher()
+	}
+	// Captured again on each settings swap, as a start captures it: each open database grants what it holds now, one an
+	// opt-out dropped or one this swap opened included.
+	m.dbCapturePrivacyEpochsFor(set.metricsClientIp)
+	if set.pythonControlLegacy && !prev.pythonControlLegacy {
+		warnIfLegacyControlEnabled(true)
+	}
+}
+
+// logSettings logs a settings sync error once until it changes, and that Core gives settings again.
+func (f *coreFeed) logSettings(err error) {
+	msg := ""
+	switch {
+	case errors.Is(err, coreinput.ErrNoSettings):
+		msg = "Core holds no settings yet; keeping the settings loaded"
+	case err != nil:
+		msg = "fetching the settings from Core failed, keeping the settings loaded: " + err.Error()
+	}
+	logChange(&f.lastSettingsErr, msg, "settings from Core: Core answers again")
+}
+
+// logChange logs msg, an error, unless it is last's; an empty msg after an error logs recovered.
+func logChange(last *string, msg, recovered string) {
+	if msg == *last {
+		return
+	}
+	if msg != "" {
+		logWarn("[pfBlockerNG]: " + msg)
+	} else {
+		logInfo("[pfBlockerNG]: " + recovered)
+	}
+	*last = msg
+}
+
 // logSync logs a Sync error once until it changes, and that Core answers again.
 func (f *coreFeed) logSync(err error) {
 	msg := ""
@@ -149,12 +306,5 @@ func (f *coreFeed) logSync(err error) {
 	case err != nil:
 		msg = "fetching the DNSBL data from Core failed, serving what is loaded: " + err.Error()
 	}
-	if msg != f.lastErr {
-		if msg != "" {
-			logWarn("[pfBlockerNG]: " + msg)
-		} else {
-			logInfo("[pfBlockerNG]: DNSBL data from Core: Core answers again")
-		}
-		f.lastErr = msg
-	}
+	logChange(&f.lastErr, msg, "DNSBL data from Core: Core answers again")
 }

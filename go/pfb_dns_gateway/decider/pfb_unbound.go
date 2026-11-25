@@ -36,6 +36,7 @@ import (
 
 	"github.com/oschwald/maxminddb-golang/v2"
 
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/coreinput"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/pysem"
 )
 
@@ -196,16 +197,22 @@ type pfbUnbound struct {
 	// failed write included; dbRecoveryMu is _db_recovery_lock, taken before dbMu and never inside it. sqlite3ResolverCon and
 	// sqlite3DnsblCon are pfb["sqlite3_resolver_con"] and pfb["sqlite3_dnsbl_con"]: the counters are enqueued only while
 	// their database is open. metricsPrivacyEpochs is pfb["metrics_privacy_epochs"], written by init before the first
-	// query. dbWorker is the DB I/O worker, nil when none runs (pfb["db_worker"] False), and dbDropped counts the events
+	// query and by a Core settings swap that turns client metrics on or off (nil: none). dbWorker is the DB I/O worker, nil when none runs (pfb["db_worker"] False), and dbDropped counts the events
 	// its full queue refused (pfb["db_dropped"]).
 	dbMu, dbRecoveryMu   sync.Mutex
 	dbClosed             bool // set by closeDb under dbMu: no connection is opened again
 	dbConns              map[int]*dbConn
 	sqlite3ResolverCon   atomic.Bool
 	sqlite3DnsblCon      atomic.Bool
-	metricsPrivacyEpochs map[int]string
-	dbWorker             atomic.Pointer[dbWorker]
-	dbDropped            atomic.Int64
+	metricsPrivacyEpochs atomic.Pointer[map[int]string]
+	// buildWith, when set, is the settings dnsblConfigFromManifest builds with instead of the module's: a reload builds
+	// from the live settings, which a Core settings swap changes. Only the builder sets it, around its build.
+	buildWith *pfbSettings
+	// settingsMu orders a Core settings change's effects outside the snapshot (the control reader) before deinit's stop of
+	// the control reader.
+	settingsMu sync.Mutex
+	dbWorker   atomic.Pointer[dbWorker]
+	dbDropped  atomic.Int64
 
 	// What the module serves without besides the DNSBL build (Frontend.Degraded): the ini that could not be parsed, and the
 	// stats databases that could not be opened.
@@ -253,9 +260,15 @@ func warnIfLegacyControlEnabled(enabled bool) {
 // loadIniConfig parses the module's ini: nil when the file is absent, otherwise the (partially) read config. A read
 // failure is written to the error log, opens the ini's parse-stage ledger entry and is the module's iniFailure; an absent
 // file or a good read closes the entry and clears it.
+//
+// On the Core input an ini that is not pfB-DNS's own (coreinput.Owned) is never read: it reads as absent.
 func (m *pfbUnbound) loadIniConfig() *configParser {
 	path := m.pfb.pfbUnboundIni
-	if !isFile(path) {
+	untrusted := m.core != nil && isFile(path) && !coreinput.Owned(path)
+	if untrusted {
+		logWarn("[pfBlockerNG]: the settings cache " + path + " is not pfB-DNS's own and is not read")
+	}
+	if !isFile(path) || untrusted {
 		m.pfbPyStatusClose("dnsbl", path, "parse")
 		m.iniFailure.clear()
 		return nil
@@ -283,6 +296,246 @@ func mainOptionError(option string, err error) error {
 	return fmt.Errorf("init_standard: [MAIN] %s: %w", option, err)
 }
 
+// loadIniSettings reads the ini's [MAIN] into pfb and, with python_enable on, the user regex, noAAAA and Group Policy bypass
+// tables into scratch: what init_standard loads from the ini before the DNSBL data. An error is what makes init_standard
+// raise. Init loads the module's settings with it, and a Core settings swap loads the settings it brings.
+func (m *pfbUnbound) loadIniSettings(config *configParser, pfb *pfbSettings, scratch *snapshot) error {
+	if config.hasSection("MAIN") {
+		mainBool := func(option string, dst *bool) error {
+			if !config.hasOption("MAIN", option) {
+				return nil
+			}
+			value, err := config.getboolean("MAIN", option)
+			if err != nil {
+				return mainOptionError(option, err)
+			}
+			*dst = value
+			return nil
+		}
+		// issue #2371: feed-at-suffix PSL policy; a missing option, an empty value or an unrecognised token keep "honor".
+		mainPslPolicy := func(option string, dst *string) error {
+			if !config.hasOption("MAIN", option) {
+				return nil
+			}
+			raw, err := config.get("MAIN", option)
+			if err != nil {
+				return mainOptionError(option, err)
+			}
+			*dst = "honor"
+			if policy := pysem.Lower(pyStrip(raw)); policy == "ignore" || policy == "apex" || policy == "honor" {
+				*dst = policy
+			}
+			return nil
+		}
+
+		if err := mainBool("metrics_client_ip", &pfb.metricsClientIp); err != nil {
+			return err
+		}
+		if err := mainBool("python_enable", &pfb.pythonEnable); err != nil {
+			return err
+		}
+		if err := mainBool("python_reply", &pfb.pythonReply); err != nil {
+			return err
+		}
+		if err := mainBool("python_blocking", &pfb.pythonBlocking); err != nil {
+			return err
+		}
+		if err := mainBool("python_tld_wildcard", &pfb.pythonTldWildcard); err != nil {
+			return err
+		}
+		if err := mainBool("python_idn", &pfb.pythonIdn); err != nil {
+			return err
+		}
+		// ADR-08: the IDN mode. A present idn_mode wins, '' being an explicit Off; an absent or unrecognised
+		// one falls back to the legacy python_idn.
+		if config.hasOption("MAIN", "idn_mode") {
+			raw, err := config.get("MAIN", "idn_mode")
+			if err != nil {
+				return mainOptionError("idn_mode", err)
+			}
+			switch rawIdn := pysem.Lower(pyStrip(raw)); rawIdn {
+			case "":
+				pfb.idnMode = IdnModeOff
+			case IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE:
+				pfb.idnMode = IdnMode(rawIdn)
+			default:
+				pfb.idnMode = idnModeFromLegacy(pfb.pythonIdn)
+			}
+		} else {
+			pfb.idnMode = idnModeFromLegacy(pfb.pythonIdn)
+		}
+		if err := mainBool("python_idn_block_malicious", &pfb.pythonIdnBlockMalicious); err != nil {
+			return err
+		}
+		if err := mainBool("python_idn_escalate_suspicious", &pfb.pythonIdnEscalateSuspicious); err != nil {
+			return err
+		}
+		// issue #713: a malformed python_tld_seg / decisiondb_max keeps the current value.
+		if config.hasOption("MAIN", "python_tld_seg") {
+			parsedTldSeg, ok, err := parseIniInt(config, "MAIN", "python_tld_seg")
+			if err != nil {
+				return mainOptionError("python_tld_seg", err)
+			}
+			if ok {
+				pfb.pythonTldSeg = parsedTldSeg
+			}
+		}
+		if config.hasOption("MAIN", "decisiondb_max") {
+			parsedDecisiondbMax, ok, err := parseIniInt(config, "MAIN", "decisiondb_max")
+			if err != nil {
+				return mainOptionError("decisiondb_max", err)
+			}
+			if ok {
+				pfb.decisiondbMax = parsedDecisiondbMax
+			}
+		}
+		if err := mainBool("tld_allow", &pfb.tldAllow); err != nil {
+			return err
+		}
+		if config.hasOption("MAIN", "tld_allow_list") {
+			raw, err := config.get("MAIN", "tld_allow_list")
+			if err != nil {
+				return mainOptionError("tld_allow_list", err)
+			}
+			pfb.tldAllowList = parseTldAllow(raw)
+		}
+		if err := mainBool("psl_include_private", &pfb.pslIncludePrivate); err != nil {
+			return err
+		}
+		if err := mainBool("psl_allow_private", &pfb.pslAllowPrivate); err != nil {
+			return err
+		}
+		if err := mainPslPolicy("psl_feed_private_policy", &pfb.pslFeedPrivatePolicy); err != nil {
+			return err
+		}
+		if err := mainPslPolicy("psl_feed_icann_policy", &pfb.pslFeedIcannPolicy); err != nil {
+			return err
+		}
+		if err := mainBool("python_cname", &pfb.pythonCname); err != nil {
+			return err
+		}
+		if err := mainBool("python_control", &pfb.pythonControl); err != nil {
+			return err
+		}
+		if err := mainBool("python_control_legacy", &pfb.pythonControlLegacy); err != nil {
+			return err
+		}
+
+		if err := mainBool("forwarding", &pfb.forwarding); err != nil {
+			return err
+		}
+
+		// ADR-07: regex_cap is the opt-in length cap; a malformed regex_warn_ms keeps the default.
+		if err := mainBool("regex_cap", &pfb.regexCap); err != nil {
+			return err
+		}
+		if config.hasOption("MAIN", "regex_warn_ms") {
+			regexWarnMs, err := config.getfloat("MAIN", "regex_warn_ms")
+			switch {
+			case err == nil:
+				pfb.regexWarnMs = regexWarnMs
+			case !isValueError(err):
+				return mainOptionError("regex_warn_ms", err)
+			}
+		}
+
+	}
+
+	if pfb.pythonEnable {
+		// Enable the Blacklist functions (IDN): any active IDN mode needs the blacklist machinery.
+		if pfb.pythonIdn || pfb.idnMode != IdnModeOff {
+			pfb.pythonBlacklist = true
+		}
+
+		// Enable the Blacklist functions (TLD Allow): an empty list must not enable the gate (issue #713).
+		if pfb.tldAllow && len(pfb.tldAllowList) > 0 {
+			pfb.pythonBlacklist = true
+		}
+
+		// Collect user-defined Regex patterns: the always-on admission gate and the opt-in length cap apply to this
+		// un-vetted list; the list has no rule limit.
+		if userRegex := dnsblCompileUserRegex(loadUserRegexEntries(config), pfb.regexCap); userRegex.len() > 0 {
+			regexDBUpdate(scratch.userRegexDB, userRegex)
+			pfb.pythonBlacklist = true
+		}
+
+		// Collect user-defined no AAAA domains. config.items interpolates every value outside the try block in
+		// Python, so a bad '%' escapes init_standard.
+		if config.hasSection("noAAAA") {
+			noaaaaConfig, err := config.items("noAAAA", false)
+			if err != nil {
+				return fmt.Errorf("init_standard: [noAAAA]: %w", err)
+			}
+			if len(noaaaaConfig) > 0 {
+				for _, row := range noaaaaConfig {
+					key, line := row[0], row[1]
+					data := strings.Split(strings.TrimRight(line, "\r\n"), ",")
+					if len(data) == 2 {
+						scratch.noAAAADB[data[0]] = data[1] == "1"
+					} else {
+						pyStderr(fmt.Sprintf("[pfBlockerNG]: Failed to parse: noAAAA: row:%s line:%s", key, line))
+					}
+				}
+				pfb.noAAAADB = true
+			}
+		}
+
+		// Collect user-defined Group Policy Global Bypass List
+		m.loadGpBypassList(config, pfb, scratch)
+	}
+	return nil
+}
+
+// newModuleSettings is the settings of a module in moduleDir before its ini is read: the ini's defaults and the files.
+func newModuleSettings(moduleDir string) pfbSettings {
+	var p pfbSettings
+	// A key not set here keeps Go's zero value, which is its Python default (False / "" / 0 / empty list).
+	p.idnMode = IdnModeOff
+	p.pythonIdnBlockMalicious = true
+	p.pslIncludePrivate = true
+	p.pslFeedPrivatePolicy = "honor"
+	p.pslFeedIcannPolicy = "honor"
+	p.regexWarnMs = REGEX_WARN_MS_DEFAULT
+	p.decisiondbMax = 10000
+
+	in := func(name string) string { return filepath.Join(moduleDir, name) }
+	p.pfbUnboundIni = in("pfb_unbound.ini")
+	p.pfbPyWhitelist = in("pfb_py_whitelist.txt")
+	p.pfbPyZone = in("pfb_py_zone.txt")
+	p.pfbPyData = in("pfb_py_data.txt")
+	p.pfbPyTop1m = in("pfb_py_top1m.txt")
+	p.pfbPyPsl = in("dnsbl_psl")
+	p.pfbPySs = in("pfb_py_ss.txt")
+	p.pfbPySources = in("pfb_py_sources.json")
+	p.pfbPyReload = in("pfb_py_reload")
+	p.pfbPyReloadApplied = in("pfb_py_reload.applied")
+	p.pfbPyControl = in("pfb_py_control")
+	p.pfbPyControlApplied = in("pfb_py_control.applied")
+	p.pfbPyCount = in("pfb_py_count")
+	p.pfbPyRegexCount = in("pfb_py_regex_count")
+	p.pfbPyRejectStats = in("pfb_py_reject_stats.json")
+	p.pfbPyStatus = in("pfb_py_status.json")
+	p.pfbPyDnsbl = in("pfb_py_dnsbl.sqlite")
+	p.pfbPyResolver = in("pfb_py_resolver.sqlite")
+
+	p.rrTypes = []uint16{
+		RR_TYPE_A,
+		RR_TYPE_AAAA,
+		RR_TYPE_ANY,
+		RR_TYPE_CNAME,
+		RR_TYPE_DNAME,
+		RR_TYPE_SIG,
+		RR_TYPE_MX,
+		RR_TYPE_NS,
+		RR_TYPE_PTR,
+		RR_TYPE_SRV,
+		RR_TYPE_TXT,
+		64,
+		65,
+	}
+	return p
+}
+
 // initStandard builds the module from the ini and the files in moduleDir. An error is what makes init_standard
 // raise in Python: a MAIN value that is no boolean, or an interpolation error in a value that is read.
 func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err error) {
@@ -306,238 +559,22 @@ func initStandardWith(id int, moduleDir, logDir string, core *coreFeed) (module 
 	scratch := newSnapshot()
 	pfb := &m.pfb
 
-	// A key not set here keeps Go's zero value, which is its Python default (False / "" / 0 / empty list).
-	pfb.idnMode = IdnModeOff
-	pfb.pythonIdnBlockMalicious = true
-	pfb.pslIncludePrivate = true
-	pfb.pslFeedPrivatePolicy = "honor"
-	pfb.pslFeedIcannPolicy = "honor"
-	pfb.regexWarnMs = REGEX_WARN_MS_DEFAULT
-	pfb.decisiondbMax = 10000
-
-	in := func(name string) string { return filepath.Join(moduleDir, name) }
-	pfb.pfbUnboundIni = in("pfb_unbound.ini")
-	pfb.pfbPyWhitelist = in("pfb_py_whitelist.txt")
-	pfb.pfbPyZone = in("pfb_py_zone.txt")
-	pfb.pfbPyData = in("pfb_py_data.txt")
-	pfb.pfbPyTop1m = in("pfb_py_top1m.txt")
-	pfb.pfbPyPsl = in("dnsbl_psl")
-	pfb.pfbPySs = in("pfb_py_ss.txt")
-	pfb.pfbPySources = in("pfb_py_sources.json")
-	pfb.pfbPyReload = in("pfb_py_reload")
-	pfb.pfbPyReloadApplied = in("pfb_py_reload.applied")
-	pfb.pfbPyControl = in("pfb_py_control")
-	pfb.pfbPyControlApplied = in("pfb_py_control.applied")
-	pfb.pfbPyCount = in("pfb_py_count")
-	pfb.pfbPyRegexCount = in("pfb_py_regex_count")
-	pfb.pfbPyRejectStats = in("pfb_py_reject_stats.json")
-	pfb.pfbPyStatus = in("pfb_py_status.json")
-	pfb.pfbPyDnsbl = in("pfb_py_dnsbl.sqlite")
-	pfb.pfbPyResolver = in("pfb_py_resolver.sqlite")
-
-	pfb.rrTypes = []uint16{
-		RR_TYPE_A,
-		RR_TYPE_AAAA,
-		RR_TYPE_ANY,
-		RR_TYPE_CNAME,
-		RR_TYPE_DNAME,
-		RR_TYPE_SIG,
-		RR_TYPE_MX,
-		RR_TYPE_NS,
-		RR_TYPE_PTR,
-		RR_TYPE_SRV,
-		RR_TYPE_TXT,
-		64,
-		65,
-	}
+	*pfb = newModuleSettings(moduleDir)
 
 	config := m.loadIniConfig()
+	if core != nil || config != nil && config.hasSection("MAIN") {
+		m.rcodeDB = rcodeNames() // on the Core input a start without settings still logs replies
+	}
 	if config != nil {
-		if config.hasSection("MAIN") {
-			mainBool := func(option string, dst *bool) error {
-				if !config.hasOption("MAIN", option) {
-					return nil
-				}
-				value, err := config.getboolean("MAIN", option)
-				if err != nil {
-					return mainOptionError(option, err)
-				}
-				*dst = value
-				return nil
-			}
-			// issue #2371: feed-at-suffix PSL policy; a missing option, an empty value or an unrecognised token keep "honor".
-			mainPslPolicy := func(option string, dst *string) error {
-				if !config.hasOption("MAIN", option) {
-					return nil
-				}
-				raw, err := config.get("MAIN", option)
-				if err != nil {
-					return mainOptionError(option, err)
-				}
-				*dst = "honor"
-				if policy := pysem.Lower(pyStrip(raw)); policy == "ignore" || policy == "apex" || policy == "honor" {
-					*dst = policy
-				}
-				return nil
-			}
-
-			if err := mainBool("metrics_client_ip", &pfb.metricsClientIp); err != nil {
-				return nil, err
-			}
-			if err := mainBool("python_enable", &pfb.pythonEnable); err != nil {
-				return nil, err
-			}
-			if err := mainBool("python_reply", &pfb.pythonReply); err != nil {
-				return nil, err
-			}
-			if err := mainBool("python_blocking", &pfb.pythonBlocking); err != nil {
-				return nil, err
-			}
-			if err := mainBool("python_tld_wildcard", &pfb.pythonTldWildcard); err != nil {
-				return nil, err
-			}
-			if err := mainBool("python_idn", &pfb.pythonIdn); err != nil {
-				return nil, err
-			}
-			// ADR-08: the IDN mode. A present idn_mode wins, '' being an explicit Off; an absent or unrecognised
-			// one falls back to the legacy python_idn.
-			if config.hasOption("MAIN", "idn_mode") {
-				raw, err := config.get("MAIN", "idn_mode")
-				if err != nil {
-					return nil, mainOptionError("idn_mode", err)
-				}
-				switch rawIdn := pysem.Lower(pyStrip(raw)); rawIdn {
-				case "":
-					pfb.idnMode = IdnModeOff
-				case IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE:
-					pfb.idnMode = IdnMode(rawIdn)
-				default:
-					pfb.idnMode = idnModeFromLegacy(pfb.pythonIdn)
-				}
-			} else {
-				pfb.idnMode = idnModeFromLegacy(pfb.pythonIdn)
-			}
-			if err := mainBool("python_idn_block_malicious", &pfb.pythonIdnBlockMalicious); err != nil {
-				return nil, err
-			}
-			if err := mainBool("python_idn_escalate_suspicious", &pfb.pythonIdnEscalateSuspicious); err != nil {
-				return nil, err
-			}
-			// issue #713: a malformed python_tld_seg / decisiondb_max keeps the current value.
-			if config.hasOption("MAIN", "python_tld_seg") {
-				parsedTldSeg, ok, err := parseIniInt(config, "MAIN", "python_tld_seg")
-				if err != nil {
-					return nil, mainOptionError("python_tld_seg", err)
-				}
-				if ok {
-					pfb.pythonTldSeg = parsedTldSeg
-				}
-			}
-			if config.hasOption("MAIN", "decisiondb_max") {
-				parsedDecisiondbMax, ok, err := parseIniInt(config, "MAIN", "decisiondb_max")
-				if err != nil {
-					return nil, mainOptionError("decisiondb_max", err)
-				}
-				if ok {
-					pfb.decisiondbMax = parsedDecisiondbMax
-				}
-			}
-			if err := mainBool("tld_allow", &pfb.tldAllow); err != nil {
-				return nil, err
-			}
-			if config.hasOption("MAIN", "tld_allow_list") {
-				raw, err := config.get("MAIN", "tld_allow_list")
-				if err != nil {
-					return nil, mainOptionError("tld_allow_list", err)
-				}
-				pfb.tldAllowList = parseTldAllow(raw)
-			}
-			if err := mainBool("psl_include_private", &pfb.pslIncludePrivate); err != nil {
-				return nil, err
-			}
-			if err := mainBool("psl_allow_private", &pfb.pslAllowPrivate); err != nil {
-				return nil, err
-			}
-			if err := mainPslPolicy("psl_feed_private_policy", &pfb.pslFeedPrivatePolicy); err != nil {
-				return nil, err
-			}
-			if err := mainPslPolicy("psl_feed_icann_policy", &pfb.pslFeedIcannPolicy); err != nil {
-				return nil, err
-			}
-			if err := mainBool("python_cname", &pfb.pythonCname); err != nil {
-				return nil, err
-			}
-			if err := mainBool("python_control", &pfb.pythonControl); err != nil {
-				return nil, err
-			}
-			if err := mainBool("python_control_legacy", &pfb.pythonControlLegacy); err != nil {
-				return nil, err
-			}
-			warnIfLegacyControlEnabled(pfb.pythonControlLegacy)
-
-			if err := mainBool("forwarding", &pfb.forwarding); err != nil {
-				return nil, err
-			}
-
-			// ADR-07: regex_cap is the opt-in length cap; a malformed regex_warn_ms keeps the default.
-			if err := mainBool("regex_cap", &pfb.regexCap); err != nil {
-				return nil, err
-			}
-			if config.hasOption("MAIN", "regex_warn_ms") {
-				regexWarnMs, err := config.getfloat("MAIN", "regex_warn_ms")
-				switch {
-				case err == nil:
-					pfb.regexWarnMs = regexWarnMs
-				case !isValueError(err):
-					return nil, mainOptionError("regex_warn_ms", err)
-				}
-			}
-
-			m.rcodeDB = rcodeNames()
+		if err := m.loadIniSettings(config, pfb, scratch); err != nil {
+			return nil, err
+		}
+		warnIfLegacyControlEnabled(pfb.pythonControlLegacy)
+		if core != nil {
+			pfb.forwarding = core.observer // whether the observer's reports arrive: the Resolver forwards
 		}
 
 		if pfb.pythonEnable {
-			// Enable the Blacklist functions (IDN): any active IDN mode needs the blacklist machinery.
-			if pfb.pythonIdn || pfb.idnMode != IdnModeOff {
-				pfb.pythonBlacklist = true
-			}
-
-			// Enable the Blacklist functions (TLD Allow): an empty list must not enable the gate (issue #713).
-			if pfb.tldAllow && len(pfb.tldAllowList) > 0 {
-				pfb.pythonBlacklist = true
-			}
-
-			// Collect user-defined Regex patterns: the always-on admission gate and the opt-in length cap apply to this
-			// un-vetted list; the list has no rule limit.
-			if userRegex := dnsblCompileUserRegex(loadUserRegexEntries(config), pfb.regexCap); userRegex.len() > 0 {
-				regexDBUpdate(scratch.userRegexDB, userRegex)
-				pfb.pythonBlacklist = true
-			}
-
-			// Collect user-defined no AAAA domains. config.items interpolates every value outside the try block in
-			// Python, so a bad '%' escapes init_standard.
-			if config.hasSection("noAAAA") {
-				noaaaaConfig, err := config.items("noAAAA", false)
-				if err != nil {
-					return nil, fmt.Errorf("init_standard: [noAAAA]: %w", err)
-				}
-				if len(noaaaaConfig) > 0 {
-					for _, row := range noaaaaConfig {
-						key, line := row[0], row[1]
-						data := strings.Split(strings.TrimRight(line, "\r\n"), ",")
-						if len(data) == 2 {
-							scratch.noAAAADB[data[0]] = data[1] == "1"
-						} else {
-							pyStderr(fmt.Sprintf("[pfBlockerNG]: Failed to parse: noAAAA: row:%s line:%s", key, line))
-						}
-					}
-					pfb.noAAAADB = true
-				}
-			}
-
-			// Collect user-defined Group Policy Global Bypass List
-			m.loadGpBypassList(config, scratch)
-
 			// Collect SafeSearch Redirection list; on the Core input, only from a cache Load trusts.
 			if core == nil || core.trusted() {
 				m.loadSafesearchDb(scratch.safeSearchDB)
@@ -626,6 +663,9 @@ func initStandardWith(id int, moduleDir, logDir string, core *coreFeed) (module 
 	} else {
 		// issue #3870: with no ini python_enable stays off and nothing is blocked: report the DNSBL as lost.
 		scratch.dnsblUnbuilt = "Failed to load ini configuration. Ini file missing."
+		if core != nil {
+			scratch.dnsblUnbuilt = "No settings from Core yet -- DNSBL not loaded"
+		}
 		logInfo("[pfBlockerNG]: " + scratch.dnsblUnbuilt)
 	}
 
@@ -703,7 +743,9 @@ func (m *pfbUnbound) deinit() {
 	m.retired.Store(true) // before the stops: a watcher that outlives its bound publishes and opens nothing, and writes no log row, from here on
 	m.publishMu.Unlock()
 	m.stopReloadWatcher()
+	m.settingsMu.Lock()
 	m.stopControlWatcher()
+	m.settingsMu.Unlock()
 	m.closeDb()
 	m.stopLogging()
 	m.closeMaxmind()
@@ -949,10 +991,10 @@ func ipNetwork(text string) (ipNet, bool) {
 	return ipNet{netip.PrefixFrom(network, prefixLen), false, network.String()}, true
 }
 
-// loadGpBypassList loads [GP_Bypass_List]. A full-length entry (a bare IP, /32, /128) is an exact gpListDB key, the
-// one structure a runtime add/removebypass edits, and a shorter prefix is a gpNetDB network. An unparseable row is
-// reported and skipped, never aborting the rest of the load.
-func (m *pfbUnbound) loadGpBypassList(config *configParser, snap *snapshot) {
+// loadGpBypassList loads [GP_Bypass_List], setting pfb's gpListDB flag. A full-length entry (a bare IP, /32, /128) is an
+// exact gpListDB key, the one structure a runtime add/removebypass edits, and a shorter prefix is a gpNetDB network. An
+// unparseable row is reported and skipped, never aborting the rest of the load.
+func (m *pfbUnbound) loadGpBypassList(config *configParser, pfb *pfbSettings, snap *snapshot) {
 	if !config.hasSection("GP_Bypass_List") {
 		return
 	}
@@ -976,7 +1018,7 @@ func (m *pfbUnbound) loadGpBypassList(config *configParser, snap *snapshot) {
 		}
 	}
 	if len(snap.gpListDB) > 0 || len(snap.gpNetDB) > 0 {
-		m.pfb.gpListDB = true
+		pfb.gpListDB = true
 	}
 }
 
