@@ -28,9 +28,6 @@ import (
 // CORE_POLL_INTERVAL is how often the poller asks Core whether the DNSBL data changed (owner, 2026-11-24).
 const CORE_POLL_INTERVAL = 10 * time.Second
 
-// coreSyncCap ends a Sync or a report that Core leaves hanging, so that the poller goes on; it orders nothing.
-const coreSyncCap = 10 * time.Minute
-
 // maxRetryEvery is the most polls between two tries of a swap that keeps failing: about 10 min.
 const maxRetryEvery = 64
 
@@ -111,9 +108,10 @@ func (f *coreFeed) run(stop <-chan struct{}, tick <-chan time.Time) {
 }
 
 // drain syncs with Core, swaps a new generation in, and reports what is served until Core has taken a report. A Sync that
-// fails changes nothing served: the live snapshot stays, and so does the module directory's last good state.
+// fails changes nothing served: the live snapshot stays, and so does the module directory's last good state. Only stop
+// ends a call to Core: a slow transfer runs to its end, and a Core that dies drops the connection (owner, 2026-11-25).
 func (f *coreFeed) drain(stop <-chan struct{}) {
-	ctx, cancel := context.WithTimeout(context.Background(), coreSyncCap)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
 		select {
