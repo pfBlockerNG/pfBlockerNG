@@ -67,3 +67,29 @@ func TestOnCoreTheCacheFolderIsMadePfbDnsOwnBeforeUse(t *testing.T) {
 		})
 	}
 }
+
+// A cache folder pfB-DNS cannot make its own is not written: the poller fetches nothing into a folder another user
+// controls, and nothing is served from it.
+func TestOnCoreACacheFolderOfAnotherUserIsNotWritten(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to give the folder to another user")
+	}
+	srv := coretest.Start(t, coreData("1", "a.example"))
+	srv.SetSettings(coretest.Settings())
+	dir := t.TempDir()
+	cache := filepath.Join(dir, "pfb_dns")
+	if err := os.Mkdir(cache, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(cache, 65534, 65534); err != nil {
+		t.Fatal(err)
+	}
+	m, ticks := bootOnCore(t, dir, srv.Socket)
+	ticks.settle()
+	if left, _ := os.ReadDir(cache); len(left) != 0 {
+		t.Errorf("%d entries were written into a folder of another user", len(left))
+	}
+	if serves(m, "a.example") {
+		t.Error("a generation fetched into a folder of another user is served")
+	}
+}
