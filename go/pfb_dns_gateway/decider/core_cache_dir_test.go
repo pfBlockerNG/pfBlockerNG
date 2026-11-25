@@ -37,8 +37,8 @@ func TestOnCoreWhatPfbDnsFetchedIsKeptInAFolderOfItsOwn(t *testing.T) {
 }
 
 func TestOnCoreTheCacheFolderIsServedWhileCoreIsDown(t *testing.T) {
-	dir := t.TempDir()
-	cacheFrom(t, filepath.Join(dir, "pfb_dns"), coreData("1", "a.example"))
+	dir := coreModuleDir(t)
+	cacheFrom(t, dir, coreData("1", "a.example"))
 	m, _ := bootOnCore(t, dir, deadSocket(t))
 	if !serves(m, "a.example") {
 		t.Error("the cache folder's generation is not served while Core is down")

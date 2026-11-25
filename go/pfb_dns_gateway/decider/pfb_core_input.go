@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -28,6 +29,11 @@ import (
 // CORE_POLL_INTERVAL is how often the poller asks Core whether the DNSBL data changed (owner, 2026-11-24).
 const CORE_POLL_INTERVAL = 10 * time.Second
 
+// CORE_CACHE_DIR is the module directory's folder the Core input keeps what it fetched in: the settings, the manifest, the
+// feed bodies, TOP1M, SafeSearch and the PSL. The RAM-disk archive takes it whole (issue #4251, owner 2026-11-25); the module
+// directory keeps what PHP reads and writes there.
+const CORE_CACHE_DIR = "pfb_dns"
+
 // maxRetryEvery is the most polls between two tries of a swap that keeps failing: about 10 min.
 const maxRetryEvery = 64
 
@@ -35,7 +41,8 @@ const maxRetryEvery = 64
 type coreFeed struct {
 	m      *pfbUnbound
 	client *coreinput.Client
-	dir    string                            // the module directory
+	dir    string                            // the cache folder, CORE_CACHE_DIR in the module directory
+	module string                            // the module directory
 	tick   func() (<-chan time.Time, func()) // the poller's tick source
 	disk   coreinput.State                   // what the module directory holds: the last Sync's state
 	served map[string]coreinput.Cursor       // what the live snapshot was built from; nil: nothing
@@ -78,22 +85,33 @@ func bootCore(moduleDir, logDir string, client *coreinput.Client, observer bool,
 			return ticker.C, ticker.Stop
 		}
 	}
-	feed := &coreFeed{client: client, dir: moduleDir, tick: tick, disk: coreinput.Load(moduleDir), observer: observer}
-	if ini := filepath.Join(moduleDir, coreinput.IniFile); !coreinput.Owned(ini) {
+	cache := filepath.Join(moduleDir, CORE_CACHE_DIR)
+	if err := os.Mkdir(cache, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		logWarn("[pfBlockerNG]: the DNSBL cache folder " + cache + " cannot be made: " + err.Error())
+	}
+	feed := &coreFeed{client: client, dir: cache, module: moduleDir, tick: tick, disk: coreinput.Load(cache), observer: observer}
+	if ini := filepath.Join(cache, coreinput.IniFile); !coreinput.Owned(ini) {
 		if _, err := os.Lstat(ini); err == nil {
 			logWarn("[pfBlockerNG]: the settings cache " + ini + " is not trusted and is not loaded; it is fetched from Core again")
 			os.Remove(ini)
 		}
 	}
 	if !feed.trusted() {
-		if _, err := os.Lstat(filepath.Join(moduleDir, "pfb_py_sources.json")); err == nil {
-			logWarn("[pfBlockerNG]: the DNSBL cache in " + moduleDir + " is not trusted and is not loaded; it is fetched from Core again")
+		if _, err := os.Lstat(filepath.Join(cache, "pfb_py_sources.json")); err == nil {
+			logWarn("[pfBlockerNG]: the DNSBL cache in " + cache + " is not trusted and is not loaded; it is fetched from Core again")
 		}
 	}
 	return initStandardWith(MODULE_ID, moduleDir, logDir, feed)
 }
 
-// trusted is whether init may build from the module directory: Load trusts what the last Sync left there.
+// cachePaths points the settings' inputs at the cache folder: what Sync and SyncSettings write there.
+func (f *coreFeed) cachePaths(p *pfbSettings) {
+	in := func(name string) string { return filepath.Join(f.dir, name) }
+	p.pfbUnboundIni, p.pfbPySources, p.pfbPyTop1m, p.pfbPyPsl, p.pfbPySs =
+		in(coreinput.IniFile), in("pfb_py_sources.json"), in("pfb_py_top1m.txt"), in("dnsbl_psl"), in("pfb_py_ss.txt")
+}
+
+// trusted is whether init may build from the cache folder: Load trusts what the last Sync left there.
 func (f *coreFeed) trusted() bool { return f.disk.Manifest != (coreinput.Cursor{}) }
 
 // run is the poller's body: drain, then wait for the next tick, until stop is closed. A panic ends only the poller, as
@@ -220,7 +238,8 @@ func (f *coreFeed) readSettings() (*pfbSettings, *snapshot, error) {
 	if config == nil {
 		return nil, nil, errors.New("settings: " + f.m.pfb.pfbUnboundIni + " is gone")
 	}
-	set, tables := newModuleSettings(f.dir), newSnapshot()
+	set, tables := newModuleSettings(f.module), newSnapshot()
+	f.cachePaths(&set)
 	if err := f.m.loadIniSettings(config, &set, tables); err != nil {
 		return nil, nil, err
 	}

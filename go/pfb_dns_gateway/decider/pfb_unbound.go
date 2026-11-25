@@ -520,6 +520,9 @@ func initStandardWith(id int, moduleDir, logDir string, core *coreFeed) (module 
 	pfb := &m.pfb
 
 	*pfb = newModuleSettings(moduleDir)
+	if core != nil {
+		core.cachePaths(pfb)
+	}
 
 	config := m.loadIniConfig()
 	if core != nil || config != nil && config.hasSection("MAIN") {

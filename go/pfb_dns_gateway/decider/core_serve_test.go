@@ -41,21 +41,27 @@ func cursors(data map[string]coretest.Resource) map[string]coretest.Cursor {
 	return out
 }
 
-// coreModuleDir is a module directory with an ini that turns DNSBL on, and nothing else.
+// cacheOf is the Core input's cache folder in the module directory dir.
+func cacheOf(dir string) string { return filepath.Join(dir, CORE_CACHE_DIR) }
+
+// coreModuleDir is a module directory whose cache folder holds an ini that turns DNSBL on, and nothing else.
 func coreModuleDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "pfb_unbound.ini"), []byte("[MAIN]\npython_enable = true\n"), 0o600); err != nil {
+	if err := os.Mkdir(cacheOf(dir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheOf(dir), "pfb_unbound.ini"), []byte("[MAIN]\npython_enable = true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return dir
 }
 
-// cacheFrom leaves in dir what a Sync of data writes.
+// cacheFrom leaves in the cache folder of the module directory dir what a Sync of data writes.
 func cacheFrom(t *testing.T, dir string, data map[string]coretest.Resource) {
 	t.Helper()
 	srv := coretest.Start(t, data)
-	if _, _, err := coreinput.Sync(context.Background(), coreinput.New(srv.Socket), dir, coreinput.State{}); err != nil {
+	if _, _, err := coreinput.Sync(context.Background(), coreinput.New(srv.Socket), cacheOf(dir), coreinput.State{}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -124,8 +130,8 @@ func TestOnCoreWithoutACacheNothingIsBlockedAndDNSBLIsDegraded(t *testing.T) {
 // are there: a degraded start, until Core answers.
 func TestOnCoreAnUntrustedCacheIsNotServed(t *testing.T) {
 	for name, spoil := range map[string]func(dir string) error{
-		"the state file is gone":   func(dir string) error { return os.Remove(filepath.Join(dir, "pfb_py_core.json")) },
-		"the manifest is writable": func(dir string) error { return os.Chmod(filepath.Join(dir, "pfb_py_sources.json"), 0o666) },
+		"the state file is gone":   func(dir string) error { return os.Remove(filepath.Join(cacheOf(dir), "pfb_py_core.json")) },
+		"the manifest is writable": func(dir string) error { return os.Chmod(filepath.Join(cacheOf(dir), "pfb_py_sources.json"), 0o666) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := coreModuleDir(t)
@@ -265,7 +271,7 @@ func TestOnCoreASyncCutShortLeavesNothingToReuse(t *testing.T) {
 	_, ticks := bootOnCore(t, dir, srv.Socket)
 	ticks.settle()
 	// The commit fails at the manifest: a folder that is not empty stands where it goes.
-	sources := filepath.Join(dir, "pfb_py_sources.json")
+	sources := filepath.Join(cacheOf(dir), "pfb_py_sources.json")
 	if err := os.Remove(sources); err != nil {
 		t.Fatal(err)
 	}
@@ -279,11 +285,11 @@ func TestOnCoreASyncCutShortLeavesNothingToReuse(t *testing.T) {
 	}
 	srv.Set(coreDataWith("3", top("1", "t1.example"), "a.example"))
 	ticks.settle()
-	got, err := os.ReadFile(filepath.Join(dir, "pfb_py_top1m.txt"))
+	got, err := os.ReadFile(filepath.Join(cacheOf(dir), "pfb_py_top1m.txt"))
 	if err != nil || string(got) != "t1.example\n" {
 		t.Fatalf("pfb_py_top1m.txt = %q, %v; want generation 1's TOP1M", got, err)
 	}
-	if s := coreinput.Load(dir); s.Manifest.Generation != "3" {
+	if s := coreinput.Load(cacheOf(dir)); s.Manifest.Generation != "3" {
 		t.Errorf("Load = %+v, want generation 3 trusted", s.Manifest)
 	}
 }
@@ -321,7 +327,7 @@ func TestOnCoreACacheThatDoesNotBuildIsFetchedAgain(t *testing.T) {
 	dir := coreModuleDir(t)
 	gen1 := coreData("1", "a.example")
 	cacheFrom(t, dir, gen1)
-	if err := os.WriteFile(filepath.Join(dir, "pfb_py_sources.json"), []byte("{"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(cacheOf(dir), "pfb_py_sources.json"), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	srv := coretest.Start(t, gen1)
@@ -356,7 +362,7 @@ func TestOnCoreSafeSearchIsCoresData(t *testing.T) {
 
 	dir := coreModuleDir(t)
 	cacheFrom(t, dir, coreDataWith("2", ss, "a.example"))
-	if err := os.Remove(filepath.Join(dir, "pfb_py_core.json")); err != nil {
+	if err := os.Remove(filepath.Join(cacheOf(dir), "pfb_py_core.json")); err != nil {
 		t.Fatal(err)
 	}
 	m, _ = bootOnCore(t, dir, deadSocket(t))
