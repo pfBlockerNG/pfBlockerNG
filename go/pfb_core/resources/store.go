@@ -505,9 +505,10 @@ func (s *Store) FoldApplied(prefix string, report map[string]Cursor) error {
 	return errors.Join(errs...)
 }
 
-// Sweep deletes every file of an id the index no longer holds: what a RemovalApplied stopped between its index save and
-// its prune left, which no later call names (issue #4181). A baseline a stopped Applied left is pruned by the id's next
-// Publish or removal. It is a writer call.
+// Sweep deletes every file the index does not keep: the files of an id it no longer holds, and the files of a held id
+// other than the bodies of its current generation and baseline and the delta between them. That is what a writer call
+// stopped between its index save and its prune left, which no later call names (issue #4181): a RemovalApplied's files,
+// and the old baseline of an Applied, whose generation FoldApplied never names again. It is a writer call.
 func (s *Store) Sweep() error {
 	idx, err := s.loadWriter()
 	if err != nil {
@@ -517,11 +518,16 @@ func (s *Store) Sweep() error {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
+	kept := map[string]bool{}
+	for id, e := range idx.Resources {
+		if e != nil {
+			s.keep(id, e, kept)
+		}
+	}
 	for _, f := range files {
 		// A file of id is "<escaped id>.<rest>"; no id holds a dot.
 		escaped, _, ok := strings.Cut(f.Name(), ".")
-		id := strings.ReplaceAll(escaped, "~", "/")
-		if !ok || f.Name() == indexName || !ValidID(id) || idx.Resources[id] != nil {
+		if !ok || f.Name() == indexName || !ValidID(strings.ReplaceAll(escaped, "~", "/")) || kept[f.Name()] {
 			continue
 		}
 		if err := os.Remove(filepath.Join(s.dir, f.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -974,20 +980,26 @@ func (s *Store) syncDir() error {
 	return d.Sync()
 }
 
-// prune deletes every file of id except the bodies of e's current generation and applied baseline and the delta between them.
-func (s *Store) prune(id string, e *entry) error {
-	keep := map[string]bool{}
+// keep adds to kept the names of the files of id that e keeps: the bodies of its current generation and applied baseline and
+// the delta between them.
+func (s *Store) keep(id string, e *entry, kept map[string]bool) {
 	if e.Current.Generation != 0 {
-		keep[filepath.Base(s.bodyPath(id, e.Current.Generation))] = true
+		kept[filepath.Base(s.bodyPath(id, e.Current.Generation))] = true
 	}
 	if e.Applied != nil {
-		keep[filepath.Base(s.bodyPath(id, e.Applied.Generation))] = true
+		kept[filepath.Base(s.bodyPath(id, e.Applied.Generation))] = true
 	}
 	if d := e.delta(); d != nil {
 		for _, part := range []string{PartAdd, PartRemove} {
-			keep[filepath.Base(s.deltaPath(id, e.Current.Generation, d.From, part))] = true
+			kept[filepath.Base(s.deltaPath(id, e.Current.Generation, d.From, part))] = true
 		}
 	}
+}
+
+// prune deletes every file of id except those e keeps.
+func (s *Store) prune(id string, e *entry) error {
+	keep := map[string]bool{}
+	s.keep(id, e, keep)
 	files, err := os.ReadDir(s.dir)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
