@@ -252,10 +252,13 @@ func warnIfLegacyControlEnabled(enabled bool) {
 // On the Core input an ini that is not pfB-DNS's own (coreinput.Owned) is never read: it reads as absent.
 func (m *pfbUnbound) loadIniConfig() *configParser {
 	path := m.pfb.pfbUnboundIni
-	untrusted := m.core != nil && isFile(path) && !coreinput.Owned(path)
+	// A cache folder pfB-DNS could not make its own gives nothing, whatever the file in it (bootCore said why)
+	unusable := m.core != nil && m.core.unusable != nil
+	untrusted := m.core != nil && !unusable && isFile(path) && !coreinput.Owned(path)
 	if untrusted {
 		logWarn("[pfBlockerNG]: the settings cache " + path + " is not pfB-DNS's own and is not read")
 	}
+	untrusted = untrusted || unusable
 	if !isFile(path) || untrusted {
 		m.pfbPyStatusClose("dnsbl", path, "parse")
 		m.iniFailure.clear()

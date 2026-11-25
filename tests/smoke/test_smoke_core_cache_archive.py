@@ -38,7 +38,10 @@ def cache_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
 
 def test_the_core_input_cache_folder_comes_back_with_its_owner_and_modes(cache_vm: SmokeVM) -> None:
     vm = cache_vm
-    had = vm.ssh(f"ls {ARCHIVE}.zst {ARCHIVE}.bz2 2>/dev/null", timeout=30).stdout.split()
+    # The box's own archives: an inventory that fails stops the test, so that a save never replaces an archive unseen
+    listed = vm.ssh(f'for a in {ARCHIVE}.zst {ARCHIVE}.bz2; do if [ -e "$a" ]; then echo "$a"; fi; done', timeout=30)
+    assert listed.returncode == 0, f"could not list the box's archives: {listed.stderr}"
+    had = listed.stdout.split()
     assert vm.ssh(f"test -e {CACHE}", timeout=30).returncode != 0, f"before: {CACHE} already exists"
     plant = (
         f"mkdir -m 700 {CACHE} && mkdir -m 700 {CACHE}/pfb_py_raw {CACHE}/pfb_py_raw/g7.abc && "
