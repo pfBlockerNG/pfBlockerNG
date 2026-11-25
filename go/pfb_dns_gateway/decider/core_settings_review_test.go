@@ -73,8 +73,8 @@ func TestOnCoreNoSettingsYetIsTheReasonGiven(t *testing.T) {
 	}
 }
 
-// A cached ini that is a symbolic link, writable by others or not this user's is not loaded at a start: it is removed,
-// and the start is one without settings until Core gives them.
+// A cached ini that is a symbolic link or writable by others is not loaded at a start: it is removed, and the start is
+// one without settings until Core gives them.
 func TestOnCoreAnUntrustedSettingsCacheIsNotLoaded(t *testing.T) {
 	for name, spoil := range map[string]func(ini string) error{
 		"a symbolic link": func(ini string) error {

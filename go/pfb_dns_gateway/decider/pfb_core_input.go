@@ -61,6 +61,15 @@ type coreFeed struct {
 	// lastSettingsErr is the last settings sync error logged.
 	newSettings     bool
 	lastSettingsErr string
+	// read is the settings and tables the ini gave when it last changed, which each try of the swap builds with: read once,
+	// so that what the read logs is logged once. nil: read at the build.
+	read *readSettings
+}
+
+// readSettings is what coreFeed.readSettings gives.
+type readSettings struct {
+	set    *pfbSettings
+	tables *snapshot
 }
 
 // bootCore boots the module in moduleDir on the Core API at socket. tick is the poller's tick source (nil: a
@@ -122,8 +131,9 @@ func (f *coreFeed) drain(stop <-chan struct{}) {
 	newSettings, err := coreinput.SyncSettings(ctx, f.client, f.dir)
 	f.logSettings(err)
 	if newSettings {
-		f.newSettings, f.retryIn, f.retryEvery = true, 0, 1
-		if set, _, err := f.readSettings(); err == nil {
+		f.newSettings, f.retryIn, f.retryEvery, f.read = true, 0, 1, nil
+		if set, tables, err := f.readSettings(); err == nil {
+			f.read = &readSettings{set, tables}
 			f.m.applyOptOuts(set)
 		}
 	}
@@ -135,7 +145,7 @@ func (f *coreFeed) drain(stop <-chan struct{}) {
 	case f.m.reloadRunSwap(f.build):
 		f.served, f.reported, f.pending = f.disk.Resources, false, false
 		if fresh {
-			f.newSettings = false
+			f.newSettings, f.read = false, nil
 			f.m.applyLiveSettings(prev)
 		}
 	default:
@@ -180,10 +190,14 @@ func (f *coreFeed) build() (*snapshot, error) {
 // ones. What init opens with the settings is opened first, so that the snapshot says what is open.
 func (f *coreFeed) buildSettings() (*snapshot, error) {
 	m := f.m
-	set, tables, err := f.readSettings()
-	if err != nil {
-		return nil, err
+	if f.read == nil {
+		set, tables, err := f.readSettings()
+		if err != nil {
+			return nil, err
+		}
+		f.read = &readSettings{set, tables}
 	}
+	set, tables := f.read.set, f.read.tables
 	if !m.sqlite3ResolverCon.Load() {
 		if m.validateDbWithRecovery(dbResolver) {
 			m.sqlite3ResolverCon.Store(true)
@@ -250,8 +264,9 @@ func (m *pfbUnbound) applyLiveSettings(prev *pfbSettings) {
 	} else {
 		m.stopControlWatcher()
 	}
-	if set.metricsClientIp && !prev.metricsClientIp {
-		m.dbCapturePrivacyEpochsFor(true)
+	// Captured again whenever the authority held is not the one wanted: an opt-out may have dropped it before this swap.
+	if epochs := m.metricsPrivacyEpochs.Load(); set.metricsClientIp != (epochs != nil && len(*epochs) > 0) {
+		m.dbCapturePrivacyEpochsFor(set.metricsClientIp)
 	}
 	if set.pythonControlLegacy && !prev.pythonControlLegacy {
 		warnIfLegacyControlEnabled(true)
