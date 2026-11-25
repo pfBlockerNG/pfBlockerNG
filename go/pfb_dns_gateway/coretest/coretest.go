@@ -43,8 +43,9 @@ func Digest(body []byte) string {
 type Cursor struct{ Generation, Digest string }
 
 // Server answers GetResources and GetResourceBody from Resources, GetSettings from the settings SetSettings gave (an
-// uninitialized Core until then), and records each ReportApplied; every other method is not_found. Like Core's store it keeps one baseline per resource besides the current body, the body Set replaced, and
-// answers a cursor at the baseline with the delta from it.
+// uninitialized Core until then), and records each ReportApplied; every other method is not_found. Like Core's store it
+// keeps one baseline per resource besides the current body, the body Set replaced, and answers a cursor at the baseline
+// with the delta from it.
 type Server struct {
 	Socket string
 

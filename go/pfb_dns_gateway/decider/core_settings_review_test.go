@@ -2,6 +2,8 @@
 package decider
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -68,5 +70,74 @@ func TestOnCoreNoSettingsYetIsTheReasonGiven(t *testing.T) {
 	m, _ := bootOnCore(t, t.TempDir(), deadSocket(t))
 	if got := m.snapshot.Load().dnsblUnbuilt; !strings.Contains(got, "No settings from Core yet") {
 		t.Errorf("dnsblUnbuilt = %q", got)
+	}
+}
+
+// A cached ini that is a symbolic link, writable by others or not this user's is not loaded at a start: it is removed,
+// and the start is one without settings until Core gives them.
+func TestOnCoreAnUntrustedSettingsCacheIsNotLoaded(t *testing.T) {
+	for name, spoil := range map[string]func(ini string) error{
+		"a symbolic link": func(ini string) error {
+			real := ini + ".real"
+			if err := os.Rename(ini, real); err != nil {
+				return err
+			}
+			return os.Symlink(real, ini)
+		},
+		"world-writable": func(ini string) error { return os.Chmod(ini, 0o666) },
+		"group-writable": func(ini string) error { return os.Chmod(ini, 0o620) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			ini := filepath.Join(dir, "pfb_unbound.ini")
+			if err := os.WriteFile(ini, []byte("[MAIN]\npython_enable = on\n[noAAAA]\n0 = v6.example,0\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := spoil(ini); err != nil {
+				t.Fatal(err)
+			}
+			m, _ := bootOnCore(t, dir, deadSocket(t))
+			if s := m.snapshot.Load(); s.settings.pythonEnable || len(s.noAAAADB) != 0 {
+				t.Errorf("the untrusted ini is loaded: python_enable %v, noAAAA %v", s.settings.pythonEnable, s.noAAAADB)
+			}
+			if _, err := os.Lstat(ini); !os.IsNotExist(err) {
+				t.Errorf("ini: %v, want it removed", err)
+			}
+		})
+	}
+}
+
+// A start from the cached settings takes forwarding from --observer too: the ini never holds it.
+func TestOnCoreACachedStartTakesForwardingFromTheObserverFlag(t *testing.T) {
+	dir := t.TempDir()
+	srv := coretest.Start(t, coreData("1", "a.example"))
+	srv.SetSettings(coretest.Settings())
+	_, ticks := bootOnCore(t, dir, srv.Socket)
+	ticks.settle()
+
+	m, err := bootCore(dir, testLogDir, deadSocket(t), true, make(coreTicks).source)
+	if err != nil {
+		t.Fatalf("bootCore: %v", err)
+	}
+	stopModule(t, m)
+	if s := m.snapshot.Load().settings; !s.pythonEnable || !s.forwarding {
+		t.Errorf("python_enable %v, forwarding %v; want both on", s.pythonEnable, s.forwarding)
+	}
+}
+
+// Reply logging turned on by a settings swap opens the GeoIP reader init left closed.
+func TestOnCoreReplyLoggingTurnedOnOpensTheGeoIPReader(t *testing.T) {
+	withGeoIP(t, "testdata/GeoLite2-Country-Test.mmdb")
+	srv := coretest.Start(t, coreData("1", "a.example"))
+	srv.SetSettings(coreSettings(map[string]any{"replyLogging": false}))
+	m, ticks := bootOnCore(t, t.TempDir(), srv.Socket)
+	ticks.settle()
+	if m.snapshot.Load().settings.pythonMaxmind {
+		t.Fatal("the GeoIP reader is in use with reply logging off")
+	}
+	srv.SetSettings(coretest.Settings())
+	ticks.settle()
+	if s := m.snapshot.Load().settings; !s.pythonReply || !s.pythonMaxmind {
+		t.Errorf("reply logging %v, GeoIP %v; want both on", s.pythonReply, s.pythonMaxmind)
 	}
 }
