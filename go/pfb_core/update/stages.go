@@ -781,8 +781,9 @@ func (u *updater) postHook() error {
 }
 
 // settle is stage 20: what the apply applied becomes the store's baseline and what it removed is deleted (a failed id
-// keeps its cursor), pfB-DNS's report is folded, and files a stopped removal left are swept (#4181). An apply that failed
-// fails the Update here, once what it applied is settled.
+// keeps its cursor), pfB-DNS's report is folded, and every file the index does not keep is swept: what a stopped
+// removal or a stopped Applied left (#4181). An apply that failed fails the Update here, once what it applied is
+// settled.
 func (u *updater) settle() error {
 	var errs []error
 	if u.applied != nil {

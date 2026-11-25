@@ -85,3 +85,99 @@ func TestSweepRemovesTheFilesOfAnIDTheIndexNoLongerHolds(t *testing.T) {
 		t.Errorf("the baseline serves %q, want [1.1.1.1]", got)
 	}
 }
+
+// Scenario: issue #4181. Applied saves the index with the new baseline and then prunes the old one; a Core stopped between
+// the two left the old baseline's body and the delta from it, and FoldApplied never calls Applied again for a generation
+// that already is the baseline.
+//
+// GIVEN an id whose Applied of its current generation stopped right after the index save
+// WHEN the writer sweeps the store
+// THEN the old baseline's body and the delta from it are gone, and the current body is kept and still served.
+func TestSweepRemovesTheOldBaselineAStoppedAppliedLeft(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "store")
+	s := Open(dir)
+	if _, err := s.Publish("dnsbl/kept", []string{"1.1.1.1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Applied("dnsbl/kept", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Publish("dnsbl/kept", []string{"2.2.2.2"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	stopAt(t, "index-renamed", func() { _ = s.Applied("dnsbl/kept", 2) })
+	if !slices.Contains(storeFiles(t, dir), "dnsbl~kept.1.body") {
+		t.Fatalf("before: %q, want the stopped Applied to leave the old baseline's body", storeFiles(t, dir))
+	}
+	kept := []string{"dnsbl~kept.2.body", "index.json"}
+
+	if err := s.Sweep(); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if got := storeFiles(t, dir); !slices.Equal(got, kept) {
+		t.Errorf("after the sweep:\n have %q\n want %q", got, kept)
+	}
+	if got := bodyLines(t, s, "dnsbl/kept", 2); !slices.Equal(got, []string{"2.2.2.2"}) {
+		t.Errorf("the current body serves %q, want [2.2.2.2]", got)
+	}
+}
+
+// GIVEN an id whose Applied of a generation the store does not hold, which clears the baseline, stopped right after the index
+// save
+// WHEN the writer sweeps the store
+// THEN the cleared baseline's body and the delta from it are gone, and the current body is kept.
+func TestSweepRemovesTheBaselineAStoppedClearingAppliedLeft(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "store")
+	s := Open(dir)
+	if _, err := s.Publish("dnsbl/kept", []string{"1.1.1.1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Applied("dnsbl/kept", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Publish("dnsbl/kept", []string{"2.2.2.2"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	stopAt(t, "index-renamed", func() { _ = s.Applied("dnsbl/kept", 99) })
+	if !slices.Contains(storeFiles(t, dir), "dnsbl~kept.1.body") {
+		t.Fatalf("before: %q, want the stopped Applied to leave the cleared baseline's body", storeFiles(t, dir))
+	}
+
+	if err := s.Sweep(); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if got, want := storeFiles(t, dir), []string{"dnsbl~kept.2.body", "index.json"}; !slices.Equal(got, want) {
+		t.Errorf("after the sweep:\n have %q\n want %q", got, want)
+	}
+	if got := bodyLines(t, s, "dnsbl/kept", 2); !slices.Equal(got, []string{"2.2.2.2"}) {
+		t.Errorf("the current body serves %q, want [2.2.2.2]", got)
+	}
+}
+
+// GIVEN an id removed from the configuration whose RemovalApplied has not come yet, with a baseline and a delta
+// WHEN the writer sweeps the store
+// THEN its files stay: its bodies are kept until RemovalApplied.
+func TestSweepKeepsTheFilesOfARemovedIDUntilRemovalApplied(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "store")
+	s := Open(dir)
+	if _, err := s.Publish("dnsbl/gone", []string{"1.1.1.1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Applied("dnsbl/gone", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Publish("dnsbl/gone", []string{"2.2.2.2"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Remove("dnsbl/gone"); err != nil {
+		t.Fatal(err)
+	}
+	want := storeFiles(t, dir)
+
+	if err := s.Sweep(); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if got := storeFiles(t, dir); !slices.Equal(got, want) {
+		t.Errorf("after the sweep:\n have %q\n want %q", got, want)
+	}
+}
