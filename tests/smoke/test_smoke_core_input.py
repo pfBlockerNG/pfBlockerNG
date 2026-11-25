@@ -7,7 +7,9 @@ own services:
   the package's settings adapter (``config.xml``) and ``--client-uid``/``--socket-group`` for ``unbound``, as the
   package's rc line admits pfB-DNS (#4250);
 * a second pfB-DNS (the package's pfb-dns) on 127.0.0.1:15353, ``--user unbound``, ``--core-socket`` that Core, and a
-  module directory of its own, so its cache folder is ``<module dir>/pfb_dns`` (#4251).
+  module directory of its own, so its cache folder is ``<module dir>/pfb_dns`` (#4251). Its upstream is the box's
+  127.0.0.1:53, which answers whether or not the package's own pfB-DNS stands in front of Unbound, and its control
+  socket has a folder of its own: pfB-DNS closes that folder to 0700, which would shut unbound out of the fence.
 
 What it proves:
 
@@ -124,7 +126,7 @@ def seed_store(vm: SmokeVM, fence: str, domains: list[str] | None, count: int = 
 def start_dns(vm: SmokeVM, fence: str, log: str) -> str:
     """pfB-DNS on the Core input, as unbound, on 127.0.0.1:PORT; its pid once it serves."""
     command = (
-        f"{DNS_BIN} --listen 127.0.0.1 --port {PORT} --upstream 127.0.0.1:5353 --ctl-socket {fence}/ctl.sock "
+        f"{DNS_BIN} --listen 127.0.0.1 --port {PORT} --upstream 127.0.0.1:53 --ctl-socket {fence}/ctl/ctl.sock "
         f"--module-dir {fence}/mod --core-socket {fence}/core/api.sock --user unbound --ready-file {READY}"
     )
     start = vm.ssh(f"nohup {command} </dev/null >{log} 2>&1 & echo $!", timeout=30)
