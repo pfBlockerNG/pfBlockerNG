@@ -35,3 +35,35 @@ func TestOnCoreWhatPfbDnsFetchedIsKeptInAFolderOfItsOwn(t *testing.T) {
 		t.Errorf("the cache folder is %v (%v), want pfB-DNS's alone (0700)", info, err)
 	}
 }
+
+// What stands at the cache folder's name is made pfB-DNS's own folder before anything is written there: a looser folder is
+// tightened to 0700, and a link or a file is replaced by a folder, so nothing is written through a link.
+func TestOnCoreTheCacheFolderIsMadePfbDnsOwnBeforeUse(t *testing.T) {
+	for name, plant := range map[string]func(cache, elsewhere string) error{
+		"a folder open to others": func(cache, _ string) error { return os.Mkdir(cache, 0o755) },
+		"a link to a folder":      func(cache, elsewhere string) error { return os.Symlink(elsewhere, cache) },
+		"a file":                  func(cache, _ string) error { return os.WriteFile(cache, []byte("x"), 0o600) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := coretest.Start(t, coreData("1", "a.example"))
+			srv.SetSettings(coretest.Settings())
+			dir, elsewhere := t.TempDir(), t.TempDir()
+			cache := filepath.Join(dir, "pfb_dns")
+			if err := plant(cache, elsewhere); err != nil {
+				t.Fatal(err)
+			}
+			m, ticks := bootOnCore(t, dir, srv.Socket)
+			ticks.settle()
+			info, err := os.Lstat(cache)
+			if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+				t.Fatalf("the cache folder is %v (%v), want a folder of pfB-DNS's alone (0700)", info, err)
+			}
+			if !serves(m, "a.example") {
+				t.Error("the generation is not served from the folder")
+			}
+			if left, _ := os.ReadDir(elsewhere); len(left) != 0 {
+				t.Errorf("%d entries were written through the link", len(left))
+			}
+		})
+	}
+}
