@@ -156,9 +156,12 @@ final class PythonWhitelistTldSegTest extends TestCase
 		$this->assertSame("example.com,0\nwild.org,1\n", pfb_unbound_python_whitelist());
 	}
 
-	public function testWriterEmitsFixedPythonTldSegment(): void
+	/** The options pfB-DNS no longer reads (#4036, owner 2026-11-25) are not written: they only ever held one value. */
+	public function testWriterEmitsNoOptionThatOnlyHeldOneValue(): void
 	{
 		$ini = $this->emitIni();
-		$this->assertMatchesRegularExpression('/^python_tld_seg\s*=\s*1$/m', $ini);
+		foreach (['python_tld_seg', 'python_blocking', 'python_idn', 'regex_warn_ms'] as $key) {
+			$this->assertDoesNotMatchRegularExpression('/^' . $key . '\s*=/m', $ini, "the ini still writes {$key}");
+		}
 	}
 }

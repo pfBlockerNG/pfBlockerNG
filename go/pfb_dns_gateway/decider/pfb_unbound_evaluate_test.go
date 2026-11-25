@@ -51,9 +51,6 @@ func evCaptureLog(t *testing.T) *evSyncBuffer {
 // evCfg is the per-query cfg of the Python tests' _cfg() with every presence gate off.
 func evCfg() evaluateConfig {
 	return evaluateConfig{
-		pythonBlocking:          true,
-		regexWarnMs:             REGEX_WARN_MS_DEFAULT,
-		pythonTldSeg:            2,
 		builtinLogFlag:          "0",
 		pythonIdnBlockMalicious: true,
 		regex:                   newRegexRuntime(),
@@ -222,20 +219,19 @@ func TestEvaluateDomainIdnArms(t *testing.T) {
 		evEval("xn--any1234.uuid1011.com", "com", false, cfg, matcherContainers{whiteDB: map[string]whiteEntry{"xn--any1234.uuid1011.com": evWhite(false, false, 2)}}),
 		dd{isFound: true, inWhitelist: true, nullBlocking: true, logType: "0", bType: "Python", pType: "Python", feed: "IDN", group: "DNSBL_IDN", bEval: "xn--any1234.uuid1011.com", groupOwner: "DNSBL_IDN", groupOrigin: "builtin"})
 
-	// oracle: cfg.get("idn_mode") absent (None) or unrecognised falls back to python_idn; an explicit "off" is not bypassed.
+	// An absent or unrecognised idn_mode is Off (python_idn is not read, owner 2026-11-25).
 	for _, row := range []struct {
-		name      string
-		mode      IdnMode
-		pythonIdn bool
-		blocked   bool
+		name    string
+		mode    IdnMode
+		blocked bool
 	}{
-		{"mode absent, python_idn on", "", true, true},
-		{"mode absent, python_idn off", "", false, false},
-		{"mode unrecognised, python_idn on", "bogus", true, true},
-		{"mode off wins over python_idn on", IdnModeOff, true, false},
+		{"mode absent", "", false},
+		{"mode unrecognised", "bogus", false},
+		{"mode off", IdnModeOff, false},
+		{"mode on", IdnModeAll, true},
 	} {
 		cfg := evCfgAll()
-		cfg.idnMode, cfg.pythonIdn = row.mode, row.pythonIdn
+		cfg.idnMode = row.mode
 		if got := evEval("xn--any1234.uuid1011.com", "com", false, cfg, matcherContainers{}); got.isFound != row.blocked {
 			t.Errorf("%s: isFound = %v, want %v", row.name, got.isFound, row.blocked)
 		}
@@ -246,7 +242,6 @@ func TestEvaluateDomainIdnArms(t *testing.T) {
 func TestEvaluateDomainTldAllow(t *testing.T) {
 	tldCfg := func(enabled bool, list ...string) evaluateConfig {
 		cfg := evCfg()
-		cfg.pythonBlocking = false
 		cfg.tldAllow, cfg.tldAllowList = enabled, list
 		return cfg
 	}
@@ -293,7 +288,7 @@ func TestEvaluateDomainTldAllow(t *testing.T) {
 
 	// A10: a dataDB hit wins outright.
 	cfg = tldCfg(true, "com")
-	cfg.pythonBlocking, cfg.dataDB = true, true
+	cfg.dataDB = true
 	if got := evEval("uuid-a10.org", "org", false, cfg, matcherContainers{}); !got.isFound || got.feed != "TLD_Allow" {
 		t.Errorf("A10 control: got %+v, want TLD_Allow", *got)
 	}
@@ -553,7 +548,7 @@ func evPslContainers(t *testing.T, roots []string, allowPrivate bool) matcherCon
 
 func evAllowCfg(list ...string) evaluateConfig {
 	cfg := evCfg()
-	cfg.pythonBlocking, cfg.tldAllow, cfg.tldAllowList = false, true, list
+	cfg.tldAllow, cfg.tldAllowList = true, list
 	return cfg
 }
 
@@ -730,13 +725,6 @@ func TestEvaluateDomainOracleRows(t *testing.T) {
 		dataDB: map[string]*blockEntry{"evil.com": evBlk("3", 1, PRIO_FEED_BLOCK)}, feedGroupIndexDB: fg}),
 		dd{isFound: true, nxdomain: true, nullBlocking: true, logType: "3", bType: "DNSBL_CNAME", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"})
 
-	// R8: python_blocking gates data and zone, not TLD-Allow.
-	evCheck(t, "R8 python_blocking off", evEval("evil.com", "com", false,
-		cfgOf(func(c *evaluateConfig) {
-			c.pythonBlocking, c.dataDB, c.tldAllow, c.tldAllowList = false, true, true, []string{"net"}
-		}),
-		matcherContainers{dataDB: dataEvil, feedGroupIndexDB: fg}),
-		dd{isFound: true, nullBlocking: true, logType: "0", bType: "Python", pType: "Python", feed: "TLD_Allow", group: "DNSBL_TLD_Allow", bEval: "evil.com", groupOwner: "DNSBL_TLD_Allow", groupOrigin: "builtin"})
 	// R9: the presence gates.
 	evCheck(t, "R9a dataDB gate off", evEval("evil.com", "com", false, evCfg(), matcherContainers{dataDB: dataEvil, feedGroupIndexDB: fg}), evNone)
 	evCheck(t, "R9b zoneDB gate off", evEval("a.evil.com", "com", false, evCfg(), matcherContainers{zoneDB: dataEvil, feedGroupIndexDB: fg}), evNone)
@@ -1481,11 +1469,9 @@ func evCfgDiff(got, want evaluateConfig) string {
 // settings (never from the pfbUnbound the swap does not refresh), the TLD-Allow list from the snapshot's frozen roots.
 func TestEvaluateCfg(t *testing.T) {
 	m := &pfbUnbound{regexRuntime: newRegexRuntime()}
-	m.pfb.pythonBlocking = false // a swap does not refresh this; the snapshot's settings decide
 	settings := &pfbSettings{
-		pythonBlocking: true, tldAllow: true, tldAllowList: []string{"com"},
-		pythonIdn: true, idnMode: IdnModeConfusable, pythonIdnBlockMalicious: false, pythonIdnEscalateSuspicious: true,
-		regexWarnMs: 7.5, pythonTldSeg: 3,
+		tldAllow: true, tldAllowList: []string{"com"},
+		idnMode: IdnModeConfusable, pythonIdnBlockMalicious: false, pythonIdnEscalateSuspicious: true,
 	}
 	snap := evSnapshot(settings)
 	snap.dataDB = map[string]*blockEntry{"evil.com": evBlk("1", 0, 1)}
@@ -1496,20 +1482,15 @@ func TestEvaluateCfg(t *testing.T) {
 	snap.hasTldAllowRoots, snap.tldAllowRoots = true, []string{"io"}
 
 	want := evaluateConfig{
-		pythonBlocking: true, dataDB: true, zoneDB: false, tldAllow: true, tldAllowList: []string{"io"},
-		pythonIdn: true, idnMode: IdnModeConfusable,
+		dataDB: true, zoneDB: false, tldAllow: true, tldAllowList: []string{"io"},
+		idnMode:                 IdnModeConfusable,
 		pythonIdnBlockMalicious: false, pythonIdnEscalateSuspicious: true,
 		regexDB: true, whiteDB: true, allowRegexDB: false, userRegexDB: true, userAllowRegexDB: false,
-		importantRules: true, regexWarnMs: 7.5, pythonTldSeg: 3,
+		importantRules: true,
 		builtinLogFlag: "1", regex: m.regexRuntime,
 	}
 	if diff := evCfgDiff(m.evaluateCfg(snap), want); diff != "" {
 		t.Errorf("evaluateCfg: %s", diff)
-	}
-
-	// test_adr07_regex_safety.py TestNoRuntimeEviction: the cfg carries the settings' warn ceiling.
-	if got := m.evaluateCfg(snap).regexWarnMs; got != settings.regexWarnMs {
-		t.Errorf("regexWarnMs = %v, want %v", got, settings.regexWarnMs)
 	}
 }
 
@@ -1517,7 +1498,7 @@ func TestEvaluateCfg(t *testing.T) {
 // settings.
 func TestEvaluateCfgGatesFollowTheSnapshot(t *testing.T) {
 	m := &pfbUnbound{regexRuntime: newRegexRuntime()}
-	settings := &pfbSettings{pythonBlocking: true}
+	settings := &pfbSettings{}
 	empty := evSnapshot(settings)
 	if cfg := m.evaluateCfg(empty); cfg.dataDB || cfg.zoneDB || cfg.whiteDB || cfg.regexDB || cfg.allowRegexDB || cfg.userRegexDB || cfg.userAllowRegexDB || cfg.importantRules {
 		t.Errorf("an empty snapshot: got gates %+v, want all off", cfg)
@@ -1533,22 +1514,20 @@ func TestEvaluateCfgGatesFollowTheSnapshot(t *testing.T) {
 	}
 }
 
-// _evaluate_cfg: idn_mode is the stored mode unless it is absent, then the legacy python_idn (the explicit Off is not
-// bypassed, ADR-28); tld_allow_list is the snapshot's frozen roots, else the settings' list normalised.
+// _evaluate_cfg: idn_mode is the stored mode, Off when it is absent (python_idn is not read, owner 2026-11-25);
+// tld_allow_list is the snapshot's frozen roots, else the settings' list normalised.
 func TestEvaluateCfgIdnModeAndTldRoots(t *testing.T) {
 	m := &pfbUnbound{regexRuntime: newRegexRuntime()}
 	for _, row := range []struct {
-		name      string
-		mode      IdnMode
-		pythonIdn bool
-		want      IdnMode
+		name string
+		mode IdnMode
+		want IdnMode
 	}{
-		{"absent, python_idn on", "", true, IdnModeAll},
-		{"absent, python_idn off", "", false, IdnModeOff},
-		{"off wins over python_idn on", IdnModeOff, true, IdnModeOff},
-		{"confusable is kept", IdnModeConfusable, false, IdnModeConfusable},
+		{"absent", "", IdnModeOff},
+		{"off", IdnModeOff, IdnModeOff},
+		{"confusable is kept", IdnModeConfusable, IdnModeConfusable},
 	} {
-		if got := m.evaluateCfg(evSnapshot(&pfbSettings{idnMode: row.mode, pythonIdn: row.pythonIdn})).idnMode; got != row.want {
+		if got := m.evaluateCfg(evSnapshot(&pfbSettings{idnMode: row.mode})).idnMode; got != row.want {
 			t.Errorf("idn_mode %s: got %q, want %q", row.name, got, row.want)
 		}
 	}

@@ -12895,35 +12895,6 @@
     }
    }
   },
-  "parity-allow-tld-seg": {
-   "resources": {
-    "dnsbl/feed-Feed": {
-     "metadata": {},
-     "body": [
-      "sub.wild-ok.example",
-      "x.deep.seg-ok.example"
-     ]
-    },
-    "dnsbl/manifest": {
-     "metadata": {
-      "entries": 2,
-      "feeds": 1,
-      "groups": [
-       {
-        "name": "Group",
-        "entries": 2
-       }
-      ]
-     },
-     "body": [
-      "{\"kind\":\"config\",\"builtinLogFlag\":\"0\",\"top1mEnabled\":false}",
-      "{\"kind\":\"feed\",\"position\":1,\"feed\":\"Feed\",\"group\":\"Group\",\"logFlag\":\"1\",\"provenance\":\"feed\",\"mode\":\"deny\",\"top1m\":false,\"resource\":\"dnsbl/feed-Feed\",\"generation\":\"1\",\"digest\":\"a46fc751e0f5b4398276532441c89601\",\"entries\":2}",
-      "{\"kind\":\"whitelist\",\"domain\":\".deep.seg-ok.example\"}",
-      "{\"kind\":\"whitelist\",\"domain\":\".wild-ok.example\"}"
-     ]
-    }
-   }
-  },
   "parity-cname-memo-order": {
    "resources": {
     "dnsbl/feed-VipFeed": {
@@ -13411,20 +13382,6 @@
    }
   },
   "parity-idn-confusable-escalate": {
-   "resources": {
-    "dnsbl/manifest": {
-     "metadata": {
-      "entries": 0,
-      "feeds": 0,
-      "groups": []
-     },
-     "body": [
-      "{\"kind\":\"config\",\"builtinLogFlag\":\"1\",\"top1mEnabled\":false}"
-     ]
-    }
-   }
-  },
-  "parity-idn-legacy-on": {
    "resources": {
     "dnsbl/manifest": {
      "metadata": {
@@ -14156,32 +14113,6 @@
       "{\"section\":\"icann\",\"rule\":\"org.uk\"}",
       "{\"section\":\"icann\",\"rule\":\"uk\"}",
       "{\"section\":\"private\",\"rule\":\"pages.com\"}"
-     ]
-    }
-   }
-  },
-  "parity-python-blocking-off": {
-   "resources": {
-    "dnsbl/feed-VipFeed": {
-     "metadata": {},
-     "body": [
-      "blocked.example"
-     ]
-    },
-    "dnsbl/manifest": {
-     "metadata": {
-      "entries": 1,
-      "feeds": 1,
-      "groups": [
-       {
-        "name": "VipGroup",
-        "entries": 1
-       }
-      ]
-     },
-     "body": [
-      "{\"kind\":\"config\",\"builtinLogFlag\":\"0\",\"top1mEnabled\":false}",
-      "{\"kind\":\"feed\",\"position\":1,\"feed\":\"VipFeed\",\"group\":\"VipGroup\",\"logFlag\":\"1\",\"provenance\":\"feed\",\"mode\":\"deny\",\"top1m\":false,\"resource\":\"dnsbl/feed-VipFeed\",\"generation\":\"1\",\"digest\":\"371b3c33fd4fe295272f9ef2bdd44daf\",\"entries\":1}"
      ]
     }
    }

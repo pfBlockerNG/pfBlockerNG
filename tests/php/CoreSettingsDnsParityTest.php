@@ -169,8 +169,7 @@ final class CoreSettingsDnsParityTest extends TestCase
 			$this->assertSame(1, preg_match('/^' . $key . '\t= (.*)$/m', $ini, $m), "{$case['id']}: the ini has {$key}:\n{$ini}");
 			$this->assertSame($expected, $this->native($field, $m[1]), "{$case['id']}: {$field} from ini {$key} = '{$m[1]}'");
 			if ($field === 'idnMode') {
-				$legacy = $expected === 'on' ? 'on' : 'off';
-				$this->assertStringContainsString("\npython_idn\t= {$legacy}\n", $ini, "{$case['id']}: python_idn is on exactly for IDN mode on");
+				$this->assertStringNotContainsString("\npython_idn\t", $ini, "{$case['id']}: python_idn, which pfB-DNS no longer reads, is not written");
 			}
 		}
 	}

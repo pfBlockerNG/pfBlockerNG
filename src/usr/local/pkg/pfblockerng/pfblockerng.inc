@@ -19332,7 +19332,6 @@ function pfb_unbound_python_ini($mode, ?string $now = NULL): string {
 	$python_enable = ($mode == 'enabled') ? 'on' : 'off';
 	$metrics_client_ip = PfbConfig::read('gen/pfb_metrics_client_ip') === PfbToggle::On ? 'on' : 'off';
 	$python_reply = ($pfb['dnsbl_py_reply'] === PfbToggle::On) ? 'on' : 'off';
-	$python_blocking = 'on';
 	$dnsbl_tld_wildcard = $pfb['dnsbl_tld_wildcard'];
 	$python_tld_wildcard = !empty($dnsbl_tld_wildcard) ? 'on' : 'off';
 	$psl_include_private = ($pfb['dnsbl_psl_include_private'] === PfbToggle::On) ? 'on' : 'off';
@@ -19341,7 +19340,6 @@ function pfb_unbound_python_ini($mode, ?string $now = NULL): string {
 	$psl_feed_icann_policy = $pfb['dnsbl_psl_feed_icann_policy']->toStored();
 
 	$idn_mode = $pfb['dnsbl_idn']->toStored();
-	$python_idn = ($pfb['dnsbl_idn'] === PfbIdnMode::All) ? 'on' : 'off';
 	$python_idn_block_malicious = (pfb_cfg_toggle_read($pfb['dnsbl_idn_block_malicious']) === PfbToggle::On) ? 'on' : 'off';
 	$python_idn_escalate_suspicious = (pfb_cfg_toggle_read($pfb['dnsbl_idn_escalate_suspicious']) === PfbToggle::On) ? 'on' : 'off';
 	$python_cname = ($pfb['dnsbl_cname'] === PfbToggle::On) ? 'on' : 'off';
@@ -19376,17 +19374,14 @@ function pfb_unbound_python_ini($mode, ?string $now = NULL): string {
 python_enable	= {$python_enable}
 metrics_client_ip	= {$metrics_client_ip}
 python_reply	= {$python_reply}
-python_blocking	= {$python_blocking}
 python_tld_wildcard	= {$python_tld_wildcard}
 psl_include_private	= {$psl_include_private}
 psl_allow_private	= {$psl_allow_private}
 psl_feed_private_policy	= {$psl_feed_private_policy}
 psl_feed_icann_policy	= {$psl_feed_icann_policy}
-python_idn	= {$python_idn}
 idn_mode	= {$idn_mode}
 python_idn_block_malicious	= {$python_idn_block_malicious}
 python_idn_escalate_suspicious	= {$python_idn_escalate_suspicious}
-python_tld_seg	= 1
 decisiondb_max	= {$decisiondb_max}
 tld_allow	= {$tld_allow}
 tld_allow_list	= {$tld_allow_list}

@@ -59,13 +59,6 @@ const (
 	IdnModeOff        IdnMode = IDN_MODE_OFF
 )
 
-func idnModeFromLegacy(pythonIdn bool) IdnMode {
-	if pythonIdn {
-		return IdnModeAll
-	}
-	return IdnModeOff
-}
-
 // pfbSettings is the pfb dict init_standard fills: the settings a decision reads, the DNSBL files, the ini toggles.
 // important_rules is the snapshot's own importantRules, and group_policy and the thread flags are set only by code that
 // is not translated yet, so they are not here. The sqlite flags are pfbUnbound's own (pfb_unbound_sqlite.go).
@@ -73,13 +66,10 @@ type pfbSettings struct {
 	metricsClientIp             bool
 	pythonEnable                bool
 	pythonReply                 bool
-	pythonBlocking              bool
 	pythonTldWildcard           bool
-	pythonIdn                   bool
 	idnMode                     IdnMode
 	pythonIdnBlockMalicious     bool
 	pythonIdnEscalateSuspicious bool
-	pythonTldSeg                int64
 	decisiondbMax               int64
 	tldAllow                    bool
 	tldAllowList                []string
@@ -93,7 +83,6 @@ type pfbSettings struct {
 	pythonControlLegacy         bool
 	forwarding                  bool
 	regexCap                    bool
-	regexWarnMs                 float64
 	pythonBlacklist             bool
 
 	// The "<x>DB loaded" flags a loader sets and operate() reads. dataDB, zoneDB, whiteDB, regexDB and allowRegexDB
@@ -337,32 +326,20 @@ func (m *pfbUnbound) loadIniSettings(config *configParser, pfb *pfbSettings, scr
 		if err := mainBool("python_reply", &pfb.pythonReply); err != nil {
 			return err
 		}
-		if err := mainBool("python_blocking", &pfb.pythonBlocking); err != nil {
-			return err
-		}
 		if err := mainBool("python_tld_wildcard", &pfb.pythonTldWildcard); err != nil {
 			return err
 		}
-		if err := mainBool("python_idn", &pfb.pythonIdn); err != nil {
-			return err
-		}
-		// ADR-08: the IDN mode. A present idn_mode wins, '' being an explicit Off; an absent or unrecognised
-		// one falls back to the legacy python_idn.
+		// ADR-08: the IDN mode; '' and an absent or unrecognised one are Off. python_idn, the legacy switch PHP still
+		// writes as a copy of idn_mode, is not read (owner, 2026-11-25).
 		if config.hasOption("MAIN", "idn_mode") {
 			raw, err := config.get("MAIN", "idn_mode")
 			if err != nil {
 				return mainOptionError("idn_mode", err)
 			}
 			switch rawIdn := pysem.Lower(pyStrip(raw)); rawIdn {
-			case "":
-				pfb.idnMode = IdnModeOff
 			case IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE:
 				pfb.idnMode = IdnMode(rawIdn)
-			default:
-				pfb.idnMode = idnModeFromLegacy(pfb.pythonIdn)
 			}
-		} else {
-			pfb.idnMode = idnModeFromLegacy(pfb.pythonIdn)
 		}
 		if err := mainBool("python_idn_block_malicious", &pfb.pythonIdnBlockMalicious); err != nil {
 			return err
@@ -370,16 +347,8 @@ func (m *pfbUnbound) loadIniSettings(config *configParser, pfb *pfbSettings, scr
 		if err := mainBool("python_idn_escalate_suspicious", &pfb.pythonIdnEscalateSuspicious); err != nil {
 			return err
 		}
-		// issue #713: a malformed python_tld_seg / decisiondb_max keeps the current value.
-		if config.hasOption("MAIN", "python_tld_seg") {
-			parsedTldSeg, ok, err := parseIniInt(config, "MAIN", "python_tld_seg")
-			if err != nil {
-				return mainOptionError("python_tld_seg", err)
-			}
-			if ok {
-				pfb.pythonTldSeg = parsedTldSeg
-			}
-		}
+		// issue #713: a malformed decisiondb_max keeps the current value. python_blocking (always on), python_tld_seg
+		// (always 1), python_idn and regex_warn_ms (never written) are not read (owner, 2026-11-25).
 		if config.hasOption("MAIN", "decisiondb_max") {
 			parsedDecisiondbMax, ok, err := parseIniInt(config, "MAIN", "decisiondb_max")
 			if err != nil {
@@ -425,25 +394,16 @@ func (m *pfbUnbound) loadIniSettings(config *configParser, pfb *pfbSettings, scr
 			return err
 		}
 
-		// ADR-07: regex_cap is the opt-in length cap; a malformed regex_warn_ms keeps the default.
+		// ADR-07: regex_cap is the opt-in length cap.
 		if err := mainBool("regex_cap", &pfb.regexCap); err != nil {
 			return err
-		}
-		if config.hasOption("MAIN", "regex_warn_ms") {
-			regexWarnMs, err := config.getfloat("MAIN", "regex_warn_ms")
-			switch {
-			case err == nil:
-				pfb.regexWarnMs = regexWarnMs
-			case !isValueError(err):
-				return mainOptionError("regex_warn_ms", err)
-			}
 		}
 
 	}
 
 	if pfb.pythonEnable {
 		// Enable the Blacklist functions (IDN): any active IDN mode needs the blacklist machinery.
-		if pfb.pythonIdn || pfb.idnMode != IdnModeOff {
+		if pfb.idnMode != IdnModeOff {
 			pfb.pythonBlacklist = true
 		}
 
@@ -495,7 +455,6 @@ func newModuleSettings(moduleDir string) pfbSettings {
 	p.pslIncludePrivate = true
 	p.pslFeedPrivatePolicy = "honor"
 	p.pslFeedIcannPolicy = "honor"
-	p.regexWarnMs = REGEX_WARN_MS_DEFAULT
 	p.decisiondbMax = 10000
 
 	in := func(name string) string { return filepath.Join(moduleDir, name) }

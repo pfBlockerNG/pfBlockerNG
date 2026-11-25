@@ -125,8 +125,7 @@ func (f *fields) list(name, key string) []string {
 // settingsIni is pfb_unbound.ini as pfb_unbound_python_ini() writes it for these settings, with three departures: no
 // creation time, so that the same settings give the same bytes; no forwarding, which is the gateway's --observer; and a %
 // in a value configparser interpolates is written %%, so that it reads back as written instead of failing the ini.
-// python_enable, python_blocking and python_tld_seg are the constants today's writer gives on a box where pfB-DNS hosts
-// DNSBL.
+// python_enable is the constant today's writer gives on a box where pfB-DNS hosts DNSBL.
 func settingsIni(dns, policy map[string]any) ([]byte, error) {
 	if dns == nil || policy == nil {
 		return nil, errors.New("the dns or policy/dnsbl projection is missing")
@@ -160,17 +159,14 @@ func settingsIni(dns, policy map[string]any) ([]byte, error) {
 		{"python_enable", "on"},
 		{"metrics_client_ip", onOff(d.flag("metricsClientIp"))},
 		{"python_reply", onOff(d.flag("replyLogging"))},
-		{"python_blocking", "on"},
 		{"python_tld_wildcard", onOff(d.flag("tldWildcard"))},
 		{"psl_include_private", onOff(d.flag("pslIncludePrivate"))},
 		{"psl_allow_private", onOff(d.flag("pslAllowPrivate"))},
 		{"psl_feed_private_policy", escape(d.text("pslFeedPrivatePolicy"))},
 		{"psl_feed_icann_policy", escape(d.text("pslFeedIcannPolicy"))},
-		{"python_idn", onOff(idnMode == "on")},
 		{"idn_mode", escape(storedIdn)},
 		{"python_idn_block_malicious", onOff(d.flag("idnBlockMalicious"))},
 		{"python_idn_escalate_suspicious", onOff(d.flag("idnEscalateSuspicious"))},
-		{"python_tld_seg", "1"},
 		{"decisiondb_max", strconv.FormatInt(d.count("decisionCacheMax"), 10)},
 		{"tld_allow", onOff(tldAllow)},
 		{"tld_allow_list", escape(strings.Join(tldList, ","))},

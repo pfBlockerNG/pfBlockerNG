@@ -1,6 +1,6 @@
-// Rows added after a mutation run over pfb_unbound_evaluate_test.go left them alive: the band ties between the
-// discovery and the re-scan, the built-in strata's feed band under the numeric path, the tie order inside
-// scanBlockBand, and the CNAME allow band taking the higher of the two names. The expected decisions of the evaluate
+// Rows added after a mutation run over pfb_unbound_evaluate_test.go left them alive: the built-in strata's feed band
+// under the numeric path, the tie order inside scanBlockBand, and the CNAME allow band taking the higher of the two
+// names. The expected decisions of the evaluate
 // rows were produced by running evaluate_domain in Python (uv run python, Python 3.11, this worktree).
 package decider
 
@@ -8,30 +8,6 @@ import "testing"
 
 func TestEvaluateDomainBandTiesAndBuiltinBands(t *testing.T) {
 	fg := map[int]feedGroup{1: {"FeedA", "GroupA"}}
-	// python_blocking off: the discovery skips data and zone, but the numeric re-scan still reads them.
-	numeric := func(over func(*evaluateConfig)) evaluateConfig {
-		cfg := evCfg()
-		cfg.pythonBlocking, cfg.importantRules = false, true
-		over(&cfg)
-		return cfg
-	}
-
-	// A tie keeps the discovered attribution: TLD_Allow (band 1) against a data entry of band 1.
-	evCheck(t, "E1 a tie with the TLD_Allow discovery", evEval("x.example.net", "net", false,
-		numeric(func(c *evaluateConfig) { c.dataDB, c.tldAllow, c.tldAllowList = true, true, []string{"com"} }),
-		matcherContainers{dataDB: map[string]*blockEntry{"x.example.net": evBlk("2", 1, PRIO_FEED_BLOCK)}, feedGroupIndexDB: fg}),
-		dd{isFound: true, nullBlocking: true, logType: "0", bType: "Python", pType: "Python", feed: "TLD_Allow", group: "DNSBL_TLD_Allow", bEval: "x.example.net", groupOwner: "DNSBL_TLD_Allow", groupOrigin: "builtin"})
-	// A strictly higher band wins: the important data entry (band 3) takes over from TLD_Allow.
-	evCheck(t, "E1b a higher band wins over the TLD_Allow discovery", evEval("x.example.net", "net", false,
-		numeric(func(c *evaluateConfig) { c.dataDB, c.tldAllow, c.tldAllowList = true, true, []string{"com"} }),
-		matcherContainers{dataDB: map[string]*blockEntry{"x.example.net": evBlk("2", 1, PRIO_FEED_BLOCK_IMPORTANT)}, feedGroupIndexDB: fg}),
-		dd{isFound: true, nullBlocking: true, logType: "2", bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "x.example.net", groupOwner: "GroupA", groupOrigin: "custom"})
-	// A tie keeps the discovered user regex against a data entry of the same band, which the re-scan reads first.
-	evCheck(t, "E2 a tie with the regex discovery", evEval("evil.com", "com", false,
-		numeric(func(c *evaluateConfig) { c.dataDB, c.userRegexDB = true, true }),
-		matcherContainers{dataDB: map[string]*blockEntry{"evil.com": evBlk("2", 1, PRIO_USER_BLOCK)}, userRegexDB: evRegexDB(evRx("U#0", "evil", PRIO_USER_BLOCK)), feedGroupIndexDB: fg}),
-		dd{isFound: true, nullBlocking: true, logType: "0", bType: "Python", pType: "Python", feed: "U#0", group: "DNSBL_Regex", bEval: "evil.com"})
-
 	// The IDN blocks carry the feed band, so under the numeric path with no allow they stand (band 1 > 0), where a
 	// band of 0 would read as already overridden.
 	cfg := evCfg()

@@ -51,7 +51,6 @@ func opInstall(t *testing.T, m *pfbUnbound, set func(*pfbSettings), fill func(*s
 // opEnable is the Python tests' _enable: the DNSBL gate on, Python blocking on.
 func opEnable(s *pfbSettings) {
 	s.pythonBlacklist = true
-	s.pythonBlocking = true
 }
 
 func opBlockData(s *snapshot, name, log string, index int) {

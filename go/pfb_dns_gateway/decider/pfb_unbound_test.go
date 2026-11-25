@@ -62,7 +62,6 @@ func modDefaults(dir string) pfbSettings {
 		pslIncludePrivate:       true,
 		pslFeedPrivatePolicy:    "honor",
 		pslFeedIcannPolicy:      "honor",
-		regexWarnMs:             10.0,
 		decisiondbMax:           10000,
 
 		pfbUnboundIni:       in("pfb_unbound.ini"),
@@ -154,13 +153,7 @@ func TestIntOfKeepsTheValueOrSaturates(t *testing.T) {
 	}
 }
 
-func TestIdnModeFromLegacy(t *testing.T) {
-	if got := idnModeFromLegacy(true); got != IdnModeAll {
-		t.Errorf("idnModeFromLegacy(true) = %q, want %q", got, IdnModeAll)
-	}
-	if got := idnModeFromLegacy(false); got != IdnModeOff {
-		t.Errorf("idnModeFromLegacy(false) = %q, want %q: Confusable cannot arise from the legacy flag", got, IdnModeOff)
-	}
+func TestIdnModeTokens(t *testing.T) {
 	for mode, token := range map[IdnMode]string{IdnModeAll: "on", IdnModeConfusable: "confusable", IdnModeOff: "off"} {
 		if string(mode) != token {
 			t.Errorf("IdnMode backing value = %q, want %q (the canonical ini token)", string(mode), token)
@@ -171,29 +164,24 @@ func TestIdnModeFromLegacy(t *testing.T) {
 	}
 }
 
-// The 14 ini-value x python_idn rows of test_adr28_cfg_adapters.py, plus case folding.
+// The idn_mode rows of test_adr28_cfg_adapters.py, plus case folding. python_idn is not read (owner, 2026-11-25): each
+// row carries python_idn = on, and an idn_mode that is absent, empty or not a mode is Off.
 func TestInitStandardIdnModeTruthTable(t *testing.T) {
 	for _, tc := range []struct {
-		iniValue  string
-		present   bool
-		pythonIdn bool
-		want      IdnMode
+		iniValue string
+		present  bool
+		want     IdnMode
 	}{
-		{"off", true, true, IdnModeOff}, {"off", true, false, IdnModeOff},
-		{"on", true, true, IdnModeAll}, {"on", true, false, IdnModeAll},
-		{"confusable", true, true, IdnModeConfusable}, {"confusable", true, false, IdnModeConfusable},
-		{"all", true, true, IdnModeAll}, {"all", true, false, IdnModeOff}, // the dropped alpha token falls back to python_idn
-		{"bogus", true, true, IdnModeAll}, {"bogus", true, false, IdnModeOff},
-		{"", true, true, IdnModeOff}, {"", true, false, IdnModeOff}, // present empty is an explicit Off
-		{"", false, true, IdnModeAll}, {"", false, false, IdnModeOff}, // absent falls back to python_idn
-		{"CONFUSABLE", true, false, IdnModeConfusable}, {"ON", true, false, IdnModeAll}, {"Off", true, true, IdnModeOff},
+		{"off", true, IdnModeOff}, {"on", true, IdnModeAll}, {"confusable", true, IdnModeConfusable},
+		{"all", true, IdnModeOff}, {"bogus", true, IdnModeOff}, {"", true, IdnModeOff}, {"", false, IdnModeOff},
+		{"CONFUSABLE", true, IdnModeConfusable}, {"ON", true, IdnModeAll}, {"Off", true, IdnModeOff},
 	} {
-		lines := []string{"python_enable = false", fmt.Sprintf("python_idn = %v", tc.pythonIdn)}
+		lines := []string{"python_enable = false", "python_idn = on"}
 		if tc.present {
 			lines = append(lines, "idn_mode = "+tc.iniValue)
 		}
 		if got := modMain(t, lines...).pfb.idnMode; got != tc.want {
-			t.Errorf("idn_mode=%q (present=%v) python_idn=%v: idnMode = %q, want %q", tc.iniValue, tc.present, tc.pythonIdn, got, tc.want)
+			t.Errorf("idn_mode=%q (present=%v): idnMode = %q, want %q", tc.iniValue, tc.present, got, tc.want)
 		}
 	}
 }
@@ -336,9 +324,7 @@ var modBoolKeys = []modBoolKey{
 	{"metrics_client_ip", func(p *pfbSettings) bool { return p.metricsClientIp }, false},
 	{"python_enable", func(p *pfbSettings) bool { return p.pythonEnable }, false},
 	{"python_reply", func(p *pfbSettings) bool { return p.pythonReply }, false},
-	{"python_blocking", func(p *pfbSettings) bool { return p.pythonBlocking }, false},
 	{"python_tld_wildcard", func(p *pfbSettings) bool { return p.pythonTldWildcard }, false},
-	{"python_idn", func(p *pfbSettings) bool { return p.pythonIdn }, false},
 	{"python_idn_block_malicious", func(p *pfbSettings) bool { return p.pythonIdnBlockMalicious }, true},
 	{"python_idn_escalate_suspicious", func(p *pfbSettings) bool { return p.pythonIdnEscalateSuspicious }, false},
 	{"tld_allow", func(p *pfbSettings) bool { return p.tldAllow }, false},
@@ -373,11 +359,9 @@ func TestInitStandardReadsEveryMainBoolean(t *testing.T) {
 }
 
 func TestInitStandardReadsStringIntAndFloatKeys(t *testing.T) {
-	dir := modIniDir(t, "[MAIN]\npython_tld_seg = 3\ndecisiondb_max = 500\nregex_warn_ms = 2.5\ntld_allow_list = COM, net\n")
+	dir := modIniDir(t, "[MAIN]\ndecisiondb_max = 500\ntld_allow_list = COM, net\n")
 	want := modDefaults(dir)
-	want.pythonTldSeg = 3
 	want.decisiondbMax = 500
-	want.regexWarnMs = 2.5
 	want.tldAllowList = []string{"com", "net"}
 	modDiff(t, "string, int and float keys", modMust(t, dir).pfb, want)
 
@@ -389,9 +373,9 @@ func TestInitStandardReadsStringIntAndFloatKeys(t *testing.T) {
 }
 
 func TestInitStandardMalformedNumbersKeepTheirDefaults(t *testing.T) {
-	dir := modIniDir(t, "[MAIN]\npython_tld_seg = abc\ndecisiondb_max = 1.5\nregex_warn_ms = abc\nforwarding = on\n")
+	dir := modIniDir(t, "[MAIN]\ndecisiondb_max = 1.5\nforwarding = on\n")
 	want := modDefaults(dir)
-	want.forwarding = true // the read went on past the three malformed numbers
+	want.forwarding = true // the read went on past the malformed number
 	modDiff(t, "malformed numbers", modMust(t, dir).pfb, want)
 }
 
@@ -418,11 +402,11 @@ func TestInitStandardDerivesPythonBlacklist(t *testing.T) {
 		lines []string
 		want  bool
 	}{
-		{"python_idn on", []string{"python_idn = on"}, true},
+		{"python_idn on is not read", []string{"python_idn = on"}, false},
 		{"idn_mode on", []string{"idn_mode = on"}, true},
 		{"idn_mode confusable", []string{"idn_mode = confusable"}, true},
-		{"idn_mode off but python_idn on", []string{"idn_mode = off", "python_idn = on"}, true},
-		{"idn_mode empty, python_idn off", []string{"idn_mode =", "python_idn = off"}, false},
+		{"idn_mode off", []string{"idn_mode = off", "python_idn = on"}, false},
+		{"idn_mode empty", []string{"idn_mode =", "python_idn = off"}, false},
 		{"tld_allow with a list", []string{"tld_allow = on", "tld_allow_list = com"}, true},
 		{"tld_allow with an empty list", []string{"tld_allow = on", "tld_allow_list ="}, false},
 		{"tld_allow with a blank list", []string{"tld_allow = on", "tld_allow_list =  , "}, false}, // issue #713
@@ -435,7 +419,7 @@ func TestInitStandardDerivesPythonBlacklist(t *testing.T) {
 		}
 	}
 	// The derivation only runs when python_enable is on.
-	m := modMain(t, "python_enable = off", "python_idn = on", "tld_allow = on", "tld_allow_list = com")
+	m := modMain(t, "python_enable = off", "idn_mode = on", "tld_allow = on", "tld_allow_list = com")
 	if m.pfb.pythonBlacklist {
 		t.Errorf("python_enable off: pythonBlacklist = true, want false")
 	}
@@ -446,9 +430,7 @@ func TestInitStandardFailsWhereTheIniReadRaisesInPython(t *testing.T) {
 		{"python_enable = maybe", "python_enable", "Not a boolean: maybe"},
 		{"forwarding = 2", "forwarding", "Not a boolean: 2"},
 		{"python_idn_block_malicious =", "python_idn_block_malicious", "Not a boolean: "},
-		{"python_tld_seg = 5%", "python_tld_seg", "'%' must be followed by '%' or '('"}, // _parse_ini_int only swallows ValueError
 		{"decisiondb_max = %(nope)s", "decisiondb_max", "Bad value substitution"},
-		{"regex_warn_ms = 5%", "regex_warn_ms", "'%' must be followed by '%' or '('"},
 		{"idn_mode = 5%", "idn_mode", "'%' must be followed by '%' or '('"},
 		{"tld_allow_list = %q", "tld_allow_list", "'%' must be followed by '%' or '('"},
 		{"psl_feed_private_policy = %z", "psl_feed_private_policy", "'%' must be followed by '%' or '('"},

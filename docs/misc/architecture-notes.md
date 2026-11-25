@@ -58,7 +58,7 @@ Custom_List `/re/` and `@@/re/` rows) live in their own containers (`userRegexDB
 the sum of its rules and nothing caps it, and an uncached numeric-precedence query scans the
 block lists twice and the allow lists once. The always-on runtime guard times every match: it
 logs one warning per slow rule per list (user/feed, block/allow) and one line per list whose scan sums over the warn ceiling
-(`regex_warn_ms`, 10 ms), and never removes a rule from the live databases. Pinned by
+(`REGEX_WARN_MS_DEFAULT`, 10 ms; the ini's `regex_warn_ms`, which nothing wrote, is no longer read), and never removes a rule from the live databases. Pinned by
 `tests/test_adr07_*` (decision spec/oracle, parser, matcher strata, emit/wire, regex safety, PHP boundary);
 the regex/ReDoS kill-gate is
 `legacy/benchmarks/spike_adr07_regex.py` — it exits non-zero on NO-GO (`--report-only` forces exit 0),
