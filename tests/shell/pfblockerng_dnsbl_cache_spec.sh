@@ -103,6 +103,39 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     cleanup_sandbox
   End
 
+  # issue #4251: the Core input's cache folder, whole: what pfB-DNS fetched, Core's own PSL among it.
+  plant_core_cache() {
+    mkdir -p "${pfbchroot}/pfb_dns/pfb_py_raw/g7.abc"
+    chmod 700 "${pfbchroot}/pfb_dns"
+    echo 'CORE-PSL-v7' > "${pfbchroot}/pfb_dns/dnsbl_psl"
+    echo 'feed-body' > "${pfbchroot}/pfb_dns/pfb_py_raw/g7.abc/feed-F"
+    echo '{"version":1}' > "${pfbchroot}/pfb_dns/pfb_py_core.json"
+    chmod 600 "${pfbchroot}/pfb_dns/dnsbl_psl" "${pfbchroot}/pfb_dns/pfb_py_core.json" "${pfbchroot}/pfb_dns/pfb_py_raw/g7.abc/feed-F"
+  }
+
+  save_restore_core_cache() {
+    dc save
+    rm -rf "${pfbchroot}"
+    dc restore
+    stat -c '%a %n' "${pfbchroot}/pfb_dns" "${pfbchroot}/pfb_dns/pfb_py_core.json" 2>/dev/null \
+      || stat -f '%Lp %N' "${pfbchroot}/pfb_dns" "${pfbchroot}/pfb_dns/pfb_py_core.json"
+    cat "${pfbchroot}/pfb_dns/dnsbl_psl" "${pfbchroot}/pfb_dns/pfb_py_raw/g7.abc/feed-F"
+  }
+
+  It 'save takes the Core input cache folder whole, and restore brings it back with its modes over the shipped PSL (#4251)'
+    setup_sandbox
+    mkdir -p "${pfbchroot}"
+    plant_core_cache
+    When call save_restore_core_cache
+    The line 1 of output should equal "700 ${pfbchroot}/pfb_dns"
+    The line 2 of output should equal "600 ${pfbchroot}/pfb_dns/pfb_py_core.json"
+    # Core's PSL in the folder, not the shipped copy restore stages at the chroot's top
+    The line 3 of output should equal 'CORE-PSL-v7'
+    The line 4 of output should equal 'feed-body'
+    The path "${pfbchroot}/dnsbl_psl" should be exist
+    cleanup_sandbox
+  End
+
   # Every file an older package staged into the chroot that nothing reads any more (#3791).
   plant_retired() {
     mkdir -p "${pfbchroot}/__pycache__"
