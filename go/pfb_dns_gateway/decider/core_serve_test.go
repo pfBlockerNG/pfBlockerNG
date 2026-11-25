@@ -77,7 +77,7 @@ func (c coreTicks) settle() {
 func bootOnCore(t *testing.T, dir, socket string) (*pfbUnbound, coreTicks) {
 	t.Helper()
 	ticks := make(coreTicks)
-	m, err := bootCore(dir, testLogDir, socket, false, ticks.source)
+	m, err := bootCore(dir, testLogDir, coreinput.New(socket), false, ticks.source)
 	if err != nil {
 		t.Fatalf("bootCore: %v", err)
 	}

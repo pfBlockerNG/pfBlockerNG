@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/coreinput"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/coretest"
 )
 
@@ -115,7 +116,7 @@ func TestOnCoreACachedStartTakesForwardingFromTheObserverFlag(t *testing.T) {
 	_, ticks := bootOnCore(t, dir, srv.Socket)
 	ticks.settle()
 
-	m, err := bootCore(dir, testLogDir, deadSocket(t), true, make(coreTicks).source)
+	m, err := bootCore(dir, testLogDir, coreinput.New(deadSocket(t)), true, make(coreTicks).source)
 	if err != nil {
 		t.Fatalf("bootCore: %v", err)
 	}

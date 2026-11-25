@@ -72,16 +72,16 @@ type readSettings struct {
 	tables *snapshot
 }
 
-// bootCore boots the module in moduleDir on the Core API at socket. tick is the poller's tick source (nil: a
+// bootCore boots the module in moduleDir on the Core API that client calls. tick is the poller's tick source (nil: a
 // CORE_POLL_INTERVAL ticker).
-func bootCore(moduleDir, logDir, socket string, observer bool, tick func() (<-chan time.Time, func())) (*pfbUnbound, error) {
+func bootCore(moduleDir, logDir string, client *coreinput.Client, observer bool, tick func() (<-chan time.Time, func())) (*pfbUnbound, error) {
 	if tick == nil {
 		tick = func() (<-chan time.Time, func()) {
 			ticker := time.NewTicker(CORE_POLL_INTERVAL)
 			return ticker.C, ticker.Stop
 		}
 	}
-	feed := &coreFeed{client: coreinput.New(socket), dir: moduleDir, tick: tick, disk: coreinput.Load(moduleDir), observer: observer}
+	feed := &coreFeed{client: client, dir: moduleDir, tick: tick, disk: coreinput.Load(moduleDir), observer: observer}
 	if ini := filepath.Join(moduleDir, coreinput.IniFile); !coreinput.Owned(ini) {
 		if _, err := os.Lstat(ini); err == nil {
 			logWarn("[pfBlockerNG]: the settings cache " + ini + " is not trusted and is not loaded; it is fetched from Core again")
