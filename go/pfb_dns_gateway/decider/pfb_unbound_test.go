@@ -68,7 +68,6 @@ func modDefaults(dir string) pfbSettings {
 		pfbPyWhitelist:      in("pfb_py_whitelist.txt"),
 		pfbPyZone:           in("pfb_py_zone.txt"),
 		pfbPyData:           in("pfb_py_data.txt"),
-		pfbPyTop1m:          in("pfb_py_top1m.txt"),
 		pfbPyPsl:            in("dnsbl_psl"),
 		pfbPySs:             in("pfb_py_ss.txt"),
 		pfbPySources:        in("pfb_py_sources.json"),

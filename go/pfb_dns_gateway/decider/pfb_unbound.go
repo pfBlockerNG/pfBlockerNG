@@ -96,7 +96,6 @@ type pfbSettings struct {
 	pfbPyWhitelist      string
 	pfbPyZone           string
 	pfbPyData           string
-	pfbPyTop1m          string
 	pfbPyPsl            string
 	pfbPySs             string
 	pfbPySources        string
@@ -253,10 +252,13 @@ func warnIfLegacyControlEnabled(enabled bool) {
 // On the Core input an ini that is not pfB-DNS's own (coreinput.Owned) is never read: it reads as absent.
 func (m *pfbUnbound) loadIniConfig() *configParser {
 	path := m.pfb.pfbUnboundIni
-	untrusted := m.core != nil && isFile(path) && !coreinput.Owned(path)
+	// A cache folder pfB-DNS could not make its own gives nothing, whatever the file in it (bootCore said why)
+	unusable := m.core != nil && m.core.unusable != nil
+	untrusted := m.core != nil && !unusable && isFile(path) && !coreinput.Owned(path)
 	if untrusted {
 		logWarn("[pfBlockerNG]: the settings cache " + path + " is not pfB-DNS's own and is not read")
 	}
+	untrusted = untrusted || unusable
 	if !isFile(path) || untrusted {
 		m.pfbPyStatusClose("dnsbl", path, "parse")
 		m.iniFailure.clear()
@@ -463,7 +465,6 @@ func newModuleSettings(moduleDir string) pfbSettings {
 	p.pfbPyWhitelist = in("pfb_py_whitelist.txt")
 	p.pfbPyZone = in("pfb_py_zone.txt")
 	p.pfbPyData = in("pfb_py_data.txt")
-	p.pfbPyTop1m = in("pfb_py_top1m.txt")
 	p.pfbPyPsl = in("dnsbl_psl")
 	p.pfbPySs = in("pfb_py_ss.txt")
 	p.pfbPySources = in("pfb_py_sources.json")
@@ -520,6 +521,9 @@ func initStandardWith(id int, moduleDir, logDir string, core *coreFeed) (module 
 	pfb := &m.pfb
 
 	*pfb = newModuleSettings(moduleDir)
+	if core != nil {
+		core.cachePaths(pfb)
+	}
 
 	config := m.loadIniConfig()
 	if core != nil || config != nil && config.hasSection("MAIN") {

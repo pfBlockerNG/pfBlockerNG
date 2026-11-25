@@ -1,7 +1,7 @@
 // Package coreinput is pfB-DNS's DNSBL input from the Core API (issue #4036, sub-slice 7d): it fetches the dnsbl/*
-// resources the Core Updater publishes and writes them into the module directory in the shapes the decider reads there
-// today (pfb_py_sources.json, its raw feed files, pfb_py_top1m.txt, pfb_py_ss.txt and dnsbl_psl), so that boot and
-// reload build from them unchanged. The module directory is pfB-DNS's private cache: nothing else writes or reads it.
+// resources the Core Updater publishes and writes them into a folder in the shapes the decider reads (pfb_py_sources.json,
+// its raw feed files, pfb_py_top1m.txt, pfb_py_ss.txt and dnsbl_psl), so that boot and reload build from them unchanged.
+// The folder is pfB-DNS's private cache, pfb_dns in the module directory (issue #4251): nothing else writes or reads it.
 //
 // A Sync verifies every body against the digest and line count its manifest row names before it changes anything, then
 // writes the feed bodies into a folder of their own generation, the TOP1M, SafeSearch and PSL files, and the manifest
@@ -38,7 +38,7 @@ type Cursor struct {
 	Digest     string `json:"digest,omitempty"`
 }
 
-// State is what the module directory holds from Core: the manifest's cursor, and every dnsbl/* body it serves (the
+// State is what the cache folder holds from Core: the manifest's cursor, and every dnsbl/* body it serves (the
 // manifest included), as ReportApplied takes them.
 type State struct {
 	Version   int               `json:"version"` // stateVersion; a state of another version is not trusted
@@ -53,7 +53,7 @@ type State struct {
 var (
 	// ErrNoData: Core publishes no dnsbl/manifest (DNSBL is off, or no Update has run yet).
 	ErrNoData = errors.New("core publishes no DNSBL data")
-	// ErrMoved: a body the manifest names moved on before it was fetched; the module directory is unchanged.
+	// ErrMoved: a body the manifest names moved on before it was fetched; the cache folder is unchanged.
 	ErrMoved = errors.New("a DNSBL body moved on while it was fetched")
 )
 
