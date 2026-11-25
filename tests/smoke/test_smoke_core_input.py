@@ -97,14 +97,11 @@ class Rig:
     def module(self) -> str:
         return f"{self.fence}/mod"
 
-    def ask(self, name: str) -> h.DnsAnswer:
-        """The first answer pfB-DNS gives for name (A), or a failure when it gives none."""
-        got = self.vm.ssh(f"{h.DRILL_BIN} -p {PORT} {shlex.quote(name)} A @127.0.0.1", timeout=30)
-        assert "rcode:" in got.stdout, f"pfB-DNS gave no answer for {name}: {got.stdout}{got.stderr}"
-        return h._parse_drill(got.stdout, "A")
-
     def blocked(self, name: str) -> bool:
-        return self.ask(name).records == ["0.0.0.0"]
+        """Whether pfB-DNS answers name (A) with its block, 0.0.0.0. A name it does not block is forwarded to the box's
+        resolver, which may not answer here; that is no block either."""
+        got = self.vm.ssh(f"{h.DRILL_BIN} -p {PORT} {shlex.quote(name)} A @127.0.0.1", timeout=30)
+        return "rcode:" in got.stdout and h._parse_drill(got.stdout, "A").records == ["0.0.0.0"]
 
 
 def seed_store(vm: SmokeVM, fence: str, domains: list[str] | None, count: int = 0) -> None:
