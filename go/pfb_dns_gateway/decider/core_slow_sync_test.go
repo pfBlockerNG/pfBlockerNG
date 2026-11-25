@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/coreinput"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/coretest"
@@ -49,8 +50,7 @@ func TestOnCoreNoRequestOfThePollerHasADeadline(t *testing.T) {
 	}
 }
 
-// With no time limit, stop alone ends a call that a stuck Core never answers: the poller's goroutine has ended once the stop
-// returns, so the call had ended first.
+// With no time limit, stop alone ends a call that a stuck Core never answers: the call has ended once the stop returns.
 func TestOnCoreStopEndsACallCoreNeverAnswers(t *testing.T) {
 	entered, ended := make(chan struct{}), make(chan struct{})
 	var first sync.Once
@@ -69,7 +69,11 @@ func TestOnCoreStopEndsACallCoreNeverAnswers(t *testing.T) {
 		t.Fatalf("bootCore: %v", err)
 	}
 	stopModule(t, m)
-	<-entered
+	select {
+	case <-entered:
+	case <-time.After(time.Minute): // fails a hung test only
+		t.Fatal("the poller made no request")
+	}
 	m.stopReloadWatcher()
 	select {
 	case <-ended:
