@@ -18,7 +18,8 @@ What it proves:
 * while Core is stopped (SIGSTOP), pfB-DNS keeps serving the last generation; a restart of pfB-DNS with Core down serves
   the cache it kept (owner, 2026-11-25: no time limit, no watchdog);
 * the 5,000,000-domain measurement: the start time and peak memory of a pfB-DNS that builds from the cache, printed
-  (``PFB_CORE_INPUT_MEASURE``), never asserted. It needs a box with at least 4 GiB.
+  (``PFB_CORE_INPUT_MEASURE``), never asserted. It runs only with ``PFB_CORE_INPUT_MEASURE=1``, on a box with at least
+  4 GiB.
 
 A settings change that reaches pfB-DNS by a swap is not driven here: it needs a ``config.xml`` edit through the
 adapter. The decider tests cover the swap (``core_settings_test.go``).
@@ -28,9 +29,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 import pytest
@@ -101,10 +103,6 @@ class Rig:
     def api(self) -> str:
         return f"{self.fence}/core/api.sock"
 
-    @property
-    def module(self) -> str:
-        return f"{self.fence}/mod"
-
     def blocked(self, name: str) -> bool:
         """Whether pfB-DNS answers name (A) with its block, 0.0.0.0. A name it does not block is forwarded to the box's
         resolver, which may not answer here; that is no block either."""
@@ -119,7 +117,7 @@ def seed_store(vm: SmokeVM, fence: str, domains: list[str] | None, count: int = 
         listed = "\n".join(sorted(domains)) + "\n"
         wrote = vm.ssh(f"printf %s {shlex.quote(listed)} > {fence}/feed.txt", timeout=60)
         count = len(domains)
-    else:  # sorted as Core keeps members: d<i>.<run>.com sorted as strings
+    else:  # sorted as Core keeps members: d<i>.pfbmeasure.com sorted as strings
         wrote = vm.ssh(f"jot -w 'd%d.pfbmeasure.com' {count} 1 | LC_ALL=C sort > {fence}/feed.txt", timeout=600)
     assert wrote.returncode == 0, f"could not write the feed: {wrote.stderr}"
     script = SEED_PHP.replace("@OPEN@", OPEN).replace("@CLOSE@", CLOSE)
@@ -128,8 +126,9 @@ def seed_store(vm: SmokeVM, fence: str, domains: list[str] | None, count: int = 
     assert OPEN in seeded.stdout, f"the store was not seeded: rc={seeded.returncode} {seeded.stdout}{seeded.stderr}"
 
 
-def start_dns(vm: SmokeVM, fence: str, log: str) -> str:
-    """pfB-DNS on the Core input, as unbound, on 127.0.0.1:PORT; its pid once it serves."""
+def start_dns(vm: SmokeVM, fence: str, log: str, watchdog: float = READY_WATCHDOG) -> str:
+    """pfB-DNS on the Core input, as unbound, on 127.0.0.1:PORT; its pid once it serves. It builds a trusted cache
+    first and allows itself 300 s for that: a 5,000,000-domain start passes a watchdog of its own."""
     command = (
         f"{DNS_BIN} --listen 127.0.0.1 --port {PORT} --upstream 127.0.0.1:53 --ctl-socket {fence}/ctl/ctl.sock "
         f"--module-dir {fence}/mod --core-socket {fence}/core/api.sock --user unbound --ready-file {READY}"
@@ -137,7 +136,7 @@ def start_dns(vm: SmokeVM, fence: str, log: str) -> str:
     start = vm.ssh(f"nohup {command} </dev/null >{log} 2>&1 & echo $!", timeout=30)
     pid = start.stdout.strip()
     assert start.returncode == 0 and pid.isdigit(), f"pfB-DNS did not start: {start.stdout}{start.stderr}"
-    deadline = time.monotonic() + READY_WATCHDOG
+    deadline = time.monotonic() + watchdog
     while vm.ssh(f'test -s {READY} && test "$(cat {READY})" = {pid}', timeout=30).returncode != 0:  # it serves
         if vm.ssh(f"kill -0 {pid}", timeout=30).returncode != 0 or time.monotonic() > deadline:
             said = vm.ssh(f"tail -n 30 {log}; ls -ld {fence} {fence}/mod; id unbound", timeout=30).stdout
@@ -147,9 +146,22 @@ def start_dns(vm: SmokeVM, fence: str, log: str) -> str:
 
 
 def stop(vm: SmokeVM, pid: str) -> None:
+    """TERM, then KILL only when the process outlives ten one-second checks: a drain cut in its commit leaves no
+    trusted cache."""
     vm.ssh(
-        f"kill -CONT {pid} 2>/dev/null; kill {pid} 2>/dev/null; sleep 1; kill -9 {pid} 2>/dev/null; true", timeout=30
+        f"kill -CONT {pid} 2>/dev/null; kill {pid} 2>/dev/null; "
+        f"for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 {pid} 2>/dev/null || exit 0; sleep 1; done; kill -9 {pid}; true",
+        timeout=60,
     )
+
+
+def wait_for(what: str, ready: Callable[[], bool], watchdog: float = SERVE_WATCHDOG) -> None:
+    """Block until ready() holds; the watchdog only salvages a stuck run."""
+    deadline = time.monotonic() + watchdog
+    while not ready():
+        if time.monotonic() > deadline:
+            pytest.fail(f"STUCK: {what}")
+        time.sleep(1)
 
 
 @pytest.fixture(scope="module")
@@ -182,7 +194,7 @@ def core_command(fence: str) -> str:
 
 @dataclass
 class Observation:
-    blocked: bool  # the feed's domain, after the first poll
+    blocked: bool  # the feed's domain, asked again once the first poll served it
     other_blocked: bool  # a domain no feed lists
     report: str  # Core's applied.json
     blocked_while_core_stopped: bool
@@ -215,12 +227,24 @@ def observed(box: SmokeVM) -> Iterator[Observation]:
                             f"cat {fence}/mod/pfb_py_status.json; echo; tail -n 8 /var/log/pfblockerng/py_error.log; "
                             f"ls -la {fence}/mod {fence}/mod/pfb_dns {fence}/store; tail -n 5 {fence}/core.log"
                         )
-                        said = box.ssh(probe, timeout=30).stdout + box.ssh(probe, timeout=30).stderr
+                        ran = box.ssh(probe, timeout=30)
+                        said = ran.stdout + ran.stderr
                         pytest.fail(f"STUCK: {listed} was never blocked from Core's data:\n{said}")
                     time.sleep(2)
-                other_blocked = rig.blocked(other)
-                report = box.ssh(f"cat {fence}/state/applied.json 2>&1", timeout=30).stdout
+                blocked, other_blocked = rig.blocked(listed), rig.blocked(other)
+                # The report follows the swap: Core has it once applied.json names the generation served
+                applied = f"{fence}/state/applied.json"
+                wait_for(
+                    "Core never recorded the generation pfB-DNS serves",
+                    lambda: '"dnsbl/feed-F"' in box.ssh(f"cat {applied} 2>/dev/null", timeout=30).stdout,
+                )
+                report = box.ssh(f"cat {applied}", timeout=30).stdout
+                # Core stuck: asked only once a poll of pfB-DNS waits on the stopped Core, its connection open
                 box.ssh(f"kill -STOP {core}", timeout=30)
+                wait_for(
+                    "no poll of pfB-DNS reached the stopped Core",
+                    lambda: rig.api in box.ssh("/usr/bin/sockstat -u -c -w | grep pfb-dns", timeout=30).stdout,
+                )
                 while_stopped = rig.blocked(listed)
                 box.ssh(f"kill -CONT {core}", timeout=30)
             finally:
@@ -231,9 +255,9 @@ def observed(box: SmokeVM) -> Iterator[Observation]:
             after_restart = rig.blocked(listed)
         finally:
             stop(box, dns)
-        yield Observation(True, other_blocked, report, while_stopped, cache, after_restart)
+        yield Observation(blocked, other_blocked, report, while_stopped, cache, after_restart)
     finally:
-        box.ssh(f"rm -rf {fence} {READY}", timeout=120)
+        box.ssh(f"rm -rf {fence} {READY} {READY}.sha256", timeout=120)
 
 
 def test_pfb_dns_blocks_what_core_publishes_and_only_that(observed: Observation) -> None:
@@ -260,7 +284,10 @@ def test_a_restart_with_core_down_serves_the_cache(observed: Observation) -> Non
 
 @pytest.fixture(scope="module")
 def measured(box: SmokeVM) -> Iterator[dict[str, object]]:
-    """The 5,000,000-domain start, timed in the fixture: from Core, then from the cache."""
+    """The 5,000,000-domain start, timed in the fixture: from Core, then from the cache. It runs only when asked
+    (``PFB_CORE_INPUT_MEASURE=1``): its seed and builds take many minutes."""
+    if os.environ.get("PFB_CORE_INPUT_MEASURE") != "1":
+        pytest.skip("the 5,000,000-domain measurement runs only with PFB_CORE_INPUT_MEASURE=1")
     ram = int(box.ssh("sysctl -n hw.physmem", timeout=30).stdout.strip() or 0)
     if ram < MEASURE_MIN_RAM:
         pytest.skip(f"the box has {ram >> 20} MiB; the measurement needs {MEASURE_MIN_RAM >> 20} MiB")
@@ -271,7 +298,7 @@ def measured(box: SmokeVM) -> Iterator[dict[str, object]]:
         probe = "d1.pfbmeasure.com"
         with h.start_core(box, core_command(fence), rig.api, f"{fence}/core.log", watchdog=READY_WATCHDOG):
             began = time.monotonic()
-            dns = start_dns(box, fence, f"{fence}/dns.log")
+            dns = start_dns(box, fence, f"{fence}/dns.log", watchdog=1800)
             try:
                 deadline = time.monotonic() + 1800
                 while not rig.blocked(probe):  # the real condition: the five million are served
@@ -281,11 +308,14 @@ def measured(box: SmokeVM) -> Iterator[dict[str, object]]:
             finally:
                 stop(box, dns)
         began = time.monotonic()
-        dns = start_dns(box, fence, f"{fence}/dns2.log")
+        dns = start_dns(box, fence, f"{fence}/dns2.log", watchdog=1800)
         try:
             served = rig.blocked(probe)
             from_cache = time.monotonic() - began
-            rss = box.ssh(f"/usr/bin/procstat -r {dns} | awk '/maximum RSS/ {{print $NF}}'", timeout=30).stdout.strip()
+            usage = box.ssh(f"/usr/bin/procstat -r {dns}", timeout=30).stdout
+            held = re.search(r"maximum RSS\s+(\d+)", usage)
+            assert held, f"no maximum RSS row from procstat -r {dns}:\n{usage}"
+            rss = int(held.group(1))
         finally:
             stop(box, dns)
         yield {
@@ -297,7 +327,7 @@ def measured(box: SmokeVM) -> Iterator[dict[str, object]]:
             "served": served,
         }
     finally:
-        box.ssh(f"rm -rf {fence} {READY}", timeout=120)
+        box.ssh(f"rm -rf {fence} {READY} {READY}.sha256", timeout=120)
 
 
 def test_measure_a_start_from_a_cache_of_five_million_domains(measured: dict[str, object]) -> None:
