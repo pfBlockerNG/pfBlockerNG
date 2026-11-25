@@ -514,27 +514,17 @@ func (s *Store) Sweep() error {
 	if err != nil {
 		return err
 	}
-	files, err := os.ReadDir(s.dir)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
 	kept := map[string]bool{}
 	for id, e := range idx.Resources {
 		if e != nil {
 			s.keep(id, e, kept)
 		}
 	}
-	for _, f := range files {
+	return s.removeExcept(kept, func(name string) bool {
 		// A file of id is "<escaped id>.<rest>"; no id holds a dot.
-		escaped, _, ok := strings.Cut(f.Name(), ".")
-		if !ok || f.Name() == indexName || !ValidID(strings.ReplaceAll(escaped, "~", "/")) || kept[f.Name()] {
-			continue
-		}
-		if err := os.Remove(filepath.Join(s.dir, f.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-	}
-	return nil
+		escaped, _, ok := strings.Cut(name, ".")
+		return ok && name != indexName && ValidID(strings.ReplaceAll(escaped, "~", "/"))
+	})
 }
 
 // Generation is id's current generation as the index records it, its body not read: ErrNotFound when the store does not
@@ -998,14 +988,19 @@ func (s *Store) keep(id string, e *entry, kept map[string]bool) {
 
 // prune deletes every file of id except those e keeps.
 func (s *Store) prune(id string, e *entry) error {
-	keep := map[string]bool{}
-	s.keep(id, e, keep)
+	kept := map[string]bool{}
+	s.keep(id, e, kept)
+	return s.removeExcept(kept, func(name string) bool { return strings.HasPrefix(name, escape(id)+".") })
+}
+
+// removeExcept deletes every file of the store directory that owned claims and kept does not name.
+func (s *Store) removeExcept(kept map[string]bool, owned func(name string) bool) error {
 	files, err := os.ReadDir(s.dir)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	for _, f := range files {
-		if n := f.Name(); strings.HasPrefix(n, escape(id)+".") && !keep[n] {
+		if n := f.Name(); owned(n) && !kept[n] {
 			if err := os.Remove(filepath.Join(s.dir, n)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return err
 			}
