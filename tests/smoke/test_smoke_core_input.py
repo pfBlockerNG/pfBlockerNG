@@ -205,6 +205,7 @@ def observed(box: SmokeVM) -> Iterator[Observation]:
                             f"/usr/local/bin/curl -sS --unix-socket {rig.api} -X POST "
                             f"-H 'Content-Type: application/json' --data {shlex.quote(MANIFEST_ASK)} "
                             f"http://localhost/v1/GetResources; echo; "
+                            f"cat {fence}/mod/pfb_py_status.json; echo; tail -n 8 /var/log/pfblockerng/py_error.log; "
                             f"ls -la {fence}/mod {fence}/mod/pfb_dns {fence}/store; tail -n 5 {fence}/core.log"
                         )
                         said = box.ssh(probe, timeout=30).stdout + box.ssh(probe, timeout=30).stderr
