@@ -152,11 +152,19 @@ final class PfbCoreServiceTest extends TestCase
 		$this->assertSame(['0 1 2 '], $this->lines('fds'), 'the daemon inherited a descriptor of the caller (stdio must be /dev/null)');
 	}
 
+	/** @return array<string, array{0: string, 1: string}> unbound's uid and gid as an id(1) that succeeds prints them */
+	public static function idsThatAreNoNumbers(): array
+	{
+		return ['a name' => ['unbound', '60'], 'a uid with a letter after its digits' => ['5x', '60'],
+			'a gid with a letter after its digits' => ['59', '6y'], 'an empty gid' => ['59', ''], 'two ids' => ['59 60', '60']];
+	}
+
 	/** Issue #4250: an id that is no number is not passed on: Core would refuse its flags and daemon(8) restart it every 5 s. */
-	public function testAnUnboundIdThatIsNoNumberStartsCoreWithNoClient(): void
+	#[DataProvider('idsThatAreNoNumbers')]
+	public function testAnUnboundIdThatIsNoNumberStartsCoreWithNoClient(string $uid, string $gid): void
 	{
 		// Given an id(1) that succeeds but prints no number
-		$this->arrangeInstalled(scenario: ['UNBOUND_UID' => 'unbound', 'UNBOUND_GID' => '']);
+		$this->arrangeInstalled(scenario: ['UNBOUND_UID' => $uid, 'UNBOUND_GID' => $gid]);
 
 		// When the service starts
 		[$status, $out] = $this->rc('start');

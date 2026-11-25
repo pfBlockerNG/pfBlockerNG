@@ -4447,7 +4447,8 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	if uid="\$(/usr/bin/id -u unbound 2>/dev/null)" && gid="\$(/usr/bin/id -g unbound 2>/dev/null)"; then
 		# Numbers only: Core refuses any other value, and daemon(8) would restart it every 5 s
 		case "\${uid}:\${gid}" in
-			[0-9]*:[0-9]*) case "\${uid}\${gid}" in *[!0-9]*) ;; *) clients="--client-uid \${uid} --socket-group \${gid}" ;; esac ;;
+			:*|*:|*[!0-9:]*|*:*:*) ;;
+			*) clients="--client-uid \${uid} --socket-group \${gid}" ;;
 		esac
 	fi
 
