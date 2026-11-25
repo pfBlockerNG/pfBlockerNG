@@ -43,7 +43,7 @@ final class PfbCoreServiceTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$this->sandboxUp(['daemon', 'logger', 'lockf', 'uname', 'pgrep', 'pkill', 'sleep'],
+		$this->sandboxUp(['daemon', 'logger', 'lockf', 'uname', 'pgrep', 'pkill', 'sleep', 'id'],
 			['log', 'core/bin/freebsd-amd64', 'core/bin/freebsd-arm64'], [
 				'core_socket'         => 'run/pfb_core/api.sock',
 				'core_state'          => 'db/pfb_core',
@@ -145,10 +145,45 @@ final class PfbCoreServiceTest extends TestCase
 			'--metrics-cmd', '/usr/local/pkg/pfblockerng/pfb_core_metrics.sh',
 			'--counters-cmd', '/usr/local/pkg/pfblockerng/pfb_core_counters.sh',
 			'--zoneinfo', '/etc/localtime',
+			'--client-uid', '59', '--socket-group', '59',
 			...$this->loopFlags(),
 			...$this->feedFlags(),
 		], $this->lines('daemon.argv'));
 		$this->assertSame(['0 1 2 '], $this->lines('fds'), 'the daemon inherited a descriptor of the caller (stdio must be /dev/null)');
+	}
+
+	/** Issue #4250: pfB-DNS runs as unbound and reads Core as a further local client (owner, 2026-11-24). */
+	public function testStartAdmitsUnboundsUserAsAClientAndOpensTheSocketToItsGroupAsTheSystemNamesThem(): void
+	{
+		// Given a system whose unbound user and group have ids of their own
+		$this->arrangeInstalled(scenario: ['UNBOUND_UID' => '1059', 'UNBOUND_GID' => '1060']);
+
+		// When the service starts
+		[$status, $out] = $this->rc('start');
+
+		// Then Core admits that uid as a client and opens its socket to that group, the ids read at the start, never written in
+		$this->assertSame(0, $status, $out);
+		$argv = $this->lines('daemon.argv');
+		$at = array_search('--client-uid', $argv, TRUE);
+		$this->assertIsInt($at, 'Core was given no --client-uid: ' . implode(' ', $argv));
+		$this->assertSame(['--client-uid', '1059', '--socket-group', '1060'], array_slice($argv, $at, 4));
+	}
+
+	/** Issue #4250: a system without the unbound user still starts Core, with no client. */
+	public function testWithoutAnUnboundUserCoreStartsAndAdmitsNoClient(): void
+	{
+		// Given a system with no unbound user
+		$this->arrangeInstalled(scenario: ['UNBOUND_UID' => '']);
+
+		// When the service starts
+		[$status, $out] = $this->rc('start');
+
+		// Then Core starts, and is given no client and no socket group
+		$this->assertSame(0, $status, $out);
+		$argv = $this->lines('daemon.argv');
+		$this->assertContains('--socket', $argv, 'Core was not started');
+		$this->assertNotContains('--client-uid', $argv);
+		$this->assertNotContains('--socket-group', $argv);
 	}
 
 	public function testMaintenanceProducerPreservesQuotedRuntimePathsAndSupervisorIdentity(): void
