@@ -264,10 +264,9 @@ func (m *pfbUnbound) applyLiveSettings(prev *pfbSettings) {
 	} else {
 		m.stopControlWatcher()
 	}
-	// Captured again whenever the authority held is not the one wanted: an opt-out may have dropped it before this swap.
-	if epochs := m.metricsPrivacyEpochs.Load(); set.metricsClientIp != (epochs != nil && len(*epochs) > 0) {
-		m.dbCapturePrivacyEpochsFor(set.metricsClientIp)
-	}
+	// Captured again on each settings swap, as a start captures it: each open database grants what it holds now, one an
+	// opt-out dropped or one this swap opened included.
+	m.dbCapturePrivacyEpochsFor(set.metricsClientIp)
 	if set.pythonControlLegacy && !prev.pythonControlLegacy {
 		warnIfLegacyControlEnabled(true)
 	}

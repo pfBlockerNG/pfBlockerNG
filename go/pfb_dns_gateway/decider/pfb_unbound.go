@@ -36,6 +36,7 @@ import (
 
 	"github.com/oschwald/maxminddb-golang/v2"
 
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/coreinput"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/pysem"
 )
 
@@ -259,9 +260,15 @@ func warnIfLegacyControlEnabled(enabled bool) {
 // loadIniConfig parses the module's ini: nil when the file is absent, otherwise the (partially) read config. A read
 // failure is written to the error log, opens the ini's parse-stage ledger entry and is the module's iniFailure; an absent
 // file or a good read closes the entry and clears it.
+//
+// On the Core input an ini that is not pfB-DNS's own (coreinput.Owned) is never read: it reads as absent.
 func (m *pfbUnbound) loadIniConfig() *configParser {
 	path := m.pfb.pfbUnboundIni
-	if !isFile(path) {
+	untrusted := m.core != nil && isFile(path) && !coreinput.Owned(path)
+	if untrusted {
+		logWarn("[pfBlockerNG]: the settings cache " + path + " is not pfB-DNS's own and is not read")
+	}
+	if !isFile(path) || untrusted {
 		m.pfbPyStatusClose("dnsbl", path, "parse")
 		m.iniFailure.clear()
 		return nil
