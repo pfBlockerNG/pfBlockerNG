@@ -93,3 +93,27 @@ func TestOnCoreACacheFolderOfAnotherUserIsNotWritten(t *testing.T) {
 		t.Error("a generation fetched into a folder of another user is served")
 	}
 }
+
+// Nor are settings read from it: an ini that would be trusted on its own, in a cache folder pfB-DNS cannot make its own,
+// gives the module nothing.
+func TestOnCoreTheSettingsOfACacheFolderOfAnotherUserAreNotRead(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to give the folder to another user")
+	}
+	dir := t.TempDir()
+	cache := filepath.Join(dir, "pfb_dns")
+	if err := os.Mkdir(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ini := "[MAIN]\npython_enable = on\n[noAAAA]\n0 = v6.example,0\n"
+	if err := os.WriteFile(filepath.Join(cache, "pfb_unbound.ini"), []byte(ini), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(cache, 65534, 65534); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := bootOnCore(t, dir, deadSocket(t))
+	if got := m.snapshot.Load().noAAAADB; len(got) != 0 {
+		t.Errorf("the noAAAA table of an ini in a folder of another user was loaded: %v", got)
+	}
+}
