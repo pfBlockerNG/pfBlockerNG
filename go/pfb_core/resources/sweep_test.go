@@ -150,3 +150,31 @@ func TestSweepRemovesTheBaselineAStoppedClearingAppliedLeft(t *testing.T) {
 		t.Errorf("after the sweep:\n have %q\n want %q", got, want)
 	}
 }
+
+// GIVEN an id removed from the configuration whose RemovalApplied has not come yet, with a baseline and a delta
+// WHEN the writer sweeps the store
+// THEN its files stay: its bodies are kept until RemovalApplied.
+func TestSweepKeepsTheFilesOfARemovedIDUntilRemovalApplied(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "store")
+	s := Open(dir)
+	if _, err := s.Publish("dnsbl/gone", []string{"1.1.1.1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Applied("dnsbl/gone", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Publish("dnsbl/gone", []string{"2.2.2.2"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Remove("dnsbl/gone"); err != nil {
+		t.Fatal(err)
+	}
+	want := storeFiles(t, dir)
+
+	if err := s.Sweep(); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if got := storeFiles(t, dir); !slices.Equal(got, want) {
+		t.Errorf("after the sweep:\n have %q\n want %q", got, want)
+	}
+}
