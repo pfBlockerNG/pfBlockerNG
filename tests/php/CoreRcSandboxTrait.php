@@ -116,6 +116,12 @@ trait CoreRcSandboxTrait
 			done < "$S/ancestry"
 			exit 1
 			;;
+		id)
+			# id(1) asked for unbound's uid (-u) or gid (-g); an empty UNBOUND_UID stands for a system without that user
+			[ "$#" -eq 2 ] && [ "$2" = unbound ] || { ev bad-id; exit 2; }
+			[ -n "$UNBOUND_UID" ] || exit 1
+			case "$1" in -u) echo "$UNBOUND_UID" ;; -g) echo "$UNBOUND_GID" ;; *) ev bad-id; exit 2 ;; esac
+			;;
 		sha256)
 			[ "$#" -eq 2 ] && [ "$1" = -r ] || { ev bad-sha256; exit 2; }
 			printf '%s %s\n' "$BINARY_SHA" "$2"
@@ -260,7 +266,8 @@ trait CoreRcSandboxTrait
 		file_put_contents("{$this->dir}/run.sh", $script);
 		$state = "{$this->dir}/state";
 		$vars += ['MACHINE' => 'amd64', 'TERM_AFTER' => '1', 'SUPERVISOR_AT' => '0', 'DAEMON_EXIT' => '0', 'LOCKF_EXIT' => '', 'KILL_IGNORED' => '',
-			'LOCK_VAR' => static::rcService()['lock_var'], 'DAEMON_PIDFILE' => $this->rcPath('daemon_pidfile'), 'SUPERVISOR_PID' => '3001'];
+			'LOCK_VAR' => static::rcService()['lock_var'], 'DAEMON_PIDFILE' => $this->rcPath('daemon_pidfile'), 'SUPERVISOR_PID' => '3001',
+			'UNBOUND_UID' => '59', 'UNBOUND_GID' => '60'];
 		file_put_contents("{$state}/scenario", implode('', array_map(
 			static fn (string $k, string $v): string => "{$k}=" . escapeshellarg($v) . "\n",
 			array_keys($vars),

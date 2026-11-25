@@ -1384,17 +1384,21 @@ have let any process of that user call `SaveSettings` or `StartUpdate`. It is no
 and `ReportApplied` only, reads only the `dns` and `policy/dnsbl` projections and the `dnsbl/*` resources, and has
 a replay memory of its own.*
 
+*Amendment 2026-11-25 (issue #4250): Core's rc line passes `--client-uid` and `--socket-group` with `unbound`'s uid and
+gid, read from the system at each start (owner, 2026-11-24: pfB-DNS may call Core as `unbound`; no dedicated user). A
+system without that user starts Core with no client.*
+
 ## On pfSense
 
 | What | Where |
 |---|---|
 | Binary | `/usr/local/pkg/pfblockerng/core/bin/freebsd-amd64/pfb-core`, `.../freebsd-arm64/pfb-core` (static, `CGO_ENABLED=0`; built by `scripts/build-pfb-dns.py`) |
-| rc script | `/usr/local/etc/rc.d/pfb_core.sh`, written by `pfb_core_service()`; pfSense service `pfb_core`; it starts pfb-core with `--settings-backend-cmd`, `--update-cmd`, `--maintenance-cmd`, `--metrics-cmd`, `--counters-cmd`, `--zoneinfo /etc/localtime` (the host's zone, which the scheduler reads local time in), the Core Updater loop's folders below and the feed phase's flags below |
+| rc script | `/usr/local/etc/rc.d/pfb_core.sh`, written by `pfb_core_service()`; pfSense service `pfb_core`; it starts pfb-core with `--settings-backend-cmd`, `--update-cmd`, `--maintenance-cmd`, `--metrics-cmd`, `--counters-cmd`, `--zoneinfo /etc/localtime` (the host's zone, which the scheduler reads local time in), `--client-uid` and `--socket-group` with `unbound`'s uid and gid read at each start (issue #4250; omitted without that user), the Core Updater loop's folders below and the feed phase's flags below |
 | Loop folders | Issue #4038: `--resource-dir /var/db/pfblockerng/store`, `--hook-dir /usr/local/pkg/pfblockerng/hooks`, `--python-wrapper /usr/local/pkg/pfblockerng/pfb_python.sh`, `--db-dir /var/db/pfblockerng`, `--geoip-dir /usr/local/share/GeoIP`, `--cc-dir /usr/local/share/GeoIP/cc`, `--log-dir /var/log/pfblockerng`, `--pkg-dir /usr/local/pkg/pfblockerng` and `--asn-table /usr/local/www/pfblockerng/pfblockerng_asn.txt`, each `escapeshellarg()`-quoted. The switch stays off: the script passes neither `--update-loop` nor `--main-log` (which Core refuses without the switch), so an Update runs `--update-cmd` alone, and of these flags only `--resource-dir` is read (`GetResources`) |
 | Feed phase flags | `--feed-local-dir` once per folder a `file://` feed may sit directly in: the 14 of `pfb_filter()`'s local-path rule (`/var/db/pfblockerng` and its `deny`, `permit`, `match`, `native`, `original`, `dnsbl`, `dnsblorig`, `ET`, `ut1` and `shallalist` folders, `/usr/local/www`, `/usr/local/share/GeoIP`, `…/GeoIP/cc`) and the real path of the database folder (resolved when the script is generated, when it exists); `--script-dir` twice, in search order (`/usr/local/pkg/pfblockerng/list_scripts`, then `/usr/local/pkg/pfblockerng`); `--rsync-bin /usr/local/bin/rsync`; `--user-agent` the cURL user agent of the package, `pfSense/pfBlockerNG cURL download agent-<unique id>`, as one quoted argument without the line break an id may end with. Each value is `escapeshellarg()`-quoted; Core refuses a relative path and a user agent with a control character as a usage error (exit status 2) |
 | Supervisor | `daemon(8) -r -R 5 -t pfb_core`, pidfiles `/var/run/pfb_core_daemon.pid` (supervisor) and `/var/run/pfb_core.pid` (pfb-core) |
 | Log | `/var/log/pfblockerng/core.log` (pfb-core's stderr, through `daemon -o`) |
-| Socket | `/var/run/pfb_core/api.sock` |
+| Socket | `/var/run/pfb_core/api.sock`, its directory 0750 and the socket 0660, group `unbound` (0700 and 0600, root's, without that user) |
 | State (`--state-dir`) | `/usr/local/etc/pfb_core` (0700): Core's data and its lock, never settings; with `--update-cmd` also `schedule_state.json` and `update.log`; outside `/var`, so it survives a RAM-disk reboot |
 | Settings backend | `/usr/local/pkg/pfblockerng/pfb_core_settings.sh` (`--settings-backend-cmd`): `config.xml` through PHP |
 | Update program | `/usr/local/pkg/pfblockerng/pfb_core_update.sh` (`--update-cmd`): the `core_update` verb of `pfblockerng.inc` |

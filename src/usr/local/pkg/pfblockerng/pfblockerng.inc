@@ -4104,7 +4104,8 @@ const PFB_CORE_FEED_SECTIONS = ['feeds/ipv4' => 'pfblockernglistsv4', 'feeds/ipv
 // The Groups editor's update frequencies, and its feed states (native => stored)
 const PFB_CORE_FEED_CRON = ['Never', '01hour', '02hours', '03hours', '04hours', '06hours', '08hours', '12hours', 'EveryDay', 'Weekly'];
 const PFB_CORE_FEED_STATES = ['enabled' => 'Enabled', 'disabled' => 'Disabled', 'hold' => 'Hold', 'flex' => 'Flex'];
-// Kept in $pfb like the other runtime paths, so a unit test points them at its own files. The socket's directory is root's alone (0700).
+// Kept in $pfb like the other runtime paths, so a unit test points them at its own files. The socket's directory and the socket are
+// open to unbound's group (0750, 0660; issue #4250), which pfB-DNS runs in; without that user they are root's alone (0700, 0600).
 $pfb['core_socket'] = '/var/run/pfb_core/api.sock';
 // issue #3842: Core's own storage and lock, root's alone (0700). Not under /var: it survives a RAM-disk reboot.
 $pfb['core_state'] = '/usr/local/etc/pfb_core';
@@ -4440,11 +4441,23 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 		exit 0
 	fi
 
+	# issue #4250: pfB-DNS runs as unbound and reads Core as a further local client (owner, 2026-11-24): Core serves that uid its
+	# client methods and opens the socket to that group. The ids are the system's, read now; without the user Core admits no client.
+	clients=''
+	if uid="\$(/usr/bin/id -u unbound 2>/dev/null)" && gid="\$(/usr/bin/id -g unbound 2>/dev/null)"; then
+		# Numbers only: Core refuses any other value, and daemon(8) would restart it every 5 s
+		case "\${uid}:\${gid}" in
+			:*|*:|*[!0-9:]*|*:*:*) ;;
+			*) clients="--client-uid \${uid} --socket-group \${gid}" ;;
+		esac
+	fi
+
 	rc_stop || exit 1
 	# Anything the daemon runs that starts this service again must take the lock
 	unset PFB_CORE_START_LOCKED
 	# Detach std fds (#662): the caller's pipe (the package-manager capture during an install) must not stay open in the daemon
-	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} --maintenance-cmd {$maintenanceCmd} --metrics-cmd {$metricsCmd} --counters-cmd {$countersCmd} --zoneinfo /etc/localtime{$loopFlags}{$feedFlags} </dev/null >/dev/null 2>&1
+	# shellcheck disable=SC2086 # clients is the ids' flags, numbers only: each word one argument
+	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} --maintenance-cmd {$maintenanceCmd} --metrics-cmd {$metricsCmd} --counters-cmd {$countersCmd} --zoneinfo /etc/localtime \${clients}{$loopFlags}{$feedFlags} </dev/null >/dev/null 2>&1
 	daemonstatus="\$?"
 	if [ "\${daemonstatus}" -ne 0 ]; then
 		/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: daemon(8) failed with status \${daemonstatus} - not started"

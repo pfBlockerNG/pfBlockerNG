@@ -43,7 +43,7 @@ final class PfbCoreServiceTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$this->sandboxUp(['daemon', 'logger', 'lockf', 'uname', 'pgrep', 'pkill', 'sleep'],
+		$this->sandboxUp(['daemon', 'logger', 'lockf', 'uname', 'pgrep', 'pkill', 'sleep', 'id'],
 			['log', 'core/bin/freebsd-amd64', 'core/bin/freebsd-arm64'], [
 				'core_socket'         => 'run/pfb_core/api.sock',
 				'core_state'          => 'db/pfb_core',
@@ -145,10 +145,53 @@ final class PfbCoreServiceTest extends TestCase
 			'--metrics-cmd', '/usr/local/pkg/pfblockerng/pfb_core_metrics.sh',
 			'--counters-cmd', '/usr/local/pkg/pfblockerng/pfb_core_counters.sh',
 			'--zoneinfo', '/etc/localtime',
+			'--client-uid', '59', '--socket-group', '60',
 			...$this->loopFlags(),
 			...$this->feedFlags(),
 		], $this->lines('daemon.argv'));
 		$this->assertSame(['0 1 2 '], $this->lines('fds'), 'the daemon inherited a descriptor of the caller (stdio must be /dev/null)');
+	}
+
+	/** @return array<string, array{0: string, 1: string}> unbound's uid and gid as an id(1) that succeeds prints them */
+	public static function idsThatAreNoNumbers(): array
+	{
+		return ['a name' => ['unbound', '60'], 'a uid with a letter after its digits' => ['5x', '60'],
+			'a gid with a letter after its digits' => ['59', '6y'], 'an empty gid' => ['59', ''], 'two ids' => ['59 60', '60']];
+	}
+
+	/** Issue #4250: an id that is no number is not passed on: Core would refuse its flags and daemon(8) restart it every 5 s. */
+	#[DataProvider('idsThatAreNoNumbers')]
+	public function testAnUnboundIdThatIsNoNumberStartsCoreWithNoClient(string $uid, string $gid): void
+	{
+		// Given an id(1) that succeeds but prints no number
+		$this->arrangeInstalled(scenario: ['UNBOUND_UID' => $uid, 'UNBOUND_GID' => $gid]);
+
+		// When the service starts
+		[$status, $out] = $this->rc('start');
+
+		// Then Core starts with no client and no socket group
+		$this->assertSame(0, $status, $out);
+		$argv = $this->lines('daemon.argv');
+		$this->assertContains('--socket', $argv, 'Core was not started');
+		$this->assertNotContains('--client-uid', $argv);
+		$this->assertNotContains('--socket-group', $argv);
+	}
+
+	/** Issue #4250: a system without the unbound user still starts Core, with no client. */
+	public function testWithoutAnUnboundUserCoreStartsAndAdmitsNoClient(): void
+	{
+		// Given a system with no unbound user
+		$this->arrangeInstalled(scenario: ['UNBOUND_UID' => '']);
+
+		// When the service starts
+		[$status, $out] = $this->rc('start');
+
+		// Then Core starts, and is given no client and no socket group
+		$this->assertSame(0, $status, $out);
+		$argv = $this->lines('daemon.argv');
+		$this->assertContains('--socket', $argv, 'Core was not started');
+		$this->assertNotContains('--client-uid', $argv);
+		$this->assertNotContains('--socket-group', $argv);
 	}
 
 	public function testMaintenanceProducerPreservesQuotedRuntimePathsAndSupervisorIdentity(): void
