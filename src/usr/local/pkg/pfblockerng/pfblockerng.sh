@@ -400,7 +400,8 @@ aliastables() {
 #   save     = archive the GENERATED set plus exact TOP1M detector sidecars, with the caller holding
 #              the publication lock; the shipped and retired sets stay out
 #   restore  = boot earlyshellcmd: untar the cached files THEN stage
-# Naming contract: a new generated file MUST keep the pfb_unbound*/pfb_py_* prefix; a new shipped
+# Naming contract: a new generated file MUST keep the pfb_unbound*/pfb_py_* prefix, unless it lives in the Core input's
+# cache folder pfb_dns/, which is archived whole (issue #4251); a new shipped
 # file goes in PFB_PY_SHIPPED (the port's plist is GENERATED from the stagedir, so packaging needs
 # nothing) -- dnsbl_psl rides PFB_PY_SHIPPED with the same source/chroot basename like every other
 # entry; no NAME-MAPPED shipped file (source basename != chroot basename) remains (issue #1541
@@ -521,6 +522,9 @@ dnsbl_cache() {
 				done
 				[ -z "${_skip}" ] && set -- "$@" "${_g}"
 			done
+			# issue #4251: the Core input's cache folder (pfB-DNS's settings, manifest, feed bodies, TOP1M, SafeSearch and
+			# Core's PSL), whole: its names need no prefix, and its dnsbl_psl is Core's, never the shipped one
+			[ -d "${pfbchroot}/pfb_dns" ] && set -- "$@" "${pfbchroot}/pfb_dns"
 			# issue #1542: preserve only the TOP1M detector baseline sidecars;
 			# transient and unrelated /var/db/pfblockerng files stay out.
 			_top1m_base="${pfbdb%/}/top-1m.csv.zip"
