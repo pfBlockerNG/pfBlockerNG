@@ -55,7 +55,8 @@ def test_a_pfb_dns_stop_leaves_an_archive_that_holds_the_core_input_folder(servi
     had = listed.stdout.split()
     assert vm.ssh(f"test -e {CACHE}", timeout=30).returncode != 0, f"before: {CACHE} already exists"
     moved: list[str] = []  # the box's own archives, set aside so that the archive found after the stop is the stop's
-    passed = False
+    passed = planted_here = False
+    cleanup_error = ""
     try:
         for a in had:
             aside = vm.ssh(f"test ! -e {a}.aside4259 && mv {a} {a}.aside4259", timeout=30)
@@ -69,6 +70,8 @@ def test_a_pfb_dns_stop_leaves_an_archive_that_holds_the_core_input_folder(servi
         cleared = vm.ssh(f"rm -f {ARCHIVE}.zst {ARCHIVE}.bz2", timeout=30)
         assert cleared.returncode == 0, f"could not remove the pass's archive: {cleared.stderr}"
         assert _running(vm), "after the pass pfB-DNS is not serving"
+        assert vm.ssh(f"test -e {CACHE}", timeout=30).returncode != 0, f"the pass made {CACHE}: it is not this test's"
+        planted_here = True
         planted = vm.ssh(
             f"mkdir -m 700 {CACHE} && echo feed-body > {CACHE}/feed-F && chmod 600 {CACHE}/feed-F && "
             f"chown -R unbound:unbound {CACHE}",
@@ -89,16 +92,21 @@ def test_a_pfb_dns_stop_leaves_an_archive_that_holds_the_core_input_folder(servi
         passed = True
     finally:
         h.set_ramdisk(vm, False)
-        vm.ssh(f"rm -rf {CACHE}", timeout=30)
+        if planted_here:
+            vm.ssh(f"rm -rf {CACHE}", timeout=30)
         # the pass with the switch off removes the restore it registered, and deletes the archive it finds: the box's
-        # own are still set aside
-        h.reload(vm, "updatednsbl")
+        # own are still set aside. A failed pass is reported after the box's archives are back.
+        try:
+            h.reload(vm, "updatednsbl")
+        except RuntimeError as e:
+            cleanup_error = str(e)
         if len(moved) == len(had):
             vm.ssh(f"rm -f {ARCHIVE}.zst {ARCHIVE}.bz2", timeout=30)
         back = [a for a in moved if vm.ssh(f"mv {a}.aside4259 {a}", timeout=30).returncode != 0]
         if back:
             print(f"WARNING: the box's archive was not put back: {back} (still at .aside4259)")
         started = vm.ssh(RC, "start", timeout=120)
+    assert not cleanup_error, f"the cleanup pass failed: {cleanup_error}"
     assert passed and not back, f"the box's archive was not put back: {back} (still at .aside4259)"
     assert started.returncode == 0, f"pfB-DNS did not start again: {started.stdout}{started.stderr}"
     assert vm.ssh(RESTORE, timeout=30).returncode != 0, "the box's config.xml still registers the archive restore"

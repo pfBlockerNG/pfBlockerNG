@@ -8619,8 +8619,9 @@ SH;
  * ancestor, a delete or an unreadable process table stop it. The script's own stops (start, restart) pass an argument and always
  * stop. Known limit: the first upgrade to a version with this probe still runs the old script, so it takes effect from the next.
  * A stop with no argument that ended pfB-DNS, on a RAM-disk box (use_mfs_tmpvar) whose config.xml registers the boot's archive
- * restore and where the Core input's cache folder /var/unbound/pfb_dns exists, then writes the DNSBL archive (pfb_dnsbl_cache('save'), bounded); a failed save is logged
- * and never fails the stop (issue #4259). pfSense's restart_service() is such a stop, so its restart waits on the save.
+ * restore and where the Core input's cache folder /var/unbound/pfb_dns exists, then writes the DNSBL archive
+ * (pfb_dnsbl_cache('save'), bounded); a failed save is logged and never fails the stop (issue #4259). pfSense's
+ * restart_service() is such a stop, so its restart waits on the save.
  *
  * Encrypted transports: while DoT, DoH or DoQ is wanted (pfb_dns_proxy_tls_wanted()) the certificate and key selected on the DNS General page
  * are written to $pfb['dns_proxy_cert'] on every call (pfb_dns_proxy_certificate_export(), the root-only file the gateway's --tls-pem
