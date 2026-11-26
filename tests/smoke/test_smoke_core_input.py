@@ -18,6 +18,8 @@ What it proves:
 * while Core is stopped (SIGSTOP) with a poll of pfB-DNS waiting on it, pfB-DNS keeps serving the last generation;
   once Core is back, it serves and reports the next one, with no restart; a restart of pfB-DNS with Core down serves
   the cache it kept (owner, 2026-11-25: no time limit, no watchdog);
+* an Unlock on the Alerts page, the whole set of unlocked domains sent to Core (SetTemporaryUnlocks, issue #4264), stops
+  pfB-DNS blocking the domain within its poll, and the Lock that empties the set makes it block the domain again;
 * the 5,000,000-domain measurement: the start time and peak memory of a pfB-DNS that builds from Core, then from the
   cache, printed (``PFB_CORE_INPUT_MEASURE``), never asserted. It runs only with ``PFB_CORE_INPUT_MEASURE=1``, on a
   box with at least 4 GiB.
@@ -225,6 +227,17 @@ def core_command(fence: str) -> str:
     )
 
 
+def set_unlocks(vm: SmokeVM, api: str, request: str, domains: list[str]) -> str:
+    """SetTemporaryUnlocks as the Alerts page sends it (root): its HTTP status, then its reply."""
+    body = json.dumps({"requestId": request, "domains": domains})
+    got = vm.ssh(
+        f"/usr/local/bin/curl -sS -w ' %{{http_code}}' --unix-socket {api} -X POST -H 'Content-Type: application/json' "
+        f"--data {shlex.quote(body)} http://localhost/v1/SetTemporaryUnlocks",
+        timeout=30,
+    )
+    return got.stdout.strip()
+
+
 @dataclass
 class Observation:
     blocked: bool  # the feed's domain, asked again once the first poll served it
@@ -235,6 +248,10 @@ class Observation:
     report_after_core_returned: str
     cache_folder: str  # mode and owner of <module dir>/pfb_dns
     blocked_after_restart_without_core: bool
+    unlock_status: str  # SetTemporaryUnlocks' HTTP status and reply, for the domain only the next generation lists
+    unblocked_after_unlock: bool  # within the poll (issue #4264)
+    lock_status: str
+    blocked_after_lock: bool
 
 
 @pytest.fixture(scope="module")
@@ -289,6 +306,13 @@ def observed(box: SmokeVM) -> Iterator[Observation]:
                 wait_for("Core never recorded the next generation", lambda: rig.reported(applied) == "2")
                 next_blocked = rig.blocked(following)
                 report_back = box.ssh(f"cat {applied}", timeout=30).stdout
+                # issue #4264: the Alerts page's Unlock, as root; Core republishes the manifest and pfB-DNS polls it
+                unlock_status = set_unlocks(box, rig.api, "u1", [following])
+                wait_for("pfB-DNS kept blocking an unlocked domain", lambda: not rig.blocked(following))
+                unblocked = not rig.blocked(following)
+                lock_status = set_unlocks(box, rig.api, "u2", [])
+                wait_for("pfB-DNS never blocked a locked domain again", lambda: rig.blocked(following))
+                blocked_again = rig.blocked(following)
             finally:
                 stop(box, dns)
         cache = box.ssh(f"/usr/bin/stat -f '%Lp %Su' {fence}/mod/pfb_dns 2>&1", timeout=30).stdout.strip()
@@ -298,7 +322,18 @@ def observed(box: SmokeVM) -> Iterator[Observation]:
         finally:
             stop(box, dns)
         yield Observation(
-            blocked, other_blocked, report, while_stopped, next_blocked, report_back, cache, after_restart
+            blocked,
+            other_blocked,
+            report,
+            while_stopped,
+            next_blocked,
+            report_back,
+            cache,
+            after_restart,
+            unlock_status,
+            unblocked,
+            lock_status,
+            blocked_again,
         )
     finally:
         box.ssh(f"rm -rf {fence} {READY} {READY}.sha256", timeout=120)
@@ -330,6 +365,16 @@ def test_pfb_dns_keeps_its_cache_in_a_folder_of_unbounds_alone(observed: Observa
 
 def test_a_restart_with_core_down_serves_the_cache(observed: Observation) -> None:
     assert observed.blocked_after_restart_without_core, "a restart with Core down does not serve the cache"
+
+
+def test_an_unlock_stops_pfb_dns_blocking_the_domain_within_its_poll(observed: Observation) -> None:
+    assert observed.unlock_status == "{} 200", f"SetTemporaryUnlocks answered {observed.unlock_status!r}"
+    assert observed.unblocked_after_unlock, "pfB-DNS still blocks the unlocked domain"
+
+
+def test_a_lock_makes_pfb_dns_block_the_domain_again(observed: Observation) -> None:
+    assert observed.lock_status == "{} 200", f"SetTemporaryUnlocks answered {observed.lock_status!r}"
+    assert observed.blocked_after_lock, "pfB-DNS does not block the domain once it is locked again"
 
 
 @pytest.fixture(scope="module")
