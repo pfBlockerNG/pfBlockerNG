@@ -6777,7 +6777,7 @@ function pfb_core_update_v2_list(string $field, mixed $value, int $max = PFB_COR
 
 /**
  * The version 2 request Core sends the update command on stdin, validated whole: anything it does not understand refuses it,
- * with the reason, before anything runs. A field that is null is absent; trigger is required, scope defaults to both. Each id
+ * with the reason, before anything runs, except a pendingToken outside its rule, which is read as none (issue #4263). A field that is null is absent; trigger is required, scope defaults to both. Each id
  * is a resource id the apply handles (no dnsbl/*: pfB-DNS fetches those), once across resources and removed, which hold at
  * most PFB_CORE_UPDATE_V2_MAX_IDS ids together, and maps to an alias (the geo-catalog has none). scope does not constrain
  * what the lists hold: the apply honours it when it acts. The normal form gives each ip-set and ip-aggregate its alias, and
@@ -6800,10 +6800,8 @@ function pfb_core_update_v2_request(string $stdin): array
 		['version', 'trigger', 'scope', 'pendingToken', 'pendingOutsideWindow', 'resources', 'removed', 'dnsbl', 'issues']);
 	$trigger = pfb_core_update_choose($request, 'trigger', ['scheduled', 'manual', 'apply', 'retry'], NULL);
 	$scope = pfb_core_update_choose($request, 'scope', ['ip', 'dnsbl', 'both'], 'both');
-	$token = $request['pendingToken'] ?? NULL;
-	if ($token !== NULL && !pfb_pending_token_valid($token)) {
-		$token = NULL;	// issue #4263 (owner, 2026-11-23): read as none; the apply discards the marker that holds it
-	}
+	// issue #4263 (owner, 2026-11-23): any other token is read as none; the apply discards the marker that holds it
+	$token = pfb_pending_token_valid($request['pendingToken'] ?? NULL) ? $request['pendingToken'] : NULL;
 	$outside = $request['pendingOutsideWindow'] ?? FALSE;
 	if (!is_bool($outside)) {
 		throw new InvalidArgumentException('pendingOutsideWindow is not a boolean');
@@ -7535,9 +7533,10 @@ function pfb_outpost_expected_aliases(): array
 
 /**
  * Issue #4263 (owner, 2026-11-23): a pending marker whose token the apply does not take (pfb_pending_token_valid()) would make
- * every apply refuse its request; it is discarded, and the issue returned for the status page. An empty marker is a mark to
- * version (pfb_pending_changes_token()), not a bad token. The marker is removed only while it still holds what was read: a
- * save that marked meanwhile keeps its own.
+ * every apply refuse its request; it is discarded, and the issue returned for the status page, where its entry stays until the
+ * next apply (pfb_outpost_issues() closes what a request no longer names; the notice stays). An empty marker is a mark to
+ * version (pfb_pending_changes_token()), not a bad token. The marker is set aside by a rename before it is removed: a save that
+ * marks after the rename writes a new marker, which stays, and one that marked before it is put back.
  *
  * @return list<array{resource: string, stage: string, code: string, message: string}>
  */
@@ -7548,10 +7547,20 @@ function pfb_outpost_repair_pending_marker(): array
 	if (!is_string($held) || $held === '' || pfb_pending_token_valid($held)) {
 		return [];
 	}
-	// ponytail: a save between this read and the unlink loses its mark; the window is two calls, and the next save marks again.
-	if (@file_get_contents($marker) === $held) {
-		pfb_clear_pending_changes();
+	$aside = "{$marker}.discard";
+	if (!@rename($marker, $aside)) {
+		return [];	// gone meanwhile: nothing to discard
 	}
+	if (@file_get_contents($aside) !== $held) {
+		if (!file_exists($marker)) {
+			@rename($aside, $marker);	// a save marked between the read and the rename: its mark stays
+		} else {
+			@unlink($aside);	// a later save's marker stands in for it
+		}
+		return [];
+	}
+	@unlink($aside);
+	@unlink("{$marker}.applied");
 	return [['resource' => 'pending-marker', 'stage' => 'apply', 'code' => 'pending_token_invalid',
 		'message' => 'the pending-changes marker held a token that is not 1 to 64 printable ASCII characters; it was discarded']];
 }

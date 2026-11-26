@@ -337,6 +337,20 @@ final class OutpostApplyTest extends TestCase
 			'the issue is filed as a notice');
 	}
 
+	/** An empty marker is a mark still to be versioned, not a bad token: the apply keeps it and files no issue for it. */
+	public function testAnEmptyMarkerIsNoBadTokenAndIsKept(): void
+	{
+		$apply = self::at([self::ABUSE => ['2', self::OLD]]) + ['pendingToken' => '', 'apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)]),
+			'core'    => [self::unchanged(self::ABUSE, '2')],
+		]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertTrue($r['pending'], 'the empty marker is still pending');
+		$this->assertStringNotContainsString('pending-marker', $r['syncStatus']['pfb_sync_status.json'] ?? '');
+	}
+
 	/** With pendingOutsideWindow the apply marks the changes pending, applies nothing and writes one line without applied. */
 	public function testOutsideTheWindowTheChangesAreMarkedPendingAndNothingIsApplied(): void
 	{

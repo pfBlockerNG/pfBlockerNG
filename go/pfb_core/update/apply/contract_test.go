@@ -505,7 +505,8 @@ func TestTheTokenRowsAreReadAsNoToken(t *testing.T) {
 		}
 		req, reason := asRequest(input(t, row))
 		if reason != "" {
-			continue // Core's types hold no such token (a number): nothing to hand back
+			t.Errorf("%s: Core's types cannot hold the request (%s), so nothing shows the token handed back", id, reason)
+			continue
 		}
 		written, err := apply.Encode(req)
 		if err != nil {

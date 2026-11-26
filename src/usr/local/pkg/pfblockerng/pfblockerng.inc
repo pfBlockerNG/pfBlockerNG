@@ -6938,7 +6938,7 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		// Before the settings, as the apply pass takes it: a change marked while they are read stays pending. JSON carries text only
 		$token = is_file(pfb_pending_changes_marker()) ? pfb_pending_changes_token() : NULL;
 		if ($token !== NULL && !mb_check_encoding($token, 'UTF-8')) {
-			return pfb_core_settings_refusal('unavailable', 'the pending-changes marker does not hold text');
+			$token = NULL;	// issue #4263: JSON cannot carry it unaltered; answered as none, the apply discards the marker
 		}
 		$settings = pfb_core_settings($interfaces);
 		// issue #4038: pending state beside the token, outside the settings and their revision; Core never reads the token to decide it.

@@ -149,8 +149,8 @@ A read also answers `platform.pendingToken` (issue #4031): the Outpost's pending
 string, or `null` when nothing is marked. The adapter takes it before it reads the settings, as the apply pass does, so a change
 marked meanwhile stays pending. It is not a setting and not part of the revision. Core keeps its JSON value as the adapter wrote
 it (`Store.PendingToken`, in-process only), hands it back to the platform in the apply request and never parses, compares or logs
-it; no API method answers it. A token JSON cannot carry unaltered (bytes that are not UTF-8) refuses the read whole
-(`unavailable`). A write's reply holds no `platform`.
+it; no API method answers it. A token JSON cannot carry unaltered (bytes that are not UTF-8) is answered as `null`, never
+substituted or cut, and the marker is left for the apply to discard (issue #4263). A write's reply holds no `platform`.
 
 A read also answers `platform.pendingApply` (issue #4038): a JSON bool, whether the Outpost holds a change that waits for an
 apply (`pfb_core_update_pending_apply()`: the pending marker not yet applied, or the due ledger's `pending_apply`). Like the
@@ -937,9 +937,10 @@ checks the request's shape, and the apply honours `scope` when it acts. Each of 
 refused over 4,096 entries with `<list> holds more than 4096 entries`, a check that runs before the combined bound.
 
 Core writes `pendingToken` as the settings read gave it (`platform.pendingToken`) and does not validate it. The apply reads
-any other value as no token, so the request is not refused for it (issue #4263, owner 2026-11-23). When the pending-changes
+a value outside the rule above as no token, so the request is not refused for it (issue #4263, owner 2026-11-23). When the pending-changes
 marker still holds such a token, the apply discards the marker and files the issue `pending-marker` `apply`
-`pending_token_invalid` with Core's issues; an empty marker is a mark to version, not a bad token.
+`pending_token_invalid` with Core's issues: a notice, and a status entry until the next apply. An empty marker is a mark to
+version, not a bad token.
 
 - **A resource** is `{"id", "generation", "action", "direction", "entries"}`. The `id` is a [resource id](#resources) the
   apply handles: an `ip-set`, an `ip-aggregate` or the `geo-catalog`, never a `dnsbl/*` id (pfB-DNS fetches those). Each

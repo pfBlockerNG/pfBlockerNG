@@ -164,15 +164,19 @@ final class CoreSettingsPendingTokenTest extends TestCase
 		$this->assertTrue($token === $carried, 'the token is carried byte for byte');
 	}
 
-	public function testATokenThatIsNotUtf8RefusesTheReadWholeAndLeavesTheMarkerAlone(): void
+	/**
+	 * issue #4263 (owner, 2026-11-23): JSON cannot carry a token that is not UTF-8 unaltered, and refusing the read would stop
+	 * every Update. The read answers no token, never a substituted or partial one, and leaves the marker for the apply to discard.
+	 */
+	public function testATokenThatIsNotUtf8IsAnsweredAsNoTokenAndLeavesTheMarkerAlone(): void
 	{
 		file_put_contents($this->marker, "ab\xff\xfecd");
 
 		$reply = json_decode(pfb_core_settings_serve('{"version":1,"op":"read"}'), TRUE, 512, JSON_THROW_ON_ERROR);
 
-		$this->assertSame('unavailable', $reply['error']['code'] ?? NULL, 'JSON cannot carry it unaltered: ' . json_encode(array_keys($reply)));
-		$this->assertArrayNotHasKey('settings', $reply, 'no settings beside a token that was not carried');
-		$this->assertArrayNotHasKey('platform', $reply, 'no substituted or partial token');
+		$this->assertArrayHasKey('settings', $reply, 'the read answered ' . json_encode(array_keys($reply)));
+		$this->assertSame(['pendingToken' => NULL], array_intersect_key($reply['platform'] ?? [], ['pendingToken' => 1]),
+			'no substituted or partial token');
 		$this->assertSame("ab\xff\xfecd", file_get_contents($this->marker), 'the marker is as it was');
 	}
 }
