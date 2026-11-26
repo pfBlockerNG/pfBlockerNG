@@ -133,14 +133,76 @@ final class OutpostResourceFetchTest extends TestCase
 		$this->assertMirror("1.1.1.1\n198.51.100.0/24\n");
 	}
 
-	public function testAnEmptyFullBodyIsAValidStateAndLeavesAnEmptyMirror(): void
+	/** @return array<string, array{string, string}> an IP set of each family, and the placeholder its empty mirror holds */
+	public static function placeholders(): array
+	{
+		return ['IPv4' => [self::ID, "127.1.7.7\n"], 'IPv6' => ['ip-set/Abuse/ipv6', "::127.1.7.7\n"]];
+	}
+
+	/**
+	 * issue #4196: an empty set reaches its mirror as today's update pass writes an empty list, the placeholder address
+	 * (ip/ip_placeholder, 127.1.7.7 by default), so that pfSense's filter reload finds a table file it does not try to fetch
+	 * again; the cursor still records Core's empty body.
+	 */
+	#[DataProvider('placeholders')]
+	public function testAnEmptyFullBodyIsAValidStateAndLeavesThePlaceholderInTheMirror(string $id, string $placeholder): void
 	{
 		file_put_contents($this->mirror, self::OLD);
-		[$result] = $this->fetch([self::full('8', ''), self::text('')], self::cursor('7', self::OLD));
+		[$result] = $this->fetch([self::full('8', '', id: $id), self::text('')], self::cursor('7', self::OLD), id: $id);
 
 		$this->assertTrue($result['ok'], json_encode($result));
-		$this->assertSame(['full', 0], [$result['kind'], $result['entries']]);
+		$this->assertSame(['full', 0, hash('xxh128', '')], [$result['kind'], $result['entries'], $result['digest']]);
+		$this->assertMirror($placeholder);
+	}
+
+	public function testAnEmptyGeoCatalogLeavesAnEmptyMirror(): void
+	{
+		[$result] = $this->fetch([self::full('3', '', id: 'geo-catalog'), self::text('')], NULL, id: 'geo-catalog');
+
+		$this->assertTrue($result['ok'], json_encode($result));
 		$this->assertMirror('');
+	}
+
+	public function testThePlaceholderMirrorIsTheEmptyBodyItsCursorRecords(): void
+	{
+		file_put_contents($this->mirror, "127.1.7.7\n");
+		[$result, $requests] = $this->fetch([self::items(['kind' => 'unchanged', 'generation' => '7'])], self::cursor('7', ''));
+
+		$this->assertSame(['resources' => [self::ID => ['generation' => '7', 'digest' => hash('xxh128', '')]]], $requests[0]['params'],
+			'the cursor of the empty body is sent');
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame('unchanged', $result['kind']);
+		$this->assertMirror("127.1.7.7\n");
+	}
+
+	public function testAPlaceholderBesideACursorThatCountsMembersIsNoMirrorOfIt(): void
+	{
+		file_put_contents($this->mirror, "127.1.7.7\n");
+		[, $requests] = $this->fetch([self::full('8', self::OLD), self::text(self::OLD)], self::cursor('7', self::OLD));
+
+		$this->assertSame(['resources' => [self::ID => []]], $requests[0]['params'], 'no cursor is sent for a mirror that is not its body');
+		$this->assertMirror(self::OLD);
+	}
+
+	public function testADeltaFromTheEmptySetMergesIntoAMirrorWithoutThePlaceholder(): void
+	{
+		file_put_contents($this->mirror, "127.1.7.7\n");
+		$add = "1.1.1.1\n198.51.100.0/24\n";
+		[$result] = $this->fetch([self::delta('8', '7', $add, '', $add), self::text($add), self::text('')], self::cursor('7', ''));
+
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame(['delta', FALSE, 2], [$result['kind'], $result['fellBack'], $result['entries']]);
+		$this->assertMirror($add);
+	}
+
+	public function testADeltaToTheEmptySetLeavesThePlaceholderInTheMirror(): void
+	{
+		file_put_contents($this->mirror, self::OLD);
+		[$result] = $this->fetch([self::delta('8', '7', '', self::OLD, ''), self::text(''), self::text(self::OLD)], self::cursor('7', self::OLD));
+
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertSame(['delta', 0, hash('xxh128', '')], [$result['kind'], $result['entries'], $result['digest']]);
+		$this->assertMirror("127.1.7.7\n");
 	}
 
 	public function testTheCursorSentIsTheStoredGenerationWithTheMirrorsDigestAndUnchangedFetchesNothing(): void
