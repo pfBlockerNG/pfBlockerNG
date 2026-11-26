@@ -10,7 +10,8 @@ use PHPUnit\Framework\TestCase;
  * Issue #4031 (docs/specs/go-updater-pipeline.md §8.6): the settings adapter's read answers the pending-changes token beside the
  * settings, as `platform.pendingToken`, taken before the settings are read as sync_package_pfblockerng() takes it at its start. The
  * Core Updater hands it back unread and the Outpost apply settles exactly that token, so a change marked while the Update ran stays
- * pending. The token is opaque: carried whole or the read refused whole, never altered or truncated.
+ * pending. The token is opaque: a token the apply takes is carried whole; any other is answered as none (issue #4263), never
+ * altered or truncated.
  */
 #[CoversFunction('pfb_core_settings_backend')]
 #[CoversFunction('pfb_core_settings_serve')]
@@ -148,31 +149,24 @@ final class CoreSettingsPendingTokenTest extends TestCase
 			'control characters' => ["a\x01b\nc\td\"e\\f\x7f"],
 			'a NUL'              => ["a\0b"],
 			'multibyte text'     => ['tökén-✓'],
+			'not UTF-8'          => ["ab\xff\xfecd"],
 		];
 	}
 
+	/**
+	 * issue #4263: a token outside the apply's rule (pfb_pending_token_valid()) never leaves the Outpost: carried, a mebibyte
+	 * of it would put Core's request over the 1 MiB the apply reads and stop every Update. The read answers no token, never a
+	 * substituted or cut one, pendingApply still counts the marker, and the marker is left for the apply to repair.
+	 */
 	#[DataProvider('hostileTokens')]
-	public function testAHostileTokenIsCarriedWholeThroughTheServedReply(string $token): void
+	public function testAHostileTokenIsAnsweredAsNoTokenAndStillPending(string $token): void
 	{
 		file_put_contents($this->marker, $token);
 
 		$reply = json_decode(pfb_core_settings_serve('{"version":1,"op":"read"}'), TRUE, 512, JSON_THROW_ON_ERROR);
 
 		$this->assertArrayHasKey('settings', $reply, 'the read answered ' . json_encode(array_keys($reply)));
-		$carried = $reply['platform']['pendingToken'] ?? NULL;
-		$this->assertSame(strlen($token), strlen((string) $carried), 'the token is not truncated');
-		$this->assertTrue($token === $carried, 'the token is carried byte for byte');
-	}
-
-	public function testATokenThatIsNotUtf8RefusesTheReadWholeAndLeavesTheMarkerAlone(): void
-	{
-		file_put_contents($this->marker, "ab\xff\xfecd");
-
-		$reply = json_decode(pfb_core_settings_serve('{"version":1,"op":"read"}'), TRUE, 512, JSON_THROW_ON_ERROR);
-
-		$this->assertSame('unavailable', $reply['error']['code'] ?? NULL, 'JSON cannot carry it unaltered: ' . json_encode(array_keys($reply)));
-		$this->assertArrayNotHasKey('settings', $reply, 'no settings beside a token that was not carried');
-		$this->assertArrayNotHasKey('platform', $reply, 'no substituted or partial token');
-		$this->assertSame("ab\xff\xfecd", file_get_contents($this->marker), 'the marker is as it was');
+		$this->assertSame(['pendingToken' => NULL, 'pendingApply' => TRUE], $reply['platform'] ?? NULL);
+		$this->assertTrue($token === file_get_contents($this->marker), 'the marker is as it was');
 	}
 }

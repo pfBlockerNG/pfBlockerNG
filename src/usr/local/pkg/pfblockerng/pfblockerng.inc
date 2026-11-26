@@ -6936,15 +6936,15 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 	}
 	if ($request['op'] === 'read') {
 		// Before the settings, as the apply pass takes it: a change marked while they are read stays pending. JSON carries text only
-		$token = is_file(pfb_pending_changes_marker()) ? pfb_pending_changes_token() : NULL;
-		if ($token !== NULL && !mb_check_encoding($token, 'UTF-8')) {
-			return pfb_core_settings_refusal('unavailable', 'the pending-changes marker does not hold text');
-		}
+		$marked = is_file(pfb_pending_changes_marker()) ? pfb_pending_changes_token() : NULL;
+		// issue #4263: a token outside the apply's rule never leaves the Outpost (a mebibyte of it would put Core's request over
+		// what the apply reads); answered as none, while pendingApply counts the marker, and the apply replaces the token
+		$token = pfb_pending_token_valid($marked) ? $marked : NULL;
 		$settings = pfb_core_settings($interfaces);
 		// issue #4038: pending state beside the token, outside the settings and their revision; Core never reads the token to decide it.
 		// pfb_core_update_pending_apply() on the token just taken, reading no file that is absent: a read must not warn
 		$applied = pfb_pending_changes_marker() . '.applied';
-		$pending = ($token !== NULL && $token !== (is_file($applied) ? @file_get_contents($applied) : FALSE))
+		$pending = ($marked !== NULL && $marked !== (is_file($applied) ? @file_get_contents($applied) : FALSE))
 			|| pfb_due_ledger_is_pending('cron', (string) $pfb['dbdir']);
 		return ['version' => 1, 'revision' => pfb_core_settings_revision($settings), 'settings' => $settings,
 			'platform' => ['pendingToken' => $token, 'pendingApply' => $pending]];
@@ -13355,6 +13355,10 @@ function pfb_pending_changes_token(): ?string {
 		$token = @file_get_contents(pfb_pending_changes_marker());
 	}
 	return $token === FALSE ? NULL : $token;
+}
+// Whether $token is a pending-changes token the version 2 apply takes: 1 to 64 printable ASCII characters other than the space.
+function pfb_pending_token_valid(mixed $token): bool {
+	return is_string($token) && preg_match('/^[\x21-\x7e]{1,64}\z/', $token) === 1;
 }
 // Writes only a new version: a routine pass with nothing pending leaves persistent storage alone.
 function pfb_settle_pending_changes(?string $seen): void {

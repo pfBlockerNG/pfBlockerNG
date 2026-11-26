@@ -328,8 +328,8 @@ func TestCoreWritesWhatTheApplyAccepts(t *testing.T) {
 	tokens := 0
 	byteForByte := map[string]bool{}
 	for _, row := range doc.Requests {
-		if row.Refused != nil {
-			continue
+		if row.Refused != nil || slices.Contains(tokenHandedBackByCore, row.ID) {
+			continue // a token the apply reads as none: TestTheTokenRowsAreReadAsNoToken
 		}
 		t.Run(row.ID, func(t *testing.T) {
 			stdin := input(t, row)
@@ -426,17 +426,16 @@ var issuesNormalisedByCore = []string{"over-1-mib", "ten-mib", "issues-4097", "i
 	"issue-code-tab", "issue-resource-e-acute", "issue-code-unit-separator", "issue-resource-257-bytes", "issue-resource-empty",
 	"issue-code-empty"}
 
-// The refused rows whose only fault is their pendingToken (TestTheTokenRowsAreRefusedForTheirTokenAlone), which Core writes
-// with the token as the row holds it: the token is the platform's; Core hands back what the settings read gave it; what the
-// loop does when the apply would refuse the marker is settled in sub-slice 9i (#4038).
+// The rows whose pendingToken is not 1 to 64 printable ASCII characters (TestTheTokenRowsAreReadAsNoToken). Core writes the
+// token as the row holds it: the token is the platform's, and Core hands back what the settings read gave it. The apply reads
+// such a token as none and replaces it in the marker by a fresh mark (owner, 2026-11-23, #4263).
 var tokenHandedBackByCore = []string{"token-empty", "token-65", "token-line-break", "token-trailing-line-feed", "token-nul",
 	"token-space", "token-non-ascii", "token-number"}
 
 // WHEN Core is asked to write the request of each refused row THEN its writer refuses it, or its types cannot hold it, or the
-// row's fault is only in its issues and Core writes them in the normal form the apply accepts, or the row's fault is only its
-// token and Core writes the token unchanged.
+// row's fault is only in its issues and Core writes them in the normal form the apply accepts.
 func TestCoreNeverWritesARequestTheApplyRefuses(t *testing.T) {
-	refused, encoded, handedBack := 0, 0, 0
+	refused, encoded := 0, 0
 	for _, row := range readContract(t).Requests {
 		if row.Refused == nil {
 			continue
@@ -463,29 +462,19 @@ func TestCoreNeverWritesARequestTheApplyRefuses(t *testing.T) {
 						t.Errorf("Core writes the issue %+.300q, not in the apply's normal form", is)
 					}
 				}
-			case slices.Contains(tokenHandedBackByCore, row.ID) && err != nil:
-				t.Errorf("Core hands the token back without looking inside it, but refuses the request: %v", err)
-			case slices.Contains(tokenHandedBackByCore, row.ID):
-				handedBack++
-				if got, want := tokenOf(t, written), tokenOf(t, input(t, row)); !bytes.Equal(got, want) {
-					t.Errorf("Core writes the token %s, the row holds %s", got, want)
-				}
 			case err == nil:
 				t.Errorf("the apply refuses it (%s), Core writes %.300s", *row.Refused, written)
 			}
 		})
 	}
-	if refused < 100 || encoded < 85 {
+	if refused < 100 || encoded < 78 {
 		t.Errorf("%d refused rows, %d of them asked of Encode", refused, encoded)
-	}
-	if handedBack != len(tokenHandedBackByCore) {
-		t.Errorf("%d rows written with their token handed back, %d listed", handedBack, len(tokenHandedBackByCore))
 	}
 }
 
-// WHEN each row Core writes with its token handed back is read THEN the apply refuses it for its token, and the same request
-// without its token is an accepted row: the list hides no other fault.
-func TestTheTokenRowsAreRefusedForTheirTokenAlone(t *testing.T) {
+// WHEN each row with a token the apply does not take is read THEN it is accepted as the same request without its token, and
+// Core writes it with the token as the row holds it: the token is handed back, and the apply alone reads it as none.
+func TestTheTokenRowsAreReadAsNoToken(t *testing.T) {
 	doc := readContract(t)
 	for _, id := range tokenHandedBackByCore {
 		i := slices.IndexFunc(doc.Requests, func(r contractRow) bool { return r.ID == id })
@@ -494,8 +483,9 @@ func TestTheTokenRowsAreRefusedForTheirTokenAlone(t *testing.T) {
 			continue
 		}
 		row := doc.Requests[i]
-		if row.Refused == nil || *row.Refused != "pendingToken is not 1 to 64 printable ASCII characters" {
-			t.Errorf("%s: refused for %v, not for its token", id, row.Refused)
+		if row.Refused != nil {
+			t.Errorf("%s: refused for %q, not read as no token", id, *row.Refused)
+			continue
 		}
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(row.Request, &m); err != nil || m["pendingToken"] == nil {
@@ -508,9 +498,21 @@ func TestTheTokenRowsAreRefusedForTheirTokenAlone(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !slices.ContainsFunc(doc.Requests, func(r contractRow) bool {
-			return r.Refused == nil && reflect.DeepEqual(decodeAny(t, input(t, r)), decodeAny(t, without))
+			return r.Refused == nil && reflect.DeepEqual(decodeAny(t, input(t, r)), decodeAny(t, without)) &&
+				reflect.DeepEqual(decodeAny(t, r.Accepted), decodeAny(t, row.Accepted))
 		}) {
-			t.Errorf("%s: without its token, %s is no accepted row", id, without)
+			t.Errorf("%s: its normal form is not that of %s, accepted", id, without)
+		}
+		req, reason := asRequest(input(t, row))
+		if reason != "" {
+			t.Errorf("%s: Core's types cannot hold the request (%s), so nothing shows the token handed back", id, reason)
+			continue
+		}
+		written, err := apply.Encode(req)
+		if err != nil {
+			t.Errorf("%s: Core hands the token back without looking inside it, but refuses the request: %v", id, err)
+		} else if got, want := tokenOf(t, written), tokenOf(t, input(t, row)); !bytes.Equal(got, want) {
+			t.Errorf("%s: Core writes the token %s, the row holds %s", id, got, want)
 		}
 	}
 }

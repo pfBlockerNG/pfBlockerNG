@@ -6777,7 +6777,7 @@ function pfb_core_update_v2_list(string $field, mixed $value, int $max = PFB_COR
 
 /**
  * The version 2 request Core sends the update command on stdin, validated whole: anything it does not understand refuses it,
- * with the reason, before anything runs. A field that is null is absent; trigger is required, scope defaults to both. Each id
+ * with the reason, before anything runs, except a pendingToken outside its rule, which is read as none (issue #4263). A field that is null is absent; trigger is required, scope defaults to both. Each id
  * is a resource id the apply handles (no dnsbl/*: pfB-DNS fetches those), once across resources and removed, which hold at
  * most PFB_CORE_UPDATE_V2_MAX_IDS ids together, and maps to an alias (the geo-catalog has none). scope does not constrain
  * what the lists hold: the apply honours it when it acts. The normal form gives each ip-set and ip-aggregate its alias, and
@@ -6800,10 +6800,8 @@ function pfb_core_update_v2_request(string $stdin): array
 		['version', 'trigger', 'scope', 'pendingToken', 'pendingOutsideWindow', 'resources', 'removed', 'dnsbl', 'issues']);
 	$trigger = pfb_core_update_choose($request, 'trigger', ['scheduled', 'manual', 'apply', 'retry'], NULL);
 	$scope = pfb_core_update_choose($request, 'scope', ['ip', 'dnsbl', 'both'], 'both');
-	$token = $request['pendingToken'] ?? NULL;
-	if ($token !== NULL && (!is_string($token) || preg_match('/^[\x21-\x7e]{1,64}\z/', $token) !== 1)) {
-		throw new InvalidArgumentException('pendingToken is not 1 to 64 printable ASCII characters');
-	}
+	// issue #4263 (owner, 2026-11-23): any other token is read as none; the apply replaces the marker's token
+	$token = pfb_pending_token_valid($request['pendingToken'] ?? NULL) ? $request['pendingToken'] : NULL;
 	$outside = $request['pendingOutsideWindow'] ?? FALSE;
 	if (!is_bool($outside)) {
 		throw new InvalidArgumentException('pendingOutsideWindow is not a boolean');
@@ -7119,13 +7117,22 @@ function pfb_outpost_apply(array $request, $out, ?string $socket = NULL, array $
 	try {
 		pfb_global();
 		$pfb['save'] = FALSE;
+		// first: the deferrals below write a mark over a bad token, and its issue is filed with Core's wherever they are
+		$repaired = pfb_outpost_repair_pending_marker();
+		$request['issues'] = [...$request['issues'], ...$repaired];
 		if ($request['pendingOutsideWindow']) {
+			if ($repaired !== []) {
+				pfb_outpost_issues($request['issues']);
+			}
 			pfb_mark_pending_changes();
 			pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
 			pfb_logger("\n Outpost apply: outside the apply window, the changes are marked pending.\n", 1);
 			return $status = pfb_outpost_report($out, []) ? 0 : 1;
 		}
 		if (!pfb_geoip_generation_ready()) {
+			if ($repaired !== []) {
+				pfb_outpost_issues($request['issues']);
+			}
 			pfb_mark_pending_changes();
 			pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
 			pfb_logger("\n Outpost apply deferred: GeoIP generation swap in progress; pending changes retained.\n", 1);
@@ -7531,6 +7538,27 @@ function pfb_outpost_expected_aliases(): array
 		}
 	}
 	return $expected;
+}
+
+/**
+ * Issue #4263 (owner, 2026-11-23): a pending marker whose token the apply does not take (pfb_pending_token_valid()) would make
+ * every apply refuse its request. Its token is discarded: the marker is rewritten with a fresh mark (pfb_mark_pending_changes()),
+ * so what was pending stays pending until an apply settles the new mark, and a save writing meanwhile writes a valid mark too,
+ * so none is lost. The issue is returned for the status page, where its entry stays until the next apply (pfb_outpost_issues()
+ * closes what a request no longer names; the notice stays). An empty marker is a mark to version, not a bad token.
+ *
+ * @return list<array{resource: string, stage: string, code: string, message: string}>
+ */
+function pfb_outpost_repair_pending_marker(): array
+{
+	$marker = pfb_pending_changes_marker();
+	$held = @file_get_contents($marker);
+	if (!is_string($held) || $held === '' || pfb_pending_token_valid($held) || $held === @file_get_contents("{$marker}.applied")) {
+		return [];	// a mark, a mark to version, or a bad token already settled: nothing pending to repair
+	}
+	pfb_mark_pending_changes();
+	return [['resource' => 'pending-marker', 'stage' => 'apply', 'code' => 'pending_token_invalid',
+		'message' => 'the pending-changes marker held a token that is not 1 to 64 printable ASCII characters; it was replaced by a new mark']];
 }
 
 /**

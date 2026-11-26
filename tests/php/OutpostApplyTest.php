@@ -313,6 +313,58 @@ final class OutpostApplyTest extends TestCase
 		$this->assertTrue($r['pending'], 'the later mark is still pending');
 	}
 
+	/**
+	 * issue #4263 (owner, 2026-11-23): WHEN the pending marker holds a token that is not 1 to 64 printable ASCII characters, and
+	 * Core hands it back THEN the apply replaces the token by a fresh mark, files an issue the status page shows, and applies the
+	 * request; what was pending stays pending for the next apply to settle.
+	 */
+	public function testAMarkerWithAnInvalidTokenIsDiscardedAndTheApplyProceeds(): void
+	{
+		$bad = "bad token\n";
+		$apply = self::at([self::ABUSE => ['1', self::OLD]]) + ['pendingToken' => $bad, 'apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)], ['pendingToken' => $bad]),
+			'core'    => [self::full(self::ABUSE, '2', self::NEW), self::text(self::NEW)],
+		]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame([self::ABUSE => '2'], self::generations($r), 'the request was applied');
+		$this->assertSame(self::NEW, $r['kernel']['pfB_Abuse_v4']);
+		$this->assertTrue($r['pending'], 'the marker holds a fresh mark, still pending');
+		$entry = json_decode($r['syncStatus']['pfb_sync_status.json'] ?? '{}', TRUE)['ip']['pending-marker']['core'] ?? NULL;
+		$this->assertIsArray($entry, 'the status page shows the issue: ' . ($r['syncStatus']['pfb_sync_status.json'] ?? 'no ledger'));
+		$this->assertStringStartsWith('pending_token_invalid: ', $entry['message']);
+		$this->assertNotEmpty(array_filter($r['notices'], static fn (array $n): bool => str_contains($n['notice'], 'pending-marker')),
+			'the issue is filed as a notice');
+	}
+
+	/** An empty marker is a mark still to be versioned, not a bad token: the apply keeps it and files no issue for it. */
+	public function testAnEmptyMarkerIsNoBadTokenAndIsKept(): void
+	{
+		$apply = self::at([self::ABUSE => ['2', self::OLD]]) + ['pendingToken' => '', 'apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)]),
+			'core'    => [self::unchanged(self::ABUSE, '2')],
+		]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertTrue($r['pending'], 'the empty marker is still pending');
+		$this->assertStringNotContainsString('pending-marker', $r['syncStatus']['pfb_sync_status.json'] ?? '');
+	}
+
+	/** issue #4263: outside the window the apply marks the changes pending over a bad token, and still reports the repair. */
+	public function testOutsideTheWindowABadTokenIsStillReported(): void
+	{
+		$apply = self::at([self::ABUSE => ['1', self::OLD]]) + ['pendingToken' => "bad token\n", 'apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)], ['pendingOutsideWindow' => TRUE])]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertTrue($r['pending']);
+		$this->assertStringContainsString('pending_token_invalid', $r['syncStatus']['pfb_sync_status.json'] ?? '',
+			'the status page shows the repair');
+	}
+
 	/** With pendingOutsideWindow the apply marks the changes pending, applies nothing and writes one line without applied. */
 	public function testOutsideTheWindowTheChangesAreMarkedPendingAndNothingIsApplied(): void
 	{
