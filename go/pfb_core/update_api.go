@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,7 +16,6 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/scheduler"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update"
-	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update/feedstage"
 )
 
 // newUpdates builds Core's scheduler and Update gate for --update-cmd. An empty path means no scheduler, and both are nil.
@@ -137,24 +135,14 @@ func scheduleModel(st *settings.Store) func() (schedule.Model, error) {
 // schedule"). Without a scheduler (no --update-cmd) each answers unavailable.
 func updateMethods(stateDir string, sched *scheduler.Scheduler, gate *update.Gate) map[string]method {
 	methods := map[string]method{
-		// issue #4257: the widget's "Clear Failed Downloads" resets the Core Updater's retry count of the named feeds (all
-		// when feeds is absent), held in updater.json for the day, so the next Update that comes to them fetches them.
+		// issue #4257: the widget's "Clear Failed Downloads"
 		"ResetFeedFailures": {mutating: true, call: func(_ context.Context, params []byte) (any, error) {
-			var p struct {
-				RequestID string   `json:"requestId"`
-				Feeds     []string `json:"feeds"` // absent or null: every feed
-			}
-			if err := decodeParams(params, &p); err != nil {
+			if err := decodeParams(params, &struct {
+				RequestID string `json:"requestId"`
+			}{}); err != nil {
 				return nil, err
 			}
-			for i, name := range p.Feeds {
-				if !feedstage.ValidName(name) {
-					return nil, newError(codeInvalidArgument, "the feeds are not feed names; nothing was reset",
-						fieldError{Field: fmt.Sprintf("feeds[%d]", i), Message: "must be letters, digits and underscores"})
-				}
-			}
-			// an Update may be running: the state's lock keeps the reset and its saves apart (update.ResetFailures)
-			if err := update.ResetFailures(stateDir, p.Feeds); err != nil {
+			if err := update.ResetFailures(stateDir); err != nil {
 				return nil, newError(codeUnavailable, err.Error())
 			}
 			return struct{}{}, nil

@@ -77,19 +77,21 @@ func lockState(dir string) (*os.File, error) {
 	return f, nil
 }
 
-// ResetFailures clears the failed downloads counted today for the named feeds, or for every feed when feeds is nil, in the
-// Updater's state in dir, so the next Update that comes to them (their next scheduled run, or a manual one) fetches them
-// instead of skipping them at the retry cap (issue #4257, "Clear Failed Downloads"). The rest of the state is kept; a reset
-// that clears no count writes nothing. A state that does not exist is left so; one that cannot be read is an error, never
-// replaced. It may come while an Update runs: the state's lock keeps the two apart, and the Update adds only its own
-// failures to what it then finds (saveState).
-func ResetFailures(dir string, feeds []string) error {
+// ResetFailures clears every feed's failed downloads counted today in the Updater's state in dir, so the next Update that
+// comes to a feed (its next scheduled run, or a manual one) fetches it instead of skipping it at the retry cap (issue #4257,
+// "Clear Failed Downloads"). The Updater's other state is kept, and a state with no count is not written. A state that
+// does not exist is left so; one that cannot be read is an error, never replaced. A reset may come while an Update runs:
+// under the state's lock, the Update adds only its own failures to what it then finds (saveState).
+func ResetFailures(dir string) error {
+	path := filepath.Join(dir, updaterStateName)
+	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
+		return nil // nothing counted, and no lock file left behind
+	}
 	lock, err := lockState(dir)
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
-	path := filepath.Join(dir, updaterStateName)
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -101,21 +103,10 @@ func ResetFailures(dir string, feeds []string) error {
 	if err := json.Unmarshal(b, &st); err != nil {
 		return fmt.Errorf("%s cannot be read: %w", updaterStateName, err)
 	}
-	cleared := feeds == nil && len(st.Failures) > 0
-	if feeds == nil {
-		st.Failures = nil
-	}
-	for _, name := range feeds {
-		_, had := st.Failures[name]
-		cleared = cleared || had
-		delete(st.Failures, name)
-	}
-	if !cleared {
+	if len(st.Failures) == 0 {
 		return nil
 	}
-	if len(st.Failures) == 0 {
-		st.Failures, st.FailuresDay = nil, ""
-	}
+	st.Failures, st.FailuresDay = nil, ""
 	out, err := json.Marshal(st)
 	if err != nil {
 		return err
@@ -448,9 +439,14 @@ func (u *updater) saveState() error {
 	}
 	defer lock.Close()
 	st := u.state
-	held := readUpdaterState(u.stateDir)
 	st.Failures = map[string]int{}
-	if held.FailuresDay == u.state.FailuresDay {
+	var held updaterState
+	b, err := os.ReadFile(filepath.Join(u.stateDir, updaterStateName))
+	switch {
+	case err != nil || json.Unmarshal(b, &held) != nil:
+		// missing or unreadable is no reset (a reset never removes the file): the counts read at the start stand
+		maps.Copy(st.Failures, u.state.Failures)
+	case held.FailuresDay == u.state.FailuresDay:
 		maps.Copy(st.Failures, held.Failures)
 	}
 	for name, n := range u.added {
@@ -459,11 +455,11 @@ func (u *updater) saveState() error {
 	if len(st.Failures) == 0 {
 		st.Failures, st.FailuresDay = nil, ""
 	}
-	b, err := json.Marshal(st)
+	out, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
-	if err := writeList(filepath.Join(u.stateDir, updaterStateName), string(b)); err != nil {
+	if err := writeList(filepath.Join(u.stateDir, updaterStateName), string(out)); err != nil {
 		return err
 	}
 	u.added = nil

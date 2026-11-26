@@ -30,8 +30,8 @@ final class ResetFeedFailuresTest extends TestCase
 		$down = static fn (): array => ['status' => 0, 'body' => NULL, 'error' => 'the Core API did not answer: no socket'];
 		$this->assertSame('the Core API did not answer: no socket', pfb_reset_feed_failures($down));
 
-		$busy = static fn (): array => ['status' => 409, 'body' => ['error' => ['code' => 'conflict',
-			'message' => 'an Update is running; nothing was reset']], 'error' => NULL];
-		$this->assertSame('conflict: an Update is running; nothing was reset', pfb_reset_feed_failures($busy));
+		$noLoop = static fn (): array => ['status' => 503, 'body' => ['error' => ['code' => 'unavailable',
+			'message' => 'Core runs no scheduler: start it with --update-cmd']], 'error' => NULL];
+		$this->assertSame('unavailable: Core runs no scheduler: start it with --update-cmd', pfb_reset_feed_failures($noLoop));
 	}
 }
