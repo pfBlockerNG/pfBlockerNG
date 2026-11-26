@@ -19426,7 +19426,7 @@ function pfb_unbound_python_sources_unlock(?callable $call = NULL) {
  * @param list<string> $domains
  */
 function pfb_set_temporary_unlocks(callable $call, array $domains): ?string {
-	return pfb_update_core_failure($call('SetTemporaryUnlocks', ['requestId' => bin2hex(random_bytes(16)), 'domains' => array_values($domains)],
+	return pfb_update_core_failure($call('SetTemporaryUnlocks', ['requestId' => bin2hex(random_bytes(16)), 'domains' => $domains],
 		NULL, PFB_CORE_PAGE_TIMEOUT));
 }
 

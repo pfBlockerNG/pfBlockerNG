@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/dnsbl"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedparse"
@@ -11,8 +12,13 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update"
 )
 
-// maxUnlocks bounds the temporary unlocks one request carries: the Alerts page unlocks a domain at a time.
+// maxUnlocks bounds the set of temporary unlocks Core holds, which each request carries whole; a page holding more is refused
+// on every click until a Lock or an Update brings it under.
 const maxUnlocks = 4096
+
+// unlockMu makes SetTemporaryUnlocks requests one at a time: two clicks at once are no Update to refuse, and without Updates it
+// is the store's one writer.
+var unlockMu sync.Mutex
 
 // unlockMethods is SetTemporaryUnlocks (issue #4264; owner, 2026-11-24): Core holds the Alerts page's temporary unlocks. Each
 // Lock and Unlock sends the whole set of unlocked domains, and Core republishes dnsbl/manifest with them as its unlock rows,
@@ -52,6 +58,8 @@ func unlockMethods(store *resources.Store, gate *update.Gate) map[string]method 
 				_, _, err := dnsbl.SetUnlocks(store, *p.Domains)
 				return err
 			}
+			unlockMu.Lock()
+			defer unlockMu.Unlock()
 			// the Updater is the store's other writer: with no Updates, nothing else writes it
 			var err error
 			if gate == nil {

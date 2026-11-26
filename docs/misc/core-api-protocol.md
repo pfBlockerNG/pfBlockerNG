@@ -799,7 +799,8 @@ them through its poll. The next Update's DNSBL build publishes no `unlock` row: 
 | --- | --- |
 | `{"requestId": "...", "domains": ["example.com", ...]}` | `{}` |
 
-`domains` is required, at most 4096 of them, each a domain as `PFB_FILTER_DOMAIN` takes it; `[]` locks every one. Anything
+`domains` is required, at most 4096 of them (a page holding more is refused on every click until a Lock or an Update brings
+it under), each a domain as `PFB_FILTER_DOMAIN` takes it; `[]` locks every one. Anything
 else is `invalid_argument` with a field error per domain, and changes nothing. While an Update runs the method answers
 `conflict`: the Update is the store's writer, and its end re-locks every unlock anyway. A store that holds no
 `dnsbl/manifest` (before the cutover PHP publishes the manifest pfB-DNS reads) is answered `{}` and written nothing. Without

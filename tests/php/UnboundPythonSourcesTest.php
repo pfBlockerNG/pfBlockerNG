@@ -15,7 +15,7 @@ use PHPUnit\Framework\TestCase;
  * It runs against a temp $pfb sandbox (no live box).
  *
  * Also covers the #51 temporary-unlock plumbing: the full build clears
- * config.user_unlock (Force/Cron re-lock), and pfb_unbound_python_sources_unlock()
+ * config.user_unlock (Force/Cron re-lock), and pfb_unbound_python_sources_unlock(self::coreRecorder()[0])
  * recomputes it in place from the live pfb_unlock store (pfb_dnsbl_unlock_lines()).
  *
  * PFBL-01 boundary coverage (both sides of each new validation branch):
@@ -378,7 +378,7 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertSame([], $m['config']['user_unlock']);
 
 		file_put_contents("{$this->tmp}/dnsbl_unlock", "evil.com,python\nfoo.org,python\n");
-		$this->assertTrue(pfb_unbound_python_sources_unlock());
+		$this->assertTrue(pfb_unbound_python_sources_unlock(self::coreRecorder()[0]));
 
 		$patched = json_decode(file_get_contents("{$this->tmp}/pfb_py_sources.json"), TRUE);
 		$this->assertSame(['evil.com', 'foo.org'], $patched['config']['user_unlock']);
@@ -396,10 +396,10 @@ final class UnboundPythonSourcesTest extends TestCase
 	{
 		pfb_unbound_python_sources($this->feeds());
 		file_put_contents("{$this->tmp}/dnsbl_unlock", "evil.com,python\n");
-		pfb_unbound_python_sources_unlock();
+		pfb_unbound_python_sources_unlock(self::coreRecorder()[0]);
 
 		unlink("{$this->tmp}/dnsbl_unlock");           // store emptied (lock / Cron / Force)
-		$this->assertTrue(pfb_unbound_python_sources_unlock());
+		$this->assertTrue(pfb_unbound_python_sources_unlock(self::coreRecorder()[0]));
 		$patched = json_decode(file_get_contents("{$this->tmp}/pfb_py_sources.json"), TRUE);
 		$this->assertSame([], $patched['config']['user_unlock']);
 	}
@@ -464,7 +464,7 @@ final class UnboundPythonSourcesTest extends TestCase
 	{
 		// No full build ran -> no manifest to patch.
 		$this->assertFileDoesNotExist("{$this->tmp}/pfb_py_sources.json");
-		$this->assertFalse(pfb_unbound_python_sources_unlock());
+		$this->assertFalse(pfb_unbound_python_sources_unlock(self::coreRecorder()[0]));
 	}
 
 	// --- PFBL-01: header re-validation at the manifest choke point ----------------
