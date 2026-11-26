@@ -28,9 +28,10 @@ func etServer(t *testing.T, body []byte) (*httptest.Server, *atomic.Int32) {
 
 const etCSV = "192.0.2.10,1,127\n198.51.100.20,2,88\n198.51.100.40,15,2\n"
 
-// issue #4256: an uncompressed ET IQRisk source keeps no download to split again, so its Reload downloads it: the
-// categories now selected take effect, where today's Reload splits the published split and publishes an empty list.
-func TestAReloadOfAnUncompressedETFeedDownloadsAndSplitsWithTheCategoriesNowSelected(t *testing.T) {
+// issue #4256: an uncompressed ET IQRisk source keeps the CSV it split as .raw, so its Reload splits it again offline with
+// the categories now selected, where today's Reload, which keeps no .raw, splits the published split and publishes an
+// empty list.
+func TestAReloadOfAnUncompressedETFeedSplitsItsKeptCSVAgain(t *testing.T) {
 	srv, requests := etServer(t, []byte(etCSV))
 	stage := testStage(t)
 	stage.Fetcher.ETDir = t.TempDir()
@@ -50,8 +51,8 @@ func TestAReloadOfAnUncompressedETFeedDownloadsAndSplitsWithTheCategoriesNowSele
 	if !strings.Contains(got, "198.51.100.40") || strings.Contains(got, "192.0.2.10") {
 		t.Errorf("the Reload's list %q, want ET_P2P's address alone", got)
 	}
-	if n := requests.Load(); n != 2 {
-		t.Errorf("%d requests, want the Reload's download too", n)
+	if n := requests.Load(); n != 1 {
+		t.Errorf("%d requests, want the first run's alone: a Reload transfers nothing", n)
 	}
 }
 

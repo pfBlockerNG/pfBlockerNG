@@ -111,3 +111,33 @@ func TestAReloadWhoseKeptDownloadDoesNotSplitIsNoFailedTransfer(t *testing.T) {
 		t.Errorf("the Reload = %+v, want failed at a stage other than fetch", r)
 	}
 }
+
+// deadlineCtx has passed its deadline from the moment a file matches its pattern.
+type deadlineCtx struct{ globCtx }
+
+func (c deadlineCtx) Err() error {
+	if c.globCtx.Err() != nil {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+// A Reload whose split outlives the Update's deadline is a failed split, not a cancellation, as a transfer past its deadline
+// is a failed download.
+func TestAReloadPastItsDeadlineDuringTheETSplitIsAFailedSplit(t *testing.T) {
+	srv, _ := etServer(t, gzipped(t, etCSV))
+	stage := testStage(t)
+	stage.Fetcher.ETDir = t.TempDir()
+	stage.Fetcher.ETBlock = []string{"ET_Cnc"}
+	feed := testFeed("ipv4", "enabled", "auto", srv.URL+"/iprepdata.txt.gz")
+	if r := run(stage, feed, "none"); r.Disposition != "changed" {
+		t.Fatalf("the first run = %+v", r)
+	}
+	ctx := deadlineCtx{globCtx{context.Background(), filepath.Join(stage.Paths.FeedDir, runPrefix+feed.Name, ".pfbstage_*"), new(bool)}}
+
+	r := stage.Run(ctx, feed, Change{Force: "parse"})
+
+	if r.Disposition != "failed" || r.Reason == "cancelled" || r.Stage != "parse" {
+		t.Errorf("the Reload past its deadline = %+v, want a failed split at stage parse", r)
+	}
+}

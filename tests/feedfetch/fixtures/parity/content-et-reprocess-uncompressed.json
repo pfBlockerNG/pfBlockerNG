@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "description": "#4256: a Reload of an uncompressed ET IQRisk feed has no .raw to split again (only an archive keeps it). Core keeps the published split and its match file; the old path splits the published split, which holds no category, and publishes nothing.",
+ "description": "#4256: a Reload of an uncompressed ET IQRisk feed splits the CSV its ingest kept as .raw again with the categories now selected, without a transfer. The old path keeps no .raw: it splits the published split, which names no category, and publishes an empty list.",
  "hosts": {
   "feed.example": [
    "127.0.0.1",
@@ -49,6 +49,27 @@
      "ET_Spam.txt": "203.0.113.30\n203.0.113.31\n",
      "ET_P2P.txt": "198.51.100.40\n"
     },
+    "et_match": "203.0.113.30\n203.0.113.31\n",
+    "raw_retained": true
+   },
+   "old_expect": {
+    "ok": true,
+    "published": "198.51.100.20\n192.0.2.10\n192.0.2.11\n",
+    "digest": "0dd85c33197d54970407de0c14632bd0",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/iprepdata.txt"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000,
+    "et_split": {
+     "ET_Cnc.txt": "192.0.2.10\n192.0.2.11\n",
+     "ET_Bot.txt": "198.51.100.20\n",
+     "ET_Spam.txt": "203.0.113.30\n203.0.113.31\n",
+     "ET_P2P.txt": "198.51.100.40\n"
+    },
     "et_match": "203.0.113.30\n203.0.113.31\n"
    }
   },
@@ -61,15 +82,16 @@
    },
    "expect": {
     "ok": true,
-    "published": "198.51.100.20\n192.0.2.10\n192.0.2.11\n",
+    "published": "198.51.100.40\n",
     "requests": [],
+    "raw_retained": true,
     "et_split": {
      "ET_Cnc.txt": "192.0.2.10\n192.0.2.11\n",
      "ET_Bot.txt": "198.51.100.20\n",
      "ET_Spam.txt": "203.0.113.30\n203.0.113.31\n",
      "ET_P2P.txt": "198.51.100.40\n"
     },
-    "et_match": "203.0.113.30\n203.0.113.31\n"
+    "et_match": "198.51.100.20\n"
    },
    "old_expect": {
     "ok": true,

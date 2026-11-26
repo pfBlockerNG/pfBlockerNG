@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "description": "C05: with no Block and no Match category the published copy is empty and no match file is written.",
+ "description": "C05: with no Block and no Match category the published copy is empty and no match file is written. Core keeps the CSV it split as .raw, which a Reload splits again (#4256); the old path keeps none.",
  "hosts": {
   "feed.example": [
    "127.0.0.1",
@@ -32,6 +32,27 @@
    "op": "ingest",
    "url": "http://feed.example:{port:origin}/iprepdata.txt",
    "expect": {
+    "ok": true,
+    "published": "",
+    "digest": "0dd85c33197d54970407de0c14632bd0",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/iprepdata.txt"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000,
+    "et_split": {
+     "ET_Cnc.txt": "192.0.2.10\n192.0.2.11\n",
+     "ET_Bot.txt": "198.51.100.20\n",
+     "ET_Spam.txt": "203.0.113.30\n203.0.113.31\n",
+     "ET_P2P.txt": "198.51.100.40\n"
+    },
+    "et_match": null,
+    "raw_retained": true
+   },
+   "old_expect": {
     "ok": true,
     "published": "",
     "digest": "0dd85c33197d54970407de0c14632bd0",
