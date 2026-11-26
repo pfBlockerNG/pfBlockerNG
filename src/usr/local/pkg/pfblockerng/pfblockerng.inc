@@ -8897,6 +8897,15 @@ EOF;
 			;;
 	esac
 
+	# A RAM-disk install (use_mfs_tmpvar) loses its RAM disks when it restarts: pfSense's own stop (no argument; not the stop a start or restart
+	# makes before its launch) archives the Core input's cache folder, now that pfB-DNS no longer writes it (issue #4259). Under
+	# the publication lock, bounded; a failure costs only the next boot's warm start, never the stop.
+	if [ "\$#" -eq 0 ] && [ -d /var/unbound/pfb_dns ] &&
+	    [ "\$(/usr/local/sbin/read_xml_tag.sh boolean system/use_mfs_tmpvar)" = 'true' ]; then
+		/usr/bin/timeout -s TERM -k 5 60 {$pfb['php']} -f /usr/local/pkg/pfblockerng/pfblockerng.inc dnsbl_cache >/dev/null 2>&1 ||
+			/usr/bin/logger -p daemon.warning -t pfb_dns_proxy "WARNING [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy: the DNSBL archive could not be written at the stop - the next boot starts pfB-DNS without its cached data"
+	fi
+
 EOF;
 
 	// A survivor must fail the restart: the start's healthy check would otherwise report success over it
