@@ -111,7 +111,19 @@ final class OutpostRepairPendingMarkerTest extends TestCase
 
 		unlink($this->marker);
 		file_put_contents("{$this->marker}.discard", self::BAD);
-		$this->assertSame([], pfb_outpost_repair_pending_marker());
-		$this->assertSame([], $this->left(), 'a bad token set aside is removed');
+		file_put_contents("{$this->marker}.applied", 'older');
+		$this->assertCount(1, pfb_outpost_repair_pending_marker(), 'a bad token set aside is discarded and reported');
+		$this->assertSame([], $this->left(), 'with its applied record');
+	}
+
+	public function testAnAsideThatVanishesIsNotReportedAsDiscarded(): void
+	{
+		file_put_contents($this->marker, self::BAD);
+		file_put_contents("{$this->marker}.applied", 'older');
+
+		$issues = pfb_outpost_repair_pending_marker(['aside' => fn () => unlink("{$this->marker}.discard")]);
+
+		$this->assertSame([], $issues, 'nothing known was discarded here');
+		$this->assertSame(['pending.applied'], $this->left(), 'the applied record stays');
 	}
 }

@@ -7549,20 +7549,30 @@ function pfb_outpost_repair_pending_marker(array $seams = []): array
 {
 	$marker = pfb_pending_changes_marker();
 	$aside = "{$marker}.discard";
-	$isMark = static fn (mixed $held): bool => $held === '' || pfb_pending_token_valid($held);
-	$putBack = static function () use ($marker, $aside, $isMark): bool {
-		if (!$isMark(@file_get_contents($aside))) {
-			return FALSE;
+	// What is set aside decides: a mark goes back, a bad token is discarded and reported, an aside gone meanwhile is nothing.
+	$settle = static function () use ($marker, $aside): array {
+		$held = @file_get_contents($aside);
+		if (!is_string($held)) {
+			return [];
 		}
-		@link($aside, $marker);	// a newer marker stands: it supersedes the one set aside
+		if ($held === '' || pfb_pending_token_valid($held)) {
+			// link() never replaces a newer marker; a filesystem without hard links takes the rename while none stands
+			if (!@link($aside, $marker) && !file_exists($marker)) {
+				@rename($aside, $marker);
+			}
+			@unlink($aside);
+			return [];
+		}
 		@unlink($aside);
-		return TRUE;
+		@unlink("{$marker}.applied");
+		return [['resource' => 'pending-marker', 'stage' => 'apply', 'code' => 'pending_token_invalid',
+			'message' => 'the pending-changes marker held a token that is not 1 to 64 printable ASCII characters; it was discarded']];
 	};
-	if (file_exists($aside) && !$putBack()) {
-		@unlink($aside);
+	if (file_exists($aside)) {
+		return $settle();	// left by an apply stopped half-way; its marker, if any, is the next apply's
 	}
 	$held = @file_get_contents($marker);
-	if (!is_string($held) || $isMark($held)) {
+	if (!is_string($held) || $held === '' || pfb_pending_token_valid($held)) {
 		return [];
 	}
 	if (isset($seams['read'])) {
@@ -7574,13 +7584,7 @@ function pfb_outpost_repair_pending_marker(array $seams = []): array
 	if (isset($seams['aside'])) {
 		$seams['aside']();
 	}
-	if ($putBack()) {
-		return [];
-	}
-	@unlink($aside);
-	@unlink("{$marker}.applied");
-	return [['resource' => 'pending-marker', 'stage' => 'apply', 'code' => 'pending_token_invalid',
-		'message' => 'the pending-changes marker held a token that is not 1 to 64 printable ASCII characters; it was discarded']];
+	return $settle();
 }
 
 /**
