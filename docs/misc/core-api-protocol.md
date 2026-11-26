@@ -787,6 +787,26 @@ running Update still skips the feeds it found at the cap when it started, so the
 that cannot be read or written is `unavailable`; without `--update-cmd` the method answers `unavailable` like the other
 methods of this section.
 
+### SetTemporaryUnlocks
+
+Privileged; mutating (`requestId`). Issue #4264 (owner, 2026-11-24, on #3977,
+which amends the "no API change" constraint for this method): Core holds the Alerts page's temporary DNSBL unlocks. Each
+Lock and Unlock on the page sends the whole set of unlocked domains, and Core republishes `dnsbl/manifest` with them as its
+`unlock` rows, its other rows and its metadata as they were, without running an Update; pfB-DNS on the Core input takes
+them through its poll. The next Update's DNSBL build publishes no `unlock` row: it re-locks them.
+
+| Params | Reply |
+| --- | --- |
+| `{"requestId": "...", "domains": ["example.com", ...]}` | `{}` |
+
+`domains` is required, at most 4096 of them (a page holding more is refused on every click until a Lock or an Update brings
+it under), each a domain as `PFB_FILTER_DOMAIN` takes it; `[]` locks every one. Anything
+else is `invalid_argument` with a field error per domain, and changes nothing. While an Update runs the method answers
+`conflict`: the Update is the store's writer, and its end re-locks every unlock anyway. A store that holds no
+`dnsbl/manifest` (before the cutover PHP publishes the manifest pfB-DNS reads) is answered `{}` and written nothing. Without
+`--resource-dir` the method answers `unavailable`; without `--update-cmd` nothing else writes the store, and it is written at
+once.
+
 ### Update command
 
 `--update-cmd PATH` names the program an independent worker runs for each admitted Update; the path comes only from the flag. Core refuses to start (exit status 2, a line naming the flag) when it is not valid UTF-8 or holds a control character, with or without `--update-loop`.

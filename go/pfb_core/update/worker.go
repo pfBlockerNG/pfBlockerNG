@@ -171,6 +171,11 @@ func observeWorker(logPath string) (workerObservation, error) {
 		return workerObservation{}, err
 	}
 	defer lock.Close()
+	return observeReceipt(logPath)
+}
+
+// observeReceipt reads the receipt of an Update that holds no lifetime lock, as the holder of that lock.
+func observeReceipt(logPath string) (workerObservation, error) {
 	state, err := readWorkerState(logPath + ".status")
 	if errors.Is(err, os.ErrNotExist) {
 		return workerObservation{}, noWorkerState(logPath)

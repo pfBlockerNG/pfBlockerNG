@@ -76,13 +76,14 @@ type Gate struct {
 	Admit          func(string) (*Admission, error) // nil only for a Gate whose run does not own a worker
 	Launch         func(context.Context, *Admission, Request, *os.File) (Result, error)
 	done           func(Request, Result, error)
-	admit          sync.Mutex // taken by Start's TryLock and released when the Update ends; nothing ever waits on it but Stop
+	admit          sync.Mutex // taken by Start's and Hold's TryLock and released when the Update or the Hold ends; only Stop waits on it
 	mu             sync.Mutex // everything below
 	status         *Status    // replaced when the Update ends, never changed in place: View hands it out
 	gen            int64      // bumped by every Start but the first: a cursor from an earlier Update reads from the start
 	cancel         context.CancelFunc
 	stopped        bool
 	prepublication bool // this process admitted a worker whose initial status is not published yet
+	holding        bool // a Hold holds the operation lock: the receipt is the last Update's, read as its holder
 }
 
 // New returns a Gate with no local admission. A worker-backed Gate observes any retained worker from its durable receipt. Start
@@ -90,6 +91,42 @@ type Gate struct {
 // gate is released, so a scheduler can record outcomes before the next Start. Calling Stop from done deadlocks.
 func New(logPath string, run RunFunc, done func(Request, Result, error)) *Gate {
 	return &Gate{logPath: logPath, run: run, done: done}
+}
+
+// Hold runs fn under the admission an Update takes (issue #4264): what fn writes, the resource store an Update writes too,
+// has one writer at a time. While an Update runs it returns ErrRunning at once, after Stop ErrStopped, and when the lease
+// cannot be taken that error, without running fn; otherwise it returns fn's error, and an Update may start once it returns.
+// A finished Update that awaits recovery does not stop it: recovery writes no resource.
+func (g *Gate) Hold(fn func() error) error {
+	g.mu.Lock()
+	if g.stopped {
+		g.mu.Unlock()
+		return ErrStopped
+	}
+	if !g.admit.TryLock() {
+		g.mu.Unlock()
+		return ErrRunning
+	}
+	// The lease is taken and given back under mu, as Start takes it: a View sees the lock and the Hold together.
+	var lease *Admission
+	if g.Admit != nil {
+		var err error
+		if lease, err = g.Admit(g.logPath); err != nil {
+			g.admit.Unlock()
+			g.mu.Unlock()
+			return err
+		}
+		g.holding = true
+	}
+	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		lease.Close()
+		g.holding = false
+		g.admit.Unlock()
+		g.mu.Unlock()
+	}()
+	return fn()
 }
 
 // Start admits req (TryLock) or returns ErrRunning at once. commit, when set, runs once after the
@@ -214,7 +251,11 @@ func (g *Gate) View(after int64, max int) (View, error) {
 	if g.Admit == nil {
 		return g.viewLocked(g.status, g.status != nil && g.status.FinishedAt == nil, after, max), nil
 	}
-	observed, err := observeWorker(g.logPath)
+	observe := observeWorker
+	if g.holding {
+		observe = observeReceipt
+	}
+	observed, err := observe(g.logPath)
 	if err != nil {
 		if g.prepublication && g.status != nil && g.status.FinishedAt == nil &&
 			(errors.Is(err, os.ErrNotExist) || errors.Is(err, errLockedTerminal)) {
