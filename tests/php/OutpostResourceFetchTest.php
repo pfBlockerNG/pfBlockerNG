@@ -185,6 +185,17 @@ final class OutpostResourceFetchTest extends TestCase
 		$this->assertMirror("127.1.7.7\n");
 	}
 
+	/** An empty mirror an apply before the placeholder left is no mirror of an empty set: the full body brings the placeholder. */
+	public function testAnEmptyMirrorOfAnEmptySetIsReplacedByThePlaceholder(): void
+	{
+		file_put_contents($this->mirror, '');
+		[$result, $requests] = $this->fetch([self::full('7', ''), self::text('')], self::cursor('7', ''));
+
+		$this->assertSame(['resources' => [self::ID => []]], $requests[0]['params'], 'no cursor is sent for an unpadded empty mirror');
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertMirror("127.1.7.7\n");
+	}
+
 	public function testAPlaceholderBesideACursorThatCountsMembersIsNoMirrorOfIt(): void
 	{
 		file_put_contents($this->mirror, "127.1.7.7\n");
