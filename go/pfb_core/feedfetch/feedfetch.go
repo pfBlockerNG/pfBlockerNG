@@ -13,7 +13,8 @@
 // A feed's files live in Feed.Dir under Feed.Name: the published copy "<name>.orig", validators ".orig.etag" and
 // ".orig.lastmod" (plus FTP's ".orig.size"), the xxh128 of the raw bytes it was published from ".orig.xxhash128", a
 // changed probe's body ".probe" (the next ingest publishes it instead of fetching again), and the staged body ".raw":
-// consumed by a text feed's publication, kept by an archive's (its digest is of those bytes, and ET reuses it), gone after any refusal.
+// consumed by a text feed's publication, kept by an archive's (its digest is of those bytes, and ET reuses it) and by an ET
+// IQRisk feed's whatever it came as (its Reload splits it again, ReprocessET), gone after any refusal.
 //
 // A whois or asn feed has no body to fetch: Whois resolves its Domain/AS list (the translation of whoisconvert(), #3974)
 // into the published copy "<name>.orig", and leaves "<name>.fail" when an entry failed or the batch ran out of time.

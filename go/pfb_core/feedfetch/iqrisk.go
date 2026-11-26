@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var maxXLSXAddresses = 10_000_000
@@ -91,34 +92,30 @@ func (f *Fetcher) iqrisk(ctx context.Context, feed Feed, body string) (string, e
 
 // ReprocessET splits an ET IQRisk feed's kept download again with the categories now selected (#4256), where today's reuse
 // arm of sync_package_pfblockerng() re-runs processet(): on a Reload, and on a pass that parses an unchanged download again
-// for its script. The .raw its ingest kept is gunzipped when it is gzip and split as it is otherwise, and the split
-// replaces the published copy; nothing is transferred. Today's arm gunzips only, and an uncompressed source keeps no .raw
-// there: it splits the published split, which names no category, and publishes an empty list. A feed without a .raw has
-// nothing to split again, and its published split stands. A failure keeps the published copy, which today's arm keeps
-// only when the gunzip fails.
+// for its script. The .raw its ingest kept goes through the content gates and the extraction its ingest ran (gate), and
+// what that yields is split again and replaces the published copy; nothing is transferred. Today's arm gunzips only, and
+// an uncompressed source keeps no .raw there: it splits the published split, which names no category, and publishes an
+// empty list. A feed without a .raw (one PHP downloaded, until its next download) has nothing to split again, and its
+// published split stands. A failure keeps the published copy, which today's arm keeps only when the gunzip fails.
 func (f *Fetcher) ReprocessET(ctx context.Context, feed Feed) Result {
 	raw := feed.path(".raw")
-	magic := make([]byte, 2)
-	in, err := os.Open(raw)
-	if errors.Is(err, os.ErrNotExist) {
+	info, err := os.Lstat(raw)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
 		return Result{OK: true}
+	case err != nil || !info.Mode().IsRegular():
+		return fail("kept download is not a regular file")
 	}
-	if err == nil {
-		_, err = io.ReadFull(in, magic)
-		in.Close()
+	// A text body is the .raw itself, which its ingest finished; an extraction is finished as its ingest finished it.
+	body, refusal := f.gate(ctx, feed, raw, time.Time{})
+	if refusal != nil {
+		return *refusal
 	}
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
-		return fail("kept download could not be read")
-	}
-	body := raw
-	if bytes.Equal(magic, []byte{0x1f, 0x8b}) {
-		if body, err = f.stage(ctx, feed, mimeGzip, raw, false); err != nil {
-			if ctxEnded(err) {
-				return fail(err.Error())
-			}
-			return fail("kept download could not be extracted")
-		}
+	if body != raw {
 		defer os.Remove(body)
+		if err := finish(body); err != nil {
+			return fail(err.Error())
+		}
 	}
 	et, err := f.iqrisk(ctx, feed, body)
 	if err != nil {
