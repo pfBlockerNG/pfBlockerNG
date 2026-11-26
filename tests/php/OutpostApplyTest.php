@@ -1389,6 +1389,24 @@ final class OutpostApplyTest extends TestCase
 		$this->assertSame([self::ABUSE => '2'], $r['resultLines'][0]['applied']);
 	}
 
+	/** WHEN an empty aggregate is unchanged THEN nothing is pushed: an aggregate is never padded, so its empty table is its set. */
+	public function testAnUnchangedEmptyAggregateIsNotPushed(): void
+	{
+		$agg = 'ip-aggregate/deny/ipv4';
+		$apply = self::at([$agg => ['1', []]]);
+		$apply['files']['{aliasdir}/pfB_Deny_Aggregated_v4.txt'] = [];
+		$apply['kernel']['pfB_Deny_Aggregated_v4'] = [];
+		$apply['config'] = ['installedpackages/pfblockerng/config/0/pfb_agg_types' => 'Deny'];
+		$apply['apply'] = ['request' => self::request([['id' => $agg, 'generation' => '1', 'action' => 'alias_only', 'entries' => 0]]),
+			'core' => [self::unchanged($agg, '1')]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame([], self::verbs($r), 'an empty aggregate table is not lost');
+		$this->assertSame([$agg => '1'], $r['resultLines'][0]['applied']);
+		$this->assertArrayNotHasKey('changedAliases', $r['resultLines'][0]);
+	}
+
 	/** @return array<string, array{0: array<string, mixed>, 1: int}> an apply that fetched a delta's parts, and its exit status */
 	public static function appliesThatFetchedParts(): array
 	{

@@ -165,6 +165,17 @@ final class OutpostResourceFetchTest extends TestCase
 		$this->assertMirror('');
 	}
 
+	public function testAnEmptyAggregateMirrorIsTheEmptyBodyItsCursorRecords(): void
+	{
+		$id = 'ip-aggregate/Deny/ipv4';
+		file_put_contents($this->mirror, '');
+		[$result, $requests] = $this->fetch([self::items(['kind' => 'unchanged', 'generation' => '7'], $id)], self::cursor('7', ''), id: $id);
+
+		$this->assertSame(['resources' => [$id => ['generation' => '7', 'digest' => hash('xxh128', '')]]], $requests[0]['params']);
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertMirror('');
+	}
+
 	public function testAnEmptyGeoCatalogLeavesAnEmptyMirror(): void
 	{
 		[$result] = $this->fetch([self::full('3', '', id: 'geo-catalog'), self::text('')], NULL, id: 'geo-catalog');
