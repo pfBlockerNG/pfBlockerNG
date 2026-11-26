@@ -66,6 +66,8 @@ trait DnsProxyRcSandboxTrait
 		}
 		case "${0##*/}" in
 		read_xml_tag.sh)
+			# the RAM-disk switch the stop reads (boolean), then the pfB-DNS settings the start reads (string)
+			if [ "$1" = boolean ] && [ "$2" = system/use_mfs_tmpvar ]; then echo "$GATE_MFS"; exit 0; fi
 			[ "$1" = string ] || { ev bad-xml; exit 2; }
 			case "$2" in
 			*/pfb_dns_saved) echo "$GATE_SAVED" ;;
@@ -182,6 +184,14 @@ trait DnsProxyRcSandboxTrait
 				ev validate
 				echo "$*" >> "$S/php.args"
 				[ -n "$SAVED_VALID" ] || exit 1
+				;;
+			dnsbl_cache)
+				# the stop writes the RAM-disk archive: what is still alive then is recorded (an empty line: nothing)
+				ev save
+				echo "$*" >> "$S/php.args"
+				reap
+				cut -d'|' -f1 "$S/procs" | tr '\n' ' ' >> "$S/save.alive"; echo >> "$S/save.alive"
+				[ -z "$SAVE_FAIL" ] || exit 1
 				;;
 			*) ev bad-php; exit 2 ;;
 			esac
@@ -315,7 +325,7 @@ trait DnsProxyRcSandboxTrait
 		$gates += ['GATE_DNSBL' => 'on', 'GATE_PROXY' => 'on', 'GATE_SAVED' => (string) config_get_path(self::SAVED, '')];
 		$state = "{$this->dir}/state";
 		$vars = $gates + ['TERM_AFTER' => $termAfter, 'KILL_AFTER' => $killAfter, 'READY_FILE' => $this->readyFile(), 'LOCKF_BUSY' => '', 'MACHINE' => $machine,
-			'PEM_FILE' => $this->certFile(), 'EXPORT_FAIL' => '', 'TIMEOUT_FIRES' => '', 'SAVED_VALID' => ''];
+			'PEM_FILE' => $this->certFile(), 'EXPORT_FAIL' => '', 'TIMEOUT_FIRES' => '', 'SAVED_VALID' => '', 'GATE_MFS' => 'false', 'SAVE_FAIL' => ''];
 		file_put_contents("{$state}/scenario", implode('', array_map(
 			static fn (string $k, string $v): string => "{$k}=" . escapeshellarg($v) . "\n",
 			array_keys($vars),
@@ -323,7 +333,7 @@ trait DnsProxyRcSandboxTrait
 		)));
 		file_put_contents("{$state}/ticks", "0\n");
 		file_put_contents("{$state}/sockstat.status", "0\n");
-		foreach (['events', 'fds', 'procs', 'logger', 'daemon.argv', 'launch.marker', 'launch.fds', 'lockf.calls', 'timeout.args', 'php.args', 'ancestry', 'ancestry.self', 'ancestry.queries', 'sockstat.out', 'sockstat.calls'] as $file) {
+		foreach (['events', 'fds', 'procs', 'logger', 'daemon.argv', 'launch.marker', 'launch.fds', 'lockf.calls', 'timeout.args', 'php.args', 'ancestry', 'ancestry.self', 'ancestry.queries', 'sockstat.out', 'sockstat.calls', 'save.alive'] as $file) {
 			file_put_contents("{$state}/{$file}", '');
 		}
 		@unlink("{$state}/ps.fail");
@@ -389,6 +399,12 @@ trait DnsProxyRcSandboxTrait
 		return "{$this->dir}/run/pfb_dns_ready";
 	}
 
+	/** The Core input's cache folder (the production path is /var/unbound/pfb_dns; the generated script names this one). */
+	private function inputDir(): string
+	{
+		return "{$this->dir}/unbound/pfb_dns";
+	}
+
 	/** Where the sandboxed script keeps the copy of itself when a stop leaves the proxy running (the production path is $pfb['dns_proxy_rc_kept']). */
 	private function keptFile(): string
 	{
@@ -416,6 +432,9 @@ trait DnsProxyRcSandboxTrait
 				if (preg_match('~^/(?:usr/local/sbin|usr/local/bin|usr/sbin|usr/bin|sbin|bin)/([\w.\-]+)$~', $path, $cmd) === 1) {
 					$this->assertFileExists("{$this->dir}/bin/{$cmd[1]}", "no command double for {$path}; refusing to run a host binary");
 					return "{$this->dir}/bin/{$cmd[1]}";
+				}
+				if ($path === '/var/unbound/pfb_dns') {
+					return $this->inputDir();
 				}
 				if (preg_match('~^/var/run/([\w.\-]+)$~', $path, $file) === 1) {
 					return "{$this->dir}/run/{$file[1]}";
