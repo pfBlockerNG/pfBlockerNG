@@ -371,8 +371,8 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 		return failedFeed(f.ID, "fetch", "cancelled")
 	}
 	if force == "parse" && et {
-		if et := s.Fetcher.ReprocessET(ctx, feed); !et.OK {
-			return failedFeed(f.ID, "fetch", s.safeReason(et.Reason, "feed_fetch_failed", f))
+		if res := s.Fetcher.ReprocessET(ctx, feed); !res.OK {
+			return failedFeed(f.ID, "fetch", s.safeReason(res.Reason, "feed_fetch_failed", f))
 		}
 	}
 	result.SourceChanged = sourceChanged
