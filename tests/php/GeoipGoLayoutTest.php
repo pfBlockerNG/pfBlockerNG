@@ -182,6 +182,7 @@ final class GeoipGoLayoutTest extends TestCase
 
 		$this->assertTrue(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
 
+		$this->assertSame('mac', file_get_contents("{$share}/.DS_Store"));
 		$this->assertSame('php', file_get_contents("{$share}/GeoLite2-Country.mmdb"));
 	}
 
