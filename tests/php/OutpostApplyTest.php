@@ -352,6 +352,19 @@ final class OutpostApplyTest extends TestCase
 		$this->assertStringNotContainsString('pending-marker', $r['syncStatus']['pfb_sync_status.json'] ?? '');
 	}
 
+	/** issue #4263: outside the window the apply marks the changes pending over a bad token, and still reports the repair. */
+	public function testOutsideTheWindowABadTokenIsStillReported(): void
+	{
+		$apply = self::at([self::ABUSE => ['1', self::OLD]]) + ['pendingToken' => "bad token\n", 'apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)], ['pendingOutsideWindow' => TRUE])]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertTrue($r['pending']);
+		$this->assertStringContainsString('pending_token_invalid', $r['syncStatus']['pfb_sync_status.json'] ?? '',
+			'the status page shows the repair');
+	}
+
 	/** With pendingOutsideWindow the apply marks the changes pending, applies nothing and writes one line without applied. */
 	public function testOutsideTheWindowTheChangesAreMarkedPendingAndNothingIsApplied(): void
 	{

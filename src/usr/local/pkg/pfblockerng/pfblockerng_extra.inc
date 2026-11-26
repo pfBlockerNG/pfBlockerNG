@@ -7117,13 +7117,22 @@ function pfb_outpost_apply(array $request, $out, ?string $socket = NULL, array $
 	try {
 		pfb_global();
 		$pfb['save'] = FALSE;
+		// first: the deferrals below write a mark over a bad token, and its issue is filed with Core's wherever they are
+		$repaired = pfb_outpost_repair_pending_marker();
+		$request['issues'] = [...$request['issues'], ...$repaired];
 		if ($request['pendingOutsideWindow']) {
+			if ($repaired !== []) {
+				pfb_outpost_issues($request['issues']);
+			}
 			pfb_mark_pending_changes();
 			pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
 			pfb_logger("\n Outpost apply: outside the apply window, the changes are marked pending.\n", 1);
 			return $status = pfb_outpost_report($out, []) ? 0 : 1;
 		}
 		if (!pfb_geoip_generation_ready()) {
+			if ($repaired !== []) {
+				pfb_outpost_issues($request['issues']);
+			}
 			pfb_mark_pending_changes();
 			pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
 			pfb_logger("\n Outpost apply deferred: GeoIP generation swap in progress; pending changes retained.\n", 1);
@@ -7305,7 +7314,7 @@ function pfb_outpost_apply_run(array $request, $out, ?string $socket, bool $abso
 		}
 	}
 
-	pfb_outpost_issues([...$request['issues'], ...pfb_outpost_repair_pending_marker()]);
+	pfb_outpost_issues($request['issues']);
 	$report = [];
 	$accounting = TRUE;
 	if ($request['scope'] !== 'ip') {
