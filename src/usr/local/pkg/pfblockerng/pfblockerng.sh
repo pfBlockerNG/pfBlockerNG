@@ -2696,7 +2696,8 @@ case "${1}" in
 		;;
 	dnsbl_cache)
 		# #468: DNSBL python-integration cache. $2 = stage | teardown | retire | save | restore.
-		dnsbl_cache "${2}"
+		# issue #4259: the save's status is the script's, which the pfB-DNS stop reports
+		dnsbl_cache "${2}" || exitnow 1
 		;;
 	pfb_compress)
 		# #468: single-sourced archive compression for callers (e.g. PHP
