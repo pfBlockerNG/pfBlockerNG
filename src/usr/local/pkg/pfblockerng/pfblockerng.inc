@@ -8618,6 +8618,10 @@ SH;
  * (classified as pfb_pkg_operation() does) is an install, upgrade or reinstall: the next update applies the new version. No pkg
  * ancestor, a delete or an unreadable process table stop it. The script's own stops (start, restart) pass an argument and always
  * stop. Known limit: the first upgrade to a version with this probe still runs the old script, so it takes effect from the next.
+ * A stop with no argument that ended pfB-DNS, on a RAM-disk box (use_mfs_tmpvar) whose config.xml registers the boot's archive
+ * restore and where the Core input's cache folder /var/unbound/pfb_dns exists, then writes the DNSBL archive
+ * (pfb_dnsbl_cache('save'), bounded); a failed save is logged and never fails the stop (issue #4259). pfSense's
+ * restart_service() is such a stop, so its restart waits on the save.
  *
  * Encrypted transports: while DoT, DoH or DoQ is wanted (pfb_dns_proxy_tls_wanted()) the certificate and key selected on the DNS General page
  * are written to $pfb['dns_proxy_cert'] on every call (pfb_dns_proxy_certificate_export(), the root-only file the gateway's --tls-pem
@@ -8896,6 +8900,20 @@ EOF;
 			esac
 			;;
 	esac
+
+	# A RAM-disk install (use_mfs_tmpvar) loses its RAM disks when it restarts: a stop pfSense makes (no argument: its shutdown's
+	# stop_packages(), Status > Services, restart_service()) that ended pfB-DNS archives the Core input's cache folder, now that
+	# pfB-DNS no longer writes it (issue #4259). Not the stop this script's start and restart make right before a launch, and only
+	# while config.xml registers the boot's restore: the apply that removes it (pfB-DNS, pfBlockerNG or the Resolver off) deletes
+	# the archive, and one written after would outlive it. Nor the Resolver's restore, which stops pfB-DNS under the DNS configuration
+	# lock with nothing serving DNS (PFB_DNS_PROXY_NO_ARCHIVE). Under the publication lock (a 60 s wait), bounded past it; a failure
+	# costs only the next boot's warm start, never the stop.
+	if [ "\$#" -eq 0 ] && [ -n "\${stopped}" ] && [ -z "\${PFB_DNS_PROXY_NO_ARCHIVE:-}" ] && [ -d /var/unbound/pfb_dns ] &&
+	    /usr/bin/grep -q -F 'pfblockerng.sh dnsbl_cache restore' /cf/conf/config.xml &&
+	    [ "\$(/usr/local/sbin/read_xml_tag.sh boolean system/use_mfs_tmpvar)" = 'true' ]; then
+		/usr/bin/timeout -s TERM -k 5 120 {$pfb['php']} -f /usr/local/pkg/pfblockerng/pfblockerng.inc dnsbl_cache >/dev/null 2>&1 ||
+			/usr/bin/logger -p daemon.warning -t pfb_dns_proxy "WARNING [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy: the DNSBL archive could not be written at the stop - the next boot starts pfB-DNS without its cached data"
+	fi
 
 EOF;
 
@@ -10395,8 +10413,7 @@ if (isset($argv[1])) {
 
 	// Snapshot capture shares the manifest publication lock with updates and generation GC.
 	elseif ($argv[1] == 'dnsbl_cache') {
-			pfb_dnsbl_cache('save');
-			exit(0);
+			exit(pfb_dnsbl_cache('save') ? 0 : 1);
 	}
 }
 
@@ -20650,8 +20667,14 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL, ?
 		// issue #3561: under the lock, from a fresh read, through the rc script itself: stop_service() does nothing while the package's
 		// service entry is absent (an install runs this before pfSense registers it), and the Resolver's start hook starts the proxy
 		// without one. Only the pidfiles say whether the proxy still holds the port Unbound would collide on.
+		// issue #4259: no RAM-disk archive from this stop: it would hold the lock, with nothing serving DNS, for data the disable removes
 		if (file_exists(PFB_DNS_PROXY_RCFILE)) {
-			mwexec(PFB_DNS_PROXY_RCFILE . ' stop');
+			putenv('PFB_DNS_PROXY_NO_ARCHIVE=1');
+			try {
+				mwexec(PFB_DNS_PROXY_RCFILE . ' stop');
+			} finally {
+				putenv('PFB_DNS_PROXY_NO_ARCHIVE');
+			}
 		}
 		if (pfb_dns_proxy_running() || isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE)) {
 			$text = 'DNS proxy: the DNS proxy is still running after it was stopped, so the DNS Resolver was not restored ' .
@@ -26892,7 +26915,7 @@ function pfb_aliastables($mode) {
 // register the boot 'dnsbl_cache restore' earlyshellcmd when DNSBL is enabled AND /var is a RAM
 // disk, and write the archive when it is missing (#3713); otherwise remove it and delete the archive.
 // 'save': archive the current generated DNSBL state (called post-reload on a real DNSBL change; the caller
-// gates on use_mfs_tmpvar + DNSBL enabled).
+// gates on use_mfs_tmpvar + DNSBL enabled), and say whether the archive was written.
 function pfb_dnsbl_cache($mode) {
 	global $pfb;
 
@@ -26901,14 +26924,14 @@ function pfb_dnsbl_cache($mode) {
 	if ($mode == 'save') {
 		$lock = pfb_unbound_py_publication_lock();
 		if ($lock === FALSE) {
-			return;
+			return FALSE;
 		}
 		try {
-			exec(escapeshellarg($pfb['script']) . ' dnsbl_cache save >/dev/null 2>&1');
+			exec(escapeshellarg($pfb['script']) . ' dnsbl_cache save >/dev/null 2>&1', $output, $status);
 		} finally {
 			pfb_unbound_py_publication_unlock($lock);
 		}
-		return;
+		return $status === 0;
 	}
 
 	// $mode == 'conf'

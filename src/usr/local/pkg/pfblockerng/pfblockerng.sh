@@ -338,12 +338,12 @@ pfb_archive_compress() {
 	_ztmp="$(mktemp "${_base}.XXXXXX")" || { rm -f "${_tartmp}"; return 1; }
 	if "${pathtar}" -Pcf "${_tartmp}" "$@" \
 		&& zstd -q -f -T"$(pfb_zstd_threads)" -o "${_ztmp}" "${_tartmp}" 2>/dev/null \
-		&& zstd -tq "${_ztmp}" 2>/dev/null; then
-		mv -f "${_ztmp}" "${_base}.zst"
+		&& zstd -tq "${_ztmp}" 2>/dev/null \
+		&& mv -f "${_ztmp}" "${_base}.zst"; then
 		rm -f "${_tartmp}" "${_base}.bz2"
 		return 0
 	fi
-	# tar, zstd compression, or zstd verification failed: drop the temp/partial
+	# tar, zstd compression, zstd verification or the publish failed: drop the temp/partial
 	# output (never the pre-existing .bz2 -- it was never touched above) and fall
 	# back to bzip2 ("who knows what the future holds").
 	rm -f "${_tartmp}" "${_ztmp}" "${_base}.zst"
@@ -2696,7 +2696,8 @@ case "${1}" in
 		;;
 	dnsbl_cache)
 		# #468: DNSBL python-integration cache. $2 = stage | teardown | retire | save | restore.
-		dnsbl_cache "${2}"
+		# issue #4259: the save's status is the script's, which the pfB-DNS stop reports
+		dnsbl_cache "${2}" || exitnow 1
 		;;
 	pfb_compress)
 		# #468: single-sourced archive compression for callers (e.g. PHP

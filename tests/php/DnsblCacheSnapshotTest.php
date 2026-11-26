@@ -122,22 +122,80 @@ PHP;
 		$this->assertSame('new.example', file_get_contents("{$this->dir}/chroot/dnsbl_psl"), 'normal staging must still install the shipped PSL');
 	}
 
-	public function testStopEntryPointUsesTheLockedSave(): void
+	/** The CLI arm the rc stops run (`pfblockerng.inc dnsbl_cache`), its exit() turned into a return: the status it exits with. */
+	private function runStopEntryPoint(): int
 	{
 		$source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
-		$this->assertSame(1, preg_match("~\\belseif \\(\\\$argv\\[1\\] == 'dnsbl_cache'\\) \\{(.*?)\\bexit\\(0\\);\\s*\\}~s", $source, $arm),
-			'the stop must enter through the publication-locked PHP save');
-		(static function () use ($arm): void { eval($arm[1]); })();
+		$this->assertSame(1, preg_match("~\belseif \(\\\$argv\[1\] == 'dnsbl_cache'\) \{\s*exit(\(.*?\));\s*\}~s", $source, $arm),
+			'the stop must enter through the publication-locked PHP save, in one exit statement');
+		return (static fn (string $status): int => eval("return {$status};"))($arm[1]);
+	}
+
+	public function testStopEntryPointUsesTheLockedSave(): void
+	{
+		$this->assertSame(0, $this->runStopEntryPoint(), 'a written archive exits 0');
 		$this->archive();
 		$this->assertLockReleased();
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'shutdown capture must not register restore hooks or write config.xml');
+	}
+
+	public function testStopEntryPointExitsNonZeroWhenNoArchiveIsWritten(): void
+	{
+		// issue #4259: the pfB-DNS stop logs a save that failed; it knows only by the exit status
+		$tar = "{$this->dir}/fail.sh";
+		$this->executable($tar, "#!/bin/sh\nexit 2\n");
+		$this->wrapper($tar);
+		$this->assertSame(1, $this->runStopEntryPoint());
+		$this->assertLockReleased();
+	}
+
+	public function testTheSaveSaysWhetherItWroteTheArchive(): void
+	{
+		$this->assertTrue(pfb_dnsbl_cache('save'));
+		$this->archive();
+	}
+
+	/**
+	 * $pfb['script'] as the real pfblockerng.sh, its top-level init and dispatch included, with the paths that would write
+	 * the host pointed at the sandbox: the save's status reaches PHP only through the script's own exit.
+	 */
+	private function entrypoint(string $tar): void
+	{
+		$script = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.sh');
+		foreach (['pathtar=/usr/bin/tar' => 'pathtar=' . escapeshellarg($tar),
+			'"/usr/local/etc/pfb_dnsbl_cache.tar"' => escapeshellarg($GLOBALS['pfb']['dnsblarchive']),
+			'/var/db/' => "{$this->dir}/vardb/", '/var/log/pfblockerng/' => "{$this->dir}/"] as $from => $to) {
+			$this->assertStringContainsString($from, $script);
+			$script = str_replace($from, $to, $script);
+		}
+		@mkdir("{$this->dir}/vardb/pfblockerng", 0777, TRUE);
+		@mkdir("{$this->dir}/vardb/aliastables", 0777, TRUE);
+		// pfbchroot has no top-level default: the dnsbl_cache function's own default reads it from here
+		$script = preg_replace('~^#!/bin/sh\n~', "#!/bin/sh\npfbchroot=" . escapeshellarg("{$this->dir}/chroot") . "\n", $script, 1, $n);
+		$this->assertSame(1, $n, 'pfblockerng.sh starts with #!/bin/sh');
+		$this->executable("{$this->dir}/entry.sh", (string) $script);
+		$GLOBALS['pfb']['script'] = "{$this->dir}/entry.sh";
+	}
+
+	public function testTheScriptsDispatchExitsWithTheSavesStatus(): void
+	{
+		// issue #4259: a failed save must reach the rc stop, whose only view of it is the exit status
+		$tar = "{$this->dir}/fail.sh";
+		$this->executable($tar, "#!/bin/sh\nexit 2\n");
+		$this->entrypoint($tar);
+		$this->assertFalse(pfb_dnsbl_cache('save'), 'the script exited 0 over a failed archive');
+		$this->assertLockReleased();
+
+		$this->entrypoint(pfb_test_tar());
+		$this->assertTrue(pfb_dnsbl_cache('save'), 'a written archive exits 0');
+		$this->archive();
 	}
 
 	public function testUnavailablePublicationLockDoesNotSave(): void
 	{
 		// Given a real lock-path failure, not an injected exception
 		mkdir("{$this->dir}/chroot/pfb_py_sources.lock");
-		pfb_dnsbl_cache('save');
+		$this->assertFalse(pfb_dnsbl_cache('save'), 'a save the lock refused says so');
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsblarchive'] . '.zst', 'an unlocked snapshot must never be published');
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsblarchive'] . '.bz2', 'fallback must not bypass the publication lock');
 	}
@@ -147,7 +205,7 @@ PHP;
 		$tar = "{$this->dir}/fail.sh";
 		$this->executable($tar, "#!/bin/sh\nexit 2\n");
 		$this->wrapper($tar);
-		pfb_dnsbl_cache('save');
+		$this->assertFalse(pfb_dnsbl_cache('save'), 'a save whose archive failed says so');
 		$this->assertLockReleased();
 	}
 
