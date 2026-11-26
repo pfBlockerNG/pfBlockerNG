@@ -345,14 +345,19 @@ function pfb_cli_deprecation_warning(string $verb): string {
  * log itself). The exit status is the Update's result: 0 for success, PFB_EXIT_LOCKED for an Update skipped (the pass was
  * deferred) or refused because one runs (`conflict`: reported, nothing queued), 1 otherwise. A Core that is down or refuses the
  * caller (not root) is a message on $err and 1, never a pass run in-process. Each call is bounded by PFB_CORE_PAGE_TIMEOUT, and
- * $sleep (one second) parts the polls, at most $polls of them.
+ * $sleep (one second) parts the polls, at most $polls of them. An Update that started before the request ($now, Unix seconds, read
+ * before StartUpdate on the host Core runs on) is the one before ours, which GetUpdate can still report right after StartUpdate:
+ * the verb waits for its own.
  *
  * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
  * @param ?callable(string): void $out
  * @param callable(string): void $err
  * @param callable(): void $sleep
+ * @param ?callable(): int $now time()
  */
-function pfb_cli_update_run(array $request, callable $call, ?callable $out, callable $err, callable $sleep, int $polls = PFB_CLI_UPDATE_POLLS): int {
+function pfb_cli_update_run(array $request, callable $call, ?callable $out, callable $err, callable $sleep, int $polls = PFB_CLI_UPDATE_POLLS,
+    ?callable $now = NULL): int {
+	$asked = ($now ?? 'time')();
 	$failure = pfb_update_core_failure($call('StartUpdate', ['requestId' => bin2hex(random_bytes(16))] + $request, NULL, PFB_CORE_PAGE_TIMEOUT));
 	if ($failure !== NULL) {
 		$err("pfBlockerNG Core did not start the Update: {$failure}\n");
@@ -375,6 +380,9 @@ function pfb_cli_update_run(array $request, callable $call, ?callable $out, call
 		}
 		$body = $answer['body'];
 		$update = is_array($body['update'] ?? NULL) ? $body['update'] : [];
+		if ($started === NULL && is_int($update['startedAt'] ?? NULL) && $update['startedAt'] < $asked) {
+			continue;	// the Update before ours
+		}
 		$started ??= $update['startedAt'] ?? NULL;
 		if ($started === NULL || ($update['startedAt'] ?? NULL) !== $started) {
 			$err("pfBlockerNG Core reports no result of this Update: another Update started in its place\n");
