@@ -803,7 +803,8 @@ them through its poll. The next Update's DNSBL build publishes no `unlock` row: 
 else is `invalid_argument` with a field error per domain, and changes nothing. While an Update runs the method answers
 `conflict`: the Update is the store's writer, and its end re-locks every unlock anyway. A store that holds no
 `dnsbl/manifest` (before the cutover PHP publishes the manifest pfB-DNS reads) is answered `{}` and written nothing. Without
-`--resource-dir` and `--update-cmd` the method answers `unavailable`.
+`--resource-dir` the method answers `unavailable`; without `--update-cmd` nothing else writes the store, and it is written at
+once.
 
 ### Update command
 

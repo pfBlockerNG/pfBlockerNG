@@ -45,14 +45,20 @@ func unlockMethods(store *resources.Store, gate *update.Gate) map[string]method 
 			if bad != nil {
 				return nil, newError(codeInvalidArgument, "a domain is not valid; nothing was changed", bad...)
 			}
-			if store == nil || gate == nil {
-				return nil, newError(codeUnavailable, "Core holds no temporary unlocks without its resource store and Updates "+
-					"(start it with --resource-dir and --update-cmd)")
+			if store == nil {
+				return nil, newError(codeUnavailable, "Core holds no temporary unlocks without its resource store (start it with --resource-dir)")
 			}
-			err := gate.Hold(func() error {
+			set := func() error {
 				_, _, err := dnsbl.SetUnlocks(store, *p.Domains)
 				return err
-			})
+			}
+			// the Updater is the store's other writer: with no Updates, nothing else writes it
+			var err error
+			if gate == nil {
+				err = set()
+			} else {
+				err = gate.Hold(set)
+			}
 			switch {
 			case errors.Is(err, update.ErrRunning):
 				return nil, newError(codeConflict, "an Update is running, and its end re-locks every temporary unlock; ask again after it")
