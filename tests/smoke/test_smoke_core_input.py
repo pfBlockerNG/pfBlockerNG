@@ -158,12 +158,15 @@ def start_dns(vm: SmokeVM, fence: str, log: str, watchdog: float = READY_WATCHDO
     pid = start.stdout.strip()
     assert start.returncode == 0 and pid.isdigit(), f"pfB-DNS did not start: {start.stdout}{start.stderr}"
     deadline = time.monotonic() + watchdog
-    while vm.ssh(f'test -s {READY} && test "$(cat {READY})" = {pid}', timeout=30).returncode != 0:  # it serves
-        if vm.ssh(f"kill -0 {pid}", timeout=30).returncode != 0 or time.monotonic() > deadline:
-            said = vm.ssh(f"tail -n 30 {log}; ls -ld {fence} {fence}/mod; id unbound", timeout=30).stdout
-            stop(vm, pid)  # no caller's cleanup holds the pid yet
-            pytest.fail(f"STUCK: pfB-DNS never became ready:\n{said}")
-        time.sleep(1)
+    try:
+        while vm.ssh(f'test -s {READY} && test "$(cat {READY})" = {pid}', timeout=30).returncode != 0:  # it serves
+            if vm.ssh(f"kill -0 {pid}", timeout=30).returncode != 0 or time.monotonic() > deadline:
+                said = vm.ssh(f"tail -n 30 {log}; ls -ld {fence} {fence}/mod; id unbound", timeout=30).stdout
+                pytest.fail(f"STUCK: pfB-DNS never became ready:\n{said}")
+            time.sleep(1)
+    except BaseException:
+        stop(vm, pid)  # no caller's cleanup holds the pid until it is returned
+        raise
     return pid
 
 
