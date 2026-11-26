@@ -27,9 +27,9 @@ var dnsblOrigSidecars = append([]string{".orig.etag", ".orig.lastmod", ".orig.si
 //
 // A feed moves by hard links, its sidecars before its .orig, and PHP's copies go only once the .orig is linked: a move cut
 // short leaves either every PHP file in place, or the .orig linked, and the next move completes it. The Core Updater trusts
-// validators and digests only beside a copy, so what a cut-short move linked is never trusted on its own. The caller runs the
-// Core Updater's recovery of the feed folder (feedstage.Recover) first, and the move until it returns nil before the first
-// Update: an Update in between would publish over a half-moved feed.
+// validators and digests only beside a copy, so what a cut-short move linked is never trusted on its own. Nothing else writes
+// dnsbl while the move runs: the caller runs the Core Updater's recovery of the feed folder (feedstage.Recover) first, then
+// the move until it returns nil, and only then the first Update, which would otherwise publish over a half-moved feed.
 func MoveDNSBLOrig(dbDir string) error {
 	from, to := filepath.Join(dbDir, "dnsblorig"), filepath.Join(dbDir, "dnsbl")
 	entries, err := os.ReadDir(from)
@@ -85,23 +85,15 @@ func moveDNSBLOrigFeed(from, to, name string) error {
 			return err
 		}
 	}
-	// A link never replaces: a copy the Core Updater published meanwhile stays, and fails the move. PHP's sidecars linked
-	// beside it go, so that it is fetched again rather than trusted.
+	// a link never replaces: a copy found there fails the move rather than being overwritten
 	if err := dnsblOrigLink(src(".orig"), dst(".orig")); err != nil {
-		for _, s := range dnsblOrigSidecars {
-			linked, lerr := os.Lstat(dst(s))
-			php, perr := os.Lstat(src(s))
-			if lerr == nil && perr == nil && os.SameFile(linked, php) {
-				err = errors.Join(err, dnsblOrigRemove(dst(s)))
-			}
-		}
 		return err
 	}
 	return removeDNSBLOrigSources(src)
 }
 
-// removeDNSBLOrigSources removes PHP's copies of a moved feed, its .orig last: while it stays, the next move finds the
-// two .orig one file and finishes here.
+// removeDNSBLOrigSources removes PHP's copies of a moved or superseded feed, its .orig last: while it stays, the next move
+// finds a copy in dnsbl and finishes here.
 func removeDNSBLOrigSources(src func(string) string) error {
 	for _, s := range slices.Concat(dnsblOrigSidecars, []string{".orig"}) {
 		if fi, err := os.Lstat(src(s)); err != nil || !fi.Mode().IsRegular() {

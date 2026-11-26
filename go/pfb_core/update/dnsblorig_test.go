@@ -210,37 +210,6 @@ func TestAMoveCutShortAtAnyStepCompletesOnTheNext(t *testing.T) {
 	}
 }
 
-func TestACopyTheCoreUpdaterPublishesDuringTheMoveIsKeptWithNoneOfPHPsSidecars(t *testing.T) {
-	db := dnsblOrigFixture(t)
-	dnsblOrigLink = func(from, to string) error {
-		if filepath.Base(to) == "A.orig" {
-			// the Core Updater publishes A between the move's look and its link, with its own validators and digest
-			for name, body := range map[string]string{"A.orig": "the Core Updater's a.example\n", "A.orig.etag": `"etag-a-go"`, "A.orig.xxhash128": "go"} {
-				if err := os.WriteFile(filepath.Join(filepath.Dir(to), name), []byte(body), 0o644); err != nil {
-					return err
-				}
-			}
-		}
-		return os.Link(from, to)
-	}
-	t.Cleanup(func() { dnsblOrigLink = os.Link })
-
-	if err := MoveDNSBLOrig(db); err == nil {
-		t.Fatal("the move reported no error over a copy it did not move")
-	}
-
-	got := filesUnder(t, db)
-	if got["dnsbl/A.orig"] != "the Core Updater's a.example\n" || got["dnsblorig/A.orig"] != "a.example\n" {
-		t.Fatalf("A after the move: dnsbl %q, dnsblorig %q", got["dnsbl/A.orig"], got["dnsblorig/A.orig"])
-	}
-	// no PHP validator or digest describes the Core Updater's copy: it is fetched again rather than trusted
-	for _, s := range dnsblOrigSidecars {
-		if body, ok := got["dnsbl/A"+s]; ok && body == wantMoved()["dnsbl/A"+s] {
-			t.Fatalf("PHP's %s stays beside the Core Updater's copy", "A"+s)
-		}
-	}
-}
-
 func TestNoDNSBLDownloadsNoMove(t *testing.T) {
 	db := t.TempDir()
 
