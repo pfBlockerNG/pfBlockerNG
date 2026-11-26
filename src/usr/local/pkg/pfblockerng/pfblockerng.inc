@@ -11472,10 +11472,14 @@ function pfb_stage_publish_dir_merge_swap(string $staged, string $target): bool 
 	}
 	$entries = array_values(array_diff($entries, array('.', '..')));
 	foreach ($entries as $entry) {
+		// a dot entry is what the Core Updater names its own (archive links, their generations, locks): never staged (mergeable)
+		if (str_starts_with($entry, '.')) {
+			return FALSE;
+		}
 		$live = "{$target}/{$entry}";
 		$live_is_link = is_link($live);
 		// issue #4261: a member the Core Updater merged is a link `.<archive>/<member>` whose `.<archive>` is a link to one of
-		// its generations, `.<archive>.<pid>.<8 hex>` (feedfetch entryLink); a real file over it would leave the share half
+		// its generations, `..<archive>.<pid>.<8 hex>` (feedfetch entryLink); a real file over it would leave the share half
 		// the Core Updater's and half PHP's
 		// nor a link to a folder: the Core Updater's archive link `.<archive>` (or the country folder), whose members' links
 		// would dangle (feedfetch mergeable)
@@ -11484,7 +11488,7 @@ function pfb_stage_publish_dir_merge_swap(string $staged, string $target): bool 
 		}
 		$to = $live_is_link ? (string) @readlink($live) : '';
 		if (preg_match('~^(\.[^/]+)/([^/]+)$~D', $to, $m) === 1 && $m[2] === $entry && $m[1] !== '..'
-		    && preg_match('~^' . preg_quote($m[1], '~') . '\.[0-9]+\.[0-9a-f]{8}$~D', (string) @readlink("{$target}/{$m[1]}")) === 1) {
+		    && preg_match('~^\.' . preg_quote($m[1], '~') . '\.[0-9]+\.[0-9a-f]{8}$~D', (string) @readlink("{$target}/{$m[1]}")) === 1) {
 			return FALSE;
 		}
 		$live_exists = file_exists($live) || $live_is_link;
