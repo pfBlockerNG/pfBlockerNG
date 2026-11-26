@@ -33,8 +33,6 @@ final class GeoipGoLayoutTest extends TestCase
 		$this->assertTrue(symlink('.cc.123.0123abcd', "{$this->dir}/share/cc"));
 		$GLOBALS['pfb']['ccdir'] = "{$this->dir}/share/cc";
 		$GLOBALS['pfb']['dbdir'] = "{$this->dir}/db";
-		$GLOBALS['pfb']['geoipshare'] = "{$this->dir}/share";
-		$GLOBALS['pfb']['geoip_isos'] = "{$this->dir}/db/geoip.txt";
 	}
 
 	protected function tearDown(): void
@@ -126,6 +124,22 @@ final class GeoipGoLayoutTest extends TestCase
 
 		$this->assertTrue(is_link("{$share}/GeoLite2-Country.mmdb"), 'the member link stays a link');
 		$this->assertSame('go', file_get_contents("{$share}/GeoLite2-Country.mmdb"));
+	}
+
+	public function testALinkThatNamesNoGoGenerationIsNoMemberLinkOfTheCoreUpdater(): void
+	{
+		// an administrator's layout: the Core Updater would replace such a link too (feedfetch entryLink)
+		$share = "{$this->dir}/share";
+		$this->assertTrue(mkdir("{$this->dir}/elsewhere"));
+		file_put_contents("{$this->dir}/elsewhere/GeoLite2-ASN.mmdb", 'admin');
+		$this->assertTrue(symlink("{$this->dir}/elsewhere", "{$share}/.custom"));
+		$this->assertTrue(symlink('.custom/GeoLite2-ASN.mmdb', "{$share}/GeoLite2-ASN.mmdb"));
+		$this->assertTrue(mkdir("{$this->dir}/staged"));
+		file_put_contents("{$this->dir}/staged/GeoLite2-ASN.mmdb", 'php');
+
+		$this->assertTrue(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
+
+		$this->assertSame('php', file_get_contents("{$share}/GeoLite2-ASN.mmdb"));
 	}
 
 	public function testPhpsShareMergeStillReplacesItsOwnFiles(): void
