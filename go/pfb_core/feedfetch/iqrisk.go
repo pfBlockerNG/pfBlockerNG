@@ -89,6 +89,39 @@ func (f *Fetcher) iqrisk(ctx context.Context, feed Feed, body string) (string, e
 	return stageRecords(feed.Dir, block)
 }
 
+// ReprocessET is a Reload of an ET IQRisk feed (#4256), as the reuse arm of today's sync_package_pfblockerng() runs it:
+// the .raw an archive's ingest kept is gunzipped and split again with the categories now selected, and the split replaces
+// the published copy; nothing is transferred. A feed without a .raw (an uncompressed source keeps none) has nothing to
+// split again, and its published split stands, where today's arm splits that split, which names no category, and
+// publishes an empty list. A failure keeps the published copy, which today's arm keeps only when the gunzip fails.
+func (f *Fetcher) ReprocessET(ctx context.Context, feed Feed) Result {
+	raw := feed.path(".raw")
+	if _, err := os.Stat(raw); errors.Is(err, os.ErrNotExist) {
+		return Result{OK: true}
+	}
+	body, err := f.stage(ctx, feed, mimeGzip, raw, false)
+	if err != nil {
+		if ctxEnded(err) {
+			return fail(err.Error())
+		}
+		return fail("kept download could not be extracted")
+	}
+	defer os.Remove(body)
+	et, err := f.iqrisk(ctx, feed, body)
+	switch {
+	case err == nil:
+	case ctxEnded(err), err == errInvalidETConfiguration:
+		return fail(err.Error())
+	default:
+		return fail("et processing failed (script exit 1)")
+	}
+	if err := os.Rename(et, feed.path(".orig")); err != nil {
+		os.Remove(et)
+		return fail("published copy could not be replaced")
+	}
+	return Result{OK: true}
+}
+
 // etSplit is processet()'s `grep ",<n>," | cut -d, -f1` for every category at once: a row names its category between
 // commas, and its address is what precedes the first.
 func (f *Fetcher) etSplit(ctx context.Context, in io.Reader) error {
