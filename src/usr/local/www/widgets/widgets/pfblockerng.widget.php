@@ -146,7 +146,7 @@ if ($_POST) {
 		// issue #999: ADR-61 moved the reporting list to the sync-status ledger --
 		// close the entries it actually reads, not just the retired error.log.
 		pfBlockerNG_clearfailed($pfb['dbdir']);
-		// issue #4257: and the Core Updater's retry counts, so a cleared feed is fetched again today
+		// issue #4257: and the Core Updater's retry counts, so the next Update fetches a cleared feed instead of skipping it
 		$failure = pfb_reset_feed_failures('pfb_core_call');
 		if ($failure !== NULL) {
 			pfb_logger("\n Clear Failed Downloads: the Core Updater's retry counts were not reset: {$failure}\n", 1);

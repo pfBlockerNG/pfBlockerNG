@@ -237,6 +237,10 @@ func (s *Scheduler) StartWith(asked update.Request) error {
 	})
 }
 
+// Admit runs fn as the scheduler admits its own Updates: a retained Update's completion is recorded first, and fn runs once
+// more after a recovery it asked for (update.ErrRecoveryRequired).
+func (s *Scheduler) Admit(fn func() error) error { return s.admit(fn) }
+
 func (s *Scheduler) admit(fn func() error) error {
 	if err := s.Recover(); err != nil {
 		return err

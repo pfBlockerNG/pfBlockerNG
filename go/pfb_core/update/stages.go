@@ -64,9 +64,10 @@ func readUpdaterState(dir string) updaterState {
 }
 
 // ResetFailures clears the failed downloads counted today for the named feeds, or for every feed when feeds is nil, in the
-// Updater's state in dir, so the next Update fetches them again before the day ends (issue #4257, "Clear Failed Downloads").
-// The rest of the state is kept. A state that does not exist is left so; one that cannot be read is an error, never replaced.
-// The caller holds the Gate (Exclusive): no Update writes the state meanwhile.
+// Updater's state in dir, so the next Update that comes to them (their next scheduled run, or a manual one) fetches them
+// instead of skipping them at the retry cap (issue #4257, "Clear Failed Downloads"). The rest of the state is kept; a reset
+// that clears no count writes nothing. A state that does not exist is left so; one that cannot be read is an error, never
+// replaced. The caller holds the Gate (Exclusive): no Update writes the state meanwhile.
 func ResetFailures(dir string, feeds []string) error {
 	path := filepath.Join(dir, updaterStateName)
 	b, err := os.ReadFile(path)
@@ -80,11 +81,17 @@ func ResetFailures(dir string, feeds []string) error {
 	if err := json.Unmarshal(b, &st); err != nil {
 		return fmt.Errorf("%s cannot be read: %w", updaterStateName, err)
 	}
+	cleared := feeds == nil && len(st.Failures) > 0
 	if feeds == nil {
 		st.Failures = nil
 	}
 	for _, name := range feeds {
+		_, had := st.Failures[name]
+		cleared = cleared || had
 		delete(st.Failures, name)
+	}
+	if !cleared {
+		return nil
 	}
 	if len(st.Failures) == 0 {
 		st.Failures, st.FailuresDay = nil, ""

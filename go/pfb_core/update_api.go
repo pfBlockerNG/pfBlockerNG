@@ -132,32 +132,31 @@ func scheduleModel(st *settings.Store) func() (schedule.Model, error) {
 	}
 }
 
-// updateMethods are the three Update and schedule methods over sched and gate (docs/misc/core-api-protocol.md, "Update and
+// updateMethods are the Update and schedule methods over sched and gate (docs/misc/core-api-protocol.md, "Update and
 // schedule"). Without a scheduler (no --update-cmd) each answers unavailable.
 func updateMethods(stateDir string, sched *scheduler.Scheduler, gate *update.Gate) map[string]method {
 	methods := map[string]method{
 		// issue #4257: the widget's "Clear Failed Downloads" resets the Core Updater's retry count of the named feeds (all
-		// when feeds is absent), held in updater.json for the day; never while an Update runs, which writes that state.
+		// when feeds is absent), held in updater.json for the day, so the next Update that comes to them fetches them; never
+		// while an Update runs, which writes that state.
 		"ResetFeedFailures": {mutating: true, call: func(_ context.Context, params []byte) (any, error) {
 			var p struct {
-				RequestID string    `json:"requestId"`
-				Feeds     *[]string `json:"feeds"`
+				RequestID string   `json:"requestId"`
+				Feeds     []string `json:"feeds"` // absent or null: every feed
 			}
 			if err := decodeParams(params, &p); err != nil {
 				return nil, err
 			}
-			var feeds []string
-			if p.Feeds != nil {
-				feeds = []string{}
-				for i, name := range *p.Feeds {
-					if name == "" || strings.Trim(name, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != "" {
-						return nil, newError(codeInvalidArgument, "the feeds are not feed names; nothing was reset",
-							fieldError{Field: fmt.Sprintf("feeds[%d]", i), Message: "must be letters, digits and underscores"})
-					}
-					feeds = append(feeds, name)
+			for i, name := range p.Feeds {
+				if name == "" || strings.Trim(name, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != "" {
+					return nil, newError(codeInvalidArgument, "the feeds are not feed names; nothing was reset",
+						fieldError{Field: fmt.Sprintf("feeds[%d]", i), Message: "must be letters, digits and underscores"})
 				}
 			}
-			err := gate.Exclusive(func() error { return update.ResetFailures(stateDir, feeds) })
+			// as the scheduler admits an Update: a finished Update's result is recorded first, never answered unavailable
+			err := sched.Admit(func() error {
+				return gate.Exclusive(func() error { return update.ResetFailures(stateDir, p.Feeds) })
+			})
 			switch {
 			case errors.Is(err, update.ErrRunning):
 				return nil, newError(codeConflict, "an Update is running; nothing was reset")

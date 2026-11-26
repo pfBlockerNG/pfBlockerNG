@@ -609,7 +609,7 @@ func TestTheSchedulerLoopStartsAScheduledUpdateWhenItsTimerFires(t *testing.T) {
 }
 
 // issue #4257 (owner, 2026-11-26, decision 3 on #3977): "Clear Failed Downloads" resets the Core Updater's per-feed retry
-// count, kept in updater.json for the local day, so a cleared feed is fetched again before midnight.
+// count, kept in updater.json for the local day, so the next Update fetches a cleared feed instead of skipping it.
 func TestResetFeedFailuresClearsTheNamedCountsThenAllAndKeepsTheRestOfTheState(t *testing.T) {
 	c, _ := startUpdateCore(t)
 	path := filepath.Join(c.state, "updater.json")

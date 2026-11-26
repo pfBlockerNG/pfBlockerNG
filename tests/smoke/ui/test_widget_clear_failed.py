@@ -306,8 +306,8 @@ def test_dismiss_resets_the_core_updaters_retry_counts(
     php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
 ) -> None:
     """issue #4257 (owner, 2026-11-26): "Clear Failed Downloads" also resets the Core Updater's retry count of every
-    feed (``updater.json``, the day's failed downloads the retry cap reads), through Core's ``ResetFeedFailures``, so a
-    cleared feed is fetched again before midnight. The rest of Core's state stays."""
+    feed (``updater.json``, the day's failed downloads the retry cap reads), through Core's ``ResetFeedFailures``, so
+    the next Update fetches a cleared feed instead of skipping it. The rest of Core's state stays."""
     vm = smoke_vm
     state = '{"pendingFeeds":["P"],"failuresDay":"2026-11-26","failures":{"Smoke_Feed":3}}'
     wrote = vm.ssh(f"printf %s '{state}' > {core_updater_state} && chmod 600 {core_updater_state}", timeout=30)

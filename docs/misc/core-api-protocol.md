@@ -774,15 +774,17 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
 Privileged; mutating (`requestId`). Issue #4257 (owner, 2026-11-26, decision 3 on #3977, which amends the "no API change"
 constraint for this method): the Core Updater counts each feed's failed downloads for the local day in `updater.json` in the
 state directory, and stops retrying a feed whose count reaches the retry cap (`ingest.skipFeedLimit`) until the day ends. The
-widget's "Clear Failed Downloads" calls this method, beside what it clears in the Outpost, so a cleared feed is fetched again
-the same day.
+widget's "Clear Failed Downloads" calls this method, beside what it clears in the Outpost, so the next Update that comes to a
+cleared feed (its next scheduled run, or a manual Update) fetches it instead of skipping it; the reset itself starts none.
 
 | Params | Reply |
 | --- | --- |
 | `{"requestId": "...", "feeds": ["Name", ...]}` | `{}` |
 
 `feeds` is optional: absent, every feed's count is reset; given, only the named feeds' (each 1 or more letters, digits and
-underscores, the feed's file name). The rest of `updater.json` is kept, and a state directory without one is left without one.
+underscores, the feed's file name). The rest of `updater.json` is kept, a reset that clears no count writes nothing, and a
+state directory without one is left without one. A finished Update whose result Core has not recorded yet is recorded first,
+as before an Update starts.
 While an Update runs, which writes that state, the method answers `conflict` ("an Update is running; nothing was reset") and
 changes nothing; it holds the gate as `StartUpdate` does, so no Update starts meanwhile. A name that is not a feed name is
 `invalid_argument`; a state that cannot be read or written is `unavailable`. Without `--update-cmd` it answers `unavailable`
