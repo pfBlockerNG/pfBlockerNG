@@ -313,6 +313,30 @@ final class OutpostApplyTest extends TestCase
 		$this->assertTrue($r['pending'], 'the later mark is still pending');
 	}
 
+	/**
+	 * issue #4263 (owner, 2026-11-23): WHEN the pending marker holds a token that is not 1 to 64 printable ASCII characters, and
+	 * Core hands it back THEN the apply discards the marker, files an issue the status page shows, and applies the request.
+	 */
+	public function testAMarkerWithAnInvalidTokenIsDiscardedAndTheApplyProceeds(): void
+	{
+		$bad = "bad token\n";
+		$apply = self::at([self::ABUSE => ['1', self::OLD]]) + ['pendingToken' => $bad, 'apply' => [
+			'request' => self::request([self::resource(self::ABUSE, '2', 3)], ['pendingToken' => $bad]),
+			'core'    => [self::full(self::ABUSE, '2', self::NEW), self::text(self::NEW)],
+		]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame([self::ABUSE => '2'], self::generations($r), 'the request was applied');
+		$this->assertSame(self::NEW, $r['kernel']['pfB_Abuse_v4']);
+		$this->assertFalse($r['pending'], 'the marker is discarded');
+		$entry = json_decode($r['syncStatus']['pfb_sync_status.json'] ?? '{}', TRUE)['ip']['pending-marker']['core'] ?? NULL;
+		$this->assertIsArray($entry, 'the status page shows the issue: ' . ($r['syncStatus']['pfb_sync_status.json'] ?? 'no ledger'));
+		$this->assertStringStartsWith('pending_token_invalid: ', $entry['message']);
+		$this->assertNotEmpty(array_filter($r['notices'], static fn (array $n): bool => str_contains($n['notice'], 'pending-marker')),
+			'the issue is filed as a notice');
+	}
+
 	/** With pendingOutsideWindow the apply marks the changes pending, applies nothing and writes one line without applied. */
 	public function testOutsideTheWindowTheChangesAreMarkedPendingAndNothingIsApplied(): void
 	{

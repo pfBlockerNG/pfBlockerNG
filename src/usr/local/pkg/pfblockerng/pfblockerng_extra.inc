@@ -6801,8 +6801,8 @@ function pfb_core_update_v2_request(string $stdin): array
 	$trigger = pfb_core_update_choose($request, 'trigger', ['scheduled', 'manual', 'apply', 'retry'], NULL);
 	$scope = pfb_core_update_choose($request, 'scope', ['ip', 'dnsbl', 'both'], 'both');
 	$token = $request['pendingToken'] ?? NULL;
-	if ($token !== NULL && (!is_string($token) || preg_match('/^[\x21-\x7e]{1,64}\z/', $token) !== 1)) {
-		throw new InvalidArgumentException('pendingToken is not 1 to 64 printable ASCII characters');
+	if ($token !== NULL && !pfb_pending_token_valid($token)) {
+		$token = NULL;	// issue #4263 (owner, 2026-11-23): read as none; the apply discards the marker that holds it
 	}
 	$outside = $request['pendingOutsideWindow'] ?? FALSE;
 	if (!is_bool($outside)) {
@@ -7307,7 +7307,7 @@ function pfb_outpost_apply_run(array $request, $out, ?string $socket, bool $abso
 		}
 	}
 
-	pfb_outpost_issues($request['issues']);
+	pfb_outpost_issues([...$request['issues'], ...pfb_outpost_repair_pending_marker()]);
 	$report = [];
 	$accounting = TRUE;
 	if ($request['scope'] !== 'ip') {
@@ -7531,6 +7531,29 @@ function pfb_outpost_expected_aliases(): array
 		}
 	}
 	return $expected;
+}
+
+/**
+ * Issue #4263 (owner, 2026-11-23): a pending marker whose token the apply does not take (pfb_pending_token_valid()) would make
+ * every apply refuse its request; it is discarded, and the issue returned for the status page. An empty marker is a mark to
+ * version (pfb_pending_changes_token()), not a bad token. The marker is removed only while it still holds what was read: a
+ * save that marked meanwhile keeps its own.
+ *
+ * @return list<array{resource: string, stage: string, code: string, message: string}>
+ */
+function pfb_outpost_repair_pending_marker(): array
+{
+	$marker = pfb_pending_changes_marker();
+	$held = @file_get_contents($marker);
+	if (!is_string($held) || $held === '' || pfb_pending_token_valid($held)) {
+		return [];
+	}
+	// ponytail: a save between this read and the unlink loses its mark; the window is two calls, and the next save marks again.
+	if (@file_get_contents($marker) === $held) {
+		pfb_clear_pending_changes();
+	}
+	return [['resource' => 'pending-marker', 'stage' => 'apply', 'code' => 'pending_token_invalid',
+		'message' => 'the pending-changes marker held a token that is not 1 to 64 printable ASCII characters; it was discarded']];
 }
 
 /**

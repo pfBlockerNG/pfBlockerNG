@@ -1380,83 +1380,155 @@
 		},
 		{
 			"id": "token-empty",
-			"description": "An empty token.",
+			"description": "An empty token. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
 				"pendingToken": ""
 			},
-			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
 		},
 		{
 			"id": "token-65",
-			"description": "A token of 65 characters.",
+			"description": "A token of 65 characters. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
 				"pendingToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 			},
-			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
 		},
 		{
 			"id": "token-line-break",
-			"description": "A token with a line break.",
+			"description": "A token with a line break. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
 				"pendingToken": "0123\n4567"
 			},
-			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
 		},
 		{
 			"id": "token-trailing-line-feed",
-			"description": "A token that ends in a line feed.",
+			"description": "A token that ends in a line feed. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
 				"pendingToken": "abc\n"
 			},
-			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
 		},
 		{
 			"id": "token-nul",
-			"description": "A token with a NUL.",
+			"description": "A token with a NUL. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
 				"pendingToken": "0123\u00004567"
 			},
-			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
 		},
 		{
 			"id": "token-space",
-			"description": "A token with a space.",
+			"description": "A token with a space. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
 				"pendingToken": "0123 4567"
 			},
-			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
 		},
 		{
 			"id": "token-non-ascii",
-			"description": "A token with a character that is not ASCII.",
+			"description": "A token with a character that is not ASCII. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
 				"pendingToken": "café"
 			},
-			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
 		},
 		{
 			"id": "token-number",
-			"description": "A token that is a number.",
+			"description": "A token that is a number. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
 				"pendingToken": 12
 			},
-			"refused": "pendingToken is not 1 to 64 printable ASCII characters"
+			"accepted": {
+				"trigger": "manual",
+				"scope": "both",
+				"pendingToken": null,
+				"pendingOutsideWindow": false,
+				"resources": [],
+				"removed": [],
+				"dnsbl": null,
+				"issues": []
+			}
 		},
 		{
 			"id": "outside-window-string",

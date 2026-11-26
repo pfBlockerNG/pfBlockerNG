@@ -13356,6 +13356,10 @@ function pfb_pending_changes_token(): ?string {
 	}
 	return $token === FALSE ? NULL : $token;
 }
+// Whether $token is a pending-changes token the version 2 apply takes: 1 to 64 printable ASCII characters other than the space.
+function pfb_pending_token_valid(mixed $token): bool {
+	return is_string($token) && preg_match('/^[\x21-\x7e]{1,64}\z/', $token) === 1;
+}
 // Writes only a new version: a routine pass with nothing pending leaves persistent storage alone.
 function pfb_settle_pending_changes(?string $seen): void {
 	$applied = pfb_pending_changes_marker() . '.applied';
