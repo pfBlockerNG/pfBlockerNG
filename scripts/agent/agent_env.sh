@@ -81,6 +81,8 @@ scrub_git_env() {
 # time, never through a link: a link there is refused, the new file is made by mktemp (which follows no link) and
 # renamed over it, and anything but a regular file there afterwards is an error.
 ignore_worktrees() {
+	require_tool mktemp
+	require_tool mv
 	if [ -L "$1/.gitignore" ]; then
 		echo "the worktree root .gitignore must not be a symlink: '$1/.gitignore'" >&2
 		return 2

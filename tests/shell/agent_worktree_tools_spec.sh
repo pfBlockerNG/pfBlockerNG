@@ -154,6 +154,15 @@ SERENA
     The contents of file "$worktree/.worktrees/.gitignore" should equal '*'
   End
 
+  It "names a missing tool the ignore needs instead of failing bare"
+    linked "$worktree/.worktrees/topic" || return 1
+    rm "$no_codegraph/mktemp"
+    When run env PATH="$no_codegraph" sh "$script_abs" "$worktree/.worktrees/topic"
+    The status should equal 4
+    The stderr should include 'TOOL-MISSING: mktemp'
+    Assert [ ! -e "$worktree/.worktrees/.gitignore" ]
+  End
+
   It "leaves the primary's .worktrees/ alone for a worktree cut elsewhere"
     linked "$fixture/elsewhere" || return 1
     mkdir "$worktree/.worktrees"
