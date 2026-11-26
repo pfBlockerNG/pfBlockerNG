@@ -4,6 +4,7 @@ package feedfetch_test
 // ends during the split, and a workbook past a lowered extraction ceiling.
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
@@ -186,5 +187,43 @@ func TestAReprocessWhoseSplitCannotBeWrittenKeepsThePublishedCopy(t *testing.T) 
 	}
 	if got := published(t, feed); got != before {
 		t.Errorf("published %q, want %q kept", got, before)
+	}
+}
+
+// A kept download of another archive type is extracted as its ingest extracted it (gate): a tar.gz's member is split
+// again, never the tar's headers, which today's gunzip-only arm splits as CSV.
+func TestAReprocessOfATarGzSplitsItsMember(t *testing.T) {
+	f, feed, _ := etFeed(t, "")
+	csv := []byte("192.0.2.10,1,127\n198.51.100.40,15,2\n")
+	var packed bytes.Buffer
+	zw := gzip.NewWriter(&packed)
+	tw := tar.NewWriter(zw)
+	tw.WriteHeader(&tar.Header{Name: "iprepdata.txt", Mode: 0o644, Size: int64(len(csv))})
+	tw.Write(csv)
+	tw.Close()
+	zw.Close()
+	if err := os.WriteFile(filepath.Join(feed.Dir, feed.Name+".raw"), packed.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if res := f.ReprocessET(context.Background(), feed); !res.OK || published(t, feed) != "192.0.2.10\n" {
+		t.Errorf("ReprocessET = %+v, published %q; want ET_Cnc's address", res, published(t, feed))
+	}
+}
+
+// A kept download that is no regular file is refused, its target never split.
+func TestAReprocessOfALinkedRawKeepsThePublishedCopy(t *testing.T) {
+	f, feed, _ := etFeed(t, "")
+	target := filepath.Join(t.TempDir(), "elsewhere.csv")
+	if err := os.WriteFile(target, []byte("192.0.2.10,1,127\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(feed.Dir, feed.Name+".raw")); err != nil {
+		t.Fatal(err)
+	}
+	before := published(t, feed)
+
+	if res := f.ReprocessET(context.Background(), feed); res.OK || published(t, feed) != before {
+		t.Errorf("ReprocessET = %+v, published %q; want a refusal and %q kept", res, published(t, feed), before)
 	}
 }
