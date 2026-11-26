@@ -119,7 +119,9 @@ type updater struct {
 	lock, result, log *os.File
 
 	snap     map[string]map[string]any // the projections the stages read
-	state    updaterState              // the Updater's state, as read and as written
+	state    updaterState              // the Updater's state, as read at the start; its failure counts are the work list's
+	added    map[string]int            // the failed downloads counted and not written yet (saveState)
+	written  map[string]int            // the counts saveState last wrote
 	pending  []string                  // the Updater state's pending feeds
 	inWindow bool                      // now is inside the apply window, at the change detection
 	zone     *time.Location

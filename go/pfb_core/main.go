@@ -314,7 +314,7 @@ func coreMethods(stateDir string, store *settings.Store, resourceStore *resource
 	methods := productionMethods()
 	maps.Copy(methods, settingsMethods(store))
 	maps.Copy(methods, resourceMethods(resourceStore))
-	maps.Copy(methods, updateMethods(sched, gate))
+	maps.Copy(methods, updateMethods(stateDir, sched, gate))
 	maps.Copy(methods, appliedMethods(stateDir))
 	return methods
 }

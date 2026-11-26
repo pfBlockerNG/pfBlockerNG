@@ -284,3 +284,41 @@ def test_dismiss_cross_site_post_does_not_clear_ledger(
     assert item in raw, f"cross-site POST removed {item!r} from the raw ledger file"
 
     _ledger_close(vm, "ip", item, "apply")
+
+
+_CORE_UPDATER_STATE = "/usr/local/etc/pfb_core/updater.json"
+
+
+@pytest.fixture
+def core_updater_state(smoke_vm: helpers.SmokeVM) -> Iterator[str]:
+    """Set aside Core's ``updater.json`` for the test and put it back after: the test writes a count of its own."""
+    vm = smoke_vm
+    kept = f"{_CORE_UPDATER_STATE}.smoke-{uuid.uuid4().hex[:8]}"
+    moved = vm.ssh(f"[ ! -e {_CORE_UPDATER_STATE} ] || mv {_CORE_UPDATER_STATE} {kept}", timeout=30)
+    assert moved.returncode == 0, f"could not set {_CORE_UPDATER_STATE} aside: {moved.stderr}"
+    yield _CORE_UPDATER_STATE
+    restored = vm.ssh(
+        f"rm -f {_CORE_UPDATER_STATE} && {{ [ ! -e {kept} ] || mv {kept} {_CORE_UPDATER_STATE}; }}", timeout=30
+    )
+    assert restored.returncode == 0, f"could not put {kept} back as {_CORE_UPDATER_STATE}: {restored.stderr}"
+
+
+def test_dismiss_resets_the_core_updaters_retry_counts(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    core_updater_state: str,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
+) -> None:
+    """issue #4257 (owner, 2026-11-26): "Clear Failed Downloads" also resets the Core Updater's retry count of every
+    feed (``updater.json``, the day's failed downloads the retry cap reads), through Core's ``ResetFeedFailures``, so
+    the next Update fetches a cleared feed instead of skipping it. The rest of Core's state stays."""
+    vm = smoke_vm
+    state = '{"pendingFeeds":["P"],"failuresDay":"2026-11-26","failures":{"Smoke_Feed":3}}'
+    wrote = vm.ssh(f"printf %s '{state}' > {core_updater_state} && chmod 600 {core_updater_state}", timeout=30)
+    assert wrote.returncode == 0, f"could not plant {core_updater_state}: {wrote.stderr}"
+
+    _dismiss(webui)
+
+    after = vm.ssh(f"cat {core_updater_state}", timeout=30).stdout
+    assert '"failures"' not in after, f"the retry counts are still in Core's state: {after}"
+    assert '"pendingFeeds":["P"]' in after, f"the rest of Core's state was not kept: {after}"

@@ -211,6 +211,17 @@ function pfb_update_core_failure(array $answer): ?string {
 }
 
 /**
+ * "Clear Failed Downloads" (issue #4257, owner 2026-11-26): ask Core to reset the Core Updater's retry count of every feed
+ * (ResetFeedFailures), so the next Update that comes to a cleared feed fetches it instead of skipping it. NULL once Core reset it; otherwise why not, as
+ * one line for the log: the rest of the clear never depends on Core. The call is bounded by PFB_CORE_PAGE_TIMEOUT.
+ *
+ * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ */
+function pfb_reset_feed_failures(callable $call): ?string {
+	return pfb_update_core_failure($call('ResetFeedFailures', ['requestId' => bin2hex(random_bytes(16))], NULL, PFB_CORE_PAGE_TIMEOUT));
+}
+
+/**
  * Whether Core reports an Update running (issue #3941): the Update page's status line. A Core that does not answer, or answers with
  * an error, is not running one. The call is bounded by PFB_CORE_PAGE_TIMEOUT, like every call of the page.
  *

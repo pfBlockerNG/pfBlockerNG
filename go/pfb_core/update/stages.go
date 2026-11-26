@@ -63,6 +63,57 @@ func readUpdaterState(dir string) updaterState {
 	return st
 }
 
+// lockState takes the lock of the Updater's state in dir, which a reset and the Updater's own saves take around their read
+// and write, so that neither loses the other's change (owner, 2026-11-26). Closing the file releases it.
+func lockState(dir string) (*os.File, error) {
+	f, err := os.OpenFile(filepath.Join(dir, updaterStateName+".lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// ResetFailures clears every feed's failed downloads counted today in the Updater's state in dir, so the next Update that
+// comes to a feed (its next scheduled run, or a manual one) fetches it instead of skipping it at the retry cap (issue #4257,
+// "Clear Failed Downloads"). The Updater's other state is kept, and a state with no count is not written. A state that
+// does not exist is left so; one that cannot be read is an error, never replaced. A reset may come while an Update runs:
+// under the state's lock, the Update adds only its own failures to what it then finds (saveState).
+func ResetFailures(dir string) error {
+	path := filepath.Join(dir, updaterStateName)
+	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
+		return nil // nothing counted, and no lock file left behind
+	}
+	lock, err := lockState(dir)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var st updaterState
+	if err := json.Unmarshal(b, &st); err != nil {
+		return fmt.Errorf("%s cannot be read: %w", updaterStateName, err)
+	}
+	if len(st.Failures) == 0 {
+		return nil
+	}
+	st.Failures, st.FailuresDay = nil, ""
+	out, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	return writeList(path, string(out))
+}
+
 // The test seams of the Extras verbs and of the dnsbl/* publication; production never sets them.
 var (
 	extrasRun    = (*feedfetch.Fetcher).RunExtras
@@ -377,12 +428,53 @@ func (u *updater) pendingAfter(feeds []string) error {
 	return u.saveState()
 }
 
+// saveState writes the Updater's state. The failure counts are not the Updater's alone: a reset may have cleared them since
+// it read them, so under the state's lock it adds the failures it counted and has not written to the counts it finds for
+// its day (none when the file holds another day, or none after a reset); the work list keeps deciding from the counts read
+// at the start.
 func (u *updater) saveState() error {
-	b, err := json.Marshal(u.state)
+	lock, err := lockState(u.stateDir)
 	if err != nil {
 		return err
 	}
-	return writeList(filepath.Join(u.stateDir, updaterStateName), string(b))
+	defer lock.Close()
+	st := u.state
+	st.Failures = map[string]int{}
+	var held updaterState
+	b, err := os.ReadFile(filepath.Join(u.stateDir, updaterStateName))
+	switch {
+	case err != nil || json.Unmarshal(b, &held) != nil:
+		// missing or unreadable is no reset (a reset never removes the file): the counts this Update last wrote stand, or
+		// those read at its start before it wrote any
+		base := u.written
+		if base == nil {
+			base = u.state.Failures
+		}
+		maps.Copy(st.Failures, base)
+	case held.FailuresDay == u.state.FailuresDay:
+		maps.Copy(st.Failures, held.Failures)
+	}
+	for name, n := range u.added {
+		st.Failures[name] += n
+	}
+	out, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	if err := writeList(filepath.Join(u.stateDir, updaterStateName), string(out)); err != nil {
+		return err
+	}
+	u.added, u.written = nil, st.Failures
+	return nil
+}
+
+// countFailure counts one failed download of the feed name today, written at once so that an Updater that dies keeps it.
+func (u *updater) countFailure(name string) error {
+	if u.added == nil {
+		u.added = map[string]int{}
+	}
+	u.added[name]++
+	return u.saveState()
 }
 
 // runFeeds is the per-feed stage of every item of kinds, in work-list order, each outcome written once its feed ends.
@@ -401,11 +493,7 @@ func (u *updater) runFeeds(kinds ...string) error {
 		}
 		r := u.stages[item.Feed.Kind].Run(context.Background(), item.Feed, item.Change)
 		if failedTransfer(r) {
-			if u.state.Failures == nil {
-				u.state.Failures = map[string]int{}
-			}
-			u.state.Failures[item.Feed.Name]++
-			if err := u.saveState(); err != nil {
+			if err := u.countFailure(item.Feed.Name); err != nil {
 				return err
 			}
 		}

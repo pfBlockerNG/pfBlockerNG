@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -220,7 +221,8 @@ func (c *runningCore) initialize() {
 
 func TestTheUpdateMethodsAnswerUnavailableWithoutUpdateCmd(t *testing.T) {
 	c := startCore(t, scratchDir(t))
-	for name, body := range map[string]string{"StartUpdate": `{"requestId":"r1","trigger":"apply"}`, "GetUpdate": `{}`, "GetSchedule": `{}`} {
+	for name, body := range map[string]string{"StartUpdate": `{"requestId":"r1","trigger":"apply"}`, "GetUpdate": `{}`, "GetSchedule": `{}`,
+		"ResetFeedFailures": `{"requestId":"f1"}`} {
 		got := c.post(name, body)
 		wantError(t, got, http.StatusServiceUnavailable, codeUnavailable)
 		if !bytes.Contains(got.body, []byte("start it with --update-cmd")) {
@@ -604,4 +606,43 @@ func TestTheSchedulerLoopStartsAScheduledUpdateWhenItsTimerFires(t *testing.T) {
 	if n := f.runs(); n != 1 {
 		t.Errorf("the program ran %d times for one quarter hour, want 1", n)
 	}
+}
+
+// issue #4257 (owner, 2026-11-26, decision 3 on #3977): "Clear Failed Downloads" resets the Core Updater's per-feed retry
+// count, kept in updater.json for the local day, so the next Update fetches a cleared feed instead of skipping it.
+func TestResetFeedFailuresClearsEveryCountAndKeepsTheRestOfTheState(t *testing.T) {
+	c, _ := startUpdateCore(t)
+	path := filepath.Join(c.state, "updater.json")
+	if err := os.WriteFile(path, []byte(`{"pendingFeeds":["P"],"failuresDay":"2026-11-26","failures":{"A":3,"B":2}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	wantJSON(t, c.post("ResetFeedFailures", `{"requestId":"f1"}`), http.StatusOK, `{}`)
+	sameJSON(t, string(mustRead(t, path)), `{"pendingFeeds":["P"]}`)
+}
+
+func TestResetFeedFailuresWithoutAStateWritesNone(t *testing.T) {
+	c, _ := startUpdateCore(t)
+	wantJSON(t, c.post("ResetFeedFailures", `{"requestId":"f1"}`), http.StatusOK, `{}`)
+	for _, name := range []string{"updater.json", "updater.json.lock"} {
+		if _, err := os.Stat(filepath.Join(c.state, name)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s after a reset of no state: %v, want none written", name, err)
+		}
+	}
+}
+
+func TestResetFeedFailuresWhileAnUpdateRunsIsNotRefusedAndResetsTheCounts(t *testing.T) {
+	c, f := startUpdateCore(t)
+	path := filepath.Join(c.state, "updater.json")
+	if err := os.WriteFile(path, []byte(`{"pendingFeeds":[],"failuresDay":"2026-11-26","failures":{"A":3}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantJSON(t, c.post("StartUpdate", `{"requestId":"s1","trigger":"manual"}`), http.StatusOK, `{}`)
+	c.waitLog("", "update program started")
+
+	// owner, 2026-11-26: a click during an Update is no failure to refuse; the Update adds only its own failures at its end
+	wantJSON(t, c.post("ResetFeedFailures", `{"requestId":"f1"}`), http.StatusOK, `{}`)
+	sameJSON(t, string(mustRead(t, path)), `{"pendingFeeds":[]}`)
+	f.release()
+	c.waitFinished("manual")
 }

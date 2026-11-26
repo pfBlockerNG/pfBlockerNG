@@ -661,7 +661,7 @@ today's readers (`pfb_get_hooks()`, `pfb_hook_timeout()`, `pfb_hook_script_valid
 
 Core runs the singleton Update and its quarter-hour scheduler (issue #3941, map #3813) when it starts with
 `--update-cmd PATH` ([Update command](#update-command)). Without the flag Core runs no scheduler and `StartUpdate`,
-`GetUpdate` and `GetSchedule` answer `unavailable` ("Core runs no scheduler: start it with --update-cmd"). The pfSense
+`GetUpdate`, `GetSchedule` and `ResetFeedFailures` answer `unavailable` ("Core runs no scheduler: start it with --update-cmd"). The pfSense
 layer relays these calls from its authenticated pages; Core is never exposed to a browser.
 
 - **One Update at a time.** Every trigger goes through one gate: the scheduler's own `scheduled`, and `manual`, `apply` and
@@ -768,6 +768,24 @@ updates are off or no feed is or will be due. `extras` holds the Extras that are
 `lastRun` 0 when never run. `lastSuccessfulCheck` is always an object: the time of the last successful check of every item (a feed
 id or an Extra) that has had one, `{}` when none has; it is the metrics export's `pfblockerng_feed_last_success_timestamp_seconds`. When the model cannot be built (the settings are not initialized, or hold a value the schedule refuses) the call is
 `unavailable` with the reason.
+
+### ResetFeedFailures
+
+Privileged; mutating (`requestId`). Issue #4257 (owner, 2026-11-26, decision 3 on #3977, which amends the "no API change"
+constraint for this method): the Core Updater counts each feed's failed downloads for the local day in `updater.json` in the
+state directory, and stops retrying a feed whose count reaches the retry cap (`ingest.skipFeedLimit`) until the day ends. The
+widget's "Clear Failed Downloads" calls this method, beside what it clears in the Outpost, so the next Update that comes to a
+cleared feed (its next scheduled run, or a manual Update) fetches it instead of skipping it; the reset itself starts none.
+
+| Params | Reply |
+| --- | --- |
+| `{"requestId": "..."}` | `{}` |
+
+Every feed's count is reset; the Updater's other state is kept, and a state with no count, or no state at all, is not
+written. A reset may come while an Update runs: it stands, and only that Update's failures after it are counted; the
+running Update still skips the feeds it found at the cap when it started, so the next one fetches them. A state
+that cannot be read or written is `unavailable`; without `--update-cmd` the method answers `unavailable` like the other
+methods of this section.
 
 ### Update command
 

@@ -131,10 +131,22 @@ func scheduleModel(st *settings.Store) func() (schedule.Model, error) {
 	}
 }
 
-// updateMethods are the three Update and schedule methods over sched and gate (docs/misc/core-api-protocol.md, "Update and
+// updateMethods are the Update and schedule methods over sched and gate (docs/misc/core-api-protocol.md, "Update and
 // schedule"). Without a scheduler (no --update-cmd) each answers unavailable.
-func updateMethods(sched *scheduler.Scheduler, gate *update.Gate) map[string]method {
+func updateMethods(stateDir string, sched *scheduler.Scheduler, gate *update.Gate) map[string]method {
 	methods := map[string]method{
+		// issue #4257: the widget's "Clear Failed Downloads"
+		"ResetFeedFailures": {mutating: true, call: func(_ context.Context, params []byte) (any, error) {
+			if err := decodeParams(params, &struct {
+				RequestID string `json:"requestId"`
+			}{}); err != nil {
+				return nil, err
+			}
+			if err := update.ResetFailures(stateDir); err != nil {
+				return nil, newError(codeUnavailable, err.Error())
+			}
+			return struct{}{}, nil
+		}},
 		"StartUpdate": {mutating: true, call: func(_ context.Context, params []byte) (any, error) {
 			var p struct {
 				RequestID string  `json:"requestId"`
