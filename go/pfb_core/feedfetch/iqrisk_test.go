@@ -139,3 +139,25 @@ func TestAnETFeedWithMissingSplitSettingsRefusesBeforeFilesystemChanges(t *testi
 		})
 	}
 }
+
+// issue #4256: a Reload whose kept .raw does not gunzip keeps last-known-good. Today's reuse arm publishes nothing over
+// the copy either (pfb_apply_gunzip_orig_pipeline) and fails the feed.
+func TestAReprocessOfARawThatIsNoGzipKeepsThePublishedCopy(t *testing.T) {
+	f, feed, _ := etFeed(t, "")
+	if err := os.WriteFile(filepath.Join(feed.Dir, feed.Name+".raw"), []byte("192.0.2.10,1,127\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := published(t, feed)
+
+	res := f.ReprocessET(context.Background(), feed)
+
+	if res.OK || res.Reason == "" {
+		t.Errorf("ReprocessET = %+v, want a failure with its reason", res)
+	}
+	if got := published(t, feed); got != before {
+		t.Errorf("published %q, want %q kept", got, before)
+	}
+	if left, _ := filepath.Glob(filepath.Join(feed.Dir, ".pfbstage_*")); len(left) != 0 {
+		t.Errorf("staged files left: %v", left)
+	}
+}
