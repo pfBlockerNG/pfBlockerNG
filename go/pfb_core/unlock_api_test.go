@@ -84,10 +84,13 @@ func TestSetTemporaryUnlocksRefusesADomainThatIsNoneAndChangesNothing(t *testing
 	c, _, store := startUnlockCore(t)
 	_, before := manifestUnlocks(t, store)
 
-	for _, body := range []string{`{"requestId":"u1","domains":["a.example","not a domain"]}`, `{"requestId":"u1","domains":[""]}`,
-		`{"requestId":"u1"}`, `{"requestId":"u1","domains":"a.example"}`} {
-		got := c.post("SetTemporaryUnlocks", body)
-		wantError(t, got, http.StatusBadRequest, codeInvalidArgument)
+	for body, fields := range map[string][]string{
+		`{"requestId":"u1","domains":["a.example","not a domain"]}`: {"domains[1]"},
+		`{"requestId":"u2","domains":[""]}`:                         {"domains[0]"},
+		`{"requestId":"u3"}`:                                        {"domains"},
+		`{"requestId":"u4","domains":"a.example"}`:                  {"domains"},
+	} {
+		wantError(t, c.post("SetTemporaryUnlocks", body), http.StatusBadRequest, codeInvalidArgument, fields...)
 	}
 	if got, after := manifestUnlocks(t, store); len(got) != 0 || after != before {
 		t.Errorf("after refused requests the manifest unlocks %v at generation %d, want none at %d", got, after, before)
@@ -127,10 +130,9 @@ func TestSetTemporaryUnlocksWithoutAPublicationWritesNothing(t *testing.T) {
 
 func TestSetTemporaryUnlocksIsUnavailableWithoutAStoreOrUpdates(t *testing.T) {
 	f := newFakeUpdate(t)
-	for name, flags := range map[string][]string{"no store": {"--update-cmd", f.path}, "no updates": {"--resource-dir", t.TempDir()}} {
+	for _, flags := range [][]string{{"--update-cmd", f.path}, {"--resource-dir", t.TempDir()}} {
 		c := startCore(t, scratchDir(t), flags...)
 		wantError(t, c.post("SetTemporaryUnlocks", `{"requestId":"u1","domains":["a.example"]}`), http.StatusServiceUnavailable, codeUnavailable)
-		_ = name
 	}
 }
 
