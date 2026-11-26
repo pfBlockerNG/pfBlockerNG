@@ -4984,8 +4984,10 @@ function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $w
 	// a mirror that is not the body the cursor records is not that generation's: send no cursor. The placeholder is compared on a
 	// bounded read, not with pfb_member_file_is_placeholder_only(), which reads a mirror of any size whole
 	if ($cursor !== NULL && !is_link($mirror) && is_file($mirror)) {
-		$padded = $placeholder !== NULL && $cursor['entries'] === 0 && @file_get_contents($mirror, FALSE, NULL, 0, 64) === $placeholder;
-		if ($padded || pfb_content_hash($mirror) === $cursor['digest']) {
+		// an empty IP set's mirror is its placeholder only: an empty file (an apply before the placeholder) is fetched again
+		$emptySet = $placeholder !== NULL && $cursor['entries'] === 0;
+		$padded = $emptySet && @file_get_contents($mirror, FALSE, NULL, 0, 64) === $placeholder;
+		if ($padded || (!$emptySet && pfb_content_hash($mirror) === $cursor['digest'])) {
 			$sent = ['generation' => (string) $cursor['generation'], 'digest' => $cursor['digest']];
 			$base = $padded ? '/dev/null' : $mirror;
 		}

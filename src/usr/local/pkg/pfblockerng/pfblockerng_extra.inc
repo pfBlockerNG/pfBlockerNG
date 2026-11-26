@@ -7398,8 +7398,8 @@ function pfb_outpost_apply_run(array $request, $out, ?string $socket, bool $abso
 		$f = $fetched[$alias] ?? NULL;	// NULL: an alias an IP unlock re-blocks, replaced from its mirror
 		// an unlocked member is in no delta: only a replace from the mirror re-blocks it; and a table that leaves or reaches the
 		// empty set is replaced, so that its placeholder (issue #4196) is never kept beside members, nor missing
-		$force = $f === NULL || $unlock || $f['kind'] !== 'delta' || !isset($cursors[$f['id']]) || pfb_pfctl_table_empty($alias)
-			|| (int) $f['entries'] === 0 || (int) $cursors[$f['id']]['entries'] === 0;
+		$force = $f === NULL || $unlock || $f['kind'] !== 'delta' || !isset($cursors[$f['id']]) || (int) $f['entries'] === 0
+			|| (int) $cursors[$f['id']]['entries'] === 0 || pfb_pfctl_table_empty($alias);
 		$done = pfb_apply_alias_delta_files($pfb['pfctl'], $alias, str_ends_with($alias, '_v6') ? 'ipv6' : 'ipv4', "{$pfb['aliasdir']}/{$alias}.txt",
 			(string) ($f['add'] ?? ''), (int) ($f['addEntries'] ?? 0), (string) ($f['remove'] ?? ''), (int) ($f['removeEntries'] ?? 0),
 			(int) ($f['entries'] ?? 0), $f === NULL ? 0 : (int) ($cursors[$f['id']]['entries'] ?? 0), $mode, $batch, $force, $work);
