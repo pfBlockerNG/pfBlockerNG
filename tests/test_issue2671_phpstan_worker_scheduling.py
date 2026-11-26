@@ -113,7 +113,7 @@ def _sources_quoting_a_phpstan_limit() -> list[tuple[str, str]]:
     over the whole tree. `tests/php/NoEmptyOnStringRuleTest.php` is not one of them:
     it analyses a three-file fixture directory and carries its own limit."""
     skip = {"node_modules", ".venv", "vendor", "plugins", ".git"}
-    worktrees = ROOT / ".claude" / "worktrees"
+    worktrees = (ROOT / ".claude" / "worktrees", ROOT / ".worktrees")
     candidates = [
         *ROOT.rglob("*.md"),
         ROOT / "phpstan.neon",
@@ -122,7 +122,7 @@ def _sources_quoting_a_phpstan_limit() -> list[tuple[str, str]]:
     return [
         (str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
         for path in candidates
-        if not skip & set(path.parts) and worktrees not in path.parents
+        if not skip & set(path.parts) and not any(w in path.parents for w in worktrees)
     ]
 
 

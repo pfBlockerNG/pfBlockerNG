@@ -61,6 +61,7 @@ test-results/
 
 # ── AI-agent worktrees (per-task, never committed) ───────────────────────────
 .claude/worktrees/
+.worktrees/
 .grok/worktrees/
 .codex/local-notes.md
 .ua/

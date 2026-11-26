@@ -4,7 +4,7 @@
 Describe 'setup-agent-tools.sh'
   project_root="${SHELLSPEC_PROJECT_ROOT:-$PWD}"
   script_abs="$project_root/scripts/agent/setup-agent-tools.sh"
-  canonical_worktree_path='worktree-path = "{{ repo_path }}/../.{{ repo }}_worktrees/{{ branch | sanitize }}"'
+  canonical_worktree_path='worktree-path = "{{ repo_path }}/.worktrees/{{ branch | sanitize }}"'
 
   make_base_path() {
     destination=$1

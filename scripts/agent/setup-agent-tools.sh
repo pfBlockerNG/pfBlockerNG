@@ -53,7 +53,7 @@ install_linux_prerequisites() {
 configure_worktrunk() {
 	worktrunk_dir=${XDG_CONFIG_HOME:-$HOME/.config}/worktrunk
 	worktrunk_config=$worktrunk_dir/config.toml
-	worktrunk_path='worktree-path = "{{ repo_path }}/../.{{ repo }}_worktrees/{{ branch | sanitize }}"'
+	worktrunk_path='worktree-path = "{{ repo_path }}/.worktrees/{{ branch | sanitize }}"'
 	mkdir -p "$worktrunk_dir"
 	[ -f "$worktrunk_config" ] || touch "$worktrunk_config"
 	worktrunk_trailing_newline=1

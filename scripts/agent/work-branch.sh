@@ -6,9 +6,9 @@
 #   Prints the branch name (`issue/NN-slug` / `adr/NN-slug`; empty slug -> bare `type/NN`).
 #   --worktree  also `git fetch origin` + cut the worktree through `wt` (falling
 #               back to `git worktree add` when wt is absent, fails, or leaves no
-#               worktree) at an ABSOLUTE path (default <repo-parent>/.<repo-name>_worktrees/<branch
-#               with '/' replaced by '-'>; a relative --path anchors below that sibling
-#               root, while an absolute --path stays exact). An existing branch or path
+#               worktree) at an ABSOLUTE path (default <repo>/.worktrees/<branch with '/'
+#               replaced by '-'>, the folder ignoring itself through a `*` .gitignore; a
+#               relative --path anchors below that root, while an absolute --path stays exact). An existing branch or path
 #               gets a `-<epoch>` suffix (collision rule). Every created worktree
 #               initializes CodeGraph and enabled Serena tools.
 #               Prints `BRANCH<TAB>PATH` instead.
@@ -87,7 +87,7 @@ claim_gate() {
 
 # wt renders `worktree-path` as a minijinja TEMPLATE, so a marker anywhere in the
 # value makes wt cut somewhere this script never reports — and the value is not only
-# what the caller typed: the sibling root is derived from the CHECKOUT's own directory
+# what the caller typed: the worktree root is derived from the CHECKOUT's own directory
 # name. A control character breaks the TOML the same way. Validate every component
 # this script will hand to wt, before a branch is reserved.
 reject_wt_template_chars() {
@@ -208,18 +208,18 @@ main() {
 		fi
 	fi
 
-	repo_name=${root##*/}
-	repo_parent=${root%/*}
-	worktree_root="$repo_parent/.${repo_name}_worktrees"
+	worktree_root="$root/.worktrees"
 	reject_wt_template_chars "$worktree_root" 'the worktree root'
 	if [ "$absolute_path" -eq 1 ]; then
 		mkdir -p "$(dirname "$path")" || exit 1
 	else
 		if [ -L "$worktree_root" ]; then
-			echo "work-branch.sh: sibling root must not be a symlink: '$worktree_root'" >&2
+			echo "work-branch.sh: the worktree root must not be a symlink: '$worktree_root'" >&2
 			exit 2
 		fi
 		mkdir -p "$worktree_root" || exit 1
+		# The folder ignores itself, as the owner's wt pre-start hook has it: the primary's status and indexers skip it.
+		[ -e "$worktree_root/.gitignore" ] || printf '*\n' > "$worktree_root/.gitignore" || exit 1
 		worktree_root=$(CDPATH='' cd "$worktree_root" && pwd -P) || exit 1
 		if [ "$path_set" -eq 1 ]; then
 			requested_parent=$(dirname "$worktree_root/$path")
@@ -229,7 +229,7 @@ main() {
 			case "$path" in
 				"$worktree_root"/*) ;;
 				*)
-					echo "work-branch.sh: relative --path escapes sibling root '$worktree_root'" >&2
+					echo "work-branch.sh: relative --path escapes the worktree root '$worktree_root'" >&2
 					exit 2
 					;;
 			esac

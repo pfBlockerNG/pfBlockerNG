@@ -56,7 +56,7 @@ def _pins() -> dict[str, dict[str, list[str]]]:
 def _docs_under(root: Path) -> list[Path]:
     """The Markdown files this checkout is answerable for.
 
-    `.claude/worktrees/` is excluded by PATH, not by directory name: it holds per-task
+    `.claude/worktrees/` and `.worktrees/` are excluded by PATH, not by directory name: they hold per-task
     agent worktrees — gitignored, one whole repository checkout each — so a name-based
     skip would also drop a legitimate `worktrees/` directory elsewhere in the tree, while
     walking into them grades OTHER branches' documentation at commits this checkout has no
@@ -65,8 +65,12 @@ def _docs_under(root: Path) -> list[Path]:
     actions/checkout has no worktrees.
     """
     skip = {"node_modules", ".venv", "vendor", "plugins", ".git"}
-    worktrees = root / ".claude" / "worktrees"
-    return [path for path in root.rglob("*.md") if not skip & set(path.parts) and worktrees not in path.parents]
+    worktrees = (root / ".claude" / "worktrees", root / ".worktrees")
+    return [
+        path
+        for path in root.rglob("*.md")
+        if not skip & set(path.parts) and not any(w in path.parents for w in worktrees)
+    ]
 
 
 def test_gate_deciding_pins_agree_wherever_they_appear() -> None:
@@ -230,6 +234,16 @@ def test_the_doc_scan_ignores_agent_worktrees(tmp_path: Path) -> None:
     (tmp_path / ".claude/worktrees/issue-1/docs").mkdir(parents=True)
     (tmp_path / ".claude/worktrees/issue-1/CONTRIBUTING.md").write_text("stale", encoding="utf-8")
     (tmp_path / ".claude/worktrees/issue-1/docs/deep.md").write_text("stale", encoding="utf-8")
+
+    assert _docs_under(tmp_path) == []
+
+
+def test_the_doc_scan_ignores_worktrees_cut_inside_the_repository(tmp_path: Path) -> None:
+    """`.worktrees/` holds the worktrees `work-branch.sh` and the owner's `wt` cut inside the repository (#4265), each
+    another branch's whole checkout, so the scan skips it as it skips `.claude/worktrees/`."""
+    (tmp_path / ".worktrees/issue-1/docs").mkdir(parents=True)
+    (tmp_path / ".worktrees/issue-1/CONTRIBUTING.md").write_text("stale", encoding="utf-8")
+    (tmp_path / ".worktrees/issue-1/docs/deep.md").write_text("stale", encoding="utf-8")
 
     assert _docs_under(tmp_path) == []
 
