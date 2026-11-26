@@ -165,10 +165,14 @@ func TestAMoveCutShortAtAnyStepCompletesOnTheNext(t *testing.T) {
 		}
 		cut := tree(t, db)
 		for name := range cut {
-			// never a download the Core Updater would trust beside sidecars that do not describe it
+			// never a moved download the Core Updater would trust beside sidecars that do not describe it
 			if base, ok := strings.CutSuffix(name, ".orig"); ok && strings.HasPrefix(base, "dnsbl/") {
+				feed := "dnsblorig/" + strings.TrimPrefix(base, "dnsbl/") + ".orig"
+				if _, kept := cut[feed]; kept {
+					continue // not moved: the Core Updater's own
+				}
 				for _, s := range []string{".etag", ".lastmod", ".xxhash128", ".md5"} {
-					if _, left := cut["dnsblorig/"+strings.TrimPrefix(base, "dnsbl/")+".orig"+s]; left {
+					if _, left := cut[feed+s]; left {
 						t.Fatalf("step %d: %s moved while its %s did not", step, name, s)
 					}
 				}
