@@ -15,11 +15,12 @@ What it proves:
 
 * a domain of the published feed is blocked after the first poll, and the generation served is reported to Core
   (``applied.json``);
-* while Core is stopped (SIGSTOP), pfB-DNS keeps serving the last generation; a restart of pfB-DNS with Core down serves
+* while Core is stopped (SIGSTOP) with a poll of pfB-DNS waiting on it, pfB-DNS keeps serving the last generation;
+  once Core is back, it serves and reports the next one, with no restart; a restart of pfB-DNS with Core down serves
   the cache it kept (owner, 2026-11-25: no time limit, no watchdog);
-* the 5,000,000-domain measurement: the start time and peak memory of a pfB-DNS that builds from the cache, printed
-  (``PFB_CORE_INPUT_MEASURE``), never asserted. It runs only with ``PFB_CORE_INPUT_MEASURE=1``, on a box with at least
-  4 GiB.
+* the 5,000,000-domain measurement: the start time and peak memory of a pfB-DNS that builds from Core, then from the
+  cache, printed (``PFB_CORE_INPUT_MEASURE``), never asserted. It runs only with ``PFB_CORE_INPUT_MEASURE=1``, on a
+  box with at least 4 GiB.
 
 A settings change that reaches pfB-DNS by a swap is not driven here: it needs a ``config.xml`` edit through the
 adapter. The decider tests cover the swap (``core_settings_test.go``).
@@ -58,14 +59,15 @@ OPEN, CLOSE = "<<<SEED>>>", "<<<SEED-END>>>"
 MANIFEST_ASK = json.dumps({"resources": {"dnsbl/manifest": {}}})
 
 # The store Core serves: a dnsbl/manifest naming one feed and the PSL, all generation 1, written as Core's store holds
-# them (index.json + <id with / as ~>.<generation>.body). argv: the store, the feed's domains file, the count it holds.
+# them (index.json + <id with / as ~>.<generation>.body). argv: the store, the feed's domains file, the count it holds,
+# the generation. Core reads index.json on each call, so a later seed publishes the next generation to a running Core.
 SEED_PHP = r"""<?php
-[, $dir, $domains, $n] = $argv;
-$put = function (string $id, string $file) use ($dir): array {
-    $name = str_replace('/', '~', $id) . '.1.body';
+[, $dir, $domains, $n, $g] = $argv;
+$put = function (string $id, string $file) use ($dir, $g): array {
+    $name = str_replace('/', '~', $id) . ".$g.body";
     rename($file, "$dir/$name");
     chmod("$dir/$name", 0600);
-    return ['generation' => '1', 'digest' => hash_file('xxh128', "$dir/$name"), 'length' => filesize("$dir/$name"),
+    return ['generation' => $g, 'digest' => hash_file('xxh128', "$dir/$name"), 'length' => filesize("$dir/$name"),
         'entries' => 0, 'metadata' => new stdClass()];
 };
 $feed = $put('dnsbl/feed-F', $domains);
@@ -77,9 +79,9 @@ $psl['entries'] = 1;
 $rows = [
     json_encode(['kind' => 'config', 'builtinLogFlag' => '0', 'top1mEnabled' => false]),
     json_encode(['kind' => 'feed', 'position' => 1, 'feed' => 'F', 'group' => 'G', 'logFlag' => '1',
-        'provenance' => 'feed', 'mode' => 'deny', 'top1m' => false, 'resource' => 'dnsbl/feed-F', 'generation' => '1',
+        'provenance' => 'feed', 'mode' => 'deny', 'top1m' => false, 'resource' => 'dnsbl/feed-F', 'generation' => $g,
         'digest' => $feed['digest'], 'entries' => (int) $n]),
-    json_encode(['kind' => 'member', 'resource' => 'dnsbl/psl', 'generation' => '1', 'digest' => $psl['digest'],
+    json_encode(['kind' => 'member', 'resource' => 'dnsbl/psl', 'generation' => $g, 'digest' => $psl['digest'],
         'entries' => 1]),
 ];
 sort($rows, SORT_STRING);
@@ -88,8 +90,9 @@ $manifest = $put('dnsbl/manifest', "$dir/manifest.tmp");
 $manifest['entries'] = count($rows);
 $index = ['dnsbl/feed-F' => ['current' => $feed], 'dnsbl/psl' => ['current' => $psl],
     'dnsbl/manifest' => ['current' => $manifest]];
-file_put_contents("$dir/index.json", json_encode(['version' => 1, 'resources' => $index], JSON_UNESCAPED_SLASHES));
-chmod("$dir/index.json", 0600);
+file_put_contents("$dir/index.tmp", json_encode(['version' => 1, 'resources' => $index], JSON_UNESCAPED_SLASHES));
+chmod("$dir/index.tmp", 0600);
+rename("$dir/index.tmp", "$dir/index.json"); // whole, for a Core that reads it meanwhile
 echo '@OPEN@ok@CLOSE@';
 """
 
@@ -103,6 +106,22 @@ class Rig:
     def api(self) -> str:
         return f"{self.fence}/core/api.sock"
 
+    def holds_a_request(self) -> bool:
+        """Whether a connection to Core's socket holds bytes Core has not read (netstat -f unix: Recv-Q, Addr)."""
+        rows = self.vm.ssh("/usr/bin/netstat -f unix -n", timeout=30).stdout.splitlines()
+        return any(
+            len(cols) > 3 and cols[-1] == self.api and cols[2].isdigit() and int(cols[2]) > 0
+            for cols in (row.split() for row in rows)
+        )
+
+    def reported(self, applied: str) -> str:
+        """The feed's generation in Core's applied.json; "" before Core has one."""
+        held = self.vm.ssh(f"cat {applied} 2>/dev/null", timeout=30).stdout
+        try:
+            return str(json.loads(held)["resources"]["dnsbl/feed-F"]["generation"])
+        except (ValueError, KeyError, TypeError):
+            return ""
+
     def blocked(self, name: str) -> bool:
         """Whether pfB-DNS answers name (A) with its block, 0.0.0.0. A name it does not block is forwarded to the box's
         resolver, which may not answer here; that is no block either."""
@@ -110,9 +129,9 @@ class Rig:
         return "rcode:" in got.stdout and h._parse_drill(got.stdout, "A").records == ["0.0.0.0"]
 
 
-def seed_store(vm: SmokeVM, fence: str, domains: list[str] | None, count: int = 0) -> None:
-    """Seed the fence's store with one feed: the given domains, or ``count`` generated ones."""
-    vm.ssh(f"mkdir -m 700 {fence}/store", timeout=30)
+def seed_store(vm: SmokeVM, fence: str, domains: list[str] | None, count: int = 0, generation: int = 1) -> None:
+    """Seed the fence's store with one feed at generation: the given domains, or ``count`` generated ones."""
+    vm.ssh(f"mkdir -p -m 700 {fence}/store", timeout=30)
     if domains is not None:
         listed = "\n".join(sorted(domains)) + "\n"
         wrote = vm.ssh(f"printf %s {shlex.quote(listed)} > {fence}/feed.txt", timeout=60)
@@ -122,7 +141,9 @@ def seed_store(vm: SmokeVM, fence: str, domains: list[str] | None, count: int = 
     assert wrote.returncode == 0, f"could not write the feed: {wrote.stderr}"
     script = SEED_PHP.replace("@OPEN@", OPEN).replace("@CLOSE@", CLOSE)
     vm.ssh(f"printf %s {shlex.quote(script)} > {fence}/seed.php", timeout=60)
-    seeded = vm.ssh(f"{PHP} -d memory_limit=-1 {fence}/seed.php {fence}/store {fence}/feed.txt {count}", timeout=600)
+    seeded = vm.ssh(
+        f"{PHP} -d memory_limit=-1 {fence}/seed.php {fence}/store {fence}/feed.txt {count} {generation}", timeout=600
+    )
     assert OPEN in seeded.stdout, f"the store was not seeded: rc={seeded.returncode} {seeded.stdout}{seeded.stderr}"
 
 
@@ -154,6 +175,14 @@ def stop(vm: SmokeVM, pid: str) -> None:
         f"for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 {pid} 2>/dev/null || exit 0; sleep 1; done; kill -9 {pid}; true",
         timeout=60,
     )
+
+
+def max_rss_kb(vm: SmokeVM, pid: str) -> int:
+    """The process's peak resident set so far, in KiB (procstat -r)."""
+    usage = vm.ssh(f"/usr/bin/procstat -r {pid}", timeout=30).stdout
+    held = re.search(r"maximum RSS\s+(\d+)", usage)
+    assert held, f"no maximum RSS row from procstat -r {pid}:\n{usage}"
+    return int(held.group(1))
 
 
 def wait_for(what: str, ready: Callable[[], bool], watchdog: float = SERVE_WATCHDOG) -> None:
@@ -199,6 +228,8 @@ class Observation:
     other_blocked: bool  # a domain no feed lists
     report: str  # Core's applied.json
     blocked_while_core_stopped: bool
+    next_blocked_after_core_returned: bool  # a domain only the next generation lists, once Core is back
+    report_after_core_returned: str
     cache_folder: str  # mode and owner of <module dir>/pfb_dns
     blocked_after_restart_without_core: bool
 
@@ -208,7 +239,7 @@ def observed(box: SmokeVM) -> Iterator[Observation]:
     """All the box work, in the fixture (the smoke tier caps a test body at 30 s): what pfB-DNS did, for the tests."""
     fence = make_fence(box)
     try:
-        listed, other = h.unique_domain(), h.unique_domain()
+        listed, other, following = h.unique_domain(), h.unique_domain(), h.unique_domain()
         seed_store(box, fence, [listed])
         rig = Rig(box, fence)
         with h.start_core(box, core_command(fence), rig.api, f"{fence}/core.log", watchdog=READY_WATCHDOG) as core:
@@ -240,14 +271,21 @@ def observed(box: SmokeVM) -> Iterator[Observation]:
                     lambda: '"dnsbl/feed-F"' in box.ssh(f"cat {applied} 2>/dev/null", timeout=30).stdout,
                 )
                 report = box.ssh(f"cat {applied}", timeout=30).stdout
-                # Core stuck: asked only once a poll of pfB-DNS waits on the stopped Core, its connection open
+                # Core stuck: asked only once a request of pfB-DNS waits unread on the stopped Core. An open connection
+                # alone is no proof: the client keeps idle ones, so the barrier is Core's side holding unread bytes.
                 box.ssh(f"kill -STOP {core}", timeout=30)
                 wait_for(
-                    "no poll of pfB-DNS reached the stopped Core",
-                    lambda: rig.api in box.ssh("/usr/bin/sockstat -u -c -w | grep pfb-dns", timeout=30).stdout,
+                    "no request of pfB-DNS reached the stopped Core",
+                    rig.holds_a_request,
                 )
                 while_stopped = rig.blocked(listed)
+                # Core back: the next generation, a feed that also lists another domain, is served and reported
+                seed_store(box, fence, [listed, following], generation=2)
                 box.ssh(f"kill -CONT {core}", timeout=30)
+                wait_for("pfB-DNS never served the generation Core published once back", lambda: rig.blocked(following))
+                wait_for("Core never recorded the next generation", lambda: rig.reported(applied) == "2")
+                next_blocked = rig.blocked(following)
+                report_back = box.ssh(f"cat {applied}", timeout=30).stdout
             finally:
                 stop(box, dns)
         cache = box.ssh(f"/usr/bin/stat -f '%Lp %Su' {fence}/mod/pfb_dns 2>&1", timeout=30).stdout.strip()
@@ -256,7 +294,9 @@ def observed(box: SmokeVM) -> Iterator[Observation]:
             after_restart = rig.blocked(listed)
         finally:
             stop(box, dns)
-        yield Observation(blocked, other_blocked, report, while_stopped, cache, after_restart)
+        yield Observation(
+            blocked, other_blocked, report, while_stopped, next_blocked, report_back, cache, after_restart
+        )
     finally:
         box.ssh(f"rm -rf {fence} {READY} {READY}.sha256", timeout=120)
 
@@ -273,6 +313,12 @@ def test_pfb_dns_reports_the_generation_it_serves_to_core(observed: Observation)
 
 def test_pfb_dns_keeps_serving_while_core_is_stopped(observed: Observation) -> None:
     assert observed.blocked_while_core_stopped, "pfB-DNS stopped blocking while Core was stopped"
+
+
+def test_pfb_dns_takes_the_next_generation_once_core_is_back(observed: Observation) -> None:
+    assert observed.next_blocked_after_core_returned, "pfB-DNS did not serve the generation Core published once back"
+    resources = json.loads(observed.report_after_core_returned)["resources"]
+    assert resources["dnsbl/feed-F"]["generation"] == "2", observed.report_after_core_returned
 
 
 def test_pfb_dns_keeps_its_cache_in_a_folder_of_unbounds_alone(observed: Observation) -> None:
@@ -306,6 +352,7 @@ def measured(box: SmokeVM) -> Iterator[dict[str, object]]:
                     assert time.monotonic() < deadline, "STUCK: the measured generation was never served"
                     time.sleep(5)
                 from_core = time.monotonic() - began
+                rss_core = max_rss_kb(box, dns)
             finally:
                 stop(box, dns)
         began = time.monotonic()
@@ -313,15 +360,13 @@ def measured(box: SmokeVM) -> Iterator[dict[str, object]]:
         try:
             served = rig.blocked(probe)
             from_cache = time.monotonic() - began
-            usage = box.ssh(f"/usr/bin/procstat -r {dns}", timeout=30).stdout
-            held = re.search(r"maximum RSS\s+(\d+)", usage)
-            assert held, f"no maximum RSS row from procstat -r {dns}:\n{usage}"
-            rss = int(held.group(1))
+            rss = max_rss_kb(box, dns)
         finally:
             stop(box, dns)
         yield {
             "entries": MEASURE_ENTRIES,
             "first_start_s": round(from_core, 1),
+            "first_max_rss_kb": rss_core,
             "cached_start_s": round(from_cache, 1),
             "cached_max_rss_kb": rss,
             "box_ram_mib": ram >> 20,
