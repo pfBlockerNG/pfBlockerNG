@@ -94,8 +94,9 @@ func New(logPath string, run RunFunc, done func(Request, Result, error)) *Gate {
 }
 
 // Hold runs fn under the admission an Update takes (issue #4264): what fn writes, the resource store an Update writes too,
-// has one writer at a time. While an Update runs it returns ErrRunning at once, and after Stop ErrStopped, without running
-// fn; otherwise it returns fn's error, and an Update may start once it returns.
+// has one writer at a time. While an Update runs it returns ErrRunning at once, after Stop ErrStopped, and when the lease
+// cannot be taken that error, without running fn; otherwise it returns fn's error, and an Update may start once it returns.
+// A finished Update that awaits recovery does not stop it: recovery writes no resource.
 func (g *Gate) Hold(fn func() error) error {
 	g.mu.Lock()
 	if g.stopped {
@@ -110,13 +111,7 @@ func (g *Gate) Hold(fn func() error) error {
 	var lease *Admission
 	if g.Admit != nil {
 		var err error
-		if lease, err = g.Admit(g.logPath); err == nil {
-			if receipt, readErr := readWorkerState(g.logPath + ".status"); readErr == nil && receipt.FinishedAt != nil && !receipt.Settled {
-				lease.Close()
-				err = ErrRecoveryRequired
-			}
-		}
-		if err != nil {
+		if lease, err = g.Admit(g.logPath); err != nil {
 			g.admit.Unlock()
 			g.mu.Unlock()
 			return err
