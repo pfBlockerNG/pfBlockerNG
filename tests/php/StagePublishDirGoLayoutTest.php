@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/StagedDirFixtureTrait.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
@@ -11,18 +13,22 @@ use PHPUnit\Framework\TestCase;
  * real folder an interrupted Go publication left aside under .pfbstagebak2_<name> (go/pfb_core/feedfetch replaceDir).
  *
  * pfb_stage_publish_dir() and pfb_stage_publish_dir_recover() run only on PHP's download path, which the cutover (#3977)
- * removes; until then the Core Updater publishes nothing. They are kept as they are: over a Go publication both refuse,
- * and neither removes, replaces or writes through anything of it.
+ * removes; until then the Core Updater publishes nothing. They are kept as they are: the publication refuses a Go
+ * category, the recovery refuses only a folder set aside behind a link (a Go link alone is no refusal), and neither removes,
+ * replaces or writes through anything of the Go publication.
  */
 #[CoversFunction('pfb_stage_publish_dir')]
 #[CoversFunction('pfb_stage_publish_dir_recover')]
 final class StagePublishDirGoLayoutTest extends TestCase
 {
+	use StagedDirFixtureTrait;
+
 	private string $dir;
 
 	protected function setUp(): void
 	{
-		$this->dir = sys_get_temp_dir() . '/pfb_go_layout_' . bin2hex(random_bytes(6));
+		// spaces, a semicolon and quotes, as DownloadStagePublishDirTest's: a path is never globbed or split by a shell
+		$this->dir = sys_get_temp_dir() . '/pfb go layout; ' . bin2hex(random_bytes(6)) . " 'fixture'";
 		foreach (['.blacklists.123.0123abcd/adult', '.blacklists.99.89abcdef/adult', '.pfbstagebak2_blacklists/adult'] as $sub) {
 			$this->assertTrue(mkdir("{$this->dir}/{$sub}", 0755, TRUE));
 		}
@@ -35,10 +41,10 @@ final class StagePublishDirGoLayoutTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		rmdir_recursive($this->dir);
+		$this->removeTree($this->dir);
 	}
 
-	/** @return array<string,string> every entry under the folder: a file's content, a link's target, a folder as "dir" */
+	/** @return array<string,string> every entry under the folder: a link's target; a file's mode and content, a folder's mode */
 	private function layout(): array
 	{
 		$out = [];
@@ -49,7 +55,8 @@ final class StagePublishDirGoLayoutTest extends TestCase
 			if ($entry->isLink()) {
 				$out[$rel] = '-> ' . readlink($entry->getPathname()); // not walked into: no FOLLOW_SYMLINKS
 			} else {
-				$out[$rel] = $entry->isDir() ? 'dir' : (string) file_get_contents($entry->getPathname());
+				$mode = substr(sprintf('%o', fileperms($entry->getPathname())), -4);
+				$out[$rel] = $mode . ($entry->isDir() ? ' dir' : ' ' . (string) file_get_contents($entry->getPathname()));
 			}
 		}
 		ksort($out);
@@ -75,7 +82,7 @@ final class StagePublishDirGoLayoutTest extends TestCase
 
 	public function testThePublicationRefusesAGoLinkWithNothingSetAside(): void
 	{
-		rmdir_recursive("{$this->dir}/.pfbstagebak2_blacklists");
+		$this->removeTree("{$this->dir}/.pfbstagebak2_blacklists");
 		$before = $this->layout();
 
 		$ok = pfb_stage_publish_dir("{$this->dir}/blacklists", static function (string $staged): int {
@@ -86,6 +93,15 @@ final class StagePublishDirGoLayoutTest extends TestCase
 
 		$this->assertFalse($ok);
 		$this->assertSame($before, $this->layout(), 'nothing replaces or writes through the link, and no staging folder stays');
+	}
+
+	public function testTheRecoveryTakesAGoLinkWithNothingSetAsideAsItIs(): void
+	{
+		$this->removeTree("{$this->dir}/.pfbstagebak2_blacklists");
+		$before = $this->layout();
+
+		$this->assertTrue(pfb_stage_publish_dir_recover($this->dir), 'nothing to recover');
+		$this->assertSame($before, $this->layout());
 	}
 
 	public function testTheRecoveryLeavesAGoCategoryAndWhatItSetAside(): void
