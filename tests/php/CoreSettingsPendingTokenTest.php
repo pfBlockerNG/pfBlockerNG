@@ -151,17 +151,21 @@ final class CoreSettingsPendingTokenTest extends TestCase
 		];
 	}
 
+	/**
+	 * issue #4263: a token outside the apply's rule (pfb_pending_token_valid()) never leaves the Outpost: carried, a mebibyte
+	 * of it would put Core's request over the 1 MiB the apply reads and stop every Update. The read answers no token, never a
+	 * substituted or cut one, pendingApply still counts the marker, and the marker is left for the apply to repair.
+	 */
 	#[DataProvider('hostileTokens')]
-	public function testAHostileTokenIsCarriedWholeThroughTheServedReply(string $token): void
+	public function testAHostileTokenIsAnsweredAsNoTokenAndStillPending(string $token): void
 	{
 		file_put_contents($this->marker, $token);
 
 		$reply = json_decode(pfb_core_settings_serve('{"version":1,"op":"read"}'), TRUE, 512, JSON_THROW_ON_ERROR);
 
 		$this->assertArrayHasKey('settings', $reply, 'the read answered ' . json_encode(array_keys($reply)));
-		$carried = $reply['platform']['pendingToken'] ?? NULL;
-		$this->assertSame(strlen($token), strlen((string) $carried), 'the token is not truncated');
-		$this->assertTrue($token === $carried, 'the token is carried byte for byte');
+		$this->assertSame(['pendingToken' => NULL, 'pendingApply' => TRUE], $reply['platform'] ?? NULL);
+		$this->assertTrue($token === file_get_contents($this->marker), 'the marker is as it was');
 	}
 
 	/**

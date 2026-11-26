@@ -55,6 +55,15 @@ final class OutpostRepairPendingMarkerTest extends TestCase
 		}
 	}
 
+	public function testABadTokenAlreadySettledIsNotPendingAndIsLeftAlone(): void
+	{
+		file_put_contents($this->marker, "bad token\n");
+		file_put_contents("{$this->marker}.applied", "bad token\n");
+
+		$this->assertSame([], pfb_outpost_repair_pending_marker());
+		$this->assertSame("bad token\n", file_get_contents($this->marker), 'nothing pending: no new mark, no notice');
+	}
+
 	public function testWithoutAMarkerNothingIsWritten(): void
 	{
 		$this->assertSame([], pfb_outpost_repair_pending_marker());

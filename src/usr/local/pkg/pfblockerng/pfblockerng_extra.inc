@@ -7542,9 +7542,10 @@ function pfb_outpost_expected_aliases(): array
  */
 function pfb_outpost_repair_pending_marker(): array
 {
-	$held = @file_get_contents(pfb_pending_changes_marker());
-	if (!is_string($held) || $held === '' || pfb_pending_token_valid($held)) {
-		return [];
+	$marker = pfb_pending_changes_marker();
+	$held = @file_get_contents($marker);
+	if (!is_string($held) || $held === '' || pfb_pending_token_valid($held) || $held === @file_get_contents("{$marker}.applied")) {
+		return [];	// a mark, a mark to version, or a bad token already settled: nothing pending to repair
 	}
 	pfb_mark_pending_changes();
 	return [['resource' => 'pending-marker', 'stage' => 'apply', 'code' => 'pending_token_invalid',

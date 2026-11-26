@@ -149,9 +149,9 @@ A read also answers `platform.pendingToken` (issue #4031): the Outpost's pending
 string, or `null` when nothing is marked. The adapter takes it before it reads the settings, as the apply pass does, so a change
 marked meanwhile stays pending. It is not a setting and not part of the revision. Core keeps its JSON value as the adapter wrote
 it (`Store.PendingToken`, in-process only), hands it back to the platform in the apply request and never parses, compares or logs
-it; no API method answers it. A token JSON cannot carry unaltered (bytes that are not UTF-8) is answered as `null`, never
-substituted or cut, while `pendingApply` still counts the marker as pending; the apply replaces the marker's token
-(issue #4263). A write's reply holds no `platform`.
+it; no API method answers it. A token outside the request's `pendingToken` rule (below), such as bytes that are not UTF-8
+or a token over 64 characters, is answered as `null`, never substituted or cut, while `pendingApply` still counts the
+marker as pending; the apply replaces the marker's token (issue #4263). A write's reply holds no `platform`.
 
 A read also answers `platform.pendingApply` (issue #4038): a JSON bool, whether the Outpost holds a change that waits for an
 apply (`pfb_core_update_pending_apply()`: the pending marker not yet applied, or the due ledger's `pending_apply`). Like the
