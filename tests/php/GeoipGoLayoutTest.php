@@ -142,6 +142,38 @@ final class GeoipGoLayoutTest extends TestCase
 		$this->assertSame('php', file_get_contents("{$share}/GeoLite2-ASN.mmdb"));
 	}
 
+	public function testPhpsShareMergeNeverReplacesAGoArchiveLink(): void
+	{
+		// a staged entry named like an archive link would leave every member link of it dangling (feedfetch mergeable)
+		$share = "{$this->dir}/share";
+		$this->assertTrue(mkdir("{$share}/.A.1.0123abcd"));
+		file_put_contents("{$share}/.A.1.0123abcd/m", 'go');
+		$this->assertTrue(symlink('.A.1.0123abcd', "{$share}/.A"));
+		$this->assertTrue(symlink('.A/m', "{$share}/m"));
+		$this->assertTrue(mkdir("{$this->dir}/staged"));
+		file_put_contents("{$this->dir}/staged/.A", 'php');
+
+		$this->assertFalse(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
+
+		$this->assertTrue(is_link("{$share}/.A"));
+		$this->assertSame('go', file_get_contents("{$share}/m"));
+	}
+
+	public function testALinkNamingAnotherMemberIsNoMemberLinkOfIt(): void
+	{
+		$share = "{$this->dir}/share";
+		$this->assertTrue(mkdir("{$share}/.A.1.0123abcd"));
+		file_put_contents("{$share}/.A.1.0123abcd/other", 'go');
+		$this->assertTrue(symlink('.A.1.0123abcd', "{$share}/.A"));
+		$this->assertTrue(symlink('.A/other', "{$share}/m"));
+		$this->assertTrue(mkdir("{$this->dir}/staged"));
+		file_put_contents("{$this->dir}/staged/m", 'php');
+
+		$this->assertTrue(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
+
+		$this->assertSame('php', file_get_contents("{$share}/m"));
+	}
+
 	public function testPhpsShareMergeStillReplacesItsOwnFiles(): void
 	{
 		$share = "{$this->dir}/share";

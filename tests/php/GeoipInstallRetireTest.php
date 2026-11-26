@@ -11,11 +11,22 @@ use PHPUnit\Framework\TestCase;
  */
 final class GeoipInstallRetireTest extends TestCase
 {
-	public function testTheInstallRetiresPhpsIsoListBeforeItRebuildsTheGeoipTabs(): void
+	public function testTheInstallRetiresPhpsIsoList(): void
 	{
 		$install = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc');
 		$retire = strpos($install, "pfb_geoip_retire_php_isos(\$pfb['ccdir'], \$pfb['dbdir']);");
 		$this->assertIsInt($retire, "the install retires PHP's ISO list");
-		$this->assertLessThan(strpos($install, 'Rebuilding GeoIP tabs'), $retire, 'before the GeoIP tabs are rebuilt from the ISO list');
+		$this->assertLessThan(strpos($install, 'if (empty($pfb[\'maxmind_key\']))'), $retire, 'whether or not MaxMind is configured');
+	}
+
+	/** The ISO list's path is the layout's from the include on, and the apply's MaxMind check reads it. */
+	public function testTheIsoListPathFollowsTheLayoutWhereverItIsRead(): void
+	{
+		$src = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/';
+		$this->assertStringContainsString("\$pfb['geoip_isos']\t= pfb_geoip_isos_path(\$pfb['ccdir'], \$pfb['dbdir']);",
+			(string) file_get_contents("{$src}pfblockerng.inc"));
+		$apply = (string) file_get_contents("{$src}pfblockerng_apply.inc");
+		$this->assertStringContainsString("!file_exists(\$pfb['geoip_isos']) ||", $apply);
+		$this->assertStringNotContainsString("{\$pfb['dbdir']}/geoip.txt", $apply);
 	}
 }
