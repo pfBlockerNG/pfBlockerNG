@@ -56,14 +56,18 @@ func TestAnUnchangedETFeedWithAScriptSplitsItsKeptDownloadAgain(t *testing.T) {
 	}
 }
 
-// globCtx is cancelled from the moment a file matches its pattern.
+// globCtx is cancelled from the moment a file matches its pattern, and stays cancelled, as a context does.
 type globCtx struct {
 	context.Context
-	pattern string
+	pattern   string
+	cancelled *bool
 }
 
 func (c globCtx) Err() error {
 	if m, _ := filepath.Glob(c.pattern); len(m) > 0 {
+		*c.cancelled = true
+	}
+	if *c.cancelled {
 		return context.Canceled
 	}
 	return nil
@@ -79,7 +83,7 @@ func TestAReloadCancelledDuringTheETSplitIsCancelled(t *testing.T) {
 	if r := run(stage, feed, "none"); r.Disposition != "changed" {
 		t.Fatalf("the first run = %+v", r)
 	}
-	ctx := globCtx{context.Background(), filepath.Join(stage.Paths.FeedDir, runPrefix+feed.Name, ".pfbstage_*")}
+	ctx := globCtx{context.Background(), filepath.Join(stage.Paths.FeedDir, runPrefix+feed.Name, ".pfbstage_*"), new(bool)}
 
 	r := stage.Run(ctx, feed, Change{Force: "parse"})
 
