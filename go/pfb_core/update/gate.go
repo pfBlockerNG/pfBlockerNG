@@ -176,7 +176,8 @@ func (g *Gate) Start(req Request, commit func() (map[string]int64, error)) error
 
 // Exclusive runs fn while no Update runs and none can start, holding the admission Start takes (and a worker-backed Gate's
 // worker lease, which a worker a restarted Core retained still holds): ErrRunning when an Update holds it, ErrStopped after
-// Stop. fn's error is returned.
+// Stop, and ErrRecoveryRequired, as Start, over a finished result not recorded yet (the caller records it and asks again,
+// as Scheduler.Admit does). fn's error is returned.
 func (g *Gate) Exclusive(fn func() error) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()

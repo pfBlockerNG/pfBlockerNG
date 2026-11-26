@@ -117,3 +117,28 @@ func TestExclusiveOverAnUnrecordedResultAsksForRecoveryAndRunsNothing(t *testing
 		t.Errorf("Exclusive over an unrecorded result = %v, want ErrRecoveryRequired", err)
 	}
 }
+
+// A worker killed after writing its result but before publishing completion: Exclusive salvages it, as Start does, and asks
+// for its recording instead of running fn.
+func TestExclusiveSalvagesAnInterruptedWorkerFirst(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "update.log")
+	st := workerState{Version: workerVersion, Nonce: strings.Repeat("ef", 32), Path: "/usr/local/bin/update", StartedAt: 1}
+	if err := writeWorkerState(logPath+".status", st); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logPath+".result", []byte(`{"version":1,"outcomes":{"ipv4:A_v4":"success"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := New(logPath, nil, nil)
+	t.Cleanup(g.Stop)
+	if err := g.Exclusive(func() error { t.Error("fn ran over an interrupted worker"); return nil }); !errors.Is(err, ErrRecoveryRequired) {
+		t.Errorf("Exclusive over an interrupted worker = %v, want ErrRecoveryRequired", err)
+	}
+	if got, err := readWorkerState(logPath + ".status"); err != nil || got.FinishedAt == nil {
+		t.Errorf("the interrupted worker was not salvaged: %+v, %v", got, err)
+	}
+}
