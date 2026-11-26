@@ -12,6 +12,9 @@
     "vendor",
     "**/vendor/**",
     "legacy/**",
+    // Linked worktrees cut inside the repository (#4265): other branches' checkouts.
+    ".worktrees/**",
+    ".claude/worktrees/**",
     // Byte-faithful captures (CodeRabbit quota notice, etc.). Reformatting
     // them would destroy the parser fixtures; MD022 on those files is noise.
     "tests/fixtures/**",

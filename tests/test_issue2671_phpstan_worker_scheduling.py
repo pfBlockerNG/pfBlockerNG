@@ -13,6 +13,8 @@ import math
 import re
 from pathlib import Path
 
+from tests.test_ci_tool_pins import _docs_under
+
 ROOT = Path(__file__).resolve().parents[1]
 
 # PHPStan 2.2.5, src/Parallel/Scheduler.php. `jobSize` is the only one of these
@@ -112,18 +114,8 @@ def _sources_quoting_a_phpstan_limit() -> list[tuple[str, str]]:
     """(where, text) for every tracked surface that tells someone how to run PHPStan
     over the whole tree. `tests/php/NoEmptyOnStringRuleTest.php` is not one of them:
     it analyses a three-file fixture directory and carries its own limit."""
-    skip = {"node_modules", ".venv", "vendor", "plugins", ".git"}
-    worktrees = ROOT / ".claude" / "worktrees"
-    candidates = [
-        *ROOT.rglob("*.md"),
-        ROOT / "phpstan.neon",
-        *(ROOT / ".github/workflows").glob("*.yml"),
-    ]
-    return [
-        (str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
-        for path in candidates
-        if not skip & set(path.parts) and worktrees not in path.parents
-    ]
+    candidates = [*_docs_under(ROOT), ROOT / "phpstan.neon", *(ROOT / ".github/workflows").glob("*.yml")]
+    return [(str(path.relative_to(ROOT)), path.read_text(encoding="utf-8")) for path in candidates]
 
 
 def _limits_disagreeing_with(expected: str, where: str, text: str) -> list[str]:

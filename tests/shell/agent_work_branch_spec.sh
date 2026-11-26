@@ -64,7 +64,7 @@ Describe 'work-branch.sh post-add tool initialization'
     fixture=$(mktemp -d "${TMPDIR:-/tmp}/wb_tools.XXXXXX") || return 1
     fixture=$(cd "$fixture" && pwd -P) || return 1
     primary="$fixture/primary"
-    worktree_root="$fixture/.primary_worktrees"
+    worktree_root="$primary/.worktrees"
     git_fixture init -q -b devel "$primary" &&
       git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
         commit -q --allow-empty -m init || return 1
@@ -171,7 +171,7 @@ WT
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'fetches before add and initializes a relative worktree beneath the sibling root'
+  It 'fetches before add and initializes a relative worktree beneath the worktree root'
     add_origin || return 1
     mkdir -p "$primary/nested"
     When run sh -c 'cd "$1" && exec sh "$2" adr 41 tools --worktree --base HEAD --path nested/worktree' _ "$primary" "$script_abs"
@@ -228,6 +228,17 @@ WT
     The path "$fixture/wt-fail" should be directory
   End
 
+  It 'falls back to git worktree add at the default path with the worktree root ignored'
+    add_origin || return 1
+    export WB_WT_RC=1
+    When run sh -c 'cd "$1" && exec sh "$2" adr 57 fallback --worktree --base HEAD' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should equal "$(printf 'adr/57-fallback\t%s/adr-57-fallback' "$worktree_root")"
+    The stderr should include 'wt could not cut'
+    The contents of file "$worktree_root/.gitignore" should equal '*'
+    Assert [ -z "$(git_fixture -C "$primary" status --porcelain --untracked-files=all)" ]
+  End
+
   It 'falls back when wt reports success without leaving a worktree'
     add_origin || return 1
     export WB_WT_EMPTY=1
@@ -254,7 +265,7 @@ WT
   End
 
   It 'rejects a derived worktree root bearing a template marker, with no --path at all'
-    # The sibling root comes from the CHECKOUT's own directory name, so validating
+    # The worktree root comes from the CHECKOUT's own directory, so validating
     # only what the caller typed leaves wt's template renderer reachable through an
     # ancestor: the cut lands somewhere this script never reports.
     marked="$fixture/pf{{ repo }}"
@@ -266,7 +277,7 @@ WT
     The stderr should include 'control characters or template markers'
     The output should equal ''
     Assert [ -z "$(git_fixture -C "$marked" branch --list 'adr/62-marker')" ]
-    Assert [ ! -e "$fixture/.pf{{ repo }}_worktrees" ]
+    Assert [ ! -e "$marked/.worktrees" ]
   End
 
   It 'reclaims the worktree wt registered before its pre-start hook failed'
@@ -320,9 +331,9 @@ WT
   End
 End
 
-Describe 'work-branch.sh --worktree sibling placement'
+Describe 'work-branch.sh --worktree placement inside the repository'
   # rc-mode / managed sessions run inside a linked session worktree; every
-  # implicit path must land beside the primary repository, never inside it.
+  # implicit path must land under the PRIMARY's .worktrees/, never under the session worktree.
   script_abs="${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/work-branch.sh"
 
   setup() {
@@ -333,7 +344,7 @@ Describe 'work-branch.sh --worktree sibling placement'
     fixture=$(mktemp -d "${TMPDIR:-/tmp}/wb_spec.XXXXXX") || return 1
     fixture=$(cd "$fixture" && pwd -P) || return 1
     primary="$fixture/primary repo"
-    worktree_root="$fixture/.primary repo_worktrees"
+    worktree_root="$primary/.worktrees"
     git_fixture init -q "$primary" &&
       git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
         commit -q --allow-empty -m init &&
@@ -396,31 +407,51 @@ INIT
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'creates the sibling root for a repository name containing spaces'
+  It 'creates the worktree root inside a repository whose name contains spaces, ignored by its own .gitignore'
     When run sh -c 'cd "$1" && CODEX_THREAD_ID= exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$fixture/session" "$script_abs"
     The status should equal 0
     The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
-    The output should not include "$primary/"
     The stderr should include 'Created worktree for'
     The path "$worktree_root" should be directory
+    The contents of file "$worktree_root/.gitignore" should equal '*'
+    Assert [ -z "$(git_fixture -C "$primary" status --porcelain --untracked-files=all)" ]
   End
 
-  It 'uses the same sibling root when Codex variables are set'
+  It 'refuses a symlink at the worktree root .gitignore and writes nothing through it'
+    mkdir -p "$worktree_root"
+    ln -s "$fixture/outside-ignore" "$worktree_root/.gitignore"
+    When run sh -c 'cd "$1" && exec sh "$2" adr 52 ignore-link --worktree --base HEAD' _ "$fixture/session" "$script_abs"
+    The status should equal 2
+    The stderr should include 'the worktree root .gitignore must not be a symlink'
+    Assert [ ! -e "$fixture/outside-ignore" ]
+    Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/52-ignore-link')" ]
+  End
+
+  It 'rewrites a worktree root .gitignore of other content so the folder ignores itself'
+    mkdir -p "$worktree_root"
+    printf 'foo\n' > "$worktree_root/.gitignore"
+    When run sh -c 'cd "$1" && CODEX_THREAD_ID= exec sh "$2" issue 11 tld --worktree --base HEAD' _ "$fixture/session" "$script_abs"
+    The status should equal 0
+    The output should equal "$(printf 'issue/11-tld\t%s/issue-11-tld' "$worktree_root")"
+    The stderr should include 'Created worktree for'
+    The contents of file "$worktree_root/.gitignore" should equal '*'
+    Assert [ -z "$(git_fixture -C "$primary" status --porcelain --untracked-files=all)" ]
+  End
+
+  It 'uses the same worktree root when Codex variables are set'
     When run sh -c 'cd "$1" && CODEX_THREAD_ID=thread TMPDIR="$3" exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$fixture/session" "$script_abs" "$fixture"
     The status should equal 0
     The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
-    The output should not include "$primary/"
     The output should not include "$fixture/pfblockerng-issue-7"
     The stderr should include 'Created worktree for'
     The contents of file "$codegraph_log" should equal "init $worktree_root/issue-7-tld"
     Assert [ -f "$worktree_root/issue-7-tld/.codegraph/codegraph.db" ]
   End
 
-  It 'anchors a relative --path beneath the sibling root'
+  It 'anchors a relative --path beneath the worktree root'
     When run sh -c 'cd "$1" && exec sh "$2" issue 8 tld --worktree --base HEAD --path wt/x' _ "$fixture/session" "$script_abs"
     The status should equal 0
     The output should equal "$(printf 'issue/8-tld\t%s/wt/x' "$worktree_root")"
-    The output should not include "$primary/"
     The stderr should include 'Created worktree for'
   End
 
@@ -440,41 +471,39 @@ INIT
     Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/46-dot')" ]
   End
 
-  It 'rejects a relative --path whose parent symlink escapes the sibling root'
+  It 'rejects a relative --path whose parent symlink escapes the worktree root'
     mkdir -p "$worktree_root" "$fixture/outside"
     ln -s "$fixture/outside" "$worktree_root/link"
     When run sh -c 'cd "$1" && exec sh "$2" adr 47 symlink --worktree --base HEAD --path link/worktree' _ "$fixture/session" "$script_abs"
     The status should equal 2
-    The stderr should include 'escapes sibling root'
+    The stderr should include 'escapes the worktree root'
     Assert [ ! -e "$fixture/outside/worktree" ]
     Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/47-symlink')" ]
   End
 
-  It 'rejects a symlink at the derived sibling root'
+  It 'rejects a symlink at the derived worktree root'
     mkdir -p "$fixture/outside-root"
     ln -s "$fixture/outside-root" "$worktree_root"
     When run sh -c 'cd "$1" && exec sh "$2" adr 51 root-symlink --worktree --base HEAD' _ "$fixture/session" "$script_abs"
     The status should equal 2
-    The stderr should include 'sibling root must not be a symlink'
+    The stderr should include 'the worktree root must not be a symlink'
     Assert [ ! -e "$fixture/outside-root/adr-51-root-symlink" ]
     Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/51-root-symlink')" ]
   End
 
-  It 'uses sibling placement from the primary checkout too'
+  It 'uses the same placement from the primary checkout too'
     When run sh -c 'cd "$1" && CODEX_THREAD_ID= exec sh "$2" issue 9 tld --worktree --base HEAD' _ "$primary" "$script_abs"
     The status should equal 0
     The output should equal "$(printf 'issue/9-tld\t%s/issue-9-tld' "$worktree_root")"
-    The output should not include "$primary/"
     The stderr should include 'Created worktree for'
   End
 
-  It 'is immune to an inherited CDPATH when resolving the sibling root'
+  It 'is immune to an inherited CDPATH when resolving the worktree root'
     # A CDPATH hit makes cd echo the destination AND resolve relative to the
     # CDPATH entry instead of $PWD — either corrupts the derived root.
     When run sh -c 'mkdir -p "$3/.git" && cd "$1" && CODEX_THREAD_ID= CDPATH=$3 exec sh "$2" issue 10 tld --worktree --base HEAD' _ "$primary" "$script_abs" "$fixture/decoy"
     The status should equal 0
     The output should equal "$(printf 'issue/10-tld\t%s/issue-10-tld' "$worktree_root")"
-    The output should not include "$primary/"
     The stderr should include 'Created worktree for'
   End
 
@@ -483,7 +512,6 @@ INIT
     When run sh -c 'cd "$1" && exec sh "$2" issue 14 tld --worktree --base HEAD' _ "$fixture/session" "$script_abs"
     The status should equal 0
     The output should equal "$(printf 'issue/14-tld-1700000000\t%s/issue-14-tld-1700000000' "$worktree_root")"
-    The output should not include "$primary/"
     The stderr should include 'Created worktree for'
   End
 
@@ -634,7 +662,7 @@ Describe 'work-branch.sh --worktree claim gate (workflow.md "Claim")'
     fixture=$(mktemp -d "${TMPDIR:-/tmp}/wb_claim.XXXXXX") || return 1
     fixture=$(cd "$fixture" && pwd -P) || return 1
     primary="$fixture/primary"
-    worktree_root="$fixture/.primary_worktrees"
+    worktree_root="$primary/.worktrees"
     git_fixture init -q "$primary" &&
       git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
         commit -q --allow-empty -m init || return 1
