@@ -11012,13 +11012,10 @@ function pfb_geoip_generation_lock_path(string $ccdir): string {
 }
 
 /** Once the Core Updater publishes the country folder, PHP's ISO list and the staged copies an interrupted publication left go. */
-function pfb_geoip_retire_php_isos(?string $ccdir, ?string $dbdir): void {
-	if ($ccdir === NULL || $dbdir === NULL || !is_link($ccdir)) {
-		return;
-	}
-	unlink_if_exists("{$dbdir}/geoip.txt");
-	foreach (glob("{$dbdir}/geoip.txt.new.*") ?: [] as $staged) {
-		@unlink($staged);
+function pfb_geoip_retire_php_isos(string $ccdir, string $dbdir): void {
+	if (is_link($ccdir)) {
+		unlink_if_exists("{$dbdir}/geoip.txt");
+		unlink_if_exists("{$dbdir}/geoip.txt.new.*");	// a glob, as pfSense's unlink_if_exists() takes it
 	}
 }
 
@@ -11476,14 +11473,17 @@ function pfb_stage_publish_dir_merge_swap(string $staged, string $target): bool 
 	$entries = array_values(array_diff($entries, array('.', '..')));
 	foreach ($entries as $entry) {
 		$live = "{$target}/{$entry}";
-		// issue #4261: a member the Core Updater merged is a link `.<archive>/<member>` to its archive's generation; a real
-		// file over it would leave the share half its and half PHP's
-		$to = is_link($live) ? (string) @readlink($live) : '';
-		if (preg_match('~^(\.[^/]+)/([^/]+)$~D', $to, $m) === 1 && $m[2] === $entry && is_link("{$target}/{$m[1]}")) {
+		$live_is_link = is_link($live);
+		// issue #4261: a member the Core Updater merged is a link `.<archive>/<member>` whose `.<archive>` is a link to one of
+		// its generations, `.<archive>.<pid>.<8 hex>` (feedfetch entryLink); a real file over it would leave the share half
+		// the Core Updater's and half PHP's
+		$to = $live_is_link ? (string) @readlink($live) : '';
+		if (preg_match('~^(\.[^/]+)/([^/]+)$~D', $to, $m) === 1 && $m[2] === $entry && $m[1] !== '..'
+		    && preg_match('~^' . preg_quote($m[1], '~') . '\.[0-9]+\.[0-9a-f]{8}$~D', (string) @readlink("{$target}/{$m[1]}")) === 1) {
 			return FALSE;
 		}
-		$live_exists = file_exists($live) || is_link($live);
-		if ((is_dir($live) && !is_link($live)) ||
+		$live_exists = file_exists($live) || $live_is_link;
+		if ((is_dir($live) && !$live_is_link) ||
 		    (is_dir("{$staged}/{$entry}") && !is_link("{$staged}/{$entry}") && $live_exists)) {
 			return FALSE;
 		}
