@@ -1,3 +1,8 @@
-pre-start = "sh scripts/agent/init-worktree-tools.sh ."
 post-merge = "git worktree prune"
 post-remove = "git worktree prune"
+
+# Every worktree cut under <repo>/.worktrees, by any user's worktree-path, ignores that folder (#4265); a cut
+# elsewhere leaves none.
+[pre-start]
+tools = "sh scripts/agent/init-worktree-tools.sh ."
+ignore = "[ ! -d '{{ repo_path }}/.worktrees' ] || printf '*\\n' > '{{ repo_path }}/.worktrees/.gitignore'"

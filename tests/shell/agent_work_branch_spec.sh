@@ -228,6 +228,17 @@ WT
     The path "$fixture/wt-fail" should be directory
   End
 
+  It 'falls back to git worktree add at the default path with the worktree root ignored'
+    add_origin || return 1
+    export WB_WT_RC=1
+    When run sh -c 'cd "$1" && exec sh "$2" adr 57 fallback --worktree --base HEAD' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should equal "$(printf 'adr/57-fallback\t%s/adr-57-fallback' "$worktree_root")"
+    The stderr should include 'wt could not cut'
+    The contents of file "$worktree_root/.gitignore" should equal '*'
+    Assert [ -z "$(git_fixture -C "$primary" status --porcelain --untracked-files=all)" ]
+  End
+
   It 'falls back when wt reports success without leaving a worktree'
     add_origin || return 1
     export WB_WT_EMPTY=1
@@ -322,7 +333,7 @@ End
 
 Describe 'work-branch.sh --worktree placement inside the repository'
   # rc-mode / managed sessions run inside a linked session worktree; every
-  # implicit path must land beside the primary repository, never inside it.
+  # implicit path must land under the PRIMARY's .worktrees/, never under the session worktree.
   script_abs="${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/work-branch.sh"
 
   setup() {
@@ -402,6 +413,27 @@ INIT
     The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
     The stderr should include 'Created worktree for'
     The path "$worktree_root" should be directory
+    The contents of file "$worktree_root/.gitignore" should equal '*'
+    Assert [ -z "$(git_fixture -C "$primary" status --porcelain --untracked-files=all)" ]
+  End
+
+  It 'refuses a symlink at the worktree root .gitignore and writes nothing through it'
+    mkdir -p "$worktree_root"
+    ln -s "$fixture/outside-ignore" "$worktree_root/.gitignore"
+    When run sh -c 'cd "$1" && exec sh "$2" adr 52 ignore-link --worktree --base HEAD' _ "$fixture/session" "$script_abs"
+    The status should equal 2
+    The stderr should include 'the worktree root .gitignore must not be a symlink'
+    Assert [ ! -e "$fixture/outside-ignore" ]
+    Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/52-ignore-link')" ]
+  End
+
+  It 'rewrites a worktree root .gitignore of other content so the folder ignores itself'
+    mkdir -p "$worktree_root"
+    printf 'foo\n' > "$worktree_root/.gitignore"
+    When run sh -c 'cd "$1" && CODEX_THREAD_ID= exec sh "$2" issue 11 tld --worktree --base HEAD' _ "$fixture/session" "$script_abs"
+    The status should equal 0
+    The output should equal "$(printf 'issue/11-tld\t%s/issue-11-tld' "$worktree_root")"
+    The stderr should include 'Created worktree for'
     The contents of file "$worktree_root/.gitignore" should equal '*'
     Assert [ -z "$(git_fixture -C "$primary" status --porcelain --untracked-files=all)" ]
   End

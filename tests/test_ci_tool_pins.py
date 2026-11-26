@@ -65,12 +65,8 @@ def _docs_under(root: Path) -> list[Path]:
     actions/checkout has no worktrees.
     """
     skip = {"node_modules", ".venv", "vendor", "plugins", ".git"}
-    worktrees = (root / ".claude" / "worktrees", root / ".worktrees")
-    return [
-        path
-        for path in root.rglob("*.md")
-        if not skip & set(path.parts) and not any(w in path.parents for w in worktrees)
-    ]
+    worktrees = {root / ".claude" / "worktrees", root / ".worktrees"}
+    return [path for path in root.rglob("*.md") if not skip & set(path.parts) and not worktrees & set(path.parents)]
 
 
 def test_gate_deciding_pins_agree_wherever_they_appear() -> None:

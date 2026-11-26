@@ -6,9 +6,10 @@
 #   Prints the branch name (`issue/NN-slug` / `adr/NN-slug`; empty slug -> bare `type/NN`).
 #   --worktree  also `git fetch origin` + cut the worktree through `wt` (falling
 #               back to `git worktree add` when wt is absent, fails, or leaves no
-#               worktree) at an ABSOLUTE path (default <repo>/.worktrees/<branch with '/'
-#               replaced by '-'>, the folder ignoring itself through a `*` .gitignore; a
-#               relative --path anchors below that root, while an absolute --path stays exact). An existing branch or path
+#               worktree) at an ABSOLUTE path (default <repo>/.worktrees/<branch with
+#               '/' replaced by '-'>, the folder ignoring itself through a `*` .gitignore;
+#               a relative --path anchors below that root, while an absolute --path stays
+#               exact). An existing branch or path
 #               gets a `-<epoch>` suffix (collision rule). Every created worktree
 #               initializes CodeGraph and enabled Serena tools.
 #               Prints `BRANCH<TAB>PATH` instead.
@@ -87,9 +88,9 @@ claim_gate() {
 
 # wt renders `worktree-path` as a minijinja TEMPLATE, so a marker anywhere in the
 # value makes wt cut somewhere this script never reports — and the value is not only
-# what the caller typed: the worktree root is derived from the CHECKOUT's own directory
-# name. A control character breaks the TOML the same way. Validate every component
-# this script will hand to wt, before a branch is reserved.
+# what the caller typed: the worktree root is derived from the CHECKOUT's own path.
+# A control character breaks the TOML the same way. Validate every component this
+# script will hand to wt, before a branch is reserved.
 reject_wt_template_chars() {
 	case "$1" in
 		*'{{'* | *'{%'* | *'{#'* | *[[:cntrl:]]*)
@@ -218,8 +219,13 @@ main() {
 			exit 2
 		fi
 		mkdir -p "$worktree_root" || exit 1
-		# The folder ignores itself, as the owner's wt pre-start hook has it: the primary's status and indexers skip it.
-		[ -e "$worktree_root/.gitignore" ] || printf '*\n' > "$worktree_root/.gitignore" || exit 1
+		# A '*' .gitignore keeps the folder out of git status and indexers on every branch, including ones whose own
+		# .gitignore predates .worktrees/. Never written through a link: it would land wherever the link points.
+		if [ -L "$worktree_root/.gitignore" ]; then
+			echo "work-branch.sh: the worktree root .gitignore must not be a symlink: '$worktree_root/.gitignore'" >&2
+			exit 2
+		fi
+		printf '*\n' > "$worktree_root/.gitignore" || exit 1
 		worktree_root=$(CDPATH='' cd "$worktree_root" && pwd -P) || exit 1
 		if [ "$path_set" -eq 1 ]; then
 			requested_parent=$(dirname "$worktree_root/$path")

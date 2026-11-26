@@ -13,7 +13,11 @@ WORKTREE_DOCS = (
 )
 LANDING_POLICY = ROOT / ".agents" / "policy" / "landing.md"
 REQUIRED_HOOKS = {
-    "pre-start": "sh scripts/agent/init-worktree-tools.sh .",
+    "pre-start": {
+        "tools": "sh scripts/agent/init-worktree-tools.sh .",
+        # a worktree cut under <repo>/.worktrees by any user's worktree-path ignores itself (#4265); none elsewhere
+        "ignore": "[ ! -d '{{ repo_path }}/.worktrees' ] || printf '*\\n' > '{{ repo_path }}/.worktrees/.gitignore'",
+    },
     "post-merge": "git worktree prune",
     "post-remove": "git worktree prune",
 }

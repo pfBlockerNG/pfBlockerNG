@@ -36,13 +36,16 @@ and enabled Serena tools. Run `init-worktree-tools.sh <path>` by hand only for
 a cut that came back without a CodeGraph index (fallback route, or a pre-start that did
 not run). CodeGraph is mandatory; Serena is skipped when absent or under OMP.
 
-`work-branch.sh … --worktree` fetches, cuts below `<repo>/.worktrees/<sanitized-branch>`
-(the folder ignores itself through a `*` `.gitignore`), and initializes tools. It
+`work-branch.sh … --worktree` fetches, cuts below `<repo>/.worktrees/<sanitized-branch>`,
+and initializes tools. The folder ignores itself through a `*` `.gitignore`, which
+`work-branch.sh` and the `.config/wt.toml` pre-start hook write; the repository's
+`.gitignore` lists it too. It
 routes through `wt` under the same fallback rule. Relative paths stay below that root;
 absolute paths stay exact; initialization failure rolls back the worktree and branch.
 
 Matching Worktrunk placement: `worktree-path = "{{ repo_path }}/.worktrees/{{ branch | sanitize }}"`
-in `~/.config/worktrunk/config.toml` (Worktrunk reads it from the user configuration only). `wt remove` deletes only branches it verifies as
+in `~/.config/worktrunk/config.toml`. Worktrunk reads it from the user configuration
+only, so it applies to every repository on the host. `wt remove` deletes only branches it verifies as
 integrated; landing observes the foreground result.
 
 **Scratch trees** (probe, mutation, review lanes) have two sanctioned shapes, both taking
