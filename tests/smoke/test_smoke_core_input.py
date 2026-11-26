@@ -228,14 +228,14 @@ def core_command(fence: str) -> str:
 
 
 def set_unlocks(vm: SmokeVM, api: str, request: str, domains: list[str]) -> str:
-    """SetTemporaryUnlocks as the Alerts page sends it (root): its HTTP status, then its reply."""
+    """SetTemporaryUnlocks as the Alerts page sends it (root): its reply, then its HTTP status, on one line."""
     body = json.dumps({"requestId": request, "domains": domains})
     got = vm.ssh(
         f"/usr/local/bin/curl -sS -w ' %{{http_code}}' --unix-socket {api} -X POST -H 'Content-Type: application/json' "
         f"--data {shlex.quote(body)} http://localhost/v1/SetTemporaryUnlocks",
         timeout=30,
     )
-    return got.stdout.strip()
+    return " ".join(got.stdout.split())
 
 
 @dataclass
