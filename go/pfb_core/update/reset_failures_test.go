@@ -114,3 +114,25 @@ func TestTheStatesLockIsExclusive(t *testing.T) {
 		t.Errorf("the state's lock is still held after its release: %v", err)
 	}
 }
+
+// A state lost after this Update already wrote counts: the counts it last wrote stand, not only those read at its start.
+func TestASaveOverAStateLostMidUpdateKeepsTheCountsItWrote(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, updaterStateName)
+	if err := os.WriteFile(path, []byte(`{"pendingFeeds":[],"failuresDay":"2026-11-26","failures":{"A":3}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	u := &updater{stateDir: dir, state: readUpdaterState(dir)}
+	if err := u.countFailure("B"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.countFailure("C"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readUpdaterState(dir).Failures; got["A"] != 3 || got["B"] != 1 || got["C"] != 1 {
+		t.Errorf("counts after a state lost mid-Update: %v, want A 3, B 1, C 1", got)
+	}
+}

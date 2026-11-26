@@ -444,8 +444,13 @@ func (u *updater) saveState() error {
 	b, err := os.ReadFile(filepath.Join(u.stateDir, updaterStateName))
 	switch {
 	case err != nil || json.Unmarshal(b, &held) != nil:
-		// missing or unreadable is no reset (a reset never removes the file): the counts read at the start stand
-		maps.Copy(st.Failures, u.state.Failures)
+		// missing or unreadable is no reset (a reset never removes the file): the counts this Update last wrote stand, or
+		// those read at its start before it wrote any
+		base := u.written
+		if base == nil {
+			base = u.state.Failures
+		}
+		maps.Copy(st.Failures, base)
 	case held.FailuresDay == u.state.FailuresDay:
 		maps.Copy(st.Failures, held.Failures)
 	}
@@ -459,7 +464,7 @@ func (u *updater) saveState() error {
 	if err := writeList(filepath.Join(u.stateDir, updaterStateName), string(out)); err != nil {
 		return err
 	}
-	u.added = nil
+	u.added, u.written = nil, st.Failures
 	return nil
 }
 
