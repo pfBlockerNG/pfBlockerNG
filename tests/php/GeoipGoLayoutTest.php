@@ -113,9 +113,9 @@ final class GeoipGoLayoutTest extends TestCase
 	public function testPhpsShareMergeNeverReplacesAGoArchivesMemberLink(): void
 	{
 		$share = "{$this->dir}/share";
-		$this->assertTrue(mkdir("{$share}/.GeoLite2-Country.tar.gz.7.89abcdef"));
-		file_put_contents("{$share}/.GeoLite2-Country.tar.gz.7.89abcdef/GeoLite2-Country.mmdb", 'go');
-		$this->assertTrue(symlink('.GeoLite2-Country.tar.gz.7.89abcdef', "{$share}/.GeoLite2-Country.tar.gz"));
+		$this->assertTrue(mkdir("{$share}/..GeoLite2-Country.tar.gz.7.89abcdef"));
+		file_put_contents("{$share}/..GeoLite2-Country.tar.gz.7.89abcdef/GeoLite2-Country.mmdb", 'go');
+		$this->assertTrue(symlink('..GeoLite2-Country.tar.gz.7.89abcdef', "{$share}/.GeoLite2-Country.tar.gz"));
 		$this->assertTrue(symlink('.GeoLite2-Country.tar.gz/GeoLite2-Country.mmdb', "{$share}/GeoLite2-Country.mmdb"));
 		$this->assertTrue(mkdir("{$this->dir}/staged"));
 		file_put_contents("{$this->dir}/staged/GeoLite2-Country.mmdb", 'php');
@@ -146,9 +146,9 @@ final class GeoipGoLayoutTest extends TestCase
 	{
 		// a staged entry named like an archive link would leave every member link of it dangling (feedfetch mergeable)
 		$share = "{$this->dir}/share";
-		$this->assertTrue(mkdir("{$share}/.A.1.0123abcd"));
-		file_put_contents("{$share}/.A.1.0123abcd/m", 'go');
-		$this->assertTrue(symlink('.A.1.0123abcd', "{$share}/.A"));
+		$this->assertTrue(mkdir("{$share}/..A.1.0123abcd"));
+		file_put_contents("{$share}/..A.1.0123abcd/m", 'go');
+		$this->assertTrue(symlink('..A.1.0123abcd', "{$share}/.A"));
 		$this->assertTrue(symlink('.A/m', "{$share}/m"));
 		$this->assertTrue(mkdir("{$this->dir}/staged"));
 		file_put_contents("{$this->dir}/staged/.A", 'php');
@@ -159,12 +159,25 @@ final class GeoipGoLayoutTest extends TestCase
 		$this->assertSame('go', file_get_contents("{$share}/m"));
 	}
 
+	public function testPhpsShareMergeNeverStagesADotEntry(): void
+	{
+		// what the Core Updater names its own (archive links, their generations, locks); a dangling archive link included
+		$share = "{$this->dir}/share";
+		$this->assertTrue(symlink('..A.1.0123abcd', "{$share}/.A"));
+		$this->assertTrue(mkdir("{$this->dir}/staged"));
+		file_put_contents("{$this->dir}/staged/.A", 'php');
+
+		$this->assertFalse(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
+
+		$this->assertTrue(is_link("{$share}/.A"));
+	}
+
 	public function testALinkNamingAnotherMemberIsNoMemberLinkOfIt(): void
 	{
 		$share = "{$this->dir}/share";
-		$this->assertTrue(mkdir("{$share}/.A.1.0123abcd"));
-		file_put_contents("{$share}/.A.1.0123abcd/other", 'go');
-		$this->assertTrue(symlink('.A.1.0123abcd', "{$share}/.A"));
+		$this->assertTrue(mkdir("{$share}/..A.1.0123abcd"));
+		file_put_contents("{$share}/..A.1.0123abcd/other", 'go');
+		$this->assertTrue(symlink('..A.1.0123abcd', "{$share}/.A"));
 		$this->assertTrue(symlink('.A/other', "{$share}/m"));
 		$this->assertTrue(mkdir("{$this->dir}/staged"));
 		file_put_contents("{$this->dir}/staged/m", 'php');
