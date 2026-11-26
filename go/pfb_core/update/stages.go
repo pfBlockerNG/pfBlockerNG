@@ -452,9 +452,6 @@ func (u *updater) saveState() error {
 	for name, n := range u.added {
 		st.Failures[name] += n
 	}
-	if len(st.Failures) == 0 {
-		st.Failures, st.FailuresDay = nil, ""
-	}
 	out, err := json.Marshal(st)
 	if err != nil {
 		return err

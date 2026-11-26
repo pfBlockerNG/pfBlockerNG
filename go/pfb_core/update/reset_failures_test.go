@@ -3,6 +3,7 @@ package update
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -73,5 +74,43 @@ func TestASaveOverAMissingStateKeepsTheCountsReadAtTheStart(t *testing.T) {
 	}
 	if got := readUpdaterState(dir); got.Failures["A"] != 3 || got.Failures["B"] != 1 {
 		t.Errorf("counts after a save over a missing state: %+v, want A's 3 kept and B once", got.Failures)
+	}
+}
+
+// The first save after midnight writes no count of the day before: the Update counts from its own day only.
+func TestASaveOnANewDayWritesNoCountOfTheDayBefore(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, updaterStateName)
+	if err := os.WriteFile(path, []byte(`{"pendingFeeds":[],"failuresDay":"2026-11-25","failures":{"X":5}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	u := &updater{stateDir: dir, state: readUpdaterState(dir)}
+	u.state.FailuresDay, u.state.Failures = "2026-11-26", nil // as workList sets them on a new day
+	if err := u.pendingAfter([]string{"P"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readUpdaterState(dir); len(got.Failures) != 0 {
+		t.Errorf("a save on a new day wrote counts: %+v, want none", got)
+	}
+}
+
+// The state's lock is exclusive: what holds it keeps every other taker out until it is released.
+func TestTheStatesLockIsExclusive(t *testing.T) {
+	dir := t.TempDir()
+	lock, err := lockState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := os.OpenFile(filepath.Join(dir, updaterStateName+".lock"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := syscall.Flock(int(other.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+		t.Error("the state's lock was taken a second time while held")
+	}
+	lock.Close()
+	if err := syscall.Flock(int(other.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Errorf("the state's lock is still held after its release: %v", err)
 	}
 }

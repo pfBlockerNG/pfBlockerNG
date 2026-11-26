@@ -782,7 +782,8 @@ cleared feed (its next scheduled run, or a manual Update) fetches it instead of 
 | `{"requestId": "..."}` | `{}` |
 
 Every feed's count is reset; the Updater's other state is kept, and a state with no count, or no state at all, is not
-written. A reset may come while an Update runs: it stands, and only that Update's failures after it are counted. A state
+written. A reset may come while an Update runs: it stands, and only that Update's failures after it are counted; the
+running Update still skips the feeds it found at the cap when it started, so the next one fetches them. A state
 that cannot be read or written is `unavailable`; without `--update-cmd` the method answers `unavailable` like the other
 methods of this section.
 
