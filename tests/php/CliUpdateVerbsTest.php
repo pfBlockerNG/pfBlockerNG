@@ -84,12 +84,28 @@ final class CliUpdateVerbsTest extends TestCase
 		return self::ok(['running' => $running, 'update' => $update, 'log' => $log, 'next' => $next]);
 	}
 
+	/** The verb asks for its Update at second 100 of the fake clock. */
 	private function follow(array $request, callable $core, int $polls = 10): int
 	{
 		return pfb_cli_update_run($request, $core,
 			function (string $s): void { $this->out .= $s; },
 			function (string $s): void { $this->err .= $s; },
-			static function (): void {}, $polls);
+			static function (): void {}, $polls, static fn (): int => 100);
+	}
+
+	/**
+	 * Right after StartUpdate, GetUpdate can still report the Update before ours (seen on a box): one that started before the
+	 * verb asked is not ours, so the verb waits for its own instead of taking that one's result or calling ours another.
+	 */
+	public function testAnUpdateThatStartedBeforeTheRequestIsNotOurs(): void
+	{
+		$code = $this->follow(['trigger' => 'manual', 'scope' => 'both', 'force' => 'none'], $this->core(self::ok([]),
+			self::update(FALSE, "old\n", '9', 'failed', 50), self::update(TRUE, "ours\n", '5', NULL, 100),
+			self::update(FALSE, '', '5', 'success', 100)));
+
+		$this->assertSame(0, $code, $this->err);
+		$this->assertSame('', $this->err);
+		$this->assertSame("ours\n", $this->out, 'the earlier Update\'s log is none of ours');
 	}
 
 	public function testTheUpdateIsStartedThenFollowedToItsEndWithItsLog(): void
@@ -115,7 +131,7 @@ final class CliUpdateVerbsTest extends TestCase
 	{
 		$code = pfb_cli_update_run(['trigger' => 'manual', 'scope' => 'both', 'force' => 'none'],
 			$this->core(self::ok([]), self::update(FALSE, "hook output\n", '12', 'success')),
-			NULL, function (string $s): void { $this->err .= $s; }, static function (): void {}, 10);
+			NULL, function (string $s): void { $this->err .= $s; }, static function (): void {}, 10, static fn (): int => 100);
 
 		$this->assertSame(0, $code);
 		$this->assertSame('', $this->err);

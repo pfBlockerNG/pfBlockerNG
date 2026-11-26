@@ -81,6 +81,9 @@ import pytest
 from . import helpers as h
 from .conftest import SmokeVM, _MockCallbackSink, _MockFeedServer, _StubDnsServer
 
+# Since #4260 a CLI pass is a Core Update: its live log (the Update page's GetUpdate tail) is Core's Update log.
+_CORE_UPDATE_LOG = f"{h.CORE_STATE_DIR}/update.log"
+
 pytestmark = pytest.mark.smoke
 
 
@@ -703,7 +706,7 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
         # Wait for the pass to REACH the post hook: its runner header is logged (by pfb_logger,
         # mirrored into the per-run log) before the hook's exec() in BOTH old and new code.
         h.wait_until(
-            lambda: f"hook_post_{token}_slow.sh" in deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout,
+            lambda: f"hook_post_{token}_slow.sh" in deployed_vm.ssh("cat", _CORE_UPDATE_LOG).stdout,
             timeout=30.0,
             interval=1.0,
         )
@@ -718,15 +721,15 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
         )
         h.wait_until(
             lambda: (
-                stream_marker in deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout
-                and done_marker not in deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout
+                stream_marker in deployed_vm.ssh("cat", _CORE_UPDATE_LOG).stdout
+                and done_marker not in deployed_vm.ssh("cat", _CORE_UPDATE_LOG).stdout
             ),
             timeout=10.0,
             interval=0.2,
         )
-        runlog_now = deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout
+        runlog_now = deployed_vm.ssh("cat", _CORE_UPDATE_LOG).stdout
         assert stream_marker in runlog_now, (
-            f"hook marker {stream_marker!r} did not reach the PER-RUN log while waiting for release "
+            f"hook marker {stream_marker!r} did not reach the Update's log while waiting for release "
             f"(Fix A regressed):\n{runlog_now[-1500:]}"
         )
         # Caught it before release: the closing marker is absent — proves we observed a live
