@@ -6,6 +6,7 @@ package feedfetch_test
 import (
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"os"
 	"path/filepath"
@@ -159,5 +160,31 @@ func TestAReprocessOfARawThatIsNoGzipKeepsThePublishedCopy(t *testing.T) {
 	}
 	if left, _ := filepath.Glob(filepath.Join(feed.Dir, ".pfbstage_*")); len(left) != 0 {
 		t.Errorf("staged files left: %v", left)
+	}
+}
+
+// A Reload whose split cannot be written keeps the published copy: today's reuse arm leaves the gunzipped CSV there instead.
+func TestAReprocessWhoseSplitCannotBeWrittenKeepsThePublishedCopy(t *testing.T) {
+	f, feed, _ := etFeed(t, "")
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	zw.Write([]byte("192.0.2.10,1,127\n"))
+	zw.Close()
+	if err := os.WriteFile(filepath.Join(feed.Dir, feed.Name+".raw"), gz.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.ETDir = filepath.Join(t.TempDir(), "a-file")
+	if err := os.WriteFile(f.ETDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := published(t, feed)
+
+	res := f.ReprocessET(context.Background(), feed)
+
+	if res.OK || res.Reason != "et processing failed (script exit 1)" {
+		t.Errorf("ReprocessET = %+v, want the ET processing failure", res)
+	}
+	if got := published(t, feed); got != before {
+		t.Errorf("published %q, want %q kept", got, before)
 	}
 }
