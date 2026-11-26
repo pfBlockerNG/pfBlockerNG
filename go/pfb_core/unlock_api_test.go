@@ -128,11 +128,27 @@ func TestSetTemporaryUnlocksWithoutAPublicationWritesNothing(t *testing.T) {
 	}
 }
 
-func TestSetTemporaryUnlocksIsUnavailableWithoutAStoreOrUpdates(t *testing.T) {
-	f := newFakeUpdate(t)
-	for _, flags := range [][]string{{"--update-cmd", f.path}, {"--resource-dir", t.TempDir()}} {
-		c := startCore(t, scratchDir(t), flags...)
-		wantError(t, c.post("SetTemporaryUnlocks", `{"requestId":"u1","domains":["a.example"]}`), http.StatusServiceUnavailable, codeUnavailable)
+func TestSetTemporaryUnlocksIsUnavailableWithoutAStore(t *testing.T) {
+	c := startCore(t, scratchDir(t), "--update-cmd", newFakeUpdate(t).path)
+	wantError(t, c.post("SetTemporaryUnlocks", `{"requestId":"u1","domains":["a.example"]}`), http.StatusServiceUnavailable, codeUnavailable)
+}
+
+// Without Updates nothing else writes the store, so the unlocks are published without waiting on one.
+func TestSetTemporaryUnlocksWithoutUpdatesStillRepublishesTheManifest(t *testing.T) {
+	dir := scratchDir(t)
+	storeDir := filepath.Join(dir, "store")
+	if err := os.Mkdir(storeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := resources.Open(storeDir)
+	if _, err := dnsbl.Publish(store, dnsbl.Set{}); err != nil {
+		t.Fatal(err)
+	}
+	c := startCore(t, dir, "--resource-dir", storeDir)
+
+	wantJSON(t, c.post("SetTemporaryUnlocks", `{"requestId":"u1","domains":["a.example"]}`), http.StatusOK, `{}`)
+	if got, _ := manifestUnlocks(t, store); !slices.Equal(got, []string{"a.example"}) {
+		t.Errorf("the manifest unlocks %v, want a.example", got)
 	}
 }
 
