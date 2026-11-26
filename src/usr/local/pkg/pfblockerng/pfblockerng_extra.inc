@@ -7268,8 +7268,9 @@ function pfb_outpost_apply_run(array $request, $out, ?string $socket, bool $abso
 				// applied echoes the request's generation string; the cursor keeps Core's
 				$asked = ['id' => $id, 'current' => $current, 'asked' => $resource['generation']];
 				if ($got['kind'] === 'unchanged') {
-					// unchanged answers the cursor sent, so the mirror is its body: a table pf lost is replaced from it
-					if ($alias !== NULL && $cursors[$id]['entries'] > 0 && pfb_pfctl_table_empty($alias)) {
+					// unchanged answers the cursor sent, so the mirror is its body: a table pf lost is replaced from it (an empty
+					// set's, from its placeholder)
+					if ($alias !== NULL && pfb_pfctl_table_empty($alias)) {
 						$fetched[$alias] = $asked + ['kind' => 'unchanged', 'mirror' => $mirror, 'staged' => NULL] + $cursors[$id];
 					} elseif ($current) {
 						$applied[$id] = $resource['generation'];
@@ -7395,8 +7396,10 @@ function pfb_outpost_apply_run(array $request, $out, ?string $socket, bool $abso
 	$push = static function (string $alias, string $mode, int $batch, bool $unlock) use ($fetched, $cursors, $work, &$refused): void {
 		global $pfb;
 		$f = $fetched[$alias] ?? NULL;	// NULL: an alias an IP unlock re-blocks, replaced from its mirror
-		// an unlocked member is in no delta: only a replace from the mirror re-blocks it
-		$force = $f === NULL || $unlock || $f['kind'] !== 'delta' || !isset($cursors[$f['id']]) || pfb_pfctl_table_empty($alias);
+		// an unlocked member is in no delta: only a replace from the mirror re-blocks it; and a table that leaves or reaches the
+		// empty set is replaced, so that its placeholder (issue #4196) is never kept beside members, nor missing
+		$force = $f === NULL || $unlock || $f['kind'] !== 'delta' || !isset($cursors[$f['id']]) || pfb_pfctl_table_empty($alias)
+			|| (int) $f['entries'] === 0 || (int) $cursors[$f['id']]['entries'] === 0;
 		$done = pfb_apply_alias_delta_files($pfb['pfctl'], $alias, str_ends_with($alias, '_v6') ? 'ipv6' : 'ipv4', "{$pfb['aliasdir']}/{$alias}.txt",
 			(string) ($f['add'] ?? ''), (int) ($f['addEntries'] ?? 0), (string) ($f['remove'] ?? ''), (int) ($f['removeEntries'] ?? 0),
 			(int) ($f['entries'] ?? 0), $f === NULL ? 0 : (int) ($cursors[$f['id']]['entries'] ?? 0), $mode, $batch, $force, $work);
