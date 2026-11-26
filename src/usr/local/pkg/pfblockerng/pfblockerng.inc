@@ -384,11 +384,12 @@ function pfb_cli_update_run(array $request, callable $call, callable $out, calla
 			$params = ['after' => $body['next']];
 		}
 		if (empty($body['running'])) {
-			return match ($update['result'] ?? '') {
-				'success' => 0,
-				'skipped' => PFB_EXIT_LOCKED,
-				default => 1,
-			};
+			$result = $update['result'] ?? '';
+			if ($result === 'skipped') {
+				$err("pfBlockerNG feed pass deferred: the Update was skipped while another pass holds its lock\n");
+				return PFB_EXIT_LOCKED;
+			}
+			return $result === 'success' ? 0 : 1;
 		}
 	}
 	$err("pfBlockerNG Core's Update still runs after the wait; the Update page shows it\n");
