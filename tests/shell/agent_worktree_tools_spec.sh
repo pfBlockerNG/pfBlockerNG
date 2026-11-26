@@ -112,4 +112,37 @@ SERENA
       "$(printf 'codegraph:init:%s\nserena:project:index:%s' "$worktree" "$worktree")"
     The stderr should include 'Initializing CodeGraph in'
   End
+
+  # #4265: a worktree cut under the primary's .worktrees/ (by work-branch.sh or a plain `wt switch -c`) has the folder
+  # ignore itself; the primary's path here holds a space.
+  linked() {
+    git_fixture -C "$worktree" worktree add -q --detach "$1" >/dev/null 2>&1
+  }
+
+  It "writes the primary's .worktrees/.gitignore for a worktree cut under it"
+    linked "$worktree/.worktrees/topic" || return 1
+    When run env OMP_CLI=1 sh "$script_abs" "$worktree/.worktrees/topic"
+    The status should equal 0
+    The stderr should include 'Initializing CodeGraph in'
+    The contents of file "$worktree/.worktrees/.gitignore" should equal '*'
+    Assert [ -z "$(git_fixture -C "$worktree" status --porcelain --untracked-files=all)" ]
+  End
+
+  It "refuses a symlink at the primary's .worktrees/.gitignore and writes nothing through it"
+    linked "$worktree/.worktrees/topic" || return 1
+    ln -s "$fixture/outside-ignore" "$worktree/.worktrees/.gitignore"
+    When run env OMP_CLI=1 sh "$script_abs" "$worktree/.worktrees/topic"
+    The status should equal 2
+    The stderr should include 'the worktree root .gitignore must not be a symlink'
+    Assert [ ! -e "$fixture/outside-ignore" ]
+  End
+
+  It "leaves the primary's .worktrees/ alone for a worktree cut elsewhere"
+    linked "$fixture/elsewhere" || return 1
+    mkdir "$worktree/.worktrees"
+    When run env OMP_CLI=1 sh "$script_abs" "$fixture/elsewhere"
+    The status should equal 0
+    The stderr should include 'Initializing CodeGraph in'
+    Assert [ ! -e "$worktree/.worktrees/.gitignore" ]
+  End
 End

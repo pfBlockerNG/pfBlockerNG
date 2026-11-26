@@ -38,8 +38,8 @@ not run). CodeGraph is mandatory; Serena is skipped when absent or under OMP.
 
 `work-branch.sh … --worktree` fetches, cuts below `<repo>/.worktrees/<sanitized-branch>`,
 and initializes tools. The folder ignores itself through a `*` `.gitignore`, which
-`work-branch.sh` and the `.config/wt.toml` pre-start hook write; the repository's
-`.gitignore` lists it too. It
+`work-branch.sh` and `init-worktree-tools.sh` (the `.config/wt.toml` pre-start hook, so
+a plain `wt switch -c` too) write; the repository's `.gitignore` lists it too. It
 routes through `wt` under the same fallback rule. Relative paths stay below that root;
 absolute paths stay exact; initialization failure rolls back the worktree and branch.
 

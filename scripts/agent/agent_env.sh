@@ -75,3 +75,14 @@ scrub_git_env() {
 	. "$(dirname "$1")/../lib/git-env-scrub.sh"
 	pfb_scrub_git_env
 }
+
+# #4265: worktrees are cut under <primary>/.worktrees/, a folder that ignores itself through a `*` .gitignore on every
+# branch, including ones whose own .gitignore predates it. $1 = that folder, which exists. The file is rewritten each
+# time, never through a link: a write through one would land wherever it points.
+ignore_worktrees() {
+	if [ -L "$1/.gitignore" ]; then
+		echo "the worktree root .gitignore must not be a symlink: '$1/.gitignore'" >&2
+		return 2
+	fi
+	printf '*\n' > "$1/.gitignore" || return 1
+}

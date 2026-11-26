@@ -20,6 +20,11 @@ main() {
 		exit 2
 	}
 	root=$(CDPATH='' cd "$root" && pwd -P) || exit 2
+	common=$(git -C "$root" rev-parse --path-format=absolute --git-common-dir) || exit 2
+	primary=$(CDPATH='' cd "$common/.." && pwd -P) || exit 2
+	case "$root" in
+		"$primary/.worktrees/"*) ignore_worktrees "$primary/.worktrees" || exit $? ;;
+	esac
 	sh "$(dirname "$0")/ensure-codegraph.sh" "$root" || exit $?
 
 	case "${OMP_CLI:-}${PI_CLI:-}" in

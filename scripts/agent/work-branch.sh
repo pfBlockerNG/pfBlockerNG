@@ -219,13 +219,7 @@ main() {
 			exit 2
 		fi
 		mkdir -p "$worktree_root" || exit 1
-		# A '*' .gitignore keeps the folder out of git status and indexers on every branch, including ones whose own
-		# .gitignore predates .worktrees/. Never written through a link: it would land wherever the link points.
-		if [ -L "$worktree_root/.gitignore" ]; then
-			echo "work-branch.sh: the worktree root .gitignore must not be a symlink: '$worktree_root/.gitignore'" >&2
-			exit 2
-		fi
-		printf '*\n' > "$worktree_root/.gitignore" || exit 1
+		ignore_worktrees "$worktree_root" || exit $?
 		worktree_root=$(CDPATH='' cd "$worktree_root" && pwd -P) || exit 1
 		if [ "$path_set" -eq 1 ]; then
 			requested_parent=$(dirname "$worktree_root/$path")

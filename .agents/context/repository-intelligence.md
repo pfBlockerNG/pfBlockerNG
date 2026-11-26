@@ -14,7 +14,7 @@ The tools' hook nudges are requirements, not hints.
   never updates an installed one (#3106); installs or updates Serena, CodeGraph, and
   Worktrunk; configures only detected clients; disables Serena's web
   dashboard; and sets Worktrunk's `worktree-path` to `<repo>/.worktrees/`. That setting
-  is host-wide: this repository ignores the folder (`.gitignore`, `.config/wt.toml`), and
+  is host-wide: this repository ignores the folder (`.gitignore`, `init-worktree-tools.sh`), and
   any other repository needs its own ignore of it.
 - Every agent tool installs through one command that both installs on a fresh host
   and upgrades an outdated one — `uv tool install --upgrade <tool>`, `codegraph upgrade`,
