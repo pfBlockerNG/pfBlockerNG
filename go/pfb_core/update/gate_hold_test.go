@@ -11,14 +11,20 @@ func TestHoldIsRefusedWhileARetainedWorkerHoldsTheOperationLock(t *testing.T) {
 	g := New(log.Name(), nil, nil)
 	g.Admit = (&Command{Path: "/bin/true"}).Admit
 	t.Cleanup(g.Stop)
+	if err := writeWorkerState(log.Name()+".status", workerState{
+		Version: workerVersion, Nonce: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Path: "/bin/true", Request: Request{Trigger: "manual"}, StartedAt: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	retained, err := operationLock(log.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer retained.Close()
 	ran := false
-	if err := g.Hold(func() error { ran = true; return nil }); err == nil || ran {
-		t.Errorf("Hold while a retained worker holds the operation lock = %v, ran %v; want an error and nothing run", err, ran)
+	if err := g.Hold(func() error { ran = true; return nil }); !errors.Is(err, ErrRunning) || ran {
+		t.Errorf("Hold while a retained worker runs = %v, ran %v; want ErrRunning and nothing run", err, ran)
 	}
 }
 

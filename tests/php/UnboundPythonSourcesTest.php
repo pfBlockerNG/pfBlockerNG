@@ -15,7 +15,7 @@ use PHPUnit\Framework\TestCase;
  * It runs against a temp $pfb sandbox (no live box).
  *
  * Also covers the #51 temporary-unlock plumbing: the full build clears
- * config.user_unlock (Force/Cron re-lock), and pfb_unbound_python_sources_unlock(self::coreRecorder()[0])
+ * config.user_unlock (Force/Cron re-lock), and pfb_unbound_python_sources_unlock()
  * recomputes it in place from the live pfb_unlock store (pfb_dnsbl_unlock_lines()).
  *
  * PFBL-01 boundary coverage (both sides of each new validation branch):
