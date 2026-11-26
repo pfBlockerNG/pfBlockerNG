@@ -105,3 +105,64 @@ func TestAViewDuringAHoldReportsTheFinishedUpdate(t *testing.T) {
 		t.Errorf("View during a Hold = %+v, %v; want the finished Update, not running", view, viewErr)
 	}
 }
+
+// A View never sees the operation lock a Hold takes or gives back without seeing the Hold: each is under the Gate's mutex.
+func TestViewsDuringHoldsNeverFail(t *testing.T) {
+	log := independentLog(t)
+	finished, exitCode := int64(200), 0
+	if err := writeWorkerState(log.Name()+".status", workerState{
+		Version: workerVersion, Nonce: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Path: "/bin/true", Request: Request{Trigger: "manual"}, StartedAt: 100,
+		FinishedAt: &finished, ExitCode: &exitCode, Settled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g := New(log.Name(), nil, nil)
+	g.Admit = (&Command{Path: "/bin/true"}).Admit
+	t.Cleanup(g.Stop)
+	stop, failed := make(chan struct{}), make(chan error, 1)
+	go func() {
+		defer close(failed)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := g.View(-1, 0); err != nil {
+				failed <- err
+				return
+			}
+		}
+	}()
+	for range 2000 {
+		if err := g.Hold(func() error { return nil }); err != nil {
+			t.Fatalf("Hold = %v", err)
+		}
+	}
+	close(stop)
+	if err := <-failed; err != nil {
+		t.Errorf("a View during Holds = %v", err)
+	}
+}
+
+// A finished Update that awaits recovery keeps the store to its recovery, as Start does.
+func TestHoldIsRefusedWhileAFinishedUpdateAwaitsRecovery(t *testing.T) {
+	log := independentLog(t)
+	finished, exitCode := int64(200), 0
+	if err := writeWorkerState(log.Name()+".status", workerState{
+		Version: workerVersion, Nonce: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Path: "/bin/true", Request: Request{Trigger: "manual"}, StartedAt: 100,
+		FinishedAt: &finished, ExitCode: &exitCode,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g := New(log.Name(), nil, nil)
+	g.Admit = (&Command{Path: "/bin/true"}).Admit
+	t.Cleanup(g.Stop)
+
+	ran := false
+	if err := g.Hold(func() error { ran = true; return nil }); !errors.Is(err, ErrRecoveryRequired) || ran {
+		t.Errorf("Hold while a finished Update awaits recovery = %v, ran %v; want ErrRecoveryRequired and nothing run", err, ran)
+	}
+}
