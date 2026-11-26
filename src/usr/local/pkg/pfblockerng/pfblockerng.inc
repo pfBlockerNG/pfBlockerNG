@@ -4938,9 +4938,9 @@ function pfb_outpost_parts_fetch(string $id, string $generation, array $parts, ?
  *
  * Any failure of the transfer itself, a reply curl cannot frame included, counts as unreachable and does not fall back.
  *
- * An empty IP set's mirror is its family's placeholder address (issue #4196), and only a placeholder mirror is the empty body a
- * cursor of no entries records: the cursor is sent, and a delta from it merges into an empty base; an empty file there sends
- * none, so the full body brings the placeholder. An aggregate is never padded.
+ * An empty IP set's mirror is its family's placeholder address (issue #4196). For an IP set, only a placeholder mirror is the
+ * empty body a cursor of no entries records: the cursor is sent, and a delta from it merges into an empty base; an empty file
+ * there sends none, so the full body brings the placeholder. An aggregate is never padded: its empty body is an empty file.
  *
  * failure, when ok is FALSE: unreachable (no whole HTTP reply), core_unavailable (the call answered unavailable), refused (any
  * other error answered to the call; code names it), unavailable (the resource or its body), reply (an answer of the wrong
