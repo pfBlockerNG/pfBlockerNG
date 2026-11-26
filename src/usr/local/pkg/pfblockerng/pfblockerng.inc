@@ -398,7 +398,7 @@ $pfb['master']		= "{$pfb['dbdir']}/masterfile";
 $pfb['supptxt']		= "{$pfb['dbdir']}/pfbsuppression.txt";
 $pfb['supptxt_v6']	= "{$pfb['dbdir']}/pfbsuppression_v6.txt";	// ADR-53: IPv6 suppression customlist
 $pfb['dnsbl_supptxt']	= "{$pfb['dbdir']}/pfbdnsblsuppression.txt";
-$pfb['geoip_isos']	= "{$pfb['dbdir']}/geoip.txt";
+$pfb['geoip_isos']	= pfb_geoip_isos_path($pfb['ccdir'], $pfb['dbdir']);	// issue #4261: the Core Updater's, inside its generation, once it publishes
 $pfb['dnsbl_info']	= '/var/unbound/pfb_py_dnsbl.sqlite';
 $pfb['dnsbl_resolver']	= '/var/unbound/pfb_py_resolver.sqlite';
 // Legacy reports-cache path retained for exact upgrade cleanup only.
@@ -10998,6 +10998,30 @@ function pfb_geoip_append_iso_data(
 	return TRUE;
 }
 
+/**
+ * issue #4261: the ISO list of the country folder as it is published: the Core Updater's, `.geoip_isos` inside the
+ * generation its link names, or PHP's `<db>/geoip.txt` beside a real folder.
+ */
+function pfb_geoip_isos_path(string $ccdir, string $dbdir): string {
+	return is_link($ccdir) ? "{$ccdir}/.geoip_isos" : "{$dbdir}/geoip.txt";
+}
+
+/** The lock a reader of the country folder shares with its publisher: the Core Updater's `.<name>.lock` beside its link, else PHP's in the folder. */
+function pfb_geoip_generation_lock_path(string $ccdir): string {
+	return is_link($ccdir) ? dirname($ccdir) . '/.' . basename($ccdir) . '.lock' : "{$ccdir}/.pfb_generation.lock";
+}
+
+/** Once the Core Updater publishes the country folder, PHP's ISO list and the staged copies an interrupted publication left go. */
+function pfb_geoip_retire_php_isos(?string $ccdir, ?string $dbdir): void {
+	if ($ccdir === NULL || $dbdir === NULL || !is_link($ccdir)) {
+		return;
+	}
+	unlink_if_exists("{$dbdir}/geoip.txt");
+	foreach (glob("{$dbdir}/geoip.txt.new.*") ?: [] as $staged) {
+		@unlink($staged);
+	}
+}
+
 /** Hold a shared generation lock until the caller finishes reading and publishing its result. */
 function pfb_geoip_generation_read_lock() {
 	global $pfb;
@@ -11010,7 +11034,7 @@ function pfb_geoip_generation_read_lock() {
 	if (empty($pfb['ccdir']) || !pfb_geoip_generation_ready()) {
 		return FALSE;
 	}
-	$lock = @fopen($pfb['ccdir'] . '/.pfb_generation.lock', 'c');
+	$lock = @fopen(pfb_geoip_generation_lock_path($pfb['ccdir']), 'c');
 	if ($lock === FALSE || !@flock($lock, LOCK_SH | LOCK_NB)) {
 		if (is_resource($lock)) {
 			@fclose($lock);
@@ -11452,6 +11476,12 @@ function pfb_stage_publish_dir_merge_swap(string $staged, string $target): bool 
 	$entries = array_values(array_diff($entries, array('.', '..')));
 	foreach ($entries as $entry) {
 		$live = "{$target}/{$entry}";
+		// issue #4261: a member the Core Updater merged is a link `.<archive>/<member>` to its archive's generation; a real
+		// file over it would leave the share half its and half PHP's
+		$to = is_link($live) ? (string) @readlink($live) : '';
+		if (preg_match('~^(\.[^/]+)/([^/]+)$~D', $to, $m) === 1 && $m[2] === $entry && is_link("{$target}/{$m[1]}")) {
+			return FALSE;
+		}
 		$live_exists = file_exists($live) || is_link($live);
 		if ((is_dir($live) && !is_link($live)) ||
 		    (is_dir("{$staged}/{$entry}") && !is_link("{$staged}/{$entry}") && $live_exists)) {
