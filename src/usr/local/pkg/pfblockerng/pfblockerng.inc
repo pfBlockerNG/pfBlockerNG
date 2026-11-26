@@ -2823,11 +2823,9 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 		$line = substr($line, 0, $pos + 3) . $rest;
 	}
 
-	// ADR-22: strip the '<scheme>://' prefix. Lenient keeps the permissive strip; both strict
-	// modes (Strict, Allow Ports -- issue #4272) validate the scheme against RFC 3986 and
-	// reject URL paths -- a rejected line is
-	// skipped, recorded per-line in the parse-error log, and counted for the once-per-feed
-	// summary WARNING below.
+	// ADR-22: strip the '<scheme>://' prefix. Lenient keeps the permissive strip; both strict modes
+	// (issue #4272) validate the scheme against RFC 3986 and reject URL paths -- a rejected line is
+	// skipped, logged per line, and counted for the once-per-feed summary WARNING.
 	$line = pfb_dnsbl_scheme_line($line, $strict, $header, $oline, $dnsbl_lineno, $parse_err,
 		$scheme_skipped);
 	if ($line === FALSE) {
@@ -2865,11 +2863,13 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 	// collection branch below recognises it.
 	$host = pfb_dnsbl_unbracket_ip6($line);
 
-	// issue #4272: strict keeps a domain only as '<host>[:<port>]/?' (the port with $allow_port).
+	// issue #4272: strict keeps a domain only as '<host>[:<1-65535>]/?' (the port with $allow_port);
+	// a leading '@' is a yHost line, which the parse loop skips silently.
 	$tail = substr($token, strlen($host));
 	if ($strict && pfb_ipv4_numeric_host($host) === NULL && !is_ipaddrv6($host) &&
 	    ($host === '' || $userinfo || str_contains(substr($host, 1), '@') || str_contains($host, ':') ||
-	    !preg_match($allow_port ? '/^(?::[0-9]{1,5})?\/?$/D' : '/^\/?$/D', $tail))) {
+	    !preg_match($allow_port ? '/^(?::([0-9]{1,5}))?\/?$/D' : '/^\/?$/D', $tail, $port) ||
+	    (isset($port[1]) && ((int) $port[1] < 1 || (int) $port[1] > 65535)))) {
 		pfb_parse_fail_log($header, $token, $oline, $parse_err, $dnsbl_lineno);
 		$scheme_skipped++;
 		return FALSE;
@@ -2991,7 +2991,7 @@ function pfb_dnsbl_staging_first_line(string $path): string {
 // '[uBlock Origin]', '[AdGuard]') is parsed as Adblock only -- its lines never reach the plain-domain path.
 function pfb_dnsbl_feed_has_abp_header(string $path): bool {
 	$line = pfb_dnsbl_scrub_line(pfb_dnsbl_strip_bom(pfb_dnsbl_staging_first_line($path)));
-	return preg_match('/^\[\s*(?:adblock|ublock|adguard)[^\]]*\]$/iD', $line) === 1;
+	return preg_match('/^\[\s*(?:adblock(?:\s*plus)?|ublock(?:\s*origin)?|adguard)(?:\s+[^\]]*)?\s*\]$/iD', $line) === 1;
 }
 
 // The DNSBL verbatim-reuse fork (pfblockerng.inc sync loop): skip re-parsing

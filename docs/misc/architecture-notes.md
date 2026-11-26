@@ -112,6 +112,14 @@ bracketed-IPv6 carve-out: `pfb_dnsbl_unbracket_ip6()` runs FIRST, so `[2604:2dc0
 collects to the DNSBL-IP firewall pass (never treated as an ABP `[section]` comment); only a
 non-IPv6 `[…]` is dropped as a control line.
 
+**Amended by issue #4272: an Adblock-headed feed is Adblock only again.** A feed whose first
+non-blank line is an Adblock-family header (`[Adblock Plus 2.0]`, `[uBlock Origin]`, `[AdGuard]`;
+`pfb_dnsbl_feed_has_abp_header()`) sends each line to the capture guard above or drops it: no line
+of such a feed reaches CSV extraction, host extraction or the plain-domain path, and IP extraction
+runs on its Adblock rule lines only. Per-line routing still governs every other feed. The plain
+path had been cutting Adblock path rules (EasyPrivacy's `.imgur.com/lumbar.gif`) down to a block
+of the whole domain.
+
 The manifest build is the sole DNSBL classifier in every TLD mode. PHP publishes each feed's
 raw rows and metadata, then `pfb_unbound.py` routes plain and ABP rows through the production
 matcher build. PHP does not re-read an aggregate feed or rebuild per-group plaintext summaries;

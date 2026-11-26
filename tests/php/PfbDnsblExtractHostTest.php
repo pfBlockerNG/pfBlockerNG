@@ -368,6 +368,20 @@ final class PfbDnsblExtractHostTest extends TestCase
 		$this->assertSame(1, $skipped, 'a bare port must be counted as a strict skip');
 	}
 
+	/** issue #4272: Allow Ports keeps only a real port, 1-65535. */
+	public function testAllowPortsKeepsOnlyARealPort(): void
+	{
+		foreach (['example.com:1', 'example.com:65535'] as $line) {
+			$skipped = 0;
+			$this->assertSame('example.com', pfb_dnsbl_extract_host($line, TRUE, 'hdr', $line, 5, $this->parseErr, $skipped, TRUE), $line);
+		}
+		foreach (['example.com:0', 'example.com:00', 'example.com:65536', 'example.com:99999'] as $line) {
+			$skipped = 0;
+			$this->assertFalse(pfb_dnsbl_extract_host($line, TRUE, 'hdr', $line, 5, $this->parseErr, $skipped, TRUE), $line);
+			$this->assertSame(1, $skipped, "{$line} must be counted as a strict skip");
+		}
+	}
+
 	public function testStrictModeSkipsNearMissDomainShapes(): void
 	{
 		foreach (self::STRICT_SKIPPED_NEAR_MISS as $line) {

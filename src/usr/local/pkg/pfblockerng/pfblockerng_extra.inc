@@ -1504,9 +1504,8 @@ function pfb_cfg_registry(): array
 			'sync'          => 'policy',
 		],
 
-		// issue #4272: feed-line parsing mode 'strict' | 'ports' | 'lenient' (PfbDnsblParseMode),
-		// renamed from the ADR-22 'pfb_dnsbl_lenient' checkbox. An upgrade keeps its behaviour:
-		// absent (pre-ADR-22) -> lenient; the checkbox's 'on' / '' / 'off' reach the read adapter
+		// issue #4272: feed-line parsing mode 'strict' | 'ports' | 'lenient' (PfbDnsblParseMode). Absent
+		// (pre-ADR-22) -> lenient; the old checkbox's 'on' / '' / 'off' reach the read adapter
 		// (Lenient / Ports / Ports -- the old strict kept ports) and write back canonically.
 		'dnsbl/pfb_dnsbl_parse_mode' => [
 			'default'       => 'ports',

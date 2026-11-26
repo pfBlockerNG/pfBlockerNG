@@ -798,11 +798,10 @@ def test_dnsbl_bom_header_feed_parses_without_error(
 # ADR-22 — feed-line parsing (issue #4272: pfb_dnsbl_parse_mode, Strict / Allow Ports / Lenient) over the live box.
 #
 # The non-lite DNSBL download path strips a ``<scheme>://`` prefix from each feed
-# line (pfblockerng.inc:11316-11329). Lenient (toggle ON — the migrated/legacy
-# default) keeps today's permissive strip: ANY ``://`` is removed at its first
+# line. Lenient (the mode an upgraded install keeps) keeps the permissive strip: ANY ``://`` is removed at its first
 # occurrence and a URL path is stripped downstream, so a malformed-scheme line
-# (digit-start) and a path line are still extracted + blocked. Strict (toggle OFF —
-# the new-install default) validates the scheme against RFC 3986 and rejects a URL
+# (digit-start) and a path line are still extracted + blocked. Strict and Allow Ports
+# (Allow Ports is the new-install default) validate the scheme against RFC 3986 and reject a URL
 # path: a rejected line is SKIPPED, recorded per-line in the DNSBL parse-error log
 # (pfb_parse_fail_log -> $pfb['dnsbl_parse_err']), and counted into ONE per-feed WARNING
 # in the main pfBlockerNG log (pfb_dnsbl_scheme_skip_warn).
@@ -810,10 +809,10 @@ def test_dnsbl_bom_header_feed_parses_without_error(
 # DELIVERY: the scheme lines ride a normal LOCAL feed row (write_local_feed), the
 # same mechanism test_abp_perline_detection_in_plain_feed uses — the body carries
 # runtime unique_domain() uuids so it must be a local file, and a feed row is exactly
-# what flows through the non-lite download loop the toggle gates (the GUI Custom_List
+# what flows through the non-lite download loop the parsing mode gates (the GUI Custom_List
 # feeds the SAME loop via a synthetic row; the loop, not the entry point, is the
-# behaviour under test). Tests A/B drive inject -> set toggle -> Force Update manually
-# (NOT CaseContext, which injects+reloads atomically before the toggle could be set)
+# behaviour under test). Tests A/B drive inject -> set the mode -> Force Update manually
+# (NOT CaseContext, which injects+reloads atomically before the mode could be set)
 # and restore config + custom feed in finally.
 # --------------------------------------------------------------------------- #
 
@@ -826,17 +825,17 @@ def _scheme_feed_path(vm: SmokeVM, name: str, lines: list[str]) -> str:
 
 @pytest.mark.timeout(300)
 def test_strict_skips_invalid_scheme_and_path_and_logs(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """ADR-22 strict (lenient OFF): invalid-scheme + path lines are skipped AND logged.
+    """ADR-22 Strict mode: invalid-scheme + path lines are skipped AND logged.
 
     Scenario: a DNSBL feed mixes two well-formed scheme lines (a valid RFC 3986 scheme,
     no path) with two malformed ones (a digit-start scheme; a valid scheme bearing a URL
-    path). With ``pfb_dnsbl_lenient='off'`` the parser must BLOCK the two well-formed
+    path). With ``pfb_dnsbl_parse_mode='strict'`` the parser must BLOCK the two well-formed
     hosts and SKIP+LOG the two malformed lines — both in the DNSBL parse-error log
     (per-line) and as one per-feed WARNING in the main log (ADR §2.3).
 
     Given (before any feed loads) all four hosts RESOLVE via the controlled stub upstream
       (``STUB_DNS_A``) — the real, observable before-state (none is blocked yet).
-    When  the feed is written, ``pfb_dnsbl_lenient`` is set OFF (strict), and a Force
+    When  the feed is written, ``pfb_dnsbl_parse_mode`` is set to ``'strict'``, and a Force
       Update runs (Unbound reloads),
     Then:
       * ``http://<http>``      -> VIP/NULL block (valid scheme, no path);
@@ -924,16 +923,16 @@ def test_strict_skips_invalid_scheme_and_path_and_logs(deployed_vm: SmokeVM, cli
 
 @pytest.mark.timeout(300)
 def test_lenient_blocks_invalid_scheme_and_path(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """ADR-22 lenient (ON): invalid-scheme + path lines are BLOCKED, no WARNING (today's behaviour).
+    """ADR-22 Lenient mode: invalid-scheme + path lines are BLOCKED, no WARNING.
 
-    The lenient counterpart of the strict test: with ``pfb_dnsbl_lenient='on'`` the SAME
+    The lenient counterpart of the strict test: with ``pfb_dnsbl_parse_mode='lenient'`` the SAME
     two malformed lines that strict skips are instead extracted and blocked (byte-identical
     to today's permissive strip), and NO per-feed strict-skip WARNING is emitted. Pairing
-    this ON case with the OFF case above proves the toggle is a real branch, not an
+    this Lenient case with the Strict case above proves the mode is a real branch, not an
     always-skip or always-block path.
 
     Given (before any feed loads) both hosts RESOLVE via the controlled stub upstream.
-    When  the feed is written, ``pfb_dnsbl_lenient`` is set ON (lenient), and a Force
+    When  the feed is written, ``pfb_dnsbl_parse_mode`` is set to ``'lenient'``, and a Force
       Update runs,
     Then  ``123://<badscheme>`` and ``http://<haspath>/path`` BOTH return the block shape
       and no longer resolve (the digit-start scheme is stripped; the path is stripped
@@ -961,7 +960,7 @@ def test_lenient_blocks_invalid_scheme_and_path(deployed_vm: SmokeVM, client_vm:
             assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
             assert not _blocked(before), f"{name} unexpectedly blocked before any feed: {before}"
 
-        # WHEN: load the feed LENIENTLY (toggle ON).
+        # WHEN: load the feed LENIENTLY (Lenient mode).
         h.inject(deployed_vm, spec)
         h.set_dnsbl_parse_mode(deployed_vm, "lenient")
         # Any per-feed strict-skip WARNING for THIS feed (1 or 2 lines) must NOT appear.
