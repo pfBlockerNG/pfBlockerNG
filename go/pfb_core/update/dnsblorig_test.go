@@ -6,13 +6,13 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
 
 // The PHP DNSBL downloads of a box before the cutover (issue #4258): dnsblorig holds each feed's .orig with its validators
-// and digests; dnsbl holds PHP's parsed lists, the fail markers, and for D a copy the Core Updater already published.
+// and digests; dnsbl holds PHP's parsed lists, the fail markers, for D a copy the Core Updater already published, and for B_2
+// a digest left with no copy beside it, which describes nothing the move brings.
 func dnsblOrigFixture(t *testing.T) string {
 	t.Helper()
 	db := t.TempDir()
@@ -33,6 +33,7 @@ func dnsblOrigFixture(t *testing.T) string {
 		"dnsbl/C.fail":               "",
 		"dnsbl/D.orig":               "the Core Updater's d.example\n",
 		"dnsbl/D.orig.xxhash128":     "dddd",
+		"dnsbl/B_2.orig.xxhash128":   "a stale digest",
 	}
 	for name, body := range files {
 		p := filepath.Join(db, name)
@@ -50,8 +51,8 @@ func dnsblOrigFixture(t *testing.T) string {
 	return db
 }
 
-// tree is every entry under db: a file's content, a link's target.
-func tree(t *testing.T, db string) map[string]string {
+// filesUnder is every entry under db: a file's content, a link's target.
+func filesUnder(t *testing.T, db string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
 	err := filepath.WalkDir(db, func(p string, d fs.DirEntry, err error) error {
@@ -103,7 +104,7 @@ func TestEveryDNSBLDownloadMovesWithItsValidatorsAndDigests(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, want := tree(t, db), wantMoved(); !maps.Equal(got, want) {
+	if got, want := filesUnder(t, db), wantMoved(); !maps.Equal(got, want) {
 		t.Fatalf("after the move:\n got %v\nwant %v", got, want)
 	}
 }
@@ -134,47 +135,66 @@ func TestASecondMoveChangesNothing(t *testing.T) {
 	if err := MoveDNSBLOrig(db); err != nil {
 		t.Fatal(err)
 	}
-	before := tree(t, db)
+	before := filesUnder(t, db)
 
 	if err := MoveDNSBLOrig(db); err != nil {
 		t.Fatal(err)
 	}
 
-	if got := tree(t, db); !maps.Equal(got, before) {
+	if got := filesUnder(t, db); !maps.Equal(got, before) {
 		t.Fatalf("the second move changed the files:\n got %v\nwant %v", got, before)
 	}
 }
 
+// cutAt makes the move's step-th write (a link or a removal) fail, for the rest of the test.
+func cutAt(t *testing.T, step int) {
+	t.Helper()
+	writes := 0
+	cut := func() error {
+		if writes++; writes == step {
+			return errors.New("cut short")
+		}
+		return nil
+	}
+	dnsblOrigLink = func(from, to string) error {
+		if err := cut(); err != nil {
+			return err
+		}
+		return os.Link(from, to)
+	}
+	dnsblOrigRemove = func(name string) error {
+		if err := cut(); err != nil {
+			return err
+		}
+		return os.Remove(name)
+	}
+	t.Cleanup(func() { dnsblOrigLink, dnsblOrigRemove = os.Link, os.Remove })
+}
+
 func TestAMoveCutShortAtAnyStepCompletesOnTheNext(t *testing.T) {
+	want := wantMoved()
 	for step := 1; ; step++ {
 		db := dnsblOrigFixture(t)
-		renames := 0
-		dnsblOrigRename = func(from, to string) error {
-			if renames++; renames == step {
-				return errors.New("cut short")
-			}
-			return os.Rename(from, to)
-		}
+		cutAt(t, step)
 		err := MoveDNSBLOrig(db)
-		dnsblOrigRename = os.Rename
+		dnsblOrigLink, dnsblOrigRemove = os.Link, os.Remove
 		if err == nil {
 			if step == 1 {
-				t.Fatal("the move made no rename")
+				t.Fatal("the move made no write")
 			}
 			return // every step was cut once
 		}
-		cut := tree(t, db)
-		for name := range cut {
-			// never a moved download the Core Updater would trust beside sidecars that do not describe it
-			if base, ok := strings.CutSuffix(name, ".orig"); ok && strings.HasPrefix(base, "dnsbl/") {
-				feed := "dnsblorig/" + strings.TrimPrefix(base, "dnsbl/") + ".orig"
-				if _, kept := cut[feed]; kept {
-					continue // not moved: the Core Updater's own
-				}
-				for _, s := range []string{".etag", ".lastmod", ".xxhash128", ".md5"} {
-					if _, left := cut[feed+s]; left {
-						t.Fatalf("step %d: %s moved while its %s did not", step, name, s)
-					}
+		cut := filesUnder(t, db)
+		for _, feed := range []string{"A", "B_2", "C"} {
+			// a moved download the Core Updater would trust has exactly the sidecars that describe it
+			if _, moved := cut["dnsbl/"+feed+".orig"]; !moved {
+				continue
+			}
+			for _, s := range dnsblOrigSidecars {
+				name := "dnsbl/" + feed + s
+				wantBody, wantOK := want[name]
+				if got, ok := cut[name]; ok != wantOK || got != wantBody {
+					t.Fatalf("step %d: %s.orig is in dnsbl beside %s = %q (present %v), want %q (present %v)", step, feed, name, got, ok, wantBody, wantOK)
 				}
 			}
 		}
@@ -183,9 +203,32 @@ func TestAMoveCutShortAtAnyStepCompletesOnTheNext(t *testing.T) {
 			t.Fatalf("step %d: the next move: %v", step, err)
 		}
 
-		if got, want := tree(t, db), wantMoved(); !maps.Equal(got, want) {
+		if got := filesUnder(t, db); !maps.Equal(got, want) {
 			t.Fatalf("step %d: after the next move:\n got %v\nwant %v", step, got, want)
 		}
+	}
+}
+
+func TestACopyTheCoreUpdaterPublishesDuringTheMoveIsKept(t *testing.T) {
+	db := dnsblOrigFixture(t)
+	dnsblOrigLink = func(from, to string) error {
+		if filepath.Base(to) == "C.orig" {
+			// the Core Updater publishes C between the move's look and its link
+			if err := os.WriteFile(to, []byte("the Core Updater's c.example\n"), 0o644); err != nil {
+				return err
+			}
+		}
+		return os.Link(from, to)
+	}
+	t.Cleanup(func() { dnsblOrigLink = os.Link })
+
+	if err := MoveDNSBLOrig(db); err == nil {
+		t.Fatal("the move reported no error over a copy it did not move")
+	}
+
+	got := filesUnder(t, db)
+	if got["dnsbl/C.orig"] != "the Core Updater's c.example\n" || got["dnsblorig/C.orig"] != "c.example\n" {
+		t.Fatalf("C after the move: dnsbl %q, dnsblorig %q", got["dnsbl/C.orig"], got["dnsblorig/C.orig"])
 	}
 }
 
@@ -196,7 +239,7 @@ func TestNoDNSBLDownloadsNoMove(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := tree(t, db); len(got) != 0 {
+	if got := filesUnder(t, db); len(got) != 0 {
 		t.Fatalf("a box with no dnsblorig got %v", got)
 	}
 	if _, err := os.Lstat(filepath.Join(db, "dnsbl")); !errors.Is(err, fs.ErrNotExist) {
