@@ -370,9 +370,15 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 	if ctx.Err() != nil {
 		return failedFeed(f.ID, "fetch", "cancelled")
 	}
-	if force == "parse" && et {
-		if res := s.Fetcher.ReprocessET(ctx, feed); !res.OK {
-			return failedFeed(f.ID, "fetch", s.safeReason(res.Reason, "feed_fetch_failed", f))
+	// So does a run that parses an unchanged download again for its script, as today's reuse arm does on Hold or not
+	// (pfb_list_script_reparse_active()). Its failure is no failed transfer: today's arm logs no FAIL line for it.
+	if et && (force == "parse" || force == "none" && change.Verdict == VerdictUnchanged && (pre != "" || post != "")) {
+		res := s.Fetcher.ReprocessET(ctx, feed)
+		switch {
+		case ctx.Err() != nil:
+			return failedFeed(f.ID, "fetch", "cancelled")
+		case !res.OK:
+			return failedFeed(f.ID, "parse", s.safeReason(res.Reason, "et_reprocess_failed", f))
 		}
 	}
 	result.SourceChanged = sourceChanged

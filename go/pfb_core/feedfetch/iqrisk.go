@@ -108,18 +108,23 @@ func (f *Fetcher) ReprocessET(ctx context.Context, feed Feed) Result {
 	}
 	defer os.Remove(body)
 	et, err := f.iqrisk(ctx, feed, body)
-	switch {
-	case err == nil:
-	case ctxEnded(err), err == errInvalidETConfiguration:
-		return fail(err.Error())
-	default:
-		return fail("et processing failed (script exit 1)")
+	if err != nil {
+		return fail(etFailure(err))
 	}
 	if err := os.Rename(et, feed.path(".orig")); err != nil {
 		os.Remove(et)
 		return fail("published copy could not be replaced")
 	}
 	return Result{OK: true}
+}
+
+// etFailure is the reason of a failed ET split: a context's end and a configuration error as they are, anything else as
+// pfb_download() logs processet()'s failure.
+func etFailure(err error) string {
+	if ctxEnded(err) || err == errInvalidETConfiguration {
+		return err.Error()
+	}
+	return "et processing failed (script exit 1)"
 }
 
 // etSplit is processet()'s `grep ",<n>," | cut -d, -f1` for every category at once: a row names its category between

@@ -257,13 +257,7 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		// keeps last-known-good: the published copy is replaced only by the split's outcome.
 		et, err := f.iqrisk(ctx, feed, body)
 		if err != nil {
-			if ctxEnded(err) {
-				return Result{Status: t.status, Reason: err.Error()}
-			}
-			if err == errInvalidETConfiguration {
-				return Result{Status: t.status, Reason: err.Error()}
-			}
-			return Result{Status: t.status, Reason: "et processing failed (script exit 1)"}
+			return Result{Status: t.status, Reason: etFailure(err)}
 		}
 		defer os.Remove(et)
 		body = et
