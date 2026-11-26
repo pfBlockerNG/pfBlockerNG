@@ -11472,12 +11472,13 @@ function pfb_stage_publish_dir_merge_swap(string $staged, string $target): bool 
 	}
 	$entries = array_values(array_diff($entries, array('.', '..')));
 	foreach ($entries as $entry) {
-		// a dot entry is what the Core Updater names its own (archive links, their generations, locks): never staged (mergeable)
-		if (str_starts_with($entry, '.')) {
-			return FALSE;
-		}
 		$live = "{$target}/{$entry}";
 		$live_is_link = is_link($live);
+		// a dot link is what the Core Updater names its own (an archive link, dangling or not): never replaced (mergeable); a
+		// dot member of PHP's own archive (._*, .DS_Store) is published as before
+		if ($live_is_link && str_starts_with($entry, '.')) {
+			return FALSE;
+		}
 		// issue #4261: a member the Core Updater merged is a link `.<archive>/<member>` whose `.<archive>` is a link to one of
 		// its generations, `..<archive>.<pid>.<8 hex>` (feedfetch entryLink); a real file over it would leave the share half
 		// the Core Updater's and half PHP's
