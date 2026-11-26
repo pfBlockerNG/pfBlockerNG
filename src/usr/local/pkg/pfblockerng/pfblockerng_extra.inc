@@ -7535,28 +7535,46 @@ function pfb_outpost_expected_aliases(): array
  * Issue #4263 (owner, 2026-11-23): a pending marker whose token the apply does not take (pfb_pending_token_valid()) would make
  * every apply refuse its request; it is discarded, and the issue returned for the status page, where its entry stays until the
  * next apply (pfb_outpost_issues() closes what a request no longer names; the notice stays). An empty marker is a mark to
- * version (pfb_pending_changes_token()), not a bad token. The marker is set aside by a rename before it is removed: a save that
- * marks after the rename writes a new marker, which stays, and one that marked before it is put back.
+ * version (pfb_pending_changes_token()), not a bad token.
  *
+ * The marker is set aside by a rename, and what was set aside decides: a bad token is removed with the applied record; a
+ * valid or empty mark (a save that marked between the read and the rename) goes back by link(), which never replaces a
+ * newer marker. What an apply stopped half-way left aside is settled the same way first. $seams['read'] and $seams['aside']
+ * run after the read and after the rename, for the tests.
+ *
+ * @param array{read?: callable(): mixed, aside?: callable(): mixed} $seams
  * @return list<array{resource: string, stage: string, code: string, message: string}>
  */
-function pfb_outpost_repair_pending_marker(): array
+function pfb_outpost_repair_pending_marker(array $seams = []): array
 {
 	$marker = pfb_pending_changes_marker();
+	$aside = "{$marker}.discard";
+	$isMark = static fn (mixed $held): bool => $held === '' || pfb_pending_token_valid($held);
+	$putBack = static function () use ($marker, $aside, $isMark): bool {
+		if (!$isMark(@file_get_contents($aside))) {
+			return FALSE;
+		}
+		@link($aside, $marker);	// a newer marker stands: it supersedes the one set aside
+		@unlink($aside);
+		return TRUE;
+	};
+	if (file_exists($aside) && !$putBack()) {
+		@unlink($aside);
+	}
 	$held = @file_get_contents($marker);
-	if (!is_string($held) || $held === '' || pfb_pending_token_valid($held)) {
+	if (!is_string($held) || $isMark($held)) {
 		return [];
 	}
-	$aside = "{$marker}.discard";
+	if (isset($seams['read'])) {
+		$seams['read']();
+	}
 	if (!@rename($marker, $aside)) {
 		return [];	// gone meanwhile: nothing to discard
 	}
-	if (@file_get_contents($aside) !== $held) {
-		if (!file_exists($marker)) {
-			@rename($aside, $marker);	// a save marked between the read and the rename: its mark stays
-		} else {
-			@unlink($aside);	// a later save's marker stands in for it
-		}
+	if (isset($seams['aside'])) {
+		$seams['aside']();
+	}
+	if ($putBack()) {
 		return [];
 	}
 	@unlink($aside);

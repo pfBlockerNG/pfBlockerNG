@@ -168,6 +168,16 @@ final class CoreSettingsPendingTokenTest extends TestCase
 	 * issue #4263 (owner, 2026-11-23): JSON cannot carry a token that is not UTF-8 unaltered, and refusing the read would stop
 	 * every Update. The read answers no token, never a substituted or partial one, and leaves the marker for the apply to discard.
 	 */
+	/** A marker whose token is not UTF-8 is still a change not applied: pendingApply says so, as pfb_pending_changes() does. */
+	public function testATokenThatIsNotUtf8StillCountsAsPending(): void
+	{
+		file_put_contents($this->marker, "ab\xff\xfecd");
+
+		$reply = json_decode(pfb_core_settings_serve('{"version":1,"op":"read"}'), TRUE, 512, JSON_THROW_ON_ERROR);
+
+		$this->assertTrue($reply['platform']['pendingApply'] ?? NULL, json_encode($reply['platform'] ?? NULL));
+	}
+
 	public function testATokenThatIsNotUtf8IsAnsweredAsNoTokenAndLeavesTheMarkerAlone(): void
 	{
 		file_put_contents($this->marker, "ab\xff\xfecd");

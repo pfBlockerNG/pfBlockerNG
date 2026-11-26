@@ -6936,15 +6936,14 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 	}
 	if ($request['op'] === 'read') {
 		// Before the settings, as the apply pass takes it: a change marked while they are read stays pending. JSON carries text only
-		$token = is_file(pfb_pending_changes_marker()) ? pfb_pending_changes_token() : NULL;
-		if ($token !== NULL && !mb_check_encoding($token, 'UTF-8')) {
-			$token = NULL;	// issue #4263: JSON cannot carry it unaltered; answered as none, the apply discards the marker
-		}
+		$marked = is_file(pfb_pending_changes_marker()) ? pfb_pending_changes_token() : NULL;
+		// issue #4263: JSON cannot carry a token that is not UTF-8 unaltered; answered as none, the apply discards the marker
+		$token = $marked !== NULL && mb_check_encoding($marked, 'UTF-8') ? $marked : NULL;
 		$settings = pfb_core_settings($interfaces);
 		// issue #4038: pending state beside the token, outside the settings and their revision; Core never reads the token to decide it.
 		// pfb_core_update_pending_apply() on the token just taken, reading no file that is absent: a read must not warn
 		$applied = pfb_pending_changes_marker() . '.applied';
-		$pending = ($token !== NULL && $token !== (is_file($applied) ? @file_get_contents($applied) : FALSE))
+		$pending = ($marked !== NULL && $marked !== (is_file($applied) ? @file_get_contents($applied) : FALSE))
 			|| pfb_due_ledger_is_pending('cron', (string) $pfb['dbdir']);
 		return ['version' => 1, 'revision' => pfb_core_settings_revision($settings), 'settings' => $settings,
 			'platform' => ['pendingToken' => $token, 'pendingApply' => $pending]];
