@@ -169,6 +169,12 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 	if force == "parse" && !hasOrig {
 		force = "download"
 	}
+	// A Reload of an ET IQRisk feed splits its kept download again with the categories now selected (#4256); a source kept
+	// none of (an uncompressed one) is downloaded instead, so the categories take effect all the same.
+	et := !f.Custom && strings.Contains(f.Source, "iprepdata.txt")
+	if force == "parse" && et && !regularExists(feedPath(live, ".raw")) {
+		force = "download"
+	}
 	// As today, a script that does not resolve is no script, for reuse as for Hold (apply.inc:4071, :2641).
 	pre, _ := feedparse.ResolveListScript(f.PreScript, s.Paths.ScriptDirs)
 	post, _ := feedparse.ResolveListScript(f.PostScript, s.Paths.ScriptDirs)
@@ -364,8 +370,7 @@ func (s *Stage) Run(ctx context.Context, f Feed, change Change) (result Result) 
 	if ctx.Err() != nil {
 		return failedFeed(f.ID, "fetch", "cancelled")
 	}
-	// A Reload of an ET IQRisk feed splits its kept download again (#4256), so a change of the categories takes effect.
-	if force == "parse" && !f.Custom && strings.Contains(f.Source, "iprepdata.txt") {
+	if force == "parse" && et {
 		if et := s.Fetcher.ReprocessET(ctx, feed); !et.OK {
 			return failedFeed(f.ID, "fetch", s.safeReason(et.Reason, "feed_fetch_failed", f))
 		}
