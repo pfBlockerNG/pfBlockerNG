@@ -83,6 +83,7 @@ type Gate struct {
 	cancel         context.CancelFunc
 	stopped        bool
 	prepublication bool // this process admitted a worker whose initial status is not published yet
+	holding        bool // a Hold holds the operation lock: the receipt is the last Update's, read as its holder
 }
 
 // New returns a Gate with no local admission. A worker-backed Gate observes any retained worker from its durable receipt. Start
@@ -113,6 +114,14 @@ func (g *Gate) Hold(fn func() error) error {
 			return err
 		}
 		defer lease.Close()
+		g.mu.Lock()
+		g.holding = true
+		g.mu.Unlock()
+		defer func() {
+			g.mu.Lock()
+			g.holding = false
+			g.mu.Unlock()
+		}()
 	}
 	return fn()
 }
@@ -239,7 +248,11 @@ func (g *Gate) View(after int64, max int) (View, error) {
 	if g.Admit == nil {
 		return g.viewLocked(g.status, g.status != nil && g.status.FinishedAt == nil, after, max), nil
 	}
-	observed, err := observeWorker(g.logPath)
+	observe := observeWorker
+	if g.holding {
+		observe = observeReceipt
+	}
+	observed, err := observe(g.logPath)
 	if err != nil {
 		if g.prepublication && g.status != nil && g.status.FinishedAt == nil &&
 			(errors.Is(err, os.ErrNotExist) || errors.Is(err, errLockedTerminal)) {
