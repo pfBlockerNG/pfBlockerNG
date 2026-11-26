@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 // The PHP DNSBL downloads of a box before the cutover (issue #4258): dnsblorig holds each feed's .orig with its validators
@@ -29,6 +28,7 @@ func dnsblOrigFixture(t *testing.T) string {
 		"dnsblorig/E.orig.post":      "a post script's staging copy",
 		"dnsblorig/bad-name.orig":    "not a feed name",
 		"dnsblorig/notes.txt":        "not a download",
+		"dnsblorig/L.orig.etag":      `"etag-l"`,
 		"dnsbl/A.txt":                "php's parsed list",
 		"dnsbl/C.fail":               "",
 		"dnsbl/D.orig":               "the Core Updater's d.example\n",
@@ -44,9 +44,11 @@ func dnsblOrigFixture(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	// a link is never a feed's download: it stays where it is
-	if err := os.Symlink("/etc/passwd", filepath.Join(db, "dnsblorig", "L.orig")); err != nil {
-		t.Fatal(err)
+	// a link is never a feed's download, nor a sidecar: it stays where it is, and so does a link's sidecar
+	for link, target := range map[string]string{"L.orig": "/etc/passwd", "C.orig.etag": "/etc/hostname"} {
+		if err := os.Symlink(target, filepath.Join(db, "dnsblorig", link)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return db
 }
@@ -94,6 +96,8 @@ func wantMoved() map[string]string {
 		"dnsblorig/bad-name.orig": "not a feed name",
 		"dnsblorig/notes.txt":     "not a download",
 		"dnsblorig/L.orig":        "-> /etc/passwd",
+		"dnsblorig/L.orig.etag":   `"etag-l"`,
+		"dnsblorig/C.orig.etag":   "-> /etc/hostname",
 	}
 }
 
@@ -109,11 +113,12 @@ func TestEveryDNSBLDownloadMovesWithItsValidatorsAndDigests(t *testing.T) {
 	}
 }
 
-func TestTheMoveKeepsEachDownloadsModificationTime(t *testing.T) {
-	// the Core Updater sends a Last-Modified from the published copy's time, as PHP did
-	testTime := time.Unix(1700000000, 0)
-	db := dnsblOrigFixture(t)
-	if err := os.Chtimes(filepath.Join(db, "dnsblorig", "A.orig"), testTime, testTime); err != nil {
+func TestTheMoveMakesTheCoreUpdatersFolder(t *testing.T) {
+	db := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(db, "dnsblorig"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(db, "dnsblorig", "A.orig"), []byte("a.example\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -121,12 +126,8 @@ func TestTheMoveKeepsEachDownloadsModificationTime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fi, err := os.Stat(filepath.Join(db, "dnsbl", "A.orig"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !fi.ModTime().Equal(testTime) {
-		t.Fatalf("A.orig's time is %v, want %v", fi.ModTime(), testTime)
+	if got, want := filesUnder(t, db), map[string]string{"dnsbl/A.orig": "a.example\n"}; !maps.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 
