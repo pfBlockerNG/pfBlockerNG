@@ -300,7 +300,7 @@ def core_updater_state(smoke_vm: helpers.SmokeVM) -> Iterator[str]:
     restored = vm.ssh(
         f"rm -f {_CORE_UPDATER_STATE} && {{ [ ! -e {kept} ] || mv {kept} {_CORE_UPDATER_STATE}; }}", timeout=30
     )
-    assert restored.returncode == 0, f"could not put {_CORE_UPDATER_STATE} back: {restored.stderr}"
+    assert restored.returncode == 0, f"could not put {kept} back as {_CORE_UPDATER_STATE}: {restored.stderr}"
 
 
 def test_dismiss_resets_the_core_updaters_retry_counts(
