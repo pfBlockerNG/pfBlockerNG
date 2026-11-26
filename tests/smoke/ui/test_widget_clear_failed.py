@@ -294,7 +294,8 @@ def core_updater_state(smoke_vm: helpers.SmokeVM) -> Iterator[str]:
     """Set aside Core's ``updater.json`` for the test and put it back after: the test writes a count of its own."""
     vm = smoke_vm
     kept = f"{_CORE_UPDATER_STATE}.smoke-{uuid.uuid4().hex[:8]}"
-    vm.ssh(f"[ ! -e {_CORE_UPDATER_STATE} ] || mv {_CORE_UPDATER_STATE} {kept}", timeout=30)
+    moved = vm.ssh(f"[ ! -e {_CORE_UPDATER_STATE} ] || mv {_CORE_UPDATER_STATE} {kept}", timeout=30)
+    assert moved.returncode == 0, f"could not set {_CORE_UPDATER_STATE} aside: {moved.stderr}"
     yield _CORE_UPDATER_STATE
     vm.ssh(f"rm -f {_CORE_UPDATER_STATE}; [ ! -e {kept} ] || mv {kept} {_CORE_UPDATER_STATE}", timeout=30)
 
