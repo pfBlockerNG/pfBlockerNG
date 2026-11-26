@@ -10,8 +10,9 @@ import (
 )
 
 // The PHP DNSBL downloads of a box before the cutover (issue #4258): dnsblorig holds each feed's .orig with its validators
-// and digests; dnsbl holds PHP's parsed lists, the fail markers, for D a copy the Core Updater already published, and for B_2
-// a digest left with no copy beside it, which describes nothing the move brings.
+// and digests; dnsbl holds PHP's parsed lists, the fail markers, for D a copy the Core Updater already published (PHP's older
+// one is superseded: it goes, so that no later move brings it back), and for B_2 a digest left with no copy beside it, which
+// describes nothing the move brings.
 func dnsblOrigFixture(t *testing.T) string {
 	t.Helper()
 	db := t.TempDir()
@@ -91,8 +92,6 @@ func wantMoved() map[string]string {
 		"dnsbl/C.fail":            "",
 		"dnsbl/D.orig":            "the Core Updater's d.example\n",
 		"dnsbl/D.orig.xxhash128":  "dddd",
-		"dnsblorig/D.orig":        "php's older d.example\n",
-		"dnsblorig/D.orig.etag":   `"etag-d-php"`,
 		"dnsblorig/E.orig.post":   "a post script's staging copy",
 		"dnsblorig/bad-name.orig": "not a feed name",
 		"dnsblorig/notes.txt":     "not a download",
