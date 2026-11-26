@@ -1332,6 +1332,81 @@ final class OutpostApplyTest extends TestCase
 		$this->assertSame([self::ABUSE => '2'], self::generations($r));
 	}
 
+	/** An empty set at generation $generation as the apply leaves it (issue #4196): the placeholder in its mirror and table. */
+	private static function emptyAt(string $id, string $generation): array
+	{
+		$apply = self::at([$id => [$generation, []]]);
+		$alias = pfb_core_update_v2_alias($id);
+		$apply['files']["{aliasdir}/{$alias}.txt"] = ['127.1.7.7'];
+		return $apply;
+	}
+
+	/** WHEN a set goes from empty to members by a delta THEN the table is replaced from the mirror: a delta would keep the placeholder. */
+	public function testASetLeavingTheEmptySetIsReplacedWithoutThePlaceholder(): void
+	{
+		$apply = self::emptyAt(self::ABUSE, '1');
+		$apply['apply'] = ['request' => self::request([self::resource(self::ABUSE, '2', 3)]),
+			'core' => [self::delta(self::ABUSE, '2', '1', self::NEW, [], self::NEW), self::text(self::NEW), self::text([])]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame(['resources' => [self::ABUSE => ['generation' => '1', 'digest' => self::digest([])]]], $r['coreRequests'][0]['params'],
+			'the placeholder mirror is the empty body its cursor records');
+		$this->assertSame(['pfB_Abuse_v4 replace'], self::verbs($r), 'mode delta, yet a replace from the mirror');
+		$this->assertSame(self::NEW, $r['mirrors']['pfB_Abuse_v4.txt']);
+		$this->assertSame(self::NEW, $r['kernel']['pfB_Abuse_v4']);
+		$this->assertSame([self::ABUSE => '2'], $r['resultLines'][0]['applied']);
+	}
+
+	/** WHEN a set's last members go by a delta THEN its mirror and table hold the placeholder, as today's pass leaves an empty list. */
+	public function testASetReachingTheEmptySetHoldsThePlaceholder(): void
+	{
+		$apply = self::at([self::ABUSE => ['1', self::OLD]]);
+		$apply['apply'] = ['request' => self::request([self::resource(self::ABUSE, '2', 0)]),
+			'core' => [self::delta(self::ABUSE, '2', '1', [], self::OLD, []), self::text([]), self::text(self::OLD)]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame(['pfB_Abuse_v4 replace'], self::verbs($r));
+		$this->assertSame(['127.1.7.7'], $r['mirrors']['pfB_Abuse_v4.txt']);
+		$this->assertSame(['127.1.7.7'], $r['kernel']['pfB_Abuse_v4']);
+		$this->assertSame(['schema' => 1, 'resources' => [self::ABUSE => ['generation' => '2', 'digest' => self::digest([]), 'entries' => 0]]],
+			$r['cursors'], "the cursor records Core's empty body");
+		$this->assertSame([self::ABUSE => '2'], $r['resultLines'][0]['applied']);
+	}
+
+	/** WHEN Core answers unchanged for an empty set whose table pf lost THEN the table gets its placeholder back. */
+	public function testAnEmptySetWhoseTableWasLostGetsItsPlaceholderBack(): void
+	{
+		$apply = self::emptyAt(self::ABUSE, '2');
+		$apply['kernel']['pfB_Abuse_v4'] = NULL;
+		$apply['apply'] = ['request' => self::request([self::resource(self::ABUSE, '2', 0)]), 'core' => [self::unchanged(self::ABUSE, '2')]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame(['pfB_Abuse_v4 replace'], self::verbs($r));
+		$this->assertSame(['127.1.7.7'], $r['kernel']['pfB_Abuse_v4'] ?? NULL);
+		$this->assertSame([self::ABUSE => '2'], $r['resultLines'][0]['applied']);
+	}
+
+	/** WHEN an empty aggregate is unchanged THEN nothing is pushed: an aggregate is never padded, so its empty table is its set. */
+	public function testAnUnchangedEmptyAggregateIsNotPushed(): void
+	{
+		$agg = 'ip-aggregate/deny/ipv4';
+		$apply = self::at([$agg => ['1', []]]);
+		$apply['files']['{aliasdir}/pfB_Deny_Aggregated_v4.txt'] = [];
+		$apply['kernel']['pfB_Deny_Aggregated_v4'] = [];
+		$apply['config'] = ['installedpackages/pfblockerng/config/0/pfb_agg_types' => 'Deny'];
+		$apply['apply'] = ['request' => self::request([['id' => $agg, 'generation' => '1', 'action' => 'alias_only', 'entries' => 0]]),
+			'core' => [self::unchanged($agg, '1')]];
+		$r = $this->applyOnce($apply);
+
+		$this->assertSame(0, $r['exit'], $r['log']);
+		$this->assertSame([], self::verbs($r), 'an empty aggregate table is not lost');
+		$this->assertSame([$agg => '1'], $r['resultLines'][0]['applied']);
+		$this->assertArrayNotHasKey('changedAliases', $r['resultLines'][0]);
+	}
+
 	/** @return array<string, array{0: array<string, mixed>, 1: int}> an apply that fetched a delta's parts, and its exit status */
 	public static function appliesThatFetchedParts(): array
 	{

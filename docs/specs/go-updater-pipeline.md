@@ -460,6 +460,14 @@ settled. Core holds the apply to three rules of the whole file: an id is named o
 names only aliases of ids the request holds; the file stays within 1 MiB, and when it is longer Core keeps the complete
 lines inside the first 1 MiB and reports the rest as cut (`protocol.md` "Update command, version 2").*
 
+*Amendment 2026-11-26 (issue #4196): the apply writes one result line, at its end, not one per step. A line written before
+the end could carry only failures and removals: `applied` waits for the filter reload a change needs (#3813), and the flags
+for the whole apply. An id the apply names on no line stays pending and is applied again by the next Update, so a crash part
+way loses no work, only the report of it. The empty-set placeholder (§7): an empty IP set's mirror and table (never an aggregate's, which the pass never pads) hold the
+placeholder address (`ip/ip_placeholder`, `::` before it for IPv6), as the update pass writes an empty list, since pfSense's
+filter reload asks an empty urltable file to be fetched again (`alias_expand_urltable()`); the cursor records Core's empty
+body, and a set that reaches or leaves the empty set is replaced, never changed by a delta.*
+
 #### 8.5 Failure and retry
 
 | Failure | Result | Retry |

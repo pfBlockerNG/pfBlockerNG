@@ -2425,8 +2425,13 @@ sits (owner decision on #4037, 2026-11-22: `RuntimeGatewayReadsStructureTest`, `
    does not retry a `manual` one or the `apply` trigger: a deferral after the locks are held sets the due flag for a
    `manual` Update, and for the `apply` trigger only when it cleared the flag. A non-zero exit other than 75 sets the pending mark and the due flag again.
 
+An empty IP set's mirror (not an aggregate's: the pass never pads one) holds the placeholder address, as the update pass writes an empty list (issue #4196; pfSense's
+filter reload asks an empty urltable file to be fetched again): `pfb_outpost_fetch()` writes it once the empty body is
+verified, takes it as the empty body its cursor records, and merges a delta from the empty set into an empty base; a push
+into or out of the empty set replaces the table.
+
 Not yet: a change to the DNSBL temporary unlock handling (a stored unlock alone does not reload the Resolver here, and a
-reload re-locks it exactly as the update pass does; #4036 question 3 owns any change), the empty-set placeholder in a mirror, pruning
+reload re-locks it exactly as the update pass does; #4036 question 3 owns any change), pruning
 DNSBL statistics rows of removed groups, and `--resource-dir` in the rc script. Behaviour:
 `tests/php/OutpostApplyTest.php` (through corpus A's worker) and `tests/smoke/test_smoke_outpost_apply.py`.
 

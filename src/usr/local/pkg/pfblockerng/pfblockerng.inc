@@ -4938,6 +4938,10 @@ function pfb_outpost_parts_fetch(string $id, string $generation, array $parts, ?
  *
  * Any failure of the transfer itself, a reply curl cannot frame included, counts as unreachable and does not fall back.
  *
+ * An empty IP set's mirror is its family's placeholder address (issue #4196). For an IP set, only a placeholder mirror is the
+ * empty body a cursor of no entries records: the cursor is sent, and a delta from it merges into an empty base; an empty file
+ * there sends none, so the full body brings the placeholder. An aggregate is never padded: its empty body is an empty file.
+ *
  * failure, when ok is FALSE: unreachable (no whole HTTP reply), core_unavailable (the call answered unavailable), refused (any
  * other error answered to the call; code names it), unavailable (the resource or its body), reply (an answer of the wrong
  * shape, a generation going backwards in a delta included), body (a body longer than its bound, not plain text, refused by
@@ -4962,7 +4966,7 @@ function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $w
 	$fail = static function (string $failure, string $error, ?string $code = NULL) use (&$result, $mirror): array {
 		return ['failure' => $failure, 'error' => "{$mirror}: {$error}", 'code' => $code] + $result;
 	};
-	$family = preg_match('~^ip-(?:set|aggregate)/[^/]+/(ipv[46])$~D', $id, $m) === 1 ? $m[1] : NULL;
+	[$resourceKind, $family] = preg_match('~^ip-(set|aggregate)/[^/]+/(ipv[46])$~D', $id, $m) === 1 ? [$m[1], $m[2]] : [NULL, NULL];
 	$staged = "{$mirror}.new";
 	[$add, $remove] = ["{$workdir}/add", "{$workdir}/remove"];
 	$discard = static function () use ($staged, $add, $remove): void {
@@ -4971,10 +4975,23 @@ function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $w
 		}
 	};
 	$sent = [];
+	// issue #4196: an empty IP set's mirror holds the placeholder address, as the update pass leaves an empty list, so that
+	// pfSense's filter reload finds a table file it does not fetch again; it stands for Core's empty body. An aggregate is never
+	// padded, as the pass keeps the placeholder out of one (pfb_aggregate_member_list())
+	$placeholder = $resourceKind !== 'set' ? NULL
+		: pfb_placeholder_for_family(pfb_ip_placeholder(), $family === 'ipv6' ? 'v6' : 'v4') . "\n";
 	clearstatcache(TRUE, $mirror);
-	// a mirror that is not the body the cursor records is not that generation's: send no cursor
-	if ($cursor !== NULL && !is_link($mirror) && is_file($mirror) && pfb_content_hash($mirror) === $cursor['digest']) {
-		$sent = ['generation' => (string) $cursor['generation'], 'digest' => $cursor['digest']];
+	$base = $mirror;	// what a delta merges into: an empty base for a placeholder mirror
+	// a mirror that is not the body the cursor records is not that generation's: send no cursor. The placeholder is compared on a
+	// bounded read, not with pfb_member_file_is_placeholder_only(), which reads a mirror of any size whole
+	if ($cursor !== NULL && !is_link($mirror) && is_file($mirror)) {
+		// an empty IP set's mirror is its placeholder only: an empty file (an apply before the placeholder) is fetched again
+		$emptySet = $placeholder !== NULL && $cursor['entries'] === 0;
+		$padded = $emptySet && @file_get_contents($mirror, FALSE, NULL, 0, 64) === $placeholder;
+		if ($padded || (!$emptySet && pfb_content_hash($mirror) === $cursor['digest'])) {
+			$sent = ['generation' => (string) $cursor['generation'], 'digest' => $cursor['digest']];
+			$base = $padded ? '/dev/null' : $mirror;
+		}
 	}
 	// a body pruned by a publish that raced the read: ask again once (protocol "GetResourceBody")
 	$raced = 0;
@@ -5017,7 +5034,7 @@ function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $w
 				$item['from'], $family, $socket, $timeout);
 		if ($failed === NULL) {
 			// a full body's line count was checked with its part
-			$merged = $kind === 'delta' ? pfb_outpost_mirror_merge($mirror, $remove, $add, $staged) : ['entries' => $item['entries'], 'error' => NULL];
+			$merged = $kind === 'delta' ? pfb_outpost_mirror_merge($base, $remove, $add, $staged) : ['entries' => $item['entries'], 'error' => NULL];
 			if (isset($merged['local'])) {
 				$failed = ['mirror', (string) $merged['error'], NULL];
 			} elseif ($merged['error'] !== NULL || $merged['entries'] !== $item['entries'] || pfb_content_hash($staged) !== $item['digest']) {
@@ -5038,8 +5055,9 @@ function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $w
 			}
 			return $fail($failure === 'pruned' ? 'body' : $failure, $error, $code);
 		}
-		$fh = @fopen($staged, 'r+b');
-		$synced = $fh !== FALSE && fsync($fh);
+		$pad = $placeholder !== NULL && $item['entries'] === 0;	// verified as Core's empty body, an empty IP set's mirror is its placeholder
+		$fh = @fopen($staged, $pad ? 'wb' : 'r+b');
+		$synced = $fh !== FALSE && (!$pad || fwrite($fh, $placeholder) === strlen($placeholder)) && fsync($fh);
 		if ($fh !== FALSE) {
 			fclose($fh);
 		}

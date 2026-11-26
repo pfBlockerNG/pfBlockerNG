@@ -987,7 +987,8 @@ version, not a bad token.
   text is cut to at most 1,024 bytes, never inside a character, and trimmed again. Markup in it stays as it is, for the page
   that shows it to escape.
 
-**fd 3:** result lines, each one JSON object and a newline, in printable ASCII, written as each step finishes. The fields
+**fd 3:** result lines, each one JSON object and a newline, in printable ASCII; the apply writes one, at its end (an id it names
+on no line stays pending, so a crash part way loses only the report; spec §8.4, amendment of 2026-11-26). The fields
 appear in this order; a field is left out when the apply has nothing to say in it, and `version` is always present:
 
 ```json
