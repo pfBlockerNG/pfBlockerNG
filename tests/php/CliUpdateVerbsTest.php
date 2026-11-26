@@ -153,6 +153,23 @@ final class CliUpdateVerbsTest extends TestCase
 		$this->assertCount(1, $this->calls);
 	}
 
+	/**
+	 * Core answers `unavailable` while the result of an Update that just ended waits to be recorded (the worker published its
+	 * completion before its lock holder exited): the Update is not lost, so the verb asks again, within its wait.
+	 */
+	public function testAnUnavailableCoreIsAskedAgainUntilTheResultIsRecorded(): void
+	{
+		$code = $this->follow(['trigger' => 'retry'], $this->core(self::ok([]), self::update(TRUE, "x\n", '2'),
+			['status' => 503, 'body' => ['error' => ['code' => 'unavailable', 'message' => 'an Update result is waiting to be recorded']],
+				'error' => NULL],
+			self::update(FALSE, "y\n", '4', 'success')));
+
+		$this->assertSame(0, $code);
+		$this->assertSame("x\ny\n", $this->out);
+		$this->assertSame('', $this->err);
+		$this->assertSame(['after' => '2'], $this->calls[3][1], 'the cursor stands across the unavailable answer');
+	}
+
 	public function testACoreLostWhileTheUpdateRunsIsAFailure(): void
 	{
 		$code = $this->follow(['trigger' => 'retry'], $this->core(self::ok([]), self::update(TRUE, '', '0'),
