@@ -367,6 +367,9 @@ function pfb_cli_update_run(array $request, callable $call, callable $out, calla
 			$sleep();
 		}
 		$answer = $call('GetUpdate', $params, NULL, PFB_CORE_PAGE_TIMEOUT);
+		if (($answer['body']['error']['code'] ?? NULL) === 'unavailable') {
+			continue;	// the result of an Update that just ended waits to be recorded: Core reports it once it is, within the wait
+		}
 		$failure = pfb_update_core_failure($answer);
 		if ($failure !== NULL) {
 			$err("pfBlockerNG Core did not report the Update: {$failure}\n");
