@@ -2,8 +2,9 @@
 
 ``/var/unbound/pfb_dns`` (#4251) is what pfB-DNS last fetched from Core. On a RAM-disk ``/var`` (``use_mfs_tmpvar``) the
 pfb_dns_proxy rc script's stop, the one pfSense makes with no argument, archives it (``pfblockerng.inc dnsbl_cache``)
-once pfB-DNS has exited. The test plants the folder beside a serving pfB-DNS, turns the RAM-disk switch on in
-``config.xml`` (no reboot: the stop reads the switch, the RAM disks themselves come only with one) and runs the stop.
+once pfB-DNS has exited, while ``config.xml`` registers the boot's restore. The test turns the RAM-disk switch on in
+``config.xml`` (no reboot: the stop reads the switch, the RAM disks themselves come only with one), lets an update pass
+register the restore, plants the folder beside a serving pfB-DNS and runs the stop.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ pytestmark = pytest.mark.smoke
 CACHE = "/var/unbound/pfb_dns"
 ARCHIVE = "/usr/local/etc/pfb_dnsbl_cache.tar"
 RC = "/usr/local/etc/rc.d/pfb_dns_proxy.sh"
+RESTORE = "grep -q -F 'pfblockerng.sh dnsbl_cache restore' /cf/conf/config.xml"
 
 
 @pytest.fixture(scope="module")
@@ -59,13 +61,20 @@ def test_a_pfb_dns_stop_leaves_an_archive_that_holds_the_core_input_folder(servi
             aside = vm.ssh(f"test ! -e {a}.aside4259 && mv {a} {a}.aside4259", timeout=30)
             assert aside.returncode == 0, f"could not set {a} aside (or {a}.aside4259 exists): {aside.stderr}"
             moved.append(a)
+        h.set_ramdisk(vm, True)
+        h.reload(vm, "updatednsbl")
+        registered = vm.ssh(RESTORE, timeout=30)
+        assert registered.returncode == 0, "the update pass did not register the boot's archive restore"
+        # the pass writes a missing archive itself: the one found after the stop must be the stop's
+        cleared = vm.ssh(f"rm -f {ARCHIVE}.zst {ARCHIVE}.bz2", timeout=30)
+        assert cleared.returncode == 0, f"could not remove the pass's archive: {cleared.stderr}"
+        assert _running(vm), "after the pass pfB-DNS is not serving"
         planted = vm.ssh(
             f"mkdir -m 700 {CACHE} && echo feed-body > {CACHE}/feed-F && chmod 600 {CACHE}/feed-F && "
             f"chown -R unbound:unbound {CACHE}",
             timeout=30,
         )
         assert planted.returncode == 0, f"could not plant {CACHE}: {planted.stdout}{planted.stderr}"
-        h.set_ramdisk(vm, True)
 
         stopped = vm.ssh(RC, "stop", timeout=120)
 
@@ -81,6 +90,9 @@ def test_a_pfb_dns_stop_leaves_an_archive_that_holds_the_core_input_folder(servi
     finally:
         h.set_ramdisk(vm, False)
         vm.ssh(f"rm -rf {CACHE}", timeout=30)
+        # the pass with the switch off removes the restore it registered, and deletes the archive it finds: the box's
+        # own are still set aside
+        h.reload(vm, "updatednsbl")
         if len(moved) == len(had):
             vm.ssh(f"rm -f {ARCHIVE}.zst {ARCHIVE}.bz2", timeout=30)
         back = [a for a in moved if vm.ssh(f"mv {a}.aside4259 {a}", timeout=30).returncode != 0]
@@ -89,3 +101,4 @@ def test_a_pfb_dns_stop_leaves_an_archive_that_holds_the_core_input_folder(servi
         started = vm.ssh(RC, "start", timeout=120)
     assert passed and not back, f"the box's archive was not put back: {back} (still at .aside4259)"
     assert started.returncode == 0, f"pfB-DNS did not start again: {started.stdout}{started.stderr}"
+    assert vm.ssh(RESTORE, timeout=30).returncode != 0, "the box's config.xml still registers the archive restore"
