@@ -1380,7 +1380,7 @@
 		},
 		{
 			"id": "token-empty",
-			"description": "An empty token. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
+			"description": "An empty token. It is read as no token, and the apply replaces such a token in the marker by a fresh mark (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
@@ -1399,7 +1399,7 @@
 		},
 		{
 			"id": "token-65",
-			"description": "A token of 65 characters. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
+			"description": "A token of 65 characters. It is read as no token, and the apply replaces such a token in the marker by a fresh mark (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
@@ -1418,7 +1418,7 @@
 		},
 		{
 			"id": "token-line-break",
-			"description": "A token with a line break. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
+			"description": "A token with a line break. It is read as no token, and the apply replaces such a token in the marker by a fresh mark (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
@@ -1437,7 +1437,7 @@
 		},
 		{
 			"id": "token-trailing-line-feed",
-			"description": "A token that ends in a line feed. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
+			"description": "A token that ends in a line feed. It is read as no token, and the apply replaces such a token in the marker by a fresh mark (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
@@ -1456,7 +1456,7 @@
 		},
 		{
 			"id": "token-nul",
-			"description": "A token with a NUL. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
+			"description": "A token with a NUL. It is read as no token, and the apply replaces such a token in the marker by a fresh mark (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
@@ -1475,7 +1475,7 @@
 		},
 		{
 			"id": "token-space",
-			"description": "A token with a space. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
+			"description": "A token with a space. It is read as no token, and the apply replaces such a token in the marker by a fresh mark (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
@@ -1494,7 +1494,7 @@
 		},
 		{
 			"id": "token-non-ascii",
-			"description": "A token with a character that is not ASCII. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
+			"description": "A token with a character that is not ASCII. It is read as no token, and the apply replaces such a token in the marker by a fresh mark (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",
@@ -1513,7 +1513,7 @@
 		},
 		{
 			"id": "token-number",
-			"description": "A token that is a number. It is read as no token: the apply discards a marker that holds one (owner, 2026-11-23, #4263).",
+			"description": "A token that is a number. It is read as no token, and the apply replaces such a token in the marker by a fresh mark (owner, 2026-11-23, #4263).",
 			"request": {
 				"version": 2,
 				"trigger": "manual",

@@ -428,7 +428,7 @@ var issuesNormalisedByCore = []string{"over-1-mib", "ten-mib", "issues-4097", "i
 
 // The rows whose pendingToken is not 1 to 64 printable ASCII characters (TestTheTokenRowsAreReadAsNoToken). Core writes the
 // token as the row holds it: the token is the platform's, and Core hands back what the settings read gave it. The apply reads
-// such a token as none and discards the marker that holds it (owner, 2026-11-23, #4263).
+// such a token as none and replaces it in the marker by a fresh mark (owner, 2026-11-23, #4263).
 var tokenHandedBackByCore = []string{"token-empty", "token-65", "token-line-break", "token-trailing-line-feed", "token-nul",
 	"token-space", "token-non-ascii", "token-number"}
 
