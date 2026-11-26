@@ -91,14 +91,6 @@ final class UpdatePageCronStatusTest extends TestCase
 		$this->assertStringNotContainsString('cron_exists', $source);
 	}
 
-	public function testDetachedCliVerbsPropagateLockedProcessFailure(): void
-	{
-		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php');
-		$this->assertStringContainsString('$pfb_completed = sync_package_pfblockerng(', $source);
-		$this->assertStringContainsString('$pfb_completed = pfblockerng_sync_cron(', $source);
-		$this->assertStringContainsString('pfb_cli_feed_pass_exit($pfb_completed, $pfb_deferred_by);', $source);
-	}
-
 	public function testForceValidatorsAreClearedOnlyInsideTheLockedChild(): void
 	{
 		$page = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_update.php');

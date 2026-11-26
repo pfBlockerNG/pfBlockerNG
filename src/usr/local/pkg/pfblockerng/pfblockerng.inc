@@ -292,6 +292,109 @@ function pfb_update_start(string $scope, string $force, callable $call): string 
 	return gettext('The Update was not started: ') . $failure;
 }
 
+// issue #4260: how long a CLI update verb follows its Update, in one-second polls of GetUpdate (4 h); the Update itself goes on
+// when the wait ends, and the Update page still shows it
+const PFB_CLI_UPDATE_POLLS = 14400;
+
+/**
+ * The Update a pfblockerng.php update verb asks Core for (issue #4260, #3977's coverage matrix): StartUpdate's parameters
+ * without the requestId, or NULL for a verb that runs no Update. A scope or trigger the verb does not know falls back as it did
+ * when the verb ran its pass in-process: the last `scope=` given, `both` when it is unknown; the last `trigger=`. A `cron`
+ * trigger, and the `cron` verb, are the quarter-hour run's `retry`, which takes no scope or force. A forced pfb_trigger is a
+ * reload (force `parse`), as `updateip` and `updatednsbl` are; `forcecheck` downloads again, and with `hashes=true` drops the
+ * digests too.
+ *
+ * @param list<string> $argv
+ * @return ?array{trigger: string, scope?: string, force?: string}
+ */
+function pfb_cli_update_request(array $argv): ?array {
+	$args = array_slice($argv, 2);
+	$scope = 'both';
+	$trigger = 'manual';
+	foreach ($args as $arg) {
+		if (str_starts_with($arg, 'scope=')) {
+			$scope = substr($arg, 6);
+		} elseif (str_starts_with($arg, 'trigger=')) {
+			$trigger = substr($arg, 8);
+		}
+	}
+	$scope = in_array($scope, ['ip', 'dnsbl', 'both'], TRUE) ? $scope : 'both';
+	$manual = static fn (string $scope, string $force): array => ['trigger' => 'manual', 'scope' => $scope, 'force' => $force];
+	return match ($argv[1] ?? '') {
+		'cron' => ['trigger' => 'retry'],
+		'update' => $manual('both', 'none'),
+		'updateip' => $manual('ip', 'parse'),
+		'updatednsbl' => $manual('dnsbl', 'parse'),
+		'pfb_trigger' => $trigger === 'cron' ? ['trigger' => 'retry'] : $manual($scope, in_array('force=true', $args, TRUE) ? 'parse' : 'none'),
+		'forcecheck' => $manual($scope, in_array('hashes=true', $args, TRUE) ? 'both' : 'download'),
+		default => NULL,
+	};
+}
+
+/**
+ * The warning a deprecated CLI update verb prints, or ''. `cron` is deprecated as a verb (the matrix keeps it); the pass's own
+ * `cron` request string is not, so it is named here and not in pfb_verb_deprecation_warning().
+ */
+function pfb_cli_deprecation_warning(string $verb): string {
+	if ($verb === 'cron') {
+		return "DEPRECATED: pfblockerng verb 'cron' — use explicit request (scope=both force=false trigger=cron); removal scheduled";
+	}
+	return pfb_verb_deprecation_warning($verb);
+}
+
+/**
+ * A CLI update verb (issue #4260): start $request through StartUpdate and follow the Update to its end, its log going to $out as
+ * Core holds it. The exit status is the Update's result: 0 for success, PFB_EXIT_LOCKED for an Update skipped (the pass was
+ * deferred) or refused because one runs (`conflict`: reported, nothing queued), 1 otherwise. A Core that is down or refuses the
+ * caller (not root) is a message on $err and 1, never a pass run in-process. Each call is bounded by PFB_CORE_PAGE_TIMEOUT, and
+ * $sleep (one second) parts the polls, at most $polls of them.
+ *
+ * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ * @param callable(string): void $out
+ * @param callable(string): void $err
+ * @param callable(): void $sleep
+ */
+function pfb_cli_update_run(array $request, callable $call, callable $out, callable $err, callable $sleep, int $polls = PFB_CLI_UPDATE_POLLS): int {
+	$failure = pfb_update_core_failure($call('StartUpdate', ['requestId' => bin2hex(random_bytes(16))] + $request, NULL, PFB_CORE_PAGE_TIMEOUT));
+	if ($failure !== NULL) {
+		$err("pfBlockerNG Core did not start the Update: {$failure}\n");
+		return str_starts_with($failure, 'conflict:') ? PFB_EXIT_LOCKED : 1;
+	}
+	$params = [];
+	$started = NULL;
+	for ($poll = 0; $poll < $polls; $poll++) {
+		if ($poll > 0) {
+			$sleep();
+		}
+		$answer = $call('GetUpdate', $params, NULL, PFB_CORE_PAGE_TIMEOUT);
+		$failure = pfb_update_core_failure($answer);
+		if ($failure !== NULL) {
+			$err("pfBlockerNG Core did not report the Update: {$failure}\n");
+			return 1;
+		}
+		$body = $answer['body'];
+		$update = is_array($body['update'] ?? NULL) ? $body['update'] : [];
+		$started ??= $update['startedAt'] ?? NULL;
+		if ($started === NULL || ($update['startedAt'] ?? NULL) !== $started) {
+			$err("pfBlockerNG Core reports no result of this Update: another Update started in its place\n");
+			return 1;
+		}
+		$out((string) ($body['log'] ?? ''));
+		if (is_string($body['next'] ?? NULL)) {
+			$params = ['after' => $body['next']];
+		}
+		if (empty($body['running'])) {
+			return match ($update['result'] ?? '') {
+				'success' => 0,
+				'skipped' => PFB_EXIT_LOCKED,
+				default => 1,
+			};
+		}
+	}
+	$err("pfBlockerNG Core's Update still runs after the wait; the Update page shows it\n");
+	return 1;
+}
+
 /**
  * The Update page's Schedule section (issue #3941): Core's GetSchedule as the section's rows take it. `feeds`, `dcc` and `bl` are
  * `['last_run' => int, 'next_due' => int]` (no `last_run` when the job never ran) or NULL when Core schedules none; `error` is why
@@ -29260,11 +29363,6 @@ function pfb_update_autotail(bool $task_running, bool $run_dispatch, bool $logvi
 
 function pfb_feed_pass_exit_code(bool $completed, ?string $deferred_by): int {
 	return $deferred_by !== NULL ? PFB_EXIT_LOCKED : ($completed ? 0 : 1);
-}
-
-function pfb_feed_pass_deferral_message(string $deferred_by): string {
-	$lock = $deferred_by === 'dispatcher-lock' ? 'dispatcher lock' : 'feed-pass lock';
-	return "pfBlockerNG feed pass deferred: {$lock} is held\n";
 }
 
 // issue #1175: cross-process mutual exclusion for a feed pass --
