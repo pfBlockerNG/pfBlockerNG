@@ -156,6 +156,24 @@ final class DnsProxyLifecycleTest extends TestCase
 	// S5 -- the restore stops the proxy first
 	// -----------------------------------------------------------------------
 
+	public function testTheRestoresStopWritesNoRamDiskArchive(): void
+	{
+		// issue #4259: the restore stops the proxy under the DNS configuration lock, to give the Resolver back; the archive the
+		// rc stop writes on a RAM-disk box would hold that lock, with nothing serving DNS, for data the disable then removes
+		$this->seedMovedResolver();
+		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
+		$flag = [];
+		$GLOBALS['pfb_test_mwexec_hook'] = static function (string $command) use (&$flag): int {
+			$flag[] = getenv('PFB_DNS_PROXY_NO_ARCHIVE');
+			return 0;
+		};
+
+		$this->assertTrue(pfb_dns_proxy_resolver(FALSE));
+
+		$this->assertSame(['1'], $flag, 'the stop runs with the archive turned off');
+		$this->assertFalse(getenv('PFB_DNS_PROXY_NO_ARCHIVE'), 'and the flag goes with it');
+	}
+
 	public function testRestoreStopsTheProxyBeforeAnyRestoreWrite(): void
 	{
 		// Given a moved Resolver, and a hook that snapshots config.xml at the instant the proxy is stopped

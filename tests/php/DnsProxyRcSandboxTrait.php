@@ -459,14 +459,15 @@ trait DnsProxyRcSandboxTrait
 	 * script leaves no background child behind. The runner's own deadline is longer than that limit, so the limit always fires
 	 * first, and a stopped command is a STUCK/ENVIRONMENT verdict (stuckIfStopped()), never a status to decide on.
 	 *
+	 * @param array<string,string> $env more environment for the script
 	 * @return array{0: int, 1: string} exit status, then stdout and stderr
 	 */
-	private function rc(string $verb, int $seconds = 20): array
+	private function rc(string $verb, int $seconds = 20, array $env = []): array
 	{
 		$run = pfb_test_finish_process(
 			pfb_test_start_process(
 				[$GLOBALS['pfb']['timeout'], '-k', '2', (string) $seconds, $this->shell, "{$this->dir}/run.sh", $verb],
-				['PATH' => "{$this->dir}/bin:" . (string) getenv('PATH')]
+				['PATH' => "{$this->dir}/bin:" . (string) getenv('PATH')] + $env
 			),
 			$seconds + 5.0
 		);

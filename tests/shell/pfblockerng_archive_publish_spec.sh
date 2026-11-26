@@ -49,6 +49,24 @@ LAST-GOOD"
     /usr/bin/tar -xOf "${publishbase}.bz2" "${publishbox}/payload" 2>/dev/null
   }
 
+  failed_move() {
+    printf 'LAST-GOOD' > "${publishbase}.bz2"
+    pathtar='/usr/bin/tar'
+    zstd() { return 0; }
+    mv() { return 1; }
+    pfb_archive_compress "${publishbase}" "${publishbox}/payload" 2>/dev/null
+    printf 'rc=%s\n' "$?"
+    if [ -f "${publishbase}.zst" ]; then printf 'ZST\n'; fi
+    if [ -f "${publishbase}.bz2" ]; then cat "${publishbase}.bz2"; else printf 'ABSENT'; fi
+  }
+
+  # issue #4259: the pfB-DNS stop reports a failed save by this status
+  It 'reports failure and keeps the last good archive when no archive can be published'
+    When call failed_move
+    The output should equal "rc=1
+LAST-GOOD"
+  End
+
   It 'publishes a complete fallback on a successful retry'
     When call retry_publish
     The output should equal "rc=2

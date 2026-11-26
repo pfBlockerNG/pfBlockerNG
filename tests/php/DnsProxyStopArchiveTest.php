@@ -138,6 +138,18 @@ final class DnsProxyStopArchiveTest extends TestCase
 		$this->assertSame([], $this->saves(), 'the apply removed the restore and the archive: a save would outlive them');
 	}
 
+	public function testTheResolverRestoresStopWritesNoArchive(): void
+	{
+		$this->arrangeStop();
+
+		// pfb_dns_proxy_resolver_locked(FALSE) stops pfB-DNS under the DNS configuration lock to give the Resolver back
+		[$status, $output] = $this->rc('stop', 20, ['PFB_DNS_PROXY_NO_ARCHIVE' => '1']);
+
+		$this->assertSame(0, $status, "rc stop failed: {$output}");
+		$this->assertSame([], $this->livePids());
+		$this->assertSame([], $this->saves(), 'no archive under the lock, with nothing serving DNS');
+	}
+
 	public function testPfSensesRestartWritesTheArchiveWhilePfbDnsIsDown(): void
 	{
 		$this->arrangeStop();
