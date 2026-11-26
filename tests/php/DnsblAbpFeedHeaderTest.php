@@ -95,10 +95,12 @@ final class DnsblAbpFeedHeaderTest extends TestCase
 		$code = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
 		$this->assertIsString($code);
 
-		$detect  = strpos($code, '$abp_feed = pfb_dnsbl_feed_has_abp_header($pfb_parse_path);');
+		// issue #4272 owner decision: a header or, failing it, any Adblock rule makes the feed Adblock.
+		$detect  = strpos($code, '$abp_feed = pfb_dnsbl_feed_is_abp($pfb_parse_path);');
 		$loop    = strpos($code, 'while (($line = @fgets($fhandle)) !== FALSE)', (int) $detect);
 		$capture = strpos($code, 'if (pfb_dnsbl_is_abp_rule_line($line)) {', (int) $loop);
-		$stop    = strpos($code, 'if ($abp_feed) { continue; }', (int) $capture);
+		// issue #4272 owner decision: only a hostname, a hosts line or a hostname mask of an Adblock feed goes on.
+		$stop    = strpos($code, 'if ($abp_feed) { $abp_kept = pfb_dnsbl_abp_feed_line($line); if ($abp_kept === NULL) { continue; }', (int) $capture);
 		$csv     = strpos($code, 'pfb_dnsbl_csv_extract(', (int) $capture);
 		$host    = strpos($code, 'pfb_dnsbl_extract_host(', (int) $capture);
 

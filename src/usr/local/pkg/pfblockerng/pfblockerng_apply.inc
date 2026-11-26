@@ -2605,7 +2605,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								$ip6_decision = ['count' => 0, 'loggable' => FALSE];
 								$pfb_scheme_skipped = 0;	// ADR-22: per-feed strict scheme/path skips
 								$dnsbl_lineno = 0;		// issue #1004: per-line counter for the parse-error detail sink
-								$abp_feed = pfb_dnsbl_feed_has_abp_header($pfb_parse_path);
+								$abp_feed = pfb_dnsbl_feed_is_abp($pfb_parse_path);
 
 								// Parse downloaded file for Domain names
 								if (($fhandle = @fopen($pfb_parse_path, 'r')) !== FALSE) {
@@ -2674,10 +2674,18 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 												continue;
 											}
 
-											// issue #4272: an Adblock feed's other lines (path rules such as
-											// '.imgur.com/lumbar.gif') are no plain domains -- drop them.
+											// issue #4272: an Adblock feed's other lines are dropped (path rules such as
+											// '.imgur.com/lumbar.gif'), except a hostname, a hosts line or a hostname mask.
 											if ($abp_feed) {
-												continue;
+												$abp_kept = pfb_dnsbl_abp_feed_line($line);
+												if ($abp_kept === NULL) {
+													continue;
+												}
+												if ($abp_kept[0] === PfbDnsblRowKind::Abp) {
+													@fwrite($dhandle, pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, $abp_kept[1]));
+													continue;
+												}
+												$line = $abp_kept[1];
 											}
 
 											// If 'tab' character found, replace with whitespace

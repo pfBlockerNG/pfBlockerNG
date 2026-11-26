@@ -1073,24 +1073,36 @@ def test_migration_sets_lenient_for_existing_install(deployed_vm: SmokeVM) -> No
 
 @pytest.mark.timeout(300)
 def test_adblock_feed_path_rule_never_blocks_its_domain(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """issue #4272: an Adblock-headed feed is parsed as Adblock only.
+    """issue #4272: an Adblock-headed feed is parsed as Adblock.
 
     EasyPrivacy's ``.imgur.com/lumbar.gif`` used to be cut down to a block of ``imgur.com``:
     the line is no ``||``-anchored rule, so it fell through to the plain-domain path.
 
-    Given an ``[Adblock Plus 2.0]`` feed holding a path rule ``.<path>/lumbar.gif``, a bare
-      ``<bare>`` and an anchored ``||<anchored>^``, all three resolving before the load,
+    Given an ``[Adblock Plus 2.0]`` feed holding a path rule ``.<path>/lumbar.gif``, a URL
+      fragment ``-<frag>``, a bare hostname ``<bare>``, a hosts line ``0.0.0.0 <hosts>`` and an
+      anchored ``||<anchored>^``, all resolving before the load,
     When  the feed loads in Lenient mode (what an upgraded install keeps),
-    Then  ``<anchored>`` is blocked, while ``<path>`` and ``<bare>`` still resolve — in
-      Adblock syntax neither line blocks a whole domain.
+    Then  ``<anchored>``, ``<bare>`` and ``<hosts>`` are blocked -- uBlock Origin reads a bare
+      hostname or hosts line as ``||host^`` -- while ``<path>`` and ``<frag>`` still resolve:
+      a path rule or URL fragment never blocks a whole domain.
     """
     path_dom = h.unique_domain("abp4272path")
+    frag_dom = h.unique_domain("abp4272frag")
     bare_dom = h.unique_domain("abp4272bare")
+    hosts_dom = h.unique_domain("abp4272hosts")
     anchored_dom = h.unique_domain("abp4272anchor")
     feed_url = _scheme_feed_path(
         deployed_vm,
         "smoke_4272_adblock.txt",
-        ["[Adblock Plus 2.0]", "! Title: smoke 4272", f".{path_dom}/lumbar.gif", bare_dom, f"||{anchored_dom}^"],
+        [
+            "[Adblock Plus 2.0]",
+            "! Title: smoke 4272",
+            f".{path_dom}/lumbar.gif",
+            f"-{frag_dom}",
+            bare_dom,
+            f"0.0.0.0 {hosts_dom}",
+            f"||{anchored_dom}^",
+        ],
     )
     spec = h.DnsblCase(aliasname="smoke4272abp", feed_url=feed_url, header="smoke4272abp", mode=h.DnsblMode.VIP)
 
@@ -1099,7 +1111,7 @@ def test_adblock_feed_path_rule_never_blocks_its_domain(deployed_vm: SmokeVM, cl
 
     try:
         h.unblock_egress()
-        for name in (path_dom, bare_dom, anchored_dom):
+        for name in (path_dom, frag_dom, bare_dom, hosts_dom, anchored_dom):
             before = h.dns_probe_client(client_vm, name, "A")
             assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
 
@@ -1107,13 +1119,79 @@ def test_adblock_feed_path_rule_never_blocks_its_domain(deployed_vm: SmokeVM, cl
         h.set_dnsbl_parse_mode(deployed_vm, "lenient")
         h.reload(deployed_vm, "update")
 
-        h.flush_unbound_name(deployed_vm, anchored_dom)
-        ans_anchored = h.dns_probe_client_until(client_vm, anchored_dom, _blocked)
-        assert _blocked(ans_anchored), f"||{anchored_dom}^ must block once the feed loads, got {ans_anchored}"
-        for name, line in ((path_dom, f".{path_dom}/lumbar.gif"), (bare_dom, bare_dom)):
+        for name, line in (
+            (anchored_dom, f"||{anchored_dom}^"),
+            (bare_dom, bare_dom),
+            (hosts_dom, f"0.0.0.0 {hosts_dom}"),
+        ):
+            h.flush_unbound_name(deployed_vm, name)
+            ans = h.dns_probe_client_until(client_vm, name, _blocked)
+            assert _blocked(ans), f"Adblock line [{line}] must block {name} once the feed loads, got {ans}"
+        for name, line in ((path_dom, f".{path_dom}/lumbar.gif"), (frag_dom, f"-{frag_dom}")):
             h.flush_unbound_name(deployed_vm, name)
             ans = h.dns_probe_client(client_vm, name, "A")
             assert h.resolves_to(ans, STUB_DNS_A), f"Adblock line [{line}] must not block {name}, got {ans}"
+    finally:
+        h.reset(deployed_vm)
+        h.set_dnsbl_parse_mode(deployed_vm, "lenient")
+        deployed_vm.ssh("/bin/rm", "-f", feed_url)
+
+
+@pytest.mark.timeout(300)
+def test_headerless_adblock_feed_is_parsed_as_adblock(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """issue #4272: a feed without a header but with an Adblock rule is an Adblock feed.
+
+    The AdGuard Turkish filter has no header, and in Lenient mode each of its ``site#$?#...``
+    cosmetic rules blocked the whole site.
+
+    Given a feed without a header holding ``||<anchored>^``, an AdGuard cosmetic rule
+      ``<cosmetic>#$?#.ads``, a path rule ``<path>/ads.js``, the AdGuard DNS masks ``|<exact>^``,
+      ``<suffix>^`` and ``.<subonly>^``, and ``<port>:8080``, all resolving before the load,
+    When  the feed loads in Lenient mode,
+    Then  ``<anchored>``, ``<exact>``, ``<suffix>`` and ``<port>`` are blocked, while ``<cosmetic>``,
+      ``<path>`` and ``<subonly>`` (a subdomains-only mask, which pfBlockerNG cannot express)
+      still resolve.
+    """
+    names = {
+        k: h.unique_domain(f"abp4272{k}") for k in ("anchor", "cosm", "path", "exact", "suffix", "subonly", "port")
+    }
+    feed_url = _scheme_feed_path(
+        deployed_vm,
+        "smoke_4272_headerless.txt",
+        [
+            "! Title: smoke 4272 headerless",
+            f"||{names['anchor']}^",
+            f"{names['cosm']}#$?#.ads",
+            f"{names['path']}/ads.js",
+            f"|{names['exact']}^",
+            f"{names['suffix']}^",
+            f".{names['subonly']}^",
+            f"{names['port']}:8080",
+        ],
+    )
+    spec = h.DnsblCase(aliasname="smoke4272hdl", feed_url=feed_url, header="smoke4272hdl", mode=h.DnsblMode.VIP)
+
+    def _blocked(ans: h.DnsAnswer) -> bool:
+        return h.is_vip(ans) or h.is_null_ip(ans)
+
+    try:
+        h.unblock_egress()
+        for name in names.values():
+            before = h.dns_probe_client(client_vm, name, "A")
+            assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
+
+        h.inject(deployed_vm, spec)
+        h.set_dnsbl_parse_mode(deployed_vm, "lenient")
+        h.reload(deployed_vm, "update")
+
+        for key in ("anchor", "exact", "suffix", "port"):
+            h.flush_unbound_name(deployed_vm, names[key])
+            ans = h.dns_probe_client_until(client_vm, names[key], _blocked)
+            assert _blocked(ans), f"the {key} line must block {names[key]} once the feed loads, got {ans}"
+        for key in ("cosm", "path", "subonly"):
+            h.flush_unbound_name(deployed_vm, names[key])
+            ans = h.dns_probe_client(client_vm, names[key], "A")
+            assert h.resolves_to(ans, STUB_DNS_A), f"the {key} line must not block {names[key]}, got {ans}"
     finally:
         h.reset(deployed_vm)
         h.set_dnsbl_parse_mode(deployed_vm, "lenient")

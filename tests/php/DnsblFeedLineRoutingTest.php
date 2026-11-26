@@ -99,15 +99,40 @@ final class DnsblFeedLineRoutingTest extends TestCase
 			'EasyPrivacy path rule'  => ['.imgur.com/lumbar.gif', []],
 			'path rule with options' => ['.facebook.com/tr/$image', []],
 			'file-name rule'         => ['-geoIP.js', []],
-			'bare domain'            => ['imgur.com', []],
-			'hosts line'             => ['0.0.0.0 imgur.com', []],
+			// uBO reads these as ||host^, AdGuard DNS blocks the host (owner decision, #4272).
+			'bare domain'            => ['imgur.com', [['d', 'imgur.com']]],
+			'hosts line'             => ['0.0.0.0 imgur.com', [['d', 'imgur.com']]],
+			'filename fragment'      => ['_chartbeat.js', []],
 			'header'                 => ['[Adblock Plus 2.0]', []],
 			'comment'                => ['! Title: EasyPrivacy', []],
 			'anchored rule'          => ['||mp.imgur.com^', [['a', '||mp.imgur.com^']]],
 			'anchored path rule'     => ['||imgur.com/albumview.gif?', [['a', '||imgur.com/albumview.gif?']]],
 			'exception rule'         => ['@@||imgur.com/min/px.js$~third-party', [['a', '@@||imgur.com/min/px.js$~third-party']]],
 			'cosmetic rule'          => ['imgur.com##.Top300x600', [['a', 'imgur.com##.Top300x600']]],
+			// owner decisions, second round: Allow Ports-compatible hostnames, hosts lines, AdGuard DNS masks.
+			'hostname with port'     => ['imgur.com:8080', [['d', 'imgur.com']]],
+			'hostname, port, slash'  => ['imgur.com:443/', [['d', 'imgur.com']]],
+			'hostname with slash'    => ['imgur.com/', [['d', 'imgur.com']]],
+			'hosts line, aliases'    => ['0.0.0.0 imgur.com i.imgur.com # ads', [['d', 'imgur.com']]],
+			'exact mask'             => ['|imgur.com^', [['d', 'imgur.com']]],
+			'scheme mask'            => ['://imgur.com^', [['d', 'imgur.com']]],
+			'end-anchored mask'      => ['imgur.com^', [['a', '||imgur.com^']]],
+			'important mask'         => ['imgur.com^$important', [['a', '||imgur.com^$important']]],
+			'subdomain-only mask'    => ['.imgur.com^', []],
+			'wildcard mask'          => ['*.imgur.com^', []],
+			'badfilter mask'         => ['imgur.com^$badfilter', []],
+			'AdGuard extended CSS'   => ['eksisozluk.com#$?#.ads', [['a', 'eksisozluk.com#$?#.ads']]],
+			'AdGuard HTML filter'    => ['imgur.com$$script[data-src]', []],
+			'hosts line, IP target'  => ['0.0.0.0 1.2.3.4', []],
 		];
+	}
+
+	/** An AdGuard extended cosmetic rule takes the ABP path in any feed, so Lenient never cuts its site out. */
+	public function testAnAdGuardExtendedCosmeticRuleIsNeverADomainBlock(): void
+	{
+		foreach ([TRUE, FALSE] as $lenient) {
+			$this->assertSame([['a', 'eksisozluk.com#$?#.ads']], $this->parseLine('eksisozluk.com#$?#.ads', FALSE, $lenient));
+		}
 	}
 
 	/** @param list<array{0: string, 1: string}> $rows */
