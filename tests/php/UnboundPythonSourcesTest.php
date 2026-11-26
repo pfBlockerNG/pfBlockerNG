@@ -460,6 +460,20 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertStringContainsString('conflict: an Update is running', $this->logContents());
 	}
 
+	// The pass Core runs re-locks while Core holds its gate, and Core's Update end re-locks anyway: asking Core then is only
+	// a conflict in the log.
+	public function testThePassOfACoreUpdateLeavesTheReLockToCore(): void
+	{
+		pfb_unbound_python_sources($this->feeds());
+		$GLOBALS['pfb']['core_update'] = TRUE;
+		[$call, $calls] = self::coreRecorder(['status' => 409, 'body' => ['error' => ['code' => 'conflict', 'message' => 'an Update is running']], 'error' => NULL]);
+
+		$this->assertTrue(pfb_unbound_python_sources_unlock($call));
+
+		$this->assertCount(0, $calls);
+		$this->assertStringNotContainsString('Core did not take', (string) @file_get_contents("{$this->tmp}/pfblockerng.log"));
+	}
+
 	public function testSourcesUnlockReturnsFalseWithoutManifest(): void
 	{
 		// No full build ran -> no manifest to patch.

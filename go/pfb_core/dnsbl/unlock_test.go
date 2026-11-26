@@ -95,6 +95,29 @@ func TestSetUnlocksWithNoDomainsLocksEveryOne(t *testing.T) {
 	}
 }
 
+// A publication's metadata is kept byte for byte: a call that changes no unlock row advances no generation either.
+func TestSetUnlocksKeepsTheMetadataOfAPublicationWithFeeds(t *testing.T) {
+	store := resources.Open(t.TempDir())
+	if _, err := dnsbl.Publish(store, dnsbl.Set{Feeds: []dnsbl.Feed{{Name: "F", Group: "G", Rows: []string{"d.example"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Current(dnsbl.ManifestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation, _, err := dnsbl.SetUnlocks(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.Current(dnsbl.ManifestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generation != before.Generation || string(after.Metadata) != string(before.Metadata) {
+		t.Errorf("generation %d, metadata %s; want %d, %s", generation, after.Metadata, before.Generation, before.Metadata)
+	}
+}
+
 func TestSetUnlocksWithoutAManifestWritesNothing(t *testing.T) {
 	store := resources.Open(t.TempDir())
 

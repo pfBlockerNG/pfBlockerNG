@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/dnsbl"
@@ -126,6 +127,20 @@ func TestSetTemporaryUnlocksWithoutAPublicationWritesNothing(t *testing.T) {
 	wantJSON(t, c.post("SetTemporaryUnlocks", `{"requestId":"u1","domains":["a.example"]}`), http.StatusOK, `{}`)
 	if ids, err := resources.Open(storeDir).IDs("dnsbl/"); err != nil || len(ids) != 0 {
 		t.Errorf("the store holds %v (%v), want nothing", ids, err)
+	}
+}
+
+func TestSetTemporaryUnlocksRefusesMoreThanItsCap(t *testing.T) {
+	c, _, store := startUnlockCore(t)
+	_, before := manifestUnlocks(t, store)
+	domains := make([]string, maxUnlocks+1)
+	for i := range domains {
+		domains[i] = fmt.Sprintf("%q", fmt.Sprintf("d%d.example", i))
+	}
+	wantError(t, c.post("SetTemporaryUnlocks", `{"requestId":"u1","domains":[`+strings.Join(domains, ",")+`]}`),
+		http.StatusBadRequest, codeInvalidArgument, "domains")
+	if got, after := manifestUnlocks(t, store); len(got) != 0 || after != before {
+		t.Errorf("after a refused request the manifest unlocks %d domains at generation %d, want none at %d", len(got), after, before)
 	}
 }
 

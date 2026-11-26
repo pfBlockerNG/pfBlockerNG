@@ -5,6 +5,23 @@ import (
 	"testing"
 )
 
+// A worker retained from an earlier Core holds the operation lock while this Core's own admission is free: Hold runs nothing.
+func TestHoldIsRefusedWhileARetainedWorkerHoldsTheOperationLock(t *testing.T) {
+	log := independentLog(t)
+	g := New(log.Name(), nil, nil)
+	g.Admit = (&Command{Path: "/bin/true"}).Admit
+	t.Cleanup(g.Stop)
+	retained, err := operationLock(log.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer retained.Close()
+	ran := false
+	if err := g.Hold(func() error { ran = true; return nil }); err == nil || ran {
+		t.Errorf("Hold while a retained worker holds the operation lock = %v, ran %v; want an error and nothing run", err, ran)
+	}
+}
+
 // issue #4264: Hold runs a short write of what an Update writes (the temporary unlocks' manifest) under the admission an
 // Update takes, so the resource store keeps one writer at a time.
 func TestHoldRunsItsWorkWhileNoUpdateRuns(t *testing.T) {
