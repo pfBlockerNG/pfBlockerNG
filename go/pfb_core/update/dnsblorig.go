@@ -15,9 +15,9 @@ import (
 // dnsblOrigLink and dnsblOrigRemove are the move's writes: a test's fault seams.
 var dnsblOrigLink, dnsblOrigRemove = os.Link, os.Remove
 
-// dnsblOrigSidecars are what the Core Updater reads beside a feed's .orig that PHP keeps too: the conditional-GET
-// validators (pfb_validator_write) and the content digests. PHP writes no .orig.size.
-var dnsblOrigSidecars = append([]string{".orig.etag", ".orig.lastmod"}, feedfetch.DigestSuffixes()...)
+// dnsblOrigSidecars are what the Core Updater reads beside a feed's .orig: the conditional-GET validators
+// (pfb_validator_write), the FTP size, which PHP never writes, and the content digests.
+var dnsblOrigSidecars = append([]string{".orig.etag", ".orig.lastmod", ".orig.size"}, feedfetch.DigestSuffixes()...)
 
 // MoveDNSBLOrig moves PHP's DNSBL downloads into the Core Updater's DNSBL feed folder, once, at the cutover (issue #4258):
 // each <db>/dnsblorig/<feed>.orig, a regular file of a valid feed name, goes to <db>/dnsbl with its validators and digests,
@@ -86,8 +86,16 @@ func moveDNSBLOrigFeed(from, to, name string) error {
 			return err
 		}
 	}
-	// A link never replaces: a copy the Core Updater published meanwhile stays, and fails the move.
+	// A link never replaces: a copy the Core Updater published meanwhile stays, and fails the move. PHP's sidecars linked
+	// beside it go, so that it is fetched again rather than trusted.
 	if err := dnsblOrigLink(src(".orig"), dst(".orig")); err != nil {
+		for _, s := range dnsblOrigSidecars {
+			linked, lerr := os.Lstat(dst(s))
+			php, perr := os.Lstat(src(s))
+			if lerr == nil && perr == nil && os.SameFile(linked, php) {
+				err = errors.Join(err, dnsblOrigRemove(dst(s)))
+			}
+		}
 		return err
 	}
 	return removeDNSBLOrigSources(src)
