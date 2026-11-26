@@ -15,6 +15,8 @@ use PHPUnit\Framework\TestCase;
  *     and a non-zero exit.
  *   - An Update started while one runs is Core's `conflict`: reported, nothing queued, and the exit status of a held lock
  *     (PFB_EXIT_LOCKED), as a deferred pass exited.
+ *   - `cron` (verb or trigger) is a `manual` Update, as the owner decided for the bypass entries ("manual or apply, as
+ *     fits"): Core's `retry` runs the due Extras first, which the verb never did.
  */
 #[CoversFunction('pfb_cli_update_request')]
 #[CoversFunction('pfb_cli_update_run')]
@@ -30,7 +32,7 @@ final class CliUpdateVerbsTest extends TestCase
 	public static function verbs(): array
 	{
 		return [
-			'cron (deprecated)'           => [['cron'], ['trigger' => 'retry']],
+			'cron (deprecated)'           => [['cron'], ['trigger' => 'manual', 'scope' => 'both', 'force' => 'none']],
 			'update'                      => [['update'], ['trigger' => 'manual', 'scope' => 'both', 'force' => 'none']],
 			'updateip'                    => [['updateip'], ['trigger' => 'manual', 'scope' => 'ip', 'force' => 'parse']],
 			'updatednsbl'                 => [['updatednsbl'], ['trigger' => 'manual', 'scope' => 'dnsbl', 'force' => 'parse']],
@@ -39,7 +41,8 @@ final class CliUpdateVerbsTest extends TestCase
 				['trigger' => 'manual', 'scope' => 'ip', 'force' => 'parse']],
 			'pfb_trigger manual dnsbl'    => [['pfb_trigger', 'scope=dnsbl', 'force=false', 'trigger=manual'],
 				['trigger' => 'manual', 'scope' => 'dnsbl', 'force' => 'none']],
-			'pfb_trigger cron'            => [['pfb_trigger', 'scope=dnsbl', 'force=false', 'trigger=cron'], ['trigger' => 'retry']],
+			'pfb_trigger cron'            => [['pfb_trigger', 'scope=dnsbl', 'force=false', 'trigger=cron'],
+				['trigger' => 'manual', 'scope' => 'dnsbl', 'force' => 'none']],
 			'pfb_trigger unknown values'  => [['pfb_trigger', 'scope=all', 'trigger=later'],
 				['trigger' => 'manual', 'scope' => 'both', 'force' => 'none']],
 			'forcecheck'                  => [['forcecheck', 'scope=ip'], ['trigger' => 'manual', 'scope' => 'ip', 'force' => 'download']],
