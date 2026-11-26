@@ -297,7 +297,11 @@ def test_post_hook_output_precedes_end_marker(deployed_vm: SmokeVM) -> None:
 
 
 def test_hooks_trigger_values(deployed_vm: SmokeVM) -> None:
-    """``PFB_TRIGGER`` differs by verb: ``update`` ⇒ ``cron``; ``updatednsbl`` ⇒ ``force-reload``.
+    """``PFB_TRIGGER`` differs by verb: ``update`` ⇒ ``update``; ``updatednsbl`` ⇒ ``force-reload``.
+
+    Since #4260 the reload's ``pfb_trigger ... trigger=cron`` is a Core ``manual`` Update, as every bypass entry
+    is, so its hooks see ``update`` as a Run Now's do; before, the verb called ``sync_package_pfblockerng('cron')``
+    in-process.
 
     Two distinct branches of ``pfb_hook_trigger`` (``inc:1853``), read off the SAME
     post hook across two reloads. Verified from the CLI dispatch: ``update`` calls
@@ -312,14 +316,14 @@ def test_hooks_trigger_values(deployed_vm: SmokeVM) -> None:
     marker = h.hook_marker_path(token, "post")
     h.set_update_hooks(deployed_vm, [h.env_dump_hook(token, "post")])
 
-    # update ⇒ sync_package_pfblockerng('cron') ⇒ PFB_TRIGGER=cron.
+    # update ⇒ a Core manual Update ⇒ PFB_TRIGGER=update.
     h.clear_hook_markers(deployed_vm, token)
     h.reload(deployed_vm, "update")
     env_cron = h.read_hook_env(deployed_vm, marker)
     assert env_cron is not None, "post hook did not run for 'update'"
-    assert env_cron.get("PFB_TRIGGER") == "cron", f"'update' PFB_TRIGGER should be cron, got {env_cron}"
+    assert env_cron.get("PFB_TRIGGER") == "update", f"'update' PFB_TRIGGER should be update, got {env_cron}"
 
-    # updatednsbl ⇒ PFB_TRIGGER=force-reload (distinct from the cron value above).
+    # updatednsbl ⇒ PFB_TRIGGER=force-reload (distinct from the update value above).
     h.clear_hook_markers(deployed_vm, token)
     h.reload(deployed_vm, "updatednsbl")
     env_fr = h.read_hook_env(deployed_vm, marker)

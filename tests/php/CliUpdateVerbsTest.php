@@ -107,6 +107,27 @@ final class CliUpdateVerbsTest extends TestCase
 			array_slice($this->calls, 1), 'the log is read from the cursor Core gave');
 	}
 
+	/**
+	 * The Update log goes to stdout only when stdout is a terminal ($out NULL otherwise), as the pass in-process mirrored itself:
+	 * the Update program writes the main log itself, so a verb whose stdout is appended to that log adds no second copy.
+	 */
+	public function testWithoutATerminalTheLogIsNotEchoedAndTheResultStands(): void
+	{
+		$code = pfb_cli_update_run(['trigger' => 'manual', 'scope' => 'both', 'force' => 'none'],
+			$this->core(self::ok([]), self::update(FALSE, "hook output\n", '12', 'success')),
+			NULL, function (string $s): void { $this->err .= $s; }, static function (): void {}, 10);
+
+		$this->assertSame(0, $code);
+		$this->assertSame('', $this->err);
+	}
+
+	/** The page echoes the Update log only to a terminal. */
+	public function testThePageEchoesTheLogOnlyToATerminal(): void
+	{
+		$page = (string) file_get_contents(__DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng.php');
+		$this->assertStringContainsString("pfb_stdout_is_terminal() ? static function (string \$text): void { echo \$text; } : NULL", $page);
+	}
+
 	/** @return array<string, array{0: string, 1: int}> */
 	public static function results(): array
 	{
