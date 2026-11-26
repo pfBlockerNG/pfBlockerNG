@@ -304,10 +304,10 @@ func Recover(logPath string, apply func(int64, map[string]int64, Result, error) 
 			return nil
 		case readErr != nil:
 			return readErr
-		case state.FinishedAt != nil:
+		case state.FinishedAt != nil && !state.Settled:
 			return ErrRecoveryRequired
 		default:
-			return nil
+			return nil // a running worker, or the lock held by an admission (Start, Exclusive) over a result already recorded
 		}
 	}
 	if err != nil {

@@ -112,7 +112,7 @@ func (s *Scheduler) zone() *time.Location {
 // running skips it without an error.
 func (s *Scheduler) Tick() error {
 	scheduled := update.Request{Trigger: "scheduled"}
-	if err := s.admit(func() error { return s.evaluate(scheduled, false) }); !errors.Is(err, update.ErrRunning) {
+	if err := s.Admit(func() error { return s.evaluate(scheduled, false) }); !errors.Is(err, update.ErrRunning) {
 		return err
 	}
 	return nil
@@ -204,7 +204,7 @@ func (s *Scheduler) StartWith(asked update.Request) error {
 	req := update.Request{Trigger: trigger, Scope: "both", Force: "none", Lifecycle: asked.Lifecycle, PkgOp: asked.PkgOp}
 	switch trigger {
 	case "retry":
-		return s.admit(func() error { return s.evaluate(req, true) })
+		return s.Admit(func() error { return s.evaluate(req, true) })
 	case "apply":
 	case "manual":
 		if !slices.Contains(scopes, scope) || !slices.Contains(forces, force) {
@@ -214,7 +214,7 @@ func (s *Scheduler) StartWith(asked update.Request) error {
 	default:
 		return fmt.Errorf("scheduler: %q is not a trigger an Update can be asked for", trigger)
 	}
-	return s.admit(func() error {
+	return s.Admit(func() error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		return s.launch(req, func() (map[string]int64, error) {
@@ -239,9 +239,7 @@ func (s *Scheduler) StartWith(asked update.Request) error {
 
 // Admit runs fn as the scheduler admits its own Updates: a retained Update's completion is recorded first, and fn runs once
 // more after a recovery it asked for (update.ErrRecoveryRequired).
-func (s *Scheduler) Admit(fn func() error) error { return s.admit(fn) }
-
-func (s *Scheduler) admit(fn func() error) error {
+func (s *Scheduler) Admit(fn func() error) error {
 	if err := s.Recover(); err != nil {
 		return err
 	}

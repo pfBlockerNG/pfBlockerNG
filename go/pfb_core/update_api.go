@@ -17,6 +17,7 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/scheduler"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update/feedstage"
 )
 
 // newUpdates builds Core's scheduler and Update gate for --update-cmd. An empty path means no scheduler, and both are nil.
@@ -148,7 +149,7 @@ func updateMethods(stateDir string, sched *scheduler.Scheduler, gate *update.Gat
 				return nil, err
 			}
 			for i, name := range p.Feeds {
-				if name == "" || strings.Trim(name, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != "" {
+				if !feedstage.ValidName(name) {
 					return nil, newError(codeInvalidArgument, "the feeds are not feed names; nothing was reset",
 						fieldError{Field: fmt.Sprintf("feeds[%d]", i), Message: "must be letters, digits and underscores"})
 				}
