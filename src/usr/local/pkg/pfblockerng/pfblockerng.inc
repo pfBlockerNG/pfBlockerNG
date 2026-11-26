@@ -4975,17 +4975,19 @@ function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $w
 	};
 	$sent = [];
 	// issue #4196: an empty IP set's mirror holds the placeholder address, as the update pass leaves an empty list, so that
-	// pfSense's filter reload finds a table file it does not fetch again; it stands for Core's empty body
-	$placeholder = $family === NULL ? NULL : pfb_placeholder_for_family(pfb_ip_placeholder(), $family === 'ipv6' ? 'v6' : 'v4') . "\n";
+	// pfSense's filter reload finds a table file it does not fetch again; it stands for Core's empty body. An aggregate is never
+	// padded, as the pass keeps the placeholder out of one (pfb_aggregate_member_list())
+	$placeholder = $family === NULL || !str_starts_with($id, 'ip-set/') ? NULL
+		: pfb_placeholder_for_family(pfb_ip_placeholder(), $family === 'ipv6' ? 'v6' : 'v4') . "\n";
 	clearstatcache(TRUE, $mirror);
-	$base = $mirror;	// what a delta merges into
-	// a mirror that is not the body the cursor records is not that generation's: send no cursor
+	$base = $mirror;	// what a delta merges into: an empty base for a placeholder mirror
+	// a mirror that is not the body the cursor records is not that generation's: send no cursor. The placeholder is compared on a
+	// bounded read, not with pfb_member_file_is_placeholder_only(), which reads a mirror of any size whole
 	if ($cursor !== NULL && !is_link($mirror) && is_file($mirror)) {
-		if (pfb_content_hash($mirror) === $cursor['digest']) {
+		$padded = $placeholder !== NULL && $cursor['entries'] === 0 && @file_get_contents($mirror, FALSE, NULL, 0, 64) === $placeholder;
+		if ($padded || pfb_content_hash($mirror) === $cursor['digest']) {
 			$sent = ['generation' => (string) $cursor['generation'], 'digest' => $cursor['digest']];
-		} elseif ($placeholder !== NULL && $cursor['entries'] === 0 && @file_get_contents($mirror, FALSE, NULL, 0, 64) === $placeholder) {
-			$sent = ['generation' => (string) $cursor['generation'], 'digest' => $cursor['digest']];
-			$base = '/dev/null';
+			$base = $padded ? '/dev/null' : $mirror;
 		}
 	}
 	// a body pruned by a publish that raced the read: ask again once (protocol "GetResourceBody")
@@ -5050,10 +5052,9 @@ function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $w
 			}
 			return $fail($failure === 'pruned' ? 'body' : $failure, $error, $code);
 		}
-		// verified as Core's empty body, an empty IP set's mirror is its placeholder
-		$fh = $placeholder !== NULL && $item['entries'] === 0 ? @fopen($staged, 'w+b') : @fopen($staged, 'r+b');
-		$synced = $fh !== FALSE && ($placeholder === NULL || $item['entries'] !== 0 || fwrite($fh, $placeholder) === strlen($placeholder))
-			&& fsync($fh);
+		$pad = $placeholder !== NULL && $item['entries'] === 0;	// verified as Core's empty body, an empty IP set's mirror is its placeholder
+		$fh = @fopen($staged, $pad ? 'wb' : 'r+b');
+		$synced = $fh !== FALSE && (!$pad || fwrite($fh, $placeholder) === strlen($placeholder)) && fsync($fh);
 		if ($fh !== FALSE) {
 			fclose($fh);
 		}
