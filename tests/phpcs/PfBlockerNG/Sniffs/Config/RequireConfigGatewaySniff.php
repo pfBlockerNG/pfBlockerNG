@@ -182,7 +182,7 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 		'installedpackages/pfblockerngdnsblsettings/config/0/global_log',
 		'installedpackages/pfblockerngdnsblsettings/config/0/global_log_mode',
-		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient',
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_parse_mode',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn',

@@ -2605,6 +2605,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								$ip6_decision = ['count' => 0, 'loggable' => FALSE];
 								$pfb_scheme_skipped = 0;	// ADR-22: per-feed strict scheme/path skips
 								$dnsbl_lineno = 0;		// issue #1004: per-line counter for the parse-error detail sink
+								$abp_feed = pfb_dnsbl_feed_has_abp_header($pfb_parse_path);
 
 								// Parse downloaded file for Domain names
 								if (($fhandle = @fopen($pfb_parse_path, 'r')) !== FALSE) {
@@ -2632,8 +2633,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											// hosts-line target that is itself an IP address is
 											// pulled to the firewall alias here -- never passed to
 											// Python (no double-handling, no leak) -- checked BEFORE
-											// the generic verbatim capture below.
-											if ($pfb['dnsbl_ip'] != 'Disabled') {
+											// the generic verbatim capture below. An Adblock feed's IPs come only
+											// from its Adblock rules (issue #4272).
+											if ($pfb['dnsbl_ip'] != 'Disabled' && (!$abp_feed || pfb_dnsbl_is_abp_rule_line($line))) {
 												$abp_ip = pfb_dnsbl_abp_extract_ip($line);
 												if ($abp_ip === FALSE) {
 													pfb_parse_fail_log($header, $line, $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
@@ -2669,6 +2671,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											if (pfb_dnsbl_is_abp_rule_line($line)) {
 												$domain_data = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, $line);
 												@fwrite($dhandle, $domain_data);
+												continue;
+											}
+
+											// issue #4272: an Adblock feed's other lines (path rules such as
+											// '.imgur.com/lumbar.gif') are no plain domains -- drop them.
+											if ($abp_feed) {
 												continue;
 											}
 
@@ -2779,9 +2787,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											}
 
 											if (!$lite) {
-												$strict = ($pfb['dnsbl_lenient'] !== PfbToggle::On);
+												$strict = ($pfb['dnsbl_parse_mode'] !== PfbDnsblParseMode::Lenient);
 												$line = pfb_dnsbl_extract_host($line, $strict, $header, $oline,
-													$dnsbl_lineno, $pfb['dnsbl_parse_err'], $pfb_scheme_skipped);
+													$dnsbl_lineno, $pfb['dnsbl_parse_err'], $pfb_scheme_skipped,
+													$pfb['dnsbl_parse_mode'] === PfbDnsblParseMode::Ports);
 												if ($line === FALSE) {
 													continue;
 												}

@@ -220,7 +220,7 @@ final class RegistryPassTest extends TestCase
 
 		$this->assertSame('on', $result[self::GEN_SECTION]['pfb_feed_internal_filter'] ?? NULL,
 			'gen is NEWCFG (marker-only) -- feed filter seeds the registry default');
-		$this->assertSame('on', $result[self::DNSBL_SECTION]['pfb_dnsbl_lenient'] ?? NULL,
+		$this->assertSame('lenient', $result[self::DNSBL_SECTION]['pfb_dnsbl_parse_mode'] ?? NULL,
 			'dnsbl is OLDCFG (populated) -- the lenient grandfather must fire');
 	}
 
@@ -290,19 +290,26 @@ final class RegistryPassTest extends TestCase
 		$this->assertSecondPassIsEmpty([self::GEN_SECTION => $populated]);
 	}
 
-	/** Row 7: dnsbl/pfb_dnsbl_lenient -- absent -> 'on'; 'on' -> 'on'; 'off' -> 'off'. */
-	public function testGrandfatherDnsblLenient(): void
+	/**
+	 * Row 7: dnsbl/pfb_dnsbl_parse_mode (issue #4272, renamed from pfb_dnsbl_lenient) -- absent
+	 * -> 'lenient'; the old checkbox's 'on' / 'off' move verbatim and the write adapter (the
+	 * installer's writeback) stores them as 'lenient' / 'ports'; a present new token stays.
+	 */
+	public function testGrandfatherDnsblParseMode(): void
 	{
 		$populated = ['pfb_dnsbl' => 'on'];
 
 		$absent = pfb_registry_pass([self::DNSBL_SECTION => $populated]);
-		$this->assertSame('on', $absent[self::DNSBL_SECTION]['pfb_dnsbl_lenient'] ?? NULL);
+		$this->assertSame('lenient', $absent[self::DNSBL_SECTION]['pfb_dnsbl_parse_mode'] ?? NULL);
 
 		$on = pfb_registry_pass([self::DNSBL_SECTION => $populated + ['pfb_dnsbl_lenient' => 'on']]);
-		$this->assertSame('on', $on[self::DNSBL_SECTION]['pfb_dnsbl_lenient'] ?? NULL);
+		$this->assertSame('lenient', pfb_cfg_dnsbl_parse_mode_write($on[self::DNSBL_SECTION]['pfb_dnsbl_parse_mode'] ?? 'missing'));
 
 		$off = pfb_registry_pass([self::DNSBL_SECTION => $populated + ['pfb_dnsbl_lenient' => 'off']]);
-		$this->assertSame('off', $off[self::DNSBL_SECTION]['pfb_dnsbl_lenient'] ?? NULL);
+		$this->assertSame('ports', pfb_cfg_dnsbl_parse_mode_write($off[self::DNSBL_SECTION]['pfb_dnsbl_parse_mode'] ?? 'missing'));
+
+		$strict = pfb_registry_pass([self::DNSBL_SECTION => $populated + ['pfb_dnsbl_parse_mode' => 'strict']]);
+		$this->assertSame('strict', $strict[self::DNSBL_SECTION]['pfb_dnsbl_parse_mode'] ?? NULL, 'a present new token is left alone');
 
 		$this->assertSecondPassIsEmpty([self::DNSBL_SECTION => $populated]);
 	}
@@ -481,7 +488,7 @@ final class RegistryPassTest extends TestCase
 		$this->assertStringNotContainsString("'off'", $text, 'notice must never echo stored values');
 
 		// Per-key rule, not all-or-nothing: a sibling absent key must still be seeded.
-		$this->assertSame('on', $result[self::DNSBL_SECTION]['pfb_dnsbl_lenient'] ?? NULL,
+		$this->assertSame('lenient', $result[self::DNSBL_SECTION]['pfb_dnsbl_parse_mode'] ?? NULL,
 			'a sibling key must still be processed when another key in the same section conflicts');
 	}
 

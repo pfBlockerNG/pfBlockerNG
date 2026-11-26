@@ -2079,27 +2079,29 @@ def set_dnsbl_nonat(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
         raise RuntimeError(f"set_dnsbl_nonat({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
-def set_dnsbl_lenient(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
-    """Set the ADR-22 ``pfb_dnsbl_lenient`` toggle in the DNSBL-settings section.
+def set_dnsbl_parse_mode(vm: SmokeVM, mode: str, *, timeout: float = 60.0) -> None:
+    """Set the issue #4272 feed-line parsing mode ``pfb_dnsbl_parse_mode`` in the DNSBL-settings section.
 
-    ``on`` -> lenient (today's permissive scheme strip; nothing skipped, no new log).
-    ``off`` -> strict: ``pfb_dnsbl_strip_scheme`` validates the scheme against RFC 3986
-    and rejects URL paths, recording each rejected line in the DNSBL parse-error log and
-    emitting one per-feed WARNING. Written via ``array_merge`` so it never clobbers the
-    rest of the DNSBL settings ``inject()`` already wrote. Set BEFORE the reload that
-    rebuilds the feed (``pfb_global`` reads it once per run)."""
-    val = "on" if on else "off"
+    ``mode`` is ``'strict'`` (keep only ``(<scheme>://)?<domain>/?``), ``'ports'`` (Strict plus a
+    ``:<port>``) or ``'lenient'`` (the ADR-22 permissive host cut). Both strict modes skip every other
+    line, record it in the DNSBL parse-error log and emit one per-feed WARNING. The retired ADR-22
+    ``pfb_dnsbl_lenient`` key is removed. Written via ``array_merge`` so it never clobbers the rest of
+    the DNSBL settings ``inject()`` already wrote. Set BEFORE the reload that rebuilds the feed
+    (``pfb_global`` reads it once per run)."""
+    if mode not in ("strict", "ports", "lenient"):
+        raise ValueError(f"set_dnsbl_parse_mode: unknown mode {mode!r}")
     snippet = (
         f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        f"$d['pfb_dnsbl_lenient'] = {_php_str(val)};\n"
+        f"$d['pfb_dnsbl_parse_mode'] = {_php_str(mode)};\n"
+        "unset($d['pfb_dnsbl_lenient']);\n"
         f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
-        "write_config('pfBlockerNG smoke: set pfb_dnsbl_lenient');\n"
+        "write_config('pfBlockerNG smoke: set pfb_dnsbl_parse_mode');\n"
         "echo 'OK';"
     )
     result = php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(
-            f"set_dnsbl_lenient({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+            f"set_dnsbl_parse_mode({mode}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
         )
 
 

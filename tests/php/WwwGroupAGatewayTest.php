@@ -364,7 +364,7 @@ final class WwwGroupAGatewayTest extends TestCase
 			'pfb_regex'                  => '',
 			'pfb_regex_cap'              => '',
 			'pfb_cname'                  => '',
-			'pfb_dnsbl_lenient'          => 'off',
+			'pfb_dnsbl_parse_mode'       => 'strict',
 			'pfb_noaaaa'                 => '',
 			'pfb_gp'                     => '',
 			'tld_allow'                  => '',
@@ -396,7 +396,6 @@ final class WwwGroupAGatewayTest extends TestCase
 		$expected['pfb_regex_cap']   = '';
 		$expected['pfb_idn_escalate_suspicious'] = '';
 		$expected['pfb_idn'] = '';
-		$expected['pfb_dnsbl_lenient'] = '';
 		$result = PfbConfig::readSection($section);
 		$this->assertSame($expected, $result, 'DNSBL section round-trips with only the #1887 toggle canonicalisation');
 	}

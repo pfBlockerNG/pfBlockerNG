@@ -91,9 +91,8 @@ $pconfig['pfb_idn_escalate_suspicious']	= PfbConfig::read('dnsbl/pfb_idn_escalat
 $pconfig['pfb_regex']		= PfbConfig::read('dnsbl/pfb_regex');
 $pconfig['pfb_regex_cap']	= PfbConfig::read('dnsbl/pfb_regex_cap');
 $pconfig['pfb_cname']		= PfbConfig::read('dnsbl/pfb_cname');
-// ADR-22: lenient scheme parsing. Absent = unchecked (strict) for new installs; existing
-// installs are grandfathered to 'on' by the registry pass at install/upgrade (issue #1921).
-$pconfig['pfb_dnsbl_lenient']	= PfbConfig::read('dnsbl/pfb_dnsbl_lenient');
+// issue #4272: feed-line parsing mode (Strict / Allow Ports / Lenient), the ADR-22 checkbox widened.
+$pconfig['pfb_dnsbl_parse_mode']	= PfbConfig::read('dnsbl/pfb_dnsbl_parse_mode')->value;
 $pconfig['pfb_noaaaa']		= PfbConfig::read('dnsbl/pfb_noaaaa');
 $pconfig['pfb_gp']		= PfbConfig::read('dnsbl/pfb_gp');
 $pconfig['tld_allow']		= PfbConfig::read('dnsbl/tld_allow');
@@ -200,6 +199,10 @@ $options_global_log_mode_txt = 'Choose how <strong>Global Logging/Blocking Mode<
 
 $options_global_log_mode	= [	'default'	=> 'Default',
 					'override'	=> 'Override'];
+
+$options_pfb_dnsbl_parse_mode	= [	'strict'	=> 'Strict',
+					'ports'		=> 'Allow Ports',
+					'lenient'	=> 'Lenient'];
 
 $options_dnsbl_webpage = array();
 $indexdir = '/usr/local/www/pfblockerng/www';
@@ -573,6 +576,7 @@ if ($_POST) {
 		$select_options = array(						'dnsbl_interface'	=> 'lo0',
 						'global_log'		=> $pconfig['global_log'],
 						'global_log_mode'	=> $pconfig['global_log_mode'],
+						'pfb_dnsbl_parse_mode'	=> $pconfig['pfb_dnsbl_parse_mode'],
 						'dnsbl_webpage'		=> 'dnsbl_default.php',
 						'top1m_source'		=> 'tranco',
 						'top1m_count'		=> '1000',
@@ -905,7 +909,7 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_idn_escalate_suspicious']	= pfb_filter($_POST['pfb_idn_escalate_suspicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_regex_cap']	= pfb_filter($_POST['pfb_regex_cap'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_cname']		= pfb_filter($_POST['pfb_cname'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
-			$pfb['dconfig']['pfb_dnsbl_lenient']	= pfb_filter($_POST['pfb_dnsbl_lenient'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
+			$pfb['dconfig']['pfb_dnsbl_parse_mode']	= $_POST['pfb_dnsbl_parse_mode'];
 			$pfb['dconfig']['pfb_noaaaa']		= pfb_filter($_POST['pfb_noaaaa'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_gp']		= pfb_filter($_POST['pfb_gp'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 
@@ -2825,17 +2829,20 @@ $section->addInput(new Form_Checkbox(
 ))->setHelp('Enable the Group Policy functionality to allow certain Local LAN IPs to bypass DNSBL. '
 		. pfb_list_section_help_note(['DNSBL Group Policy'], TRUE));
 
-$section->addInput(new Form_Checkbox(
-	'pfb_dnsbl_lenient',
-	gettext('Download Schemes'),
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_dnsbl_lenient']) === PfbToggle::On,
-	'on'
-))->setHelp('How feed lines are parsed: strip scheme:// and URL paths, or skip those lines.'
+$section->addInput(new Form_Select(
+	'pfb_dnsbl_parse_mode',
+	gettext('Feed Line Parsing'),
+	$pconfig['pfb_dnsbl_parse_mode'],
+	$options_pfb_dnsbl_parse_mode
+))->setHelp('How a domain is taken from a feed line that is not a plain domain (Strict, Allow Ports, or Lenient).'
 		. '<div class="infoblock">'
-		. 'Parse DNSBL feed lines permissively: any <strong>scheme://</strong> is stripped and URL paths are removed.<br />'
-		. 'When disabled (strict), lines with an invalid scheme (e.g. <strong>123://</strong>) or a URL path are skipped and logged.<br />'
-		. 'New installs default to disabled (strict); upgraded installs keep the permissive behaviour.'
+		. 'Adblock-format feeds always use their own rules: only <strong>||domain^</strong>-style rules block domains.<ul>'
+		. '<li><strong>Strict</strong> - keep only <strong>domain</strong>, <strong>domain/</strong> or <strong>scheme://domain/</strong>, '
+		. 'optionally followed by a space and a <strong>#</strong> comment.</li>'
+		. '<li><strong>Allow Ports</strong> - as Strict, and also <strong>domain:port</strong>.</li>'
+		. '<li><strong>Lenient</strong> - strip any <strong>scheme://</strong>, port, path, query or fragment and keep the domain.</li></ul>'
+		. 'Strict and Allow Ports skip and log every other line (a path, query, fragment, user info, or an invalid scheme).<br />'
+		. 'New installs default to Allow Ports; upgraded installs keep their previous behaviour.'
 		. '</div>');
 
 $section->addInput(new Form_Select(

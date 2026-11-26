@@ -148,6 +148,29 @@ enum PfbIdnMode: string implements PfbStoredEnum
 	}
 }
 
+// PfbDnsblParseMode — issue #4272: how a DNSBL feed line's host is taken. Strict keeps only
+// '(<scheme>://)?<domain>/?', Ports also a ':<port>', Lenient cuts the host out (ADR-22).
+// Tokens read case-insensitively; the legacy 'pfb_dnsbl_lenient' 'on' reads Lenient; '', 'off', unknown read Ports.
+enum PfbDnsblParseMode: string implements PfbStoredEnum
+{
+	use PfbStoredEnumAdapter;
+
+	case Strict  = 'strict';
+	case Ports   = 'ports';
+	case Lenient = 'lenient';
+
+	public static function default(): static
+	{
+		return self::Ports;
+	}
+
+	protected static function fromLegacy(string $raw): static
+	{
+		$token = strtolower(trim($raw));
+		return $token === 'on' ? self::Lenient : (self::tryFrom($token) ?? self::default());
+	}
+}
+
 // PfbFeedSuffixPolicy — issue #2371: per-PSL-section policy governing what a
 // FEED-provenance rule may do when its name resolves to a public suffix of that
 // section. Ignore (drop), Apex (demote to an exact apex block), Honor (today's
@@ -806,6 +829,19 @@ function pfb_cfg_idn_mode_read(mixed $stored): PfbIdnMode
 function pfb_cfg_idn_mode_write(PfbIdnMode|string $mode): string
 {
 	$mode = $mode instanceof PfbIdnMode ? $mode : PfbIdnMode::fromStored($mode);
+	return $mode->toStored();
+}
+
+/** Read a PfbDnsblParseMode from a raw stored value (legacy 'on' -> Lenient, ''/'off'/unknown -> Ports). */
+function pfb_cfg_dnsbl_parse_mode_read(mixed $stored): PfbDnsblParseMode
+{
+	return PfbDnsblParseMode::fromStored($stored);
+}
+
+/** Write a PfbDnsblParseMode (enum or stored string) as its canonical token: 'strict' | 'ports' | 'lenient'. */
+function pfb_cfg_dnsbl_parse_mode_write(PfbDnsblParseMode|string $mode): string
+{
+	$mode = $mode instanceof PfbDnsblParseMode ? $mode : PfbDnsblParseMode::fromStored($mode);
 	return $mode->toStored();
 }
 
@@ -1468,14 +1504,17 @@ function pfb_cfg_registry(): array
 			'sync'          => 'policy',
 		],
 
-		// ADR-22: scheme-parsing leniency: 'on' | ''. Default 'off'.
-		// Toggle adapter: Off stores the empty token.
-		'dnsbl/pfb_dnsbl_lenient' => [
-			'default'       => 'off',
-			'read_adapter'  => 'pfb_cfg_toggle_read',
-			'write_adapter' => 'pfb_cfg_toggle_write',
+		// issue #4272: feed-line parsing mode 'strict' | 'ports' | 'lenient' (PfbDnsblParseMode),
+		// renamed from the ADR-22 'pfb_dnsbl_lenient' checkbox. An upgrade keeps its behaviour:
+		// absent (pre-ADR-22) -> lenient; the checkbox's 'on' / '' / 'off' reach the read adapter
+		// (Lenient / Ports / Ports -- the old strict kept ports) and write back canonically.
+		'dnsbl/pfb_dnsbl_parse_mode' => [
+			'default'       => 'ports',
+			'read_adapter'  => 'pfb_cfg_dnsbl_parse_mode_read',
+			'write_adapter' => 'pfb_cfg_dnsbl_parse_mode_write',
 			'sync'          => 'policy',
-			'grandfather'   => [PFB_GF_ABSENT => 'on'],
+			'old_name'      => 'pfb_dnsbl_lenient',
+			'grandfather'   => [PFB_GF_ABSENT => 'lenient'],
 		],
 
 		// Python DNS reply logging. Default on (the de-facto page default since 3.2 --

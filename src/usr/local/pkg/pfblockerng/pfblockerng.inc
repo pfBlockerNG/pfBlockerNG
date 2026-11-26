@@ -2773,10 +2773,12 @@ function pfb_dnsbl_cidr(string $line): string|false|null {
 // cut (strict mode keeps a numeric host's authority alone) -> scheme strip -> '/'/'#'/'?' truncation ->
 // ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. A valid CIDR is returned
 // whole (padded octets unpadded, mask canonicalised) for the IP sanitizers; a bad mask or
-// a non-canonical numeric network is a reject. Returns FALSE on any reject (CIDR, both
-// modes; pfb_dnsbl_scheme_line, strict) -- caller must skip the line.
+// a non-canonical numeric network is a reject. Strict mode (issue #4272) also rejects a domain
+// that had userinfo or that anything but one trailing '/' followed -- with $allow_port, a ':<port>'
+// before that '/' is kept; an IP result keeps its rules. Returns FALSE on any reject (CIDR, both
+// modes; pfb_dnsbl_scheme_line and the domain grammar, strict) -- caller must skip the line.
 function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
-	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped): string|false {
+	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped, bool $allow_port = FALSE): string|false {
 
 	$cidr = pfb_dnsbl_cidr($line);
 	if ($cidr === FALSE) {
@@ -2793,10 +2795,12 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 	// address a client dials whatever the path, so strict mode keeps its authority alone instead
 	// of rejecting the path. A bare 'name@x' row is unchanged.
 	$pos = pfb_dnsbl_scheme_pos($line);
+	$userinfo = FALSE;
 	if ($pos !== FALSE) {
 		$rest = substr($line, $pos + 3);
 		$alen = strcspn($rest, '/?#');
 		if (($at = strrpos(substr($rest, 0, min($alen, strcspn($rest, '^'))), '@')) !== FALSE) {
+			$userinfo = TRUE;
 			$rest = substr($rest, $at + 1);
 			$alen -= $at + 1;
 		}
@@ -2819,9 +2823,9 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 		$line = substr($line, 0, $pos + 3) . $rest;
 	}
 
-	// ADR-22: strip the '<scheme>://' prefix. Lenient (toggle ON, the migrated/legacy
-	// default) keeps today's permissive strip; strict (toggle OFF, the new-install default)
-	// validates the scheme against RFC 3986 and rejects URL paths -- a rejected line is
+	// ADR-22: strip the '<scheme>://' prefix. Lenient keeps the permissive strip; both strict
+	// modes (Strict, Allow Ports -- issue #4272) validate the scheme against RFC 3986 and
+	// reject URL paths -- a rejected line is
 	// skipped, recorded per-line in the parse-error log, and counted for the once-per-feed
 	// summary WARNING below.
 	$line = pfb_dnsbl_scheme_line($line, $strict, $header, $oline, $dnsbl_lineno, $parse_err,
@@ -2829,6 +2833,7 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 	if ($line === FALSE) {
 		return FALSE;
 	}
+	$token = $line;
 
 	// If '/' character found, remove characters after '/'
 	if (strpos($line, '/') !== FALSE) {
@@ -2858,7 +2863,18 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 	// Issue #938: unwrap a bracketed IPv6 literal (e.g. a
 	// URI-style '[2604:2dc0::]') so the is_ipaddrv6($line)
 	// collection branch below recognises it.
-	return pfb_dnsbl_unbracket_ip6($line);
+	$host = pfb_dnsbl_unbracket_ip6($line);
+
+	// issue #4272: strict keeps a domain only as '<host>[:<port>]/?' (the port with $allow_port).
+	$tail = substr($token, strlen($host));
+	if ($strict && pfb_ipv4_numeric_host($host) === NULL && !is_ipaddrv6($host) &&
+	    ($host === '' || $userinfo || str_contains(substr($host, 1), '@') || str_contains($host, ':') ||
+	    !preg_match($allow_port ? '/^(?::[0-9]{1,5})?\/?$/D' : '/^\/?$/D', $tail))) {
+		pfb_parse_fail_log($header, $token, $oline, $parse_err, $dnsbl_lineno);
+		$scheme_skipped++;
+		return FALSE;
+	}
+	return $host;
 }
 
 /**
@@ -2969,6 +2985,13 @@ function pfb_dnsbl_staging_first_line(string $path): string {
 	}
 	fclose($fh);
 	return '';
+}
+
+// issue #4272: a feed whose first non-blank line is an Adblock-family header ('[Adblock Plus 2.0]',
+// '[uBlock Origin]', '[AdGuard]') is parsed as Adblock only -- its lines never reach the plain-domain path.
+function pfb_dnsbl_feed_has_abp_header(string $path): bool {
+	$line = pfb_dnsbl_scrub_line(pfb_dnsbl_strip_bom(pfb_dnsbl_staging_first_line($path)));
+	return preg_match('/^\[\s*(?:adblock|ublock|adguard)[^\]]*\]$/iD', $line) === 1;
 }
 
 // The DNSBL verbatim-reuse fork (pfblockerng.inc sync loop): skip re-parsing
@@ -4228,11 +4251,9 @@ function pfb_global() {
 	$pfb['dnsbl_top1m_type']	= PfbConfig::read('dnsbl/top1m_source');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
 	$pfb['dnsbl_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
 	$pfb['pfb_dns']	= PfbConfig::read('dns/pfb_dns');							// [ #3515 ] pfB-DNS: experimental DNS proxy front end, with or without DNSBL (default off)
-	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
-	// strict RFC 3986 scheme validation + URL-path rejection. New installs default OFF
-	// (strict); existing installs are grandfathered to 'on' by the registry pass at
-	// install/upgrade (issue #1921).
-	$pfb['dnsbl_lenient']	= PfbConfig::read('dnsbl/pfb_dnsbl_lenient');							// DNSBL scheme-parsing leniency (PfbToggle enum)
+	// issue #4272: Strict / Allow Ports / Lenient (ADR-22's checkbox widened). New installs
+	// default to Allow Ports; an upgrade keeps its behaviour (registry grandfather + adapter).
+	$pfb['dnsbl_parse_mode']	= PfbConfig::read('dnsbl/pfb_dnsbl_parse_mode');						// DNSBL feed-line parsing mode (PfbDnsblParseMode enum)
 
 	$pfb['dnsbl_py_reply']	= PfbConfig::read('dnsbl/pfb_py_reply');			// DNSBL Resolver python DNS Reply logging (default on, issue #1907)
 	$pfb['dnsbl_hsts']	= PfbConfig::read('dnsbl/pfb_hsts');			// DNSBL Resolver python block HSTS via Null Blocking mode (default on, issue #1907)
@@ -14437,7 +14458,7 @@ function pfb_dnsbl_scheme_pos(string $line): int|false {
 }
 
 
-// ADR-22: the non-lite scheme strip, gated on the 'pfb_dnsbl_lenient' toggle. No scheme
+// ADR-22: the non-lite scheme strip, strict unless the parsing mode is Lenient. No scheme
 // separator (pfb_dnsbl_scheme_pos) -> line unchanged. Empty scheme ('://<ip>[^[$opts]]', both
 // modes): an IPv4 literal or a bracketed IPv6 literal, with one trailing '^' or a '^$opts' tail
 // dropped (options are never scanned), returns the bare address; any other empty-scheme
@@ -14663,7 +14684,7 @@ function pfb_dnsbl_scheme_line(string $line, bool $strict, $header, $oline, $lin
 // is not error-log noise). Silent when nothing was skipped (lenient never bumps the counter).
 function pfb_dnsbl_scheme_skip_warn($skipped, $header) {
 	if ($skipped > 0) {
-		pfb_logger("\n[ DNSBL ] {$header}: {$skipped} line(s) skipped - strict parsing rejected an invalid scheme or URL path (see DNSBL parse-error log)\n", 1);
+		pfb_logger("\n[ DNSBL ] {$header}: {$skipped} line(s) skipped - strict parsing kept no domain from them (see DNSBL parse-error log)\n", 1);
 	}
 }
 
@@ -20732,7 +20753,7 @@ function pfb_dnsbl_policy_upgrade(): bool {
 // decision (issue #1921) -- seeding new keys into an otherwise-EMPTY dnsbl section
 // there would flip that section's mode to OLDCFG for every OTHER registered dnsbl/*
 // field before the pass ever sees it, wrongly applying an ABSENT-grandfather map meant
-// only for a genuine upgrade. Confirmed against dnsbl/pfb_dnsbl_lenient (grandfather
+// only for a genuine upgrade. Confirmed against dnsbl/pfb_dnsbl_lenient, now pfb_dnsbl_parse_mode (grandfather
 // ABSENT -> 'on') via an executed probe: the same latent interaction already reaches
 // gen/pfb_alias_delta_mode through pfb_schedule_migrate (#2308) today, empirically
 // observed to yield 'replace' instead of the intended fresh-install 'auto'. #2371 does

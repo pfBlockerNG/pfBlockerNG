@@ -39,7 +39,7 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
 		}
 		if (!preg_match(
-			'/(\t+if \(\$pfb\[\'dnsbl_ip\'\] != \'Disabled\'\) \{\n\t+\$abp_ip = pfb_dnsbl_abp_extract_ip\(\$line\);' .
+			'/(\t+if \(\$pfb\[\'dnsbl_ip\'\] != \'Disabled\'[^\n]*\) \{\n\t+\$abp_ip = pfb_dnsbl_abp_extract_ip\(\$line\);' .
 			'.*?PfbDnsblRowKind::Abp, \$line\);\n\t+@fwrite\(\$dhandle, \$domain_data\);\n\t+continue;\n\t+\})/s',
 			$src,
 			$abp
@@ -76,7 +76,7 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 		string $dnsblIp = 'Deny_Both'): array
 	{
 		$pfb = [
-			'dnsbl_lenient'   => PfbToggle::On,
+			'dnsbl_parse_mode' => PfbDnsblParseMode::Lenient,
 			'dnsbl_parse_err' => $this->failLog,
 			'dnsbl_ip'        => $dnsblIp,
 			'supp'            => $supp,
@@ -97,7 +97,8 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 			return TRUE;
 		});
 		try {
-			eval(self::$abpRegion);
+			$abp_feed = FALSE;
+		eval(self::$abpRegion);
 		} finally {
 			restore_error_handler();
 		}

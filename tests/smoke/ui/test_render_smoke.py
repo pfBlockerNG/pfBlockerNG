@@ -1556,25 +1556,27 @@ def test_dnsbl_top1m_type_help_says_update_not_force_reload(
     )
 
 
-def test_dnsbl_lenient_parsing_field_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """The ADR-22 'Download Schemes' toggle renders cleanly on the DNSBL page — so a
-    regression that drops or breaks the field is caught at the render tier (not only by the
-    feed-parsing smoke).
+def test_dnsbl_parse_mode_field_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The issue #4272 'Feed Line Parsing' select renders cleanly on the DNSBL page with its
+    three modes -- the ADR-22 'Download Schemes' checkbox widened to Strict / Allow Ports /
+    Lenient -- so a regression that drops the field or an option is caught at the render tier.
 
-    Asserts the page passes the clean-render oracle AND that the POST field name
-    (``pfb_dnsbl_lenient``) and its 'Download Schemes' label are present in the body.
-    ``php_error_log_guard`` enrolls this GET in the module-level no-growth sweep.
+    Asserts the page passes the clean-render oracle, that the select (POST name
+    ``pfb_dnsbl_parse_mode``) and its label are present, that each mode is an option, and
+    that the retired checkbox is gone. ``php_error_log_guard`` enrolls this GET in the
+    module-level no-growth sweep.
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
     result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
-    for needle in (
-        'name="pfb_dnsbl_lenient"',
-        "Download Schemes",
-    ):
-        assert needle in body, f"DNSBL page is missing the lenient-parsing marker {needle!r}"
+    select = re.search(r'<select[^>]*\bname="pfb_dnsbl_parse_mode"[^>]*>(.*?)</select>', body, re.S)
+    assert select is not None, 'DNSBL page is missing the <select name="pfb_dnsbl_parse_mode"> field'
+    options = re.findall(r'<option[^>]*\bvalue="([^"]*)"', select.group(1))
+    assert options == ["strict", "ports", "lenient"], f"Feed Line Parsing options must be the 3 modes: {options}"
+    assert "Feed Line Parsing" in body, "DNSBL page is missing the 'Feed Line Parsing' label"
+    assert 'name="pfb_dnsbl_lenient"' not in body, "the retired Download Schemes checkbox must be gone"
 
 
 def test_dnsbl_redir_exception_and_fill_fields_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
