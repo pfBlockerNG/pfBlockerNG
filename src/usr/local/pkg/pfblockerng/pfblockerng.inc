@@ -11477,6 +11477,11 @@ function pfb_stage_publish_dir_merge_swap(string $staged, string $target): bool 
 		// issue #4261: a member the Core Updater merged is a link `.<archive>/<member>` whose `.<archive>` is a link to one of
 		// its generations, `.<archive>.<pid>.<8 hex>` (feedfetch entryLink); a real file over it would leave the share half
 		// the Core Updater's and half PHP's
+		// nor a link to a folder: the Core Updater's archive link `.<archive>` (or the country folder), whose members' links
+		// would dangle (feedfetch mergeable)
+		if ($live_is_link && is_dir($live)) {
+			return FALSE;
+		}
 		$to = $live_is_link ? (string) @readlink($live) : '';
 		if (preg_match('~^(\.[^/]+)/([^/]+)$~D', $to, $m) === 1 && $m[2] === $entry && $m[1] !== '..'
 		    && preg_match('~^' . preg_quote($m[1], '~') . '\.[0-9]+\.[0-9a-f]{8}$~D', (string) @readlink("{$target}/{$m[1]}")) === 1) {
