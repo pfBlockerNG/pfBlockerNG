@@ -21,7 +21,6 @@ pytestmark = pytest.mark.smoke
 CACHE = "/var/unbound/pfb_dns"
 ARCHIVE = "/usr/local/etc/pfb_dnsbl_cache.tar"
 RC = "/usr/local/etc/rc.d/pfb_dns_proxy.sh"
-PRE = "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
 
 
 @pytest.fixture(scope="module")
@@ -40,12 +39,15 @@ def serving_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
 
 
 def _running(vm: SmokeVM) -> bool:
-    return h._php_read_scalar(vm, PRE, "json_encode(pfb_dns_proxy_running())") == "true"
+    pre = "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
+    return h._php_read_scalar(vm, pre, "json_encode(pfb_dns_proxy_running())") == "true"
 
 
 def test_a_pfb_dns_stop_leaves_an_archive_that_holds_the_core_input_folder(serving_vm: SmokeVM) -> None:
     vm = serving_vm
     assert _running(vm), "before: pfB-DNS is not serving"
+    if h.php_eval(vm, "echo config_path_enabled('system', 'use_mfs_tmpvar') ? 'on' : 'off';").stdout.strip() != "off":
+        pytest.skip("the box already has RAM disks: turning the switch on and off would lose the box's own setting")
     listed = vm.ssh(f'for a in {ARCHIVE}.zst {ARCHIVE}.bz2; do if [ -e "$a" ]; then echo "$a"; fi; done', timeout=30)
     assert listed.returncode == 0, f"could not list the box's archives: {listed.stderr}"
     had = listed.stdout.split()
@@ -82,5 +84,8 @@ def test_a_pfb_dns_stop_leaves_an_archive_that_holds_the_core_input_folder(servi
         if len(moved) == len(had):
             vm.ssh(f"rm -f {ARCHIVE}.zst {ARCHIVE}.bz2", timeout=30)
         back = [a for a in moved if vm.ssh(f"mv {a}.aside4259 {a}", timeout=30).returncode != 0]
-        vm.ssh(RC, "start", timeout=120)
+        if back:
+            print(f"WARNING: the box's archive was not put back: {back} (still at .aside4259)")
+        started = vm.ssh(RC, "start", timeout=120)
     assert passed and not back, f"the box's archive was not put back: {back} (still at .aside4259)"
+    assert started.returncode == 0, f"pfB-DNS did not start again: {started.stdout}{started.stderr}"

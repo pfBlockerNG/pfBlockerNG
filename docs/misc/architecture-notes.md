@@ -396,7 +396,8 @@ generation then goes through the same RAM-gated swap, and the poller reports wha
 once after the start and after each swap. That report is what lets Core keep the delta from the served generation. Boot
 never waits for Core: it builds from the cache only when `coreinput.Load` trusts it (every file there, of pfB-DNS's own
 user, writable by no other user, each body at its digest). Otherwise it serves no DNSBL, reported degraded, until the
-first poll brings the data.
+first poll brings the data. On a RAM-disk box the folder rides the DNSBL archive (`pfblockerng.sh dnsbl_cache save`): the rc
+script's stop writes it once pfB-DNS has exited (issue #4259), and the boot's restore brings it back.
 
 The settings come the same way (owner, 2026-11-25). Each poll reads Core's `settings/dns` and `settings/policy/dnsbl` and
 writes them as the cache folder's `pfb_unbound.ini`, in the shape `pfb_unbound_python_ini()` gives, so init reads them
