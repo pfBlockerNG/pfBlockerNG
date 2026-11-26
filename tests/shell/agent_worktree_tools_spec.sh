@@ -7,7 +7,7 @@ Describe 'init-worktree-tools.sh'
   make_tool_path() {
     destination=$1
     mkdir -p "$destination"
-    for tool in sh dirname git tr mkdir pwd mv mktemp; do
+    for tool in sh dirname git tr mkdir pwd mv mktemp rm; do
       ln -s "$(command -v "$tool")" "$destination/$tool"
     done
   }
@@ -160,6 +160,15 @@ SERENA
     When run env PATH="$no_codegraph" sh "$script_abs" "$worktree/.worktrees/topic"
     The status should equal 4
     The stderr should include 'TOOL-MISSING: mktemp'
+    Assert [ ! -e "$worktree/.worktrees/.gitignore" ]
+  End
+
+  It "names a missing rm, which the ignore's cleanup needs, instead of failing bare"
+    linked "$worktree/.worktrees/topic" || return 1
+    rm "$no_codegraph/rm"
+    When run env PATH="$no_codegraph" sh "$script_abs" "$worktree/.worktrees/topic"
+    The status should equal 4
+    The stderr should include 'TOOL-MISSING: rm'
     Assert [ ! -e "$worktree/.worktrees/.gitignore" ]
   End
 

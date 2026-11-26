@@ -83,6 +83,7 @@ scrub_git_env() {
 ignore_worktrees() {
 	require_tool mktemp
 	require_tool mv
+	require_tool rm
 	if [ -L "$1/.gitignore" ]; then
 		echo "the worktree root .gitignore must not be a symlink: '$1/.gitignore'" >&2
 		return 2
