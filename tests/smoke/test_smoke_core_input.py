@@ -140,6 +140,7 @@ def start_dns(vm: SmokeVM, fence: str, log: str, watchdog: float = READY_WATCHDO
     while vm.ssh(f'test -s {READY} && test "$(cat {READY})" = {pid}', timeout=30).returncode != 0:  # it serves
         if vm.ssh(f"kill -0 {pid}", timeout=30).returncode != 0 or time.monotonic() > deadline:
             said = vm.ssh(f"tail -n 30 {log}; ls -ld {fence} {fence}/mod; id unbound", timeout=30).stdout
+            stop(vm, pid)  # no caller's cleanup holds the pid yet
             pytest.fail(f"STUCK: pfB-DNS never became ready:\n{said}")
         time.sleep(1)
     return pid
