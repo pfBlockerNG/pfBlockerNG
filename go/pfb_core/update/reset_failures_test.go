@@ -96,3 +96,24 @@ func TestExclusiveWhileAnUpdateRunsIsRefusedAndRunsNothing(t *testing.T) {
 	h.finish(t, nil)
 	settle(t, g)
 }
+
+// Exclusive makes Start's checks under its admission: a finished result not recorded yet is ErrRecoveryRequired (the caller
+// records it and asks again), and fn does not run over it.
+func TestExclusiveOverAnUnrecordedResultAsksForRecoveryAndRunsNothing(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "update.log")
+	finished := int64(1)
+	st := workerState{Version: workerVersion, Nonce: strings.Repeat("cd", 32), Path: "/usr/local/bin/update", StartedAt: 1,
+		FinishedAt: &finished, ExitCode: new(int)}
+	if err := writeWorkerState(logPath+".status", st); err != nil {
+		t.Fatal(err)
+	}
+	g := New(logPath, nil, nil)
+	t.Cleanup(g.Stop)
+	if err := g.Exclusive(func() error { t.Error("fn ran over an unrecorded result"); return nil }); !errors.Is(err, ErrRecoveryRequired) {
+		t.Errorf("Exclusive over an unrecorded result = %v, want ErrRecoveryRequired", err)
+	}
+}

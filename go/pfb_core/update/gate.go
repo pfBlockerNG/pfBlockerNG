@@ -194,6 +194,13 @@ func (g *Gate) Exclusive(fn func() error) error {
 		}
 		defer lease.Close()
 	}
+	// Start's checks under its admission: a result left unpublished, or published and not recorded, is recorded first
+	if err := salvageUnfinished(g.logPath); err != nil {
+		return err
+	}
+	if receipt, err := readWorkerState(g.logPath + ".status"); err == nil && receipt.FinishedAt != nil && !receipt.Settled {
+		return ErrRecoveryRequired
+	}
 	return fn()
 }
 

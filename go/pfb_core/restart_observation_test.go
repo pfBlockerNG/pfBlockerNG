@@ -215,7 +215,6 @@ func TestRestartFailsClosedOnMalformedUnsettledReceipt(t *testing.T) {
 // issue #4257: a worker a restarted Core retained still runs and writes updater.json, with no Update admitted in this
 // process: ResetFeedFailures refuses it as a conflict, from the worker's lease, and changes nothing.
 func TestResetFeedFailuresUnderARetainedLiveWorkerIsAConflictAndChangesNothing(t *testing.T) {
-	holdQuarters(t)
 	c, f := startUpdateCore(t)
 	t.Cleanup(f.release)
 	state := `{"pendingFeeds":[],"failuresDay":"2026-11-26","failures":{"A":3}}`
