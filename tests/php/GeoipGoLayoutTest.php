@@ -172,6 +172,30 @@ final class GeoipGoLayoutTest extends TestCase
 		$this->assertTrue(is_link("{$share}/.A"));
 	}
 
+	public function testPhpsShareMergeStillPublishesADotMemberOfItsOwn(): void
+	{
+		// an archive made on a Mac carries ._* and .DS_Store members: today's merge publishes them, and still does
+		$share = "{$this->dir}/share";
+		$this->assertTrue(mkdir("{$this->dir}/staged"));
+		file_put_contents("{$this->dir}/staged/.DS_Store", 'mac');
+		file_put_contents("{$this->dir}/staged/GeoLite2-Country.mmdb", 'php');
+
+		$this->assertTrue(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
+
+		$this->assertSame('php', file_get_contents("{$share}/GeoLite2-Country.mmdb"));
+	}
+
+	public function testPhpsShareMergeNeverReplacesTheGoCountryFolderLink(): void
+	{
+		$share = "{$this->dir}/share";
+		$this->assertTrue(mkdir("{$this->dir}/staged"));
+		file_put_contents("{$this->dir}/staged/cc", 'php');
+
+		$this->assertFalse(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
+
+		$this->assertTrue(is_link("{$share}/cc"));
+	}
+
 	public function testALinkNamingAnotherMemberIsNoMemberLinkOfIt(): void
 	{
 		$share = "{$this->dir}/share";
