@@ -7,7 +7,7 @@ Describe 'init-worktree-tools.sh'
   make_tool_path() {
     destination=$1
     mkdir -p "$destination"
-    for tool in sh dirname git tr mkdir pwd mv; do
+    for tool in sh dirname git tr mkdir pwd mv mktemp; do
       ln -s "$(command -v "$tool")" "$destination/$tool"
     done
   }
@@ -135,6 +135,15 @@ SERENA
     The status should equal 2
     The stderr should include 'the worktree root .gitignore must not be a symlink'
     Assert [ ! -e "$fixture/outside-ignore" ]
+  End
+
+  It "refuses a .gitignore that is not a regular file and leaves no temporary file"
+    linked "$worktree/.worktrees/topic" || return 1
+    mkdir "$worktree/.worktrees/.gitignore"
+    When run env OMP_CLI=1 sh "$script_abs" "$worktree/.worktrees/topic"
+    The status should equal 2
+    The stderr should include 'the worktree root .gitignore must be a regular file'
+    Assert [ -z "$(find "$worktree/.worktrees" -maxdepth 1 -name '.gitignore.*')" ]
   End
 
   It "writes the ignore before it needs CodeGraph, so a cut on a host without it is ignored too"

@@ -78,8 +78,8 @@ scrub_git_env() {
 
 # #4265: worktrees are cut under <primary>/.worktrees/, a folder that ignores itself through a `*` .gitignore on every
 # branch, including ones whose own .gitignore predates it. $1 = that folder, which exists. The file is rewritten each
-# time, never through a link: a link there is refused, and the rename that writes it replaces one made meanwhile
-# instead of writing where it points.
+# time, never through a link: a link there is refused, the new file is made by mktemp (which follows no link) and
+# renamed over it, and anything but a regular file there afterwards is an error.
 ignore_worktrees() {
 	if [ -L "$1/.gitignore" ]; then
 		echo "the worktree root .gitignore must not be a symlink: '$1/.gitignore'" >&2
@@ -89,8 +89,13 @@ ignore_worktrees() {
 		echo "the worktree root .gitignore must be a regular file: '$1/.gitignore'" >&2
 		return 2
 	fi
-	if ! { printf '*\n' > "$1/.gitignore.$$" && mv -f "$1/.gitignore.$$" "$1/.gitignore"; }; then
-		rm -f "$1/.gitignore.$$"
+	iw_tmp=$(mktemp "$1/.gitignore.XXXXXX") || return 1
+	if ! { printf '*\n' > "$iw_tmp" && mv -f "$iw_tmp" "$1/.gitignore"; }; then
+		rm -f "$iw_tmp"
+		return 1
+	fi
+	if [ -L "$1/.gitignore" ] || [ ! -f "$1/.gitignore" ]; then
+		echo "the worktree root .gitignore was replaced while it was written: '$1/.gitignore'" >&2
 		return 1
 	fi
 }
