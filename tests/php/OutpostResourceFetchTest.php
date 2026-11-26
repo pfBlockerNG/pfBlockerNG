@@ -155,6 +155,16 @@ final class OutpostResourceFetchTest extends TestCase
 		$this->assertMirror($placeholder);
 	}
 
+	/** An aggregate is never padded: the update pass keeps the placeholder out of an aggregate (pfb_aggregate_member_list()). */
+	public function testAnEmptyAggregateLeavesAnEmptyMirror(): void
+	{
+		$id = 'ip-aggregate/Deny/ipv4';
+		[$result] = $this->fetch([self::full('3', '', id: $id), self::text('')], NULL, id: $id);
+
+		$this->assertTrue($result['ok'], json_encode($result));
+		$this->assertMirror('');
+	}
+
 	public function testAnEmptyGeoCatalogLeavesAnEmptyMirror(): void
 	{
 		[$result] = $this->fetch([self::full('3', '', id: 'geo-catalog'), self::text('')], NULL, id: 'geo-catalog');
