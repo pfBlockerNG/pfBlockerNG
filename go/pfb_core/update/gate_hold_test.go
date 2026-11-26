@@ -79,3 +79,29 @@ func TestHoldIsRefusedAfterStop(t *testing.T) {
 		t.Errorf("Hold after Stop = %v, ran %v; want ErrStopped and nothing run", err, ran)
 	}
 }
+
+// While a Hold holds the operation lock, the finished Update it follows stays readable: Hold is no Update.
+func TestAViewDuringAHoldReportsTheFinishedUpdate(t *testing.T) {
+	log := independentLog(t)
+	finished, exitCode := int64(200), 0
+	if err := writeWorkerState(log.Name()+".status", workerState{
+		Version: workerVersion, Nonce: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Path: "/bin/true", Request: Request{Trigger: "manual"}, StartedAt: 100,
+		FinishedAt: &finished, ExitCode: &exitCode, Settled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g := New(log.Name(), nil, nil)
+	g.Admit = (&Command{Path: "/bin/true"}).Admit
+	t.Cleanup(g.Stop)
+
+	var view View
+	var viewErr error
+	if err := g.Hold(func() error { view, viewErr = g.View(-1, 0); return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	if viewErr != nil || view.Running || view.Update == nil || view.Update.FinishedAt == nil || *view.Update.FinishedAt != finished {
+		t.Errorf("View during a Hold = %+v, %v; want the finished Update, not running", view, viewErr)
+	}
+}

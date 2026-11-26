@@ -130,6 +130,12 @@ class Rig:
         got = self.vm.ssh(f"{h.DRILL_BIN} -p {PORT} {shlex.quote(name)} A @127.0.0.1", timeout=30)
         return "rcode:" in got.stdout and h._parse_drill(got.stdout, "A").records == ["0.0.0.0"]
 
+    def unblocked(self, name: str) -> bool:
+        """Whether pfB-DNS answers name (A), whatever the box's resolver gave it, with no block: a probe that got no
+        answer tells nothing."""
+        got = self.vm.ssh(f"{h.DRILL_BIN} -p {PORT} {shlex.quote(name)} A @127.0.0.1", timeout=30)
+        return "rcode:" in got.stdout and h._parse_drill(got.stdout, "A").records != ["0.0.0.0"]
+
 
 def seed_store(vm: SmokeVM, fence: str, domains: list[str] | None, count: int = 0, generation: int = 1) -> None:
     """Seed the fence's store with one feed at generation: the given domains, or ``count`` generated ones."""
@@ -310,7 +316,7 @@ def observed(box: SmokeVM) -> Iterator[Observation]:
                 unlock_status = set_unlocks(box, rig.api, "u1", [following])
                 wait_for(
                     f"pfB-DNS kept blocking an unlocked domain (Core: {unlock_status})",
-                    lambda: not rig.blocked(following),
+                    lambda: rig.unblocked(following),
                 )
                 lock_status = set_unlocks(box, rig.api, "u2", [])
                 wait_for(
