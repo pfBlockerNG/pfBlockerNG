@@ -18,6 +18,7 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_cli_update_request')]
 #[CoversFunction('pfb_cli_update_run')]
+#[CoversFunction('pfb_cli_deprecation_warning')]
 final class CliUpdateVerbsTest extends TestCase
 {
 	/** @var list<array{0: string, 1: array}> every call the fake Core got: method, params */
@@ -171,9 +172,16 @@ final class CliUpdateVerbsTest extends TestCase
 		$this->assertStringContainsString('another Update started', $this->err);
 	}
 
-	public function testTheDeprecatedCronVerbSaysSo(): void
+	/**
+	 * `cron` is deprecated as a CLI verb only (the matrix keeps it): the pass's own `cron` string never warns
+	 * (pfb_verb_deprecation_warning(), TriggerAdaptersTest), so the CLI says it for itself.
+	 */
+	public function testTheDeprecatedCliVerbsSaySo(): void
 	{
-		$this->assertStringContainsString("DEPRECATED: pfblockerng verb 'cron'", pfb_verb_deprecation_warning('cron'));
+		$this->assertStringContainsString("DEPRECATED: pfblockerng verb 'cron'", pfb_cli_deprecation_warning('cron'));
+		$this->assertSame(pfb_verb_deprecation_warning('update'), pfb_cli_deprecation_warning('update'));
+		$this->assertSame('', pfb_cli_deprecation_warning('pfb_trigger'));
+		$this->assertSame('', pfb_verb_deprecation_warning('cron'), "the pass's own cron string still never warns");
 	}
 
 	/**
