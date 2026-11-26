@@ -89,24 +89,37 @@ func (f *Fetcher) iqrisk(ctx context.Context, feed Feed, body string) (string, e
 	return stageRecords(feed.Dir, block)
 }
 
-// ReprocessET is a Reload of an ET IQRisk feed (#4256), as the reuse arm of today's sync_package_pfblockerng() runs it:
-// the .raw an archive's ingest kept is gunzipped and split again with the categories now selected, and the split replaces
-// the published copy; nothing is transferred. A feed without a .raw (an uncompressed source keeps none) has nothing to
-// split again, and its published split stands, where today's arm splits that split, which names no category, and
-// publishes an empty list. A failure keeps the published copy, which today's arm keeps only when the gunzip fails.
+// ReprocessET splits an ET IQRisk feed's kept download again with the categories now selected (#4256), where today's reuse
+// arm of sync_package_pfblockerng() re-runs processet(): on a Reload, and on a pass that parses an unchanged download again
+// for its script. The .raw its ingest kept is gunzipped when it is gzip and split as it is otherwise, and the split
+// replaces the published copy; nothing is transferred. Today's arm gunzips only, and an uncompressed source keeps no .raw
+// there: it splits the published split, which names no category, and publishes an empty list. A feed without a .raw has
+// nothing to split again, and its published split stands. A failure keeps the published copy, which today's arm keeps
+// only when the gunzip fails.
 func (f *Fetcher) ReprocessET(ctx context.Context, feed Feed) Result {
 	raw := feed.path(".raw")
-	if _, err := os.Stat(raw); errors.Is(err, os.ErrNotExist) {
+	magic := make([]byte, 2)
+	in, err := os.Open(raw)
+	if errors.Is(err, os.ErrNotExist) {
 		return Result{OK: true}
 	}
-	body, err := f.stage(ctx, feed, mimeGzip, raw, false)
-	if err != nil {
-		if ctxEnded(err) {
-			return fail(err.Error())
-		}
-		return fail("kept download could not be extracted")
+	if err == nil {
+		_, err = io.ReadFull(in, magic)
+		in.Close()
 	}
-	defer os.Remove(body)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return fail("kept download could not be read")
+	}
+	body := raw
+	if bytes.Equal(magic, []byte{0x1f, 0x8b}) {
+		if body, err = f.stage(ctx, feed, mimeGzip, raw, false); err != nil {
+			if ctxEnded(err) {
+				return fail(err.Error())
+			}
+			return fail("kept download could not be extracted")
+		}
+		defer os.Remove(body)
+	}
 	et, err := f.iqrisk(ctx, feed, body)
 	if err != nil {
 		return fail(etFailure(err))

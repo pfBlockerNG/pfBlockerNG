@@ -199,7 +199,9 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		return fail("proxy_unusable")
 	}
 	staged, probe, published := feed.path(".raw"), feed.path(".probe"), feed.path(".orig")
-	keepRaw := false // an archive's success leaves the staged archive: the digest is of it, and ET reuses it (A35)
+	// An archive's success leaves the staged archive: the digest is of it, and ET reuses it (A35). An ET IQRisk feed's
+	// success leaves its CSV there too, whether it came compressed or not, for a Reload to split again (#4256).
+	keepRaw := false
 	defer func() {
 		if !keepRaw {
 			os.Remove(staged)
@@ -278,7 +280,7 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 	if err := publish(feed, body, sum, t.lastMod); err != nil {
 		return Result{Status: t.status, Reason: err.Error()}
 	}
-	keepRaw = archive
+	keepRaw = archive || strings.Contains(req.URL, "iprepdata.txt")
 	if fromProbe {
 		// The probe's validators describe the body just published (#3911).
 		for _, v := range [...]string{".etag", ".lastmod", ".size"} {
