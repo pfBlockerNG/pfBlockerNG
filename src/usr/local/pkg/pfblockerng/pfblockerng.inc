@@ -2991,7 +2991,7 @@ function pfb_dnsbl_staging_first_line(string $path): string {
 // '[uBlock Origin]', '[AdGuard]') is parsed as Adblock only -- its lines never reach the plain-domain path.
 function pfb_dnsbl_feed_has_abp_header(string $path): bool {
 	$line = pfb_dnsbl_scrub_line(pfb_dnsbl_strip_bom(pfb_dnsbl_staging_first_line($path)));
-	return preg_match('/^\[\s*(?:adblock(?:\s*plus)?|ublock(?:\s*origin)?|adguard)(?:\s+[^\]]*)?\s*\]$/iD', $line) === 1;
+	return preg_match('/^\[\s*(?:adblock|ublock|adguard)[^\]]*\]$/iD', $line) === 1;
 }
 
 // The DNSBL verbatim-reuse fork (pfblockerng.inc sync loop): skip re-parsing

@@ -128,18 +128,14 @@ final class DnsblFeedLineRoutingTest extends TestCase
 		$this->assertSame([['d', 'imgur.com']], $this->parseLine('.imgur.com/lumbar.gif', FALSE, TRUE), 'lenient still cuts the host');
 	}
 
-	/** A bracketed first line that only starts like a product name is no Adblock header: its feed must keep its lines. */
-	public function testABracketedLineThatOnlyStartsLikeAnAdblockHeaderIsNoHeader(): void
+	/** Any bracketed first line naming an Adblock-family product heads an Adblock-syntax list (owner ruling, #4272). */
+	public function testEveryAdblockFamilyBracketHeaderMarksTheFeedAsAdblock(): void
 	{
 		$path = (string) tempnam(sys_get_temp_dir(), 'pfb_route_hdr_');
 		try {
-			foreach (['[Adblocker list]', '[AdGuardHome blocklist]', '[uBlock-mirror hosts]', '[Adblock-free hosts]'] as $first) {
-				file_put_contents($path, "{$first}\n0.0.0.0 example.com\n");
-				$this->assertFalse(pfb_dnsbl_feed_has_abp_header($path), "{$first} must not mark the feed as Adblock");
-			}
-			foreach (['[Adblock Plus 2.0]', '[AdblockPlus 2.0]', '[Adblock]', '[uBlock Origin]', '[AdGuard]', '[ uBlock ]'] as $first) {
+			foreach (['[Adblock Plus 2.0]', '[Adblocker list]', '[AdGuardHome blocklist]', '[uBlock-mirror hosts]', '[ uBlock ]'] as $first) {
 				file_put_contents($path, "{$first}\n");
-				$this->assertTrue(pfb_dnsbl_feed_has_abp_header($path), "{$first} is an Adblock header");
+				$this->assertTrue(pfb_dnsbl_feed_has_abp_header($path), "{$first} heads an Adblock-syntax list");
 			}
 		} finally {
 			@unlink($path);
