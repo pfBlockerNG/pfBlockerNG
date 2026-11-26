@@ -28,7 +28,7 @@ var dnsblOrigSidecars = append([]string{".orig.etag", ".orig.lastmod", ".orig.si
 // A feed moves by hard links, its sidecars before its .orig, and PHP's copies go only once the .orig is linked: a move cut
 // short leaves either every PHP file in place, or the .orig linked, and the next move completes it. The Core Updater trusts
 // validators and digests only beside a copy, so what a cut-short move linked is never trusted on its own. Nothing else writes
-// dnsbl while the move runs: the caller runs the Core Updater's recovery of the feed folder (feedstage.Recover) first, then
+// dnsbl or dnsblorig while the move runs (PHP's DNSBL pass no longer runs at the cutover): the caller runs the Core Updater's recovery of the feed folder (feedstage.Recover) first, then
 // the move until it returns nil, and only then the first Update, which would otherwise publish over a half-moved feed.
 func MoveDNSBLOrig(dbDir string) error {
 	from, to := filepath.Join(dbDir, "dnsblorig"), filepath.Join(dbDir, "dnsbl")

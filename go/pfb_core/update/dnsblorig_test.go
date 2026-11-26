@@ -210,6 +210,33 @@ func TestAMoveCutShortAtAnyStepCompletesOnTheNext(t *testing.T) {
 	}
 }
 
+func TestTheMoveNeverReplacesACopyFoundInDNSBL(t *testing.T) {
+	db := dnsblOrigFixture(t)
+	dnsblOrigLink = func(from, to string) error {
+		if filepath.Base(to) == "C.orig" {
+			// a copy appears between the move's look and its link, published as the Core Updater publishes: by a rename
+			tmp := to + ".tmp"
+			if err := os.WriteFile(tmp, []byte("the Core Updater's c.example\n"), 0o644); err != nil {
+				return err
+			}
+			if err := os.Rename(tmp, to); err != nil {
+				return err
+			}
+		}
+		return os.Link(from, to)
+	}
+	t.Cleanup(func() { dnsblOrigLink = os.Link })
+
+	if err := MoveDNSBLOrig(db); err == nil {
+		t.Fatal("the move reported no error over a copy it did not move")
+	}
+
+	got := filesUnder(t, db)
+	if got["dnsbl/C.orig"] != "the Core Updater's c.example\n" || got["dnsblorig/C.orig"] != "c.example\n" {
+		t.Fatalf("C after the move: dnsbl %q, dnsblorig %q", got["dnsbl/C.orig"], got["dnsblorig/C.orig"])
+	}
+}
+
 func TestNoDNSBLDownloadsNoMove(t *testing.T) {
 	db := t.TempDir()
 
