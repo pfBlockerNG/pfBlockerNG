@@ -116,6 +116,14 @@ final class CliUpdateVerbsTest extends TestCase
 		$this->assertSame($code, $this->follow(['trigger' => 'retry'], $this->core(self::ok([]), self::update(FALSE, '', '0', $result))));
 	}
 
+	/** A deferred pass, which once said so on the CLI's stderr, still does: Core reports it as the Update's result `skipped`. */
+	public function testASkippedUpdateSaysThePassWasDeferred(): void
+	{
+		$this->follow(['trigger' => 'retry'], $this->core(self::ok([]), self::update(FALSE, '', '0', 'skipped')));
+
+		$this->assertSame("pfBlockerNG feed pass deferred: the Update was skipped while another pass holds its lock\n", $this->err);
+	}
+
 	public function testAnUpdateThatRunsAlreadyIsAConflictReportedAndNothingQueued(): void
 	{
 		$code = $this->follow(['trigger' => 'retry'], $this->core(['status' => 409, 'body' => ['error' => ['code' => 'conflict',
