@@ -106,23 +106,31 @@ func (g *Gate) Hold(fn func() error) error {
 		g.mu.Unlock()
 		return ErrRunning
 	}
-	g.mu.Unlock()
-	defer g.admit.Unlock()
+	// The lease is taken and given back under mu, as Start takes it: a View sees the lock and the Hold together.
+	var lease *Admission
 	if g.Admit != nil {
-		lease, err := g.Admit(g.logPath)
+		var err error
+		if lease, err = g.Admit(g.logPath); err == nil {
+			if receipt, readErr := readWorkerState(g.logPath + ".status"); readErr == nil && receipt.FinishedAt != nil && !receipt.Settled {
+				lease.Close()
+				err = ErrRecoveryRequired
+			}
+		}
 		if err != nil {
+			g.admit.Unlock()
+			g.mu.Unlock()
 			return err
 		}
-		defer lease.Close()
-		g.mu.Lock()
 		g.holding = true
-		g.mu.Unlock()
-		defer func() {
-			g.mu.Lock()
-			g.holding = false
-			g.mu.Unlock()
-		}()
 	}
+	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		lease.Close()
+		g.holding = false
+		g.admit.Unlock()
+		g.mu.Unlock()
+	}()
 	return fn()
 }
 
