@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -156,5 +157,23 @@ func TestSetTemporaryUnlocksIsForRootAlone(t *testing.T) {
 	m, ok := coreMethods(t.TempDir(), nil, nil, nil, nil)["SetTemporaryUnlocks"]
 	if !ok || !m.mutating || m.client {
 		t.Errorf("SetTemporaryUnlocks = %+v (served %v), want a mutating method no client may call", m, ok)
+	}
+}
+
+// Two clicks at once (two tabs, a double click) are no Update: both are taken, one after the other.
+func TestConcurrentSetTemporaryUnlocksAreAllTaken(t *testing.T) {
+	c, _, store := startUnlockCore(t)
+	const n = 16
+	got := make(chan reply, n)
+	for i := range n {
+		go func() {
+			got <- c.post("SetTemporaryUnlocks", fmt.Sprintf(`{"requestId":"c%d","domains":["d%d.example"]}`, i, i))
+		}()
+	}
+	for range n {
+		wantJSON(t, <-got, http.StatusOK, `{}`)
+	}
+	if got, _ := manifestUnlocks(t, store); len(got) != 1 {
+		t.Errorf("the manifest unlocks %v, want the one set the last request sent", got)
 	}
 }
