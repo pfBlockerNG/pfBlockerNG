@@ -47,9 +47,13 @@ func SetUnlocks(store *resources.Store, domains []string) (generation uint64, ok
 	for _, d := range domains {
 		rows = append(rows, jsonLine(domainRow{"unlock", d}))
 	}
-	var meta map[string]any
-	if err := json.Unmarshal(cur.Metadata, &meta); err != nil {
+	var raw map[string]json.RawMessage // kept verbatim: the same rows advance no generation
+	if err := json.Unmarshal(cur.Metadata, &raw); err != nil {
 		return 0, false, fmt.Errorf("%s %d metadata: %w", ManifestID, cur.Generation, err)
+	}
+	meta := make(map[string]any, len(raw))
+	for k, v := range raw {
+		meta[k] = v
 	}
 	if generation, err = store.Publish(ManifestID, rows, meta); err != nil {
 		return 0, false, err

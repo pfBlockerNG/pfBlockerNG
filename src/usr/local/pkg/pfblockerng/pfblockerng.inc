@@ -19408,10 +19408,12 @@ function pfb_unbound_python_sources_whitelist() {
 //
 // issue #4264 (owner, 2026-11-24): Core holds the temporary unlocks, so the same set goes to Core too (SetTemporaryUnlocks),
 // which republishes dnsbl/manifest's unlock rows for pfB-DNS on the Core input; until the cutover the patch below still
-// applies, so both paths give the same set. A Core that does not take it is logged and never stops the patch.
+// applies, so both paths give the same set. A Core that does not take it is logged and never stops the patch. The pass of a
+// Core Update re-locks while Core holds its gate, and that Update's end re-locks Core's set, so it does not ask Core.
 function pfb_unbound_python_sources_unlock(?callable $call = NULL) {
+	global $pfb;
 	$domains = pfb_dnsbl_unlock_lines();
-	$error = pfb_set_temporary_unlocks($call ?? 'pfb_core_call', $domains);
+	$error = empty($pfb['core_update']) ? pfb_set_temporary_unlocks($call ?? 'pfb_core_call', $domains) : NULL;
 	if ($error !== NULL) {
 		pfb_logger("\n Core did not take the temporary DNSBL unlocks: {$error}\n", 1);
 	}

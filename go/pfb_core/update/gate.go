@@ -76,7 +76,7 @@ type Gate struct {
 	Admit          func(string) (*Admission, error) // nil only for a Gate whose run does not own a worker
 	Launch         func(context.Context, *Admission, Request, *os.File) (Result, error)
 	done           func(Request, Result, error)
-	admit          sync.Mutex // taken by Start's TryLock and released when the Update ends; nothing ever waits on it but Stop
+	admit          sync.Mutex // taken by Start's and Hold's TryLock and released when the Update or the Hold ends; only Stop waits on it
 	mu             sync.Mutex // everything below
 	status         *Status    // replaced when the Update ends, never changed in place: View hands it out
 	gen            int64      // bumped by every Start but the first: a cursor from an earlier Update reads from the start
