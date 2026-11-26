@@ -1,7 +1,8 @@
 package feedfetch_test
 
 // ET IQRisk and xlsx behaviour the parity corpus cannot pin: a split directory that already holds files, a context that
-// ends during the split, and a workbook past a lowered extraction ceiling.
+// ends during the split, a workbook past a lowered extraction ceiling, and a Reload's split of a kept download (#4256):
+// one that does not gunzip, one whose split cannot be written, a kept tar.gz, and a kept download that is a link.
 
 import (
 	"archive/tar"
@@ -9,6 +10,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -198,10 +200,15 @@ func TestAReprocessOfATarGzSplitsItsMember(t *testing.T) {
 	var packed bytes.Buffer
 	zw := gzip.NewWriter(&packed)
 	tw := tar.NewWriter(zw)
-	tw.WriteHeader(&tar.Header{Name: "iprepdata.txt", Mode: 0o644, Size: int64(len(csv))})
-	tw.Write(csv)
-	tw.Close()
-	zw.Close()
+	if err := tw.WriteHeader(&tar.Header{Name: "iprepdata.txt", Mode: 0o644, Size: int64(len(csv))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(csv); err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(tw.Close(), zw.Close()); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(feed.Dir, feed.Name+".raw"), packed.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
