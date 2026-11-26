@@ -298,34 +298,31 @@ const PFB_CLI_UPDATE_POLLS = 14400;
 
 /**
  * The Update a pfblockerng.php update verb asks Core for (issue #4260, #3977's coverage matrix): StartUpdate's parameters
- * without the requestId, or NULL for a verb that runs no Update. A scope or trigger the verb does not know falls back as it did
- * when the verb ran its pass in-process: the last `scope=` given, `both` when it is unknown; the last `trigger=`. A `cron`
- * trigger, and the `cron` verb, are the quarter-hour run's `retry`, which takes no scope or force. A forced pfb_trigger is a
- * reload (force `parse`), as `updateip` and `updatednsbl` are; `forcecheck` downloads again, and with `hashes=true` drops the
- * digests too.
+ * without the requestId, or NULL for a verb that runs no Update. A scope falls back as it did when the verb ran its pass
+ * in-process: the last `scope=` given, `both` when it is unknown. Every one is a `manual` Update, as the owner decided for these
+ * entries ("manual or apply, as fits"): `cron`, verb or pfb_trigger trigger, too, since Core's `retry` runs the due Extras
+ * first, which the verb never did. A forced pfb_trigger is a reload (force `parse`), as `updateip` and `updatednsbl` are;
+ * `forcecheck` downloads again, and with `hashes=true` drops the digests too.
  *
  * @param list<string> $argv
- * @return ?array{trigger: string, scope?: string, force?: string}
+ * @return ?array{trigger: string, scope: string, force: string}
  */
 function pfb_cli_update_request(array $argv): ?array {
 	$args = array_slice($argv, 2);
 	$scope = 'both';
-	$trigger = 'manual';
 	foreach ($args as $arg) {
 		if (str_starts_with($arg, 'scope=')) {
 			$scope = substr($arg, 6);
-		} elseif (str_starts_with($arg, 'trigger=')) {
-			$trigger = substr($arg, 8);
 		}
 	}
 	$scope = in_array($scope, ['ip', 'dnsbl', 'both'], TRUE) ? $scope : 'both';
 	$manual = static fn (string $scope, string $force): array => ['trigger' => 'manual', 'scope' => $scope, 'force' => $force];
 	return match ($argv[1] ?? '') {
-		'cron' => ['trigger' => 'retry'],
+		'cron' => $manual('both', 'none'),
 		'update' => $manual('both', 'none'),
 		'updateip' => $manual('ip', 'parse'),
 		'updatednsbl' => $manual('dnsbl', 'parse'),
-		'pfb_trigger' => $trigger === 'cron' ? ['trigger' => 'retry'] : $manual($scope, in_array('force=true', $args, TRUE) ? 'parse' : 'none'),
+		'pfb_trigger' => $manual($scope, in_array('force=true', $args, TRUE) ? 'parse' : 'none'),
 		'forcecheck' => $manual($scope, in_array('hashes=true', $args, TRUE) ? 'both' : 'download'),
 		default => NULL,
 	};
