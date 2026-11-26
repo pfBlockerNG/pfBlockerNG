@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -220,7 +221,8 @@ func (c *runningCore) initialize() {
 
 func TestTheUpdateMethodsAnswerUnavailableWithoutUpdateCmd(t *testing.T) {
 	c := startCore(t, scratchDir(t))
-	for name, body := range map[string]string{"StartUpdate": `{"requestId":"r1","trigger":"apply"}`, "GetUpdate": `{}`, "GetSchedule": `{}`} {
+	for name, body := range map[string]string{"StartUpdate": `{"requestId":"r1","trigger":"apply"}`, "GetUpdate": `{}`, "GetSchedule": `{}`,
+		"ResetFeedFailures": `{"requestId":"f1"}`} {
 		got := c.post(name, body)
 		wantError(t, got, http.StatusServiceUnavailable, codeUnavailable)
 		if !bytes.Contains(got.body, []byte("start it with --update-cmd")) {
@@ -603,5 +605,53 @@ func TestTheSchedulerLoopStartsAScheduledUpdateWhenItsTimerFires(t *testing.T) {
 	waitFor(t, func() bool { return q.armed.Load() == 2 }) // the loop waits for the next one
 	if n := f.runs(); n != 1 {
 		t.Errorf("the program ran %d times for one quarter hour, want 1", n)
+	}
+}
+
+// issue #4257 (owner, 2026-11-26, decision 3 on #3977): "Clear Failed Downloads" resets the Core Updater's per-feed retry
+// count, kept in updater.json for the local day, so a cleared feed is fetched again before midnight.
+func TestResetFeedFailuresClearsTheNamedCountsThenAllAndKeepsTheRestOfTheState(t *testing.T) {
+	c, _ := startUpdateCore(t)
+	path := filepath.Join(c.state, "updater.json")
+	if err := os.WriteFile(path, []byte(`{"pendingFeeds":["P"],"failuresDay":"2026-11-26","failures":{"A":3,"B":2}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	wantJSON(t, c.post("ResetFeedFailures", `{"requestId":"f1","feeds":["A"]}`), http.StatusOK, `{}`)
+	sameJSON(t, string(mustRead(t, path)), `{"pendingFeeds":["P"],"failuresDay":"2026-11-26","failures":{"B":2}}`)
+
+	wantJSON(t, c.post("ResetFeedFailures", `{"requestId":"f2"}`), http.StatusOK, `{}`)
+	sameJSON(t, string(mustRead(t, path)), `{"pendingFeeds":["P"]}`)
+}
+
+func TestResetFeedFailuresWithoutAStateWritesNone(t *testing.T) {
+	c, _ := startUpdateCore(t)
+	wantJSON(t, c.post("ResetFeedFailures", `{"requestId":"f1"}`), http.StatusOK, `{}`)
+	if _, err := os.Stat(filepath.Join(c.state, "updater.json")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("updater.json after a reset of no state: %v, want none written", err)
+	}
+}
+
+func TestResetFeedFailuresWhileAnUpdateRunsIsAConflictAndChangesNothing(t *testing.T) {
+	c, f := startUpdateCore(t)
+	path := filepath.Join(c.state, "updater.json")
+	state := `{"pendingFeeds":[],"failuresDay":"2026-11-26","failures":{"A":3}}`
+	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantJSON(t, c.post("StartUpdate", `{"requestId":"s1","trigger":"manual"}`), http.StatusOK, `{}`)
+	c.waitLog("", "update program started")
+
+	wantError(t, c.post("ResetFeedFailures", `{"requestId":"f1"}`), http.StatusConflict, codeConflict)
+	sameJSON(t, string(mustRead(t, path)), state)
+	f.release()
+	c.waitFinished("manual")
+}
+
+func TestResetFeedFailuresRefusesFeedsThatAreNotNames(t *testing.T) {
+	c, _ := startUpdateCore(t)
+	for params, field := range map[string]string{`{"requestId":"f1","feeds":"A"}`: "feeds", `{"requestId":"f2","feeds":["../x"]}`: "feeds[0]",
+		`{"requestId":"f3","feeds":[""]}`: "feeds[0]"} {
+		wantError(t, c.post("ResetFeedFailures", params), http.StatusBadRequest, codeInvalidArgument, field)
 	}
 }
