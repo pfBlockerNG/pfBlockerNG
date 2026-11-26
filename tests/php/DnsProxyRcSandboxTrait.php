@@ -19,7 +19,7 @@ trait DnsProxyRcSandboxTrait
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const RC = 'pfb_dns_proxy.sh';
 
-	private const DOUBLES = ['read_xml_tag.sh', 'daemon', 'kill', 'sleep', 'ps', 'logger', 'lockf', 'uname', 'php', 'timeout', 'sockstat'];
+	private const DOUBLES = ['read_xml_tag.sh', 'daemon', 'kill', 'sleep', 'ps', 'logger', 'lockf', 'uname', 'php', 'timeout', 'sockstat', 'grep'];
 
 	/** One script installed under every command name the rc body uses; $0 picks the role. */
 	private const DOUBLE = <<<'SH'
@@ -121,6 +121,12 @@ trait DnsProxyRcSandboxTrait
 			cat "$S/sockstat.out"
 			read -r status < "$S/sockstat.status"
 			exit "$status"
+			;;
+		grep)
+			# the stop's look for the boot's archive restore in config.xml (pfb_dnsbl_cache('conf') registers it): GATE_RESTORE answers
+			{ [ "$#" -eq 4 ] && [ "$1" = -q ] && [ "$2" = -F ] && [ "$3" = 'pfblockerng.sh dnsbl_cache restore' ] && [ "$4" = /cf/conf/config.xml ]; } ||
+				{ ev bad-grep; exit 2; }
+			[ -n "$GATE_RESTORE" ]
 			;;
 		logger)
 			ev log
@@ -325,7 +331,7 @@ trait DnsProxyRcSandboxTrait
 		$gates += ['GATE_DNSBL' => 'on', 'GATE_PROXY' => 'on', 'GATE_SAVED' => (string) config_get_path(self::SAVED, '')];
 		$state = "{$this->dir}/state";
 		$vars = $gates + ['TERM_AFTER' => $termAfter, 'KILL_AFTER' => $killAfter, 'READY_FILE' => $this->readyFile(), 'LOCKF_BUSY' => '', 'MACHINE' => $machine,
-			'PEM_FILE' => $this->certFile(), 'EXPORT_FAIL' => '', 'TIMEOUT_FIRES' => '', 'SAVED_VALID' => '', 'GATE_MFS' => 'false', 'SAVE_FAIL' => ''];
+			'PEM_FILE' => $this->certFile(), 'EXPORT_FAIL' => '', 'TIMEOUT_FIRES' => '', 'SAVED_VALID' => '', 'GATE_MFS' => 'false', 'SAVE_FAIL' => '', 'GATE_RESTORE' => '1'];
 		file_put_contents("{$state}/scenario", implode('', array_map(
 			static fn (string $k, string $v): string => "{$k}=" . escapeshellarg($v) . "\n",
 			array_keys($vars),

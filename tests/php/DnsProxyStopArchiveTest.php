@@ -14,9 +14,10 @@ use PHPUnit\Framework\TestCase;
  * the folder while it is archived. The save is bounded (timeout(1)) and its failure never fails the stop.
  *
  * Only a stop pfSense makes (no argument: stop_packages() at a reboot or halt from the GUI or console menu, Status >
- * Services, restart_service()) that ended pfB-DNS, with pfB-DNS turned on, writes it: not the stop the script's own start
- * and restart make before a launch (`rc_stop internal`), not a stop that found nothing running, and not the stop that turns
- * pfB-DNS off (its archive would outlive the restore hook the apply removes). pfSense's restart_service() is a stop and a
+ * Services, restart_service()) that ended pfB-DNS, while config.xml registers the boot's archive restore, writes it: not the
+ * stop the script's own start and restart make before a launch (`rc_stop internal`), not a stop that found nothing running,
+ * and not a stop once the apply removed the restore (pfB-DNS, pfBlockerNG or the Resolver turned off): an archive nothing
+ * restores would outlive it, and a later registration would keep it. pfSense's restart_service() is a stop and a
  * start, so it writes one while pfB-DNS is down: the package restarts pfB-DNS only for a changed gateway, listener set or
  * backend port.
  *
@@ -40,11 +41,11 @@ final class DnsProxyStopArchiveTest extends TestCase
 
 	/** A serving proxy on a box whose RAM-disk switch and Core input folder are as given; the stop has no pkg ancestor. */
 	private function arrangeStop(bool $ramDisk = TRUE, bool $folder = TRUE, string $termAfter = '2', string $killAfter = '1', bool $saveFails = FALSE,
-		bool $running = TRUE, string $toggle = 'on'): void
+		bool $running = TRUE, bool $restore = TRUE): void
 	{
 		$this->moveResolver();
 		pfb_dns_proxy_service();
-		$this->arrange(['GATE_MFS' => $ramDisk ? 'true' : 'false', 'SAVE_FAIL' => $saveFails ? '1' : '', 'GATE_PROXY' => $toggle], $termAfter, $killAfter, $running);
+		$this->arrange(['GATE_MFS' => $ramDisk ? 'true' : 'false', 'SAVE_FAIL' => $saveFails ? '1' : '', 'GATE_RESTORE' => $restore ? '1' : ''], $termAfter, $killAfter, $running);
 		$this->ancestry(['/bin/sh /usr/local/etc/rc.d/pfb_dns_proxy.sh stop', 'sh -c /usr/local/etc/rc.d/pfb_dns_proxy.sh stop']);
 		if ($folder) {
 			$this->assertTrue(mkdir($this->inputDir(), 0755, TRUE));
@@ -126,15 +127,15 @@ final class DnsProxyStopArchiveTest extends TestCase
 		$this->assertSame([], $this->saves(), 'pfB-DNS fetched nothing since the last stop');
 	}
 
-	public function testTheStopThatTurnsPfbDnsOffWritesNoArchive(): void
+	public function testAStopWithNoRestoreRegisteredWritesNoArchive(): void
 	{
-		$this->arrangeStop(toggle: '');
+		$this->arrangeStop(restore: FALSE);
 
 		[$status, $output] = $this->rc('stop');
 
 		$this->assertSame(0, $status, "rc stop failed: {$output}");
 		$this->assertSame([], $this->livePids());
-		$this->assertSame([], $this->saves(), 'the apply removes the restore hook and the archive: a save would outlive them');
+		$this->assertSame([], $this->saves(), 'the apply removed the restore and the archive: a save would outlive them');
 	}
 
 	public function testPfSensesRestartWritesTheArchiveWhilePfbDnsIsDown(): void

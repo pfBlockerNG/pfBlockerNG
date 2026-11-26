@@ -46,7 +46,7 @@ def _running(vm: SmokeVM) -> bool:
 def test_a_pfb_dns_stop_leaves_an_archive_that_holds_the_core_input_folder(serving_vm: SmokeVM) -> None:
     vm = serving_vm
     assert _running(vm), "before: pfB-DNS is not serving"
-    if h.php_eval(vm, "echo config_path_enabled('system', 'use_mfs_tmpvar') ? 'on' : 'off';").stdout.strip() != "off":
+    if vm.ssh("grep -q '<use_mfs_tmpvar' /cf/conf/config.xml", timeout=30).returncode == 0:
         pytest.skip("the box already has RAM disks: turning the switch on and off would lose the box's own setting")
     listed = vm.ssh(f'for a in {ARCHIVE}.zst {ARCHIVE}.bz2; do if [ -e "$a" ]; then echo "$a"; fi; done', timeout=30)
     assert listed.returncode == 0, f"could not list the box's archives: {listed.stderr}"

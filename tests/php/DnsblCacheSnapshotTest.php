@@ -155,6 +155,42 @@ PHP;
 		$this->archive();
 	}
 
+	/**
+	 * $pfb['script'] as the real pfblockerng.sh, its top-level init and dispatch included, with the paths that would write
+	 * the host pointed at the sandbox: the save's status reaches PHP only through the script's own exit.
+	 */
+	private function entrypoint(string $tar): void
+	{
+		$script = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.sh');
+		foreach (['pathtar=/usr/bin/tar' => 'pathtar=' . escapeshellarg($tar),
+			'"/usr/local/etc/pfb_dnsbl_cache.tar"' => escapeshellarg($GLOBALS['pfb']['dnsblarchive']),
+			'/var/db/' => "{$this->dir}/vardb/", '/var/log/pfblockerng/' => "{$this->dir}/"] as $from => $to) {
+			$this->assertStringContainsString($from, $script);
+			$script = str_replace($from, $to, $script);
+		}
+		@mkdir("{$this->dir}/vardb/pfblockerng", 0777, TRUE);
+		@mkdir("{$this->dir}/vardb/aliastables", 0777, TRUE);
+		// pfbchroot has no top-level default: the dnsbl_cache function's own default reads it from here
+		$script = preg_replace('~^#!/bin/sh\n~', "#!/bin/sh\npfbchroot=" . escapeshellarg("{$this->dir}/chroot") . "\n", $script, 1, $n);
+		$this->assertSame(1, $n, 'pfblockerng.sh starts with #!/bin/sh');
+		$this->executable("{$this->dir}/entry.sh", (string) $script);
+		$GLOBALS['pfb']['script'] = "{$this->dir}/entry.sh";
+	}
+
+	public function testTheScriptsDispatchExitsWithTheSavesStatus(): void
+	{
+		// issue #4259: a failed save must reach the rc stop, whose only view of it is the exit status
+		$tar = "{$this->dir}/fail.sh";
+		$this->executable($tar, "#!/bin/sh\nexit 2\n");
+		$this->entrypoint($tar);
+		$this->assertFalse(pfb_dnsbl_cache('save'), 'the script exited 0 over a failed archive');
+		$this->assertLockReleased();
+
+		$this->entrypoint(pfb_test_tar());
+		$this->assertTrue(pfb_dnsbl_cache('save'), 'a written archive exits 0');
+		$this->archive();
+	}
+
 	public function testUnavailablePublicationLockDoesNotSave(): void
 	{
 		// Given a real lock-path failure, not an injected exception
