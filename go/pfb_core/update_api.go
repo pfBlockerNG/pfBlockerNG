@@ -138,8 +138,7 @@ func scheduleModel(st *settings.Store) func() (schedule.Model, error) {
 func updateMethods(stateDir string, sched *scheduler.Scheduler, gate *update.Gate) map[string]method {
 	methods := map[string]method{
 		// issue #4257: the widget's "Clear Failed Downloads" resets the Core Updater's retry count of the named feeds (all
-		// when feeds is absent), held in updater.json for the day, so the next Update that comes to them fetches them; never
-		// while an Update runs, which writes that state.
+		// when feeds is absent), held in updater.json for the day, so the next Update that comes to them fetches them.
 		"ResetFeedFailures": {mutating: true, call: func(_ context.Context, params []byte) (any, error) {
 			var p struct {
 				RequestID string   `json:"requestId"`
@@ -154,14 +153,8 @@ func updateMethods(stateDir string, sched *scheduler.Scheduler, gate *update.Gat
 						fieldError{Field: fmt.Sprintf("feeds[%d]", i), Message: "must be letters, digits and underscores"})
 				}
 			}
-			// as the scheduler admits an Update: a finished Update's result is recorded first, never answered unavailable
-			err := sched.Admit(func() error {
-				return gate.Exclusive(func() error { return update.ResetFailures(stateDir, p.Feeds) })
-			})
-			switch {
-			case errors.Is(err, update.ErrRunning):
-				return nil, newError(codeConflict, "an Update is running; nothing was reset")
-			case err != nil:
+			// an Update may be running: the state's lock keeps the reset and its saves apart (update.ResetFailures)
+			if err := update.ResetFailures(stateDir, p.Feeds); err != nil {
 				return nil, newError(codeUnavailable, err.Error())
 			}
 			return struct{}{}, nil

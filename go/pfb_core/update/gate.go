@@ -174,37 +174,6 @@ func (g *Gate) Start(req Request, commit func() (map[string]int64, error)) error
 	return nil
 }
 
-// Exclusive runs fn while no Update runs and none can start, holding the admission Start takes (and a worker-backed Gate's
-// worker lease, which a worker a restarted Core retained still holds): ErrRunning when an Update holds it, ErrStopped after
-// Stop, and ErrRecoveryRequired, as Start, over a finished result not recorded yet (the caller records it and asks again,
-// as Scheduler.Admit does). fn's error is returned.
-func (g *Gate) Exclusive(fn func() error) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.stopped {
-		return ErrStopped
-	}
-	if !g.admit.TryLock() {
-		return ErrRunning
-	}
-	defer g.admit.Unlock()
-	if g.Admit != nil {
-		lease, err := g.Admit(g.logPath)
-		if err != nil {
-			return err
-		}
-		defer lease.Close()
-	}
-	// Start's checks under its admission: a result left unpublished, or published and not recorded, is recorded first
-	if err := salvageUnfinished(g.logPath); err != nil {
-		return err
-	}
-	if receipt, err := readWorkerState(g.logPath + ".status"); err == nil && receipt.FinishedAt != nil && !receipt.Settled {
-		return ErrRecoveryRequired
-	}
-	return fn()
-}
-
 func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, lease *Admission, req Request, log *os.File) {
 	var res Result
 	var err error

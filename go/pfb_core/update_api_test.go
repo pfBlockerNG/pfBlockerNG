@@ -632,18 +632,18 @@ func TestResetFeedFailuresWithoutAStateWritesNone(t *testing.T) {
 	}
 }
 
-func TestResetFeedFailuresWhileAnUpdateRunsIsAConflictAndChangesNothing(t *testing.T) {
+func TestResetFeedFailuresWhileAnUpdateRunsResetsTheCounts(t *testing.T) {
 	c, f := startUpdateCore(t)
 	path := filepath.Join(c.state, "updater.json")
-	state := `{"pendingFeeds":[],"failuresDay":"2026-11-26","failures":{"A":3}}`
-	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"pendingFeeds":[],"failuresDay":"2026-11-26","failures":{"A":3}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	wantJSON(t, c.post("StartUpdate", `{"requestId":"s1","trigger":"manual"}`), http.StatusOK, `{}`)
 	c.waitLog("", "update program started")
 
-	wantError(t, c.post("ResetFeedFailures", `{"requestId":"f1"}`), http.StatusConflict, codeConflict)
-	sameJSON(t, string(mustRead(t, path)), state)
+	// owner, 2026-11-26: a click during an Update is no failure to refuse; the Update adds only its own failures at its end
+	wantJSON(t, c.post("ResetFeedFailures", `{"requestId":"f1"}`), http.StatusOK, `{}`)
+	sameJSON(t, string(mustRead(t, path)), `{"pendingFeeds":[]}`)
 	f.release()
 	c.waitFinished("manual")
 }

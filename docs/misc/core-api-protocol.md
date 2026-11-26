@@ -783,12 +783,12 @@ cleared feed (its next scheduled run, or a manual Update) fetches it instead of 
 
 `feeds` is optional: absent, every feed's count is reset; given, only the named feeds' (each 1 or more letters, digits and
 underscores, the feed's file name). The rest of `updater.json` is kept, a reset that clears no count writes nothing, and a
-state directory without one is left without one. A finished Update whose result Core has not recorded yet is recorded first,
-as before an Update starts.
-While an Update runs, which writes that state, the method answers `conflict` ("an Update is running; nothing was reset") and
-changes nothing; it holds the gate as `StartUpdate` does, so no Update starts meanwhile. A name that is not a feed name is
-`invalid_argument`; a state that cannot be read or written is `unavailable`. Without `--update-cmd` it answers `unavailable`
-like the other methods of this section.
+state directory without one is left without one. A reset may come while an Update runs (owner, 2026-11-26): the Update
+decides which feeds to skip from the counts it read at its start, and each time it writes its state it adds only the
+failures it counted to the counts it then finds, under the lock `updater.json.lock` that the reset takes too. A reset made
+during an Update therefore stands, with only that Update's later failures counted after it. A state that cannot be read or
+written is `unavailable`, and a name that is not a feed name is `invalid_argument`. Without `--update-cmd` it answers
+`unavailable` like the other methods of this section.
 
 ### Update command
 

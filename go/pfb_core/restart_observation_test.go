@@ -211,29 +211,3 @@ func TestRestartFailsClosedOnMalformedUnsettledReceipt(t *testing.T) {
 		})
 	}
 }
-
-// issue #4257: a worker a restarted Core retained still runs and writes updater.json, with no Update admitted in this
-// process: ResetFeedFailures refuses it as a conflict, from the worker's lease, and changes nothing.
-func TestResetFeedFailuresUnderARetainedLiveWorkerIsAConflictAndChangesNothing(t *testing.T) {
-	c, f := startUpdateCore(t)
-	t.Cleanup(f.release)
-	state := `{"pendingFeeds":[],"failuresDay":"2026-11-26","failures":{"A":3}}`
-	path := filepath.Join(c.state, "updater.json")
-	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	wantJSON(t, c.post("StartUpdate", `{"requestId":"live-1","trigger":"manual","scope":"ip"}`), http.StatusOK, `{}`)
-	c.waitLog("", "update program started")
-	if c.stop() != 0 {
-		t.Fatalf("first Core exited %d\n%s", c.code, c.stderr.String())
-	}
-
-	restart := startCore(t, filepath.Dir(c.state), "--update-cmd", f.path)
-	wantError(t, restart.post("ResetFeedFailures", `{"requestId":"f1"}`), http.StatusConflict, codeConflict)
-	if got := string(mustRead(t, path)); got != state {
-		t.Errorf("updater.json under a retained worker = %s, want it unchanged", got)
-	}
-
-	f.release()
-	waitRetainedTerminal(t, filepath.Join(c.state, "update.log.status"))
-}

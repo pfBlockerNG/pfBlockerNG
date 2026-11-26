@@ -74,71 +74,35 @@ func TestRecoverUnderAHeldLockAsksForRecoveryOnlyForAnUnrecordedResult(t *testin
 	}
 }
 
-// Exclusive refuses after Stop, as Start does, and runs nothing.
-func TestExclusiveAfterStopIsRefusedAndRunsNothing(t *testing.T) {
-	g := New(filepath.Join(t.TempDir(), "update.log"), nil, nil)
-	g.Stop()
-	if err := g.Exclusive(func() error { t.Error("fn ran after Stop"); return nil }); !errors.Is(err, ErrStopped) {
-		t.Errorf("Exclusive after Stop = %v, want ErrStopped", err)
-	}
-}
-
-// Exclusive refuses while an Update holds the gate, and runs nothing.
-func TestExclusiveWhileAnUpdateRunsIsRefusedAndRunsNothing(t *testing.T) {
-	h := newHold()
-	g := newGate(t, h.run, nil)
-	if err := g.Start(Request{Trigger: "manual", Scope: "both", Force: "none"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := g.Exclusive(func() error { t.Error("fn ran while an Update held the gate"); return nil }); !errors.Is(err, ErrRunning) {
-		t.Errorf("Exclusive during an Update = %v, want ErrRunning", err)
-	}
-	h.finish(t, nil)
-	settle(t, g)
-}
-
-// Exclusive makes Start's checks under its admission: a finished result not recorded yet is ErrRecoveryRequired (the caller
-// records it and asks again), and fn does not run over it.
-func TestExclusiveOverAnUnrecordedResultAsksForRecoveryAndRunsNothing(t *testing.T) {
+// owner, 2026-11-26: a reset may come while an Update runs. The Update decides from the counts it read at its start and
+// adds only its own failures to what the state holds when it saves: a reset made meanwhile stands, under the state's lock.
+func TestAFailureCountedAfterAResetAddsToTheResetCountsOnly(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
+	path := filepath.Join(dir, updaterStateName)
+	if err := os.WriteFile(path, []byte(`{"pendingFeeds":["P"],"failuresDay":"2026-11-26","failures":{"A":2,"B":1}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	logPath := filepath.Join(dir, "update.log")
-	finished := int64(1)
-	st := workerState{Version: workerVersion, Nonce: strings.Repeat("cd", 32), Path: "/usr/local/bin/update", StartedAt: 1,
-		FinishedAt: &finished, ExitCode: new(int)}
-	if err := writeWorkerState(logPath+".status", st); err != nil {
-		t.Fatal(err)
-	}
-	g := New(logPath, nil, nil)
-	t.Cleanup(g.Stop)
-	if err := g.Exclusive(func() error { t.Error("fn ran over an unrecorded result"); return nil }); !errors.Is(err, ErrRecoveryRequired) {
-		t.Errorf("Exclusive over an unrecorded result = %v, want ErrRecoveryRequired", err)
-	}
-}
+	u := &updater{stateDir: dir, state: readUpdaterState(dir)}
 
-// A worker killed after writing its result but before publishing completion: Exclusive salvages it, as Start does, and asks
-// for its recording instead of running fn.
-func TestExclusiveSalvagesAnInterruptedWorkerFirst(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := ResetFailures(dir, nil); err != nil {
 		t.Fatal(err)
 	}
-	logPath := filepath.Join(dir, "update.log")
-	st := workerState{Version: workerVersion, Nonce: strings.Repeat("ef", 32), Path: "/usr/local/bin/update", StartedAt: 1}
-	if err := writeWorkerState(logPath+".status", st); err != nil {
+	if err := u.countFailure("A"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(logPath+".result", []byte(`{"version":1,"outcomes":{"ipv4:A_v4":"success"}}`+"\n"), 0o600); err != nil {
+	got := readUpdaterState(dir)
+	if got.FailuresDay != "2026-11-26" || len(got.Failures) != 1 || got.Failures["A"] != 1 {
+		t.Errorf("after a reset and one failure of A: %+v, want only A once, on the Update's day", got)
+	}
+	if len(got.PendingFeeds) != 1 || got.PendingFeeds[0] != "P" {
+		t.Errorf("the Update's own state was not kept: %+v", got)
+	}
+
+	// without a reset, its failures add to what is there
+	if err := u.countFailure("A"); err != nil {
 		t.Fatal(err)
 	}
-	g := New(logPath, nil, nil)
-	t.Cleanup(g.Stop)
-	if err := g.Exclusive(func() error { t.Error("fn ran over an interrupted worker"); return nil }); !errors.Is(err, ErrRecoveryRequired) {
-		t.Errorf("Exclusive over an interrupted worker = %v, want ErrRecoveryRequired", err)
-	}
-	if got, err := readWorkerState(logPath + ".status"); err != nil || got.FinishedAt == nil {
-		t.Errorf("the interrupted worker was not salvaged: %+v, %v", got, err)
+	if got := readUpdaterState(dir); got.Failures["A"] != 2 {
+		t.Errorf("a second failure of A: %+v, want A twice", got.Failures)
 	}
 }
