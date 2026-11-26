@@ -336,6 +336,12 @@ func Publish(store *resources.Store, set Set) (Result, error) {
 	return res, nil
 }
 
+// domainRow is a manifest row that names a domain: whitelist, unlock or tld_exclusion.
+type domainRow struct {
+	Kind   string `json:"kind"`
+	Domain string `json:"domain"`
+}
+
 // memberRow names the body a manifest row belongs with.
 type memberRow struct {
 	Resource   string `json:"resource"`
@@ -357,10 +363,6 @@ func manifestRows(set Set, feeds []Feed, byName map[string]*body, bodies []*body
 		BuiltinLogFlag string `json:"builtinLogFlag"`
 		Top1mEnabled   bool   `json:"top1mEnabled"`
 	}{"config", set.BuiltinLogFlag, set.Top1mEnabled})
-	type domainRow struct {
-		Kind   string `json:"kind"`
-		Domain string `json:"domain"`
-	}
 	exclusions := set.TLDExclusions
 	if !set.TLDWildcard {
 		exclusions = nil

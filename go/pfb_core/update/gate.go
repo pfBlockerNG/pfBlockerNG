@@ -92,6 +92,31 @@ func New(logPath string, run RunFunc, done func(Request, Result, error)) *Gate {
 	return &Gate{logPath: logPath, run: run, done: done}
 }
 
+// Hold runs fn under the admission an Update takes (issue #4264): what fn writes, the resource store an Update writes too,
+// has one writer at a time. While an Update runs it returns ErrRunning at once, and after Stop ErrStopped, without running
+// fn; otherwise it returns fn's error, and an Update may start once it returns.
+func (g *Gate) Hold(fn func() error) error {
+	g.mu.Lock()
+	if g.stopped {
+		g.mu.Unlock()
+		return ErrStopped
+	}
+	if !g.admit.TryLock() {
+		g.mu.Unlock()
+		return ErrRunning
+	}
+	g.mu.Unlock()
+	defer g.admit.Unlock()
+	if g.Admit != nil {
+		lease, err := g.Admit(g.logPath)
+		if err != nil {
+			return err
+		}
+		defer lease.Close()
+	}
+	return fn()
+}
+
 // Start admits req (TryLock) or returns ErrRunning at once. commit, when set, runs once after the
 // admission lease is held and before the worker is released. It also refuses after Stop with ErrStopped.
 func (g *Gate) Start(req Request, commit func() (map[string]int64, error)) error {
