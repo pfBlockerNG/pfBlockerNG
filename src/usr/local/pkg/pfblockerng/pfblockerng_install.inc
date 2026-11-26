@@ -79,7 +79,9 @@ if (pfb_geoip_refresh_navigation()) {
 	update_status(" failed.");
 }
 
-// MaxMind Database is no longer pre-installed during package installation
+// MaxMind Database is no longer pre-installed during package installation; and once the Core Updater publishes the country
+// folder, its ISO list is inside the generation, so PHP's goes (issue #4261)
+pfb_geoip_retire_php_isos($pfb['ccdir'], $pfb['dbdir']);
 if (empty($pfb['maxmind_key'])) {
 	update_status("\nMaxMind GeoIP databases are not pre-installed during installation.\nTo utilize the MaxMind GeoIP functionalities, you will be required to register for a free MaxMind user account and access key. Review the IP tab: MaxMind Settings for more details.\n\n");
 }

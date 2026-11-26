@@ -3433,7 +3433,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		$maxmind_verify = TRUE;
 		if (!file_exists("{$pfb['geoipshare']}/GeoLite2-Country.mmdb") ||
 		    !file_exists("{$pfb['geoipshare']}/GeoLite2-Country-Blocks-IPv4.csv") ||
-		    !file_exists("{$pfb['dbdir']}/geoip.txt") ||
+		    !file_exists($pfb['geoip_isos']) ||
 		    !file_exists("{$pfb['ccdir']}/Top_Spammers_v4.info")) {
 
 			// Check if MaxMind download already in progress
