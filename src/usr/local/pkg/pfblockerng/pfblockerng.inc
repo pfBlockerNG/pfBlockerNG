@@ -6939,7 +6939,7 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		$marked = is_file(pfb_pending_changes_marker()) ? pfb_pending_changes_token() : NULL;
 		// issue #4263: a token outside the apply's rule never leaves the Outpost (a mebibyte of it would put Core's request over
 		// what the apply reads); answered as none, while pendingApply counts the marker, and the apply replaces the token
-		$token = $marked !== NULL && pfb_pending_token_valid($marked) ? $marked : NULL;
+		$token = pfb_pending_token_valid($marked) ? $marked : NULL;
 		$settings = pfb_core_settings($interfaces);
 		// issue #4038: pending state beside the token, outside the settings and their revision; Core never reads the token to decide it.
 		// pfb_core_update_pending_apply() on the token just taken, reading no file that is absent: a read must not warn

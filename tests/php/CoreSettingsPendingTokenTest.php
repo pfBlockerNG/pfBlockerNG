@@ -10,7 +10,8 @@ use PHPUnit\Framework\TestCase;
  * Issue #4031 (docs/specs/go-updater-pipeline.md §8.6): the settings adapter's read answers the pending-changes token beside the
  * settings, as `platform.pendingToken`, taken before the settings are read as sync_package_pfblockerng() takes it at its start. The
  * Core Updater hands it back unread and the Outpost apply settles exactly that token, so a change marked while the Update ran stays
- * pending. The token is opaque: carried whole or the read refused whole, never altered or truncated.
+ * pending. The token is opaque: a token the apply takes is carried whole; any other is answered as none (issue #4263), never
+ * altered or truncated.
  */
 #[CoversFunction('pfb_core_settings_backend')]
 #[CoversFunction('pfb_core_settings_serve')]
@@ -148,6 +149,7 @@ final class CoreSettingsPendingTokenTest extends TestCase
 			'control characters' => ["a\x01b\nc\td\"e\\f\x7f"],
 			'a NUL'              => ["a\0b"],
 			'multibyte text'     => ['tökén-✓'],
+			'not UTF-8'          => ["ab\xff\xfecd"],
 		];
 	}
 
@@ -166,31 +168,5 @@ final class CoreSettingsPendingTokenTest extends TestCase
 		$this->assertArrayHasKey('settings', $reply, 'the read answered ' . json_encode(array_keys($reply)));
 		$this->assertSame(['pendingToken' => NULL, 'pendingApply' => TRUE], $reply['platform'] ?? NULL);
 		$this->assertTrue($token === file_get_contents($this->marker), 'the marker is as it was');
-	}
-
-	/**
-	 * issue #4263 (owner, 2026-11-23): JSON cannot carry a token that is not UTF-8 unaltered, and refusing the read would stop
-	 * every Update. The read answers no token, never a substituted or partial one, and leaves the marker for the apply to discard.
-	 */
-	public function testATokenThatIsNotUtf8IsAnsweredAsNoTokenAndLeavesTheMarkerAlone(): void
-	{
-		file_put_contents($this->marker, "ab\xff\xfecd");
-
-		$reply = json_decode(pfb_core_settings_serve('{"version":1,"op":"read"}'), TRUE, 512, JSON_THROW_ON_ERROR);
-
-		$this->assertArrayHasKey('settings', $reply, 'the read answered ' . json_encode(array_keys($reply)));
-		$this->assertSame(['pendingToken' => NULL], array_intersect_key($reply['platform'] ?? [], ['pendingToken' => 1]),
-			'no substituted or partial token');
-		$this->assertSame("ab\xff\xfecd", file_get_contents($this->marker), 'the marker is as it was');
-	}
-
-	/** A marker whose token is not UTF-8 is still a change not applied: pendingApply says so, as pfb_pending_changes() does. */
-	public function testATokenThatIsNotUtf8StillCountsAsPending(): void
-	{
-		file_put_contents($this->marker, "ab\xff\xfecd");
-
-		$reply = json_decode(pfb_core_settings_serve('{"version":1,"op":"read"}'), TRUE, 512, JSON_THROW_ON_ERROR);
-
-		$this->assertTrue($reply['platform']['pendingApply'] ?? NULL, json_encode($reply['platform'] ?? NULL));
 	}
 }
