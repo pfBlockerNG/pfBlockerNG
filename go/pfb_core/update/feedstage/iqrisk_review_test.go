@@ -103,7 +103,7 @@ func TestAReloadWhoseKeptDownloadDoesNotSplitIsNoFailedTransfer(t *testing.T) {
 	if r := run(stage, feed, "none"); r.Disposition != "changed" {
 		t.Fatalf("the first run = %+v", r)
 	}
-	writeFile(t, filepath.Join(stage.Paths.FeedDir, "feed_v4.raw"), "no gzip\n")
+	writeFile(t, filepath.Join(stage.Paths.FeedDir, "feed_v4.raw"), "\x1f\x8bno gzip\n")
 
 	r := run(stage, feed, "parse")
 

@@ -102,7 +102,7 @@ func TestAReloadWhoseKeptDownloadDoesNotSplitPublishesNothing(t *testing.T) {
 	dir := stage.Paths.FeedDir
 	parsed, orig := filepath.Join(dir, "feed_v4.parsed.ip"), filepath.Join(dir, "feed_v4.orig")
 	listBefore, origBefore := readFile(t, parsed), readFile(t, orig)
-	writeFile(t, filepath.Join(dir, "feed_v4.raw"), "no gzip\n")
+	writeFile(t, filepath.Join(dir, "feed_v4.raw"), "\x1f\x8bno gzip\n")
 
 	stage.Fetcher.ETBlock = []string{"ET_P2P"}
 	r := run(stage, feed, "parse")
