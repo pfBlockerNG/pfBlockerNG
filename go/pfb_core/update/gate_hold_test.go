@@ -137,7 +137,8 @@ func TestViewsDuringHoldsNeverFail(t *testing.T) {
 	}()
 	for range 2000 {
 		if err := g.Hold(func() error { return nil }); err != nil {
-			t.Fatalf("Hold = %v", err)
+			t.Errorf("Hold = %v", err)
+			break
 		}
 	}
 	close(stop)
@@ -146,8 +147,9 @@ func TestViewsDuringHoldsNeverFail(t *testing.T) {
 	}
 }
 
-// A finished Update that awaits recovery keeps the store to its recovery, as Start does.
-func TestHoldIsRefusedWhileAFinishedUpdateAwaitsRecovery(t *testing.T) {
+// A finished Update that awaits recovery writes no resource: its recovery records outcomes in the schedule state and the
+// receipt alone, so a Hold does not wait on it (a Hold that did would refuse every Unlock until a Start recovered it).
+func TestAHoldRunsWhileAFinishedUpdateAwaitsRecovery(t *testing.T) {
 	log := independentLog(t)
 	finished, exitCode := int64(200), 0
 	if err := writeWorkerState(log.Name()+".status", workerState{
@@ -162,7 +164,7 @@ func TestHoldIsRefusedWhileAFinishedUpdateAwaitsRecovery(t *testing.T) {
 	t.Cleanup(g.Stop)
 
 	ran := false
-	if err := g.Hold(func() error { ran = true; return nil }); !errors.Is(err, ErrRecoveryRequired) || ran {
-		t.Errorf("Hold while a finished Update awaits recovery = %v, ran %v; want ErrRecoveryRequired and nothing run", err, ran)
+	if err := g.Hold(func() error { ran = true; return nil }); err != nil || !ran {
+		t.Errorf("Hold while a finished Update awaits recovery = %v, ran %v; want its work run", err, ran)
 	}
 }
