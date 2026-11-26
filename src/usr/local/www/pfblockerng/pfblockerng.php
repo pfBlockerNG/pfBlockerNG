@@ -268,7 +268,7 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 			fwrite(STDERR, "{$pfb_deprecated}\n");
 		}
 		exit(pfb_cli_update_run($pfb_update_request, 'pfb_core_call',
-			static function (string $text): void { echo $text; },
+			pfb_stdout_is_terminal() ? static function (string $text): void { echo $text; } : NULL,
 			static function (string $text): void { fwrite(STDERR, $text); },
 			static function (): void { sleep(1); }));
 	}
