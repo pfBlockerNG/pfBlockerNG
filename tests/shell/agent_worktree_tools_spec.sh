@@ -7,7 +7,7 @@ Describe 'init-worktree-tools.sh'
   make_tool_path() {
     destination=$1
     mkdir -p "$destination"
-    for tool in sh dirname git tr mkdir pwd; do
+    for tool in sh dirname git tr mkdir pwd mv; do
       ln -s "$(command -v "$tool")" "$destination/$tool"
     done
   }
@@ -135,6 +135,14 @@ SERENA
     The status should equal 2
     The stderr should include 'the worktree root .gitignore must not be a symlink'
     Assert [ ! -e "$fixture/outside-ignore" ]
+  End
+
+  It "writes the ignore before it needs CodeGraph, so a cut on a host without it is ignored too"
+    linked "$worktree/.worktrees/topic" || return 1
+    When run env PATH="$no_codegraph" sh "$script_abs" "$worktree/.worktrees/topic"
+    The status should equal 4
+    The stderr should include 'codegraph'
+    The contents of file "$worktree/.worktrees/.gitignore" should equal '*'
   End
 
   It "leaves the primary's .worktrees/ alone for a worktree cut elsewhere"
