@@ -19405,8 +19405,29 @@ function pfb_unbound_python_sources_whitelist() {
 // the query-time whiteDB rebuild from it on the next reload. The alerts handler's
 // reload (pfb_reload_unbound) does NOT delete the store, so store and manifest stay in
 // step; a full update/Force/Cron is the only thing that clears both.
-function pfb_unbound_python_sources_unlock() {
-	return pfb_unbound_python_sources_patch('user_unlock', pfb_dnsbl_unlock_lines());
+//
+// issue #4264 (owner, 2026-11-24): Core holds the temporary unlocks, so the same set goes to Core too (SetTemporaryUnlocks),
+// which republishes dnsbl/manifest's unlock rows for pfB-DNS on the Core input; until the cutover the patch below still
+// applies, so both paths give the same set. A Core that does not take it is logged and never stops the patch.
+function pfb_unbound_python_sources_unlock(?callable $call = NULL) {
+	$domains = pfb_dnsbl_unlock_lines();
+	$error = pfb_set_temporary_unlocks($call ?? 'pfb_core_call', $domains);
+	if ($error !== NULL) {
+		pfb_logger("\n Core did not take the temporary DNSBL unlocks: {$error}\n", 1);
+	}
+	return pfb_unbound_python_sources_patch('user_unlock', $domains);
+}
+
+/**
+ * Hand Core the whole set of temporary DNSBL unlocks (issue #4264): NULL once Core took it, otherwise why not, as one line for
+ * the log. The call is bounded by PFB_CORE_PAGE_TIMEOUT.
+ *
+ * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ * @param list<string> $domains
+ */
+function pfb_set_temporary_unlocks(callable $call, array $domains): ?string {
+	return pfb_update_core_failure($call('SetTemporaryUnlocks', ['requestId' => bin2hex(random_bytes(16)), 'domains' => array_values($domains)],
+		NULL, PFB_CORE_PAGE_TIMEOUT));
 }
 
 
