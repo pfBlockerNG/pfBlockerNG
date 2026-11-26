@@ -4938,8 +4938,9 @@ function pfb_outpost_parts_fetch(string $id, string $generation, array $parts, ?
  *
  * Any failure of the transfer itself, a reply curl cannot frame included, counts as unreachable and does not fall back.
  *
- * An empty IP set's mirror is its family's placeholder address (issue #4196), and a placeholder mirror is the empty body a
- * cursor of no entries records: the cursor is sent, and a delta from it merges into an empty base.
+ * An empty IP set's mirror is its family's placeholder address (issue #4196), and only a placeholder mirror is the empty body a
+ * cursor of no entries records: the cursor is sent, and a delta from it merges into an empty base; an empty file there sends
+ * none, so the full body brings the placeholder. An aggregate is never padded.
  *
  * failure, when ok is FALSE: unreachable (no whole HTTP reply), core_unavailable (the call answered unavailable), refused (any
  * other error answered to the call; code names it), unavailable (the resource or its body), reply (an answer of the wrong
@@ -4965,7 +4966,7 @@ function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $w
 	$fail = static function (string $failure, string $error, ?string $code = NULL) use (&$result, $mirror): array {
 		return ['failure' => $failure, 'error' => "{$mirror}: {$error}", 'code' => $code] + $result;
 	};
-	$family = preg_match('~^ip-(?:set|aggregate)/[^/]+/(ipv[46])$~D', $id, $m) === 1 ? $m[1] : NULL;
+	[$resourceKind, $family] = preg_match('~^ip-(set|aggregate)/[^/]+/(ipv[46])$~D', $id, $m) === 1 ? [$m[1], $m[2]] : [NULL, NULL];
 	$staged = "{$mirror}.new";
 	[$add, $remove] = ["{$workdir}/add", "{$workdir}/remove"];
 	$discard = static function () use ($staged, $add, $remove): void {
@@ -4977,7 +4978,7 @@ function pfb_outpost_fetch(string $id, ?array $cursor, string $mirror, string $w
 	// issue #4196: an empty IP set's mirror holds the placeholder address, as the update pass leaves an empty list, so that
 	// pfSense's filter reload finds a table file it does not fetch again; it stands for Core's empty body. An aggregate is never
 	// padded, as the pass keeps the placeholder out of one (pfb_aggregate_member_list())
-	$placeholder = $family === NULL || !str_starts_with($id, 'ip-set/') ? NULL
+	$placeholder = $resourceKind !== 'set' ? NULL
 		: pfb_placeholder_for_family(pfb_ip_placeholder(), $family === 'ipv6' ? 'v6' : 'v4') . "\n";
 	clearstatcache(TRUE, $mirror);
 	$base = $mirror;	// what a delta merges into: an empty base for a placeholder mirror

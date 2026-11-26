@@ -7269,8 +7269,8 @@ function pfb_outpost_apply_run(array $request, $out, ?string $socket, bool $abso
 				$asked = ['id' => $id, 'current' => $current, 'asked' => $resource['generation']];
 				if ($got['kind'] === 'unchanged') {
 					// unchanged answers the cursor sent, so the mirror is its body: a table pf lost is replaced from it (an empty
-					// set's, from its placeholder)
-					if ($alias !== NULL && pfb_pfctl_table_empty($alias)) {
+					// IP set's, from its placeholder; an empty aggregate is never padded, so its empty table is its set)
+					if ($alias !== NULL && ($cursors[$id]['entries'] > 0 || str_starts_with($id, 'ip-set/')) && pfb_pfctl_table_empty($alias)) {
 						$fetched[$alias] = $asked + ['kind' => 'unchanged', 'mirror' => $mirror, 'staged' => NULL] + $cursors[$id];
 					} elseif ($current) {
 						$applied[$id] = $resource['generation'];
