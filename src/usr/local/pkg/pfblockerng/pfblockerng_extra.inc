@@ -6800,7 +6800,7 @@ function pfb_core_update_v2_request(string $stdin): array
 		['version', 'trigger', 'scope', 'pendingToken', 'pendingOutsideWindow', 'resources', 'removed', 'dnsbl', 'issues']);
 	$trigger = pfb_core_update_choose($request, 'trigger', ['scheduled', 'manual', 'apply', 'retry'], NULL);
 	$scope = pfb_core_update_choose($request, 'scope', ['ip', 'dnsbl', 'both'], 'both');
-	// issue #4263 (owner, 2026-11-23): any other token is read as none; the apply discards the marker that holds it
+	// issue #4263 (owner, 2026-11-23): any other token is read as none; the apply replaces the marker's token
 	$token = pfb_pending_token_valid($request['pendingToken'] ?? NULL) ? $request['pendingToken'] : NULL;
 	$outside = $request['pendingOutsideWindow'] ?? FALSE;
 	if (!is_bool($outside)) {
@@ -7533,58 +7533,22 @@ function pfb_outpost_expected_aliases(): array
 
 /**
  * Issue #4263 (owner, 2026-11-23): a pending marker whose token the apply does not take (pfb_pending_token_valid()) would make
- * every apply refuse its request; it is discarded, and the issue returned for the status page, where its entry stays until the
- * next apply (pfb_outpost_issues() closes what a request no longer names; the notice stays). An empty marker is a mark to
- * version (pfb_pending_changes_token()), not a bad token.
+ * every apply refuse its request. Its token is discarded: the marker is rewritten with a fresh mark (pfb_mark_pending_changes()),
+ * so what was pending stays pending until an apply settles the new mark, and a save writing meanwhile writes a valid mark too,
+ * so none is lost. The issue is returned for the status page, where its entry stays until the next apply (pfb_outpost_issues()
+ * closes what a request no longer names; the notice stays). An empty marker is a mark to version, not a bad token.
  *
- * The marker is set aside by a rename, and what was set aside decides: a bad token is removed with the applied record; a
- * valid or empty mark (a save that marked between the read and the rename) goes back by link(), which never replaces a
- * newer marker. What an apply stopped half-way left aside is settled the same way first. $seams['read'] and $seams['aside']
- * run after the read and after the rename, for the tests.
- *
- * @param array{read?: callable(): mixed, aside?: callable(): mixed} $seams
  * @return list<array{resource: string, stage: string, code: string, message: string}>
  */
-function pfb_outpost_repair_pending_marker(array $seams = []): array
+function pfb_outpost_repair_pending_marker(): array
 {
-	$marker = pfb_pending_changes_marker();
-	$aside = "{$marker}.discard";
-	// What is set aside decides: a mark goes back, a bad token is discarded and reported, an aside gone meanwhile is nothing.
-	$settle = static function () use ($marker, $aside): array {
-		$held = @file_get_contents($aside);
-		if (!is_string($held)) {
-			return [];
-		}
-		if ($held === '' || pfb_pending_token_valid($held)) {
-			// link() never replaces a newer marker; a filesystem without hard links takes the rename while none stands
-			if (!@link($aside, $marker) && !file_exists($marker)) {
-				@rename($aside, $marker);
-			}
-			@unlink($aside);
-			return [];
-		}
-		@unlink($aside);
-		@unlink("{$marker}.applied");
-		return [['resource' => 'pending-marker', 'stage' => 'apply', 'code' => 'pending_token_invalid',
-			'message' => 'the pending-changes marker held a token that is not 1 to 64 printable ASCII characters; it was discarded']];
-	};
-	if (file_exists($aside)) {
-		return $settle();	// left by an apply stopped half-way; its marker, if any, is the next apply's
-	}
-	$held = @file_get_contents($marker);
+	$held = @file_get_contents(pfb_pending_changes_marker());
 	if (!is_string($held) || $held === '' || pfb_pending_token_valid($held)) {
 		return [];
 	}
-	if (isset($seams['read'])) {
-		$seams['read']();
-	}
-	if (!@rename($marker, $aside)) {
-		return [];	// gone meanwhile: nothing to discard
-	}
-	if (isset($seams['aside'])) {
-		$seams['aside']();
-	}
-	return $settle();
+	pfb_mark_pending_changes();
+	return [['resource' => 'pending-marker', 'stage' => 'apply', 'code' => 'pending_token_invalid',
+		'message' => 'the pending-changes marker held a token that is not 1 to 64 printable ASCII characters; it was replaced by a new mark']];
 }
 
 /**

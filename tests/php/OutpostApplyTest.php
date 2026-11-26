@@ -315,7 +315,8 @@ final class OutpostApplyTest extends TestCase
 
 	/**
 	 * issue #4263 (owner, 2026-11-23): WHEN the pending marker holds a token that is not 1 to 64 printable ASCII characters, and
-	 * Core hands it back THEN the apply discards the marker, files an issue the status page shows, and applies the request.
+	 * Core hands it back THEN the apply replaces the token by a fresh mark, files an issue the status page shows, and applies the
+	 * request; what was pending stays pending for the next apply to settle.
 	 */
 	public function testAMarkerWithAnInvalidTokenIsDiscardedAndTheApplyProceeds(): void
 	{
@@ -329,7 +330,7 @@ final class OutpostApplyTest extends TestCase
 		$this->assertSame(0, $r['exit'], $r['log']);
 		$this->assertSame([self::ABUSE => '2'], self::generations($r), 'the request was applied');
 		$this->assertSame(self::NEW, $r['kernel']['pfB_Abuse_v4']);
-		$this->assertFalse($r['pending'], 'the marker is discarded');
+		$this->assertTrue($r['pending'], 'the marker holds a fresh mark, still pending');
 		$entry = json_decode($r['syncStatus']['pfb_sync_status.json'] ?? '{}', TRUE)['ip']['pending-marker']['core'] ?? NULL;
 		$this->assertIsArray($entry, 'the status page shows the issue: ' . ($r['syncStatus']['pfb_sync_status.json'] ?? 'no ledger'));
 		$this->assertStringStartsWith('pending_token_invalid: ', $entry['message']);
