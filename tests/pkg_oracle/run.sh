@@ -53,7 +53,7 @@ stage_gateway() {
 
 stage="$out/stage"
 rm -rf "$stage" && mkdir -p "$stage"
-tar -C "$repo" --exclude=.git --exclude=.codegraph -cf - . | tar -C "$stage" -xf -
+tar -C "$repo" --exclude=.git -cf - . | tar -C "$stage" -xf -
 if [ -f "$repo/go/pfb_dns_gateway/go.mod" ]; then
 	stage_gateway "$repo" "$stage/src/usr/local/pkg/pfblockerng/dns_proxy/bin/freebsd-amd64/pfb-dns" "$out/results/pfb-dns.txt"
 fi

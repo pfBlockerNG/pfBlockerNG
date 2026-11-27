@@ -23,8 +23,7 @@ Describe 'setup-agent-tools.sh'
     home="$fixture/home root"
     repository="$fixture/repository root"
     xdg_config="$home/config root"
-    serena_state="$fixture/serena-state"
-    mkdir -p "$home" "$repository/scripts/agent" "$serena_state"
+    mkdir -p "$home" "$repository/scripts/agent"
     git_fixture init -q "$repository" &&
       git_fixture -C "$repository" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
         commit -q --allow-empty -m init || return 1
@@ -133,14 +132,6 @@ mkdir -p "$uv_bin"
 cp "$DEBIAN_INSTALLABLES/uv" "$uv_bin/uv"
 INSTALL_UV
     ;;
-  https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh)
-    cat <<'INSTALL_CODEGRAPH'
-#!/bin/sh
-codegraph_bin=${CODEGRAPH_BIN_DIR:-$HOME/.local/bin}
-mkdir -p "$codegraph_bin"
-cp "$DEBIAN_INSTALLABLES/codegraph" "$codegraph_bin/codegraph"
-INSTALL_CODEGRAPH
-    ;;
   https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh)
     cat <<'INSTALL_WORKTRUNK'
 #!/bin/sh
@@ -157,11 +148,6 @@ CURL
 #!/bin/sh
 printf 'uv:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
 case "$*" in
-  "tool install --upgrade serena-agent=="*)
-    uv_tool_bin=${UV_TOOL_BIN_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}
-    mkdir -p "$uv_tool_bin"
-    cp "$DEBIAN_INSTALLABLES/serena" "$uv_tool_bin/serena"
-    ;;
   'tool install --upgrade ast-grep-cli')
     uv_tool_bin=${UV_TOOL_BIN_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}
     mkdir -p "$uv_tool_bin"
@@ -175,74 +161,6 @@ case "$*" in
   *) exit 9 ;;
 esac
 UV
-    cat > "$installables/serena" <<'SERENA'
-#!/bin/sh
-printf 'serena:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
-if [ "$#" -eq 1 ] && [ "$1" = init ]; then
-  mkdir -p "$HOME/.serena"
-  if [ ! -f "$HOME/.serena/serena_config.yml" ]; then
-    case "${SERENA_CONFIG_MODE:-root}" in
-      root)
-        cat > "$HOME/.serena/serena_config.yml" <<'CONFIG'
-# preserved
-web_dashboard: true
-projects:
-  demo:
-    web_dashboard: true
-CONFIG
-        ;;
-      missing-root)
-        cat > "$HOME/.serena/serena_config.yml" <<'CONFIG'
-projects:
-  demo:
-    web_dashboard: true
-CONFIG
-        ;;
-      double-root)
-        cat > "$HOME/.serena/serena_config.yml" <<'CONFIG'
-"web_dashboard": true
-projects:
-  demo:
-    web_dashboard: true
-CONFIG
-        ;;
-      single-root)
-        cat > "$HOME/.serena/serena_config.yml" <<'CONFIG'
-'web_dashboard': true
-projects:
-  demo:
-    web_dashboard: true
-CONFIG
-        ;;
-      *) exit 9 ;;
-    esac
-  fi
-fi
-if [ "$#" -eq 2 ] && [ "$1" = setup ]; then
-  case "${SERENA_SETUP_MODE:-ok}" in
-    ok) ;;
-    duplicate)
-      if [ ! -f "$SERENA_STATE_DIR/$2.removed" ]; then
-        printf '%s\n' "Serena MCP entry for $2 already exists" >&2
-        exit 7
-      fi
-      ;;
-    permission-denied)
-      printf '%s\n' 'permission denied' >&2
-      exit 7
-      ;;
-    *) exit 9 ;;
-  esac
-fi
-SERENA
-    cat > "$installables/codegraph" <<'CODEGRAPH'
-#!/bin/sh
-printf 'codegraph:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
-case "$*" in
-  upgrade|'install -l global -y -t auto') ;;
-  *) exit 9 ;;
-esac
-CODEGRAPH
     for tool in ast-grep semgrep; do
       cat > "$installables/$tool" <<'STATIC_TOOL'
 #!/bin/sh
@@ -254,41 +172,9 @@ STATIC_TOOL
 [ "$*" = 'config shell install --yes' ] || exit 9
 printf 'wt:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
 WORKTRUNK
-    cat > "$installables/claude" <<'CLAUDE'
-#!/bin/sh
-printf 'claude:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
-case "$*" in
-  'mcp remove serena -s user') touch "$SERENA_STATE_DIR/claude-code.removed" ;;
-  *) exit 9 ;;
-esac
-CLAUDE
-    cat > "$installables/codex" <<'CODEX'
-#!/bin/sh
-printf 'codex:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
-case "$*" in
-  'mcp remove serena') touch "$SERENA_STATE_DIR/codex.removed" ;;
-  *) exit 9 ;;
-esac
-CODEX
-    for client in copilot omp pi; do
-      cat > "$installables/$client" <<'CLIENT'
-#!/bin/sh
-exit 0
-CLIENT
-    done
-    cat > "$installables/grok" <<'GROK'
-#!/bin/sh
-printf 'grok:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
-case "$*" in
-  'mcp remove serena') touch "$SERENA_STATE_DIR/grok.removed" ;;
-  'mcp doctor codegraph --json') exit "${GROK_DOCTOR_RC:-0}" ;;
-  'mcp remove codegraph'|'mcp add codegraph -- codegraph serve --mcp') ;;
-  *) exit 9 ;;
-esac
-GROK
     chmod +x "$activebin/id" "$activebin/uname" "$activebin/dpkg-query" \
       "$activebin/apt-get" "$activebin/sudo" "$activebin/brew" "$activebin/curl" "$installables"/*
-    for tool in uv serena codegraph wt; do
+    for tool in uv wt; do
       cp "$installables/$tool" "$activebin/$tool"
     done
 
@@ -303,16 +189,11 @@ GROK
     export DEBIAN_INSTALLABLES="$installables"
     export DEBIAN_REPOSITORY="$repository"
     export BREW_UV_PREFIX="$brew_prefix"
-    export SERENA_STATE_DIR="$serena_state"
     unset CLAUDECODE CODEX_THREAD_ID COPILOT_CLI GROK_AGENT GROK_SESSION_ID OMP_CLI PI_CLI
-    unset DEBIAN_MISSING_PACKAGES SERENA_CONFIG_MODE SERENA_SETUP_MODE SERENA_AGENT_VERSION
-    unset GROK_DOCTOR_RC AGENT_TEST_OS BREW_UV_INSTALLED XDG_BIN_HOME UV_TOOL_BIN_DIR
-    unset UV_OMIT_TOOL CODEGRAPH_BIN_DIR CARGO_HOME
+    unset DEBIAN_MISSING_PACKAGES
+    unset AGENT_TEST_OS BREW_UV_INSTALLED XDG_BIN_HOME UV_TOOL_BIN_DIR
+    unset UV_OMIT_TOOL CARGO_HOME
     PATH="$activebin:$basebin"; export PATH
-  }
-
-  enable_client() {
-    cp "$installables/$1" "$activebin/$1"
   }
 
   cleanup() {
@@ -343,25 +224,19 @@ GROK
   End
 
   It 'uses official installers and current-process user paths on an initial Linux setup'
-    rm -f "$activebin/brew" "$activebin/uv" "$activebin/serena" "$activebin/codegraph" "$activebin/wt"
+    rm -f "$activebin/brew" "$activebin/uv" "$activebin/wt"
     When run sh "$script_abs" "$repository"
     The status should equal 0
-    The contents of file "$curl_log" should equal "$(printf '%s\n%s\n%s' \
+    The contents of file "$curl_log" should equal "$(printf '%s\n%s' \
       'https://astral.sh/uv/install.sh' \
-      'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh' \
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh')"
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
-      'uv:tool install --upgrade serena-agent==1.7.0' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
-      'codegraph:install -l global -y -t auto' \
-      'wt:config shell install --yes' \
-      'serena:init')"
+      'wt:config shell install --yes')"
     The path "$home/.local/bin/uv" should be executable
-    The path "$home/.local/bin/serena" should be executable
     The path "$home/.local/bin/ast-grep" should be executable
     The path "$home/.local/bin/semgrep" should be executable
-    The path "$home/.local/bin/codegraph" should be executable
     The path "$home/.cargo/bin/wt" should be executable
   End
 
@@ -458,34 +333,26 @@ FAIL_SKILL_PUBLISH
   End
 
   It 'resolves every initial Linux tool from its configured destination immediately'
-    rm -f "$activebin/uv" "$activebin/serena" "$activebin/codegraph" "$activebin/wt"
+    rm -f "$activebin/uv" "$activebin/wt"
     custom_xdg_bin="$fixture/custom xdg bin"
     custom_uv_tool_bin="$fixture/custom uv tool bin"
-    custom_codegraph_bin="$fixture/custom codegraph bin"
     custom_cargo_home="$fixture/custom cargo home"
     When run env \
       XDG_BIN_HOME="$custom_xdg_bin" \
       UV_TOOL_BIN_DIR="$custom_uv_tool_bin" \
-      CODEGRAPH_BIN_DIR="$custom_codegraph_bin" \
       CARGO_HOME="$custom_cargo_home" \
       sh "$script_abs" "$repository"
     The status should equal 0
-    The contents of file "$curl_log" should equal "$(printf '%s\n%s\n%s' \
+    The contents of file "$curl_log" should equal "$(printf '%s\n%s' \
       'https://astral.sh/uv/install.sh' \
-      'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh' \
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh')"
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
-      'uv:tool install --upgrade serena-agent==1.7.0' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
-      'codegraph:install -l global -y -t auto' \
-      'wt:config shell install --yes' \
-      'serena:init')"
+      'wt:config shell install --yes')"
     The path "$custom_xdg_bin/uv" should be executable
-    The path "$custom_uv_tool_bin/serena" should be executable
     The path "$custom_uv_tool_bin/ast-grep" should be executable
     The path "$custom_uv_tool_bin/semgrep" should be executable
-    The path "$custom_codegraph_bin/codegraph" should be executable
     The path "$custom_cargo_home/bin/wt" should be executable
   End
 
@@ -494,7 +361,7 @@ FAIL_SKILL_PUBLISH
     When run sh "$script_abs" "$repository"
     The status should not equal 0
     The stderr should include 'TOOL-MISSING: ast-grep'
-    The contents of file "$tool_log" should not include 'codegraph:'
+    The contents of file "$tool_log" should not include 'wt:'
   End
 
   It 'requires semgrep immediately after its uv installation'
@@ -502,22 +369,18 @@ FAIL_SKILL_PUBLISH
     When run sh "$script_abs" "$repository"
     The status should not equal 0
     The stderr should include 'TOOL-MISSING: semgrep'
-    The contents of file "$tool_log" should not include 'codegraph:'
+    The contents of file "$tool_log" should not include 'wt:'
   End
 
-  It 'leaves an existing Linux uv alone and updates CodeGraph while rerunning global auto configuration'
+  It 'leaves an existing Linux uv alone on a rerun'
     When run sh "$script_abs" "$repository"
     The status should equal 0
     The contents of file "$curl_log" should equal \
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh'
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
-      'uv:tool install --upgrade serena-agent==1.7.0' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
-      'codegraph:upgrade' \
-      'codegraph:install -l global -y -t auto' \
-      'wt:config shell install --yes' \
-      'serena:init')"
+      'wt:config shell install --yes')"
     The file "$apt_log" should not be exist
   End
 
@@ -534,13 +397,9 @@ UNMANAGED_UV
       'brew:list --versions uv' \
       'brew:install uv' \
       'brew:--prefix uv' \
-      'uv:tool install --upgrade serena-agent==1.7.0' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
-      'codegraph:upgrade' \
-      'codegraph:install -l global -y -t auto' \
-      'wt:config shell install --yes' \
-      'serena:init')"
+      'wt:config shell install --yes')"
     The contents of file "$curl_log" should equal \
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh'
     The path "$brew_prefix/bin/uv" should be executable
@@ -554,45 +413,32 @@ UNMANAGED_UV
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
       'brew:list --versions uv' \
       'brew:--prefix uv' \
-      'uv:tool install --upgrade serena-agent==1.7.0' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
-      'codegraph:upgrade' \
-      'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
-      'serena:init' \
       'brew:list --versions uv' \
       'brew:--prefix uv' \
-      'uv:tool install --upgrade serena-agent==1.7.0' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
-      'codegraph:upgrade' \
-      'codegraph:install -l global -y -t auto' \
-      'wt:config shell install --yes' \
-      'serena:init')"
+      'wt:config shell install --yes')"
     Assert [ "$(grep -c '^https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh$' "$curl_log")" -eq 2 ]
     The path "$brew_prefix/bin/uv" should be executable
     The file "$apt_log" should not be exist
   End
 
-  It 'uses the official CodeGraph installer and managed uv prefix for an initial Darwin setup'
-    rm -f "$activebin/uv" "$activebin/codegraph"
+  It 'uses the managed uv prefix for an initial Darwin setup'
+    rm -f "$activebin/uv"
     When run env AGENT_TEST_OS=Darwin sh "$script_abs" "$repository"
     The status should equal 0
-    The contents of file "$curl_log" should equal "$(printf '%s\n%s' \
-      'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh' \
-      'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh')"
+    The contents of file "$curl_log" should equal \
+      'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh'
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
       'brew:list --versions uv' \
       'brew:--prefix uv' \
-      'uv:tool install --upgrade serena-agent==1.7.0' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
-      'codegraph:install -l global -y -t auto' \
-      'wt:config shell install --yes' \
-      'serena:init')"
+      'wt:config shell install --yes')"
     The path "$brew_prefix/bin/uv" should be executable
-    The path "$home/.local/bin/codegraph" should be executable
     The file "$apt_log" should not be exist
   End
 
@@ -616,168 +462,22 @@ UNMANAGED_UV
     The path "$home/.local" should not be exist
     The path "$home/.cargo" should not be exist
     The path "$worktrunk_config" should not be exist
-    The path "$home/.serena/serena_config.yml" should not be exist
   End
 
-  It 'disables only the root Serena dashboard key and calls every repository helper for the default repository'
+  It 'calls every repository helper for the default repository'
     When run sh -c 'cd "$1" && exec sh "$2"' _ "$repository" "$script_abs"
     The status should equal 0
-    The contents of file "$home/.serena/serena_config.yml" should equal "$(printf '%s\n' \
-      '# preserved' \
-      'web_dashboard: false' \
-      'projects:' \
-      '  demo:' \
-      '    web_dashboard: true')"
     The contents of file "$helper_log" should equal \
       "$(printf 'setup-hooks:\ninit-worktree-tools:%s' "$repository")"
-    The contents of file "$tool_log" should include 'serena:init'
     The contents of file "$tool_log" should include 'wt:config shell install --yes'
-    The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
   End
 
-  It 'fails before repository initialization when Serena has no root dashboard key to disable'
-    export SERENA_CONFIG_MODE=missing-root
-    When run sh "$script_abs" "$repository"
-    The status should not equal 0
-    The contents of file "$home/.serena/serena_config.yml" should equal "$(printf '%s\n' \
-      'projects:' \
-      '  demo:' \
-      '    web_dashboard: true')"
-    The contents of file "$helper_log" should equal 'setup-hooks:'
-    The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
-  End
-
-  It 'canonicalizes a double-quoted root Serena dashboard key without changing the nested key'
-    export SERENA_CONFIG_MODE=double-root
-    When run sh "$script_abs" "$repository"
-    The status should equal 0
-    The contents of file "$home/.serena/serena_config.yml" should equal "$(printf '%s\n' \
-      'web_dashboard: false' \
-      'projects:' \
-      '  demo:' \
-      '    web_dashboard: true')"
-    The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
-  End
-
-  It 'canonicalizes a single-quoted root Serena dashboard key without changing the nested key'
-    export SERENA_CONFIG_MODE=single-root
-    When run sh "$script_abs" "$repository"
-    The status should equal 0
-    The contents of file "$home/.serena/serena_config.yml" should equal "$(printf '%s\n' \
-      'web_dashboard: false' \
-      'projects:' \
-      '  demo:' \
-      '    web_dashboard: true')"
-    The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
-  End
-
-  It 'replaces a duplicate Claude Code Serena entry before retrying setup'
-    enable_client claude
-    export SERENA_SETUP_MODE=duplicate
-    When run sh "$script_abs" "$repository"
-    The status should equal 0
-    The contents of file "$tool_log" should include "$(printf '%s\n%s\n%s' \
-      'serena:setup claude-code' \
-      'claude:mcp remove serena -s user' \
-      'serena:setup claude-code')"
-    Assert [ "$(grep -Fxc 'serena:setup claude-code' "$tool_log")" -eq 2 ]
-    Assert [ "$(grep -Fxc 'claude:mcp remove serena -s user' "$tool_log")" -eq 1 ]
-  End
-
-  It 'replaces a duplicate Codex Serena entry before retrying setup'
-    enable_client codex
-    export SERENA_SETUP_MODE=duplicate
-    When run sh "$script_abs" "$repository"
-    The status should equal 0
-    The contents of file "$tool_log" should include "$(printf '%s\n%s\n%s' \
-      'serena:setup codex' \
-      'codex:mcp remove serena' \
-      'serena:setup codex')"
-    Assert [ "$(grep -Fxc 'serena:setup codex' "$tool_log")" -eq 2 ]
-    Assert [ "$(grep -Fxc 'codex:mcp remove serena' "$tool_log")" -eq 1 ]
-  End
-
-  It 'replaces a duplicate Grok Serena entry before retrying setup'
-    enable_client grok
-    export SERENA_SETUP_MODE=duplicate
-    When run sh "$script_abs" "$repository"
-    The status should equal 0
-    The contents of file "$tool_log" should include "$(printf '%s\n%s\n%s' \
-      'serena:setup grok' \
-      'grok:mcp remove serena' \
-      'serena:setup grok')"
-    Assert [ "$(grep -Fxc 'serena:setup grok' "$tool_log")" -eq 2 ]
-    Assert [ "$(grep -Fxc 'grok:mcp remove serena' "$tool_log")" -eq 1 ]
-  End
-
-  It 'keeps a nonduplicate Serena setup failure fatal before removal'
-    enable_client claude
-    export SERENA_SETUP_MODE=permission-denied
-    When run sh "$script_abs" "$repository"
-    The status should not equal 0
-    The stderr should include 'permission denied'
-    Assert [ "$(grep -Fxc 'serena:setup claude-code' "$tool_log")" -eq 1 ]
-    The contents of file "$tool_log" should not include 'mcp remove serena'
-  End
-
-  It 'reruns detected Claude Code setup on every invocation'
-    enable_client claude
-    When run sh -c 'sh "$1" "$2" && sh "$1" "$2"' _ "$script_abs" "$repository"
-    The status should equal 0
-    Assert [ "$(grep -c '^serena:setup claude-code$' "$tool_log")" -eq 2 ]
-    Assert [ "$(grep -c '^codegraph:install -l global -y -t auto$' "$tool_log")" -eq 2 ]
-    The contents of file "$tool_log" should not include 'serena:setup codex'
-    The contents of file "$tool_log" should not include 'serena:setup grok'
-    The contents of file "$tool_log" should not include 'grok:mcp'
-  End
-
-  It 'reruns only detected Codex setup on every invocation'
-    enable_client codex
-    When run sh -c 'sh "$1" "$2" && sh "$1" "$2"' _ "$script_abs" "$repository"
-    The status should equal 0
-    Assert [ "$(grep -c '^serena:setup codex$' "$tool_log")" -eq 2 ]
-    Assert [ "$(grep -c '^codegraph:install -l global -y -t auto$' "$tool_log")" -eq 2 ]
-    The contents of file "$tool_log" should not include 'serena:setup claude-code'
-    The contents of file "$tool_log" should not include 'serena:setup grok'
-    The contents of file "$tool_log" should not include 'grok:mcp'
-  End
-
-  It 'reruns detected Grok setup on every invocation without changing repository agent policy'
-    enable_client grok
-    When run sh -c 'cd "$1" && sh "$2" "$1" && sh "$2" "$1"' _ "$repository" "$script_abs"
-    The status should equal 0
-    Assert [ "$(grep -c '^serena:setup grok$' "$tool_log")" -eq 2 ]
-    Assert [ "$(grep -c '^grok:mcp doctor codegraph --json$' "$tool_log")" -eq 2 ]
-    The contents of file "$tool_log" should not include 'grok:mcp remove codegraph'
-    The contents of file "$tool_log" should not include 'grok:mcp add codegraph'
-    Assert [ "$(grep -c '^codegraph:install -l global -y -t auto$' "$tool_log")" -eq 2 ]
-    Assert [ "$(cmp -s "$fixture/AGENTS.md.before" "$agent_marker"; printf '%s' "$?")" -eq 0 ]
-    Assert [ "$(cmp -s "$fixture/policy.before" "$policy_marker"; printf '%s' "$?")" -eq 0 ]
-  End
-
-  It 'repairs only an unhealthy detected Grok CodeGraph MCP entry with the canonical server command'
-    enable_client grok
-    export GROK_DOCTOR_RC=7
-    When run sh "$script_abs" "$repository"
-    The status should equal 0
-    The contents of file "$tool_log" should include "$(printf '%s\n%s\n%s' \
-      'grok:mcp doctor codegraph --json' \
-      'grok:mcp remove codegraph' \
-      'grok:mcp add codegraph -- codegraph serve --mcp')"
-    Assert [ "$(grep -c '^grok:mcp doctor codegraph --json$' "$tool_log")" -eq 1 ]
-    Assert [ "$(grep -c '^grok:mcp remove codegraph$' "$tool_log")" -eq 1 ]
-    Assert [ "$(grep -c '^grok:mcp add codegraph -- codegraph serve --mcp$' "$tool_log")" -eq 1 ]
-    Assert [ "$(grep -c '^codegraph:install -l global -y -t auto$' "$tool_log")" -eq 1 ]
-  End
-
-  It 'ignores agent environment markers when no client executable is present'
+  It 'ignores agent environment markers and leaves repository agent policy unchanged'
     When run env CLAUDECODE=1 CODEX_THREAD_ID=thread COPILOT_CLI=1 GROK_AGENT=1 \
       GROK_SESSION_ID=session OMP_CLI=1 PI_CLI=1 sh "$script_abs" "$repository"
     The status should equal 0
-    The contents of file "$tool_log" should include 'serena:init'
-    The contents of file "$tool_log" should not include 'serena:setup'
-    The contents of file "$tool_log" should not include 'grok:mcp'
-    The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
+    Assert [ "$(cmp -s "$fixture/AGENTS.md.before" "$agent_marker"; printf '%s' "$?")" -eq 0 ]
+    Assert [ "$(cmp -s "$fixture/policy.before" "$policy_marker"; printf '%s' "$?")" -eq 0 ]
     The file "$apt_log" should not be exist
     The contents of file "$curl_log" should equal \
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh'
@@ -931,22 +631,12 @@ CONFIG
     The status should equal 0
     The contents of file "$worktrunk_config" should equal "$canonical_worktree_path"
     Assert [ "$(grep -Fxc "$canonical_worktree_path" "$worktrunk_config")" -eq 1 ]
-    Assert [ "$(grep -c '^uv:tool install --upgrade serena-agent==1.7.0$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade ast-grep-cli$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade semgrep$' "$tool_log")" -eq 2 ]
-    Assert [ "$(grep -c '^codegraph:upgrade$' "$tool_log")" -eq 2 ]
-    Assert [ "$(grep -c '^codegraph:install -l global -y -t auto$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^wt:config shell install --yes$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh$' "$curl_log")" -eq 2 ]
     Assert [ "$(grep -c '^setup-hooks:$' "$helper_log")" -eq 2 ]
     Assert [ "$(grep -c "^init-worktree-tools:$repository$" "$helper_log")" -eq 2 ]
-  End
-
-  It 'installs the environment-overridden serena-agent version instead of the default pin'
-    When run env SERENA_AGENT_VERSION=9.9.9 sh "$script_abs" "$repository"
-    The status should equal 0
-    Assert [ "$(grep -c '^uv:tool install --upgrade serena-agent==9.9.9$' "$tool_log")" -eq 1 ]
-    Assert [ "$(grep -c '^uv:tool install --upgrade serena-agent==1.7.0$' "$tool_log")" -eq 0 ]
   End
 
   It 'requires every repository setup helper before running any of them'

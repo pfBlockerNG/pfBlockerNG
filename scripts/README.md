@@ -241,10 +241,9 @@ in `read-version-matrix.sh`.
 | --- | --- |
 | [`install-from-repo.sh`](install-from-repo.sh) | **First-time install** onto a clean pfSense from `src/` — no Netgate pkg. |
 | [`deploy.sh`](deploy.sh) | Fast code update of an **already-installed** pfBlockerNG: rsync `src/` + restart unbound/nginx. |
-| [`setup-hooks.sh`](setup-hooks.sh) | Mandatory post-clone setup: point git at `.githooks` and initialize CodeGraph when installed. |
-| [`agent/setup-agent-tools.sh`](agent/setup-agent-tools.sh) | Bootstrap or refresh a macOS/Debian agent host: install/update uv, Serena, CodeGraph, Worktrunk and configure detected clients (`.agents/context/repository-intelligence.md`). |
-| [`agent/init-worktree-tools.sh`](agent/init-worktree-tools.sh) | Initialize repository-intelligence tools for one exact worktree root (runs `ensure-codegraph.sh`); for a worktree under the primary's `.worktrees/`, write that folder's self-ignoring `.gitignore` first. |
-| [`agent/ensure-codegraph.sh`](agent/ensure-codegraph.sh) | Idempotently create an exact-root CodeGraph index for one checkout. |
+| [`setup-hooks.sh`](setup-hooks.sh) | Mandatory post-clone setup: point git at `.githooks`. |
+| [`agent/setup-agent-tools.sh`](agent/setup-agent-tools.sh) | Bootstrap or refresh a macOS/Debian agent host: install/update uv, ast-grep, semgrep and Worktrunk (`.agents/context/repository-intelligence.md`). |
+| [`agent/init-worktree-tools.sh`](agent/init-worktree-tools.sh) | Prepare one exact worktree root: for a worktree under the primary's `.worktrees/`, write that folder's self-ignoring `.gitignore`. |
 | [`git-no-docs.sh`](git-no-docs.sh) | Local doc-free history views: run a read-only git command (default `log -p`) with the `.gitattributes` `linguist-documentation` trees (`legacy/ADRs/`, `docs/`) excluded from its pathspec. |
 | [`update-pfsense-stubs.py`](update-pfsense-stubs.py) | Regenerate `stubs/pfsense/` after a CE bump. |
 

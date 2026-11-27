@@ -1,6 +1,6 @@
 #!/bin/sh
-# Initialize repository-intelligence tools for one exact worktree root. A worktree under the primary's
-# .worktrees/ also has that folder ignore itself (ignore_worktrees, #4265), whether or not the tools are installed.
+# Prepare one exact worktree root: a worktree under the primary's .worktrees/ has that folder ignore itself
+# (ignore_worktrees, #4265).
 
 usage() {
 	echo "usage: init-worktree-tools.sh [WORKTREE]" >&2
@@ -25,15 +25,6 @@ main() {
 	case "$root" in
 		"$primary/.worktrees/"*) ignore_worktrees "$primary/.worktrees" || exit $? ;;
 	esac
-	require_tool codegraph
-	sh "$(dirname "$0")/ensure-codegraph.sh" "$root" || exit $?
-
-	case "${OMP_CLI:-}${PI_CLI:-}" in
-		'') ;;
-		*) exit 0 ;;
-	esac
-	command -v serena >/dev/null 2>&1 || exit 0
-	serena project index "$root"
 }
 
 main "$@"

@@ -70,6 +70,5 @@ owns. Whoever finds one reaps it on sight under `landing.md`'s conditions, never
 mtime: clean tree (`git status --porcelain` empty, untracked included), no live process
 under it (`/proc/*/cwd`, `/proc/*/fd`), and either a PR `MERGED` whose head equals or
 descends from the local head with no open PR at that head, or `wt list` reporting the
-branch integrated into `devel`. Stop its CodeGraph daemon
-(`repository-intelligence.md`), run the `landing.md` removal command, observe
+branch integrated into `devel`. Run the `landing.md` removal command, observe
 `branch_outcome`; anything else stays and is reported.

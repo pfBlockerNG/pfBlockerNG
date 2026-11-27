@@ -15,8 +15,7 @@ Codex translate canonical nouns mechanically:
 | Commit and public attribution | None. Commits use the configured user identity; public bodies contain no agent/model/client footer. |
 | Claude-only status/token/UI hooks | No equivalent unless `.codex/hooks.json` map one. |
 
-Repository-intelligence routing is canonical in `AGENTS.md`; Codex maps its exact
-language-semantic/LSP surface there to Serena.
+Repository-intelligence routing is canonical in `AGENTS.md`.
 
 Skills with `policy.allow_implicit_invocation: false` may be absent from startup metadata but stay explicitly invokable. Never report explicitly named `$name` unavailable from startup metadata alone; first resolve `.agents/skills/<name>/SKILL.md`.
 

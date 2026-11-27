@@ -251,14 +251,6 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
     for contract in (
         "work-branch.sh --worktree",
         "scripts/agent/init-worktree-tools.sh",
-        "scripts/agent/ensure-codegraph.sh",
-        "serena project index",
-        "OMP_CLI",
-        "PI_CLI",
-        # CodeGraph's first call is for code structure ONLY; grep first for the rest.
-        "grep first",
-        "reference counts",
-        "tool wiring",
         # Every agent tool installs the same way: one command that installs on a
         # fresh host and upgrades an outdated one, a floor at most, never a pin --
         # including the install added when a setup script hits a missing dependency.
@@ -266,14 +258,6 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "installed the same way, never pinned",
     ):
         assert contract in flat, f"direct worktree initialization routing lost {contract}"
-
-
-def test_codegraph_generated_state_is_ignored_by_its_own_tracked_contract() -> None:
-    local_ignore = (ROOT / ".codegraph/.gitignore").read_text(encoding="utf-8").splitlines()
-    assert "*" in local_ignore
-    assert "!.gitignore" in local_ignore
-    root_ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert ".codegraph/" not in root_ignore, "root ignore would hide CodeGraph's own tracked contract"
 
 
 def test_omp_language_servers_route_php_include_files() -> None:

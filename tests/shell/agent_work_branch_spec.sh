@@ -77,21 +77,6 @@ printf 'init:%s\n' "$1" >> "$WB_TOOL_EVENTS"
 exit "${WB_INIT_RC:-0}"
 INIT
     chmod +x "$stubdir/init-worktree-tools"
-    cat > "$stubdir/codegraph" <<'CODEGRAPH'
-#!/bin/sh
-case "$1" in
-  init|index)
-    [ -n "${WB_DEFAULT_TOOL_LOG:-}" ] && printf 'codegraph:%s:%s\n' "$1" "$2" >> "$WB_DEFAULT_TOOL_LOG"
-    mkdir -p "$2/.codegraph"
-    true > "$2/.codegraph/codegraph.db"
-    ;;
-  status)
-    printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"complete","pendingRefs":0}}'
-    ;;
-  *) exit 9 ;;
-esac
-CODEGRAPH
-    chmod +x "$stubdir/codegraph"
     export WB_REAL_GIT="$(command -v git)"
     cat > "$stubdir/git" <<'GIT'
 #!/bin/sh
@@ -138,25 +123,13 @@ done
 # git's raw stderr through would let assertions pass on text real wt never emits.
 "$WB_REAL_GIT" worktree add "$wt_path" "$wt_branch" >/dev/null 2>&1 || exit $?
 printf '%s\n' "✓ Created worktree for $wt_branch @ $wt_path" >&2
-# Real wt runs the tracked .config/wt.toml `pre-start` hook, which initializes the
-# worktree's tools. WB_WT_PRESTART reproduces that already-initialized result.
-[ "${WB_WT_PRESTART:-0}" -eq 0 ] || {
-  mkdir -p "$wt_path/.codegraph"
-  true > "$wt_path/.codegraph/codegraph.db"
-}
 # WB_WT_HOOKFAIL reproduces real wt's worst shape: the worktree is created and
-# REGISTERED, the pre-start hook then fails part-way, and wt exits non-zero while
-# leaving the tree — including a half-written CodeGraph marker — behind.
-[ "${WB_WT_HOOKFAIL:-0}" -eq 0 ] || {
-  mkdir -p "$wt_path/.codegraph"
-  true > "$wt_path/.codegraph/codegraph.db"
-  exit 1
-}
+# REGISTERED, the pre-start hook then fails, and wt exits non-zero while leaving
+# the tree behind.
+[ "${WB_WT_HOOKFAIL:-0}" -eq 0 ] || exit 1
 WT
     chmod +x "$stubdir/wt"
     export WB_TOOL_EVENTS="$events"
-    default_tool_log="$fixture/default-tools"
-    export WB_DEFAULT_TOOL_LOG="$default_tool_log"
     export PFB_INIT_WORKTREE_TOOLS="$stubdir/init-worktree-tools"
     PATH="$stubdir:$PATH"; export PATH
   }
@@ -185,13 +158,12 @@ WT
   It 'uses the co-located default initializer when no test seam is configured'
     add_origin || return 1
     unset PFB_INIT_WORKTREE_TOOLS
-    When run env OMP_CLI=1 sh -c 'cd "$1" && exec sh "$2" adr 44 tools --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/default-init"
+    When run sh -c 'cd "$1" && exec sh "$2" adr 44 tools --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/default-init"
     The status should equal 0
     The output should equal "$(printf 'adr/44-tools\t%s/default-init' "$fixture")"
     The stderr should include 'Created worktree for'
-    The stderr should include 'Initializing CodeGraph in'
     The contents of file "$events" should equal "$(printf 'fetch\nwt')"
-    The contents of file "$default_tool_log" should equal "codegraph:init:$fixture/default-init"
+    Assert [ -f "$fixture/default-init/.git" ]
   End
 
   It 'aborts a configured origin fetch failure before add or initialization'
@@ -285,8 +257,7 @@ WT
     # it on disk when the hook fails. Falling back over the top of it would hit
     # `fatal: already exists`, and the branch rollback would then fail because the
     # branch is checked out in the orphan: an orphan worktree squatting the canonical
-    # path plus an undeletable branch. Its half-written CodeGraph marker must go with
-    # it, or the retry inherits a tree that only looks initialized.
+    # path plus an undeletable branch.
     add_origin || return 1
     export WB_WT_HOOKFAIL=1
     When run sh -c 'cd "$1" && exec sh "$2" adr 58 hookfail --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/wt-hookfail"
@@ -317,17 +288,6 @@ WT
     The stderr should include 'control characters or template markers'
     The output should equal ''
     Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/60-ctrl')" ]
-  End
-
-  It 'does not re-initialize a worktree wt already initialized through its pre-start hook'
-    add_origin || return 1
-    export WB_WT_PRESTART=1
-    When run sh -c 'cd "$1" && exec sh "$2" adr 57 prestart --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/wt-prestart"
-    The status should equal 0
-    The stderr should include 'Created worktree for'
-    The output should equal "$(printf 'adr/57-prestart\t%s/wt-prestart' "$fixture")"
-    The contents of file "$events" should equal "$(printf 'fetch\nwt')"
-    Assert [ -f "$fixture/wt-prestart/.codegraph/codegraph.db" ]
   End
 End
 
@@ -371,31 +331,13 @@ printf '%s\n' 1700000000
 DATE
     chmod +x "$stubdir/date"
     export WB_GH_LOG="$gh_log"
-    codegraph_log="$fixture/codegraph.log"
-    cat > "$stubdir/codegraph" <<'CODEGRAPH'
-#!/bin/sh
-[ "${WB_CODEGRAPH_RC:-0}" -eq 0 ] || exit "$WB_CODEGRAPH_RC"
-case "$1" in
-  init|index)
-    printf '%s\n' "$*" >> "$WB_CODEGRAPH_LOG"
-    mkdir -p "$2/.codegraph"
-    true > "$2/.codegraph/codegraph.db"
-    ;;
-  status)
-    printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"complete","pendingRefs":0}}'
-    ;;
-  *) exit 9 ;;
-esac
-CODEGRAPH
-    chmod +x "$stubdir/codegraph"
-    export WB_CODEGRAPH_LOG="$codegraph_log"
     cat > "$stubdir/init-worktree-tools" <<'INIT'
 #!/bin/sh
-printf 'init %s\n' "$1" >> "$WB_CODEGRAPH_LOG"
-mkdir -p "$1/.codegraph"
-true > "$1/.codegraph/codegraph.db"
+printf 'init %s\n' "$1" >> "$WB_INIT_LOG"
 INIT
     chmod +x "$stubdir/init-worktree-tools"
+    init_log="$fixture/init.log"
+    export WB_INIT_LOG="$init_log"
     make_wt_stub "$stubdir"
     export PFB_INIT_WORKTREE_TOOLS="$stubdir/init-worktree-tools"
     PATH="$stubdir:$PATH"; export PATH
@@ -444,8 +386,7 @@ INIT
     The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
     The output should not include "$fixture/pfblockerng-issue-7"
     The stderr should include 'Created worktree for'
-    The contents of file "$codegraph_log" should equal "init $worktree_root/issue-7-tld"
-    Assert [ -f "$worktree_root/issue-7-tld/.codegraph/codegraph.db" ]
+    The contents of file "$init_log" should equal "init $worktree_root/issue-7-tld"
   End
 
   It 'anchors a relative --path beneath the worktree root'
@@ -647,7 +588,7 @@ INIT
     The status should equal 0
     The output should equal "$(printf 'issue/13-tld\t%s/offline' "$fixture")"
     The stderr should include 'Created worktree for'
-    Assert [ -f "$fixture/offline/.codegraph/codegraph.db" ]
+    The contents of file "$init_log" should equal "init $fixture/offline"
   End
 End
 
@@ -681,24 +622,6 @@ esac
 GH
     chmod +x "$stubdir/gh"
     export WB_GH_LOG="$gh_log"
-    codegraph_dir="$fixture/codegraph-bin"; mkdir -p "$codegraph_dir"
-    codegraph_log="$fixture/codegraph.log"
-    cat > "$codegraph_dir/codegraph" <<'CODEGRAPH'
-#!/bin/sh
-case "$1" in
-  init|index)
-    printf '%s\n' "$*" >> "$WB_CODEGRAPH_LOG"
-    mkdir -p "$2/.codegraph"
-    true > "$2/.codegraph/codegraph.db"
-    ;;
-  status)
-    printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"complete","pendingRefs":0}}'
-    ;;
-  *) exit 9 ;;
-esac
-CODEGRAPH
-    chmod +x "$codegraph_dir/codegraph"
-    export WB_CODEGRAPH_LOG="$codegraph_log"
     cat > "$stubdir/init-worktree-tools" <<'INIT'
 #!/bin/sh
 exit 0
@@ -706,7 +629,7 @@ INIT
     chmod +x "$stubdir/init-worktree-tools"
     make_wt_stub "$stubdir"
     export PFB_INIT_WORKTREE_TOOLS="$stubdir/init-worktree-tools"
-    PATH="$stubdir:$codegraph_dir:$PATH"; export PATH
+    PATH="$stubdir:$PATH"; export PATH
   }
   cleanup() {
     unset PFB_INIT_WORKTREE_TOOLS
@@ -761,7 +684,7 @@ INIT
   End
 
   It 'warns and proceeds when gh is not installed at all'
-    When run sh -c 'cd "$1" && PATH="$4:$3" exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$primary" "$script_abs" "$(dirname "$(command -v git)"):/usr/bin:/bin" "$codegraph_dir"
+    When run sh -c 'cd "$1" && PATH="$3" exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$primary" "$script_abs" "$(dirname "$(command -v git)"):/usr/bin:/bin"
     The status should equal 0
     The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
     The stderr should include 'claim NOT verified'

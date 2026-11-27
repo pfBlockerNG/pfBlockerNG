@@ -10,8 +10,8 @@ directory (normally `~/.omp/agent`), not legacy `~/.pi`.
 - Skills come from OMP marketplace plugins, native `skills/`, and the shared
   `.agents/skills/` provider. Prefer managed marketplace plugins for third-party
   bundles that ship hooks; never vendor them into this repository.
-- Repository discovery uses CodeGraph first, then Serena or native LSP for exact
-  language semantics, per `.agents/context/repository-intelligence.md`.
+- Repository discovery uses OMP's native LSP for exact language semantics, per
+  `.agents/context/repository-intelligence.md`.
 - The custom user-level `pfblockerng-policy.ts` bridge was retired from the machine
   profiles on 2026-09-11; this adapter does not require its installation or restoration.
   `.omp/RULES.md` carries per-turn instructions, not proof of tool-time enforcement.

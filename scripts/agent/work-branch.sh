@@ -11,7 +11,7 @@
 #               a relative --path anchors below that root, while an absolute --path stays
 #               exact). An existing branch or path
 #               gets a `-<epoch>` suffix (collision rule). Every created worktree
-#               initializes CodeGraph and enabled Serena tools.
+#               runs init-worktree-tools.sh.
 #               Prints `BRANCH<TAB>PATH` instead.
 #   --base REF  worktree base (default origin/devel)
 #   --claim     with `issue … --worktree`: assign an UNCLAIMED issue to the caller
@@ -311,14 +311,10 @@ main() {
 		exit "$worktree_status"
 	done
 	initializer=${PFB_INIT_WORKTREE_TOOLS:-$(dirname "$0")/init-worktree-tools.sh}
-	# A `wt` cut already ran the initializer through `.config/wt.toml`'s pre-start hook,
-	# and the CodeGraph index it leaves is the marker that the tools are in place. Only
-	# the fallback route (and a pre-start that did not run) still needs the direct call.
-	initializer_status=0
-	if [ ! -f "$path/.codegraph/codegraph.db" ]; then
-		sh "$initializer" "$path"
-		initializer_status=$?
-	fi
+	# A `wt` cut already ran it through `.config/wt.toml`'s pre-start hook; it is idempotent,
+	# and the fallback route (or a pre-start that did not run) still needs the direct call.
+	sh "$initializer" "$path"
+	initializer_status=$?
 	if [ "$initializer_status" -ne 0 ]; then
 		echo "work-branch.sh: removing worktree and branch after tool initialization failure" >&2
 		git worktree remove --force "$path" >/dev/null 2>&1 || {
