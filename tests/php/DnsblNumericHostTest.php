@@ -43,7 +43,7 @@ final class DnsblNumericHostTest extends TestCase
 			throw new RuntimeException('test bootstrap: DNSBL plain-line region not found');
 		}
 		if (!preg_match(
-			'/(\t+if \(\$pfb\[\'dnsbl_ip\'\] != \'Disabled\'\) \{\n\t+\$abp_ip = pfb_dnsbl_abp_extract_ip\(\$line\);' .
+			'/(\t+if \(\$pfb\[\'dnsbl_ip\'\] != \'Disabled\'[^\n]*\) \{\n\t+\$abp_ip = pfb_dnsbl_abp_extract_ip\(\$line\);' .
 			'.*?PfbDnsblRowKind::Abp, \$line\);\n\t+@fwrite\(\$dhandle, \$domain_data\);\n\t+continue;\n\t+\})/s',
 			$src,
 			$abp
@@ -91,7 +91,7 @@ final class DnsblNumericHostTest extends TestCase
 		PfbToggle $supp = PfbToggle::Off, string $dnsblIp = 'Deny_Both'): array
 	{
 		$pfb = [
-			'dnsbl_lenient'   => $lenient ? PfbToggle::On : PfbToggle::Off,
+			'dnsbl_parse_mode' => $lenient ? PfbDnsblParseMode::Lenient : PfbDnsblParseMode::Strict,
 			'dnsbl_parse_err' => $this->failLog,
 			'dnsbl_ip'        => $dnsblIp,
 			'supp'            => $supp,
@@ -108,6 +108,7 @@ final class DnsblNumericHostTest extends TestCase
 		$ipcount = 0;
 		$dnsbl_skip = [];
 		$dhandle = fopen('php://memory', 'w+');
+		$abp_feed = FALSE;
 		eval($region);
 		rewind($dhandle);
 		$rows = [];
@@ -363,8 +364,10 @@ final class DnsblNumericHostTest extends TestCase
 	{
 		$decoy = $this->runRegion(self::$plainRegion, 'http://secure.bank.com@3232235876/', lenient: FALSE);
 		$this->assertSame([[], ['192.168.1.100']], [$decoy['rows'], $decoy['ip4']]);
+		// issue #4272: a domain that carried userinfo is no plain '<scheme>://<domain>/' -- strict skips it.
 		$domain = $this->runRegion(self::$plainRegion, 'http://user@evil.com/', lenient: FALSE);
-		$this->assertSame([['d', 'evil.com']], $domain['rows']);
+		$this->assertSame([], $domain['rows']);
+		$this->assertStringContainsString('evil.com', $domain['fail']);
 	}
 
 	public function testSuppressionStillAppliesToADecodedAddress(): void
@@ -496,7 +499,7 @@ final class DnsblNumericHostTest extends TestCase
 	{
 		return [
 			'userinfo domain lenient'   => ['http://user@evil.com/', FALSE, 'evil.com'],
-			'userinfo domain strict'    => ['http://user@evil.com/', TRUE, 'evil.com'],
+			'userinfo domain strict'    => ['http://user@evil.com/', TRUE, FALSE],
 			'userinfo decoy lenient'    => ['http://secure.bank.com@3232235876/', FALSE, '3232235876'],
 			'user:pass, port'           => ['https://u:p@evil.com:8443/x', FALSE, 'evil.com'],
 			'last @ wins'               => ['http://a@b@evil.com/', FALSE, 'evil.com'],
@@ -702,6 +705,10 @@ final class DnsblNumericHostTest extends TestCase
 				'192.168.1.0/24#x' => [['192.168.1.0'], [], []],
 				'192.168.1.0/ 24' => [[], [], []],
 			] as $line => [$ip4, $ip6, $domains]) {
+				// issue #4272: strict skips a domain followed by a path (testStrictModeSkipsNearMissDomainShapes).
+				if (!$lenient && $domains !== []) {
+					continue;
+				}
 				$rows["{$line} {$m}"] = [$line, $lenient, $ip4, $ip6, $domains];
 			}
 		}
@@ -720,5 +727,22 @@ final class DnsblNumericHostTest extends TestCase
 		$out = $this->runRegion(self::$hostsRegion, $feedLine, $lenient, FALSE);
 
 		$this->assertSame([$ip4, $ip6, $domains, ''], [$out['ip4'], $out['ip6'], $out['rows'], $out['fail']]);
+	}
+
+	/** @return array<string, array{string}> */
+	public static function strictNearMissDomainProvider(): array
+	{
+		$lines = ['example.com/24', 'cdn.example.com/v1.2/3', 'example.com/path/setup_1.0/1', 'example.com/1.2.3.4/24'];
+		return array_combine($lines, array_map(static fn (string $line): array => [$line], $lines));
+	}
+
+	/** issue #4272: strict keeps a domain only when nothing but one trailing '/' follows it. */
+	#[DataProvider('strictNearMissDomainProvider')]
+	public function testStrictModeSkipsNearMissDomainShapes(string $feedLine): void
+	{
+		$out = $this->runRegion(self::$hostsRegion, $feedLine, FALSE, FALSE);
+
+		$this->assertSame([[], [], []], [$out['ip4'], $out['ip6'], $out['rows']], "line {$feedLine}");
+		$this->assertStringContainsString($feedLine, $out['fail'], 'the skipped line must be in the parse-error log');
 	}
 }

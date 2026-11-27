@@ -298,8 +298,8 @@ def test_absent_syncscope_renders_the_registered_default_policy(
 # behaviour-equivalent by design -- every toggle-contract state renders exactly
 # as before -- so these tests pin the end-state observable on the real pages: a
 # stored 'on' renders CHECKED (control), and an absent key renders UNCHECKED
-# (registry defaults: '' for five, legacy-'off' for lenient), plus the lenient
-# key's two Off spellings ('' and legacy 'off') both rendering UNCHECKED.
+# (registry default ''). The seventh, pfb_dnsbl_lenient, became the three-way
+# pfb_dnsbl_parse_mode select in issue #4272 (its render test follows the sweep).
 # Every case mutates config.xml, so each rides the isolation net (dual-marked
 # ui_e2e per conftest's _ui_pfb_isolation marker discipline).
 
@@ -312,7 +312,6 @@ _SWEPT_DNSBL_TOGGLES = {
     "pfb_dnsbl_nonat": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat",
     "pfb_idn_escalate_suspicious": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_escalate_suspicious",
     "pfb_regex_cap": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex_cap",
-    "pfb_dnsbl_lenient": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient",
     "top1m_enable": "installedpackages/pfblockerngdnsblsettings/config/0/top1m_enable",
     "pfb_regex": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex",
     "pfb_cname": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_cname",
@@ -367,19 +366,29 @@ def test_swept_pfb_dns_toggle_renders_on_when_stored_and_off_when_absent(
     assert not _checkbox_is_checked(html, name), f"an absent {name} must render UNCHECKED (registry default Off)"
 
 
+_CFG_PARSE_MODE = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_parse_mode"
+
+
 @pytest.mark.ui_e2e
-def test_swept_pfb_dnsbl_lenient_off_spellings_render_unchecked(
+def test_parse_mode_select_renders_each_stored_token_as_its_mode(
     smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
 ) -> None:
-    """issue #2812: the lenient key's registry default is legacy 'off' where the old
-    page literal was '' -- under the #2120 toggle contract both spell Off, so both
-    stored spellings render UNCHECKED (the equivalence the sweep relied on)."""
-    for stored in ("off", ""):
-        node_state(_SWEPT_DNSBL_TOGGLES["pfb_dnsbl_lenient"], stored)
+    """issue #4272: the Feed Line Parsing select (the ADR-22 checkbox widened to three modes)
+    renders each stored token as its mode -- the canonical tokens, the retired checkbox's 'on'
+    as Lenient, its '' / 'off' as Allow Ports, and an absent key as the Allow Ports default."""
+    for stored, mode in (
+        ("strict", "strict"),
+        ("ports", "ports"),
+        ("lenient", "lenient"),
+        ("on", "lenient"),
+        ("", "ports"),
+        ("off", "ports"),
+        (None, "ports"),
+    ):
+        node_state(_CFG_PARSE_MODE, stored)
         html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
-        assert not _checkbox_is_checked(html, "pfb_dnsbl_lenient"), (
-            f"a stored {stored!r} pfb_dnsbl_lenient must render UNCHECKED -- both Off "
-            "spellings agree under the #2120 toggle contract"
+        assert _select_selected_values(html, "pfb_dnsbl_parse_mode") == {mode}, (
+            f"a stored {stored!r} pfb_dnsbl_parse_mode must render {mode!r} selected"
         )
 
 

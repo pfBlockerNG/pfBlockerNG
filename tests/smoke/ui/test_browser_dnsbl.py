@@ -621,11 +621,11 @@ def test_expand_all_opens_then_collapses_every_form_panel(
 
 
 # --------------------------------------------------------------------------- #
-# ADR-29 gateway save→reload→assert round-trip (pfb_dnsbl_lenient on DNSBL page)
+# ADR-29 gateway save→reload→assert round-trip (pfb_dnsbl_parse_mode on DNSBL page)
 # --------------------------------------------------------------------------- #
 
-# Config path for the pfb_dnsbl_lenient field (DNSBL settings section).
-_CFG_LENIENT = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient"
+# Config path for the issue #4272 feed-line parsing mode (DNSBL settings section).
+_CFG_PARSE_MODE = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_parse_mode"
 
 # POST timeout: DNSBL settings save only write_config()s (no reload), so it's fast.
 _DNSBL_POST_TIMEOUT = 120.0
@@ -643,96 +643,53 @@ def dnsbl_vip_ready_browser(smoke_vm: helpers.SmokeVM) -> None:
     helpers.ensure_dnsbl_vip(smoke_vm)
 
 
-def test_gateway_dnsbl_lenient_save_roundtrip(
+def test_gateway_dnsbl_parse_mode_save_roundtrip(
     browser_page: Page,
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
     dnsbl_vip_ready_browser: None,
     screenshot_dir: Path,
 ) -> None:
-    """pfb_dnsbl_lenient round-trips through the DNSBL page and the gateway.
+    """The Feed Line Parsing select round-trips every mode through the DNSBL page and the gateway.
 
-    Proves the ADR-29 gateway routing on ``pfblockerng_dnsbl.php`` stores the matching
-    checkbox token for ``pfb_dnsbl_lenient`` and that the page re-renders the checkbox
-    in the matching state when reloaded.
-
-    NOTE on the stored vocabulary (issue #964): the page form sends 'on' (checked) or
-    '' (unchecked) — ``pfb_filter(..., PFB_FILTER_ON_OFF)`` rejects 'off' — but the
-    save persists the section via ``PfbConfig::writeSection`` (pfblockerng_dnsbl.php:903),
-    which round-trips every adapter-carrying key through its read+write adapters;
-    unchecked saves store the empty token. Legacy ``'off'`` remains readable.
-
-    Scenario: ADR-29 gateway save→reload round-trip for pfb_dnsbl_lenient on the DNSBL page.
+    Scenario: issue #4272 three-way parsing mode, save→reload on the DNSBL page.
       Background: pfBlockerNG deployed; DNSBL VIP seeded; webConfigurator authenticated.
 
-    Given the current checkbox state of pfb_dnsbl_lenient (read via config_get oracle —
-      'on' = checked, anything else = unchecked),
-    When the DNSBL page is POST-saved with the checkbox flipped,
-    Then config.xml holds the CANONICAL token ('on' or ''); AND the DNSBL page,
-      navigated fresh in the browser, renders the checkbox in the matching state; AND a
-      second POST restores the original state with the same two assertions (both
-      directions).
+    Given the stored ``pfb_dnsbl_parse_mode`` (config_get oracle),
+    When the DNSBL page is POST-saved with each of 'strict', 'ports' and 'lenient' in turn,
+    Then config.xml holds that canonical token, AND the page, navigated fresh in the
+      browser, renders that option selected; AND an out-of-vocabulary POST keeps the
+      previous mode; AND the original state is restored.
     """
     page = browser_page
-
-    # GIVEN: the form sends a plain on/'' checkbox, but the save's writeSection adapter
-    # Map the stored value to its checkbox token ('on' = checked, anything else =
-    # unchecked) and each POSTed token to the value the save will store.
-    original_state = helpers.config_get_state(smoke_vm, _CFG_LENIENT)
-    original_box = "on" if original_state[0] and original_state[1] == "on" else ""
-    flipped = "" if original_box == "on" else "on"
-    stored_token = {"on": "on", "": ""}  # POSTed checkbox token -> canonical stored token
+    original_state = helpers.config_get_state(smoke_vm, _CFG_PARSE_MODE)
+    select = "#pfb_dnsbl_parse_mode"
 
     try:
-        # ---- FLIP: POST the checkbox to the opposite state ---- #
-        resp = webui.post(DNSBL_PAGE, {"pfb_dnsbl_lenient": flipped}, timeout=_DNSBL_POST_TIMEOUT)
-        assert "Sign In" not in resp.text, "pfb_dnsbl_lenient flip POST lost the session"
+        for mode in ("lenient", "ports", "strict"):
+            resp = webui.post(DNSBL_PAGE, {"pfb_dnsbl_parse_mode": mode}, timeout=_DNSBL_POST_TIMEOUT)
+            assert "Sign In" not in resp.text, f"pfb_dnsbl_parse_mode={mode} POST lost the session"
 
-        # Config oracle: stored token must be the CANONICAL form of the flipped value.
-        stored_flip = helpers.config_get(smoke_vm, _CFG_LENIENT)
-        assert stored_flip == stored_token[flipped], (
-            f"pfb_dnsbl_lenient gateway FAIL after flip: stored {stored_flip!r}, "
-            f"expected {stored_token[flipped]!r} (the writeSection adapter stores canonical on/empty)"
-        )
+            stored = helpers.config_get(smoke_vm, _CFG_PARSE_MODE)
+            assert stored == mode, f"pfb_dnsbl_parse_mode gateway FAIL: posted {mode!r}, stored {stored!r}"
 
-        # DOM oracle: reload the DNSBL page and assert the checkbox state matches.
-        _open(page, webui, DNSBL_PAGE)
-        box_flip = page.locator("#pfb_dnsbl_lenient")
-        expect(box_flip).to_be_attached(timeout=JS_TIMEOUT_MS)
-        if flipped == "on":
-            expect(box_flip).to_be_checked(timeout=JS_TIMEOUT_MS)
-        else:
-            expect(box_flip).not_to_be_checked(timeout=JS_TIMEOUT_MS)
-        _shot(page, screenshot_dir, "gateway_dnsbl_lenient_after_flip")
+            _open(page, webui, DNSBL_PAGE)
+            expect(page.locator(select)).to_have_value(mode, timeout=JS_TIMEOUT_MS)
+            _shot(page, screenshot_dir, f"gateway_dnsbl_parse_mode_{mode}")
 
-        # ---- RESTORE: POST the checkbox back to its original state ---- #
-        resp = webui.post(DNSBL_PAGE, {"pfb_dnsbl_lenient": original_box}, timeout=_DNSBL_POST_TIMEOUT)
-        assert "Sign In" not in resp.text, "pfb_dnsbl_lenient restore POST lost the session"
+        # A tampered POST outside the three options must keep the stored mode -- 'strict', not the
+        # 'ports' default the adapter would fall back to.
+        resp = webui.post(DNSBL_PAGE, {"pfb_dnsbl_parse_mode": "junk"}, timeout=_DNSBL_POST_TIMEOUT)
+        assert "Sign In" not in resp.text, "pfb_dnsbl_parse_mode junk POST lost the session"
+        stored = helpers.config_get(smoke_vm, _CFG_PARSE_MODE)
+        assert stored == "strict", f"an out-of-vocabulary POST must keep the previous mode 'strict', stored {stored!r}"
 
-        # Config oracle: stored token must be the CANONICAL form of the original value.
-        stored_restore = helpers.config_get(smoke_vm, _CFG_LENIENT)
-        assert stored_restore == stored_token[original_box], (
-            f"pfb_dnsbl_lenient gateway FAIL after restore: stored {stored_restore!r}, "
-            f"expected {stored_token[original_box]!r} (canonical on/empty)"
-        )
-
-        # DOM oracle: reload and assert the checkbox matches the restored value.
-        _open(page, webui, DNSBL_PAGE)
-        box_restore = page.locator("#pfb_dnsbl_lenient")
-        expect(box_restore).to_be_attached(timeout=JS_TIMEOUT_MS)
-        if original_box == "on":
-            expect(box_restore).to_be_checked(timeout=JS_TIMEOUT_MS)
-        else:
-            expect(box_restore).not_to_be_checked(timeout=JS_TIMEOUT_MS)
-        _shot(page, screenshot_dir, "gateway_dnsbl_lenient_after_restore")
-        helpers.config_restore_state(smoke_vm, _CFG_LENIENT, original_state)
-        assert helpers.config_get_state(smoke_vm, _CFG_LENIENT) == original_state
+        helpers.config_restore_state(smoke_vm, _CFG_PARSE_MODE, original_state)
+        assert helpers.config_get_state(smoke_vm, _CFG_PARSE_MODE) == original_state
 
     finally:
-        # Belt-and-suspenders: restore to the original checkbox value on any mid-flip
-        # abort (compare against the canonical stored token an unchecked save leaves).
-        if helpers.config_get_state(smoke_vm, _CFG_LENIENT) != original_state:
-            helpers.config_restore_state(smoke_vm, _CFG_LENIENT, original_state)
+        if helpers.config_get_state(smoke_vm, _CFG_PARSE_MODE) != original_state:
+            helpers.config_restore_state(smoke_vm, _CFG_PARSE_MODE, original_state)
 
 
 # --------------------------------------------------------------------------- #
@@ -754,7 +711,7 @@ def test_gateway_dnsbl_feed_suffix_policy_save_roundtrip(
     """pfb_psl_feed_private_policy / pfb_psl_feed_icann_policy round-trip through the
     DNSBL page and the gateway (issue #2371 Step 3).
 
-    Same idiom as ``test_gateway_dnsbl_lenient_save_roundtrip`` above, extended to TWO
+    Same idiom as ``test_gateway_dnsbl_parse_mode_save_roundtrip`` above, extended to TWO
     independent ``<select>`` fields (instead of one checkbox) so a field-swap bug (the
     save binding for one field accidentally writing the other's key) is caught: each
     field is driven to a DIFFERENT non-default token ('apex' for PRIVATE, 'ignore' for

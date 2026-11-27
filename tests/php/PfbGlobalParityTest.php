@@ -232,27 +232,18 @@ final class PfbGlobalParityTest extends TestCase
 	}
 
 	/**
-	 * pfb_dnsbl_lenient: OLD = pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '')->value.
-	 * When absent: pfb_cfg_toggle_read('')->value = 'off'.
-	 * Via gateway: PfbConfig::read('dnsbl/pfb_dnsbl_lenient')->value = 'off' (default Off).
-	 * PARITY: identical.
+	 * pfb_dnsbl_parse_mode (issue #4272, the renamed ADR-22 pfb_dnsbl_lenient): absent reads
+	 * Allow Ports, the behaviour of the old absent (= strict) checkbox, which kept 'host:port'.
 	 */
-	public function testParityPfbDnsblLenientAbsentYieldsOff(): void
+	public function testParityPfbDnsblParseModeAbsentYieldsAllowPorts(): void
 	{
 		$this->assertNull(
-			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient')
+			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_parse_mode')
 		);
 
-		// Before: old code would produce pfb_cfg_toggle_read('')->value = 'off'.
-		$old_result = pfb_cfg_toggle_read('')->value;
-		$this->assertSame('off', $old_result);
+		$result = PfbConfig::read('dnsbl/pfb_dnsbl_parse_mode');
 
-		// When: gateway read.
-		$result = PfbConfig::read('dnsbl/pfb_dnsbl_lenient');
-
-		// Then: same value.
-		$this->assertSame(PfbToggle::Off, $result);
-		$this->assertSame('off', $result->value, 'pfb_dnsbl_lenient absent -> "off" (matches old pfb_cfg_toggle_read)');
+		$this->assertSame(PfbDnsblParseMode::Ports, $result, 'pfb_dnsbl_parse_mode absent -> Allow Ports');
 	}
 
 	/**

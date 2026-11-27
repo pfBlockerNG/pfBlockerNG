@@ -11,7 +11,7 @@ use PHPUnit\Framework\TestCase;
  * Scenario: a strict skip is recorded per-line AND summarised once per feed; lenient is
  * byte-identical to today (nothing skipped, no new log output).
  *   Background:
- *     - strict = (pfb_dnsbl_lenient !== 'on') -- the trivial single-toggle resolution.
+ *     - strict = (parsing mode !== Lenient) -- issue #4272's three-way pfb_dnsbl_parse_mode.
  *     - pfb_dnsbl_scheme_line($line, $strict, $header, $oline, $lineno, $logfile, &$skipped):
  *       returns the kept host, or FALSE after recording a parse-error line (naming its
  *       source line number, issue #1004) + bumping the per-feed counter.

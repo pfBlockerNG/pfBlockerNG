@@ -2605,6 +2605,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								$ip6_decision = ['count' => 0, 'loggable' => FALSE];
 								$pfb_scheme_skipped = 0;	// ADR-22: per-feed strict scheme/path skips
 								$dnsbl_lineno = 0;		// issue #1004: per-line counter for the parse-error detail sink
+								// issue #4272: a custom list is the user's own; only an explicit Adblock header makes it Adblock.
+								$abp_feed = $custom ? pfb_dnsbl_feed_has_abp_header($pfb_parse_path) : pfb_dnsbl_feed_is_abp($pfb_parse_path);
 
 								// Parse downloaded file for Domain names
 								if (($fhandle = @fopen($pfb_parse_path, 'r')) !== FALSE) {
@@ -2632,8 +2634,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											// hosts-line target that is itself an IP address is
 											// pulled to the firewall alias here -- never passed to
 											// Python (no double-handling, no leak) -- checked BEFORE
-											// the generic verbatim capture below.
-											if ($pfb['dnsbl_ip'] != 'Disabled') {
+											// the generic verbatim capture below. An Adblock feed's IPs come only
+											// from its Adblock rules (issue #4272).
+											if ($pfb['dnsbl_ip'] != 'Disabled' && (!$abp_feed || pfb_dnsbl_is_abp_rule_line($line))) {
 												$abp_ip = pfb_dnsbl_abp_extract_ip($line);
 												if ($abp_ip === FALSE) {
 													pfb_parse_fail_log($header, $line, $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
@@ -2670,6 +2673,21 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 												$domain_data = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, $line);
 												@fwrite($dhandle, $domain_data);
 												continue;
+											}
+
+											// issue #4272: an Adblock feed's other lines are dropped (path rules such as
+											// '.imgur.com/lumbar.gif'), except a hostname, a hosts line or a hostname mask.
+											if ($abp_feed) {
+												$abp_kept = pfb_dnsbl_abp_feed_line($line);
+												if ($abp_kept === NULL) {
+													continue;
+												}
+												if ($abp_kept[0] === PfbDnsblRowKind::Abp) {
+													$domain_data = pfb_dnsbl_ndjson_emit_row(...$abp_kept);
+													@fwrite($dhandle, $domain_data);
+													continue;
+												}
+												$line = $abp_kept[1];
 											}
 
 											// If 'tab' character found, replace with whitespace
@@ -2779,9 +2797,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											}
 
 											if (!$lite) {
-												$strict = ($pfb['dnsbl_lenient'] !== PfbToggle::On);
+												$strict = ($pfb['dnsbl_parse_mode'] !== PfbDnsblParseMode::Lenient);
 												$line = pfb_dnsbl_extract_host($line, $strict, $header, $oline,
-													$dnsbl_lineno, $pfb['dnsbl_parse_err'], $pfb_scheme_skipped);
+													$dnsbl_lineno, $pfb['dnsbl_parse_err'], $pfb_scheme_skipped,
+													$pfb['dnsbl_parse_mode'] === PfbDnsblParseMode::Ports);
 												if ($line === FALSE) {
 													continue;
 												}

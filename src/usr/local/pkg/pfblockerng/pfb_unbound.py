@@ -4794,7 +4794,8 @@ def _dnsbl_classify_options(opts_str: str) -> tuple[tuple[str, ...], bool, bool]
 # Element-hiding / cosmetic marker family (ADR §2 Decision 2) -- shared by
 # parse_abp()'s skip check and _dnsbl_is_abp_rule_line()'s capture guard so the
 # two never drift apart.
-_DNSBL_ELEMENT_HIDING_MARKERS = ("##", "#@#", "#?#", "#%#", "#$#")
+# issue #4272: AdGuard's extended markers are cosmetic too.
+_DNSBL_ELEMENT_HIDING_MARKERS = ("##", "#@#", "#?#", "#%#", "#$#", "#$?#", "#@$?#", "#@?#", "#@%#", "#@$#")
 
 
 def _dnsbl_parse_abp_regex(stripped: str) -> tuple[str, str, str] | None:

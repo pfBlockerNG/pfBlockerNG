@@ -485,7 +485,7 @@ final class DnsblPolicyMigrationTest extends TestCase
 	{
 		pfb_dnsbl_policy_upgrade();
 
-		$this->assertSame(PfbToggle::Off, PfbConfig::read('dnsbl/pfb_dnsbl_lenient'),
+		$this->assertSame(PfbDnsblParseMode::Ports, PfbConfig::read('dnsbl/pfb_dnsbl_parse_mode'),
 			'a bystander registered field must get its own correct NEWCFG default, not stay absent');
 	}
 

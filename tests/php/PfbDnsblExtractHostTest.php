@@ -11,11 +11,18 @@ use PHPUnit\Framework\TestCase;
  * download/parse loop's `if (!$lite)` host-munging branch into a pure, unit-testable
  * helper. Pins the pipeline's load-bearing ORDER (CIDR whole-or-reject -> scheme strip -> '/'/'#'/'?'
  * truncation -> ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST -- issue #938) and the
- * FALSE-propagation contract when pfb_dnsbl_scheme_line() rejects a strict-mode URL path.
+ * FALSE-propagation contract when pfb_dnsbl_scheme_line() rejects a strict-mode URL path. Strict mode
+ * keeps a domain only as '<host>' or '<host>/' (issue #4272, DnsblStrictHostGrammarTest), so the
+ * truncation steps below cut hosts in lenient mode and are strict-mode skips.
  */
 #[CoversFunction('pfb_dnsbl_extract_host')]
 final class PfbDnsblExtractHostTest extends TestCase
 {
+	private const STRICT_SKIPPED_NEAR_MISS = [
+		'example.com/24', '/24', 'cdn.example.com/v1.2/3', 'example.com/path/setup_1.0/1',
+		'example.com/1.2.3.4/24', '2001:db8::1%em0/64',
+	];
+
 	private string $parseErr = '';
 
 	protected function setUp(): void
@@ -81,24 +88,24 @@ final class PfbDnsblExtractHostTest extends TestCase
 		$this->assertStringContainsString('http://d.com/path', (string) file_get_contents($this->parseErr));
 	}
 
-	// -- '/', '#', '?' truncation (both modes -- scheme-less lines are strict-invariant) --
+	// -- '/', '#', '?' truncation (lenient; strict skips the line, issue #4272) --
 
 	public function testSlashTruncation(): void
 	{
 		$this->assertSame('d.com', $this->extract('d.com/a/b', FALSE));
-		$this->assertSame('d.com', $this->extract('d.com/a/b', TRUE));
+		$this->assertFalse($this->extract('d.com/a/b', TRUE));
 	}
 
 	public function testHashTruncation(): void
 	{
 		$this->assertSame('d.com', $this->extract('d.com#frag', FALSE));
-		$this->assertSame('d.com', $this->extract('d.com#frag', TRUE));
+		$this->assertFalse($this->extract('d.com#frag', TRUE));
 	}
 
 	public function testQuestionMarkTruncation(): void
 	{
 		$this->assertSame('d.com', $this->extract('d.com?q=1', FALSE));
-		$this->assertSame('d.com', $this->extract('d.com?q=1', TRUE));
+		$this->assertFalse($this->extract('d.com?q=1', TRUE));
 	}
 
 	// -- ';' strstr-only truncation (issue #1237: the parse_url host-pick branch was
@@ -109,7 +116,7 @@ final class PfbDnsblExtractHostTest extends TestCase
 		// parse_url('d.com;jsessionid=x') has no scheme/authority marker, so it never
 		// set 'host' even under the old code -- this shape was already strstr-only.
 		$this->assertSame('d.com', $this->extract('d.com;jsessionid=x', FALSE));
-		$this->assertSame('d.com', $this->extract('d.com;jsessionid=x', TRUE));
+		$this->assertFalse($this->extract('d.com;jsessionid=x', TRUE));
 	}
 
 	public function testSemicolonParamWithPortLikeSuffixIsTruncatedNotParsed(): void
@@ -120,15 +127,15 @@ final class PfbDnsblExtractHostTest extends TestCase
 		// so pfb_filter() drops the whole line downstream). Plain strstr-before-';' now
 		// yields the clean domain instead.
 		$this->assertSame('d.com', $this->extract('d.com;jsessionid=1:80', FALSE));
-		$this->assertSame('d.com', $this->extract('d.com;jsessionid=1:80', TRUE));
+		$this->assertFalse($this->extract('d.com;jsessionid=1:80', TRUE));
 	}
 
 	public function testSemicolonParamWithPortLikeSuffixShorterLabels(): void
 	{
 		$this->assertSame('evilhost', $this->extract('evilhost;x:99', FALSE));
-		$this->assertSame('evilhost', $this->extract('evilhost;x:99', TRUE));
+		$this->assertFalse($this->extract('evilhost;x:99', TRUE));
 		$this->assertSame('a', $this->extract('a;b:2', FALSE));
-		$this->assertSame('a', $this->extract('a;b:2', TRUE));
+		$this->assertFalse($this->extract('a;b:2', TRUE));
 	}
 
 	public function testSemicolonSlashCombinationsUnaffectedByTruncationOrder(): void
@@ -136,19 +143,19 @@ final class PfbDnsblExtractHostTest extends TestCase
 		// '/' truncation (an earlier pipeline step) already empties or shortens these
 		// before the ';' step ever runs -- must stay unchanged by this fix.
 		$this->assertSame('', $this->extract('//d.com;jsessionid=x', FALSE));
-		$this->assertSame('', $this->extract('//d.com;jsessionid=x', TRUE));
+		$this->assertFalse($this->extract('//d.com;jsessionid=x', TRUE));
 		$this->assertSame('d.com', $this->extract('d.com;jsessionid=1/extra', FALSE));
-		$this->assertSame('d.com', $this->extract('d.com;jsessionid=1/extra', TRUE));
+		$this->assertFalse($this->extract('d.com;jsessionid=1/extra', TRUE));
 	}
 
 	public function testSemicolonEdgeShapesTrailingAndLeading(): void
 	{
 		$this->assertSame('d.com', $this->extract('d.com;', FALSE));
-		$this->assertSame('d.com', $this->extract('d.com;', TRUE));
-		// Leading ';' truncates to an empty STRING, never FALSE (FALSE is reserved for
-		// the strict scheme-reject contract).
+		$this->assertFalse($this->extract('d.com;', TRUE));
+		// Leading ';' truncates to an empty STRING in lenient mode, never FALSE (FALSE is reserved
+		// for the strict rejects).
 		$this->assertSame('', $this->extract(';x', FALSE));
-		$this->assertSame('', $this->extract(';x', TRUE));
+		$this->assertFalse($this->extract(';x', TRUE));
 	}
 
 	public function testBracketedIpv6WithSemicolonUnaffectedByThisStep(): void
@@ -164,7 +171,7 @@ final class PfbDnsblExtractHostTest extends TestCase
 	public function testTrailingPortIsStripped(): void
 	{
 		$this->assertSame('d.com', $this->extract('d.com:8080', FALSE));
-		$this->assertSame('d.com', $this->extract('d.com:8080', TRUE));
+		$this->assertFalse($this->extract('d.com:8080', TRUE));
 	}
 
 	public function testBareIpv6LiteralTrailingHextetIsNotMangled(): void
@@ -334,6 +341,10 @@ final class PfbDnsblExtractHostTest extends TestCase
 		$rows = [];
 		foreach ($controls as $line => $expected) {
 			foreach ([TRUE, FALSE] as $strict) {
+				// issue #4272: strict skips a domain followed by a path (testStrictModeSkipsNearMissDomainShapes).
+				if ($strict && in_array($line, self::STRICT_SKIPPED_NEAR_MISS, TRUE)) {
+					continue;
+				}
 				$rows[$line . ($strict ? ' strict' : ' lenient')] = [$line, $expected, $strict];
 			}
 		}
@@ -347,6 +358,37 @@ final class PfbDnsblExtractHostTest extends TestCase
 		$this->assertSame($expected, $this->extract($line, $strict, $skipped));
 		$this->assertSame(0, $skipped);
 		$this->assertFileDoesNotExist($this->parseErr, 'the CIDR rules must not fire for a near-miss shape');
+	}
+
+	/** issue #4272: Allow Ports keeps a port only after a domain -- a bare ':<port>' is a skipped line. */
+	public function testAllowPortsSkipsAPortWithNoDomain(): void
+	{
+		$skipped = 0;
+		$this->assertFalse(pfb_dnsbl_extract_host(':65535', TRUE, 'hdr', ':65535', 5, $this->parseErr, $skipped, TRUE));
+		$this->assertSame(1, $skipped, 'a bare port must be counted as a strict skip');
+	}
+
+	/** issue #4272: Allow Ports keeps only a real port, 1-65535. */
+	public function testAllowPortsKeepsOnlyARealPort(): void
+	{
+		foreach (['example.com:1', 'example.com:65535'] as $line) {
+			$skipped = 0;
+			$this->assertSame('example.com', pfb_dnsbl_extract_host($line, TRUE, 'hdr', $line, 5, $this->parseErr, $skipped, TRUE), $line);
+		}
+		foreach (['example.com:0', 'example.com:00', 'example.com:65536', 'example.com:99999'] as $line) {
+			$skipped = 0;
+			$this->assertFalse(pfb_dnsbl_extract_host($line, TRUE, 'hdr', $line, 5, $this->parseErr, $skipped, TRUE), $line);
+			$this->assertSame(1, $skipped, "{$line} must be counted as a strict skip");
+		}
+	}
+
+	public function testStrictModeSkipsNearMissDomainShapes(): void
+	{
+		foreach (self::STRICT_SKIPPED_NEAR_MISS as $line) {
+			$skipped = 0;
+			$this->assertFalse($this->extract($line, TRUE, $skipped), "strict {$line}");
+			$this->assertSame(1, $skipped, "strict {$line} must be counted as a strict skip");
+		}
 	}
 
 	// -- issue #3408: a trailing-dot IPv4 prefix is never short-form filled; an empty-scheme anchor

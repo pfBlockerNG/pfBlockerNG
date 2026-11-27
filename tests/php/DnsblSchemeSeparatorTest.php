@@ -77,7 +77,7 @@ final class DnsblSchemeSeparatorTest extends TestCase
 		string $dnsblIp = 'Deny_Both', bool $custom = TRUE): array
 	{
 		$pfb = [
-			'dnsbl_lenient'   => $lenient ? PfbToggle::On : PfbToggle::Off,
+			'dnsbl_parse_mode' => $lenient ? PfbDnsblParseMode::Lenient : PfbDnsblParseMode::Strict,
 			'dnsbl_parse_err' => $this->failLog,
 			'dnsbl_ip'        => $dnsblIp,
 			'supp'            => $supp,
@@ -89,6 +89,7 @@ final class DnsblSchemeSeparatorTest extends TestCase
 		$header = 'testfeed';
 		$dnsbl_lineno = 1;
 		$pfb_scheme_skipped = 0;
+		$abp_feed = FALSE;
 		$domain_data_ip = [];
 		$domain_data_ip6 = [];
 		$ipcount = 0;
@@ -183,12 +184,13 @@ final class DnsblSchemeSeparatorTest extends TestCase
 			['://1.2.3.4/path^', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 			['://1.2.3.4^ #c', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 
-			// RED: a '://' after '/', '?' or '#' is not a scheme separator.
-			['evil.com/x?u=http://8.8.8.8/', 'd=evil.com', 'd=evil.com', 'RED'],
-			['evil.com/r#http://8.8.8.8', 'd=evil.com', 'd=evil.com', 'RED'],
-			['evil.com?u=http://8.8.8.8', 'd=evil.com', 'd=evil.com', 'RED'],
-			['evil.com/r?u=://8.8.8.8', 'd=evil.com', 'd=evil.com', 'RED'],
-			['evil.com/x?u=http://[2001:db8::1]/', 'd=evil.com', 'd=evil.com', 'RED'],
+			// RED: a '://' after '/', '?' or '#' is not a scheme separator. Strict skips the whole line,
+			// as it does any domain followed by a path, query or fragment (issue #4272).
+			['evil.com/x?u=http://8.8.8.8/', 'd=evil.com', 'pe', 'RED'],
+			['evil.com/r#http://8.8.8.8', 'd=evil.com', 'pe', 'RED'],
+			['evil.com?u=http://8.8.8.8', 'd=evil.com', 'pe', 'RED'],
+			['evil.com/r?u=://8.8.8.8', 'd=evil.com', 'pe', 'RED'],
+			['evil.com/x?u=http://[2001:db8::1]/', 'd=evil.com', 'pe', 'RED'],
 			['8.8.8.8/http://9.9.9.9', 'ip4=8.8.8.8', 'ip4=8.8.8.8', 'RED'],
 			['1.2.3.4?u=http://9.9.9.9', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 			['a/b://8.8.8.8', 'pe', 'pe', 'RED'],

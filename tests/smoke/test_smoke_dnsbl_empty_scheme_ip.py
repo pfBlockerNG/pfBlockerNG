@@ -3,7 +3,8 @@
 A DNSBL feed line ``://192.0.2.10^`` (the "block regardless of scheme" shape) lists that IPv4
 address, and ``://[2001:db8::10]^$third-party`` that IPv6 address (options dropped), in both
 lenient and strict mode. A ``://`` after a ``/``, ``?`` or ``#`` is part of the path or query,
-so ``<redirector>/x?u=http://198.51.100.20/`` lists the domain only, never 198.51.100.20.
+so ``<redirector>/x?u=http://198.51.100.20/`` never lists 198.51.100.20: lenient lists the domain
+only, and strict skips the whole line (issue #4272: nothing may follow a strict domain).
 
 The addresses come from the RFC 5737 / RFC 3849 documentation ranges; ``deploy()`` pins IP
 Suppression off, so they are collected.
@@ -63,6 +64,7 @@ def test_empty_scheme_ip_collected_and_embedded_url_ignored(
       ``<redirector>/x?u=http://198.51.100.20/`` and a control domain,
     When the feed is reloaded,
     Then the control domain is VIP-blocked (the feed loaded),
+      the redirector is VIP-blocked in lenient mode and still resolves in strict mode,
       pfB_DNSBLIP_v4 holds 192.0.2.10 and pfB_DNSBLIP_v6 holds 2001:db8::10,
       and 198.51.100.20 is in neither table.
     """
@@ -82,7 +84,7 @@ def test_empty_scheme_ip_collected_and_embedded_url_ignored(
     )
     try:
         h.inject(vm, spec)
-        h.set_dnsbl_lenient(vm, lenient)
+        h.set_dnsbl_parse_mode(vm, "lenient" if lenient else "strict")
         h.reload(vm, "update")
 
         h.flush_unbound_name(vm, control)
@@ -90,7 +92,10 @@ def test_empty_scheme_ip_collected_and_embedded_url_ignored(
         ans = h.dns_probe_client(client_vm, control, "A")
         assert h.is_vip(ans), f"control {control} expected VIP block (feed loaded), got {ans}"
         ans = h.dns_probe_client(client_vm, redirector, "A")
-        assert h.is_vip(ans), f"{mode}: redirector {redirector} expected VIP block (domain listed), got {ans}"
+        if lenient:
+            assert h.is_vip(ans), f"{mode}: redirector {redirector} expected VIP block (domain listed), got {ans}"
+        else:
+            assert not h.is_vip(ans), f"{mode}: redirector line has a path, so strict must skip it, got {ans}"
 
         h.apply_filter_sync(vm)
         v4 = h.pfctl_table_members(vm, "pfB_DNSBLIP_v4")
@@ -101,5 +106,5 @@ def test_empty_scheme_ip_collected_and_embedded_url_ignored(
         assert not h.member_present(v6, EMBEDDED_IP), f"{mode}: {EMBEDDED_IP} from a query string in v6: {v6}"
     finally:
         h.reset(vm)
-        h.set_dnsbl_lenient(vm, True)
+        h.set_dnsbl_parse_mode(vm, "lenient")
         vm.ssh("/bin/rm", "-f", feed_url)

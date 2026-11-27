@@ -795,14 +795,13 @@ def test_dnsbl_bom_header_feed_parses_without_error(
 
 
 # --------------------------------------------------------------------------- #
-# ADR-22 — the "Lenient feed parsing" toggle (pfb_dnsbl_lenient) over the live box.
+# ADR-22 — feed-line parsing (issue #4272: pfb_dnsbl_parse_mode, Strict / Allow Ports / Lenient) over the live box.
 #
 # The non-lite DNSBL download path strips a ``<scheme>://`` prefix from each feed
-# line (pfblockerng.inc:11316-11329). Lenient (toggle ON — the migrated/legacy
-# default) keeps today's permissive strip: ANY ``://`` is removed at its first
+# line. Lenient (the mode an upgraded install keeps) keeps the permissive strip: ANY ``://`` is removed at its first
 # occurrence and a URL path is stripped downstream, so a malformed-scheme line
-# (digit-start) and a path line are still extracted + blocked. Strict (toggle OFF —
-# the new-install default) validates the scheme against RFC 3986 and rejects a URL
+# (digit-start) and a path line are still extracted + blocked. Strict and Allow Ports
+# (Allow Ports is the new-install default) validate the scheme against RFC 3986 and reject a URL
 # path: a rejected line is SKIPPED, recorded per-line in the DNSBL parse-error log
 # (pfb_parse_fail_log -> $pfb['dnsbl_parse_err']), and counted into ONE per-feed WARNING
 # in the main pfBlockerNG log (pfb_dnsbl_scheme_skip_warn).
@@ -810,10 +809,10 @@ def test_dnsbl_bom_header_feed_parses_without_error(
 # DELIVERY: the scheme lines ride a normal LOCAL feed row (write_local_feed), the
 # same mechanism test_abp_perline_detection_in_plain_feed uses — the body carries
 # runtime unique_domain() uuids so it must be a local file, and a feed row is exactly
-# what flows through the non-lite download loop the toggle gates (the GUI Custom_List
+# what flows through the non-lite download loop the parsing mode gates (the GUI Custom_List
 # feeds the SAME loop via a synthetic row; the loop, not the entry point, is the
-# behaviour under test). Tests A/B drive inject -> set toggle -> Force Update manually
-# (NOT CaseContext, which injects+reloads atomically before the toggle could be set)
+# behaviour under test). Tests A/B drive inject -> set the mode -> Force Update manually
+# (NOT CaseContext, which injects+reloads atomically before the mode could be set)
 # and restore config + custom feed in finally.
 # --------------------------------------------------------------------------- #
 
@@ -826,17 +825,17 @@ def _scheme_feed_path(vm: SmokeVM, name: str, lines: list[str]) -> str:
 
 @pytest.mark.timeout(300)
 def test_strict_skips_invalid_scheme_and_path_and_logs(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """ADR-22 strict (lenient OFF): invalid-scheme + path lines are skipped AND logged.
+    """ADR-22 Strict mode: invalid-scheme + path lines are skipped AND logged.
 
     Scenario: a DNSBL feed mixes two well-formed scheme lines (a valid RFC 3986 scheme,
     no path) with two malformed ones (a digit-start scheme; a valid scheme bearing a URL
-    path). With ``pfb_dnsbl_lenient='off'`` the parser must BLOCK the two well-formed
+    path). With ``pfb_dnsbl_parse_mode='strict'`` the parser must BLOCK the two well-formed
     hosts and SKIP+LOG the two malformed lines — both in the DNSBL parse-error log
     (per-line) and as one per-feed WARNING in the main log (ADR §2.3).
 
     Given (before any feed loads) all four hosts RESOLVE via the controlled stub upstream
       (``STUB_DNS_A``) — the real, observable before-state (none is blocked yet).
-    When  the feed is written, ``pfb_dnsbl_lenient`` is set OFF (strict), and a Force
+    When  the feed is written, ``pfb_dnsbl_parse_mode`` is set to ``'strict'``, and a Force
       Update runs (Unbound reloads),
     Then:
       * ``http://<http>``      -> VIP/NULL block (valid scheme, no path);
@@ -875,7 +874,7 @@ def test_strict_skips_invalid_scheme_and_path_and_logs(deployed_vm: SmokeVM, cli
         # parse-error-log baselines before the update so a strictly-greater count proves
         # THIS update emitted them.
         h.inject(deployed_vm, spec)
-        h.set_dnsbl_lenient(deployed_vm, False)
+        h.set_dnsbl_parse_mode(deployed_vm, "strict")
         warn_marker = f"{header}: 2 line(s) skipped"
         warn_before = h.count_log_marker(deployed_vm, h.PFB_LOG, warn_marker)
         h.reload(deployed_vm, "update")
@@ -918,22 +917,22 @@ def test_strict_skips_invalid_scheme_and_path_and_logs(deployed_vm: SmokeVM, cli
         )
     finally:
         h.reset(deployed_vm)
-        h.set_dnsbl_lenient(deployed_vm, True)
+        h.set_dnsbl_parse_mode(deployed_vm, "lenient")
         deployed_vm.ssh("/bin/rm", "-f", feed_url)
 
 
 @pytest.mark.timeout(300)
 def test_lenient_blocks_invalid_scheme_and_path(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """ADR-22 lenient (ON): invalid-scheme + path lines are BLOCKED, no WARNING (today's behaviour).
+    """ADR-22 Lenient mode: invalid-scheme + path lines are BLOCKED, no WARNING.
 
-    The lenient counterpart of the strict test: with ``pfb_dnsbl_lenient='on'`` the SAME
+    The lenient counterpart of the strict test: with ``pfb_dnsbl_parse_mode='lenient'`` the SAME
     two malformed lines that strict skips are instead extracted and blocked (byte-identical
     to today's permissive strip), and NO per-feed strict-skip WARNING is emitted. Pairing
-    this ON case with the OFF case above proves the toggle is a real branch, not an
+    this Lenient case with the Strict case above proves the mode is a real branch, not an
     always-skip or always-block path.
 
     Given (before any feed loads) both hosts RESOLVE via the controlled stub upstream.
-    When  the feed is written, ``pfb_dnsbl_lenient`` is set ON (lenient), and a Force
+    When  the feed is written, ``pfb_dnsbl_parse_mode`` is set to ``'lenient'``, and a Force
       Update runs,
     Then  ``123://<badscheme>`` and ``http://<haspath>/path`` BOTH return the block shape
       and no longer resolve (the digit-start scheme is stripped; the path is stripped
@@ -961,9 +960,9 @@ def test_lenient_blocks_invalid_scheme_and_path(deployed_vm: SmokeVM, client_vm:
             assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
             assert not _blocked(before), f"{name} unexpectedly blocked before any feed: {before}"
 
-        # WHEN: load the feed LENIENTLY (toggle ON).
+        # WHEN: load the feed LENIENTLY (Lenient mode).
         h.inject(deployed_vm, spec)
-        h.set_dnsbl_lenient(deployed_vm, True)
+        h.set_dnsbl_parse_mode(deployed_vm, "lenient")
         # Any per-feed strict-skip WARNING for THIS feed (1 or 2 lines) must NOT appear.
         warn_marker_any = f"{header}: "
         warn_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "line(s) skipped - strict parsing")
@@ -1000,20 +999,22 @@ def test_lenient_blocks_invalid_scheme_and_path(deployed_vm: SmokeVM, client_vm:
         )
     finally:
         h.reset(deployed_vm)
-        h.set_dnsbl_lenient(deployed_vm, True)
+        h.set_dnsbl_parse_mode(deployed_vm, "lenient")
         deployed_vm.ssh("/bin/rm", "-f", feed_url)
 
 
 @pytest.mark.timeout(300)
-def test_migration_sets_lenient_on_for_existing_install(deployed_vm: SmokeVM) -> None:
-    """ADR-22 §2.2 grandfather on the live box: an existing install lacking the key -> 'on'.
+def test_migration_sets_lenient_for_existing_install(deployed_vm: SmokeVM) -> None:
+    """ADR-22 §2.2 grandfather on the live box (issue #4272 key): an existing install lacking
+    the setting keeps permissive parsing -> ``pfb_dnsbl_parse_mode == 'lenient'``.
 
     Given the live DNSBL-settings section is populated (it always is on the deployed box —
-      pfb_dnsbl etc. are set) and ``pfb_dnsbl_lenient`` is REMOVED (the upgrade-from-an-
-      older-version state) — asserted absent as the before-state,
+      pfb_dnsbl etc. are set) and both ``pfb_dnsbl_parse_mode`` and the retired
+      ``pfb_dnsbl_lenient`` are REMOVED (the upgrade-from-an-older-version state) — asserted
+      absent as the before-state,
     When  ``pfb_registry_pass()`` runs against that section and the result is persisted
       (the install-hook body),
-    Then  the live config now reads ``pfb_dnsbl_lenient == 'on'`` — a present value is
+    Then  the live config now reads ``pfb_dnsbl_parse_mode == 'lenient'`` — a present value is
       never overwritten.
 
     Scoped to the DNSBL section only: driving the full ``pfblockerng_install.inc``
@@ -1028,15 +1029,15 @@ def test_migration_sets_lenient_on_for_existing_install(deployed_vm: SmokeVM) ->
     remove = (
         f"$d = config_get_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, array());\n"
         "$d['pfb_dnsbl'] = 'on';\n"  # ensure the section is populated (an existing install)
-        "unset($d['pfb_dnsbl_lenient']);\n"
+        "unset($d['pfb_dnsbl_lenient'], $d['pfb_dnsbl_parse_mode']);\n"
         f"config_set_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, $d);\n"
         "write_config('pfBlockerNG smoke: ADR-22 grandfather before-state');\n"
         "echo 'OK';"
     )
     res = h.php_eval(deployed_vm, remove)
     assert "OK" in res.stdout, f"could not stage the grandfather before-state: {res.stdout!r} {res.stderr!r}"
-    assert h.config_get(deployed_vm, h.CFG_DNSBL_SETTINGS + "/pfb_dnsbl_lenient") == "", (
-        "pfb_dnsbl_lenient should be ABSENT (empty) before the registry pass runs"
+    assert h.config_get(deployed_vm, h.CFG_DNSBL_SETTINGS + "/pfb_dnsbl_parse_mode") == "", (
+        "pfb_dnsbl_parse_mode should be ABSENT (empty) before the registry pass runs"
     )
 
     try:
@@ -1059,13 +1060,184 @@ def test_migration_sets_lenient_on_for_existing_install(deployed_vm: SmokeVM) ->
         verdict = res.stdout[res.stdout.find(sentinel_open) + len(sentinel_open) : res.stdout.find(sentinel_close)]
         assert verdict == "SET", f"registry pass should SET the changed section (returned {verdict})"
 
-        # THEN: the live config now carries pfb_dnsbl_lenient == 'on'.
-        after = h.config_get(deployed_vm, h.CFG_DNSBL_SETTINGS + "/pfb_dnsbl_lenient")
-        assert after == "on", f"registry pass must set pfb_dnsbl_lenient='on' for an existing install, got {after!r}"
+        # THEN: the live config now carries pfb_dnsbl_parse_mode == 'lenient'.
+        after = h.config_get(deployed_vm, h.CFG_DNSBL_SETTINGS + "/pfb_dnsbl_parse_mode")
+        assert after == "lenient", (
+            f"registry pass must set pfb_dnsbl_parse_mode='lenient' for an existing install, got {after!r}"
+        )
     finally:
-        # Restore the harness default (lenient ON) — same value the pass set, but make
+        # Restore the harness default (Lenient) — same value the pass set, but make
         # the cleanup explicit + independent of the assertion above.
-        h.set_dnsbl_lenient(deployed_vm, True)
+        h.set_dnsbl_parse_mode(deployed_vm, "lenient")
+
+
+@pytest.mark.timeout(300)
+def test_adblock_feed_path_rule_never_blocks_its_domain(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """issue #4272: an Adblock-headed feed is parsed as Adblock.
+
+    EasyPrivacy's ``.imgur.com/lumbar.gif`` used to be cut down to a block of ``imgur.com``:
+    the line is no ``||``-anchored rule, so it fell through to the plain-domain path.
+
+    Given an ``[Adblock Plus 2.0]`` feed holding a path rule ``.<path>/lumbar.gif``, a URL
+      fragment ``-<frag>``, a bare hostname ``<bare>``, a hosts line ``0.0.0.0 <hosts>`` and an
+      anchored ``||<anchored>^``, all resolving before the load,
+    When  the feed loads in Lenient mode (what an upgraded install keeps),
+    Then  ``<anchored>``, ``<bare>`` and ``<hosts>`` are blocked -- uBlock Origin reads a bare
+      hostname or hosts line as ``||host^`` -- while ``<path>`` and ``<frag>`` still resolve:
+      a path rule or URL fragment never blocks a whole domain.
+    """
+    path_dom = h.unique_domain("abp4272path")
+    frag_dom = h.unique_domain("abp4272frag")
+    bare_dom = h.unique_domain("abp4272bare")
+    hosts_dom = h.unique_domain("abp4272hosts")
+    anchored_dom = h.unique_domain("abp4272anchor")
+    feed_url = _scheme_feed_path(
+        deployed_vm,
+        "smoke_4272_adblock.txt",
+        [
+            "[Adblock Plus 2.0]",
+            "! Title: smoke 4272",
+            f".{path_dom}/lumbar.gif",
+            f"-{frag_dom}",
+            bare_dom,
+            f"0.0.0.0 {hosts_dom}",
+            f"||{anchored_dom}^",
+        ],
+    )
+    spec = h.DnsblCase(aliasname="smoke4272abp", feed_url=feed_url, header="smoke4272abp", mode=h.DnsblMode.VIP)
+
+    def _blocked(ans: h.DnsAnswer) -> bool:
+        return h.is_vip(ans) or h.is_null_ip(ans)
+
+    try:
+        h.unblock_egress()
+        for name in (path_dom, frag_dom, bare_dom, hosts_dom, anchored_dom):
+            before = h.dns_probe_client(client_vm, name, "A")
+            assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
+
+        h.inject(deployed_vm, spec)
+        h.set_dnsbl_parse_mode(deployed_vm, "lenient")
+        h.reload(deployed_vm, "update")
+
+        for name, line in (
+            (anchored_dom, f"||{anchored_dom}^"),
+            (bare_dom, bare_dom),
+            (hosts_dom, f"0.0.0.0 {hosts_dom}"),
+        ):
+            h.flush_unbound_name(deployed_vm, name)
+            ans = h.dns_probe_client_until(client_vm, name, _blocked)
+            assert _blocked(ans), f"Adblock line [{line}] must block {name} once the feed loads, got {ans}"
+        for name, line in ((path_dom, f".{path_dom}/lumbar.gif"), (frag_dom, f"-{frag_dom}")):
+            h.flush_unbound_name(deployed_vm, name)
+            ans = h.dns_probe_client(client_vm, name, "A")
+            assert h.resolves_to(ans, STUB_DNS_A), f"Adblock line [{line}] must not block {name}, got {ans}"
+    finally:
+        h.reset(deployed_vm)
+        h.set_dnsbl_parse_mode(deployed_vm, "lenient")
+        deployed_vm.ssh("/bin/rm", "-f", feed_url)
+
+
+@pytest.mark.timeout(300)
+def test_headerless_adblock_feed_is_parsed_as_adblock(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """issue #4272: a feed without a header but with an Adblock rule is an Adblock feed.
+
+    The AdGuard Turkish filter has no header, and in Lenient mode each of its ``site#$?#...``
+    cosmetic rules blocked the whole site.
+
+    Given a feed without a header holding ``||<anchored>^``, an AdGuard cosmetic rule
+      ``<cosmetic>#$?#.ads``, a path rule ``<path>/ads.js``, the AdGuard DNS masks ``|<exact>^``,
+      ``<suffix>^`` and ``.<subonly>^``, and ``<port>:8080``, all resolving before the load,
+    When  the feed loads in Lenient mode,
+    Then  ``<anchored>``, ``<exact>``, ``<suffix>`` and ``<port>`` are blocked, while ``<cosmetic>``,
+      ``<path>`` and ``<subonly>`` (a subdomains-only mask, which pfBlockerNG cannot express)
+      still resolve.
+    """
+    names = {
+        k: h.unique_domain(f"abp4272{k}") for k in ("anchor", "cosm", "path", "exact", "suffix", "subonly", "port")
+    }
+    feed_url = _scheme_feed_path(
+        deployed_vm,
+        "smoke_4272_headerless.txt",
+        [
+            "! Title: smoke 4272 headerless",
+            f"||{names['anchor']}^",
+            f"{names['cosm']}#$?#.ads",
+            f"{names['path']}/ads.js",
+            f"|{names['exact']}^",
+            f"{names['suffix']}^",
+            f".{names['subonly']}^",
+            f"{names['port']}:8080",
+        ],
+    )
+    spec = h.DnsblCase(aliasname="smoke4272hdl", feed_url=feed_url, header="smoke4272hdl", mode=h.DnsblMode.VIP)
+
+    def _blocked(ans: h.DnsAnswer) -> bool:
+        return h.is_vip(ans) or h.is_null_ip(ans)
+
+    try:
+        h.unblock_egress()
+        for name in names.values():
+            before = h.dns_probe_client(client_vm, name, "A")
+            assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
+
+        h.inject(deployed_vm, spec)
+        h.set_dnsbl_parse_mode(deployed_vm, "lenient")
+        h.reload(deployed_vm, "update")
+
+        for key in ("anchor", "exact", "suffix", "port"):
+            h.flush_unbound_name(deployed_vm, names[key])
+            ans = h.dns_probe_client_until(client_vm, names[key], _blocked)
+            assert _blocked(ans), f"the {key} line must block {names[key]} once the feed loads, got {ans}"
+        for key in ("cosm", "path", "subonly"):
+            h.flush_unbound_name(deployed_vm, names[key])
+            ans = h.dns_probe_client(client_vm, names[key], "A")
+            assert h.resolves_to(ans, STUB_DNS_A), f"the {key} line must not block {names[key]}, got {ans}"
+    finally:
+        h.reset(deployed_vm)
+        h.set_dnsbl_parse_mode(deployed_vm, "lenient")
+        deployed_vm.ssh("/bin/rm", "-f", feed_url)
+
+
+@pytest.mark.timeout(300)
+def test_allow_ports_keeps_a_port_and_skips_a_path(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """issue #4272: Allow Ports, the new-install default, keeps ``<domain>:<port>`` lines
+    (the STUN feed's shape) and skips and logs a ``<domain>/<path>`` line.
+
+    Given a plain feed holding ``<port>:3478`` and ``<path>/x``, both resolving before the load,
+    When  the feed loads in Allow Ports mode,
+    Then  ``<port>`` is blocked, ``<path>`` still resolves, and the path line is in the DNSBL
+      parse-error log.
+    """
+    port_dom = h.unique_domain("ports4272port")
+    path_dom = h.unique_domain("ports4272path")
+    feed_url = _scheme_feed_path(deployed_vm, "smoke_4272_ports.txt", [f"{port_dom}:3478", f"{path_dom}/x"])
+    spec = h.DnsblCase(aliasname="smoke4272ports", feed_url=feed_url, header="smoke4272ports", mode=h.DnsblMode.VIP)
+
+    def _blocked(ans: h.DnsAnswer) -> bool:
+        return h.is_vip(ans) or h.is_null_ip(ans)
+
+    try:
+        h.unblock_egress()
+        for name in (port_dom, path_dom):
+            before = h.dns_probe_client(client_vm, name, "A")
+            assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
+
+        h.inject(deployed_vm, spec)
+        h.set_dnsbl_parse_mode(deployed_vm, "ports")
+        h.reload(deployed_vm, "update")
+
+        h.flush_unbound_name(deployed_vm, port_dom)
+        ans_port = h.dns_probe_client_until(client_vm, port_dom, _blocked)
+        assert _blocked(ans_port), f"Allow Ports must keep [{port_dom}:3478], got {ans_port}"
+        h.flush_unbound_name(deployed_vm, path_dom)
+        ans_path = h.dns_probe_client(client_vm, path_dom, "A")
+        assert h.resolves_to(ans_path, STUB_DNS_A), f"Allow Ports must skip [{path_dom}/x], got {ans_path}"
+        parse_err = h.read_log_file(deployed_vm, h.DNSBL_PARSE_ERR_LOG)
+        assert path_dom in parse_err, f"{path_dom}/x not in the DNSBL parse-error log:\n{parse_err[-2000:]}"
+    finally:
+        h.reset(deployed_vm)
+        h.set_dnsbl_parse_mode(deployed_vm, "lenient")
+        deployed_vm.ssh("/bin/rm", "-f", feed_url)
 
 
 # --------------------------------------------------------------------------- #
