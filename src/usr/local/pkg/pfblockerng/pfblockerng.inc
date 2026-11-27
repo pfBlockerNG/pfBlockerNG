@@ -634,7 +634,6 @@ $pfb['dnsbl_add_data']		= '/tmp/dnsbl_add_data';
 $pfb['dnsbl_remove']		= '/tmp/dnsbl_remove';
 $pfb['dnsbl_remove_zone']	= '/tmp/dnsbl_remove_zone';
 $pfb['dnsbl_remove_data']	= '/tmp/dnsbl_remove_data';
-$pfb['dnsbl_unlock']		= '/tmp/dnsbl_unlock';
 $pfb['states_tmp']		= '/tmp/pfb_states';
 
 // Unbound files and folders
@@ -19754,6 +19753,24 @@ function pfb_dnsbl_unlocks_set(callable $call, array $set): ?string {
 }
 
 /**
+ * Drop each of $tokens from Core's temporary unlocks, in one set (issue #2670: a durable whitelist or TLD Exclusion entry
+ * replaces the temporary unlock rows of its domain, its www. sibling and its CNAMEs). NULL once Core holds the change, or when
+ * it held none of them; otherwise why not, as one line. A Core that cannot give its set is sent nothing.
+ *
+ * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ * @param list<string> $tokens
+ */
+function pfb_dnsbl_unlocks_drop(callable $call, array $tokens): ?string {
+	$error = NULL;
+	$set = pfb_dnsbl_unlocks($call, $error);
+	if ($error !== NULL) {
+		return $error;
+	}
+	$kept = array_diff_key($set, array_flip($tokens));
+	return count($kept) === count($set) ? NULL : pfb_dnsbl_unlocks_set($call, $kept);
+}
+
+/**
  * The Alerts page's Lock ('lock') or Unlock ('unlock') of one domain: Core's set is read, the domain added or removed, and the
  * set sent back. NULL once Core holds the change (or the domain already was as asked), otherwise why not, as one line to show
  * the person: a Core that cannot give its set is sent nothing, since a set sent without it would drop every other unlock.
@@ -22424,26 +22441,12 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	touch("{$pfb['dnsbl_file']}.sync");
 
 	// Marker file(s) to instruct Unbound to be reloaded
-	if ($pfb['reuse_dnsbl'] == 'on' ||
-	    file_exists("{$pfb['dnsbl_file']}.reload") ||
-	    file_exists("{$pfb['dnsbl_unlock']}")) {
+	// #3977: the temporary unlocks are Core's, re-locked by the DNSBL build of an Update, which publishes no unlock row.
+	if ($pfb['reuse_dnsbl'] == 'on' || file_exists("{$pfb['dnsbl_file']}.reload")) {
 
 		$pfbupdate = TRUE;
 		if (@file_get_contents("{$pfb['dnsbl_file']}.reload") !== 'accounting') {
 			unlink_if_exists("{$pfb['dnsbl_file']}.reload");
-		}
-
-		// ADR-06 (#51): re-lock the temporary unlocks on this reload (Cron/Force
-		// parity with main, which drops them from the regenerated whitelist). Under
-		// ADR-06 the resolver is driven by the manifest's config.user_unlock, so
-		// deleting the store alone leaves a STALE allow -- the domain keeps resolving
-		// while the UI shows it locked. Drop the store, then recompute user_unlock
-		// from it (now empty) so the reload below re-reads a cleared whiteDB.
-		$pfb_had_unlock = file_exists("{$pfb['dnsbl_unlock']}");
-		unlink_if_exists("{$pfb['dnsbl_unlock']}");
-		unlink_if_exists("{$pfb['dnsbl_unlock']}.data");
-		if ($pfb_had_unlock) {
-			pfb_unbound_python_sources_unlock();
 		}
 	}
 
@@ -29995,8 +29998,6 @@ function pfb_unlock($mode, $type, $filename_unlock, $remove='', $r_type='') {
 
 	if ($type == 'ip') {
 		$filename = $pfb['ip_unlock'];
-	} elseif ($type == 'dnsbl') {
-		$filename = $pfb['dnsbl_unlock'];
 	} else {
 		return;
 	}

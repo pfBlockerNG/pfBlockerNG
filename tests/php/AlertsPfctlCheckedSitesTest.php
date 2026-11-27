@@ -1333,68 +1333,13 @@ SH
 			'issue #2670: addwhitelistdom token list must follow the write-set (www. except on TLD exclusion)'
 		);
 		$this->assertStringContainsString(
-			"pfb_alerts_unlock_drop('dnsbl', \$dnsbl_unlock, \$unlock_drop)",
+			"pfb_dnsbl_unlocks_drop('pfb_core_call', \$unlock_drop)",
 			$region,
-			'issue #2670: addwhitelistdom must drop unlock tokens via \$unlock_drop'
+			'issue #2670 (#3977): addwhitelistdom must drop its unlock tokens from Core\'s set via \$unlock_drop'
 		);
 	}
 
-	public function testUnlockDropBareDomainAlsoClearsWwwUnlockRow(): void
-	{
-		$store = ['www.example.com' => 'TLD', 'keepme.example' => 'python'];
-		file_put_contents($GLOBALS['pfb']['dnsbl_unlock'], "www.example.com,TLD\nkeepme.example,python\n");
-
-		$store = pfb_alerts_unlock_drop('dnsbl', $store, ['example.com', 'example.com', 'www.example.com']);
-
-		$content = (string) file_get_contents($GLOBALS['pfb']['dnsbl_unlock']);
-		$this->assertStringContainsString('keepme.example', $content, 'unrelated unlock rows must survive');
-		$this->assertStringNotContainsString(
-			'www.example.com',
-			$content,
-			'issue #2670: locking the bare domain must also drop the www.<domain> unlock row'
-		);
-		$this->assertArrayNotHasKey('www.example.com', $store);
-		$this->assertArrayNotHasKey('example.com', $store);
-	}
-
-	public function testUnlockDropUnsetsBetweenTokensSoTheFirstKeyCannotReturn(): void
-	{
-		$store = ['example.com' => 'python', 'www.example.com' => 'python'];
-		file_put_contents(
-			$GLOBALS['pfb']['dnsbl_unlock'],
-			"example.com,python\nwww.example.com,python\n"
-		);
-
-		$store = pfb_alerts_unlock_drop('dnsbl', $store, ['example.com', 'www.example.com']);
-
-		$content = (string) file_get_contents($GLOBALS['pfb']['dnsbl_unlock']);
-		$this->assertSame('', trim($content), 'both tokens must be gone after sequential lock+unset');
-		$this->assertSame([], $store);
-	}
-
-	public function testUnlockDropClearsWhitelistedCnameAndWwwSibling(): void
-	{
-		$store = [
-			'alias.example.net' => 'python',
-			'www.alias.example.net' => 'python',
-			'keepme.example' => 'python',
-		];
-		file_put_contents(
-			$GLOBALS['pfb']['dnsbl_unlock'],
-			"alias.example.net,python\nwww.alias.example.net,python\nkeepme.example,python\n"
-		);
-
-		$store = pfb_alerts_unlock_drop('dnsbl', $store, [
-			'example.com', 'www.example.com',
-			'alias.example.net', 'www.alias.example.net',
-		]);
-
-		$content = (string) file_get_contents($GLOBALS['pfb']['dnsbl_unlock']);
-		$this->assertStringContainsString('keepme.example', $content);
-		$this->assertStringNotContainsString('alias.example.net', $content, 'issue #2670: a CNAME written to the whitelist must leave the unlock store');
-		$this->assertStringNotContainsString('www.alias.example.net', $content);
-		$this->assertArrayNotHasKey('alias.example.net', $store);
-	}
+	// issue #2670's drop of the unlock tokens is pinned on Core's set by DnsblCoreUnlocksTest (#3977).
 
 	public function testWhitelistUnlockTokensNonWildcardIncludesWwwAndCnames(): void
 	{

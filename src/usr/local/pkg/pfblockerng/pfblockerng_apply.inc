@@ -3379,7 +3379,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// path (pfb_update_unbound) then drops the store and clears the manifest's
 	// user_unlock. Captured BEFORE the reload: pfb_update_unbound() unlinks the file,
 	// so a post-reload file_exists() would always return false (issue #517).
-	$pfb_dnsbl_unlock_forced = file_exists($pfb['dnsbl_unlock']);
+	$pfb_dnsbl_unlock_forced = FALSE; // #3977: the temporary unlocks are Core's; this pass goes with the removal list
 	if (pfb_dnsbl_reload_needed(!empty($pfb['dnsbl_publish_failed']), !empty($pfb_data_changed), !empty($pfbupdate),
 	    !empty($pfbpython), !empty($safesearch_update), !empty($pfb_dnsbl_unlock_forced))) {
 

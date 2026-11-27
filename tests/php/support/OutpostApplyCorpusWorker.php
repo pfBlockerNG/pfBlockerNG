@@ -431,9 +431,6 @@ function corpus_v2_apply(array $apply, string $work, string $repo): array
 		pfb_test_await_ready($standin);
 	}
 	$calls = ['unbound' => [], 'cache' => 0];
-	if (!empty($apply['unlock'])) {
-		file_put_contents($pfb['dnsbl_unlock'], "example.com\n");
-	}
 	if (!empty($apply['retryMarker'])) {
 		file_put_contents("{$pfb['dnsbl_file']}.reload", 'accounting');
 	}

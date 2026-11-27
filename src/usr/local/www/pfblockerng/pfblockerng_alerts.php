@@ -353,8 +353,12 @@ if (!$alert_summary) {
 	}
 }
 
-// Collect all existing unlocked Domains
-$dnsbl_unlock	= pfb_unlock('read', 'dnsbl', '', '', '');
+// Collect all existing unlocked Domains: Core's set is the source of truth (#3977)
+$dnsbl_unlock_error = NULL;
+$dnsbl_unlock	= pfb_dnsbl_unlocks('pfb_core_call', $dnsbl_unlock_error);
+if ($dnsbl_unlock_error !== NULL) {
+	pfb_logger("\npfblockerng_alerts: pfBlockerNG Core did not give the temporary DNSBL unlocks: {$dnsbl_unlock_error}\n", 1);
+}
 
 // Collect all existing unlocked IPs
 $ip_unlock	= pfb_unlock('read', 'ip', '', '', '');
@@ -901,9 +905,6 @@ if (isset($_POST) && !empty($_POST)) {
 			// code-level "Custom_List".
 			write_config("pfBlockerNG: Removed [ {$wl_base} ] from DNSBL Whitelist (added to Custom List)", FALSE);
 
-			// Refresh the query-time whiteDB so the domain is no longer allowed.
-			pfb_unbound_python_whitelist('alerts');
-			pfb_unbound_python_sources_whitelist();
 		}
 	
 		$savemsg = gettext(" Added domain [ {$domain} ] to the DNSBL Group [ $list ] customlist. You may need to flush your OS/Browser DNS Cache!");
@@ -938,14 +939,11 @@ if (isset($_POST) && !empty($_POST)) {
 			$savemsg .= gettext(' Removed [ ') . "{$wl_base}" . gettext(' ] from the DNSBL Whitelist.');
 		}
 
-		// Reload if the Custom_List grew or the domain was stripped from the whitelist.
-		// ADR-10: this is a #51 user custom-list DATA edit -- take the zero-downtime
-		// fast path (no restart), then flush this exact allow-to-block change.
+		// #3977: when the Custom_List grew or the domain left the whitelist, an apply Update rebuilds the edited custom
+		// list and republishes the DNSBL data; pfB-DNS takes it on its next poll of Core.
 		if ($cl_added || $wl_removed) {
-			$swapped = pfb_reload_unbound('enabled', TRUE, TRUE);
-			if ($swapped) {
-				pfb_unbound_py_ccache_flush(array($domain));
-			}
+			$savemsg .= ' ' . (pfb_apply_update_start('pfb_core_call') ??
+			    gettext('It takes effect within about 10 seconds, when pfB-DNS next reads it from pfBlockerNG Core.'));
 		}
 
 		$return_page = pfb_filter($_POST['alert_view'], PFB_FILTER_HTML, 'alerts dnsbl_add');
@@ -1139,15 +1137,9 @@ if (isset($_POST) && !empty($_POST)) {
 				$savemsg .= gettext(' Also removed from DNSBL Group customlist(s): ') . implode(', ', array_keys($cl_changed)) . '.';
 			}
 
-			// ADR-06: the user whitelist is applied at QUERY TIME via the Python
-			// whiteDB. Refresh the whitelist input AND the manifest's
-			// config.user_whitelist so the next build's whiteDB un-blocks this domain.
-			pfb_unbound_python_whitelist('alerts');
-			pfb_unbound_python_sources_whitelist();
-			// ADR-10: #51 whitelist add is a block->allow DATA edit -> zero-downtime
-			// fast path (no restart). block->allow is immediate (blocks were never
-			// C-cached since #43).
-			pfb_reload_unbound('enabled', FALSE, TRUE);
+			// #3977: an apply Update republishes the DNSBL data with the whitelist entry, and pfB-DNS takes it on its
+			// next poll of Core.
+			$savemsg .= ' ' . (pfb_apply_update_start('pfb_core_call') ?? gettext('It takes effect within about 10 seconds, when pfB-DNS next reads it from pfBlockerNG Core.'));
 		}
 
 		// Save Domain/CNAME(s) to the TLD Exclusion customlist
@@ -1200,7 +1192,7 @@ if (isset($_POST) && !empty($_POST)) {
 		}
 		// issue #2670: durable whitelist/TLD exclusion replaces the temporary unlock row.
 		$unlock_drop = pfb_alerts_whitelist_unlock_tokens($domain_unlock, $domain, $dnsbl_exclude, $cname_list);
-		$dnsbl_unlock = pfb_alerts_unlock_drop('dnsbl', $dnsbl_unlock, $unlock_drop);
+		pfb_dnsbl_unlocks_drop('pfb_core_call', $unlock_drop);
 		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
 		exit;
 	}
@@ -1288,8 +1280,10 @@ if (isset($_POST) && !empty($_POST)) {
 					}
 				}
 
-				// Remove Domain from unlock file
-				pfb_unlock('lock', 'dnsbl', $dnsbl_unlock, $entry, '');
+				// Remove the Domain from Core's temporary unlocks (#3977)
+				if (isset($dnsbl_unlock[$entry])) {
+					pfb_dnsbl_unlock_toggle('pfb_core_call', 'lock', $entry, $dnsbl_unlock[$entry]);
+				}
 
 				$data = '';
 				foreach ($clists['dnsblwhitelist']['data'] as $line) {
@@ -1449,44 +1443,9 @@ if (isset($_POST) && !empty($_POST)) {
 		if ($pfb_found && !$config_flushed) {
 			write_config("pfBlockerNG: Deleted [ {$entry} ] from {$type} customlist", FALSE);
 			if ($dnsbl_py_changes) {
-				pfb_unbound_python_whitelist('alerts');
-				pfb_unbound_python_sources_whitelist();
-				// ADR-10: whitelist removal is allow->block. Exact entries get one
-				// targeted flush; wildcard removal can affect an unknown set of cached
-				// subdomains, so flush the full cache after the applied-generation wait.
-				$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
-				if ($swapped) {
-					if ($_POST['entry_delete'] == 'delete_domainwildcard') {
-						// issue #2880: this flush rides resolver-control IPC inside the
-						// page request, and raw exec() waits unboundedly -- a hung
-						// unbound-control left the HTTP request without any terminal
-						// state. Reuse the CNAME lookup seam above (issue #2083):
-						// timeout(1) default reaper mode, 30s TERM budget + 5s kill
-						// grace matching the established Alerts DNS ceiling, output
-						// to a regular file with stdin on /dev/null so no descendant
-						// can hold the capture pipe, and an explicit status. Expiry
-						// (124) and nonzero control status must never read as an
-						// ordinary success: the wildcard removal is already persisted
-						// above, so both name the saved state and the next manual
-						// recovery action instead of rolling it back silently.
-						$flush_zone_file = "{$g['tmp_path']}/pfb_alerts_flush_zone_" . getmypid() . '_' . bin2hex(random_bytes(8));
-						$flush_zone_status = 0;
-						exec(escapeshellarg($pfb['timeout'] ?? '/usr/bin/timeout') .
-							" -s TERM -k 5 30 {$pfb['chroot_cmd']} flush_zone +c . > " .
-							escapeshellarg($flush_zone_file) . " 2>&1 < /dev/null",
-							$flush_zone_output, $flush_zone_status);
-						@unlink($flush_zone_file);
-						if ($flush_zone_status === 124) {
-							pfb_logger("\npfblockerng_alerts: wildcard-delete flush_zone TIMED OUT (killed); the whitelist edit was saved and stale cached subdomains may persist until the next resolver reload\n", 2);
-							$savemsg .= " The wildcard removal was saved, but the resolver cache flush TIMED OUT (killed after 30s) -- stale cached subdomains may persist until the next resolver reload; use 'Run Now' on 'Update' with 'Run Scope' set to 'DNSBL' and 'Force' set to 'Parse', or run 'unbound-control flush_zone' to clear them.";
-						} elseif ($flush_zone_status !== 0) {
-							pfb_logger("\npfblockerng_alerts: wildcard-delete flush_zone FAILED (exit {$flush_zone_status}); the whitelist edit was saved and stale cached subdomains may persist until the next resolver reload\n", 2);
-							$savemsg .= " The wildcard removal was saved, but the resolver cache flush FAILED (exit {$flush_zone_status}) -- stale cached subdomains may persist until the next resolver reload; use 'Run Now' on 'Update' with 'Run Scope' set to 'DNSBL' and 'Force' set to 'Parse', or run 'unbound-control flush_zone' to clear them.";
-						}
-					} else {
-						pfb_unbound_py_ccache_flush(array($entry));
-					}
-				}
+				// #3977: an apply Update republishes the DNSBL data; pfB-DNS answers every query before Unbound does and
+				// clears its own decision cache when it loads it, so no resolver cache is flushed.
+				$savemsg .= ' ' . (pfb_apply_update_start('pfb_core_call') ?? gettext('It takes effect within about 10 seconds, when pfB-DNS next reads it from pfBlockerNG Core.'));
 			}
 		}
 		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
@@ -1508,41 +1467,21 @@ if (isset($_POST) && !empty($_POST)) {
 			exit;
 		}
 
-		// ADR-06 (#51): DNSBL is built by the gateway from the per-feed
-		// manifest; the legacy pfb_py_whitelist.txt/pfb_py_data/pfb_py_zone files this
-		// handler once wrote are read by nothing on the manifest path, so
-		// writing them was a no-op. Lock/Unlock
-		// now only toggles $pfb['dnsbl_unlock']; the resolver effect comes from
-		// regenerating the manifest's config.user_unlock from that store and reloading
-		// Unbound. Dispatch: pfb_dnsbl_unlock_action() (unit-tested); unknown action = no-op.
+		// #3977: Lock/Unlock changes the set of temporary unlocks Core holds; pfB-DNS takes it on its next poll.
+		// Dispatch: pfb_dnsbl_unlock_action() (unit-tested); unknown action = no-op.
 		$ua = pfb_dnsbl_unlock_action($action);
 		if ($ua['mode'] !== '') {
-			pfb_unlock($ua['mode'], 'dnsbl', $dnsbl_unlock, $domain, $dnsbl_type);
-
-			// Patch the manifest's config.user_unlock from the updated store, then
-			// reload Unbound so the query-time whiteDB picks up the change.
-			pfb_unbound_python_sources_unlock();
-
-			// ADR-10: #51 Lock/Unlock is a user custom-list DATA edit -> zero-downtime
-			// fast path (no restart). pfb_dnsbl_unlock_action() collapses the four icons
-			// onto two store modes: 'lock' (lock/reunlock) REMOVES the domain from the
-			// unlock store -> it returns to feed-blocked = allow->block; 'unlock'
-			// (unlock/relock) ADDS it -> allowed = block->allow -> immediate, no flush
-			// (blocks were never C-cached since #43).
-			// The store toggle (re-lock on Force/Cron) is unchanged -- only the apply
-			// mechanism (swap, not restart) changed.
-			$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
-
-			if ($swapped) {
-				if ($ua['mode'] === 'lock') {
-					pfb_unbound_py_ccache_flush(array($domain));
-				}
-			}
+			// #3977: Core holds the set; pfB-DNS takes it on its next poll, and clears its own decision cache then.
+			$unlock_error = pfb_dnsbl_unlock_toggle('pfb_core_call', $ua['mode'], $domain, $dnsbl_type);
 		}
 
 		// sprintf with the (domain-filtered, so '%'-free) name; an unknown action's
 		// empty 'msg' yields an empty savemsg.
 		$savemsg = sprintf($ua['msg'], $domain);
+		if ($ua['mode'] !== '') {
+			$savemsg = $unlock_error === NULL ? $savemsg . gettext(' It takes effect within about 10 seconds, when pfB-DNS next reads it from pfBlockerNG Core.')
+			    : sprintf(gettext('The Domain [ %s ] was not changed: '), $domain) . $unlock_error;
+		}
 		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
 		exit;
 	}

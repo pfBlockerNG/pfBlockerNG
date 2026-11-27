@@ -29,9 +29,6 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_unbound_python_sources')]
 #[CoversFunction('pfb_unbound_python_sources_patch')]
-#[CoversFunction('pfb_unbound_python_sources_unlock')]
-#[CoversFunction('pfb_dnsbl_unlock_lines')]
-#[CoversFunction('pfb_set_temporary_unlocks')]
 #[CoversFunction('pfb_dnsbl_whitelist_lines')]
 final class UnboundPythonSourcesTest extends TestCase
 {
@@ -358,128 +355,7 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertSame([], $m['config']['user_unlock']);
 	}
 
-	// #51: pfb_dnsbl_unlock_lines() reads the pfb_unlock store and returns its domains.
-	public function testDnsblUnlockLinesReadsStoreDomains(): void
-	{
-		file_put_contents("{$this->tmp}/dnsbl_unlock", "evil.com,python\nfoo.org,python\n");
-		$this->assertSame(['evil.com', 'foo.org'], pfb_dnsbl_unlock_lines());
-	}
-
-	public function testDnsblUnlockLinesEmptyWhenStoreAbsent(): void
-	{
-		$this->assertSame([], pfb_dnsbl_unlock_lines());
-	}
-
-	// #51: the incremental path patches ONLY config.user_unlock from the live store,
-	// leaving the rest of the manifest intact.
-	public function testSourcesUnlockRecomputesFromStore(): void
-	{
-		$m = pfb_unbound_python_sources($this->feeds());            // full build: user_unlock => []
-		$this->assertSame([], $m['config']['user_unlock']);
-
-		file_put_contents("{$this->tmp}/dnsbl_unlock", "evil.com,python\nfoo.org,python\n");
-		$this->assertTrue(pfb_unbound_python_sources_unlock(self::coreRecorder()[0]));
-
-		$patched = json_decode(file_get_contents("{$this->tmp}/pfb_py_sources.json"), TRUE);
-		$this->assertSame(['evil.com', 'foo.org'], $patched['config']['user_unlock']);
-		// The feeds and the rest of config are untouched by the in-place patch.
-		$this->assertSame($m['feeds'], $patched['feeds']);
-		$this->assertSame($m['config']['user_whitelist'], $patched['config']['user_whitelist']);
-	}
-
-	// Store deleted => manifest user_unlock cleared. This is BOTH the handler
-	// 'lock'/'reunlock' that empties the store AND the Cron/Force re-lock step the fix
-	// added at inc:3451 (pfb_update_unbound unlinks the store, then calls
-	// pfb_unbound_python_sources_unlock so the reload re-reads a cleared whiteDB). With
-	// the file gone pfb_dnsbl_unlock_lines() yields [] and the recompute empties the key.
-	public function testSourcesUnlockEmptiesWhenStoreCleared(): void
-	{
-		pfb_unbound_python_sources($this->feeds());
-		file_put_contents("{$this->tmp}/dnsbl_unlock", "evil.com,python\n");
-		pfb_unbound_python_sources_unlock(self::coreRecorder()[0]);
-
-		unlink("{$this->tmp}/dnsbl_unlock");           // store emptied (lock / Cron / Force)
-		$this->assertTrue(pfb_unbound_python_sources_unlock(self::coreRecorder()[0]));
-		$patched = json_decode(file_get_contents("{$this->tmp}/pfb_py_sources.json"), TRUE);
-		$this->assertSame([], $patched['config']['user_unlock']);
-	}
-
-	/**
-	 * issue #4264 (owner, 2026-11-24): Core holds the temporary unlocks. Each Lock and Unlock sends Core the whole set the
-	 * store holds (SetTemporaryUnlocks), the domains the manifest patch takes; until the cutover the patch still applies, so
-	 * both paths give the same unlocked set.
-	 *
-	 * @return array{0: callable, 1: list<array{method: string, params: array}>} a pfb_core_call() stand-in and its calls
-	 */
-	private static function coreRecorder(array $answer = ['status' => 200, 'body' => [], 'error' => NULL]): array
-	{
-		$calls = new ArrayObject();
-		$call = static function (string $method, array $params, ?string $socket, int $timeout) use ($calls, $answer): array {
-			$calls[] = ['method' => $method, 'params' => $params];
-			return $answer;
-		};
-		return [$call, $calls];
-	}
-
-	public function testEachUnlockSendsCoreTheWholeSetThePatchTakes(): void
-	{
-		pfb_unbound_python_sources($this->feeds());
-		file_put_contents("{$this->tmp}/dnsbl_unlock", "evil.com,python\nfoo.org,python\nnot a domain,python\n");
-		[$call, $calls] = self::coreRecorder();
-
-		$this->assertTrue(pfb_unbound_python_sources_unlock($call));
-
-		$this->assertCount(1, $calls);
-		$this->assertSame('SetTemporaryUnlocks', $calls[0]['method']);
-		$this->assertSame(['evil.com', 'foo.org'], $calls[0]['params']['domains'], 'the validated domains, as the patch takes them');
-		$this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $calls[0]['params']['requestId']);
-		$patched = json_decode(file_get_contents("{$this->tmp}/pfb_py_sources.json"), TRUE);
-		$this->assertSame($calls[0]['params']['domains'], $patched['config']['user_unlock'], 'both paths hold the same set');
-	}
-
-	public function testTheLastLockSendsCoreAnEmptySet(): void
-	{
-		pfb_unbound_python_sources($this->feeds());
-		[$call, $calls] = self::coreRecorder();
-
-		pfb_unbound_python_sources_unlock($call);
-
-		$this->assertSame([], $calls[0]['params']['domains']);
-	}
-
-	public function testACoreThatDoesNotTakeTheUnlocksIsLoggedAndThePatchStillApplies(): void
-	{
-		pfb_unbound_python_sources($this->feeds());
-		file_put_contents("{$this->tmp}/dnsbl_unlock", "evil.com,python\n");
-		[$call] = self::coreRecorder(['status' => 409, 'body' => ['error' => ['code' => 'conflict', 'message' => 'an Update is running']], 'error' => NULL]);
-
-		$this->assertTrue(pfb_unbound_python_sources_unlock($call));
-
-		$patched = json_decode(file_get_contents("{$this->tmp}/pfb_py_sources.json"), TRUE);
-		$this->assertSame(['evil.com'], $patched['config']['user_unlock']);
-		$this->assertStringContainsString('conflict: an Update is running', $this->logContents());
-	}
-
-	// The pass Core runs re-locks while Core holds its gate, and Core's Update end re-locks anyway: asking Core then is only
-	// a conflict in the log.
-	public function testThePassOfACoreUpdateLeavesTheReLockToCore(): void
-	{
-		pfb_unbound_python_sources($this->feeds());
-		$GLOBALS['pfb']['core_update'] = TRUE;
-		[$call, $calls] = self::coreRecorder(['status' => 409, 'body' => ['error' => ['code' => 'conflict', 'message' => 'an Update is running']], 'error' => NULL]);
-
-		$this->assertTrue(pfb_unbound_python_sources_unlock($call));
-
-		$this->assertCount(0, $calls);
-		$this->assertStringNotContainsString('Core did not take', (string) @file_get_contents("{$this->tmp}/pfblockerng.log"));
-	}
-
-	public function testSourcesUnlockReturnsFalseWithoutManifest(): void
-	{
-		// No full build ran -> no manifest to patch.
-		$this->assertFileDoesNotExist("{$this->tmp}/pfb_py_sources.json");
-		$this->assertFalse(pfb_unbound_python_sources_unlock(self::coreRecorder()[0]));
-	}
+	// The temporary unlocks are Core's (#3977): DnsblCoreUnlocksTest pins the page's set and its Lock and Unlock.
 
 	// --- PFBL-01: header re-validation at the manifest choke point ----------------
 
@@ -754,25 +630,6 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertSame(['good.example.com', '.wild.example.com'], $lines);
 		$log = $this->logContents();
 		$this->assertStringContainsString('pfb_dnsbl_whitelist_lines', $log);
-		$this->assertStringContainsString('failed validation', $log);
-	}
-
-	// --- PFBL-01: unlock-store domains re-validated at read -----------------------
-
-	public function testUnlockLinesSkipAndLogNonDomainStoreRow(): void
-	{
-		// Given a store carrying one non-domain row among valid ones, and an empty log
-		file_put_contents("{$this->tmp}/dnsbl_unlock",
-			"evil.com,python\nbad;row.com,python\nfoo.org,python\n");
-		$this->assertSame('', $this->logContents(), 'log must start empty');
-
-		// When the store is read back for the manifest
-		$lines = pfb_dnsbl_unlock_lines();
-
-		// Then the failing row is skipped and logged; the valid rows survive
-		$this->assertSame(['evil.com', 'foo.org'], $lines);
-		$log = $this->logContents();
-		$this->assertStringContainsString('pfb_dnsbl_unlock_lines', $log);
 		$this->assertStringContainsString('failed validation', $log);
 	}
 }

@@ -14,6 +14,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dnsbl_unlocks')]
 #[CoversFunction('pfb_dnsbl_unlocks_set')]
 #[CoversFunction('pfb_dnsbl_unlock_toggle')]
+#[CoversFunction('pfb_dnsbl_unlocks_drop')]
 final class DnsblCoreUnlocksTest extends TestCase
 {
 	/**
@@ -115,5 +116,31 @@ final class DnsblCoreUnlocksTest extends TestCase
 		$this->assertCount(1, $calls, 'an unlock of an unlocked domain sends nothing');
 		$this->assertNull(pfb_dnsbl_unlock_toggle($call, 'lock', 'z.example', 'DNSBL'));
 		$this->assertCount(2, $calls, 'a lock of a locked domain sends nothing');
+	}
+
+	/** issue #2670 (ported for #3977): a durable whitelist or TLD Exclusion entry drops each of its unlock tokens, in one set. */
+	public function testADropRemovesEveryTokenAndKeepsTheRestInOneSet(): void
+	{
+		[$call, $calls] = self::core(['GetTemporaryUnlocks' => self::ok(['unlocks' => [
+			['domain' => 'alias.example.net', 'type' => 'python'], ['domain' => 'keepme.example', 'type' => 'python'],
+			['domain' => 'www.alias.example.net', 'type' => 'python'], ['domain' => 'www.example.com', 'type' => 'TLD']]])]);
+		$this->assertNull(pfb_dnsbl_unlocks_drop($call, ['example.com', 'example.com', 'www.example.com', 'alias.example.net',
+			'www.alias.example.net', '']));
+		$this->assertCount(2, $calls, 'one read, one set');
+		$this->assertSame([['domain' => 'keepme.example', 'type' => 'python']], $calls[1][1]['unlocks']);
+	}
+
+	public function testADropOfTokensCoreDoesNotHoldSendsNothing(): void
+	{
+		[$call, $calls] = self::core(['GetTemporaryUnlocks' => self::ok(['unlocks' => [['domain' => 'keepme.example', 'type' => 'DNSBL']]])]);
+		$this->assertNull(pfb_dnsbl_unlocks_drop($call, ['example.com', 'www.example.com']));
+		$this->assertCount(1, $calls);
+	}
+
+	public function testADropOnASetCoreCouldNotGiveSendsNothingAndSaysWhy(): void
+	{
+		[$call, $calls] = self::core(['GetTemporaryUnlocks' => ['status' => 0, 'body' => NULL, 'error' => 'the Core API is not running']]);
+		$this->assertSame('the Core API is not running', pfb_dnsbl_unlocks_drop($call, ['example.com']));
+		$this->assertCount(1, $calls);
 	}
 }
