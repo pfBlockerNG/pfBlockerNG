@@ -291,6 +291,40 @@ final class CliUpdateVerbsTest extends TestCase
 		$this->assertSame('', $this->err);
 	}
 
+	/**
+	 * Ours ended before any poll saw it (skipped at once) and another Update was admitted after the request: the verb says so at
+	 * once instead of following the other one to the end of its wait.
+	 */
+	public function testAnotherUpdateStartedAfterTheRequestEndsTheVerbAtOnce(): void
+	{
+		$tick = self::update(TRUE, '', '0', NULL, 101);
+		$tick['body']['update']['trigger'] = 'scheduled';
+		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), $tick));
+
+		$this->assertSame(1, $code);
+		$this->assertStringContainsString('another Update started in its place', $this->err);
+		$this->assertCount(2, $this->calls, 'the start and the one poll that saw the other Update');
+	}
+
+	/** The admit stamp and the worker's are a second apart at most: a third stamp is another Update of the same request. */
+	public function testOnlyOneSecondOfDifferenceIsTheSameUpdate(): void
+	{
+		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), self::update(TRUE, '', '2', NULL, 100),
+			self::update(TRUE, '', '2', NULL, 101), self::update(FALSE, '', '4', 'success', 102)));
+
+		$this->assertSame(1, $code);
+		$this->assertStringContainsString('another Update started in its place', $this->err);
+	}
+
+	/** An Update reported without its start is no Update of ours to follow, and is said as such. */
+	public function testAnUpdateWithoutItsStartIsSaidAsSuch(): void
+	{
+		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), self::ok(['running' => FALSE, 'update' => NULL, 'log' => '', 'next' => '0'])));
+
+		$this->assertSame(1, $code);
+		$this->assertStringContainsString('reports no start of this Update', $this->err);
+	}
+
 	public function testACoreLostWhileTheUpdateRunsIsAFailure(): void
 	{
 		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), self::update(TRUE, '', '0'),
