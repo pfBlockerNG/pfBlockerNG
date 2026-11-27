@@ -1,6 +1,9 @@
 import re
+import tomllib
 from collections.abc import Iterable
 from pathlib import Path
+
+from scripts import go_toolchain
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -8,14 +11,24 @@ SHELLCHECK_PIN = "v0.11.0"
 SHELLSPEC_PIN = "0.28.1"
 KCOV_PIN = "a39874f938ce13f7a65f253120d1ec946b349ffe"  # the commit tag v43 pointed at
 GO_PIN = "1.27.0"  # the compiler that cross-builds the pfB-DNS payload (issue #3513)
+UV_PIN = "0.12.6"  # the uv that syncs the locked dependency-package toolchain
 
 
 _WORKFLOWS = ROOT / ".github/workflows"
+_DOCKERFILE = ROOT / ".github/docker/Dockerfile"
+_SCANNER_DOCKERFILE = ROOT / ".oss-scanner/Dockerfile"
+_SCANNER_LABEL = ".oss-scanner/Dockerfile"
+# Site prefixes (`<file>:<line>`) of the Dockerfiles that own pins; `_pins` labels the CI image's by file name.
+_IMAGE_HOMES = ("Dockerfile:", f"{_SCANNER_LABEL}:")
 
-# A pinned tool version, upstream commit or release-asset checksum, as the workflows
-# spell it: an env key whose value is a literal. `${{ ... }}` values are expressions
-# resolved per run (a matrix leg, an input), not pins, so they are skipped.
-_PIN_ENTRY = re.compile(r"^\s*([A-Z][A-Z0-9_]*(?:_VERSION|_COMMIT|_SHA256)):\s*(\S+)\s*$")
+# A pinned tool version, upstream commit or release-asset checksum: an env key in a workflow
+# whose value is a literal, or an `ARG` in the CI image's Dockerfile (the single home of the
+# tool pins) or in the OSS scanner's own Dockerfile, which holds its own copy of shellspec's.
+# `${{ ... }}` values are expressions resolved per run (a matrix leg, an input), not pins, so
+# they are skipped.
+_PIN_NAME = r"[A-Z][A-Z0-9_]*(?:_VERSION|_COMMIT|_SHA256)"
+_PIN_ENTRY = re.compile(rf"^\s*({_PIN_NAME}):\s*(\S+)\s*$")
+_DOCKERFILE_ARG = re.compile(rf"^ARG\s+({_PIN_NAME})=(\S+)\s*$")
 
 
 def _pin_index(sources: Iterable[tuple[str, str]]) -> dict[str, dict[str, list[str]]]:
@@ -23,7 +36,7 @@ def _pin_index(sources: Iterable[tuple[str, str]]) -> dict[str, dict[str, list[s
     found: dict[str, dict[str, list[str]]] = {}
     for where, text in sources:
         for line_no, line in enumerate(text.splitlines(), 1):
-            match = _PIN_ENTRY.match(line)
+            match = _PIN_ENTRY.match(line) or _DOCKERFILE_ARG.match(line)
             if not match:
                 continue
             name, value = match.group(1), match.group(2).strip("\"'")
@@ -34,14 +47,16 @@ def _pin_index(sources: Iterable[tuple[str, str]]) -> dict[str, dict[str, list[s
 
 
 def _pins() -> dict[str, dict[str, list[str]]]:
-    paths = sorted([*_WORKFLOWS.glob("*.yml"), *_WORKFLOWS.glob("*.yaml")])
-    return _pin_index((path.name, path.read_text(encoding="utf-8")) for path in paths)
+    paths = sorted([*_WORKFLOWS.glob("*.yml"), *_WORKFLOWS.glob("*.yaml"), _DOCKERFILE])
+    sources = [(path.name, path.read_text(encoding="utf-8")) for path in paths]
+    sources.append((_SCANNER_LABEL, _SCANNER_DOCKERFILE.read_text(encoding="utf-8")))
+    return _pin_index(sources)
 
 
 def _docs_under(root: Path) -> list[Path]:
     """The Markdown files this checkout is answerable for.
 
-    `.claude/worktrees/` is excluded by PATH, not by directory name: it holds per-task
+    `.claude/worktrees/` and `.worktrees/` are excluded by PATH, not by directory name: they hold per-task
     agent worktrees — gitignored, one whole repository checkout each — so a name-based
     skip would also drop a legitimate `worktrees/` directory elsewhere in the tree, while
     walking into them grades OTHER branches' documentation at commits this checkout has no
@@ -50,29 +65,38 @@ def _docs_under(root: Path) -> list[Path]:
     actions/checkout has no worktrees.
     """
     skip = {"node_modules", ".venv", "vendor", "plugins", ".git"}
-    worktrees = root / ".claude" / "worktrees"
-    return [path for path in root.rglob("*.md") if not skip & set(path.parts) and worktrees not in path.parents]
+    worktrees = {root / ".claude" / "worktrees", root / ".worktrees"}
+    return [path for path in root.rglob("*.md") if not skip & set(path.parts) and not worktrees & set(path.parents)]
 
 
 def test_gate_deciding_pins_agree_wherever_they_appear() -> None:
-    """A tool version decides gate verdicts, so every job that installs it must install
-    the SAME build. The installs are per job again, and the same pin is spelled out in
-    more than one job (ShellCheck twice in test.yml, shellspec in test.yml and
-    build-pkg-linux.yml) — two spellings of one pin drift, and the jobs then grade
-    against different binaries while both read as green (#2185)."""
+    """A tool version decides gate verdicts, so every place that declares it must declare
+    the SAME build. The pins live as ARGs in the CI image's Dockerfile; two spellings of one
+    pin drift, and the jobs then grade against different binaries while both read as green
+    (#2185)."""
     pins = _pins()
 
-    # Floor: the pins whose drift changes a verdict or a shipped binary must actually be found. A
-    # workflow that renames or restructures them would otherwise pass vacuously.
+    # Floor: the pins whose drift changes a verdict or a shipped binary must actually be found,
+    # in the Dockerfile and nowhere with another value. A restructured install would otherwise
+    # pass vacuously.
     for name, expected in (
         ("SHELLCHECK_VERSION", SHELLCHECK_PIN),
         ("SHELLSPEC_VERSION", SHELLSPEC_PIN),
         ("KCOV_COMMIT", KCOV_PIN),
         ("GO_VERSION", GO_PIN),
+        ("UV_VERSION", UV_PIN),
     ):
-        assert name in pins, f"no workflow pins {name} any more — the install moved; retarget this gate"
-        assert set(pins[name]) == {expected}, (
-            f"workflows pin {name} to {sorted(pins[name])}, this gate records {expected}"
+        assert name in pins, f"nothing pins {name} any more — the install moved; retarget this gate"
+        assert set(pins[name]) == {expected}, f"{name} is pinned to {pins[name]}, this gate records {expected}"
+        assert any(site.startswith("Dockerfile:") for site in pins[name][expected]), (
+            f"the CI image's Dockerfile does not pin {name}: {pins[name]}"
+        )
+
+    # Floor: the scanner image's own shellspec copy must still be found, or agreeing with it is vacuous.
+    for name in ("SHELLSPEC_VERSION", "SHELLSPEC_SHA256"):
+        sites = [site for where in pins[name].values() for site in where]
+        assert any(site.startswith(f"{_SCANNER_LABEL}:") for site in sites), (
+            f"{_SCANNER_LABEL} no longer pins {name}: {pins[name]}"
         )
 
     split = {
@@ -81,8 +105,8 @@ def test_gate_deciding_pins_agree_wherever_they_appear() -> None:
         if len(values) > 1
     }
     assert not split, (
-        "these pins have more than one value across the workflows, so the jobs grade against different builds: "
-        + repr(split)
+        "these pins have more than one value across the workflows and Dockerfiles, "
+        "so the jobs grade against different builds: " + repr(split)
     )
 
 
@@ -99,6 +123,54 @@ def test_pin_scanner_reports_a_planted_disagreement() -> None:
     )
     assert index["TOOL_VERSION"] == {"1.0.0": ["a.yml:2"], "2.0.0": ["b.yml:2"]}
     assert index["KEPT_VERSION"] == {"9": ["a.yml:3", "b.yml:3"]}
+
+
+def _declared_outside_the_dockerfile(index: dict[str, dict[str, list[str]]]) -> dict[str, list[str]]:
+    """{PIN: [site, ...]}: every site beyond the image Dockerfiles that declares a pin one of them owns."""
+    stray: dict[str, list[str]] = {}
+    for name, values in index.items():
+        sites = [site for where in values.values() for site in where]
+        if any(site.startswith(_IMAGE_HOMES) for site in sites):
+            others = [site for site in sites if not site.startswith(_IMAGE_HOMES)]
+            if others:
+                stray[name] = others
+    return stray
+
+
+def test_a_tool_pin_the_image_owns_is_declared_only_in_the_dockerfile() -> None:
+    """The jobs run inside the image, so its Dockerfile ARG is the one version they use. A
+    workflow that spells the same name again states a version nothing installs any more, and
+    the two drift apart while both read as current."""
+    pins = _pins()
+    owned = {
+        name for name, values in pins.items() if any(s.startswith("Dockerfile:") for v in values.values() for s in v)
+    }
+    # Floor: a scan that stopped reading the Dockerfile's ARGs would find nothing to compare.
+    assert {
+        "GO_VERSION",
+        "NODE_VERSION",
+        "ORAS_VERSION",
+        "SHELLSPEC_VERSION",
+        "KCOV_COMMIT",
+        "MARKDOWNLINT_CLI2_VERSION",
+    } <= owned
+    assert _declared_outside_the_dockerfile(pins) == {}
+
+
+def test_image_pin_scanner_reports_a_workflow_that_redeclares_a_dockerfile_pin() -> None:
+    """Vacuity guard: a workflow env key named like a Dockerfile ARG is reported with its site; a pin
+    only a workflow declares, a Dockerfile-only pin, and the scanner Dockerfile's copy of an image
+    pin are not."""
+    dockerfile = ("Dockerfile", "ARG TOOL_VERSION=1.0.0\nARG DEBIAN_FRONTEND=noninteractive\n")
+    scanner = (_SCANNER_LABEL, "ARG TOOL_VERSION=1.0.0\n")
+    workflow = ("w.yml", '    env:\n      TOOL_VERSION: "1.0.0"\n      OTHER_VERSION: 2\n')
+    assert _declared_outside_the_dockerfile(_pin_index([dockerfile, workflow])) == {"TOOL_VERSION": ["w.yml:2"]}
+    assert _declared_outside_the_dockerfile(_pin_index([dockerfile])) == {}
+    assert _declared_outside_the_dockerfile(_pin_index([workflow])) == {}
+    assert _declared_outside_the_dockerfile(_pin_index([dockerfile, scanner])) == {}
+    assert _declared_outside_the_dockerfile(_pin_index([dockerfile, scanner, workflow])) == {
+        "TOOL_VERSION": ["w.yml:2"]
+    }
 
 
 def _contributing() -> str:
@@ -162,6 +234,16 @@ def test_the_doc_scan_ignores_agent_worktrees(tmp_path: Path) -> None:
     assert _docs_under(tmp_path) == []
 
 
+def test_the_doc_scan_ignores_worktrees_cut_inside_the_repository(tmp_path: Path) -> None:
+    """`.worktrees/` holds the worktrees `work-branch.sh` and the owner's `wt` cut inside the repository (#4265), each
+    another branch's whole checkout, so the scan skips it as it skips `.claude/worktrees/`."""
+    (tmp_path / ".worktrees/issue-1/docs").mkdir(parents=True)
+    (tmp_path / ".worktrees/issue-1/CONTRIBUTING.md").write_text("stale", encoding="utf-8")
+    (tmp_path / ".worktrees/issue-1/docs/deep.md").write_text("stale", encoding="utf-8")
+
+    assert _docs_under(tmp_path) == []
+
+
 def test_the_doc_scan_still_reaches_the_checkouts_own_docs(tmp_path: Path) -> None:
     """The exclusion has to be the worktree directory and nothing more: a scan that skipped
     `.claude/` wholesale, or simply returned nothing, would pass every assertion above while
@@ -177,3 +259,117 @@ def test_the_doc_scan_still_reaches_the_checkouts_own_docs(tmp_path: Path) -> No
     found = sorted(str(path.relative_to(tmp_path)) for path in _docs_under(tmp_path))
 
     assert found == [".claude/rules.md", "README.md", "docs/misc/notes.md"]
+
+
+def test_the_baked_playwright_matches_the_locked_one() -> None:
+    """No job runs `playwright install`: the browser tier uses the Chromium baked into ci-vm at
+    PLAYWRIGHT_BROWSERS_PATH. On a mismatch the locked playwright cannot find its browser build
+    there and the tier fails, so the drift cannot pass silently."""
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    locked = [package["version"] for package in lock["package"] if package["name"] == "playwright"]
+    baked = re.findall(r"^ARG\s+PLAYWRIGHT_VERSION=(\S+)\s*$", _DOCKERFILE.read_text(encoding="utf-8"), re.MULTILINE)
+
+    assert len(locked) == 1, f"uv.lock must lock exactly one playwright, found {locked}"
+    assert baked == locked, f"the Dockerfile bakes playwright {baked}, uv.lock locks {locked}"
+
+
+def _playwright_installs(root: Path) -> list[str]:
+    """`file:line` of every `playwright install` in root's workflows and composite actions."""
+    workflows, actions = root / ".github/workflows", root / ".github/actions"
+    paths = sorted([*workflows.glob("*.yml"), *workflows.glob("*.yaml"), *actions.glob("**/action.y*ml")])
+    assert [path for path in paths if path.parent == workflows], "the scan read no workflow file"
+    return [
+        f"{path.relative_to(root)}:{line_no}"
+        for path in paths
+        for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if re.search(r"\bplaywright\s+install\b", line)
+    ]
+
+
+def test_no_workflow_downloads_a_playwright_browser() -> None:
+    """The Chromium for the browser tier comes only from the ci-vm image. A workflow or composite
+    action that runs `playwright install` fetches a browser on every run, or no-ops while the
+    baked build matches, so the step hides a drift the pin test is there to catch."""
+    offenders = _playwright_installs(ROOT)
+
+    assert not offenders, (
+        f"the browser comes only from the ci-vm image, but these run `playwright install`: {offenders}"
+    )
+
+
+def test_the_playwright_scan_reports_a_workflow_and_a_composite_action(tmp_path: Path) -> None:
+    """Vacuity guard: both places a job can run the install are reported, a clean file is not."""
+    (tmp_path / ".github/workflows").mkdir(parents=True)
+    (tmp_path / ".github/actions/ui").mkdir(parents=True)
+    (tmp_path / ".github/workflows/clean.yml").write_text("steps:\n  - run: uv sync\n", encoding="utf-8")
+    (tmp_path / ".github/workflows/w.yml").write_text("steps:\n  - run: uv run playwright install chromium\n")
+    (tmp_path / ".github/actions/ui/action.yml").write_text("runs:\n  steps:\n    - run: playwright  install\n")
+
+    assert _playwright_installs(tmp_path) == [".github/actions/ui/action.yml:3", ".github/workflows/w.yml:2"]
+
+
+def _image_pin(name: str) -> str:
+    """The one value the ci image's Dockerfile gives ARG `name`."""
+    values = _pin_index([("Dockerfile", _DOCKERFILE.read_text(encoding="utf-8"))]).get(name, {})
+    assert len(values) == 1, f"the ci image's Dockerfile must pin {name} exactly once, found {values}"
+    return next(iter(values))
+
+
+def test_the_contributing_version_table_matches_the_image_pins() -> None:
+    """A contributor installs the versions the table lists; a row that lags an ARG bump grades their
+    local run against binaries CI no longer uses."""
+    php = re.search(r"sury.*?\bfor v in ([\d. ]+); do", _DOCKERFILE.read_text(encoding="utf-8"), re.DOTALL)
+    assert php, "the Dockerfile's sury RUN no longer loops `for v in ...; do`; retarget this check"
+    expected = {
+        "Python": [".".join(_image_pin("PYTHON_VERSION").split(".")[:2])],
+        "PHP": php.group(1).split(),
+        "ShellCheck": [_image_pin("SHELLCHECK_VERSION").lstrip("v")],
+        "shellspec": [_image_pin("SHELLSPEC_VERSION")],
+        "actionlint": [_image_pin("ACTIONLINT_VERSION")],
+        "Node": [_image_pin("NODE_VERSION")],
+        "Go": [_image_pin("GO_VERSION")],
+    }
+    rows = re.findall(r"^\| (Python|PHP|ShellCheck|shellspec|actionlint|Node|Go) \| ([^|]+?) \|", _contributing(), re.M)
+    # Floor: every tool's row, exactly once; a reworded table would otherwise pass vacuously.
+    assert sorted(tool for tool, _ in rows) == sorted(expected), f"CONTRIBUTING.md's version table rows: {rows}"
+    documented = {tool: re.findall(r"\d+(?:\.\d+)+", cell) for tool, cell in rows}
+    documented["Python"] = documented["Python"][:1]  # the rest of that cell names files, not versions
+    wrong = {tool: (documented[tool], expected[tool]) for tool in expected if documented[tool] != expected[tool]}
+    assert wrong == {}, f"CONTRIBUTING.md's table disagrees with the ci image Dockerfile (documented, pinned): {wrong}"
+
+
+def test_the_baked_charset_normalizer_matches_the_locked_one() -> None:
+    """The image installs charset-normalizer into the system Python by hand; the lock owns the
+    version everything else resolves, so a lock bump that leaves the ARG behind goes unflagged."""
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    locked = [package["version"] for package in lock["package"] if package["name"] == "charset-normalizer"]
+    baked = re.findall(
+        r"^ARG\s+CHARSET_NORMALIZER_VERSION=(\S+)\s*$", _DOCKERFILE.read_text(encoding="utf-8"), re.MULTILINE
+    )
+
+    assert len(locked) == 1, f"uv.lock must lock exactly one charset-normalizer, found {locked}"
+    assert baked == locked, f"the Dockerfile bakes charset-normalizer {baked}, uv.lock locks {locked}"
+
+
+def test_the_go_quality_canary_declares_the_baked_go() -> None:
+    """The canary modules prove the Go gate can go red; their `go` directive must name the compiler
+    the image bakes, or they exercise other rules than the real module does."""
+    workflow = (_WORKFLOWS / "test.yml").read_text(encoding="utf-8")
+    directives = re.findall(r"module canary\\n\\ngo (\d+\.\d+\.\d+)\\n", workflow)
+
+    # Floor: one go.mod printf per canary module (gofmt, failing test); fewer means the printf moved.
+    assert len(directives) >= 2, f"test.yml's go-quality canary go.mod printfs moved: found {directives}"
+    assert set(directives) == {_image_pin("GO_VERSION")}, (
+        f"test.yml's go-quality canary declares go {directives}, the ci image bakes {_image_pin('GO_VERSION')}"
+    )
+
+
+def test_the_go_toolchain_helper_installs_the_archive_the_image_bakes() -> None:
+    """go_toolchain.py puts Go on a runner that has none; its archive must be the image's
+    (GO_VERSION / GO_SHA256), or leased boxes and CI build the payload with different compilers."""
+    archive, sha256 = go_toolchain.ARCHIVES[("Linux", "x86_64")]
+
+    assert archive == f"go{_image_pin('GO_VERSION')}.linux-amd64.tar.gz", f"go_toolchain.py installs {archive}"
+    assert sha256 == _image_pin("GO_SHA256"), (
+        f"go_toolchain.py pins sha256 {sha256}, the Dockerfile {_image_pin('GO_SHA256')}"
+    )
