@@ -1718,8 +1718,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// ADR-12: pre-update hooks. Fire at the TOP of the pass (after the boot/install
 	// early-return above, before any feed processing). 'pre' cannot know what changed
 	// yet -- nothing is downloaded -- so its context is just the trigger. No enabled
-	// 'pre' hook => pfb_run_hooks() returns immediately (byte-identical pass).
-	pfb_run_hooks('pre', array('TRIGGER' => $pfb_hook_val));
+	// 'pre' hook => pfb_pass_hooks() returns immediately (byte-identical pass).
+	pfb_pass_hooks('pre', array('TRIGGER' => $pfb_hook_val));
 
 	$pfb_run_plan = pfb_sync_run_plan(
 		$pfb_req,
@@ -4703,11 +4703,11 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// PFB_STATUS has no clean pass-wide ok/partial/error signal today, so it is reported
 	// as 'ok' (a stable reserved placeholder; the ADR forbids inventing an accumulator
 	// for it -- do not branch a recipe on its value). No enabled 'post' hook =>
-	// pfb_run_hooks() returns immediately (byte-identical pass).
+	// pfb_pass_hooks() returns immediately (byte-identical pass).
 	if (!empty($pfb_alias_lists) && is_array($pfb_alias_lists)) {
 		$pfb['changed_ip_aliases'] = array_merge($pfb['changed_ip_aliases'], $pfb_alias_lists);
 	}
-	pfb_run_hooks('post', array(
+	pfb_pass_hooks('post', array(
 		'TRIGGER'		=> $pfb_hook_val,
 		'IP_CHANGED'		=> (!empty($pfb['filter_configure']) || !empty($pfb_ip_unlock_forced)) ? '1' : '0',
 		'DNSBL_CHANGED'		=> pfb_dnsbl_reload_needed(!empty($pfb['dnsbl_publish_failed']),

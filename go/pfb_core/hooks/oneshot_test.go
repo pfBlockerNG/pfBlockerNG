@@ -3,8 +3,9 @@
 package hooks_test
 
 // `pfb-core --run-hooks <pre|post>` (#4035 slice 6c), run as a process of the built binary: the corpus in
-// tests/hooks/fixtures/oneshot (tests/php/HookOneShotCorpusTest.php documents the keys and drives today's PHP callers
-// on it), then the one-shot's refusals, its settings backend, its usage and the locks it leaves alone. The settings
+// tests/hooks/fixtures/oneshot (a scenario's keys: description, caller, when, stdin, python, rows, files, expect, and
+// old_expect, the retired PHP runner's answer, which #3977 left unread: its callers run this binary now), then the
+// one-shot's refusals, its settings backend, its usage and the locks it leaves alone. The settings
 // backend is an adapter program answering the scenario's rows as the hooks projection holds them.
 
 import (

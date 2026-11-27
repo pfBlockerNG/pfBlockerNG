@@ -77,24 +77,16 @@ if (isset($argv[1])) {
 		pfBlockerNG_clearsqlite('cleardnsbl');
 		exit;
 	}
-	// ADR-12: manual hook-runner test path (unwired from the update pass). Usage:
-	// pfblockerng.php runhooks <pre|post> [trigger]. Runs the configured pre/post
-	// hooks with a synthetic context WITHOUT sync_package_pfblockerng (nothing is
-	// updated) -- the real CHANGED_* context is built only in pfblockerng.inc's
-	// closing tail. Both lists are '' here because no pass ran, not a reserved
-	// placeholder; PFB_STATUS stays the reserved 'ok'.
+	// ADR-12: manual hook test path. Usage: pfblockerng.php runhooks <pre|post> [trigger]. Runs the configured pre/post hooks
+	// once with a synthetic context and no Update (#3977: through pfb-core --run-hooks, protocol "Hooks outside an Update"). The
+	// change lists are '' because nothing was updated; post gets PFB_STATUS=ok from the one-shot.
 	elseif ($argv[1] == 'runhooks') {
 		$when = ($argv[2] ?? '') === 'post' ? 'post' : 'pre';
-		$ctx  = array('TRIGGER' => ($argv[3] ?? 'manual-test'));
+		$ctx = array('trigger' => ($argv[3] ?? 'manual-test'));
 		if ($when == 'post') {
-			$ctx['IP_CHANGED']           = '0';
-			$ctx['DNSBL_CHANGED']        = '0';
-			$ctx['STATUS']               = 'ok';
-			$ctx['CHANGED_IP_ALIASES']   = '';	// no update performed by this test path
-			$ctx['CHANGED_DNSBL_GROUPS'] = '';	// no update performed by this test path
+			$ctx += array('ipChanged' => FALSE, 'dnsblChanged' => FALSE, 'changedIpAliases' => '', 'changedDnsblGroups' => '');
 		}
-		pfb_run_hooks($when, $ctx);
-		exit;
+		exit(pfb_core_run_hooks($when, $ctx));
 	}
 	// issue #149: SafeSearch CNAME fallback freshness. Legacy direct verb:
 	// re-resolves the SafeSearch CNAME targets (duckduckgo/pixabay) and

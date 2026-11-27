@@ -1076,8 +1076,9 @@ With `pendingOutsideWindow` true the apply marks the changes pending and applies
 
 `pfb-core --run-hooks pre|post` runs the ADR-12 hooks of one fire point once and exits (issue #4035; spec
 `docs/specs/go-updater-pipeline.md` section 5, "Hooks outside an Update"). It is for the two callers that fire hooks without an
-Update, while the Core API may be stopped: the uninstall disable pass and the `runhooks` test verb of `pfblockerng.php`. Neither
-calls it yet; they still run `pfb_run_hooks()` until the cutover.
+Update, while the Core API may be stopped: the uninstall disable pass and the `runhooks` test verb of `pfblockerng.php`, both
+through `pfb_core_run_hooks()` since #3977 (this machine's binary, the context on stdin, stderr appended to the main log; a
+package without the binary logs that once and runs no hook).
 
 ```text
 pfb-core --run-hooks pre|post --hook-dir PATH (--settings-backend-cmd PATH | --state-dir DIR) [--python-wrapper PATH] < context
@@ -1153,8 +1154,7 @@ pfb-core --run-hooks pre|post --hook-dir PATH (--settings-backend-cmd PATH | --s
   `post`, an argument after the flags, no `--hook-dir`, neither backend flag, a relative `--hook-dir` or `--python-wrapper`)
   or a refused context, when nothing runs.
 
-Corpus: `tests/hooks/fixtures/oneshot`, run through today's callers by `tests/php/HookOneShotCorpusTest.php` and through the
-binary by `go/pfb_core/hooks/oneshot_test.go`.
+Corpus: `tests/hooks/fixtures/oneshot`, run through the binary by `go/pfb_core/hooks/oneshot_test.go`.
 
 ## Resources
 

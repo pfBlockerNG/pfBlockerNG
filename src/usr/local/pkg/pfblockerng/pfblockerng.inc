@@ -313,6 +313,68 @@ function pfb_apply_update_start(callable $call): ?string {
 	    gettext('. The next Update applies it.');
 }
 
+/**
+ * Run the $when ('pre' or 'post') hooks outside an Update (#3977, spec section 5: the `runhooks` verb, the uninstall disable pass)
+ * through this machine's `pfb-core --run-hooks`: $context is its stdin (docs/misc/core-api-protocol.md, "Hooks outside an
+ * Update"), its stdout reaches ours (the package operation's console) and its stderr the main log. The one-shot's exit status is
+ * returned; a package without the binary for this machine logs that once, runs no hook, and returns 1. No PHP runner is left.
+ * $machine is `uname -p` (amd64, aarch64 or arm64); NULL reads it.
+ */
+function pfb_core_run_hooks(string $when, array $context, string $coreDir = PFB_CORE_DIR, ?string $machine = NULL): int {
+	global $pfb;
+
+	$machine ??= php_uname('m');
+	$target = match ($machine) { 'amd64' => 'freebsd-amd64', 'aarch64', 'arm64' => 'freebsd-arm64', default => '' };
+	$binary = "{$coreDir}/bin/{$target}/pfb-core";
+	if ($target === '' || !is_executable($binary)) {
+		pfb_logger("\n[ hooks ] no pfb-core for this machine ({$machine}): the {$when} hooks did not run\n", 1);
+		return 1;
+	}
+	$process = proc_open([$binary, '--run-hooks', $when, '--hook-dir', PFB_HOOK_SCRIPT_DIR, '--settings-backend-cmd', PFB_CORE_SETTINGS_CMD,
+	    '--python-wrapper', PFB_PYTHON_WRAPPER], [0 => ['pipe', 'r'], 1 => ['file', 'php://stdout', 'w'], 2 => ['file', $pfb['log'], 'a']], $pipes);
+	if (!is_resource($process)) {
+		pfb_logger("\n[ hooks ] pfb-core could not be started: the {$when} hooks did not run\n", 1);
+		return 1;
+	}
+	fwrite($pipes[0], json_encode((object) $context, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) . "\n");
+	fclose($pipes[0]);
+	return proc_close($process);
+}
+
+/**
+ * The hooks of the pass (#3977): an uninstall disable pass fires them through `pfb-core --run-hooks` with the uninstall lifecycle
+ * and the package operation (spec section 5); any other pass still runs pfb_run_hooks() until the removal list retires it.
+ */
+function pfb_pass_hooks(string $when, array $ctx): void {
+	global $pfb;
+	if (($pfb['hook_lifecycle'] ?? '') === 'uninstall') {
+		pfb_core_run_hooks($when, pfb_hook_oneshot_context($ctx, pfb_pkg_operation()));
+		return;
+	}
+	pfb_run_hooks($when, $ctx);
+}
+
+/**
+ * The pass's hook context ($ctx, PFB_* names without the prefix) as the one-shot's stdin for an uninstall: the trigger, the
+ * lifecycle, the package operation and, for post, the change flags and lists. PFB_STATUS is the one-shot's own reserved `ok`.
+ *
+ * @return array<string, string|bool>
+ */
+function pfb_hook_oneshot_context(array $ctx, string $pkgOp): array {
+	$out = ['trigger' => (string) ($ctx['TRIGGER'] ?? ''), 'lifecycle' => 'uninstall', 'pkgOp' => $pkgOp];
+	foreach (['IP_CHANGED' => 'ipChanged', 'DNSBL_CHANGED' => 'dnsblChanged'] as $name => $member) {
+		if (isset($ctx[$name])) {
+			$out[$member] = $ctx[$name] === '1';
+		}
+	}
+	foreach (['CHANGED_IP_ALIASES' => 'changedIpAliases', 'CHANGED_DNSBL_GROUPS' => 'changedDnsblGroups'] as $name => $member) {
+		if (isset($ctx[$name])) {
+			$out[$member] = (string) $ctx[$name];
+		}
+	}
+	return $out;
+}
+
 // #3977: how many times the package resync asks a Core that is not answering yet (the installer has just restarted it), one
 // PFB_RESYNC_START_TICK_US apart: about 5 s, the rc script's own wait for its supervisor
 const PFB_RESYNC_START_TRIES = 50;
