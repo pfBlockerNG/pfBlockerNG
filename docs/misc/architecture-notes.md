@@ -124,6 +124,16 @@ hostname re-enters the plain path as a bare host; a mask that becomes `||host^` 
 ABP row. IP extraction runs on Adblock rule lines only. The plain path had been cutting Adblock
 path rules (EasyPrivacy's `.imgur.com/lumbar.gif`) down to a block of the whole domain.
 
+**Amended by issue #4284: zone entries can leave out their apex.** The capture guard also takes
+AdGuard's subdomain-only mask `.host^` (optionally `$options`), in any feed. `parse_abp()` reads
+it as a block rule with `apex=False`, and `build()` writes it as a zone entry marked
+`"apex": false`. The suffix walk (`_zone_entry_for()`) skips that entry when the matched key is
+the query name itself, and keeps walking up. On one key, the merged entry keeps
+`apex = a.apex or b.apex`, so a `.host^` never unblocks a host that another rule blocks. A
+`.host^` whose key cannot be a zone drops instead of becoming an exact block: this applies on TLD
+Exclusion and under the PSL feed policy's `apex` demotion. The `$badfilter` signature of
+`.host^` is `.host`, so `||host^$badfilter` does not prune it.
+
 The manifest build is the sole DNSBL classifier in every TLD mode. PHP publishes each feed's
 raw rows and metadata, then `pfb_unbound.py` routes plain and ABP rows through the production
 matcher build. PHP does not re-read an aggregate feed or rebuild per-group plaintext summaries;

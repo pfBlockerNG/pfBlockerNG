@@ -3056,9 +3056,10 @@ function pfb_dnsbl_abp_feed_host(string $token): ?string {
 // hosts feed), or an AdGuard DNS hostname mask. Returns the row it becomes, or NULL to drop it. A mask maps
 // to the closest pfBlockerNG rule that never blocks more than AdGuard (with Wildcard Blocking off): '|host^',
 // '|host|' and '://host^' are the host alone; 'host^' and 'host|' match any hostname ending in 'host', so
-// '||host^', carrying '$important'; '.host^', '*' and every other modifier have no pfBlockerNG form (AdGuard
+// '||host^', carrying '$important'; '*' and every other modifier have no pfBlockerNG form (AdGuard
 // ignores a rule with an unknown one). '$badfilter' too: as '||host^$badfilter' it would prune every feed's
-// '||host^' in reconcile(), while AdGuard's 'host^$badfilter' disables only the 'host^' rule.
+// '||host^' in reconcile(), while AdGuard's 'host^$badfilter' disables only the 'host^' rule. '.host^' never
+// gets here: the capture guard sends it to parse_abp(), which blocks the subdomains alone (issue #4284).
 function pfb_dnsbl_abp_feed_line(string $line): ?array {
 	if (str_contains($line, "\0")) {
 		return NULL;
@@ -15021,6 +15022,10 @@ function pfb_dnsbl_is_abp_rule_line(string $line): bool {
 		return FALSE;
 	}
 	if (str_starts_with($line, '||') || str_starts_with($line, '@@')) {
+		return TRUE;
+	}
+	// issue #4284: AdGuard's subdomain-only mask '.host^' (twin of _DNSBL_SUBDOMAIN_MASK_RE).
+	if (preg_match('/^\.[A-Za-z0-9_.-]+\^(?:\$.*)?$/sD', $line) === 1) {
 		return TRUE;
 	}
 	if (str_contains($line, '#')) {

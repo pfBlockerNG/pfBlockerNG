@@ -4477,6 +4477,8 @@ class Rule:
                         inner pattern (REGEX).
         wildcard        DOMAIN only: True -> domain + all subdomains (zone); False ->
                         exact (data). Ignored for REGEX.
+        apex            DOMAIN only: False for AdGuard's subdomain-only ``.domain^``
+                        (issue #4284), which blocks the subdomains and never the domain.
         important       the rule carried ``$important`` (raises its feed band 1/2 ->
                         3/4). Always meaningless for, but recorded on, USER rules
                         (they are sovereign regardless).
@@ -4504,6 +4506,7 @@ class Rule:
     log: str
     signature: tuple[str, tuple[str, ...]]
     wildcard: bool = False
+    apex: bool = True
 
 
 @dataclass
@@ -4534,6 +4537,7 @@ class BuildResult:
     reconciled rule:
         data_db[domain]          = {"log": <flag>, "index": <int>, "important": bool, "band": int}
         zone_db[registrable]     = {"log": <flag>,        "index": <int>, "important": bool, "band": int}
+                                   (+ "apex": False for a '.host^' zone: the key itself is not blocked)
         feed_group_index_db[idx] = {"feed": <str>, "group": <str>}
         white_db[domain]         = {"wildcard": bool, "important": bool, "band": int}
         regex_db[name]           = {"re": <compiled>, "important": bool, "band": int}   (ABP block-regex)
@@ -4831,6 +4835,10 @@ def _dnsbl_parse_abp_regex(stripped: str) -> tuple[str, str, str] | None:
 
 _DNSBL_ABP_COSMETIC_PREFIX_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._,~*-")
 
+# issue #4284: AdGuard's subdomain-only mask '.host^', optionally with '$options'; twin of
+# the pattern in PHP's pfb_dnsbl_is_abp_rule_line().
+_DNSBL_SUBDOMAIN_MASK_RE = re.compile(r"\.[A-Za-z0-9_.-]+\^(?:\$.*)?", re.DOTALL)
+
 
 def _dnsbl_is_abp_rule_line(line: str) -> bool:
     """Capture guard: should ``build()`` route ``line`` to ``parse_abp()``?
@@ -4861,6 +4869,8 @@ def _dnsbl_is_abp_rule_line(line: str) -> bool:
     if line.startswith(","):
         return False
     if line.startswith("||") or line.startswith("@@"):
+        return True
+    if _DNSBL_SUBDOMAIN_MASK_RE.fullmatch(line):
         return True
     if "#" in line:
         hits = [(line.find(m), len(m)) for m in _DNSBL_ELEMENT_HIDING_MARKERS]
@@ -4898,6 +4908,7 @@ def parse_abp(
     KEEP (-> Rule):
         ``||domain^`` (+DNS-options)                 block, domain, wildcard
         ``@@||domain^`` (+DNS-options)               allow, domain, wildcard
+        ``.domain^`` (+DNS-options)                  block, domain, wildcard, no apex
         ``<ip> domain`` (hosts)                      block, domain, wildcard
         plain bare ``domain``                        block, domain, wildcard
         ``/re/`` (block) / ``@@/re/`` (allow)        block/allow, regex (raw inner)
@@ -4957,9 +4968,11 @@ def parse_abp(
 
     # ---- network rules: @@||domain^ (allow) / ||domain^ (block) ---------- #
     is_allow = s.startswith("@@||")
-    is_block = s.startswith("||")
+    # issue #4284: AdGuard's '.domain^' blocks the subdomains of domain, never domain itself.
+    is_subdomains = _DNSBL_SUBDOMAIN_MASK_RE.fullmatch(s) is not None
+    is_block = s.startswith("||") or is_subdomains
     if is_allow or is_block:
-        rest = s[4:] if is_allow else s[2:]
+        rest = s[4:] if is_allow else s[1:] if is_subdomains else s[2:]
         anchor, _, opts_str = rest.partition("$")
         # split the anchor at the ABP separator ``^``; reject any path token
         host = anchor.split("^", 1)[0]
@@ -4990,8 +5003,10 @@ def parse_abp(
             feed=feed,
             group=group,
             log=log,
-            signature=(dom, dns_opts),
+            # '.' keeps a '||domain^$badfilter' from pruning '.domain^' (another rule).
+            signature=("." + dom if is_subdomains else dom, dns_opts),
             wildcard=True,  # ||domain^ / @@||domain^ cover the domain + subdomains
+            apex=not is_subdomains,
         )
 
     # ---- hosts: "<ip> <domain>" ----------------------------------------- #
@@ -5303,7 +5318,8 @@ class BlockDomainRule:
     ``cls`` is DNSBL_CLASS_DATA (exact) or DNSBL_CLASS_ZONE (wildcard); ``key`` is
     the anchor domain itself for a ZONE (ABP ``||host^`` covers subdomains at any
     depth -- no registrable-parent reduction, #718) or the exact domain for DATA
-    (an exact fold, or a TLD-exclusion carve-out).
+    (an exact fold, or a TLD-exclusion carve-out). ``apex`` False (a ZONE from
+    ``.host^``, issue #4284) leaves the key itself unblocked.
     """
 
     cls: str
@@ -5314,6 +5330,7 @@ class BlockDomainRule:
     feed: str
     group: str
     log: str
+    apex: bool = True
 
 
 @dataclass(frozen=True)
@@ -5490,8 +5507,11 @@ def reconcile(
             # plain/hosts path concept and must not demote an ABP anchor. TLD exclusion still
             # opts a domain out of wildcarding (transparent exact DATA), and a
             # wildcard=False fold (exact /^D$/) stays forced to DATA.
+            apex = r.target != RULE_TARGET_DOMAIN or r.apex
             if wildcard and domain not in exclusion:
                 cls, key = DNSBL_CLASS_ZONE, domain
+            elif not apex:
+                continue  # issue #4284: exact DATA would block only the excluded apex
             else:
                 cls, key = DNSBL_CLASS_DATA, domain
             result.block_domains.append(
@@ -5504,6 +5524,7 @@ def reconcile(
                     feed=r.feed,
                     group=r.group,
                     log=r.log,
+                    apex=apex,
                 )
             )
         # NOTE: a plain user rule alone does NOT force ``important_rules`` -- the fast
@@ -6230,6 +6251,8 @@ def build(
                     continue
                 if policy == "apex" and cls == DNSBL_CLASS_ZONE:
                     _tally_reject(rejects, b.feed or "DNSBL", b.group or "DNSBL", "suffix_demote")
+                    if not b.apex:
+                        continue  # issue #4284: exact DATA would block only the apex '.host^' excludes
                     cls = DNSBL_CLASS_DATA
             idx = index_for(b.feed or "DNSBL", b.group or "DNSBL")
             # issue #3539: an unset ABP log is Null Blocking ("0"), never VIP.
@@ -6238,6 +6261,10 @@ def build(
             if cls == DNSBL_CLASS_ZONE:
                 if top1m_rows:
                     track_zone_top1m(b.key, top1m_row)
+                # issue #4284: merged apex = a.apex or b.apex, so '.host^' never unblocks a blocked host.
+                prior = zone_db.get(b.key)
+                if not b.apex and (prior is None or prior.get("apex") is False):
+                    payload["apex"] = False
                 zone_db[b.key] = payload
             elif not (top1m_row and _top1m_listed(b.key, top1m)):
                 data_db[b.key] = payload
@@ -6834,22 +6861,25 @@ def iter_domain_suffixes(name: str) -> Iterator[str]:
         q = q.split(".", 1)[-1]
 
 
-def _zone_entry_for(q_name: str, entry: dict[str, Any]) -> dict[str, Any] | None:
-    """The zone payload that blocks ``q_name`` (issue #3648): an entry last written by a
+def _zone_entry_for(q_name: str, key: str, entry: dict[str, Any]) -> dict[str, Any] | None:
+    """The zone payload at ``key`` that blocks ``q_name`` (issue #3648): an entry last written by a
     TOP1M-filtered Group yields, for a name TOP1M lists, to the key's last unfiltered writer --
-    or blocks nothing when there is none. All filtered zones share one immutable name set."""
+    or blocks nothing when there is none. All filtered zones share one immutable name set.
+    issue #4284: an entry marked ``"apex": False`` (``.host^``) never blocks its own key."""
     top1m = entry.get("top1m")
+    found: dict[str, Any] | None = entry
     if top1m is not None and _top1m_listed(q_name, top1m):
-        fallback: dict[str, Any] | None = entry.get("top1m_fallback")
-        return fallback
-    return entry
+        found = entry.get("top1m_fallback")
+    if found is not None and key == q_name and found.get("apex") is False:
+        return None
+    return found
 
 
 def find_zone_match(q_name: str, zone_db: dict[str, Any]) -> tuple[str, dict] | tuple[None, None]:
     for q in iter_domain_suffixes(q_name):
         entry = zone_db.get(q)
         if entry is not None:
-            entry = _zone_entry_for(q_name, entry)
+            entry = _zone_entry_for(q_name, q, entry)
             if entry is not None:
                 return q, entry
     return None, None
@@ -7202,7 +7232,7 @@ def _scan_block_band(
         for q in iter_domain_suffixes(q_name):
             entry = zone_db.get(q)
             if entry is not None:
-                entry = _zone_entry_for(q_name, entry)
+                entry = _zone_entry_for(q_name, q, entry)
                 if entry is not None:
                     band = _block_entry_band(entry)
                     if band > best:
