@@ -336,9 +336,23 @@ function pfb_cli_update_request(array $argv): ?array {
  */
 function pfb_cli_deprecation_warning(string $verb): string {
 	if ($verb === 'cron') {
-		return "DEPRECATED: pfblockerng verb 'cron' — use explicit request (scope=both force=false trigger=cron); removal scheduled";
+		return "DEPRECATED: pfblockerng verb 'cron' — use explicit request (scope=both force=false trigger=manual); removal scheduled";
 	}
 	return pfb_verb_deprecation_warning($verb);
+}
+
+/**
+ * Say a deprecated CLI update verb's warning on $err and in the main log, as the pass the verb ran in-process logged it: a crontab
+ * that discards the CLI's output still leaves the line in pfblockerng.log.
+ *
+ * @param callable(string): void $err
+ */
+function pfb_cli_deprecate(string $verb, callable $err): void {
+	$warning = pfb_cli_deprecation_warning($verb);
+	if ($warning !== '') {
+		$err("{$warning}\n");
+		pfb_logger("\n{$warning}\n", 1);
+	}
 }
 
 /**
@@ -389,6 +403,9 @@ function pfb_cli_update_run(array $request, callable $call, ?callable $out, call
 			&& ($update['force'] ?? NULL) === ($request['force'] ?? NULL);
 		if ($started === NULL && is_int($update['startedAt'] ?? NULL) && ($update['startedAt'] < $asked || !$asked_for)) {
 			continue;	// the Update before ours
+		}
+		if ($asked_for && is_int($started) && ($update['startedAt'] ?? NULL) === $started + 1) {
+			$started++;	// Core stamps the start when it admits the Update and again in the worker's status: a second can fall between
 		}
 		$started ??= $update['startedAt'] ?? NULL;
 		if ($started === NULL || ($update['startedAt'] ?? NULL) !== $started) {

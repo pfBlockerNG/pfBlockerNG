@@ -66,7 +66,6 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');	// 'include fu
 global $g, $pfb;
 pfb_global();
 
-
 // Clear IP/DNSBL counters by hand (Core runs the day-change lane through the core_counters verb)
 if (isset($argv[1])) {
 	if ($argv[1] == 'clearip') {
@@ -263,10 +262,7 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 	// issue #4260: the update verbs start an Update through Core and follow it to its end; Core runs it (before the cutover through
 	// the PHP update program), so no pass runs here. A Core that is down or refuses the caller fails the verb, never a fallback.
 	if (($pfb_update_request = pfb_cli_update_request($argv)) !== NULL) {
-		$pfb_deprecated = pfb_cli_deprecation_warning($argv[1]);
-		if ($pfb_deprecated !== '') {
-			fwrite(STDERR, "{$pfb_deprecated}\n");
-		}
+		pfb_cli_deprecate($argv[1], static function (string $text): void { fwrite(STDERR, $text); });
 		exit(pfb_cli_update_run($pfb_update_request, 'pfb_core_call',
 			pfb_stdout_is_terminal() ? static function (string $text): void { echo $text; } : NULL,
 			static function (string $text): void { fwrite(STDERR, $text); },
