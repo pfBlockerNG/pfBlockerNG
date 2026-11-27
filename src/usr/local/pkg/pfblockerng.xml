@@ -110,8 +110,21 @@
 	<custom_php_resync_config_command>
 		<![CDATA[
 		global $pfb;
-		$pfb['save'] = TRUE;
-		sync_package_pfblockerng(array('scope' => 'both', 'force' => FALSE, 'trigger' => 'manual'));
+		if (platform_booting()) {
+			// #3977: the boot branch is Outpost work with no Update: it fetches and parses nothing
+			$pfb['save'] = TRUE;
+			sync_package_pfblockerng(array('scope' => 'both', 'force' => FALSE, 'trigger' => 'manual'));
+		} else {
+			// #3977 (spec section 5): one Update through Core; after an install or upgrade it carries the lifecycle, so the hooks
+			// fire once in it with PFB_POST_INSTALL=1. A Core that does not start it leaves the change pending; no PHP pass runs.
+			$pfb_install = ($pfb['hook_lifecycle'] ?? '') === 'install';
+			$pfb_resync_error = pfb_resync_update_start('pfb_core_call', static function (): void { usleep(PFB_RESYNC_START_TICK_US); },
+			    $pfb_install ? 'install' : NULL, $pfb_install ? pfb_pkg_operation() : '');
+			if ($pfb_resync_error !== NULL) {
+				update_status("pfBlockerNG Core did not start the Update ({$pfb_resync_error}); the changes are pending for the next one.\n");
+				pfb_logger("\nPackage resync: pfBlockerNG Core did not start the Update: {$pfb_resync_error}; the changes are pending\n", 1);
+			}
+		}
 		// issue #3216: the pass mirrors its progress to the pkg output and can end mid-line
 		// ("Restarting DNSBL Service") -- close it so pfSense's own framing ("done.", the
 		// menu/service rows) starts on its own line in the install/upgrade log.

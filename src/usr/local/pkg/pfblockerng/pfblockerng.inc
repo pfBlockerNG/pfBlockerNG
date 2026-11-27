@@ -313,6 +313,43 @@ function pfb_apply_update_start(callable $call): ?string {
 	    gettext('. The next Update applies it.');
 }
 
+// #3977: how many times the package resync asks a Core that is not answering yet (the installer has just restarted it), one
+// PFB_RESYNC_START_TICK_US apart: about 5 s, the rc script's own wait for its supervisor
+const PFB_RESYNC_START_TRIES = 50;
+const PFB_RESYNC_START_TICK_US = 100000;
+
+/**
+ * The package resync (#3977, spec section 5): start one `manual` Update through Core, which the resync does not wait for. After an
+ * install or upgrade $lifecycle is `install` and $pkgOp the package operation (pfb_pkg_operation(); '' for none), so the hooks
+ * fire once in that Update with PFB_POST_INSTALL=1. A Core that is not answering yet is asked again, $sleep apart, up to
+ * PFB_RESYNC_START_TRIES times. NULL once Core started the Update; otherwise the change is marked pending, never applied by a PHP
+ * pass, and why is returned as one line.
+ *
+ * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ */
+function pfb_resync_update_start(callable $call, callable $sleep, ?string $lifecycle, string $pkgOp): ?string {
+	$params = ['trigger' => 'manual', 'scope' => 'both', 'force' => 'none'];
+	if ($lifecycle !== NULL) {
+		$params['lifecycle'] = $lifecycle;
+	}
+	if ($pkgOp !== '') {
+		$params['pkgOp'] = $pkgOp;
+	}
+	for ($try = 1; ; $try++) {
+		$answer = $call('StartUpdate', ['requestId' => bin2hex(random_bytes(16))] + $params, NULL, PFB_CORE_PAGE_TIMEOUT);
+		$failure = pfb_update_core_failure($answer);
+		if ($failure === NULL) {
+			return NULL;
+		}
+		// only a Core that does not answer at all may still be starting; any answer of its own is final
+		if ($answer['status'] !== 0 || $try >= PFB_RESYNC_START_TRIES) {
+			pfb_mark_pending_changes();
+			return $failure;
+		}
+		$sleep();
+	}
+}
+
 // issue #4260: how long a CLI update verb follows its Update, in polls of GetUpdate one second apart (each call bounded by
 // PFB_CORE_PAGE_TIMEOUT); the Update itself goes on when the wait ends, and the Update page still shows it
 const PFB_CLI_UPDATE_POLLS = 14400;
