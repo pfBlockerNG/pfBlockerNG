@@ -78,13 +78,11 @@ client mechanics.
 At session start read `.agents/context/repository-intelligence.md` (details; per-worktree
 `.codegraph/` invariants). Which navigation tool:
 
-- **CodeGraph** (`codegraph explore`) first, for questions inside code: symbols, call paths,
-  blast radius.
-- **Harness's native LSP, otherwise Serena**, for definitions, references, and refactors
-  (renames, moves, symbol edits).
-- **Grep/Read** for anything outside code (docs, specs, policy, decisions) and for exact
-  lines those tools already located.
-- The tools' hook nudges are requirements, not hints.
+- **CodeGraph** (`codegraph explore -p <worktree>`) for call paths, flows, and blast radius.
+- **Harness's native LSP, otherwise Serena** (activated on the worktree), for definitions,
+  references, and refactors (renames, moves, symbol edits).
+- **Grep/Read** for everything else.
+- Point both at the task's worktree, never the primary; the tools' hook nudges are advice.
 
 ## Routing table — read on trigger, not up front
 

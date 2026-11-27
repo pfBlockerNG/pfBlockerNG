@@ -3,11 +3,12 @@
 Scope: cross-client repository discovery and exact code semantics.
 Load when: every agent session, from `AGENTS.md`.
 
-Which tool: CodeGraph (`codegraph explore`) first, for questions inside code (symbols,
-call paths, blast radius); the harness's native LSP, otherwise Serena, for definitions,
-references, and refactors (renames, moves, symbol edits); Grep/Read for anything outside
-code (docs, specs, policy, decisions) and for exact lines those tools already located.
-The tools' hook nudges are requirements, not hints.
+Which tool: CodeGraph (`codegraph explore -p <worktree>`, or `projectPath` on the MCP
+tool) for call paths, flows, and blast radius; the harness's native LSP, otherwise Serena,
+for definitions, references, and refactors (renames, moves, symbol edits); Grep/Read for
+everything else. Point both at the task's worktree, never the primary checkout: a session
+started in the primary activates the worktree with Serena's `activate_project` and checks
+its edits with `git -C <worktree> diff`. The tools' hook nudges are advice.
 
 - Bootstrap or refresh a macOS/Debian agent host with
   `sh scripts/agent/setup-agent-tools.sh <checkout>`. It installs uv when absent and
@@ -35,15 +36,15 @@ The tools' hook nudges are requirements, not hints.
 - Every worktree owns its `.codegraph/` index: run `codegraph init` when it is absent,
   and never borrow a parent or sibling tree's index. Before Serena symbolic edits,
   verify that its active project root equals `git rev-parse --show-toplevel`; after a
-  mid-session worktree switch Serena is forbidden until a fresh top-level session starts
-  there. Claude Agent Teams teammates use built-ins.
+  mid-session worktree switch, `activate_project` the new worktree first (a client that
+  starts Serena with `--project-from-cwd` cannot, and uses built-ins instead). Claude
+  Agent Teams teammates use built-ins.
 - Each index runs its own CodeGraph daemon, registered in `~/.codegraph/daemons/*.json`
   (`root`, `pid`). Stop it before `wt remove` — the entry whose `root` is the worktree
   path, `kill -TERM <pid>` (interactive: `codegraph daemon`) — otherwise the removed
   `codegraph.db` stays pinned on disk until the daemon exits on its own.
-- **CodeGraph owns purely code-related questions**, and is the first call for them:
-  indexed code discovery, a named symbol's verbatim source, call paths, flows,
-  cross-file structure, and blast radius. Use `codegraph_explore` or
+- **CodeGraph answers structural code questions**: call paths, flows, cross-file
+  structure, and blast radius. Use `codegraph_explore` or
   `codegraph explore`. Every client uses the same standard stdio MCP command:
   `codegraph serve --mcp`. Go to grep first for the three classes it does not model,
   because it indexes code structure and nothing else: configuration surfaces and tool
