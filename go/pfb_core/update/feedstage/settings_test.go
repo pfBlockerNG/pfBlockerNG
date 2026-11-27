@@ -73,6 +73,7 @@ func TestUnknownKindOrStateIsRefused(t *testing.T) {
 // floors, the group's Suppression CIDR, the DNSBL IP switch, the parse mode, the PSL's ICANN TLDs, the format, the list type), then the next run parses
 // the download again with it instead of reusing the list, and the run after that reuses the new list.
 func TestParseSettingsReachTheReuseRecord(t *testing.T) {
+	otherICANN := icannOf(t, "com", "org") // the ICANN row's set, in place of each run's icannOf(t, "com")
 	for _, tc := range []struct {
 		name, kind, source string
 		suppression        bool // Suppression is on from the first run, so that the change is the one floor alone
@@ -84,13 +85,7 @@ func TestParseSettingsReachTheReuseRecord(t *testing.T) {
 		{"suppression", "dnsbl", "a.example\n", false, func(s *Stage, _ *Feed) { s.Config.Suppression = true }},
 		{"the DNSBL IP switch", "dnsbl", "a.example\n198.51.100.1\n", false, func(s *Stage, _ *Feed) { s.Config.DNSBLIP = true }},
 		{"parse mode", "dnsbl", "a.example\n", false, func(s *Stage, _ *Feed) { s.Config.ParseMode = feedparse.ParseLenient }},
-		{"the ICANN TLDs", "dnsbl", "a.example\n", false, func(s *Stage, _ *Feed) {
-			icann, err := feedparse.LoadICANNTLDs("../../../../src/usr/local/pkg/pfblockerng/dnsbl_psl")
-			if err != nil {
-				panic(err)
-			}
-			s.Config.ICANN = icann
-		}},
+		{"the ICANN TLDs", "dnsbl", "a.example\n", false, func(s *Stage, _ *Feed) { s.Config.ICANN = otherICANN }},
 		{"the format", "ipv4", "198.51.100.1\n", false, func(_ *Stage, f *Feed) { f.Format = "regex" }},
 		{"the list type", "ipv4", "198.51.100.1\n", false, func(_ *Stage, f *Feed) { f.Custom = true }},
 	} {

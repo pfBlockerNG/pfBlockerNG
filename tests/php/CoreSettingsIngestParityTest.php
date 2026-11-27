@@ -202,7 +202,7 @@ final class CoreSettingsIngestParityTest extends TestCase
 		$refused = array_column($doc['refused'], 'id');
 		$this->assertSame(array_values(array_unique($refused)), $refused, 'a refused row id appears once');
 		foreach (['proxy-url-with-userinfo', 'proxy-url-with-crlf', 'allowlist-with-spaces', 'allowlist-ipv6-zone', 'self-unspecified-v4', 'self-unspecified-v6', 'self-mapped-ipv4',
-			'scheduled-work-disabled-string', 'skipfeed-limit-beyond-page', 'skipfeed-limit-negative', 'skipfeed-limit-string', 'feed-sanity-string'] as $id) {
+			'scheduled-work-disabled-string', 'dnsbl-parse-mode-unknown', 'dnsbl-parse-mode-bool', 'skipfeed-limit-beyond-page', 'skipfeed-limit-negative', 'skipfeed-limit-string', 'feed-sanity-string'] as $id) {
 			$this->assertContains($id, $refused, "the hostile row {$id}");
 		}
 		$this->assertSame(['suppression', 'suppressionCidrV4', 'suppressionCidrV6', 'dnsblIp', 'dnsblParseMode', 'feedHostFilter', 'feedHostAllowlist', 'selfAddresses',

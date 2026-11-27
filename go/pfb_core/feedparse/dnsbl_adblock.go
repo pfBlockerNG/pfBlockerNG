@@ -187,10 +187,15 @@ func (t *ICANNTLDs) abpFeedLine(line string) (DNSBLRow, bool) {
 	if len(fields) >= 2 && (isIPAddrV4(fields[0]) || isIPAddrV6(fields[0])) {
 		first, ok := t.host(fields[1])
 		for _, alias := range fields[2:] {
-			_, valid := t.host(alias)
-			ok = ok && valid
+			if !ok {
+				break
+			}
+			_, ok = t.host(alias)
 		}
-		return DNSBLRow{Text: first}, ok
+		if !ok {
+			return DNSBLRow{}, false
+		}
+		return DNSBLRow{Text: first}, true
 	}
 	if len(fields) != 1 {
 		return DNSBLRow{}, false
@@ -214,8 +219,8 @@ func (t *ICANNTLDs) abpFeedLine(line string) (DNSBLRow, bool) {
 	return DNSBLRow{ABP: true, Text: "||" + h + "^" + m[3]}, true
 }
 
-// validPort is a decimal port 1 to 65535 (the callers' patterns allow at most five digits).
+// validPort is a decimal port 1 to 65535 of at most five digits.
 func validPort(digits string) bool {
 	n, err := strconv.Atoi(digits)
-	return err == nil && n >= 1 && n <= 65535
+	return err == nil && len(digits) <= 5 && n >= 1 && n <= 65535
 }

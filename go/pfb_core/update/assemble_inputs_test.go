@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -130,5 +131,27 @@ func TestTheParseModeAndTheICANNTLDsReachTheDNSBLStage(t *testing.T) {
 		if string(cfg.ParseMode) != mode || cfg.ICANN.Len() != 2 {
 			t.Errorf("dnsblParseMode %s: the DNSBL stage has mode %q and %d ICANN TLDs, want %s and 2", mode, cfg.ParseMode, cfg.ICANN.Len(), mode)
 		}
+	}
+}
+
+// GIVEN no readable dnsbl_psl
+// WHEN the loop builds its stages
+// THEN the DNSBL stage has no ICANN TLDs (an Adblock feed keeps no hostname) and the log says why, with the read error.
+func TestAnUnreadablePSLIsLoggedWithItsError(t *testing.T) {
+	fx := newLoopFixture(t)
+	fx.reply(t)
+	os.Remove(filepath.Join(fx.pkg, "dnsbl_psl"))
+	u := fx.updater(t, manual())
+	if err := u.snapshot(); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.workList(); err != nil {
+		t.Fatal(err)
+	}
+	if got := u.stages["dnsbl"].Config.ICANN; got != nil {
+		t.Errorf("the DNSBL stage has %s, want none", got)
+	}
+	if text := logText(t, fx.log); !strings.Contains(text, "[ dnsbl_psl ] unreadable (") || !strings.Contains(text, "no such file") {
+		t.Errorf("log = %q, want the unreadable PSL and its error", text)
 	}
 }
