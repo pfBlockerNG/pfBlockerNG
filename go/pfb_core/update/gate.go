@@ -207,6 +207,9 @@ func (g *Gate) Start(req Request, commit func() (map[string]int64, error)) error
 		}
 	}
 	g.status = &Status{Trigger: req.Trigger, Scope: req.Scope, Force: req.Force, StartedAt: time.Now().Unix()}
+	if lease != nil {
+		lease.startedAt = g.status.StartedAt
+	}
 	go g.execute(ctx, cancel, lease, req, log)
 	return nil
 }
