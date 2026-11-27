@@ -57,7 +57,7 @@ func wantRegexRule(kind, pattern string, important, badfilter bool) rule {
 		opts = "important"
 	}
 	return rule{kind: kind, target: RULE_TARGET_REGEX, keyOrPattern: pattern, important: important, badfilter: badfilter,
-		provenance: RULE_PROV_FEED, signature: ruleSignature{pattern, opts}}
+		provenance: RULE_PROV_FEED, signature: ruleSignature{"/" + pattern + "/", opts}} // issue #4286: a regex key is /pattern/
 }
 
 func expectRule(t *testing.T, line string, want rule) {
@@ -1124,8 +1124,13 @@ func TestAbpOracleLines(t *testing.T) {
 		case (got != nil) != (row.Rule != nil):
 			bad("parseAbp", got, row.Rule)
 		case got != nil:
+			// issue #4286: release/4.0 writes a regex signature key as /pattern/, after this oracle was recorded.
+			sigKey := row.Rule.Key
+			if row.Rule.Target == RULE_TARGET_REGEX {
+				sigKey = "/" + sigKey + "/"
+			}
 			want := rule{kind: row.Rule.Kind, target: row.Rule.Target, keyOrPattern: row.Rule.Key, important: row.Rule.Important, badfilter: row.Rule.Badfilter,
-				provenance: RULE_PROV_FEED, feed: "F", group: "G", log: "1", signature: ruleSignature{row.Rule.Key, strings.Join(row.Rule.Opts, ",")}, wildcard: row.Rule.Wildcard}
+				provenance: RULE_PROV_FEED, feed: "F", group: "G", log: "1", signature: ruleSignature{sigKey, strings.Join(row.Rule.Opts, ",")}, wildcard: row.Rule.Wildcard}
 			if *got != want {
 				bad("parseAbp", *got, want)
 			}

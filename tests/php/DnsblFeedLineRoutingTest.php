@@ -80,7 +80,8 @@ final class DnsblFeedLineRoutingTest extends TestCase
 			'scheme mask'            => ['://imgur.com^', [['d', 'imgur.com']]],
 			'end-anchored mask'      => ['imgur.com^', [['a', '||imgur.com^']]],
 			'important mask'         => ['imgur.com^$important', [['a', '||imgur.com^$important']]],
-			'subdomain-only mask'    => ['.imgur.com^', []],
+			// issue #4284: AdGuard's subdomain-only mask is a rule: parse_abp() blocks the subdomains alone.
+			'subdomain-only mask'    => ['.imgur.com^', [['a', '.imgur.com^']]],
 			'wildcard mask'          => ['*.imgur.com^', []],
 			'badfilter mask'         => ['imgur.com^$badfilter', []],
 			'AdGuard extended CSS'   => ['eksisozluk.com#$?#.ads', [['a', 'eksisozluk.com#$?#.ads']]],
@@ -120,6 +121,7 @@ final class DnsblFeedLineRoutingTest extends TestCase
 		$this->assertSame([['d', 'imgur.com']], $this->parseLine('0.0.0.0 imgur.com', FALSE, FALSE));
 		$this->assertSame([['a', '||mp.imgur.com^']], $this->parseLine('||mp.imgur.com^', FALSE, FALSE));
 		$this->assertSame([['d', 'imgur.com']], $this->parseLine('.imgur.com/lumbar.gif', FALSE, TRUE), 'lenient still cuts the host');
+		$this->assertSame([['a', '.imgur.com^']], $this->parseLine('.imgur.com^', FALSE, TRUE), 'issue #4284: lenient never cuts a subdomain-only mask to the host');
 	}
 
 	/** Any bracketed first line naming an Adblock-family product heads an Adblock-syntax list (owner ruling, #4272). */
