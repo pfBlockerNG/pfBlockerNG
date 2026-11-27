@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"iter"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -36,8 +35,9 @@ func apexBuildFeeds(t *testing.T, feeds [][]string, opts apexBuild) *buildResult
 	for i, lines := range feeds {
 		raw := fmt.Sprintf("feed%d.raw", i)
 		raws[raw] = lines
-		rows = append(rows, manifestFeed{raw: raw, feed: fmt.Sprintf("FEED%d", i), group: fmt.Sprintf("GRP%d", i),
-			logFlag: "1", top1m: slices.Contains(opts.top1mFeeds, i)})
+		row := bldFeed(raw, fmt.Sprintf("FEED%d", i), fmt.Sprintf("GRP%d", i))
+		row.top1m = slices.Contains(opts.top1mFeeds, i)
+		rows = append(rows, row)
 	}
 	cfg := newBuildConfig()
 	cfg.pslRules = bldRules(t, apexPSL)
@@ -99,7 +99,7 @@ func TestIssue4284APathWildcardOrUnterminatedDotLineIsNotCaptured(t *testing.T) 
 
 func TestIssue4284ParseAbpReadsASubdomainOnlyBlock(t *testing.T) {
 	r := abpParse(".WebHop.net^$important")
-	if r == nil || r.kind != DNSBL_KIND_BLOCK || r.target != RULE_TARGET_DOMAIN || r.keyOrPattern != "webhop.net" || !r.wildcard || !r.important {
+	if r == nil || r.kind != DNSBL_KIND_BLOCK || r.target != RULE_TARGET_DOMAIN || r.keyOrPattern != "webhop.net" || !r.wildcard || !r.subdomainsOnly || !r.important {
 		t.Fatalf("parseAbp(.WebHop.net^$important) = %+v", r)
 	}
 	anchored := abpParse("||webhop.net^$important")
@@ -180,14 +180,16 @@ func TestIssue4284TwoSubdomainOnlyMasksOnOneHostLeaveTheHostUnblocked(t *testing
 }
 
 func TestIssue4284TheHostKeepsTheBandAndGroupOfTheRuleThatBlocksIt(t *testing.T) {
-	for name, feeds := range map[string][][]string{
-		"anchor then mask": {{"||webhop.net^"}, {".webhop.net^$important"}},
-		"mask then anchor": {{".webhop.net^$important"}, {"||webhop.net^"}},
+	for _, c := range []struct {
+		name, group string
+		feeds       [][]string
+	}{
+		{"anchor then mask", "GRP0", [][]string{{"||webhop.net^"}, {".webhop.net^$important"}}},
+		{"mask then anchor", "GRP1", [][]string{{".webhop.net^$important"}, {"||webhop.net^"}}},
 	} {
-		anchor := slices.IndexFunc(feeds, func(lines []string) bool { return strings.HasPrefix(lines[0], "||") })
-		result := apexBuildFeeds(t, feeds, apexBuild{})
-		if band, group := apexHit(t, result, "webhop.net"); band != PRIO_FEED_BLOCK || group != fmt.Sprintf("GRP%d", anchor) {
-			t.Errorf("%s: webhop.net hit (%d, %s), want (%d, GRP%d)", name, band, group, PRIO_FEED_BLOCK, anchor)
+		result := apexBuildFeeds(t, c.feeds, apexBuild{})
+		if band, group := apexHit(t, result, "webhop.net"); band != PRIO_FEED_BLOCK || group != c.group {
+			t.Errorf("%s: webhop.net hit (%d, %s), want (%d, %s)", c.name, band, group, PRIO_FEED_BLOCK, c.group)
 		}
 	}
 }
@@ -200,14 +202,17 @@ func TestIssue4284SubdomainsKeepTheLastWriterWhenAMaskFollowsAnAnchor(t *testing
 }
 
 func TestIssue4284ATop1mFilteredAnchorNeverBlocksAListedHostThroughAMask(t *testing.T) {
-	for _, anchorFirst := range []bool{true, false} {
-		feeds, filtered := [][]string{{"||webhop.net^"}, {".webhop.net^"}}, 0
-		if !anchorFirst {
-			feeds, filtered = [][]string{{".webhop.net^"}, {"||webhop.net^"}}, 1
-		}
-		result := apexBuildFeeds(t, feeds, apexBuild{top1m: []string{"webhop.net"}, top1mFeeds: []int{filtered}})
+	for _, c := range []struct {
+		name     string
+		feeds    [][]string
+		filtered int // the anchor's feed, TOP1M-filtered
+	}{
+		{"anchor then mask", [][]string{{"||webhop.net^"}, {".webhop.net^"}}, 0},
+		{"mask then anchor", [][]string{{".webhop.net^"}, {"||webhop.net^"}}, 1},
+	} {
+		result := apexBuildFeeds(t, c.feeds, apexBuild{top1m: []string{"webhop.net"}, top1mFeeds: []int{c.filtered}})
 		if apexBlocks(t, result, "webhop.net") || !apexBlocks(t, result, "someone.webhop.net") {
-			t.Errorf("anchorFirst=%v: the listed host is blocked or its subdomain is not", anchorFirst)
+			t.Errorf("%s: the listed host is blocked or its subdomain is not", c.name)
 		}
 	}
 }
