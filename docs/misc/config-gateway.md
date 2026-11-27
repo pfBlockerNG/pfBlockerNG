@@ -369,6 +369,12 @@ Authorization = property of **write**, not call site (generalises
     `pfb_reentry_timeout()` mirrors the window and default for the shell seam (it reads the
     key via `read_xml_tag.sh` — shell has no gateway); `ReentryTimeoutSettingTest` pins the
     two windows against each other.
+  - **`pfb_dnsbl_parse_mode` → `PfbDnsblParseMode`** (registry adapters
+    `pfb_cfg_dnsbl_parse_mode_read/write`, issue #4272): `'strict'`, `'ports'` (Allow Ports, the
+    default), `'lenient'`. It replaces ADR-22's `pfb_dnsbl_lenient` checkbox (`old_name`); the read
+    adapter reads tokens case-insensitively and also takes that key's tokens, `'on'` as Lenient
+    and `''`/`'off'`/junk as Allow Ports.
+    The runtime mirror `$pfb['dnsbl_parse_mode']` carries the enum.
   - **`pfb_idn` → `PfbIdnMode`** (registry adapters `pfb_cfg_idn_mode_read/write`): live
     cases `'on'` (= All), `'confusable'`, Off. `All` **reuses original `'on'`** block-all
     token, so current code reading pre-4.0.0 configuration preserves block-all with no
@@ -512,7 +518,7 @@ Gateway preserves existing behaviour while configurations move forward:
   | --- | --- | --- |
   | `gen/pfb_keep` | `[ABSENT => 'on']` | #281 upgrade keeps settings; #2120's runtime adapter owns the legacy `''` uncheck |
   | `gen/pfb_alias_delta_mode` | `[ABSENT => 'replace']` | ADR-40 — an upgrade keeps the pre-ADR-40 full replace |
-  | `dnsbl/pfb_dnsbl_lenient` | `[ABSENT => 'on']` | ADR-22 — an upgrade keeps permissive parsing |
+  | `dnsbl/pfb_dnsbl_parse_mode` | `[ABSENT => 'lenient']` | #4272 — renamed from ADR-22's `pfb_dnsbl_lenient` (`old_name`); an upgrade keeps permissive parsing, and the old strict, which kept ports, becomes Allow Ports (the checkbox's `'on'` / `''` / `'off'` reach the read adapter and write back as `'lenient'` / `'ports'` / `'ports'`) |
   | `ip/autorule_suffix` | `[ABSENT => 'standard', '' => 'standard']` | #3450 — the runtime read the raw value with no default, so an absent or `''` suffix generated none; an upgrade keeps that, a fresh install takes the page default `autorule` |
 
   **Every entry carries its decision.** Exactly one of `grandfather` map or

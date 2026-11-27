@@ -61,7 +61,8 @@ final class DnsblSchemeSeparatorTest extends TestCase
 			'header'    => 'testfeed',
 			'custom'    => $custom,
 			'dnsbl_ip'  => $dnsblIp !== 'Disabled',
-			'lenient'   => $lenient,
+			'parse_mode' => ($lenient ? PfbDnsblParseMode::Lenient : PfbDnsblParseMode::Strict),
+			'abp_feed'   => FALSE,
 			'parse_err' => $this->failLog,
 		];
 		$res = pfb_dnsbl_parse_line($feedLine, 1, $state, $ctx);
@@ -142,12 +143,13 @@ final class DnsblSchemeSeparatorTest extends TestCase
 			['://1.2.3.4/path^', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 			['://1.2.3.4^ #c', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 
-			// RED: a '://' after '/', '?' or '#' is not a scheme separator.
-			['evil.com/x?u=http://8.8.8.8/', 'd=evil.com', 'd=evil.com', 'RED'],
-			['evil.com/r#http://8.8.8.8', 'd=evil.com', 'd=evil.com', 'RED'],
-			['evil.com?u=http://8.8.8.8', 'd=evil.com', 'd=evil.com', 'RED'],
-			['evil.com/r?u=://8.8.8.8', 'd=evil.com', 'd=evil.com', 'RED'],
-			['evil.com/x?u=http://[2001:db8::1]/', 'd=evil.com', 'd=evil.com', 'RED'],
+			// RED: a '://' after '/', '?' or '#' is not a scheme separator. Strict skips the whole line,
+			// as it does any domain followed by a path, query or fragment (issue #4272).
+			['evil.com/x?u=http://8.8.8.8/', 'd=evil.com', 'pe', 'RED'],
+			['evil.com/r#http://8.8.8.8', 'd=evil.com', 'pe', 'RED'],
+			['evil.com?u=http://8.8.8.8', 'd=evil.com', 'pe', 'RED'],
+			['evil.com/r?u=://8.8.8.8', 'd=evil.com', 'pe', 'RED'],
+			['evil.com/x?u=http://[2001:db8::1]/', 'd=evil.com', 'pe', 'RED'],
 			['8.8.8.8/http://9.9.9.9', 'ip4=8.8.8.8', 'ip4=8.8.8.8', 'RED'],
 			['1.2.3.4?u=http://9.9.9.9', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 			['a/b://8.8.8.8', 'pe', 'pe', 'RED'],

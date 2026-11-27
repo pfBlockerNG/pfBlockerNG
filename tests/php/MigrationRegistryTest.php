@@ -496,7 +496,7 @@ final class MigrationRegistryTest extends TestCase
 			'dnsbl_mode'                => 'dnsbl_python',
 			'pfb_py_block'              => 'on',
 			'pfb_control_legacy_seeded' => 'on',
-			'pfb_dnsbl_lenient'         => 'on',
+			'pfb_dnsbl_parse_mode'      => 'lenient',
 			'global_log_mode'           => 'default',
 			'global_log'                => 'disabled_log',
 		]);

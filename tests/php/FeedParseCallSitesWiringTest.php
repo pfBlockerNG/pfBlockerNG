@@ -164,7 +164,7 @@ final class FeedParseCallSitesWiringTest extends TestCase
 		rewind($fh);
 		$out = fopen('php://memory', 'w+');
 		$state = pfb_dnsbl_parse_state();
-		$ctx = $ctxOver + ['header' => 'HEADER', 'custom' => FALSE, 'dnsbl_ip' => TRUE, 'lenient' => TRUE, 'parse_err' => "{$this->dir}/parse.err"];
+		$ctx = $ctxOver + ['header' => 'HEADER', 'custom' => FALSE, 'dnsbl_ip' => TRUE, 'parse_mode' => PfbDnsblParseMode::Lenient, 'abp_feed' => FALSE, 'parse_err' => "{$this->dir}/parse.err"];
 		$result = $site ? pfb_test_dnsbl_call_site($fh, $out, $state, $ctx, 'ALIAS') : pfb_dnsbl_parse_feed($fh, $out, $state, $ctx)['rows'];
 		rewind($out);
 		$rows = (string) stream_get_contents($out);

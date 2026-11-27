@@ -9,7 +9,7 @@ import (
 func parseDNSBLReview(input string) (DNSBLFeed, []byte, []FailRecord, error) {
 	var out bytes.Buffer
 	var fails []FailRecord
-	feed, err := ParseDNSBLFeed(strings.NewReader(input), DNSBLConfig{DNSBLIP: true, Lenient: true}, &out, Sink{
+	feed, err := ParseDNSBLFeed(strings.NewReader(input), DNSBLConfig{DNSBLIP: true, ParseMode: ParseLenient}, &out, Sink{
 		Fail: func(rec FailRecord) { fails = append(fails, rec) },
 	})
 	return feed, out.Bytes(), fails, err

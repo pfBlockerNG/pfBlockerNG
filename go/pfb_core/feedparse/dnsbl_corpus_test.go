@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 )
@@ -29,6 +30,16 @@ type dnsblCorpusCase struct {
 }
 
 var dnsblHexRE = regexp.MustCompile(`^(?:[0-9a-f]{2})+$`)
+
+// corpusICANN is the ICANN TLD set of the shipped dnsbl_psl, which the PHP runner reads too (pfb_psl_icann_tlds()). It is
+// read on first use, from the package folder: a helper process of this test binary runs elsewhere and never needs it.
+var corpusICANN = sync.OnceValue(func() *ICANNTLDs {
+	t, err := LoadICANNTLDs("../../../src/usr/local/pkg/pfblockerng/dnsbl_psl")
+	if err != nil {
+		panic(err)
+	}
+	return t
+})
 
 // dnsblObject decodes a JSON object whose key set must be exactly keys.
 func dnsblObject(raw json.RawMessage, where string, keys ...string) (map[string]json.RawMessage, error) {
@@ -168,11 +179,15 @@ func dnsblLoadCorpus(t *testing.T) []dnsblCorpusCase {
 		}
 		seen[id] = true
 		cc := dnsblCorpusCase{id: id}
-		cfg, err := dnsblObject(cm["config"], where+" config", "dnsbl_ip", "lenient", "custom", "suppression")
+		cfg, err := dnsblObject(cm["config"], where+" config", "dnsbl_ip", "parse_mode", "abp_feed", "custom", "suppression")
 		if err != nil {
 			t.Fatal(err)
 		}
-		for k, dst := range map[string]*bool{"dnsbl_ip": &cc.config.DNSBLIP, "lenient": &cc.config.Lenient, "custom": &cc.config.Custom, "suppression": &cc.config.Suppression} {
+		if err := dnsblUnmarshal(cfg["parse_mode"], where+" config.parse_mode", &cc.config.ParseMode); err != nil || !cc.config.ParseMode.Valid() {
+			t.Fatalf("%s config.parse_mode: must be strict, ports or lenient: %v", where, err)
+		}
+		cc.config.ICANN = corpusICANN()
+		for k, dst := range map[string]*bool{"dnsbl_ip": &cc.config.DNSBLIP, "abp_feed": &cc.config.ABPFeed, "custom": &cc.config.Custom, "suppression": &cc.config.Suppression} {
 			if err := dnsblUnmarshal(cfg[k], where+" config."+k, dst); err != nil {
 				t.Fatal(err)
 			}

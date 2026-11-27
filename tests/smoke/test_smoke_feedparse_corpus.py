@@ -79,7 +79,8 @@ function fpc_dnsbl(string $dir): array {
 	foreach (fpc_doc($dir, 'dnsbl')['cases'] as $c) {
 		$k = $c['config'];
 		$pfb['supp'] = $k['suppression'] ? PfbToggle::On : PfbToggle::Off;
-		$ctx = ['header' => 'hdr', 'custom' => $k['custom'], 'dnsbl_ip' => $k['dnsbl_ip'], 'lenient' => $k['lenient'],
+		$ctx = ['header' => 'hdr', 'custom' => $k['custom'], 'dnsbl_ip' => $k['dnsbl_ip'],
+			'parse_mode' => PfbDnsblParseMode::from($k['parse_mode']), 'abp_feed' => $k['abp_feed'],
 			'parse_err' => $fail_log];
 		$state = pfb_dnsbl_parse_state();
 		$lines = [];

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -107,5 +108,50 @@ func TestAChangeTheOutpostHoldsWaitsForTheApplyWindow(t *testing.T) {
 		if got := fx.request(t)["pendingOutsideWindow"] == true; got != pending {
 			t.Errorf("pendingApply %v: the apply's pendingOutsideWindow is %v, request %v", pending, got, fx.request(t))
 		}
+	}
+}
+
+// GIVEN ingest.dnsblParseMode and the package's dnsbl_psl
+// WHEN the loop builds its stages
+// THEN the DNSBL stage parses with that mode and with the PSL's ICANN TLDs, which an Adblock feed's hostnames need (#4273).
+func TestTheParseModeAndTheICANNTLDsReachTheDNSBLStage(t *testing.T) {
+	for _, mode := range []string{"strict", "ports", "lenient"} {
+		fx := newLoopFixture(t)
+		fx.settings["ingest"]["dnsblParseMode"] = mode
+		fx.reply(t)
+		touch(t, filepath.Join(fx.pkg, "dnsbl_psl"), "// ===BEGIN ICANN DOMAINS===\ncom\n*.np\n// ===END ICANN DOMAINS===\n")
+		u := fx.updater(t, manual())
+		if err := u.snapshot(); err != nil {
+			t.Fatal(err)
+		}
+		if err := u.workList(); err != nil {
+			t.Fatal(err)
+		}
+		cfg := u.stages["dnsbl"].Config
+		if string(cfg.ParseMode) != mode || cfg.ICANN.Len() != 2 {
+			t.Errorf("dnsblParseMode %s: the DNSBL stage has mode %q and %d ICANN TLDs, want %s and 2", mode, cfg.ParseMode, cfg.ICANN.Len(), mode)
+		}
+	}
+}
+
+// GIVEN no readable dnsbl_psl
+// WHEN the loop builds its stages
+// THEN the DNSBL stage has no ICANN TLDs (an Adblock feed keeps no hostname) and the log says why, with the read error.
+func TestAnUnreadablePSLIsLoggedWithItsError(t *testing.T) {
+	fx := newLoopFixture(t)
+	fx.reply(t)
+	os.Remove(filepath.Join(fx.pkg, "dnsbl_psl"))
+	u := fx.updater(t, manual())
+	if err := u.snapshot(); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.workList(); err != nil {
+		t.Fatal(err)
+	}
+	if got := u.stages["dnsbl"].Config.ICANN; got != nil {
+		t.Errorf("the DNSBL stage has %s, want none", got)
+	}
+	if text := logText(t, fx.log); !strings.Contains(text, "[ dnsbl_psl ] unreadable (") || !strings.Contains(text, "no such file") {
+		t.Errorf("log = %q, want the unreadable PSL and its error", text)
 	}
 }

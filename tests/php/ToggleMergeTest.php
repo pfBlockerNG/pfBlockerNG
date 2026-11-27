@@ -210,21 +210,15 @@ final class ToggleMergeTest extends TestCase
 	}
 
 	/**
-	 * The three ex-lenient fields are on the toggle adapter and still behave.
-	 *
-	 * pfb_dnsbl_lenient is the ADR-22 default-off case, pfb_keep and
-	 * pfb_syntax_highlight the default-on cases — so this covers both registry
-	 * defaults through the single surviving adapter.
+	 * The two remaining ex-lenient fields are on the toggle adapter and still behave.
+	 * (The third, pfb_dnsbl_lenient, became the three-way dnsbl/pfb_dnsbl_parse_mode in
+	 * issue #4272 -- DnsblParseModeTest.)
 	 */
 	public function testExLenientFieldsUseTheToggleAdapter(): void
 	{
 		$fields = [
 			'gen/pfb_keep'             => ['path' => self::KEEP,   'default' => PfbToggle::On],
 			'gen/pfb_syntax_highlight' => ['path' => self::SYNTAX, 'default' => PfbToggle::On],
-			'dnsbl/pfb_dnsbl_lenient'  => [
-				'path'    => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient',
-				'default' => PfbToggle::Off,
-			],
 		];
 
 		foreach ($fields as $key => $spec) {

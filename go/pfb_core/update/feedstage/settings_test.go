@@ -5,7 +5,10 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedparse"
 )
 
 // Run reads the verdict only for a transferred feed: a disabled feed, a Hold feed with its list, a custom list and a
@@ -67,9 +70,10 @@ func TestUnknownKindOrStateIsRefused(t *testing.T) {
 
 // Scenario: a parse setting changes while the source does not.
 // Given a feed published from an unchanged source, when a setting the parse reads changes (suppression and the CIDR
-// floors, the group's Suppression CIDR, the DNSBL IP switch, lenient, the format, the list type), then the next run parses
+// floors, the group's Suppression CIDR, the DNSBL IP switch, the parse mode, the PSL's ICANN TLDs, the format, the list type), then the next run parses
 // the download again with it instead of reusing the list, and the run after that reuses the new list.
 func TestParseSettingsReachTheReuseRecord(t *testing.T) {
+	otherICANN := icannOf(t, "com", "org") // the ICANN row's set, in place of each run's icannOf(t, "com")
 	for _, tc := range []struct {
 		name, kind, source string
 		suppression        bool // Suppression is on from the first run, so that the change is the one floor alone
@@ -80,13 +84,15 @@ func TestParseSettingsReachTheReuseRecord(t *testing.T) {
 		{"the group's Suppression CIDR", "ipv4", "198.51.0.0/16\n", true, func(_ *Stage, f *Feed) { f.SuppressionCIDR = 24 }},
 		{"suppression", "dnsbl", "a.example\n", false, func(s *Stage, _ *Feed) { s.Config.Suppression = true }},
 		{"the DNSBL IP switch", "dnsbl", "a.example\n198.51.100.1\n", false, func(s *Stage, _ *Feed) { s.Config.DNSBLIP = true }},
-		{"lenient", "dnsbl", "a.example\n", false, func(s *Stage, _ *Feed) { s.Config.Lenient = true }},
+		{"parse mode", "dnsbl", "a.example\n", false, func(s *Stage, _ *Feed) { s.Config.ParseMode = feedparse.ParseLenient }},
+		{"the ICANN TLDs", "dnsbl", "a.example\n", false, func(s *Stage, _ *Feed) { s.Config.ICANN = otherICANN }},
 		{"the format", "ipv4", "198.51.100.1\n", false, func(_ *Stage, f *Feed) { f.Format = "regex" }},
 		{"the list type", "ipv4", "198.51.100.1\n", false, func(_ *Stage, f *Feed) { f.Custom = true }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stage, _, source := localStage(t)
 			stage.Config.Suppression = tc.suppression
+			stage.Config.ICANN = icannOf(t, "com") // a set the ICANN row replaces with another
 			feed := testFeed(tc.kind, "enabled", "auto", "file://"+source)
 			writeFile(t, source, tc.source)
 			if got := run(stage, feed, "none"); got.Disposition != "changed" {
@@ -108,4 +114,19 @@ func TestParseSettingsReachTheReuseRecord(t *testing.T) {
 			}
 		})
 	}
+}
+
+// icannOf is the ICANN TLD set of a PSL whose ICANN section holds the rules given.
+func icannOf(t *testing.T, rules ...string) *feedparse.ICANNTLDs {
+	t.Helper()
+	psl := filepath.Join(t.TempDir(), "dnsbl_psl")
+	text := "// ===BEGIN ICANN DOMAINS===\n" + strings.Join(rules, "\n") + "\n// ===END ICANN DOMAINS===\n"
+	if err := os.WriteFile(psl, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	icann, err := feedparse.LoadICANNTLDs(psl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return icann
 }

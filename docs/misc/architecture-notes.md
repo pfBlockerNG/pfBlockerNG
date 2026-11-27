@@ -112,6 +112,21 @@ bracketed-IPv6 carve-out: `pfb_dnsbl_unbracket_ip6()` runs FIRST, so `[2604:2dc0
 collects to the DNSBL-IP firewall pass (never treated as an ABP `[section]` comment); only a
 non-IPv6 `[…]` is dropped as a control line.
 
+**Amended by issue #4272: an Adblock feed is parsed as Adblock again.** A feed is an Adblock feed
+when its first non-blank line is an Adblock-family header (`[Adblock Plus 2.0]`, `[uBlock Origin]`,
+`[AdGuard]`; `pfb_dnsbl_feed_has_abp_header()`) or, failing that, when any line that is not `#`-led
+is an Adblock rule or an AdGuard HTML filter (`pfb_dnsbl_feed_is_abp()`). A custom list is an
+Adblock feed only by its header. In an Adblock feed, each line goes to the capture guard above (which now also knows
+AdGuard's `#$?#`, `#@$?#`, `#@?#`, `#@%#` and `#@$#` cosmetic markers) or to
+`pfb_dnsbl_abp_feed_line()`, which keeps only an LDH hostname with an ICANN TLD (optionally
+`:port` and `/`), a hosts line, or an AdGuard DNS hostname mask, and drops everything else. A kept
+hostname re-enters the plain path as a bare host; a mask that becomes `||host^` is written as an
+ABP row. IP extraction runs on Adblock rule lines only. The plain path had been cutting Adblock
+path rules (EasyPrivacy's `.imgur.com/lumbar.gif`) down to a block of the whole domain.
+Core's feed parser does the same (issue #4273): the DNSBL feed stage classifies the feed with
+`feedparse.DNSBLFeedIsABP()` before it parses it, `abpFeedLine()` is `pfb_dnsbl_abp_feed_line()`, and the parse
+mode and the PSL's ICANN TLD set are part of the stage's parse settings, so a change to either reparses a reused feed.
+
 The manifest build is the sole DNSBL classifier in every TLD mode. PHP publishes each feed's
 raw rows and metadata, then the gateway's decider routes plain and ABP rows through the production
 matcher build. PHP does not re-read an aggregate feed or rebuild per-group plaintext summaries;

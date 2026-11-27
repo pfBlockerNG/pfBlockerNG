@@ -247,3 +247,17 @@ func TestTheBlacklistVipMechanismLoadsAndValidateRefusesIt(t *testing.T) {
 		t.Errorf("Validate of the VIP mechanism = %v, want a validation error", err)
 	}
 }
+
+// A store saved before #4273 holds ingest.dnsblLenient, which dnsblParseMode replaced: Open drops it instead of refusing the
+// whole store (Core would not start, and every Update would fail). Ingest is read-only, so the dropped value was a default.
+func TestOpenDropsTheRetiredDnsblLenient(t *testing.T) {
+	dir := writeStore(t, `{"format":1,"revision":2,"projections":{"ingest":{"values":{"dnsblLenient":true}}}}`)
+	st, err := Open(dir, Production())
+	if err != nil {
+		t.Fatalf("Open of a store holding the retired dnsblLenient: %v", err)
+	}
+	ingest := projection(t, get(t, st), "ingest")
+	if _, ok := ingest.Value["dnsblLenient"]; ok || ingest.Value["dnsblParseMode"] != "ports" {
+		t.Errorf("ingest read as %s, want no dnsblLenient and the default dnsblParseMode ports", jsonOf(t, ingest))
+	}
+}

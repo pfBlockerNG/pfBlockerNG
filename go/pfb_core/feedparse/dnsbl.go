@@ -6,9 +6,13 @@ import (
 )
 
 // DNSBLConfig is what the DNSBL feed parse depends on besides the feed: whether IPs in a domain feed are collected
-// (dnsbl_ip), permissive scheme handling, a user list and the global Suppression setting.
+// (dnsbl_ip), the Feed Line Parsing mode, a user list, the global Suppression setting, whether the feed is an Adblock feed
+// (DNSBLFeedIsABP(), issue #4272) and the ICANN TLDs an Adblock feed's hostnames need.
 type DNSBLConfig struct {
-	DNSBLIP, Lenient, Custom, Suppression bool
+	DNSBLIP, Custom, Suppression bool
+	ParseMode                    ParseMode
+	ABPFeed                      bool
+	ICANN                        *ICANNTLDs
 }
 
 // DNSBLRow is a row of the staged feed: a domain, or a verbatim ABP rule for the decider.
@@ -102,8 +106,9 @@ func (p *DNSBLParser) Line(raw string) DNSBLLine {
 	var out DNSBLLine
 	line := scrubLine(stripBOM(raw))
 
-	// An ABP anchor or hosts-line target that is itself an IP goes to the firewall alias, never to the decider.
-	if p.cfg.DNSBLIP {
+	// An ABP anchor or hosts-line target that is itself an IP goes to the firewall alias, never to the decider. An Adblock
+	// feed's IPs come only from its Adblock rules (issue #4272).
+	if p.cfg.DNSBLIP && (!p.cfg.ABPFeed || isABPRuleLine(line)) {
 		ip, ok := abpExtractIP(line)
 		if !ok {
 			p.fail(&out, line)
@@ -125,6 +130,20 @@ func (p *DNSBLParser) Line(raw string) DNSBLLine {
 	if isABPRuleLine(line) {
 		out.Rows = []DNSBLRow{{ABP: true, Text: rowText(line)}}
 		return out
+	}
+
+	// An Adblock feed's other lines are dropped (path rules such as '.imgur.com/lumbar.gif'), except a hostname, a hosts
+	// line or a hostname mask (issue #4272).
+	if p.cfg.ABPFeed {
+		row, ok := p.cfg.ICANN.abpFeedLine(line)
+		if !ok {
+			return out
+		}
+		if row.ABP {
+			out.Rows = []DNSBLRow{{ABP: true, Text: rowText(row.Text)}}
+			return out
+		}
+		line = row.Text
 	}
 
 	line = strings.ReplaceAll(strings.ReplaceAll(line, "\t", " "), "%20", "")
@@ -180,7 +199,7 @@ func (p *DNSBLParser) Line(raw string) DNSBLLine {
 
 	lite := strings.Contains(line, ".") && ctypeAlnum(strings.ReplaceAll(line, ".", ""))
 	if !lite {
-		host, ok := p.extractHost(line, !p.cfg.Lenient, &out)
+		host, ok := p.extractHost(line, p.cfg.ParseMode != ParseLenient, p.cfg.ParseMode == ParsePorts, &out)
 		if !ok {
 			return out
 		}

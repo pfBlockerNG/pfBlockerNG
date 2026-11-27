@@ -75,17 +75,17 @@ final class PslFeedPolicyPipelineOrderingTest extends TestCase
 	/**
 	 * The load-bearing regression guard for keeping this seed OUT of
 	 * pfb_migration_registry(): a genuinely fresh install must not corrupt a SIBLING
-	 * registered dnsbl/* field's own NEWCFG default. dnsbl/pfb_dnsbl_lenient carries a
-	 * grandfather map (ABSENT -> 'on') that only an OLDCFG (existing-install) section
-	 * may apply; its correct fresh-install value is the registered default 'off'.
+	 * registered dnsbl/* field's own NEWCFG default. dnsbl/pfb_dnsbl_parse_mode carries a
+	 * grandfather map (ABSENT -> 'lenient') that only an OLDCFG (existing-install) section
+	 * may apply; its correct fresh-install value is the registered default 'ports'.
 	 */
 	public function testFreshInstallDoesNotCorruptSiblingFieldGrandfatherMode(): void
 	{
 		$dnsbl = $this->runInstallSequence();
 
-		$this->assertSame('off', $dnsbl['pfb_dnsbl_lenient'] ?? NULL,
-			'a genuinely fresh install must take the NEWCFG default (off) for pfb_dnsbl_lenient, '
-			. 'never the OLDCFG absent-grandfather (on) -- proves the #2371 seed running AFTER '
+		$this->assertSame('ports', $dnsbl['pfb_dnsbl_parse_mode'] ?? NULL,
+			'a genuinely fresh install must take the NEWCFG default (ports) for pfb_dnsbl_parse_mode, '
+			. 'never the OLDCFG absent-grandfather (lenient) -- proves the #2371 seed running AFTER '
 			. 'the registry pass, not as a pfb_migration_registry() entry, is load-bearing');
 	}
 

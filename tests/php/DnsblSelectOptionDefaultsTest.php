@@ -23,6 +23,7 @@ final class DnsblSelectOptionDefaultsTest extends TestCase
 	private const SCALAR_DEFAULTS = [
 		'global_log'		=> 'pconfig-log',
 		'global_log_mode'	=> 'pconfig-mode',
+		'pfb_dnsbl_parse_mode'	=> 'pconfig-parse-mode',
 		'top1m_source'		=> 'tranco',
 		'top1m_count'		=> '1000',
 		'action'		=> 'Disabled',
@@ -58,7 +59,7 @@ final class DnsblSelectOptionDefaultsTest extends TestCase
 	private static function validateSelects(array $post): array
 	{
 		$vars = [
-			'pconfig'			=> ['global_log' => 'pconfig-log', 'global_log_mode' => 'pconfig-mode'],
+			'pconfig'			=> ['global_log' => 'pconfig-log', 'global_log_mode' => 'pconfig-mode', 'pfb_dnsbl_parse_mode' => 'pconfig-parse-mode'],
 			'default_tlds'			=> self::DEFAULT_TLDS,
 			'options_top1m_inclusion'	=> ['com' => 'COM', 'net' => 'NET', 'org' => 'ORG'],
 			'input_errors'			=> [],

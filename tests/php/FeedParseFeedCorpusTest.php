@@ -32,7 +32,7 @@ final class FeedParseFeedCorpusTest extends TestCase
 	private const STAMP = '\d{4}-\d\d-\d\d \d\d:\d\d:\d\d';
 	/** The smallest well-formed case of each list: the loader tests start from these and break one thing at a time. */
 	private const WELL_IP = '{"id": "a", "description": "d", "config": {"vtype": "_v4", "pftype": "auto", "custom": false, "cidr_floor_v4": "Disabled", "cidr_floor_v6": "Disabled", "suppression": false, "placeholder": "127.1.7.7"}, "input": "1.2.3.4\n", "expect": {"out": "1.2.3.4\n", "parse_fail": 0, "suppressed": false, "details": [], "messages": [], "placeholder": ""}}';
-	private const WELL_DNSBL = '{"id": "b", "description": "d", "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false}, "input": "a.example\n", "expect": {"out": "[\"d\",\"a.example\"]\n", "ip4": [], "ip6": [], "updateip": false, "scheme_skipped": 0, "stop": false, "details": [], "messages": []}}';
+	private const WELL_DNSBL = '{"id": "b", "description": "d", "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false}, "input": "a.example\n", "expect": {"out": "[\"d\",\"a.example\"]\n", "ip4": [], "ip6": [], "updateip": false, "scheme_skipped": 0, "stop": false, "details": [], "messages": []}}';
 
 	private string $dir;
 	private mixed $savedPfb = NULL;
@@ -122,7 +122,11 @@ final class FeedParseFeedCorpusTest extends TestCase
 	{
 		$w = "case {$case['id']}";
 		FeedParseCorpusFile::keys($case, array_merge(['id', 'description', 'config', 'expect'], self::inputKeys($case)), $w);
-		FeedParseCorpusFile::flags($case['config'], ['dnsbl_ip', 'lenient', 'custom', 'suppression'], "{$w} config");
+		$mode = $case['config']['parse_mode'] ?? NULL;
+		if (!is_string($mode) || PfbDnsblParseMode::tryFrom($mode) === NULL) {
+			throw new RuntimeException("{$w} config.parse_mode: must be strict, ports or lenient");
+		}
+		FeedParseCorpusFile::flags(array_diff_key($case['config'], ['parse_mode' => TRUE]), ['dnsbl_ip', 'abp_feed', 'custom', 'suppression'], "{$w} config");
 		FeedParseCorpusFile::input($case, $w);
 		$e = $case['expect'];
 		FeedParseCorpusFile::keys($e, array_merge(['ip4', 'ip6', 'updateip', 'scheme_skipped', 'stop', 'details', 'messages'], self::outKeys($e)), "{$w} expect");
@@ -272,7 +276,7 @@ final class FeedParseFeedCorpusTest extends TestCase
 			'detail line_no 0'      => [$doc(str_replace('"details": []', '"details": [{"line_no": 0, "line": "a", "raw": "a"}]', $ip), $dn)],
 			'detail order'          => [$doc(str_replace('"details": []', '"details": [{"line_no": 2, "line": "a", "raw": "a"}, {"line_no": 1, "line": "a", "raw": "a"}]', $ip), $dn)],
 			'unknown dnsbl config'  => [$doc($ip, str_replace('"custom": false,', '"custom": false, "x": true,', $dn))],
-			'dnsbl flag not a bool' => [$doc($ip, str_replace('"lenient": true', '"lenient": 1', $dn))],
+			'dnsbl flag not a bool' => [$doc($ip, str_replace('"abp_feed": false', '"abp_feed": 0', $dn))],
 			'dnsbl ip not unique'   => [$doc($ip, str_replace('"ip4": []', '"ip4": ["1.2.3.4", "1.2.3.4"]', $dn))],
 			'dnsbl missing stop'    => [$doc($ip, str_replace('"stop": false, ', '', $dn))],
 			'dnsbl missing messages' => [$doc($ip, str_replace(', "messages": []', '', $dn))],
@@ -410,7 +414,8 @@ final class FeedParseFeedCorpusTest extends TestCase
 
 		return $this->withDiagnosticsAsErrors(function () use ($c, $input, $path, $bk, $fail, $main): array {
 			$state = pfb_dnsbl_parse_state();
-			$ctx = ['header' => self::HEADER, 'custom' => $c['custom'], 'dnsbl_ip' => $c['dnsbl_ip'], 'lenient' => $c['lenient'], 'parse_err' => $fail];
+			$ctx = ['header' => self::HEADER, 'custom' => $c['custom'], 'dnsbl_ip' => $c['dnsbl_ip'],
+				'parse_mode' => PfbDnsblParseMode::from($c['parse_mode']), 'abp_feed' => $c['abp_feed'], 'parse_err' => $fail];
 			$fh = fopen($path, 'r');
 			$out = fopen($bk, 'w');
 			$r = pfb_dnsbl_parse_feed($fh, $out, $state, $ctx);

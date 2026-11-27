@@ -60,6 +60,8 @@ final class CfgRegistryGrandfatherGateTest extends TestCase
 		'tldexclusion',
 		// issue #1921: the DNSBL whitelist blob's own retired spelling.
 		'suppression',
+		// issue #4272: the ADR-22 checkbox, widened to dnsbl/pfb_dnsbl_parse_mode.
+		'pfb_dnsbl_lenient',
 	];
 
 	// -----------------------------------------------------------------------
@@ -267,7 +269,7 @@ final class CfgRegistryGrandfatherGateTest extends TestCase
 		$expected = self::RETIRED_SCALAR_SPELLINGS;
 		sort($expected);
 		$this->assertSame($expected, $old_names,
-			"the multiset of registry 'old_name' values must equal the 14 retired scalar spellings exactly, once each"
+			"the multiset of registry 'old_name' values must equal the retired scalar spellings exactly, once each"
 		);
 
 		// No DNSBL-section bare key may itself be a retired spelling -- a re-registration

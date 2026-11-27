@@ -134,8 +134,10 @@ func anchorIP(host string) (string, bool) {
 }
 
 // extractHost is pfb_dnsbl_extract_host(): the host-munging pipeline of a non-lite line. ok is false when the line is
-// to be skipped; each failure record (and the strict-scheme skip count) goes to p.
-func (p *DNSBLParser) extractHost(line string, strict bool, out *DNSBLLine) (string, bool) {
+// to be skipped; each failure record (and the strict-scheme skip count) goes to p. Strict (issue #4272) also skips a domain
+// that had userinfo or that anything but one trailing '/' followed; allowPort keeps a ':<1-65535>' before that '/'. An IP
+// result keeps its rules.
+func (p *DNSBLParser) extractHost(line string, strict, allowPort bool, out *DNSBLLine) (string, bool) {
 	cidr, kind := dnsblCIDR(line)
 	if kind == cidrReject {
 		p.fail(out, line)
@@ -145,10 +147,12 @@ func (p *DNSBLParser) extractHost(line string, strict bool, out *DNSBLLine) (str
 		return cidr, true
 	}
 
+	userinfo := false
 	if pos := schemePos(line); pos >= 0 {
 		rest := line[pos+3:]
 		alen := strcspn(rest, "/?#")
 		if at := strings.LastIndexByte(rest[:min(alen, strcspn(rest, "^"))], '@'); at >= 0 {
+			userinfo = true
 			rest = rest[at+1:]
 			alen -= at + 1
 		}
@@ -179,5 +183,29 @@ func (p *DNSBLParser) extractHost(line string, strict bool, out *DNSBLLine) (str
 		return "", false
 	}
 	line = strBefore(strBefore(strBefore(strBefore(stripped, "/"), "#"), "?"), ";")
-	return unbracketIP6(stripTrailingPort(line)), true
+	host := unbracketIP6(stripTrailingPort(line))
+	if strict && !isIPAddrV6(host) && !strictDomainOK(host, stripped[min(len(host), len(stripped)):], userinfo, allowPort) {
+		if _, numeric, _ := ipv4NumericHost(host); !numeric {
+			p.fail(out, stripped)
+			out.SchemeSkipped++
+			return "", false
+		}
+	}
+	return host, true
+}
+
+var portTailRE = regexp.MustCompile(`^(?::([0-9]{1,5}))?/?$`)
+
+// strictDomainOK is the strict grammar of a domain host (issue #4272): '<host>[:<port>]/?' with tail what followed the host
+// in the line, no userinfo, no '@' but a leading one (a yHost line, which the caller skips silently) and no ':' left in the
+// host; the port only with allowPort, 1 to 65535.
+func strictDomainOK(host, tail string, userinfo, allowPort bool) bool {
+	if host == "" || userinfo || strings.Contains(host[1:], "@") || strings.Contains(host, ":") {
+		return false
+	}
+	if !allowPort {
+		return tail == "" || tail == "/"
+	}
+	m := portTailRE.FindStringSubmatch(tail)
+	return m != nil && (m[1] == "" || validPort(m[1]))
 }

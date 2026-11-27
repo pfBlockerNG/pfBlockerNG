@@ -133,7 +133,7 @@ func TestDNSBLCompactDedupHeapPerAddress(t *testing.T) {
 		r:     &distinctIPv4Reader{count: addresses},
 		atEOF: before.HeapAlloc,
 	}
-	got, err := ParseDNSBLFeed(in, DNSBLConfig{DNSBLIP: true, Lenient: true}, io.Discard, Sink{})
+	got, err := ParseDNSBLFeed(in, DNSBLConfig{DNSBLIP: true, ParseMode: ParseLenient}, io.Discard, Sink{})
 	growth := in.atEOF - before.HeapAlloc
 	debug.SetGCPercent(oldGC)
 	runtime.GC()

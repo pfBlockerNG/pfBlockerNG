@@ -4,7 +4,7 @@
   {
    "id": "plain_domains",
    "description": "Plain domain lines: case, labels, dots, length limits, charset",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "example.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -90,7 +90,7 @@
   {
    "id": "hosts_format",
    "description": "hosts-file lines: sink address, whitespace, comments, extra columns",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "0.0.0.0 ads.example.com\n", "expect": {"rows": [["d", "ads.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -144,7 +144,7 @@
   {
    "id": "comments_control",
    "description": "Blank/comment/directive lines that are skipped without effect",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -220,7 +220,7 @@
   {
    "id": "bom",
    "description": "UTF-8 BOM on the first line and inside later lines",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "\ufeffexample.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "\ufeff# Title: x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -246,7 +246,7 @@
   {
    "id": "whitespace_endings",
    "description": "CRLF, lone CR, tabs, NUL, vertical tab, form feed, NBSP around domains",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.com\r\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "example.com\r", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -292,7 +292,7 @@
   {
    "id": "abp_rules",
    "description": "ABP-shaped lines captured verbatim (anchors, exceptions, regex, cosmetic) with dnsbl_ip on",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "||ads.example.com^\n", "expect": {"rows": [["a", "||ads.example.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -399,7 +399,7 @@
   {
    "id": "abp_rules_noip",
    "description": "ABP IP anchors and hosts targets with dnsbl_ip off",
-   "config": {"dnsbl_ip": false, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": false, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "||1.2.3.4^\n", "expect": {"rows": [["a", "||1.2.3.4^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -419,7 +419,7 @@
   {
    "id": "hash_end_marker",
    "description": "hpHosts end marker stops the feed; nothing after it is read",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Title: hpHosts\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "0.0.0.0 before.example.com\n", "expect": {"rows": [["d", "before.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -429,7 +429,7 @@
   {
    "id": "hash_end_marker_first",
    "description": "The end marker as the very first line stops before any data",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "#Append critical updates below\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": true}}
    ]
@@ -437,7 +437,7 @@
   {
    "id": "hash_end_marker_after_csv_header",
    "description": "The end marker stops a CSV-mode feed too",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "Indicator type,Indicator,Description\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "domain,a.example.com,desc\n", "expect": {"rows": [["d", "a.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -447,7 +447,7 @@
   {
    "id": "hash_end_marker_after_spamhaus",
    "description": "The end marker wins over the Spamhaus marker on the same line",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# The Spamhaus Project Ltd Append critical updates below\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": true}}
    ]
@@ -455,7 +455,7 @@
   {
    "id": "hash_end_marker_bom_crlf",
    "description": "The end marker with BOM and CRLF",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "\ufeff#Append critical updates below\r\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": true}}
    ]
@@ -463,7 +463,7 @@
   {
    "id": "hash_end_marker_inline",
    "description": "The end marker anywhere in a # line stops the feed",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "before.example.com\n", "expect": {"rows": [["d", "before.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# note: Append critical updates below this line\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": true}}
@@ -472,7 +472,7 @@
   {
    "id": "hash_end_marker_not_hash",
    "description": "The marker text outside a # line is not a stop",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "before.example.com\n", "expect": {"rows": [["d", "before.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "! Append critical updates below\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -484,7 +484,7 @@
   {
    "id": "hash_spamhaus_reverse",
    "description": "Spamhaus marker switches the feed to reverse (domain first) format",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# The Spamhaus Project Ltd\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "ads.example.com 1.2.3.4\n", "expect": {"rows": [["d", "ads.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -500,7 +500,7 @@
   {
    "id": "hash_spamhaus_not_reverse",
    "description": "Without the marker the first token is dropped (hosts format)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Copyright The Spamhaus Project\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "ads.example.com 1.2.3.4\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -511,7 +511,7 @@
   {
    "id": "hash_spamhaus_mid_feed",
    "description": "Spamhaus marker after data lines applies from then on",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "0.0.0.0 before.example.com\n", "expect": {"rows": [["d", "before.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# The Spamhaus Project Ltd\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -522,7 +522,7 @@
   {
    "id": "hash_spamhaus_leading_space",
    "description": "A marker line that does not start with # is not the Spamhaus marker",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "example.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -536,7 +536,7 @@
   {
    "id": "hash_h3x_header",
    "description": "The h3x CSV header line switches the feed to CSV mode",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "#family,type,url,status,first_seen,first_active,last_active,last_update\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "ipv4,malware,http://evil.example.com/x,online,1,2,3,4\n", "expect": {"rows": [["d", "evil.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -552,7 +552,7 @@
   {
    "id": "hash_h3x_header_variants",
    "description": "Near-miss h3x headers do not switch to CSV mode (exact string match)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "example.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -567,7 +567,7 @@
   {
    "id": "hash_h3x_header_crlf",
    "description": "The h3x header with CRLF and BOM line endings",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "\ufeff#family,type,url,status,first_seen,first_active,last_active,last_update\r\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "ipv4,malware,evil.example.com,online,1,2,3,4\r\n", "expect": {"rows": [["d", "evil.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
@@ -576,7 +576,7 @@
   {
    "id": "csv_autodetect_unknown",
    "description": "First data line with 2+ commas but no known header: CSV tried, logged, reset, next line re-detects",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "a,b,c\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
     {"line": "plain.example.com\n", "expect": {"rows": [["d", "plain.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -588,7 +588,7 @@
   {
    "id": "csv_one_comma_not_csv",
    "description": "One comma is not CSV; the line is plain text",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "a.example.com,b.example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a.example.com,b.example.com"], "scheme_skipped": 0, "stop": false}},
     {"line": "c.example.com\n", "expect": {"rows": [["d", "c.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -598,7 +598,7 @@
   {
    "id": "csv_phishtank",
    "description": "Phishtank CSV: header detected, 8 columns, spaces removed from the URL column",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "phish_id,url,phish_detail_url,submission_time,verified,verification_time,online,target\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "1,http://evil.example.com/login,http://phishtank.example/1,2024-01-01,yes,2024-01-02,yes,Other\n", "expect": {"rows": [["d", "evil.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -615,7 +615,7 @@
   {
    "id": "csv_bambenek",
    "description": "Bambenek CSV: detected from the 4th column on the first line",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "bbc-malicious.example.com,Domain used by X,2024-01-01 00:00,http://osint.bambenekconsulting.com/manual/x.txt\n", "expect": {"rows": [["d", "bbc-malicious.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "bbc2.example.net,Domain used by Y,2024-01-01 00:00,http://osint.bambenekconsulting.com/manual/x.txt\n", "expect": {"rows": [["d", "bbc2.example.net"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -627,7 +627,7 @@
   {
    "id": "csv_bambenek_header_not_data",
    "description": "Bambenek-looking line that is not on the first data line is not detected",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "plain.example.com\n", "expect": {"rows": [["d", "plain.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "bbc-malicious.example.com,Domain used by X,2024-01-01 00:00,http://osint.bambenekconsulting.com/manual/x.txt\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["used"], "scheme_skipped": 0, "stop": false}}
@@ -636,7 +636,7 @@
   {
    "id": "csv_otx",
    "description": "Alienvault OTX CSV: header, then only domain/hostname/URL indicators",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "Indicator type,Indicator,Description\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "domain,otx1.example.com,desc\n", "expect": {"rows": [["d", "otx1.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -656,7 +656,7 @@
   {
    "id": "csv_otx_header_trailing_space",
    "description": "OTX header variant: only the exact (scrubbed) string selects the OTX type",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "Indicator type,Indicator,Description \n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "domain,x.example.com,desc\n", "expect": {"rows": [["d", "x.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
@@ -665,7 +665,7 @@
   {
    "id": "csv_otx_header_lowercase",
    "description": "OTX header variant: only the exact (scrubbed) string selects the OTX type",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "Indicator type,Indicator,description\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
     {"line": "domain,x.example.com,desc\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}}
@@ -674,7 +674,7 @@
   {
    "id": "csv_otx_header_spaced",
    "description": "OTX header variant: only the exact (scrubbed) string selects the OTX type",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "Indicator type, Indicator, Description\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
     {"line": "domain,x.example.com,desc\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}}
@@ -683,7 +683,7 @@
   {
    "id": "csv_otx_header_quoted",
    "description": "OTX header variant: only the exact (scrubbed) string selects the OTX type",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "\"Indicator type\",Indicator,Description\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
     {"line": "domain,x.example.com,desc\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}}
@@ -692,7 +692,7 @@
   {
    "id": "csv_otx_header_extra_col",
    "description": "OTX header variant: only the exact (scrubbed) string selects the OTX type",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "Indicator type,Indicator,Description,x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
     {"line": "domain,x.example.com,desc\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}}
@@ -701,7 +701,7 @@
   {
    "id": "csv_ponomocup",
    "description": "Ponomocup CSV: header on timestamp column, 9 columns, IP column collected when dnsbl_ip",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "timestamp,type,domain,ip,x,y,z,a,b\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "2024-01-01,pon,malicious-pon.example.com,198.51.100.7,c,d,e,f,g\n", "expect": {"rows": [["d", "malicious-pon.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -724,7 +724,7 @@
   {
    "id": "csv_ponomocup_noip",
    "description": "Ponomocup CSV with dnsbl_ip off: IP column ignored",
-   "config": {"dnsbl_ip": false, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": false, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "timestamp,type,domain,ip,x,y,z,a,b\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "2024-01-01,pon,pon1.example.com,198.51.100.7,c,d,e,f,g\n", "expect": {"rows": [["d", "pon1.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -734,7 +734,7 @@
   {
    "id": "csv_ponomocup_custom",
    "description": "Ponomocup CSV on a custom list: private ranges kept",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": true, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": true, "suppression": false},
    "lines": [
     {"line": "timestamp,type,domain,ip,x,y,z,a,b\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "2024-01-01,pon,pon1.example.com,10.0.0.1,c,d,e,f,g\n", "expect": {"rows": [["d", "pon1.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -744,7 +744,7 @@
   {
    "id": "csv_ponomocup_supp",
    "description": "Ponomocup CSV with Suppression: private/reserved IP column dropped",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": true},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": true},
    "lines": [
     {"line": "timestamp,type,domain,ip,x,y,z,a,b\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "2024-01-01,pon,pon1.example.com,10.0.0.1,c,d,e,f,g\n", "expect": {"rows": [["d", "pon1.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -756,7 +756,7 @@
   {
    "id": "csv_et",
    "description": "ET IQRisk CSV: header, 3 columns, first column is the domain",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "domain, category, score\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "et-malicious.example.com,Malware,99\n", "expect": {"rows": [["d", "et-malicious.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -770,7 +770,7 @@
   {
    "id": "csv_et_header_nospace",
    "description": "ET header variant: only the exact (scrubbed) string selects the ET type",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "domain,category,score\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
     {"line": "a.example.com,Malware,9\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}}
@@ -779,7 +779,7 @@
   {
    "id": "csv_et_header_trailing_space",
    "description": "ET header variant: only the exact (scrubbed) string selects the ET type",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "domain, category, score \n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "a.example.com,Malware,9\n", "expect": {"rows": [["d", "a.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
@@ -788,7 +788,7 @@
   {
    "id": "csv_et_header_uppercase",
    "description": "ET header variant: only the exact (scrubbed) string selects the ET type",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "DOMAIN, CATEGORY, SCORE\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
     {"line": "a.example.com,Malware,9\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}}
@@ -797,7 +797,7 @@
   {
    "id": "csv_quoting",
    "description": "CSV quirks once CSV mode is on: quotes, escaped quotes, leading spaces, empty fields",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "phish_id,url,phish_detail_url,submission_time,verified,verification_time,online,target\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "1,\"http://a.example.com/x\",d,e,f,g,h,i\n", "expect": {"rows": [["d", "a.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -821,7 +821,7 @@
   {
    "id": "csv_bom_crlf",
    "description": "CSV header with BOM; rows with CRLF",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "\ufeffIndicator type,Indicator,Description\r\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "domain,otx1.example.com,desc\r\n", "expect": {"rows": [["d", "otx1.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -831,7 +831,7 @@
   {
    "id": "csv_comment_in_csv",
    "description": "Comment, blank and control lines inside a CSV feed",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "Indicator type,Indicator,Description\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# comment\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -848,7 +848,7 @@
   {
    "id": "csv_first_line_blank_then_csv",
    "description": "run_once is consumed by the first non-comment, non-control line",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# c\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -861,7 +861,7 @@
   {
    "id": "csv_zero_first",
    "description": "A \"0\" first data line consumes run_once; later CSV-looking lines are plain",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "0\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "a,b,c\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a,b,c"], "scheme_skipped": 0, "stop": false}},
@@ -872,7 +872,7 @@
   {
    "id": "url_lines_lenient",
    "description": "URL-shaped plain lines, lenient scheme handling",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "http://example.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -1061,7 +1061,7 @@
   {
    "id": "url_lines_strict",
    "description": "URL-shaped plain lines, strict scheme handling (rejects non-RFC schemes and URL paths)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "http://example.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -1072,23 +1072,23 @@
     {"line": "http://example.com/path\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://example.com/path"], "scheme_skipped": 1, "stop": false}},
     {"line": "http://example.com/path/to/file.html\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://example.com/path/to/file.html"], "scheme_skipped": 1, "stop": false}},
     {"line": "http://example.com/path?x=1\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://example.com/path?x=1"], "scheme_skipped": 1, "stop": false}},
-    {"line": "http://example.com?x=1\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "http://example.com#frag\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://example.com?x=1\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com?x=1"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://example.com#frag\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com#frag"], "scheme_skipped": 1, "stop": false}},
     {"line": "http://example.com/#frag\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://example.com/#frag"], "scheme_skipped": 1, "stop": false}},
     {"line": "http://example.com:8080\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "http://example.com:8080/path\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://example.com:8080/path"], "scheme_skipped": 1, "stop": false}},
     {"line": "http://example.com:80\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "http://example.com:\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:"], "scheme_skipped": 0, "stop": false}},
-    {"line": "http://example.com:99999\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "http://example.com:port\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:port"], "scheme_skipped": 0, "stop": false}},
-    {"line": "http://user@example.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "http://user:pass@example.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://example.com:\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://example.com:99999\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:99999"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://example.com:port\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:port"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://user@example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://user:pass@example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com"], "scheme_skipped": 1, "stop": false}},
     {"line": "http://user:pass@example.com:8080/path\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://example.com:8080/path"], "scheme_skipped": 1, "stop": false}},
-    {"line": "http://a@b@example.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "http://@example.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://a@b@example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://@example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com"], "scheme_skipped": 1, "stop": false}},
     {"line": "http://user:p@ss@example.com/x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://example.com/x"], "scheme_skipped": 1, "stop": false}},
-    {"line": "http://user@\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
-    {"line": "http://:@example.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://user@\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://:@example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com"], "scheme_skipped": 1, "stop": false}},
     {"line": "ftp://example.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "ftp://example.com/file\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["ftp://example.com/file"], "scheme_skipped": 1, "stop": false}},
     {"line": "hxxp://example.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -1100,40 +1100,40 @@
     {"line": "a b://example.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "a_b://example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a_b://example.com"], "scheme_skipped": 1, "stop": false}},
     {"line": "://example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://example.com"], "scheme_skipped": 1, "stop": false}},
-    {"line": ":/example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ":/example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [":/example.com"], "scheme_skipped": 1, "stop": false}},
     {"line": "//example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "///example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "http:/example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http:"], "scheme_skipped": 0, "stop": false}},
-    {"line": "http:example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http:example.com"], "scheme_skipped": 0, "stop": false}},
-    {"line": "http//example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http"], "scheme_skipped": 0, "stop": false}},
-    {"line": "http://\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
-    {"line": "http:///\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
+    {"line": "http:/example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http:/example.com"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http:example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http:example.com"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http//example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http//example.com"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http:///\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 1, "stop": false}},
     {"line": "http:///example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http:///example.com"], "scheme_skipped": 1, "stop": false}},
     {"line": "https://https://example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["https://https://example.com"], "scheme_skipped": 1, "stop": false}},
     {"line": "http://example.com/http://other.example.net\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://example.com/http://other.example.net"], "scheme_skipped": 1, "stop": false}},
     {"line": "http://example.com?u=http://other.example.net/x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://example.com?u=http://other.example.net/x"], "scheme_skipped": 1, "stop": false}},
-    {"line": "example.com/http://other.example.net\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com?u=http://other.example.net\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com#http://other.example.net\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com/path\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com/http://other.example.net\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com/http://other.example.net"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com?u=http://other.example.net\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com?u=http://other.example.net"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com#http://other.example.net\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com#http://other.example.net"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com/path\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com/path"], "scheme_skipped": 1, "stop": false}},
     {"line": "example.com/\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com//\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com//\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com//"], "scheme_skipped": 1, "stop": false}},
     {"line": "example.com:80\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com:80/path\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com:8080#x\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com?x\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com;x=1\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com;x=1:80\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com;\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com;;\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com#\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com?\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com/?\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com/#\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com:\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:"], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com:/\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:"], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com::80\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:"], "scheme_skipped": 0, "stop": false}},
-    {"line": "example.com:80:80\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:80"], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com:80/path\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:80/path"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:8080#x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:8080#x"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com?x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com?x"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com;x=1\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com;x=1"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com;x=1:80\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com;x=1:80"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com;\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com;"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com;;\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com;;"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com#\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com#"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com?\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com?"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com/?\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com/?"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com/#\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com/#"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:/\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:/"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com::80\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com::80"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:80:80\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:80:80"], "scheme_skipped": 1, "stop": false}},
     {"line": "example.com.:80\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "example.com./\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "http://example.com./\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -1155,7 +1155,7 @@
     {"line": "http://[::ffff:1.2.3.4]/\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "http://[not-ip]/\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["[not-ip]"], "scheme_skipped": 0, "stop": false}},
     {"line": "http://[]/\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["[]"], "scheme_skipped": 0, "stop": false}},
-    {"line": "http://[::1\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["[:"], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://[::1\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["[::1"], "scheme_skipped": 1, "stop": false}},
     {"line": "[2001:db8::1]\n", "expect": {"rows": [], "ip4": [], "ip6": ["2001:db8::1"], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2606:4700:4700::1111]\n", "expect": {"rows": [], "ip4": [], "ip6": ["2606:4700:4700::1111"], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2606:4700:4700::]\n", "expect": {"rows": [], "ip4": [], "ip6": ["2606:4700:4700::"], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -1168,12 +1168,12 @@
     {"line": "[2001:db8::1]/\n", "expect": {"rows": [], "ip4": [], "ip6": ["2001:db8::1"], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2001:db8::1]#x\n", "expect": {"rows": [], "ip4": [], "ip6": ["2001:db8::1"], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2001:db8::1]?x\n", "expect": {"rows": [], "ip4": [], "ip6": ["2001:db8::1"], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "[2001:db8::1]%eth0\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["[2001:db8::1]%eth0"], "scheme_skipped": 0, "stop": false}},
+    {"line": "[2001:db8::1]%eth0\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["[2001:db8::1]%eth0"], "scheme_skipped": 1, "stop": false}},
     {"line": "[fe80::1%eth0]\n", "expect": {"rows": [], "ip4": [], "ip6": ["fe80::1%eth0"], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2001:db8::1] \n", "expect": {"rows": [], "ip4": [], "ip6": ["2001:db8::1"], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[ 2001:db8::1 ]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "[2001:db8::1][\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["[2001:db8::1]["], "scheme_skipped": 0, "stop": false}},
-    {"line": "][2001:db8::1]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["][2001:db8::1]"], "scheme_skipped": 0, "stop": false}},
+    {"line": "[2001:db8::1][\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["[2001:db8::1]["], "scheme_skipped": 1, "stop": false}},
+    {"line": "][2001:db8::1]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["][2001:db8::1]"], "scheme_skipped": 1, "stop": false}},
     {"line": "[[2001:db8::1]]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2001:db8::1]]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "http://1.2.3.4\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -1250,7 +1250,7 @@
   {
    "id": "url_lines_noip_lenient",
    "description": "URL-shaped lines with dnsbl_ip off, lenient",
-   "config": {"dnsbl_ip": false, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": false, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2001:db8::1]/64\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -1303,19 +1303,19 @@
   {
    "id": "url_lines_noip_strict",
    "description": "URL-shaped lines with dnsbl_ip off, strict",
-   "config": {"dnsbl_ip": false, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": false, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2001:db8::1]/64\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2001:db8::1]/\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2001:db8::1]#x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2001:db8::1]?x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "[2001:db8::1]%eth0\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["[2001:db8::1]%eth0"], "scheme_skipped": 0, "stop": false}},
+    {"line": "[2001:db8::1]%eth0\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["[2001:db8::1]%eth0"], "scheme_skipped": 1, "stop": false}},
     {"line": "[fe80::1%eth0]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2001:db8::1] \n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[ 2001:db8::1 ]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "[2001:db8::1][\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["[2001:db8::1]["], "scheme_skipped": 0, "stop": false}},
-    {"line": "][2001:db8::1]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["][2001:db8::1]"], "scheme_skipped": 0, "stop": false}},
+    {"line": "[2001:db8::1][\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["[2001:db8::1]["], "scheme_skipped": 1, "stop": false}},
+    {"line": "][2001:db8::1]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["][2001:db8::1]"], "scheme_skipped": 1, "stop": false}},
     {"line": "[[2001:db8::1]]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2001:db8::1]]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "http://1.2.3.4\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -1356,7 +1356,7 @@
   {
    "id": "at_prefixed",
    "description": "yHosts-style @-prefixed lines are skipped silently; other invalid names are logged",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "@ads.example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -1382,7 +1382,7 @@
   {
    "id": "invalid_logged",
    "description": "Lines that fail domain validation are logged with the processed line text",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "invalid_domain\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["invalid_domain"], "scheme_skipped": 0, "stop": false}},
@@ -1439,7 +1439,7 @@
   {
    "id": "numeric_hosts",
    "description": "Numeric IPv4 spellings (hex, octal, DWORD, short forms, padded) as plain lines, dnsbl_ip on",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -1554,7 +1554,7 @@
   {
    "id": "numeric_hosts_noip",
    "description": "Numeric IPv4 spellings with dnsbl_ip off: decoded then dropped, invalid ones still logged",
-   "config": {"dnsbl_ip": false, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": false, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2001:db8::1]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -1602,7 +1602,7 @@
   {
    "id": "ip_forms_def",
    "description": "IP/CIDR lines in a domain feed: dnsbl_ip on, lenient, feed list, Suppression off",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "1.2.3.4\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -1713,7 +1713,7 @@
   {
    "id": "ip_forms_strict",
    "description": "IP/CIDR lines in a domain feed: dnsbl_ip on, strict scheme handling",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "1.2.3.4\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -1824,7 +1824,7 @@
   {
    "id": "ip_forms_noip",
    "description": "IP/CIDR lines in a domain feed: dnsbl_ip off (collected nowhere, never validated as domains)",
-   "config": {"dnsbl_ip": false, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": false, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "1.2.3.4\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -1935,7 +1935,7 @@
   {
    "id": "ip_forms_custom",
    "description": "IP/CIDR lines in a custom list: private ranges and /0 honoured",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": true, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": true, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "1.2.3.4\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -2046,7 +2046,7 @@
   {
    "id": "ip_forms_supp",
    "description": "IP/CIDR lines in a domain feed: Suppression on (private, reserved, documentation space dropped)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": true},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": true},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "1.2.3.4\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -2157,7 +2157,7 @@
   {
    "id": "ip_forms_custom_supp",
    "description": "IP/CIDR lines in a custom list with Suppression on (custom bypasses Suppression)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": true, "suppression": true},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": true, "suppression": true},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "1.2.3.4\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -2268,7 +2268,7 @@
   {
    "id": "idn",
    "description": "Non-ASCII domains converted to punycode (UTS46); conversion failures are logged without the line text. Lines with an old_expect are divergences of Core's IDN profile, owner sign-off 2026-11-12 (#3906): Core uses golang.org/x/net/idna, the pfb-dns profile: ZWNJ/ZWJ, hyphen placement",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "bücher.de\n", "expect": {"rows": [["d", "xn--bcher-kva.de"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -2462,7 +2462,7 @@
   {
    "id": "idn_length_limits",
    "description": "IDN conversion length limits: 63-octet labels, 253-octet names (254 with the root dot)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "ü.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", "expect": {"rows": [["d", "xn--tda.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -2487,7 +2487,7 @@
   {
    "id": "mb_detect_encoding",
    "description": "Non-ASCII lines: the UTF-8, ASCII, ISO-8859-1 detection picks the encoding by demerits, so rare CJK and lines with one stray byte are read as Latin-1",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "丣.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["xn-- -bca7qw9f.com"], "scheme_skipped": 0, "stop": false}},
@@ -2532,7 +2532,7 @@
   {
    "id": "idn_strict",
    "description": "IDN lines with strict scheme handling",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "bücher.de\n", "expect": {"rows": [["d", "xn--bcher-kva.de"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -2540,13 +2540,13 @@
     {"line": "http://bücher.de/x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://bücher.de/x"], "scheme_skipped": 1, "stop": false}},
     {"line": "ftp://日本語.jp/\n", "expect": {"rows": [["d", "xn--wgv71a119e.jp"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "123://bücher.de\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["123://bücher.de"], "scheme_skipped": 1, "stop": false}},
-    {"line": "bücher.de/x\n", "expect": {"rows": [["d", "xn--bcher-kva.de"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
+    {"line": "bücher.de/x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["bücher.de/x"], "scheme_skipped": 1, "stop": false}}
    ]
   },
   {
    "id": "idn_trailing_root_dot",
    "description": "One trailing root dot, ASCII or a UTS #46 full stop (U+3002, U+FF0E, U+FF61), is dropped before the domain row, as ICU does",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.com\u3002\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "example.com\uff0e\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -2559,7 +2559,7 @@
   {
    "id": "idn_uts46",
    "description": "UTS #46 conversion by Core's x/net/idna profile (owner sign-off 2026-11-12 (#3906): Core uses golang.org/x/net/idna, the pfb-dns profile): fullwidth, NFD (Latin, Greek, Cyrillic), ligature U+FB01, circled U+2460, U+01C6, sharp s, final sigma, U+2024, U+2026, U+0E33, U+115F, U+0345 and the bidi rule. Lines without an old_expect agree with ICU's idn_to_ascii(); sharp s and final sigma are the non-transitional answers; their old_expect is the appliance's transitional ICU (ss.com, xn--4xa.com), replayed live",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "\uff25\uff38\uff21\uff2d\uff30\uff2c\uff25.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "e\u0301.com\n", "expect": {"rows": [["d", "xn--9ca.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -2582,7 +2582,7 @@
   {
    "id": "hostile_bytes",
    "description": "NUL, control, DEL, high bytes and invalid UTF-8 in plain lines; U+180E carries an old_expect, owner sign-off 2026-11-12 (#3906): Core uses golang.org/x/net/idna, the pfb-dns profile",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "a.com\u0000\n", "expect": {"rows": [["d", "a.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "\u0000a.com\n", "expect": {"rows": [["d", "a.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -2659,7 +2659,7 @@
   {
    "id": "regex_shell_meta",
    "description": "Quotes, regex and shell metacharacters in plain lines",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "'; DROP TABLE x; --\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["DROP"], "scheme_skipped": 0, "stop": false}},
@@ -2735,7 +2735,7 @@
   {
    "id": "unicode_blank_lines",
    "description": "Lines made only of Unicode whitespace are blank; whitespace does not hide ! // and [ markers",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "\u00a0\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "\u1680\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -2781,7 +2781,7 @@
   {
    "id": "oracle_extract_host_lenient",
    "description": "Lines from the pfb_dnsbl_extract_host() tests, lenient",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "d.com\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -2837,23 +2837,23 @@
   {
    "id": "oracle_extract_host_strict",
    "description": "Lines from the pfb_dnsbl_extract_host() tests, strict",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "d.com\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "http://d.com/path\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://d.com/path"], "scheme_skipped": 1, "stop": false}},
     {"line": "123://d.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["123://d.com"], "scheme_skipped": 1, "stop": false}},
     {"line": "https://d.com\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "d.com/a/b\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "d.com#frag\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "d.com?q=1\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "d.com;jsessionid=x\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "d.com;jsessionid=1:80\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "evilhost;x:99\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["evilhost"], "scheme_skipped": 0, "stop": false}},
-    {"line": "a;b:2\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a"], "scheme_skipped": 0, "stop": false}},
+    {"line": "d.com/a/b\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com/a/b"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com#frag\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com#frag"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com?q=1\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com?q=1"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com;jsessionid=x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com;jsessionid=x"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com;jsessionid=1:80\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com;jsessionid=1:80"], "scheme_skipped": 1, "stop": false}},
+    {"line": "evilhost;x:99\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["evilhost;x:99"], "scheme_skipped": 1, "stop": false}},
+    {"line": "a;b:2\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a;b:2"], "scheme_skipped": 1, "stop": false}},
     {"line": "//d.com;jsessionid=x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "d.com;jsessionid=1/extra\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "d.com;\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "d.com;jsessionid=1/extra\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com;jsessionid=1/extra"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com;\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com;"], "scheme_skipped": 1, "stop": false}},
     {"line": "d.com:8080\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "my-domain.com\n", "expect": {"rows": [["d", "my-domain.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "my_domain-2_test.example.com\n", "expect": {"rows": [["d", "my_domain-2_test.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -2882,7 +2882,7 @@
     {"line": "192.168.1.0/2u{FF14}\n", "expect": {"rows": [], "ip4": ["192.168.1.0"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "192.168.1.0/-1\n", "expect": {"rows": [], "ip4": ["192.168.1.0"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "192.168.1.0:80/24\n", "expect": {"rows": [], "ip4": ["192.168.1.0"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "/24\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
+    {"line": "/24\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["/24"], "scheme_skipped": 1, "stop": false}},
     {"line": "://5.256.67.\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://5.256.67."], "scheme_skipped": 0, "stop": false}},
     {"line": "://5.8.256.\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://5.8.256."], "scheme_skipped": 0, "stop": false}},
     {"line": "://0005.8.67.\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://0005.8.67."], "scheme_skipped": 0, "stop": false}},
@@ -2893,7 +2893,7 @@
   {
    "id": "oracle_strip_scheme_lenient",
    "description": "Lines from the pfb_dnsbl_strip_scheme() tests, lenient",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "http://x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["x"], "scheme_skipped": 0, "stop": false}},
@@ -2940,22 +2940,22 @@
   {
    "id": "oracle_strip_scheme_strict",
    "description": "Lines from the pfb_dnsbl_strip_scheme() tests, strict",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "http://x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["x"], "scheme_skipped": 0, "stop": false}},
     {"line": "2604:2dc0:100:4ed8::\n", "expect": {"rows": [], "ip4": [], "ip6": ["2604:2dc0:100:4ed8::"], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "://1.2.3.4^$\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "evil.com/x?u=http://8.8.8.8/\n", "expect": {"rows": [["d", "evil.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "evil.com/r#http://8.8.8.8\n", "expect": {"rows": [["d", "evil.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "evil.com?u=http://8.8.8.8\n", "expect": {"rows": [["d", "evil.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "a/b://evil.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a"], "scheme_skipped": 0, "stop": false}},
-    {"line": "?u=http://8.8.8.8\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
+    {"line": "evil.com/x?u=http://8.8.8.8/\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["evil.com/x?u=http://8.8.8.8/"], "scheme_skipped": 1, "stop": false}},
+    {"line": "evil.com/r#http://8.8.8.8\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["evil.com/r#http://8.8.8.8"], "scheme_skipped": 1, "stop": false}},
+    {"line": "evil.com?u=http://8.8.8.8\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["evil.com?u=http://8.8.8.8"], "scheme_skipped": 1, "stop": false}},
+    {"line": "a/b://evil.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a/b://evil.com"], "scheme_skipped": 1, "stop": false}},
+    {"line": "?u=http://8.8.8.8\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["?u=http://8.8.8.8"], "scheme_skipped": 1, "stop": false}},
     {"line": "://[192.0.2.1]^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://[192.0.2.1]^"], "scheme_skipped": 1, "stop": false}},
     {"line": "!!bad://evil.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "evil.com://junk\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["junk"], "scheme_skipped": 0, "stop": false}},
     {"line": "://evil.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://evil.com"], "scheme_skipped": 1, "stop": false}},
-    {"line": "evil.com/path\n", "expect": {"rows": [["d", "evil.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "evil.com/path\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["evil.com/path"], "scheme_skipped": 1, "stop": false}},
     {"line": "http://evil.com/path\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://evil.com/path"], "scheme_skipped": 1, "stop": false}},
     {"line": "https://evil.com\n", "expect": {"rows": [["d", "evil.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "ftp://evil.com\n", "expect": {"rows": [["d", "evil.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -2964,7 +2964,7 @@
     {"line": "pkg+https://fakepkg.com\n", "expect": {"rows": [["d", "fakepkg.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "ftp.evil.com\n", "expect": {"rows": [["d", "ftp.evil.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "ftp://ftp.evil.com/\n", "expect": {"rows": [["d", "ftp.evil.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "evil.com/path/\n", "expect": {"rows": [["d", "evil.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "evil.com/path/\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["evil.com/path/"], "scheme_skipped": 1, "stop": false}},
     {"line": "http://evil.com/path/\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://evil.com/path/"], "scheme_skipped": 1, "stop": false}},
     {"line": "pkg+https://evil.com\n", "expect": {"rows": [["d", "evil.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "://[not-an-ipv6]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://[not-an-ipv6]"], "scheme_skipped": 1, "stop": false}},
@@ -2972,22 +2972,22 @@
     {"line": "://1.2.3.4^^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://1.2.3.4^^"], "scheme_skipped": 1, "stop": false}},
     {"line": "1.2.3.4^^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["1.2.3.4^^"], "scheme_skipped": 0, "stop": false}},
     {"line": "host:port rejected\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["rejected"], "scheme_skipped": 0, "stop": false}},
-    {"line": "1.2.3.4:443^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["1.2.3.4:443^"], "scheme_skipped": 0, "stop": false}},
+    {"line": "1.2.3.4:443^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["1.2.3.4:443^"], "scheme_skipped": 1, "stop": false}},
     {"line": "://evil.com^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://evil.com^"], "scheme_skipped": 1, "stop": false}},
     {"line": "evil.com^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["evil.com^"], "scheme_skipped": 0, "stop": false}},
     {"line": "://x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://x"], "scheme_skipped": 1, "stop": false}},
     {"line": "a://b://c\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a://b://c"], "scheme_skipped": 1, "stop": false}},
-    {"line": "a/b://x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a"], "scheme_skipped": 0, "stop": false}},
-    {"line": "a?b://x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a"], "scheme_skipped": 0, "stop": false}},
-    {"line": "a#b://x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a"], "scheme_skipped": 0, "stop": false}},
+    {"line": "a/b://x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a/b://x"], "scheme_skipped": 1, "stop": false}},
+    {"line": "a?b://x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a?b://x"], "scheme_skipped": 1, "stop": false}},
+    {"line": "a#b://x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a#b://x"], "scheme_skipped": 1, "stop": false}},
     {"line": "http://x/y://z\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://x/y://z"], "scheme_skipped": 1, "stop": false}},
-    {"line": "/://x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}}
+    {"line": "/://x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["/://x"], "scheme_skipped": 1, "stop": false}}
    ]
   },
   {
    "id": "oracle_scheme_separator_lenient",
    "description": "Lines from the scheme-separator tests, lenient",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "://192.168.1/24^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://192.168.1/24^"], "scheme_skipped": 0, "stop": false}},
@@ -3038,7 +3038,7 @@
   {
    "id": "oracle_scheme_separator_strict",
    "description": "Lines from the scheme-separator tests, strict",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "://192.168.1/24^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://192.168.1/24^"], "scheme_skipped": 0, "stop": false}},
@@ -3056,10 +3056,10 @@
     {"line": "http://evil.com^$x@9.9.9.9\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["evil.com^$x@9.9.9.9"], "scheme_skipped": 0, "stop": false}},
     {"line": "://1.2.3.4^@evil.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://1.2.3.4^@evil.com"], "scheme_skipped": 1, "stop": false}},
     {"line": "://1.2.3.4^ #c\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "evil.com/r?u=://8.8.8.8\n", "expect": {"rows": [["d", "evil.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "evil.com/r?u=://8.8.8.8\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["evil.com/r?u=://8.8.8.8"], "scheme_skipped": 1, "stop": false}},
     {"line": "8.8.8.8/http://9.9.9.9\n", "expect": {"rows": [], "ip4": ["8.8.8.8"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "1.2.3.4?u=http://9.9.9.9\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "a/b://8.8.8.8\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a"], "scheme_skipped": 0, "stop": false}},
+    {"line": "a/b://8.8.8.8\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["a/b://8.8.8.8"], "scheme_skipped": 1, "stop": false}},
     {"line": "://user:pass@1.2.3.4^$third-party\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "://2001:db8::1\n", "expect": {"rows": [], "ip4": [], "ip6": ["2001:db8::1"], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "://0xC0A80164^\n", "expect": {"rows": [], "ip4": ["192.168.1.100"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3089,7 +3089,7 @@
   {
    "id": "oracle_wildcard_rows",
    "description": "Lines from the wildcard-row validation tests",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
@@ -3111,7 +3111,7 @@
   {
    "id": "oracle_numeric_host",
    "description": "Lines from the numeric-host loop tests",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "192.168.1.0/24\n", "expect": {"rows": [], "ip4": ["192.168.1.0/24"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3232,7 +3232,7 @@
   {
    "id": "oracle_abp_regex_cidrs",
    "description": "Regex rules from the IPv4 regex expansion tests (dnsbl_ip on)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "255.255.255.0/24\n", "expect": {"rows": [], "ip4": ["255.255.255.0/24"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3495,7 +3495,7 @@
   {
    "id": "oracle_is_abp_rule_line",
    "description": "Lines from the ABP rule-shape tests",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "\u2001\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3592,7 +3592,7 @@
   {
    "id": "oracle_abp_extract_ip",
    "description": "Lines from the ABP anchor / hosts IP extraction tests",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "192.0.2.9\n", "expect": {"rows": [], "ip4": ["192.0.2.9"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3636,7 +3636,7 @@
   {
    "id": "oracle_list_script_wiring",
    "description": "Lines from the list-script wiring tests",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "198.51.100.20\n", "expect": {"rows": [], "ip4": ["198.51.100.20"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3658,7 +3658,7 @@
   {
    "id": "oracle_collect_feed_ip",
    "description": "Lines from the IP collection tests",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "2001:DB8:0::/32\n", "expect": {"rows": [], "ip4": [], "ip6": ["2001:db8::/32"], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3680,7 +3680,7 @@
   {
    "id": "oracle_control_lines",
    "description": "Lines from the control-line skip tests",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "2604:2dc0::\n", "expect": {"rows": [], "ip4": [], "ip6": ["2604:2dc0::"], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3696,7 +3696,7 @@
   {
    "id": "oracle_scrub_line",
    "description": "Lines from the per-line scrub tests",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "bücher.example\n", "expect": {"rows": [["d", "xn--bcher-kva.example"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3708,7 +3708,7 @@
   {
    "id": "oracle_unbracket_ip6",
    "description": "Lines from the bracketed-IPv6 tests",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "[2604:2dc0:100:4ed8::]\n", "expect": {"rows": [], "ip4": [], "ip6": ["2604:2dc0:100:4ed8::"], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3725,7 +3725,7 @@
   {
    "id": "oracle_strip_bom",
    "description": "Lines from the BOM tests",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "||example.com^\n", "expect": {"rows": [["a", "||example.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3737,7 +3737,7 @@
   {
    "id": "oracle_idn_wildcard",
    "description": "Lines from the wildcard IDN tests",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "/((?:\\t+if \\(!empty\\(\\$line\\) && !ctype_print\\(\\$line\\)\\) \\{).*?\\$line = trim\\(\\$line, '\\.'\\);)/s\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["\\(!empty\\(\\$line\\)"], "scheme_skipped": 0, "stop": false}},
@@ -3748,7 +3748,7 @@
   {
    "id": "oracle_blank_or_comment",
    "description": "Lines from the blank/comment tests",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "://[2604:2dc0:100:4ed8::]\n", "expect": {"rows": [], "ip4": [], "ip6": ["2604:2dc0:100:4ed8::"], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3762,7 +3762,7 @@
   {
    "id": "oracle_scheme_skip_log_lenient",
    "description": "Lines from the strict scheme skip tests, lenient",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "evil.com\n", "expect": {"rows": [["d", "evil.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3773,7 +3773,7 @@
   {
    "id": "oracle_scheme_skip_log_strict",
    "description": "Lines from the strict scheme skip tests, strict",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "example.org\n", "expect": {"rows": [["d", "example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "evil.com\n", "expect": {"rows": [["d", "evil.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3784,7 +3784,7 @@
   {
    "id": "sample_apt1_report_apt1_report",
    "description": "First lines and distinct line shapes of the APT1_Report sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "advanbusiness.com\n", "expect": {"rows": [["d", "advanbusiness.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "aoldaily.com\n", "expect": {"rows": [["d", "aoldaily.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3797,7 +3797,7 @@
   {
    "id": "sample_abuse_threatfox_abuse_threatfox",
    "description": "First lines and distinct line shapes of the Abuse_ThreatFox sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "################################################################\r\n", "expect": {"rows": [["a", "################################################################"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# ThreatFox IOCs: host file                                    #\r\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3810,7 +3810,7 @@
   {
    "id": "sample_abuse_urlhaus_abuse_urlhaus",
    "description": "First lines and distinct line shapes of the Abuse_urlhaus sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "################################################################\r\n", "expect": {"rows": [["a", "################################################################"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# abuse.ch URLhaus Host file                                   #\r\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3823,7 +3823,7 @@
   {
    "id": "sample_abuse_urlhaus_30d_abuse_urlhaus_30d",
    "description": "First lines and distinct line shapes of the Abuse_urlhaus_30d sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "http://108.168.0.60:38944/bin.sh\r\n", "expect": {"rows": [], "ip4": ["108.168.0.60"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "http://112.246.16.106:53726/bin.sh\r\n", "expect": {"rows": [], "ip4": ["112.246.16.106"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3836,7 +3836,7 @@
   {
    "id": "sample_ad_wars_ad_wars",
    "description": "First lines and distinct line shapes of the Ad_Wars sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "127.0.0.1 localhost\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "::1 localhost\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3849,7 +3849,7 @@
   {
    "id": "sample_adaway_adaway",
    "description": "First lines and distinct line shapes of the Adaway sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# AdAway default blocklist\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Blocking mobile ad providers and some analytics providers\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3862,7 +3862,7 @@
   {
    "id": "sample_adguard_dns_adguard_dns",
    "description": "First lines and distinct line shapes of the Adguard_DNS sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# AdguardDNS, parsed and mirrored by https://firebog.net\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Updated 29JUN26 from https://filters.adtidy.org/extension/chromium/filters/15.txt\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3875,7 +3875,7 @@
   {
    "id": "sample_antisocial_uk_bd_antisocial_uk_bd",
    "description": "First lines and distinct line shapes of the AntiSocial_UK_BD sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "0000to2.com\n", "expect": {"rows": [["d", "0000to2.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "008ebay.com\n", "expect": {"rows": [["d", "008ebay.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3888,7 +3888,7 @@
   {
    "id": "sample_anudeep_bl_anudeep_bl",
    "description": "First lines and distinct line shapes of the Anudeep_BL sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Host file to block ads, tracking and more! Updated daily\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Homepage: https://github.com/anudeepND/blacklist\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3901,7 +3901,7 @@
   {
    "id": "sample_anudeep_facebook_anudeep_facebook",
    "description": "First lines and distinct line shapes of the Anudeep_Facebook sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Host file to block ads, tracking and more! Updated daily\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Project home page: https://github.com/anudeepND/blacklist\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3914,7 +3914,7 @@
   {
    "id": "sample_bambenek_doh_bambenek_doh",
    "description": "First lines and distinct line shapes of the Bambenek_DoH sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "dns.google\n", "expect": {"rows": [["d", "dns.google"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "cloudflare-dns.com\n", "expect": {"rows": [["d", "cloudflare-dns.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3927,7 +3927,7 @@
   {
    "id": "sample_barbblock_barbblock",
    "description": "First lines and distinct line shapes of the BarbBlock sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# BarbBlock\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Version: 1.5\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3940,7 +3940,7 @@
   {
    "id": "sample_cct_bd_cct_bd",
    "description": "First lines and distinct line shapes of the CCT_BD sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "5.182.86.32/auth/login\n", "expect": {"rows": [], "ip4": ["5.182.86.32"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3953,7 +3953,7 @@
   {
    "id": "sample_chad_mayfield_chad_mayfield",
    "description": "First lines and distinct line shapes of the Chad_Mayfield sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "0----q.tumblr.com\n", "expect": {"rows": [["d", "0----q.tumblr.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "0--liamariejohnson--0.nedrobin.net\n", "expect": {"rows": [["d", "0--liamariejohnson--0.nedrobin.net"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3966,7 +3966,7 @@
   {
    "id": "sample_chad_mayfield_1m_chad_mayfield_1m",
    "description": "First lines and distinct line shapes of the Chad_Mayfield_1M sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "livejasmin.com\n", "expect": {"rows": [["d", "livejasmin.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "pornhub.com\n", "expect": {"rows": [["d", "pornhub.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3977,7 +3977,7 @@
   {
    "id": "sample_d_me_ads_d_me_ads",
    "description": "First lines and distinct line shapes of the D_Me_ADs sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Ad filter list by Disconnect\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# License: GPLv3\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -3990,7 +3990,7 @@
   {
    "id": "sample_d_me_malv_d_me_malv",
    "description": "First lines and distinct line shapes of the D_Me_Malv sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "Malvertising list by Disconnect\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# License: GPLv3\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4003,7 +4003,7 @@
   {
    "id": "sample_d_me_malw_d_me_malw",
    "description": "First lines and distinct line shapes of the D_Me_Malw sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "Malware list by Disconnect\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# License: GPLv3\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
@@ -4012,7 +4012,7 @@
   {
    "id": "sample_dandelionsprouts_dandelionsprouts",
    "description": "First lines and distinct line shapes of the DandelionSprouts sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "\ufeff# Title: 💊 Dandelion Sprout's Anti-Malware List («hosts» file version)\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Version: 29June2026v1\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4025,7 +4025,7 @@
   {
    "id": "sample_dibdot_doh_dibdot_doh",
    "description": "First lines and distinct line shapes of the Dibdot_DoH sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "003153.xyz\n", "expect": {"rows": [["d", "003153.xyz"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "0ms.dev\n", "expect": {"rows": [["d", "0ms.dev"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4038,7 +4038,7 @@
   {
    "id": "sample_enumer_stun_enumer_stun",
    "description": "First lines and distinct line shapes of the ENUMER_STUN sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# 894 public STUN-servers. Tested 2024-02-19\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "#\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4051,7 +4051,7 @@
   {
    "id": "sample_easylist_easylist",
    "description": "First lines and distinct line shapes of the EasyList sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "[Adblock Plus 2.0]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "! Checksum: KVbG2nh0z8Gw4U56RRE/7Q\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4064,7 +4064,7 @@
   {
    "id": "sample_easylist_arabic_easylist_arabic",
    "description": "First lines and distinct line shapes of the EasyList_Arabic sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "[Adblock Plus 2.0]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "! Checksum: BhGjIznVuTxmE5+mcQ7zyw\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4077,7 +4077,7 @@
   {
    "id": "sample_easylist_bulgarian_easylist_bulgarian",
    "description": "First lines and distinct line shapes of the EasyList_Bulgarian sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "[Adblock Plus 2.0]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "! Checksum: lcHdFkC6Z/nzBu1pM7+pfw\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4090,7 +4090,7 @@
   {
    "id": "sample_easyprivacy_easyprivacy",
    "description": "First lines and distinct line shapes of the EasyPrivacy sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "[Adblock Plus 1.1]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "! Version: 202607041208\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4103,7 +4103,7 @@
   {
    "id": "sample_easyprivacy_easyprivacy_2",
    "description": "First lines and distinct line shapes of the Easyprivacy sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Easyprivacy, parsed and mirrored by https://firebog.net\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Updated 03JUL26 from https://easylist.to/easylist/easyprivacy.txt\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4116,7 +4116,7 @@
   {
    "id": "sample_edwin_email_edwin_email",
    "description": "First lines and distinct line shapes of the Edwin_Email sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "0-mail.com\n", "expect": {"rows": [["d", "0-mail.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "001.igg.biz\n", "expect": {"rows": [["d", "001.igg.biz"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4129,7 +4129,7 @@
   {
    "id": "sample_fm_spam_fm_spam",
    "description": "First lines and distinct line shapes of the FM_Spam sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "0.0.0.0 100.1qingdao.com\n", "expect": {"rows": [["d", "100.1qingdao.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "0.0.0.0 7minuteworkout.com\n", "expect": {"rows": [["d", "7minuteworkout.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4142,7 +4142,7 @@
   {
    "id": "sample_fademind_2o7_fademind_2o7",
    "description": "First lines and distinct line shapes of the Fademind_2o7 sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "0.0.0.0 sanalytics.spark.co.nz\r\n", "expect": {"rows": [["d", "sanalytics.spark.co.nz"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "0.0.0.0 analytics.metro.com.kz\r\n", "expect": {"rows": [["d", "analytics.metro.com.kz"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4155,7 +4155,7 @@
   {
    "id": "sample_fademinds_fademinds",
    "description": "First lines and distinct line shapes of the Fademinds sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "0.0.0.0 cdn.appround.biz\n", "expect": {"rows": [["d", "cdn.appround.biz"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "0.0.0.0 cdn.download.sweetpacks.com\n", "expect": {"rows": [["d", "cdn.download.sweetpacks.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4165,7 +4165,7 @@
   {
    "id": "sample_frogeye_first_frogeye_first",
    "description": "First lines and distinct line shapes of the Frogeye_First sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# First-party trackers host list\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Variant: first-party trackers\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4178,7 +4178,7 @@
   {
    "id": "sample_frogeye_multi_frogeye_multi",
    "description": "First lines and distinct line shapes of the Frogeye_Multi sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# First-party trackers host list\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Variant: multi-party trackers\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4191,7 +4191,7 @@
   {
    "id": "sample_joewein_base_joewein_base",
    "description": "First lines and distinct line shapes of the Joewein_base sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "0-0-0-0-0-0-0-0-0-0-0-0-0-18-0-0-0-0-0-0-0-0-0-0-0-0-0.info\n", "expect": {"rows": [["d", "0-0-0-0-0-0-0-0-0-0-0-0-0-18-0-0-0-0-0-0-0-0-0-0-0-0-0.info"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "0-0-0-0-0-0-0-0-0-0-0-0-0-33-0-0-0-0-0-0-0-0-0-0-0-0-0.info\n", "expect": {"rows": [["d", "0-0-0-0-0-0-0-0-0-0-0-0-0-33-0-0-0-0-0-0-0-0-0-0-0-0-0.info"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4204,7 +4204,7 @@
   {
    "id": "sample_joewein_new_joewein_new",
    "description": "First lines and distinct line shapes of the Joewein_new sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "38374993729929473939lk-us.de\n", "expect": {"rows": [["d", "38374993729929473939lk-us.de"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "9x2v3x.com\n", "expect": {"rows": [["d", "9x2v3x.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4214,7 +4214,7 @@
   {
    "id": "sample_kad_bd_kad_bd",
    "description": "First lines and distinct line shapes of the KAD_BD sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Title: KADhosts\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Description: Filtry chroniace przed roznego rodzaju przekretami i oszustwami, takimi jak np. subskrypcje SMS, wirusy i falszywe sklepy internetowe. Oprocz wlasnego zestawu, zawieraja one rowniez wpisy z list stworzonych przez takie zespoly jak np. CERT Polska, legalniewsieci.pl i KNF.\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4227,7 +4227,7 @@
   {
    "id": "sample_kadhosts_kadhosts",
    "description": "First lines and distinct line shapes of the KADhosts sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Title: KADhosts\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Description: Filtry chroniace przed roznego rodzaju przekretami i oszustwami, takimi jak np. subskrypcje SMS, wirusy i falszywe sklepy internetowe. Oprocz wlasnego zestawu, zawieraja one rowniez wpisy z list stworzonych przez takie zespoly jak np. CERT Polska, legalniewsieci.pl i KNF.\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4240,7 +4240,7 @@
   {
    "id": "sample_kowabit_kowabit",
    "description": "First lines and distinct line shapes of the Kowabit sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Bl*cklist Of Death for Fritz and Router\r\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# by kowabit\r\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4253,7 +4253,7 @@
   {
    "id": "sample_krog_bd_krog_bd",
    "description": "First lines and distinct line shapes of the Krog_BD sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# This hosts file is brought to you by Mitchell Krog\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Copyright: https://github.com/mitchellkrogza\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4266,7 +4266,7 @@
   {
    "id": "sample_laniksj_laniksj",
    "description": "First lines and distinct line shapes of the LanikSJ sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Admiral, parsed and mirrored by https://firebog.net\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Updated 01JUL26 from https://raw.githubusercontent.com/LanikSJ/ubo-filters/main/filters/getadmiral-domains.txt\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4277,7 +4277,7 @@
   {
    "id": "sample_lightswitch05_lightswitch05",
    "description": "First lines and distinct line shapes of the Lightswitch05 sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Title: Lightswitch05's ads-and-tracking-extended.txt\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Released: 2023-11-17T01:05:24+00:00\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4290,7 +4290,7 @@
   {
    "id": "sample_ms_2_ms_2",
    "description": "First lines and distinct line shapes of the MS_2 sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# http://research.zscaler.com/2015/04/irc-botnets-alive-effective-evolving.html?spref=tw\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "api1.wipmania.com.wipmsc.ru\n", "expect": {"rows": [["d", "api1.wipmania.com.wipmsc.ru"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4303,7 +4303,7 @@
   {
    "id": "sample_mvps_mvps",
    "description": "First lines and distinct line shapes of the MVPS sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# This MVPS HOSTS file is a free download from:            #\r\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# http://winhelp2002.mvps.org/hosts.htm                    #\r\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4316,7 +4316,7 @@
   {
    "id": "sample_magento_magento",
    "description": "First lines and distinct line shapes of the Magento sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "abuse-js.link\n", "expect": {"rows": [["d", "abuse-js.link"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "account-mage.su\n", "expect": {"rows": [["d", "account-mage.su"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4329,7 +4329,7 @@
   {
    "id": "sample_maltrail_bd_maltrail_bd",
    "description": "First lines and distinct line shapes of the Maltrail_BD sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "wjcqsstycdujc.eu\n", "expect": {"rows": [["d", "wjcqsstycdujc.eu"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "ww1-filecloud.com\n", "expect": {"rows": [["d", "ww1-filecloud.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4342,7 +4342,7 @@
   {
    "id": "sample_maltrail_blackbook_maltrail_blackbook",
    "description": "First lines and distinct line shapes of the Maltrail_Blackbook sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "statsrvv.com\n", "expect": {"rows": [["d", "statsrvv.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "1312services.ru\n", "expect": {"rows": [["d", "1312services.ru"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4355,7 +4355,7 @@
   {
    "id": "sample_matomo_spam_matomo_spam",
    "description": "First lines and distinct line shapes of the Matomo_Spam sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "0-0.fr\n", "expect": {"rows": [["d", "0-0.fr"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "007agent-i.fr\n", "expect": {"rows": [["d", "007agent-i.fr"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4368,7 +4368,7 @@
   {
    "id": "sample_max_ms_max_ms",
    "description": "First lines and distinct line shapes of the Max_MS sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "### WindowsSpyBlocker - Hosts spy rules\n", "expect": {"rows": [["a", "### WindowsSpyBlocker - Hosts spy rules"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "### License: MIT\n", "expect": {"rows": [["a", "### License: MIT"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4381,7 +4381,7 @@
   {
    "id": "sample_monerominer_monerominer",
    "description": "First lines and distinct line shapes of the MoneroMiner sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "cloudflare.hashfor.cash\n", "expect": {"rows": [["d", "cloudflare.hashfor.cash"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4392,7 +4392,7 @@
   {
    "id": "sample_ngosang_torrent_ngosang_torrent",
    "description": "First lines and distinct line shapes of the NGOSANG_TORRENT sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "udp://zer0day.ch:1337/announce\n", "expect": {"rows": [["d", "zer0day.ch"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4405,7 +4405,7 @@
   {
    "id": "sample_nocoin_nocoin",
    "description": "First lines and distinct line shapes of the NoCoin sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# NoCoin Filter List\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Blocking Web Browser Bitcoin Mining\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4418,7 +4418,7 @@
   {
    "id": "sample_oneoffdallas_doh_oneoffdallas_doh",
    "description": "First lines and distinct line shapes of the Oneoffdallas_DoH sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# DNS over HTTPS (DoH) server list\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Servers are in order by the domain name, then subdomain name to help maintain sanity as the list grows.\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4431,7 +4431,7 @@
   {
    "id": "sample_openphish_openphish",
    "description": "First lines and distinct line shapes of the OpenPhish sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "https://gemanelogin.webflow.io/\n", "expect": {"rows": [["d", "gemanelogin.webflow.io"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "https://www.imtaken.my/download.html\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["https://www.imtaken.my/download.html"], "scheme_skipped": 1, "stop": false}},
@@ -4444,7 +4444,7 @@
   {
    "id": "sample_pl_adservers_pl_adservers",
    "description": "First lines and distinct line shapes of the PL_Adservers sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Blocklist for use with hosts files to block ads, trackers, and other nasty things\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "#\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4457,7 +4457,7 @@
   {
    "id": "sample_perflyst_android_perflyst_android",
    "description": "First lines and distinct line shapes of the Perflyst_Android sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Created with:\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4470,7 +4470,7 @@
   {
    "id": "sample_perflyst_firetv_perflyst_firetv",
    "description": "First lines and distinct line shapes of the Perflyst_FireTV sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "device-messaging-na.amazon.com\n", "expect": {"rows": [["d", "device-messaging-na.amazon.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "devicemessaging.us-east-1.amazon.com\n", "expect": {"rows": [["d", "devicemessaging.us-east-1.amazon.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4483,7 +4483,7 @@
   {
    "id": "sample_perflyst_tv_perflyst_tv",
    "description": "First lines and distinct line shapes of the Perflyst_TV sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Title: Smart-TV Blocklist for Pi-hole\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Version: 13July2023v1\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4496,7 +4496,7 @@
   {
    "id": "sample_phishingarmy_phishingarmy",
    "description": "First lines and distinct line shapes of the PhishingArmy sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# \n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Phishing Army | The Blocklist to filter Phishing \n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4509,7 +4509,7 @@
   {
    "id": "sample_phishingarmy_agr_phishingarmy_agr",
    "description": "First lines and distinct line shapes of the PhishingArmy_agr sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# \n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Phishing Army | The Blocklist to filter Phishing \n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4522,7 +4522,7 @@
   {
    "id": "sample_phishing_army_phishing_army",
    "description": "First lines and distinct line shapes of the Phishing_Army sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# \n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Phishing Army | The Blocklist to filter Phishing \n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4535,7 +4535,7 @@
   {
    "id": "sample_piwik_spam_piwik_spam",
    "description": "First lines and distinct line shapes of the Piwik_Spam sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "0-0.fr\n", "expect": {"rows": [["d", "0-0.fr"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "007agent-i.fr\n", "expect": {"rows": [["d", "007agent-i.fr"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4548,7 +4548,7 @@
   {
    "id": "sample_prigent_ads_prigent_ads",
    "description": "First lines and distinct line shapes of the Prigent_Ads sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Prigent-Ads, parsed and mirrored by https://firebog.net\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Updated 03JUL26 from https://dsi.ut-capitole.fr/blacklists/download/publicite.tar.gz\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4561,7 +4561,7 @@
   {
    "id": "sample_prigent_crypto_prigent_crypto",
    "description": "First lines and distinct line shapes of the Prigent_Crypto sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Prigent-Crypto, parsed and mirrored by https://firebog.net\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Updated 03JUL26 from https://dsi.ut-capitole.fr/blacklists/download/cryptojacking.tar.gz\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4574,7 +4574,7 @@
   {
    "id": "sample_prigent_malware_prigent_malware",
    "description": "First lines and distinct line shapes of the Prigent_Malware sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Prigent-Malware, parsed and mirrored by https://firebog.net\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Updated 03JUL26 from https://dsi.ut-capitole.fr/blacklists/download/malware.tar.gz\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4587,7 +4587,7 @@
   {
    "id": "sample_quidsup_mal_quidsup_mal",
    "description": "First lines and distinct line shapes of the Quidsup_Mal sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Title: NoTrack Malware Blocklist\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Description: Domains classified as malware, phishing or adware\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4600,7 +4600,7 @@
   {
    "id": "sample_quidsup_trackers_quidsup_trackers",
    "description": "First lines and distinct line shapes of the Quidsup_Trackers sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Title: NoTrack Tracker Blocklist\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Description: Domains classified as tracking or advertising\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4613,7 +4613,7 @@
   {
    "id": "sample_risky_hosts_risky_hosts",
    "description": "First lines and distinct line shapes of the Risky_Hosts sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "0.0.0.0 0.r.msn.com\n", "expect": {"rows": [["d", "0.r.msn.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "0.0.0.0 050003.voodoo.com\n", "expect": {"rows": [["d", "050003.voodoo.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4626,7 +4626,7 @@
   {
    "id": "sample_sfs_toxic_bd_sfs_toxic_bd",
    "description": "First lines and distinct line shapes of the SFS_Toxic_BD sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "xrumersale.site\n", "expect": {"rows": [["d", "xrumersale.site"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "00-tv.com\n", "expect": {"rows": [["d", "00-tv.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4639,7 +4639,7 @@
   {
    "id": "sample_sfs_toxic_bd_f1_sfs_toxic_bd_f1",
    "description": "First lines and distinct line shapes of the SFS_Toxic_BD_F1 sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "xrumersale.site\n", "expect": {"rows": [["d", "xrumersale.site"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "00-tv.com\n", "expect": {"rows": [["d", "00-tv.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4651,7 +4651,7 @@
   {
    "id": "sample_sfs_toxic_bd_f2_sfs_toxic_bd_f2",
    "description": "First lines and distinct line shapes of the SFS_Toxic_BD_F2 sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "xrumersale.site\n", "expect": {"rows": [["d", "xrumersale.site"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "00-tv.com\n", "expect": {"rows": [["d", "00-tv.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
@@ -4660,7 +4660,7 @@
   {
    "id": "sample_snafu_list_snafu_list",
    "description": "First lines and distinct line shapes of the SNAFU_List sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "### A general ad & tracking domain blocklist for pi-hole. (https://pi-hole.net/)              ###\r\n", "expect": {"rows": [["a", "### A general ad & tracking domain blocklist for pi-hole. (https://pi-hole.net/)              ###"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "### Attempting to find domains not already included in popular lists. (Wally3k, Airelle, etc) ###\r\n", "expect": {"rows": [["a", "### Attempting to find domains not already included in popular lists. (Wally3k, Airelle, etc) ###"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4673,7 +4673,7 @@
   {
    "id": "sample_swc_swc",
    "description": "First lines and distinct line shapes of the SWC sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# This hosts file is brought to you by Dan Pollock and can be found at\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# http://someonewhocares.org/hosts/\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4686,7 +4686,7 @@
   {
    "id": "sample_swc_swc_2",
    "description": "First lines and distinct line shapes of the SWC sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# This hosts file is brought to you by Dan Pollock and can be found at\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# http://someonewhocares.org/hosts/zero/\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4699,7 +4699,7 @@
   {
    "id": "sample_spam404_spam404",
    "description": "First lines and distinct line shapes of the Spam404 sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "telechargerdes.com\n", "expect": {"rows": [["d", "telechargerdes.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "rarshare.com\n", "expect": {"rows": [["d", "rarshare.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4712,7 +4712,7 @@
   {
    "id": "sample_stevenblack_ads_stevenblack_ads",
    "description": "First lines and distinct line shapes of the StevenBlack_ADs sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Title: StevenBlack/hosts\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "#\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4725,7 +4725,7 @@
   {
    "id": "sample_stevenblack_bd_stevenblack_bd",
    "description": "First lines and distinct line shapes of the StevenBlack_BD sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "#=====================================\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Title: Hosts contributed by Steven Black\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4738,7 +4738,7 @@
   {
    "id": "sample_thegreatwall_doh_thegreatwall_doh",
    "description": "First lines and distinct line shapes of the TheGreatWall_DoH sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "## Title : TheGreatWall\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "## Prevent program and malware to bypass DNS filter by using popular DoH services\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4751,7 +4751,7 @@
   {
    "id": "sample_turkey_high_risk_turkey_high_risk",
    "description": "First lines and distinct line shapes of the Turkey_High_Risk sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "0--0----------------------------------------------------------0.ru\r\n", "expect": {"rows": [["d", "0--0----------------------------------------------------------0.ru"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "0--0---------------------------------------------------axelname.ru\r\n", "expect": {"rows": [["d", "0--0---------------------------------------------------axelname.ru"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4764,7 +4764,7 @@
   {
    "id": "sample_urlhaus_mal_urlhaus_mal",
    "description": "First lines and distinct line shapes of the URLhaus_Mal sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "################################################################\r\n", "expect": {"rows": [["a", "################################################################"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# abuse.ch URLhaus Host file                                   #\r\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4777,7 +4777,7 @@
   {
    "id": "sample_vxvault_vxvault",
    "description": "First lines and distinct line shapes of the VXVault sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "<pre>\r\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "VX Vault last 100 Links\r\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4790,7 +4790,7 @@
   {
    "id": "sample_wally3ks_wally3ks",
    "description": "First lines and distinct line shapes of the WaLLy3Ks sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Personal Blocklist by WaLLy3K (https://firebog.net/about)\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Content added to this list has been manually verified, and is updated irregularly\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4803,7 +4803,7 @@
   {
    "id": "sample_yhonay_bd_yhonay_bd",
    "description": "First lines and distinct line shapes of the Yhonay_BD sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "#\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# WARNING: Sites listed below can be harmful. Please, do not visit them if you don't know what you're doing!\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
@@ -4812,7 +4812,7 @@
   {
    "id": "sample_yoyo_yoyo",
    "description": "First lines and distinct line shapes of the Yoyo sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "101com.com\n", "expect": {"rows": [["d", "101com.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "180hits.de\n", "expect": {"rows": [["d", "180hits.de"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4825,7 +4825,7 @@
   {
    "id": "sample_hostsvn_hostsvn",
    "description": "First lines and distinct line shapes of the hostsVN sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "# Title: hostsVN\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Last modified: 03 Jul 2026 16:18 UTC+7\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4838,7 +4838,7 @@
   {
    "id": "sample_neohosts_neohosts",
    "description": "First lines and distinct line shapes of the neoHosts sample (strict)",
-   "config": {"dnsbl_ip": true, "lenient": false, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "#*********************************************************\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "# Copyright (c), Neko Dev Team & neoHosts Team.\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4851,7 +4851,7 @@
   {
    "id": "sample_yhosts_yhosts",
    "description": "First lines and distinct line shapes of the yHosts sample (lenient)",
-   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
    "lines": [
     {"line": "@direct/1os\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "#ios\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -4859,6 +4859,323 @@
     {"line": "::1             localhost\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "#common\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "127.0.0.1 localhost\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
+   ]
+  },
+  {
+   "id": "issue4272_strict_grammar",
+   "description": "issue #4272: Strict keeps a domain only as (<scheme>://)?<domain>/? with an optional space-separated # comment; every other domain form is skipped, logged and counted; IP literals and CIDRs keep their rules",
+   "config": {"dnsbl_ip": true, "parse_mode": "strict", "abp_feed": false, "custom": false, "suppression": false},
+   "lines": [
+    {"line": ".imgur.com/lumbar.gif\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [".imgur.com/lumbar.gif"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com/a/b\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com/a/b"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com//\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com//"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com?q=1\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com?q=1"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com#frag\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com#frag"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com;jsessionid=x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com;jsessionid=x"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com:8080\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com:8080"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://d.com:8080\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com:8080"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://d.com:8080/\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com:8080"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://user@d.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://user:pw@d.com/\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com"], "scheme_skipped": 1, "stop": false}},
+    {"line": "/24\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["/24"], "scheme_skipped": 1, "stop": false}},
+    {"line": "?foo\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["?foo"], "scheme_skipped": 1, "stop": false}},
+    {"line": "my-domain.com\n", "expect": {"rows": [["d", "my-domain.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "my-domain.com/\n", "expect": {"rows": [["d", "my-domain.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://d.com\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "https://d.com/\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://1.2.3.4:80/x\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "1.2.3.4:80\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "[2604:2dc0::]:53\n", "expect": {"rows": [], "ip4": [], "ip6": ["2604:2dc0::"], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "192.168.1.0/24#x\n", "expect": {"rows": [], "ip4": ["192.168.1.0"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "192.168.1.0/24\n", "expect": {"rows": [], "ip4": ["192.168.1.0/24"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com # blocked\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com/ # blocked\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com/\t# blocked\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "https://example.com/ # blocked\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com#blocked\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com#blocked"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com/#blocked\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com/#blocked"], "scheme_skipped": 1, "stop": false}},
+    {"line": "user@example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["user@example.com"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:abc\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:abc"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:0\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:0"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:1\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:1"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:65535\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:65535"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:65536\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:65536"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:123456\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:123456"], "scheme_skipped": 1, "stop": false}},
+    {"line": "stun.example.com:3478\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["stun.example.com:3478"], "scheme_skipped": 1, "stop": false}},
+    {"line": "stun.example.com:3478/\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["stun.example.com:3478/"], "scheme_skipped": 1, "stop": false}},
+    {"line": ":3478\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [":3478"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://example.com:8080/x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://example.com:8080/x"], "scheme_skipped": 1, "stop": false}},
+    {"line": "://example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://example.com"], "scheme_skipped": 1, "stop": false}},
+    {"line": "bücher.de/x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["bücher.de/x"], "scheme_skipped": 1, "stop": false}},
+    {"line": "bücher.de/\n", "expect": {"rows": [["d", "xn--bcher-kva.de"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com.\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 example.com/x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com/x"], "scheme_skipped": 1, "stop": false}},
+    {"line": "0.0.0.0 example.com:80\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:80"], "scheme_skipped": 1, "stop": false}}
+   ]
+  },
+  {
+   "id": "issue4272_ports_grammar",
+   "description": "issue #4272: Allow Ports is Strict plus an optional :<1-65535> port",
+   "config": {"dnsbl_ip": true, "parse_mode": "ports", "abp_feed": false, "custom": false, "suppression": false},
+   "lines": [
+    {"line": ".imgur.com/lumbar.gif\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [".imgur.com/lumbar.gif"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com/a/b\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com/a/b"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com//\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com//"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com?q=1\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com?q=1"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com#frag\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com#frag"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com;jsessionid=x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com;jsessionid=x"], "scheme_skipped": 1, "stop": false}},
+    {"line": "d.com:8080\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://d.com:8080\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://d.com:8080/\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://user@d.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://user:pw@d.com/\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["d.com"], "scheme_skipped": 1, "stop": false}},
+    {"line": "/24\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["/24"], "scheme_skipped": 1, "stop": false}},
+    {"line": "?foo\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["?foo"], "scheme_skipped": 1, "stop": false}},
+    {"line": "my-domain.com\n", "expect": {"rows": [["d", "my-domain.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "my-domain.com/\n", "expect": {"rows": [["d", "my-domain.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://d.com\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "https://d.com/\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://1.2.3.4:80/x\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "1.2.3.4:80\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "[2604:2dc0::]:53\n", "expect": {"rows": [], "ip4": [], "ip6": ["2604:2dc0::"], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "192.168.1.0/24#x\n", "expect": {"rows": [], "ip4": ["192.168.1.0"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "192.168.1.0/24\n", "expect": {"rows": [], "ip4": ["192.168.1.0/24"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com # blocked\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com/ # blocked\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com/\t# blocked\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "https://example.com/ # blocked\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com#blocked\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com#blocked"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com/#blocked\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com/#blocked"], "scheme_skipped": 1, "stop": false}},
+    {"line": "user@example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["user@example.com"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:abc\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:abc"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:0\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:0"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:1\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com:65535\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com:65536\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:65536"], "scheme_skipped": 1, "stop": false}},
+    {"line": "example.com:123456\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:123456"], "scheme_skipped": 1, "stop": false}},
+    {"line": "stun.example.com:3478\n", "expect": {"rows": [["d", "stun.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "stun.example.com:3478/\n", "expect": {"rows": [["d", "stun.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ":3478\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [":3478"], "scheme_skipped": 1, "stop": false}},
+    {"line": "http://example.com:8080/x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["http://example.com:8080/x"], "scheme_skipped": 1, "stop": false}},
+    {"line": "://example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["://example.com"], "scheme_skipped": 1, "stop": false}},
+    {"line": "bücher.de/x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["bücher.de/x"], "scheme_skipped": 1, "stop": false}},
+    {"line": "bücher.de/\n", "expect": {"rows": [["d", "xn--bcher-kva.de"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com.\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 example.com/x\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com/x"], "scheme_skipped": 1, "stop": false}},
+    {"line": "0.0.0.0 example.com:80\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
+   ]
+  },
+  {
+   "id": "issue4272_lenient_grammar",
+   "description": "issue #4272: Lenient keeps the permissive host cut of the same lines",
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
+   "lines": [
+    {"line": ".imgur.com/lumbar.gif\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "d.com/a/b\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "d.com//\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "d.com?q=1\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "d.com#frag\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "d.com;jsessionid=x\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "d.com:8080\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://d.com:8080\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://d.com:8080/\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://user@d.com\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://user:pw@d.com/\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "/24\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
+    {"line": "?foo\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
+    {"line": "my-domain.com\n", "expect": {"rows": [["d", "my-domain.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "my-domain.com/\n", "expect": {"rows": [["d", "my-domain.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://d.com\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "https://d.com/\n", "expect": {"rows": [["d", "d.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://1.2.3.4:80/x\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "1.2.3.4:80\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "[2604:2dc0::]:53\n", "expect": {"rows": [], "ip4": [], "ip6": ["2604:2dc0::"], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "192.168.1.0/24#x\n", "expect": {"rows": [], "ip4": ["192.168.1.0"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "192.168.1.0/24\n", "expect": {"rows": [], "ip4": ["192.168.1.0/24"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com # blocked\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com/ # blocked\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com/\t# blocked\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "https://example.com/ # blocked\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com#blocked\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com/#blocked\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "user@example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["user@example.com"], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com:\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:"], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com:abc\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:abc"], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com:0\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com:1\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com:65535\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com:65536\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com:123456\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["example.com:123456"], "scheme_skipped": 0, "stop": false}},
+    {"line": "stun.example.com:3478\n", "expect": {"rows": [["d", "stun.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "stun.example.com:3478/\n", "expect": {"rows": [["d", "stun.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ":3478\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
+    {"line": "http://example.com:8080/x\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "://example.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "bücher.de/x\n", "expect": {"rows": [["d", "xn--bcher-kva.de"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "bücher.de/\n", "expect": {"rows": [["d", "xn--bcher-kva.de"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com.\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 example.com/x\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 example.com:80\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
+   ]
+  },
+  {
+   "id": "issue4272_adblock_feed_lenient",
+   "description": "issue #4272: in an Adblock feed a line takes the ABP path, is kept as a hostname (ICANN TLD, LDH labels, optional :port and /), a hosts line or an AdGuard DNS hostname mask, or is dropped; IPs come from Adblock rules only",
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": true, "custom": false, "suppression": false},
+   "lines": [
+    {"line": "[Adblock Plus 2.0]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "! Title: EasyPrivacy\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ".imgur.com/lumbar.gif\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ".facebook.com/tr/$image\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "-geoIP.js\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 imgur.com\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "_chartbeat.js\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "||mp.imgur.com^\n", "expect": {"rows": [["a", "||mp.imgur.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "||imgur.com/albumview.gif?\n", "expect": {"rows": [["a", "||imgur.com/albumview.gif?"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "@@||imgur.com/min/px.js$~third-party\n", "expect": {"rows": [["a", "@@||imgur.com/min/px.js$~third-party"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com##.Top300x600\n", "expect": {"rows": [["a", "imgur.com##.Top300x600"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com:8080\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com:443/\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com/\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 imgur.com i.imgur.com # ads\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "|imgur.com^\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "|imgur.com|\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "://imgur.com^\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com^\n", "expect": {"rows": [["a", "||imgur.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com|\n", "expect": {"rows": [["a", "||imgur.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com^$important\n", "expect": {"rows": [["a", "||imgur.com^$important"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "|imgur.com^$important\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ".imgur.com^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "*.imgur.com^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "ad*.imgur.com^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com^$badfilter\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com^$third-party\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com^$dnstype=AAAA\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "eksisozluk.com#$?#.ads\n", "expect": {"rows": [["a", "eksisozluk.com#$?#.ads"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com$$script[data-src]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 1.2.3.4\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "1.2.3.4\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "||1.2.3.4^\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "||5.6.7.0/24^\n", "expect": {"rows": [], "ip4": ["5.6.7.0/24"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ":: tracker.example.org\n", "expect": {"rows": [["d", "tracker.example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 a.example.com _b.example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 ads.example.com:80\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "Ads.Example.COM\n", "expect": {"rows": [["d", "ads.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "Ads.Example.COM^\n", "expect": {"rows": [["a", "||ads.example.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "bücher.de\n", "expect": {"rows": [["d", "xn--bcher-kva.de"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "xn--bcher-kva.de\n", "expect": {"rows": [["d", "xn--bcher-kva.de"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "ads.com.np\n", "expect": {"rows": [["d", "ads.com.np"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "tracker.gov.mm^\n", "expect": {"rows": [["a", "||tracker.gov.mm^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "ads.example.notatld\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "ads.example.notatld^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "localhost\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "-murmann.ru\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "_werbung.pl\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "ads-.example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com.\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com:0\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com:65536\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com//\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com#ad\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "com.nxtras.banner.ImageRotator\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com$third-party\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "# comment\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "a,b,c.example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
+   ]
+  },
+  {
+   "id": "issue4272_adblock_feed_strict",
+   "description": "issue #4272: an Adblock feed's lines do not depend on the parse mode",
+   "config": {"dnsbl_ip": true, "parse_mode": "strict", "abp_feed": true, "custom": false, "suppression": false},
+   "lines": [
+    {"line": "[Adblock Plus 2.0]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "! Title: EasyPrivacy\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ".imgur.com/lumbar.gif\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ".facebook.com/tr/$image\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "-geoIP.js\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 imgur.com\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "_chartbeat.js\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "||mp.imgur.com^\n", "expect": {"rows": [["a", "||mp.imgur.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "||imgur.com/albumview.gif?\n", "expect": {"rows": [["a", "||imgur.com/albumview.gif?"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "@@||imgur.com/min/px.js$~third-party\n", "expect": {"rows": [["a", "@@||imgur.com/min/px.js$~third-party"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com##.Top300x600\n", "expect": {"rows": [["a", "imgur.com##.Top300x600"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com:8080\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com:443/\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com/\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 imgur.com i.imgur.com # ads\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "|imgur.com^\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "|imgur.com|\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "://imgur.com^\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com^\n", "expect": {"rows": [["a", "||imgur.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com|\n", "expect": {"rows": [["a", "||imgur.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com^$important\n", "expect": {"rows": [["a", "||imgur.com^$important"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "|imgur.com^$important\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ".imgur.com^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "*.imgur.com^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "ad*.imgur.com^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com^$badfilter\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com^$third-party\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com^$dnstype=AAAA\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "eksisozluk.com#$?#.ads\n", "expect": {"rows": [["a", "eksisozluk.com#$?#.ads"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com$$script[data-src]\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 1.2.3.4\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "1.2.3.4\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "||1.2.3.4^\n", "expect": {"rows": [], "ip4": ["1.2.3.4"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "||5.6.7.0/24^\n", "expect": {"rows": [], "ip4": ["5.6.7.0/24"], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ":: tracker.example.org\n", "expect": {"rows": [["d", "tracker.example.org"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 a.example.com _b.example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 ads.example.com:80\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "Ads.Example.COM\n", "expect": {"rows": [["d", "ads.example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "Ads.Example.COM^\n", "expect": {"rows": [["a", "||ads.example.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "bücher.de\n", "expect": {"rows": [["d", "xn--bcher-kva.de"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "xn--bcher-kva.de\n", "expect": {"rows": [["d", "xn--bcher-kva.de"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "ads.com.np\n", "expect": {"rows": [["d", "ads.com.np"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "tracker.gov.mm^\n", "expect": {"rows": [["a", "||tracker.gov.mm^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "ads.example.notatld\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "ads.example.notatld^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "localhost\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "-murmann.ru\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "_werbung.pl\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "ads-.example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com.\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com:0\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com:65536\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com//\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com#ad\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "com.nxtras.banner.ImageRotator\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com$third-party\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "# comment\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "a,b,c.example.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
+   ]
+  },
+  {
+   "id": "issue4272_adblock_feed_noip",
+   "description": "issue #4272: an Adblock feed with DNSBL IP off",
+   "config": {"dnsbl_ip": false, "parse_mode": "ports", "abp_feed": true, "custom": false, "suppression": false},
+   "lines": [
+    {"line": "||1.2.3.4^\n", "expect": {"rows": [["a", "||1.2.3.4^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "0.0.0.0 1.2.3.4\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "imgur.com^\n", "expect": {"rows": [["a", "||imgur.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
+   ]
+  },
+  {
+   "id": "issue4272_extended_cosmetic_markers",
+   "description": "issue #4272: AdGuard's extended cosmetic markers are ABP rules in any feed, so Lenient never cuts their site out",
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
+   "lines": [
+    {"line": "eksisozluk.com#$?#.ads\n", "expect": {"rows": [["a", "eksisozluk.com#$?#.ads"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "#$?#div:has(> a[href*=\"ads\"])\n", "expect": {"rows": [["a", "#$?#div:has(> a[href*=\"ads\"])"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "site.com#@$?#.ads\n", "expect": {"rows": [["a", "site.com#@$?#.ads"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "site.com#@?#div:has(.ad)\n", "expect": {"rows": [["a", "site.com#@?#div:has(.ad)"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "site.com#@%#window.x = 1\n", "expect": {"rows": [["a", "site.com#@%#window.x = 1"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "site.com#@$#body { color: red }\n", "expect": {"rows": [["a", "site.com#@$#body { color: red }"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "a.com,b.com#$?#.ads\n", "expect": {"rows": [["a", "a.com,b.com#$?#.ads"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "site.com#$#body { color: red }\n", "expect": {"rows": [["a", "site.com#$#body { color: red }"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
    ]
   }
  ]

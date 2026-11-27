@@ -331,7 +331,7 @@
        "ingest": {
         "applyWindow": "",
         "dnsblIp": false,
-        "dnsblLenient": false,
+        "dnsblParseMode": "ports",
         "feedHostAllowlist": [
          {
           "cidr": "192.168.89.0/24"
@@ -692,7 +692,7 @@
        "ingest": {
         "applyWindow": "",
         "dnsblIp": false,
-        "dnsblLenient": false,
+        "dnsblParseMode": "ports",
         "feedHostAllowlist": [
          {
           "cidr": "192.168.89.0/24"
@@ -1055,7 +1055,7 @@
        "ingest": {
         "applyWindow": "",
         "dnsblIp": false,
-        "dnsblLenient": false,
+        "dnsblParseMode": "ports",
         "feedHostAllowlist": [
          {
           "cidr": "192.168.89.0/24"
@@ -1391,7 +1391,7 @@
        "ingest": {
         "applyWindow": "",
         "dnsblIp": false,
-        "dnsblLenient": false,
+        "dnsblParseMode": "ports",
         "feedHostAllowlist": [
          {
           "cidr": "192.168.89.0/24"
@@ -1759,7 +1759,7 @@
        "ingest": {
         "applyWindow": "",
         "dnsblIp": false,
-        "dnsblLenient": false,
+        "dnsblParseMode": "ports",
         "feedHostAllowlist": [
          {
           "cidr": "192.168.89.0/24"
@@ -2075,7 +2075,7 @@
        "ingest": {
         "applyWindow": "",
         "dnsblIp": false,
-        "dnsblLenient": false,
+        "dnsblParseMode": "ports",
         "feedHostAllowlist": [
          {
           "cidr": "192.168.89.0/24"
@@ -2457,7 +2457,7 @@
        "ingest": {
         "applyWindow": "",
         "dnsblIp": false,
-        "dnsblLenient": false,
+        "dnsblParseMode": "ports",
         "feedHostAllowlist": [
          {
           "cidr": "192.168.89.0/24"
@@ -2774,7 +2774,7 @@
        "ingest": {
         "applyWindow": "",
         "dnsblIp": false,
-        "dnsblLenient": false,
+        "dnsblParseMode": "ports",
         "feedHostAllowlist": [
          {
           "cidr": "192.168.89.0/24"
@@ -3095,7 +3095,7 @@
        "ingest": {
         "applyWindow": "",
         "dnsblIp": false,
-        "dnsblLenient": false,
+        "dnsblParseMode": "ports",
         "feedHostAllowlist": [
          {
           "cidr": "192.168.89.0/24"
@@ -3357,7 +3357,7 @@
        "ingest": {
         "applyWindow": "",
         "dnsblIp": false,
-        "dnsblLenient": false,
+        "dnsblParseMode": "ports",
         "feedHostAllowlist": [
          {
           "cidr": "192.168.89.0/24"
@@ -3675,7 +3675,7 @@
        "ingest": {
         "applyWindow": "",
         "dnsblIp": true,
-        "dnsblLenient": false,
+        "dnsblParseMode": "ports",
         "feedHostAllowlist": [
          {
           "cidr": "192.168.89.0/24"
@@ -4018,7 +4018,7 @@
        "ingest": {
         "applyWindow": "",
         "dnsblIp": false,
-        "dnsblLenient": false,
+        "dnsblParseMode": "ports",
         "feedHostAllowlist": [
          {
           "cidr": "192.168.89.0/24"

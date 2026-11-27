@@ -398,7 +398,7 @@ test_smoke_feeds.py::test_ip_tar_feed_imports_members 2.44
 test_smoke_feeds.py::test_ipv6_http_feed_loads 2.44
 test_smoke_feeds.py::test_junk_octet_stream_rejected 2.69
 test_smoke_feeds.py::test_lenient_blocks_invalid_scheme_and_path 3.40
-test_smoke_feeds.py::test_migration_sets_lenient_on_for_existing_install 1.19
+test_smoke_feeds.py::test_migration_sets_lenient_for_existing_install 1.19
 test_smoke_feeds.py::test_octet_stream_zip_recovered 2.68
 test_smoke_feeds.py::test_scan_on_keeps_ut1_and_geoip_archives_ingesting 2.15
 test_smoke_feeds.py::test_strict_skips_invalid_scheme_and_path_and_logs 3.69

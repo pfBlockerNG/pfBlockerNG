@@ -64,8 +64,11 @@ final class FeedParseDnsblCorpusTest extends TestCase
 			if (isset($out[$case['id']])) {
 				throw new RuntimeException("{$where}: duplicate id");
 			}
-			self::keys($case['config'], ['dnsbl_ip', 'lenient', 'custom', 'suppression'], "{$where} config");
-			foreach ($case['config'] as $k => $v) {
+			self::keys($case['config'], ['dnsbl_ip', 'parse_mode', 'abp_feed', 'custom', 'suppression'], "{$where} config");
+			if (!is_string($case['config']['parse_mode']) || PfbDnsblParseMode::tryFrom($case['config']['parse_mode']) === NULL) {
+				throw new RuntimeException("{$where} config.parse_mode: must be strict, ports or lenient");
+			}
+			foreach (array_diff_key($case['config'], ['parse_mode' => TRUE]) as $k => $v) {
 				if (!is_bool($v)) {
 					throw new RuntimeException("{$where} config.{$k}: must be a bool");
 				}
@@ -157,7 +160,8 @@ final class FeedParseDnsblCorpusTest extends TestCase
 			'header'    => self::HEADER,
 			'custom'    => $cfg['custom'],
 			'dnsbl_ip'  => $cfg['dnsbl_ip'],
-			'lenient'   => $cfg['lenient'],
+			'parse_mode' => PfbDnsblParseMode::from($cfg['parse_mode']),
+			'abp_feed'  => $cfg['abp_feed'],
 			'parse_err' => $this->failLog,
 		];
 		$state = pfb_dnsbl_parse_state();
