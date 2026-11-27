@@ -381,6 +381,7 @@ function pfb_cli_update_run(array $request, callable $call, ?callable $out, call
 	}
 	$params = [];
 	$started = NULL;
+	$repinned = FALSE;
 	$unavailable = 0;
 	for ($poll = 0; $poll < $polls; $poll++) {
 		if ($poll > 0) {
@@ -398,16 +399,24 @@ function pfb_cli_update_run(array $request, callable $call, ?callable $out, call
 		}
 		$body = $answer['body'];
 		$update = is_array($body['update'] ?? NULL) ? $body['update'] : [];
-		$asked_for = ($update['trigger'] ?? NULL) === $request['trigger'] && ($update['scope'] ?? NULL) === ($request['scope'] ?? NULL)
-			&& ($update['force'] ?? NULL) === ($request['force'] ?? NULL);
-		if ($started === NULL && is_int($update['startedAt'] ?? NULL) && ($update['startedAt'] < $asked || !$asked_for)) {
-			continue;	// the Update before ours
+		$at = is_int($update['startedAt'] ?? NULL) ? $update['startedAt'] : NULL;
+		if ($at === NULL) {
+			$err("pfBlockerNG Core reports no start of this Update\n");
+			return 1;
 		}
-		if ($asked_for && is_int($started) && ($update['startedAt'] ?? NULL) === $started + 1) {
-			$started++;	// Core stamps the start when it admits the Update and again in the worker's status: a second can fall between
+		$asked_for = ($update['trigger'] ?? NULL) === ($request['trigger'] ?? NULL)
+			&& ($update['scope'] ?? NULL) === ($request['scope'] ?? NULL) && ($update['force'] ?? NULL) === ($request['force'] ?? NULL);
+		if ($started === NULL) {
+			if ($at < $asked || (!$asked_for && $at === $asked)) {
+				continue;	// the Update before ours
+			}
+			$started = $asked_for ? $at : NULL;
+		} elseif ($asked_for && !$repinned && $at === $started + 1) {
+			// Core stamps the start when it admits the Update and again in the worker's status: a second can fall between
+			$started = $at;
+			$repinned = TRUE;
 		}
-		$started ??= $update['startedAt'] ?? NULL;
-		if ($started === NULL || ($update['startedAt'] ?? NULL) !== $started) {
+		if ($at !== $started) {
 			$err("pfBlockerNG Core reports no result of this Update: another Update started in its place\n");
 			return 1;
 		}

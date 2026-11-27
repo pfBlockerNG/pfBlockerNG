@@ -2436,7 +2436,7 @@ DNSBL statistics rows of removed groups, and `--resource-dir` in the rc script. 
 `tests/php/OutpostApplyTest.php` (through corpus A's worker) and `tests/smoke/test_smoke_outpost_apply.py`.
 
 **Deprecated-verb migration map** (each old verb still works through an adapter; the deprecation
-line is logged for the operator-facing verbs). Since issue #4260 the CLI verbs start a Core `manual` Update
+line is logged for the operator-facing verbs, on the CLI's stderr and in the main log). Since issue #4260 the CLI verbs start a Core `manual` Update
 (`pfb_cli_update_request()`, `pfb_cli_update_run()`): the CLI follows it to its end and runs no pass itself, and the
 Update program (`core_update`) runs the pass with the request below. `cron` and `pfb_trigger ... trigger=cron` are a
 `manual` Update too (owner, #3977: bypass entries are "manual or apply, as fits"; Core's `retry` runs the due Extras
@@ -2445,7 +2445,7 @@ first), so their hooks see `update` where the in-process pass gave `cron`, and t
 
 | Legacy verb | Core Update | `PFB_TRIGGER` | Deprecation logged |
 | --- | --- | --- | --- |
-| `cron` | `manual`, `both`, force `none` | `update` | yes (CLI, stderr and main log) |
+| `cron` | `manual`, `both`, force `none` | `update` | yes |
 | `update` (GUI Update) | `manual`, `both`, force `none` | `update` | yes |
 | `updateip` | `manual`, `ip`, force `parse` | `force-reload` | yes |
 | `updatednsbl` | `manual`, `dnsbl`, force `parse` | `force-reload` | yes |
