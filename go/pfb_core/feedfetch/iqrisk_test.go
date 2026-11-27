@@ -1,12 +1,16 @@
 package feedfetch_test
 
 // ET IQRisk and xlsx behaviour the parity corpus cannot pin: a split directory that already holds files, a context that
-// ends during the split, and a workbook past a lowered extraction ceiling.
+// ends during the split, a workbook past a lowered extraction ceiling, and a Reload's split of a kept download (#4256):
+// one that does not gunzip, one whose split cannot be written, a kept tar.gz, and a kept download that is a link.
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,5 +141,96 @@ func TestAnETFeedWithMissingSplitSettingsRefusesBeforeFilesystemChanges(t *testi
 				t.Fatalf("invalid ET settings must refuse as a configuration error and keep last-known-good: %+v, published %q", res, published(t, feed))
 			}
 		})
+	}
+}
+
+// issue #4256: a Reload whose kept .raw does not gunzip keeps last-known-good. Today's reuse arm publishes nothing over
+// the copy either (pfb_apply_gunzip_orig_pipeline) and fails the feed.
+func TestAReprocessOfARawThatDoesNotGunzipKeepsThePublishedCopy(t *testing.T) {
+	f, feed, _ := etFeed(t, "")
+	if err := os.WriteFile(filepath.Join(feed.Dir, feed.Name+".raw"), []byte("\x1f\x8bno gzip\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := published(t, feed)
+
+	res := f.ReprocessET(context.Background(), feed)
+
+	if res.OK || res.Reason == "" {
+		t.Errorf("ReprocessET = %+v, want a failure with its reason", res)
+	}
+	if got := published(t, feed); got != before {
+		t.Errorf("published %q, want %q kept", got, before)
+	}
+	if left, _ := filepath.Glob(filepath.Join(feed.Dir, ".pfbstage_*")); len(left) != 0 {
+		t.Errorf("staged files left: %v", left)
+	}
+}
+
+// A Reload whose split cannot be written keeps the published copy: today's reuse arm leaves the gunzipped CSV there instead.
+func TestAReprocessWhoseSplitCannotBeWrittenKeepsThePublishedCopy(t *testing.T) {
+	f, feed, _ := etFeed(t, "")
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	zw.Write([]byte("192.0.2.10,1,127\n"))
+	zw.Close()
+	if err := os.WriteFile(filepath.Join(feed.Dir, feed.Name+".raw"), gz.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.ETDir = filepath.Join(t.TempDir(), "a-file")
+	if err := os.WriteFile(f.ETDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := published(t, feed)
+
+	res := f.ReprocessET(context.Background(), feed)
+
+	if res.OK || res.Reason != "et processing failed (script exit 1)" {
+		t.Errorf("ReprocessET = %+v, want the ET processing failure", res)
+	}
+	if got := published(t, feed); got != before {
+		t.Errorf("published %q, want %q kept", got, before)
+	}
+}
+
+// A kept download of another archive type is extracted as its ingest extracted it (gate): a tar.gz's member is split
+// again, never the tar's headers, which today's gunzip-only arm splits as CSV.
+func TestAReprocessOfATarGzSplitsItsMember(t *testing.T) {
+	f, feed, _ := etFeed(t, "")
+	csv := []byte("192.0.2.10,1,127\n198.51.100.40,15,2\n")
+	var packed bytes.Buffer
+	zw := gzip.NewWriter(&packed)
+	tw := tar.NewWriter(zw)
+	if err := tw.WriteHeader(&tar.Header{Name: "iprepdata.txt", Mode: 0o644, Size: int64(len(csv))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(csv); err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(tw.Close(), zw.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(feed.Dir, feed.Name+".raw"), packed.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if res := f.ReprocessET(context.Background(), feed); !res.OK || published(t, feed) != "192.0.2.10\n" {
+		t.Errorf("ReprocessET = %+v, published %q; want ET_Cnc's address", res, published(t, feed))
+	}
+}
+
+// A kept download that is no regular file is refused, its target never split.
+func TestAReprocessOfALinkedRawKeepsThePublishedCopy(t *testing.T) {
+	f, feed, _ := etFeed(t, "")
+	target := filepath.Join(t.TempDir(), "elsewhere.csv")
+	if err := os.WriteFile(target, []byte("192.0.2.10,1,127\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(feed.Dir, feed.Name+".raw")); err != nil {
+		t.Fatal(err)
+	}
+	before := published(t, feed)
+
+	if res := f.ReprocessET(context.Background(), feed); res.OK || published(t, feed) != before {
+		t.Errorf("ReprocessET = %+v, published %q; want a refusal and %q kept", res, published(t, feed), before)
 	}
 }

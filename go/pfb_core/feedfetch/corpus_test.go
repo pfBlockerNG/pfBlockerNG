@@ -48,7 +48,9 @@ package feedfetch_test
 //	local_files  optional {relative path: content}; local_symlinks optional {relative path: target}. A step may write
 //	             local_files again before it runs.
 //	steps        [step], run in order against one feed:
-//	  op         "ingest" (download and publish) or "probe" (change detection).
+//	  op         "ingest" (download and publish), "probe" (change detection) or "reprocess" (a Reload of an ET IQRisk
+//	             feed, #4256: its kept .raw split again with the categories now selected).
+//	  et         optional {block, match}: the ET IQRisk categories of this step, in place of the scenario's.
 //	  url, format ("rsync" or absent), username, password, headers ["Name: value"], ceiling (bytes), flex (the feed's
 //	  Flex flag, default false),
 //	  rsync      {exit, body}: the stand-in rsync (tests/feedfetch/fixtures/fake-rsync.sh) for this step.
@@ -146,6 +148,12 @@ type ftpFile struct {
 
 type ftpFiles map[string]map[string]ftpFile
 
+// etSelection is the ET IQRisk categories selected: the shell's "ET_Cnc,ET_Bot" lists, "x" or absent for none.
+type etSelection struct {
+	Block string `json:"block"`
+	Match string `json:"match"`
+}
+
 type step struct {
 	Op         string            `json:"op"`
 	URL        string            `json:"url"`
@@ -161,9 +169,10 @@ type step struct {
 		Exit int    `json:"exit"`
 		Body string `json:"body"`
 	} `json:"rsync"`
-	Flex      bool    `json:"flex"`
-	Expect    expect  `json:"expect"`
-	OldExpect *expect `json:"old_expect"`
+	Flex      bool         `json:"flex"`
+	ET        *etSelection `json:"et"`
+	Expect    expect       `json:"expect"`
+	OldExpect *expect      `json:"old_expect"`
 }
 
 type scenario struct {
@@ -172,17 +181,14 @@ type scenario struct {
 	Hosts       map[string][]string `json:"hosts"`
 	Filter      *bool               `json:"filter"`
 	Sanity      bool                `json:"sanity"`
-	ET          *struct {
-		Block string `json:"block"`
-		Match string `json:"match"`
-	} `json:"et"`
-	Allowlist []string     `json:"allowlist"`
-	Self      []string     `json:"self"`
-	Servers   []serverSpec `json:"servers"`
-	Proxy     *proxySpec   `json:"proxy"`
-	Routes    routes       `json:"routes"`
-	Files     ftpFiles     `json:"files"`
-	Seed      *struct {
+	ET          *etSelection        `json:"et"`
+	Allowlist   []string            `json:"allowlist"`
+	Self        []string            `json:"self"`
+	Servers     []serverSpec        `json:"servers"`
+	Proxy       *proxySpec          `json:"proxy"`
+	Routes      routes              `json:"routes"`
+	Files       ftpFiles            `json:"files"`
+	Seed        *struct {
 		Published *string `json:"published"`
 		ETag      *string `json:"etag"`
 		LastMod   *int64  `json:"lastmod"`
@@ -488,9 +494,6 @@ func runScenario(t *testing.T, file string) {
 		ETDir:       etDir,
 		ETMatchFile: filepath.Join(matchDir, "pfB_Match_ET_v4.txt"),
 	}
-	if sc.ET != nil {
-		f.ETBlock, f.ETMatch = etCategories(sc.ET.Block), etCategories(sc.ET.Match)
-	}
 	if pki != nil {
 		f.RootCAs = pki.pool
 	}
@@ -540,8 +543,18 @@ func runScenario(t *testing.T, file string) {
 			URL: url, Rsync: st.Format == "rsync", Username: st.Username, Password: st.Password,
 			Headers: st.Headers, Timeout: 30 * time.Second, MaxBytes: st.Ceiling, Flex: st.Flex,
 		}
+		selected := sc.ET
+		if st.ET != nil {
+			selected = st.ET
+		}
+		f.ETBlock, f.ETMatch = nil, nil
+		if selected != nil {
+			f.ETBlock, f.ETMatch = etCategories(selected.Block), etCategories(selected.Match)
+		}
 		var res feedfetch.Result
 		switch st.Op {
+		case "reprocess":
+			res = f.ReprocessET(context.Background(), feed)
 		case "ingest":
 			res = f.Ingest(context.Background(), feed, req)
 		case "probe":

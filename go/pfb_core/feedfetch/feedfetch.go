@@ -13,7 +13,8 @@
 // A feed's files live in Feed.Dir under Feed.Name: the published copy "<name>.orig", validators ".orig.etag" and
 // ".orig.lastmod" (plus FTP's ".orig.size"), the xxh128 of the raw bytes it was published from ".orig.xxhash128", a
 // changed probe's body ".probe" (the next ingest publishes it instead of fetching again), and the staged body ".raw":
-// consumed by a text feed's publication, kept by an archive's (its digest is of those bytes, and ET reuses it), gone after any refusal.
+// consumed by a text feed's publication, kept by an archive's (its digest is of those bytes, and ET reuses it) and by an ET
+// IQRisk feed's, compressed or not (its Reload splits it again, ReprocessET), gone after any refusal.
 //
 // A whois or asn feed has no body to fetch: Whois resolves its Domain/AS list (the translation of whoisconvert(), #3974)
 // into the published copy "<name>.orig", and leaves "<name>.fail" when an entry failed or the batch ran out of time.
@@ -199,7 +200,9 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		return fail("proxy_unusable")
 	}
 	staged, probe, published := feed.path(".raw"), feed.path(".probe"), feed.path(".orig")
-	keepRaw := false // an archive's success leaves the staged archive: the digest is of it, and ET reuses it (A35)
+	// An archive's success leaves the staged archive: the digest is of it, and ET reuses it (A35). An ET IQRisk feed's
+	// success leaves its CSV there too, whether it came compressed or not, for a Reload to split again (#4256).
+	keepRaw := false
 	defer func() {
 		if !keepRaw {
 			os.Remove(staged)
@@ -257,13 +260,7 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		// keeps last-known-good: the published copy is replaced only by the split's outcome.
 		et, err := f.iqrisk(ctx, feed, body)
 		if err != nil {
-			if ctxEnded(err) {
-				return Result{Status: t.status, Reason: err.Error()}
-			}
-			if err == errInvalidETConfiguration {
-				return Result{Status: t.status, Reason: err.Error()}
-			}
-			return Result{Status: t.status, Reason: "et processing failed (script exit 1)"}
+			return Result{Status: t.status, Reason: etFailure(err)}
 		}
 		defer os.Remove(et)
 		body = et
@@ -284,7 +281,7 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 	if err := publish(feed, body, sum, t.lastMod); err != nil {
 		return Result{Status: t.status, Reason: err.Error()}
 	}
-	keepRaw = archive
+	keepRaw = archive || strings.Contains(req.URL, "iprepdata.txt")
 	if fromProbe {
 		// The probe's validators describe the body just published (#3911).
 		for _, v := range [...]string{".etag", ".lastmod", ".size"} {

@@ -50,7 +50,8 @@ require_once __DIR__ . '/support/FeedFetchCorpusNet.php';
  * non-empty {feed}.raw left behind (an archive success keeps it); a leftover ".pfbstage_*" file fails the step.
  * published_b64 stands for published when the bytes are not text, published_size when the body is too large to inline.
  * ET IQRisk and xlsx run pfblockerng.sh's et and xlsx verbs for real, their pfSense paths pointed at this run's
- * directories (as tests/shell's specs source the script); et_split and et_match are that split and match file.
+ * directories (as tests/shell's specs source the script); et_split and et_match are that split and match file. A step's
+ * et replaces the scenario's categories for that step; op "reprocess" is a Reload of the ET feed (#4256), the reuse arm.
  */
 #[CoversFunction('pfb_download')]
 #[CoversFunction('pfb_update_check')]
@@ -195,8 +196,6 @@ final class FeedFetchParityCorpusTest extends TestCase
 		if (isset($case['allowlist'])) {
 			PfbConfig::write('gen/pfb_feed_internal_allowlist', base64_encode(implode("\n", $case['allowlist'])));
 		}
-		$GLOBALS['pfb']['etblock'] = $case['et']['block'] ?? 'x';
-		$GLOBALS['pfb']['etmatch'] = $case['et']['match'] ?? 'x';
 		$GLOBALS['pfb_test_configured_ips'] = $case['self'] ?? [];
 		$GLOBALS['pfb_test_resolve_map'] = [];
 		foreach ($case['hosts'] as $host => $addrs) {
@@ -260,8 +259,24 @@ final class FeedFetchParityCorpusTest extends TestCase
 			$url = $this->expand($step['url']);
 			$format = $step['format'] ?? '';
 
+			$et = $step['et'] ?? $case['et'] ?? [];
+			$GLOBALS['pfb']['etblock'] = $et['block'] ?? 'x';
+			$GLOBALS['pfb']['etmatch'] = $et['match'] ?? 'x';
+
 			$actual = [];
-			if ($step['op'] === 'ingest') {
+			if ($step['op'] === 'reprocess') {
+				// A Reload of an ET IQRisk feed: the reuse arm of sync_package_pfblockerng() (pfblockerng_apply.inc), the kept
+				// .raw gunzipped over the published copy and split again by processet() with the categories now selected.
+				$etStatus = 0;
+				$rawExisted = file_exists("{$base}.raw");
+				$staged = pfb_apply_gunzip_orig_pipeline("{$base}.raw", "{$base}.orig",
+					static function (string $orig) use (&$etStatus): void {
+						$pfb = $GLOBALS['pfb'];
+						exec(pfb_extract_cmd("{$pfb['script']} et " . escapeshellarg(self::FEED) .
+							" x x x x x {$pfb['etblock']} {$pfb['etmatch']} >> {$pfb['log']} 2>&1"), $output, $etStatus);
+					});
+				$actual['ok'] = !($rawExisted && !$staged) && pfb_download_extraction_succeeded($etStatus);
+			} elseif ($step['op'] === 'ingest') {
 				$result = pfb_download(new PfbDownloadRequest(
 					listUrl: $url,
 					downloadPath: $base,

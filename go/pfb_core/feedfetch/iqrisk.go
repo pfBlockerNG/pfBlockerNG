@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var maxXLSXAddresses = 10_000_000
@@ -87,6 +88,53 @@ func (f *Fetcher) iqrisk(ctx context.Context, feed Feed, body string) (string, e
 		}
 	}
 	return stageRecords(feed.Dir, block)
+}
+
+// ReprocessET splits an ET IQRisk feed's kept download again with the categories now selected (#4256), where today's reuse
+// arm of sync_package_pfblockerng() re-runs processet(): on a Reload, and on a pass that parses an unchanged download again
+// for its script. The .raw its ingest kept goes through the content gates and the extraction its ingest ran (gate), and
+// what that yields is split again and replaces the published copy; nothing is transferred. Today's arm gunzips only, and
+// an uncompressed source keeps no .raw there: it splits the published split, which names no category, and publishes an
+// empty list. A feed without a .raw (one PHP downloaded, until its next download) has nothing to split again, and its
+// published split stands. A failure keeps the published copy, which today's arm keeps only when the gunzip fails.
+func (f *Fetcher) ReprocessET(ctx context.Context, feed Feed) Result {
+	raw := feed.path(".raw")
+	info, err := os.Lstat(raw)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return Result{OK: true}
+	case err != nil || !info.Mode().IsRegular():
+		return fail("kept download is not a regular file")
+	}
+	// A text body is the .raw itself, which its ingest finished; an extraction is finished as its ingest finished it.
+	body, refusal := f.gate(ctx, feed, raw, time.Time{})
+	if refusal != nil {
+		return *refusal
+	}
+	if body != raw {
+		defer os.Remove(body)
+		if err := finish(body); err != nil {
+			return fail(err.Error())
+		}
+	}
+	et, err := f.iqrisk(ctx, feed, body)
+	if err != nil {
+		return fail(etFailure(err))
+	}
+	if err := os.Rename(et, feed.path(".orig")); err != nil {
+		os.Remove(et)
+		return fail("published copy could not be replaced")
+	}
+	return Result{OK: true}
+}
+
+// etFailure is the reason of a failed ET split: a context's end and a configuration error as they are, anything else as
+// pfb_download() logs processet()'s failure.
+func etFailure(err error) string {
+	if ctxEnded(err) || err == errInvalidETConfiguration {
+		return err.Error()
+	}
+	return "et processing failed (script exit 1)"
 }
 
 // etSplit is processet()'s `grep ",<n>," | cut -d, -f1` for every category at once: a row names its category between
