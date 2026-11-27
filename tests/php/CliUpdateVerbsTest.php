@@ -339,6 +339,18 @@ final class CliUpdateVerbsTest extends TestCase
 		$this->assertSame(['after' => '12'], $this->calls[3][1]);
 	}
 
+	/** A last page without a cursor ends the reading: nothing to read on from, so the result is returned, the page printed once. */
+	public function testALastPageWithoutACursorEndsTheReading(): void
+	{
+		$last = self::update(FALSE, "end\n", '0', 'success');
+		unset($last['body']['next']);
+		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), $last), 5);
+
+		$this->assertSame(0, $code, $this->err);
+		$this->assertSame("end\n", $this->out);
+		$this->assertCount(2, $this->calls);
+	}
+
 	public function testACoreLostWhileTheUpdateRunsIsAFailure(): void
 	{
 		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), self::update(TRUE, '', '0'),
