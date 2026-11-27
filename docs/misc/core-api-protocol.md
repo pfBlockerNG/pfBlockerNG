@@ -791,21 +791,34 @@ methods of this section.
 
 Privileged; mutating (`requestId`). Issue #4264 (owner, 2026-11-24, on #3977,
 which amends the "no API change" constraint for this method): Core holds the Alerts page's temporary DNSBL unlocks. Each
-Lock and Unlock on the page sends the whole set of unlocked domains, and Core republishes `dnsbl/manifest` with them as its
-`unlock` rows, its other rows and its metadata as they were, without running an Update; pfB-DNS on the Core input takes
-them through its poll. The next Update's DNSBL build publishes no `unlock` row: it re-locks them.
+Lock and Unlock on the page sends the whole set of unlocked domains, each with its type, and Core republishes
+`dnsbl/manifest` with them as its `unlock` rows (`{"kind":"unlock","domain":...,"type":...}`), its other rows and its
+metadata as they were, without running an Update; pfB-DNS on the Core input takes them through its poll and reads the
+domain alone. The next Update's DNSBL build publishes no `unlock` row: it re-locks them.
 
 | Params | Reply |
 | --- | --- |
-| `{"requestId": "...", "domains": ["example.com", ...]}` | `{}` |
+| `{"requestId": "...", "unlocks": [{"domain": "example.com", "type": "DNSBL"}, ...]}` | `{}` |
 
-`domains` is required, at most 4096 of them (a page holding more is refused on every click until a Lock or an Update brings
-it under), each a domain as `PFB_FILTER_DOMAIN` takes it; `[]` locks every one. Anything
-else is `invalid_argument` with a field error per domain, and changes nothing. While an Update runs the method answers
-`conflict`: the Update is the store's writer, and its end re-locks every unlock anyway. A store that holds no
-`dnsbl/manifest` (before the cutover PHP publishes the manifest pfB-DNS reads) is answered `{}` and written nothing. Without
-`--resource-dir` the method answers `unavailable`; without `--update-cmd` nothing else writes the store, and it is written at
-once.
+`unlocks` is required, at most 4096 of them (a page holding more is refused on every click until a Lock or an Update brings
+it under). Each `domain` is a domain as `PFB_FILTER_DOMAIN` takes it, and each `type` is the page's DNSBL type, 1 to 64 word
+characters (`PFB_FILTER_WORD`); `[]` locks every one. Anything else is `invalid_argument` with a field error per entry
+(`unlocks[<i>].domain`, `unlocks[<i>].type`), and changes nothing. While an Update runs the method answers `conflict`: the
+Update is the store's writer, and its end re-locks every unlock anyway. A store that holds no `dnsbl/manifest` is answered
+`{}` and written nothing. Without `--resource-dir` the method answers `unavailable`; without `--update-cmd` nothing else
+writes the store, and it is written at once.
+
+### GetTemporaryUnlocks
+
+Privileged; read-only. Issue #3977 (owner, 2026-11-27): Core's set is the Alerts page's source of truth. The page reads it
+to show the unlocked domains and to build the set its next Lock or Unlock sends.
+
+| Params | Reply |
+| --- | --- |
+| `{}` | `{"unlocks": [{"domain": "example.com", "type": "DNSBL"}, ...]}` |
+
+The unlocks are the current `dnsbl/manifest`'s `unlock` rows, in domain order; `[]` when the store holds no manifest.
+Without `--resource-dir` the method answers `unavailable`.
 
 ### Update command
 

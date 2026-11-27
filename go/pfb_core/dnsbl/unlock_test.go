@@ -44,7 +44,7 @@ func TestSetUnlocksRepublishesTheManifestWithOnlyItsUnlockRowsChanged(t *testing
 	}
 	rowsBefore := body(t, store, dnsbl.ManifestID)
 
-	generation, ok, err := dnsbl.SetUnlocks(store, []string{"b.example", "a.example"})
+	generation, ok, err := dnsbl.SetUnlocks(store, []dnsbl.Unlock{{Domain: "b.example", Type: "DNSBL"}, {Domain: "a.example", Type: "DNSBL"}})
 	if err != nil || !ok {
 		t.Fatalf("SetUnlocks = %v, %v", ok, err)
 	}
@@ -72,11 +72,11 @@ func TestSetUnlocksWithTheSameDomainsAdvancesNoGeneration(t *testing.T) {
 	if _, err := dnsbl.Publish(store, dnsbl.Set{}); err != nil {
 		t.Fatal(err)
 	}
-	first, _, err := dnsbl.SetUnlocks(store, []string{"a.example"})
+	first, _, err := dnsbl.SetUnlocks(store, []dnsbl.Unlock{{Domain: "a.example", Type: "DNSBL"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, _, err := dnsbl.SetUnlocks(store, []string{"a.example"})
+	again, _, err := dnsbl.SetUnlocks(store, []dnsbl.Unlock{{Domain: "a.example", Type: "DNSBL"}})
 	if err != nil || again != first {
 		t.Errorf("the same unlocks again: generation %d (%v), want %d", again, err, first)
 	}
@@ -121,7 +121,7 @@ func TestSetUnlocksKeepsTheMetadataOfAPublicationWithFeeds(t *testing.T) {
 func TestSetUnlocksWithoutAManifestWritesNothing(t *testing.T) {
 	store := resources.Open(t.TempDir())
 
-	_, ok, err := dnsbl.SetUnlocks(store, []string{"a.example"})
+	_, ok, err := dnsbl.SetUnlocks(store, []dnsbl.Unlock{{Domain: "a.example", Type: "DNSBL"}})
 
 	if err != nil || ok {
 		t.Fatalf("SetUnlocks over no manifest = %v, %v; want nothing to unlock in", ok, err)
@@ -137,7 +137,7 @@ func TestTheNextPublicationReLocks(t *testing.T) {
 	if _, err := dnsbl.Publish(store, dnsbl.Set{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := dnsbl.SetUnlocks(store, []string{"a.example"}); err != nil {
+	if _, _, err := dnsbl.SetUnlocks(store, []dnsbl.Unlock{{Domain: "a.example", Type: "DNSBL"}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -147,5 +147,27 @@ func TestTheNextPublicationReLocks(t *testing.T) {
 
 	if got := unlockRows(t, store); len(got) != 0 {
 		t.Errorf("unlock rows after the next publication %v, want none", got)
+	}
+}
+
+// #3977 (owner, 2026-11-27): Core's set is the Alerts page's source of truth, so it keeps each unlock's type, the label the
+// page shows and sends back on Lock, and reads the set back.
+func TestUnlocksReadsBackTheDomainsWithTheirTypes(t *testing.T) {
+	store := resources.Open(t.TempDir())
+	if got, err := dnsbl.Unlocks(store); err != nil || len(got) != 0 {
+		t.Fatalf("Unlocks with no manifest = %v, %v; want none", got, err)
+	}
+	if _, err := dnsbl.Publish(store, dnsbl.Set{Whitelist: []string{"w.example"}}); err != nil {
+		t.Fatal(err)
+	}
+	set := []dnsbl.Unlock{{Domain: "b.example", Type: "Python"}, {Domain: "a.example", Type: "DNSBL"}}
+	if _, _, err := dnsbl.SetUnlocks(store, set); err != nil {
+		t.Fatal(err)
+	}
+	// the store keeps a resource's members in byte order, so the set comes back in domain order
+	want := []dnsbl.Unlock{set[1], set[0]}
+	got, err := dnsbl.Unlocks(store)
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("Unlocks = %v, %v; want %v", got, err, want)
 	}
 }
