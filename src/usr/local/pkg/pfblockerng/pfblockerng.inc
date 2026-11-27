@@ -420,11 +420,16 @@ function pfb_cli_update_run(array $request, callable $call, ?callable $out, call
 			$err("pfBlockerNG Core reports no result of this Update: another Update started in its place\n");
 			return 1;
 		}
-		if ($out !== NULL) {
+		$next = is_string($body['next'] ?? NULL) ? $body['next'] : NULL;
+		$advanced = $next === NULL || $next !== ($params['after'] ?? NULL);
+		if ($out !== NULL && $advanced) {
 			$out((string) ($body['log'] ?? ''));
 		}
-		if (is_string($body['next'] ?? NULL)) {
-			$params = ['after' => $body['next']];
+		if ($next !== NULL) {
+			$params = ['after' => $next];
+		}
+		if (empty($body['running']) && $out !== NULL && $advanced && ($body['log'] ?? '') !== '') {
+			continue;	// Core gives at most 64 KiB of the log per call, also once the Update has ended: read on while it advances
 		}
 		if (empty($body['running'])) {
 			$result = $update['result'] ?? '';
