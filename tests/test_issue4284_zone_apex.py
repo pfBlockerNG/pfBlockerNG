@@ -188,3 +188,14 @@ def test_a_top1m_filtered_anchor_never_blocks_a_listed_host_through_a_mask(ancho
     result = _build(feeds, top1m=["webhop.net"], top1m_feeds=frozenset({0 if anchor_first else 1}))
     assert not _blocks(result, "webhop.net")
     assert _blocks(result, "someone.webhop.net")
+
+
+def test_a_listed_host_stays_unblocked_through_nested_top1m_fallbacks() -> None:
+    """Codex on #4285: a wrapped apex payload's fallback can itself be TOP1M-filtered."""
+    result = _build(
+        [["||webhop.net^"], [".webhop.net^"], ["||webhop.net^"], [".webhop.net^"]],
+        top1m=["webhop.net"],
+        top1m_feeds=frozenset({0, 2}),
+    )
+    assert not _blocks(result, "webhop.net")
+    assert _blocks(result, "someone.webhop.net")
