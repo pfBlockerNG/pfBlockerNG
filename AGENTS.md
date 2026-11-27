@@ -117,6 +117,11 @@ Test law (five principles, full text in `testing.md`): red-before/green-after te
 proof · every change ships with its tests · no coverage theater · front-end changes need
 front-end tests · tests document intent.
 
+Test runs (owner, 2026-11-27): while iterating, run only the change's tests and those of code it
+touches or likely affects (one PHPUnit file, `go test -run`, `pytest -k`; coverage data when
+available). Full suite (`scripts/agent/run-gates.sh --diff origin/<base>`) once before opening or
+pushing to a PR.
+
 ## Repository structure
 
 ```text
