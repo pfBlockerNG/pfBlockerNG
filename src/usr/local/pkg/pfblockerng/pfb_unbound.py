@@ -4537,7 +4537,8 @@ class BuildResult:
     reconciled rule:
         data_db[domain]          = {"log": <flag>, "index": <int>, "important": bool, "band": int}
         zone_db[registrable]     = {"log": <flag>,        "index": <int>, "important": bool, "band": int}
-                                   (+ "apex": False for a '.host^' zone: the key itself is not blocked)
+                                   (+ "apex": <payload> | False for a '.host^' zone: the payload that
+                                   blocks the key itself, or False when nothing does)
         feed_group_index_db[idx] = {"feed": <str>, "group": <str>}
         white_db[domain]         = {"wildcard": bool, "important": bool, "band": int}
         regex_db[name]           = {"re": <compiled>, "important": bool, "band": int}   (ABP block-regex)
@@ -4972,7 +4973,12 @@ def parse_abp(
     is_subdomains = _DNSBL_SUBDOMAIN_MASK_RE.fullmatch(s) is not None
     is_block = s.startswith("||") or is_subdomains
     if is_allow or is_block:
-        rest = s[4:] if is_allow else s[1:] if is_subdomains else s[2:]
+        if is_allow:
+            rest = s[4:]
+        elif is_subdomains:
+            rest = s[1:]
+        else:
+            rest = s[2:]
         anchor, _, opts_str = rest.partition("$")
         # split the anchor at the ABP separator ``^``; reject any path token
         host = anchor.split("^", 1)[0]
@@ -5507,7 +5513,7 @@ def reconcile(
             # plain/hosts path concept and must not demote an ABP anchor. TLD exclusion still
             # opts a domain out of wildcarding (transparent exact DATA), and a
             # wildcard=False fold (exact /^D$/) stays forced to DATA.
-            apex = r.target != RULE_TARGET_DOMAIN or r.apex
+            apex = r.apex  # False only for a '.host^' domain rule
             if wildcard and domain not in exclusion:
                 cls, key = DNSBL_CLASS_ZONE, domain
             elif not apex:
@@ -6037,6 +6043,18 @@ def build(
         prior = zone_db.get(key)
         zone_top1m[key] = prior if prior is not None and key not in zone_top1m else zone_top1m.get(key)
 
+    def apex_writer(key: str) -> dict[str, Any] | None:
+        # The payload that blocks zone ``key`` itself before the next write, carrying its TOP1M
+        # filter (the end-of-build pass below marks only the key's last writer), or None.
+        def blocker(entry: dict[str, Any] | None) -> dict[str, Any] | None:
+            apex = None if entry is None else entry.get("apex", entry)
+            return apex if isinstance(apex, dict) else None
+
+        writer = blocker(zone_db.get(key))
+        if writer is None or key not in zone_top1m or writer is not zone_db.get(key):
+            return writer
+        return {**writer, "top1m": top1m, "top1m_fallback": blocker(zone_top1m[key])}
+
     def index_for(feed: str, group: str) -> int:
         nonlocal next_index
         key = feed + group
@@ -6250,21 +6268,24 @@ def build(
                     _tally_reject(rejects, b.feed or "DNSBL", b.group or "DNSBL", "suffix_drop")
                     continue
                 if policy == "apex" and cls == DNSBL_CLASS_ZONE:
-                    _tally_reject(rejects, b.feed or "DNSBL", b.group or "DNSBL", "suffix_demote")
                     if not b.apex:
-                        continue  # issue #4284: exact DATA would block only the apex '.host^' excludes
+                        # issue #4284: exact DATA would block only the apex '.host^' excludes.
+                        _tally_reject(rejects, b.feed or "DNSBL", b.group or "DNSBL", "suffix_drop")
+                        continue
+                    _tally_reject(rejects, b.feed or "DNSBL", b.group or "DNSBL", "suffix_demote")
                     cls = DNSBL_CLASS_DATA
             idx = index_for(b.feed or "DNSBL", b.group or "DNSBL")
             # issue #3539: an unset ABP log is Null Blocking ("0"), never VIP.
             payload = {"log": b.log or "0", "index": idx, "important": b.important, "band": b.band}
             top1m_row = bool(top1m_rows) and (b.feed, b.group) in top1m_rows
             if cls == DNSBL_CLASS_ZONE:
+                if not b.apex:
+                    # issue #4284: a '.host^' blocks the key's subdomains; the key keeps the payload
+                    # that already blocked it (apex = a.apex or b.apex), with that payload's own
+                    # band, attribution and TOP1M filter.
+                    payload["apex"] = apex_writer(b.key) or False
                 if top1m_rows:
                     track_zone_top1m(b.key, top1m_row)
-                # issue #4284: merged apex = a.apex or b.apex, so '.host^' never unblocks a blocked host.
-                prior = zone_db.get(b.key)
-                if not b.apex and (prior is None or prior.get("apex") is False):
-                    payload["apex"] = False
                 zone_db[b.key] = payload
             elif not (top1m_row and _top1m_listed(b.key, top1m)):
                 data_db[b.key] = payload
@@ -6865,14 +6886,16 @@ def _zone_entry_for(q_name: str, key: str, entry: dict[str, Any]) -> dict[str, A
     """The zone payload at ``key`` that blocks ``q_name`` (issue #3648): an entry last written by a
     TOP1M-filtered Group yields, for a name TOP1M lists, to the key's last unfiltered writer --
     or blocks nothing when there is none. All filtered zones share one immutable name set.
-    issue #4284: an entry marked ``"apex": False`` (``.host^``) never blocks its own key."""
+    issue #4284: a ``.host^`` entry blocks ``key`` itself only through its ``"apex"`` payload
+    (the rule that blocked ``key`` before it); ``"apex": False`` means none did."""
     top1m = entry.get("top1m")
     found: dict[str, Any] | None = entry
     if top1m is not None and _top1m_listed(q_name, top1m):
         found = entry.get("top1m_fallback")
-    if found is not None and key == q_name and found.get("apex") is False:
-        return None
-    return found
+    if found is None or key != q_name or "apex" not in found:
+        return found
+    apex = found["apex"]
+    return _zone_entry_for(q_name, key, apex) if apex else None
 
 
 def find_zone_match(q_name: str, zone_db: dict[str, Any]) -> tuple[str, dict] | tuple[None, None]:

@@ -126,12 +126,14 @@ path rules (EasyPrivacy's `.imgur.com/lumbar.gif`) down to a block of the whole 
 
 **Amended by issue #4284: zone entries can leave out their apex.** The capture guard also takes
 AdGuard's subdomain-only mask `.host^` (optionally `$options`), in any feed. `parse_abp()` reads
-it as a block rule with `apex=False`, and `build()` writes it as a zone entry marked
-`"apex": false`. The suffix walk (`_zone_entry_for()`) skips that entry when the matched key is
-the query name itself, and keeps walking up. On one key, the merged entry keeps
-`apex = a.apex or b.apex`, so a `.host^` never unblocks a host that another rule blocks. A
-`.host^` whose key cannot be a zone drops instead of becoming an exact block: this applies on TLD
-Exclusion and under the PSL feed policy's `apex` demotion. The `$badfilter` signature of
+it as a block rule with `apex=False`, and `build()` writes it as a zone entry whose `"apex"` is
+the payload that already blocked the key, or `false` when none did. The coverage is
+`apex = a.apex or b.apex`, so a `.host^` never unblocks a host that another rule blocks. The
+key itself is still decided by that earlier payload, with its own band, attribution and TOP1M
+filter. The suffix walk (`_zone_entry_for()`) uses the `"apex"` payload when the matched key is
+the query name itself, and keeps walking up when it is `false`. A `.host^` whose key cannot be a
+zone is dropped instead of becoming an exact block. That happens on TLD Exclusion, and under the
+PSL feed policy's `apex` demotion, which tallies it as `suffix_drop`. The `$badfilter` signature of
 `.host^` is `.host`, so `||host^$badfilter` does not prune it.
 
 The manifest build is the sole DNSBL classifier in every TLD mode. PHP publishes each feed's
