@@ -428,7 +428,7 @@ function pfb_cli_update_run(array $request, callable $call, ?callable $out, call
 		if ($next !== NULL) {
 			$params = ['after' => $next];
 		}
-		if (empty($body['running']) && $out !== NULL && $advanced && ($body['log'] ?? '') !== '') {
+		if (empty($body['running']) && $out !== NULL && $next !== NULL && $advanced && ($body['log'] ?? '') !== '') {
 			continue;	// Core gives at most 64 KiB of the log per call, also once the Update has ended: read on while it advances
 		}
 		if (empty($body['running'])) {
