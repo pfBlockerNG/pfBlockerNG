@@ -95,7 +95,9 @@ final class GeneralScheduleUiTest extends TestCase
 		$this->assertNotFalse($notice, 'Core must be told of the saved settings');
 		$this->assertLessThan($notice, $write, 'config must be persisted before Core is told');
 		$this->assertStringContainsString("header('Location: /pfblockerng/pfblockerng_general.php');", $source);
-		$this->assertStringContainsString('$pfb[\'save\'] = TRUE; sync_package_pfblockerng();', $source);
+		// #3977 (owner, 2026-11-27): the save asks Core for an apply Update instead of running a PHP pass
+		$this->assertStringContainsString("\$savemsg = pfb_apply_update_start('pfb_core_call');", $source);
+		$this->assertStringNotContainsString('sync_package_pfblockerng()', $source);
 		$this->assertMatchesRegularExpression('/pfblockerng_retire_cron_jobs\(\s*\)/', php_strip_whitespace(self::APPLY),
 			'settings-save sync unconditionally retires the legacy cron entries: Core alone owns every schedule');
 	}

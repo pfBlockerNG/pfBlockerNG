@@ -124,6 +124,7 @@ final class CoreSettingsPageSavesTest extends TestCase
 			'ValidateSettings' => [200, []],
 			'GetSettings'      => [200, ['initialized' => TRUE, 'revision' => 3, 'projections' => []]],
 			'SettingsChanged'  => [200, ['initialized' => TRUE, 'revision' => 4, 'projections' => []]],
+			'StartUpdate'      => [200, []],
 		];
 	}
 
@@ -479,8 +480,7 @@ final class CoreSettingsPageSavesTest extends TestCase
 
 		$this->assertSame([self::refusedMessage('metricsClientIp')], $result['inputErrors']);
 		$this->assertTrue($result['returned'], 'the page renders the errors, rather than exiting through its redirect');
-		$this->assertFalse($result['synced'], 'a refused save applies nothing');
-		$this->assertNull($result['syncSawSave']);
+		$this->assertNotContains('StartUpdate', $this->methods(), 'a refused save applies nothing');
 		$this->assertNull($result['redirect'], 'a refused save redirects nowhere');
 		$this->assertSame([], $result['writes'], 'nothing is written');
 	}
@@ -493,10 +493,26 @@ final class CoreSettingsPageSavesTest extends TestCase
 
 		$this->assertSame([], $result['inputErrors']);
 		$this->assertSame([self::GENERAL_SAVE], $result['writes'], 'the save was written');
-		$this->assertTrue($result['synced'], 'the saved settings are applied');
-		$this->assertTrue($result['syncSawSave'], 'the sync runs as a save: the page sets its save flag first');
+		$starts = array_values(array_filter($this->requests(), static fn (array $r): bool => $r['method'] === 'StartUpdate'));
+		$this->assertCount(1, $starts, 'the saved settings are applied by one Update (#3977)');
+		$this->assertSame('apply', $starts[0]['body']['trigger']);
 		$this->assertFalse($result['returned'], 'the save ends in its redirect');
 		$this->assertSame('Location: /pfblockerng/pfblockerng_general.php', $result['redirect'], 'the schedule cache was generated: the plain page, no failure flag');
+	}
+
+	// #3977: an Update already running keeps the change pending, and the page says so instead of redirecting.
+	public function testAGeneralSaveDuringAnUpdateRendersWhyItWaits(): void
+	{
+		$script = self::accepting();
+		$script['StartUpdate'] = [409, ['error' => ['code' => 'conflict', 'message' => 'an Update is running']]];
+		$socket = $this->core($script);
+
+		$result = $this->save('GeneralSaveWorker', 'plain', ['core' => ['socket' => $socket]]);
+
+		$this->assertSame([self::GENERAL_SAVE], $result['writes'], 'the save was written');
+		$this->assertTrue($result['returned'], 'the page renders, rather than exiting through its redirect');
+		$this->assertNull($result['redirect']);
+		$this->assertStringContainsString('An Update is running', (string) $result['savemsg']);
 	}
 
 	public function testAGeneralSaveKeepsWhatAnotherWriterChangedInAnotherSectionSinceThePageLoaded(): void

@@ -45,10 +45,11 @@ if ($_POST && isset($_POST['save'])) {
 	$input_errors = $checked['errors'];
 	if (!$input_errors) {
 		pfb_crowdsec_save($checked['values']);
-		$pfb['save'] = TRUE;
-		sync_package_pfblockerng();
-		header('Location: ' . PFB_CROWDSEC_PAGE);
-		exit;
+		$savemsg = pfb_apply_update_start('pfb_core_call');
+		if ($savemsg === NULL) {
+			header('Location: ' . PFB_CROWDSEC_PAGE);
+			exit;
+		}
 	}
 	// Show what was posted again, for correction; never the key
 	$pconfig = array_diff_key($checked['values'], array('api_key' => ''));
@@ -62,6 +63,10 @@ include_once('head.inc');
 
 if ($input_errors) {
 	print_input_errors($input_errors);
+}
+// #3977: a save whose apply Update Core did not start says why (the change stays pending)
+if (!empty($savemsg)) {
+	print_info_box(htmlspecialchars($savemsg), 'warning');
 }
 
 pfb_crowdsec_display_tabs(PFB_CROWDSEC_PAGE);

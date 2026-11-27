@@ -305,12 +305,14 @@ if ($_POST) {
 			if ($privacy_error !== NULL) {
 				$input_errors[] = $privacy_error . ' ' . gettext('No General settings were saved.');
 			} elseif (!$pfb_core_errors) {
-				$pfb['save'] = TRUE;
-				sync_package_pfblockerng();
-				// issue #4139: the CrowdSec bouncer follows the master enable at once; the pass never applies it
+				// #3977 (owner, 2026-11-27): Core's apply Update runs the Outpost apply with the saved settings
+				$savemsg = pfb_apply_update_start('pfb_core_call');
+				// issue #4139: the CrowdSec bouncer follows the master enable at once; the apply never applies it
 				pfb_crowdsec_resync();
-				header('Location: /pfblockerng/pfblockerng_general.php');
-				exit;
+				if ($savemsg === NULL) {
+					header('Location: /pfblockerng/pfblockerng_general.php');
+					exit;
+				}
 			}
 		}
 	}
@@ -323,6 +325,10 @@ include_once('head.inc');
 
 if ($input_errors) {
 	print_input_errors($input_errors);
+}
+// #3977: a save whose apply Update Core did not start says why (the change stays pending)
+if (!empty($savemsg)) {
+	print_info_box(htmlspecialchars($savemsg), 'warning');
 }
 
 // Load Wizard on new installations only

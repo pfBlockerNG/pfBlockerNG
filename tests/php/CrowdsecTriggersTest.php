@@ -155,7 +155,7 @@ final class CrowdsecTriggersTest extends TestCase
 	/** @return iterable<string, array{string, string, string}> source file, the call that ends its save, a call it must follow */
 	public static function sourceTriggers(): iterable
 	{
-		yield 'General save (master enable)' => ['www/pfblockerng/pfblockerng_general.php', 'pfb_crowdsec_resync();', 'sync_package_pfblockerng();'];
+		yield 'General save (master enable)' => ['www/pfblockerng/pfblockerng_general.php', 'pfb_crowdsec_resync();', "pfb_apply_update_start('pfb_core_call');"];
 		yield 'wizard (every setting reset)' => ['www/wizards/pfblockerng_wizard.inc', 'pfb_crowdsec_resync();', "write_config('pfBlockerNG: Default Wizard configuration saved');"];
 		yield 'installer'                    => ['pkg/pfblockerng/pfblockerng_install.inc', 'pfb_crowdsec_resync();', "update_status(\"Applying the CrowdSec bouncer service...\");"];
 	}
@@ -166,18 +166,21 @@ final class CrowdsecTriggersTest extends TestCase
 		$text = self::source($file);
 
 		$this->assertSame(1, substr_count($text, $call), "{$file} calls {$call} once");
+		$this->assertNotFalse(strpos($text, $after), "{$file} has {$after}");
 		$this->assertGreaterThan(strpos($text, $after), strpos($text, $call), "{$file}: {$call} comes after {$after}");
 	}
 
-	public function testTheCrowdsecSaveEndsWithTheSaveModePassThatSyncsLikeTheGeneralSave(): void
+	public function testTheCrowdsecSaveAsksCoreForAnApplyUpdateLikeTheGeneralSave(): void
 	{
 		$page = self::source('www/pfblockerng/pfblockerng_crowdsec.php');
 
+		// #3977 (owner, 2026-11-27): Core's apply Update runs the Outpost apply with the new rule settings
 		$this->assertMatchesRegularExpression(
-			'~pfb_crowdsec_save\(\$checked\[\'values\'\]\);\s*\$pfb\[\'save\'\] = TRUE;\s*sync_package_pfblockerng\(\);\s*header\(~',
+			'~pfb_crowdsec_save\(\$checked\[\'values\'\]\);\s*\$savemsg = pfb_apply_update_start\(\'pfb_core_call\'\);\s*if \(\$savemsg === NULL\) \{\s*header\(~',
 			$page,
-			'after its own apply, the save runs the save-mode pass (the General save\'s sync), then redirects'
+			'after its own apply, the save asks Core for an apply Update, and redirects once Core started it'
 		);
+		$this->assertStringNotContainsString('sync_package_pfblockerng()', $page);
 	}
 
 	public function testTheCrowdsecSaveMarksNoPendingChangesForAPolicySetting(): void
