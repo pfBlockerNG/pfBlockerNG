@@ -194,10 +194,7 @@ func (p *DNSBLParser) extractHost(line string, strict, allowPort bool, out *DNSB
 	return host, true
 }
 
-var (
-	strictTailRE = regexp.MustCompile(`^/?$`)
-	portTailRE   = regexp.MustCompile(`^(?::([0-9]{1,5}))?/?$`)
-)
+var portTailRE = regexp.MustCompile(`^(?::([0-9]{1,5}))?/?$`)
 
 // strictDomainOK is the strict grammar of a domain host (issue #4272): '<host>[:<port>]/?' with tail what followed the host
 // in the line, no userinfo, no '@' but a leading one (a yHost line, which the caller skips silently) and no ':' left in the
@@ -207,7 +204,7 @@ func strictDomainOK(host, tail string, userinfo, allowPort bool) bool {
 		return false
 	}
 	if !allowPort {
-		return strictTailRE.MatchString(tail)
+		return tail == "" || tail == "/"
 	}
 	m := portTailRE.FindStringSubmatch(tail)
 	return m != nil && (m[1] == "" || validPort(m[1]))

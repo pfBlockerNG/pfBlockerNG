@@ -189,7 +189,9 @@ func (u *updater) workList() error {
 	cfg := feedstage.Config{Suppression: flag(ingest, "suppression"), FloorV4: num(ingest, "suppressionCidrV4"),
 		FloorV6: num(ingest, "suppressionCidrV6"), DNSBLIP: flag(ingest, "dnsblIp"), ParseMode: feedparse.ParseMode(str(ingest, "dnsblParseMode"))}
 	// An Adblock feed keeps a hostname only under an ICANN TLD of the shipped PSL (pfb_psl_icann_tlds(), issue #4272).
-	if cfg.ICANN, err = feedparse.LoadICANNTLDs(filepath.Join(u.loop.PkgDir, "dnsbl_psl")); err != nil || cfg.ICANN.Len() == 0 {
+	if cfg.ICANN, err = feedparse.LoadICANNTLDs(filepath.Join(u.loop.PkgDir, "dnsbl_psl")); err != nil {
+		u.sinks.Line(true, "\n  [ dnsbl_psl ] unreadable (%s): Adblock feeds keep no hostnames, hosts lines or hostname masks\n", oneLine(err))
+	} else if cfg.ICANN.Len() == 0 {
 		u.sinks.Line(true, "\n  [ dnsbl_psl ] has no ICANN TLDs: Adblock feeds keep no hostnames, hosts lines or hostname masks\n")
 	}
 	stage := func(dir string, parseErrors io.Writer) *feedstage.Stage {

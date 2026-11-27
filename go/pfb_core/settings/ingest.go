@@ -36,7 +36,7 @@ func ingestProjection() Projection {
 		{Name: "skipFeedLimit", Type: TypeInt, Default: int64(0), Min: new(int64(0)), Max: new(int64(6))},
 		// The ADR-49 feed sanity scan gen/pfb_feed_sanity.
 		{Name: "feedSanity", Type: TypeBool, Default: false},
-	}, Retired: []string{"sinkholeV4", "sinkholeV6"}} // #4054
+	}, Retired: []string{"sinkholeV4", "sinkholeV6", "dnsblLenient"}} // #4054; dnsblLenient: #4273
 }
 
 // checkAllowEntry holds an allowlist entry to an IP address or a CIDR: the forms the feed policy parses, with no zone.

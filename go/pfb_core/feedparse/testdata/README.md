@@ -115,6 +115,8 @@ per-feed state (CSV detection, reverse format, the hpHosts end marker) carried b
 Case: `id`, `description`, the feed bytes (`input` or `input_hex`) and `expect`: `{"feed": bool, "custom": bool}`, the answer for a
 downloaded feed (an Adblock-family header on the first non-blank line, or any line not led by `#` that is an Adblock rule or an
 AdGuard HTML filter) and for a custom list (the header alone). Issue #4272; Core's `DNSBLFeedIsABP()`.
+A line over 1 MiB counts for neither in Core, which skips it in the parse too; the old path reads it whole. No case
+holds one.
 
 ## `feed.json`: whole feeds through the per-feed loops (`pfb_ip_parse_feed()`, `pfb_dnsbl_parse_feed()`)
 

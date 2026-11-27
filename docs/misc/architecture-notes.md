@@ -123,6 +123,9 @@ AdGuard's `#$?#`, `#@$?#`, `#@?#`, `#@%#` and `#@$#` cosmetic markers) or to
 hostname re-enters the plain path as a bare host; a mask that becomes `||host^` is written as an
 ABP row. IP extraction runs on Adblock rule lines only. The plain path had been cutting Adblock
 path rules (EasyPrivacy's `.imgur.com/lumbar.gif`) down to a block of the whole domain.
+Core's feed parser does the same (issue #4273): the DNSBL feed stage classifies the feed with
+`feedparse.DNSBLFeedIsABP()` before it parses it, `abpFeedLine()` is `pfb_dnsbl_abp_feed_line()`, and the parse
+mode and the PSL's ICANN TLD set are part of the stage's parse settings, so a change to either reparses a reused feed.
 
 The manifest build is the sole DNSBL classifier in every TLD mode. PHP publishes each feed's
 raw rows and metadata, then the gateway's decider routes plain and ABP rows through the production

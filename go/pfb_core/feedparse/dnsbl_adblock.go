@@ -109,6 +109,7 @@ var (
 // DNSBLFeedIsABP is pfb_dnsbl_feed_is_abp() over the feed r (custom: pfb_dnsbl_feed_has_abp_header(), as a custom list is
 // an Adblock feed only by its header): its first non-blank line is an Adblock-family header, or any line not led by '#'
 // is an Adblock rule or an AdGuard HTML filter. Hosts and IP feeds open with '#' banners such as '#####' or '##Title:'.
+// A line over 1 MiB counts for neither, as the parse skips it (ParseDNSBLFeed); the old path reads it whole.
 func DNSBLFeedIsABP(r io.Reader, custom bool) (bool, error) {
 	first, abp := true, false
 	err := eachLine(r, func(line string, overlong, _ bool) error {
@@ -184,15 +185,12 @@ func (t *ICANNTLDs) abpFeedLine(line string) (DNSBLRow, bool) {
 		}
 	}
 	if len(fields) >= 2 && (isIPAddrV4(fields[0]) || isIPAddrV6(fields[0])) {
-		hosts := make([]string, 0, len(fields)-1)
-		for _, f := range fields[1:] {
-			h, ok := t.host(f)
-			if !ok {
-				return DNSBLRow{}, false
-			}
-			hosts = append(hosts, h)
+		first, ok := t.host(fields[1])
+		for _, alias := range fields[2:] {
+			_, valid := t.host(alias)
+			ok = ok && valid
 		}
-		return DNSBLRow{Text: hosts[0]}, true
+		return DNSBLRow{Text: first}, ok
 	}
 	if len(fields) != 1 {
 		return DNSBLRow{}, false
@@ -216,8 +214,8 @@ func (t *ICANNTLDs) abpFeedLine(line string) (DNSBLRow, bool) {
 	return DNSBLRow{ABP: true, Text: "||" + h + "^" + m[3]}, true
 }
 
-// validPort is a decimal port 1 to 65535 of at most five digits.
+// validPort is a decimal port 1 to 65535 (the callers' patterns allow at most five digits).
 func validPort(digits string) bool {
 	n, err := strconv.Atoi(digits)
-	return err == nil && len(digits) <= 5 && n >= 1 && n <= 65535
+	return err == nil && n >= 1 && n <= 65535
 }
