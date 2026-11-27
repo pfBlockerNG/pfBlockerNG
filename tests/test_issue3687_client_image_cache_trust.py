@@ -31,7 +31,7 @@ import yaml
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/ui-tests.yml"
 CLIENT_DIR = "client-image"
 WRITER = "client-image"
-APT_DIR = "${{ steps.aptkey.outputs.dir }}"
+UV_DIR = "~/.cache/uv"
 NAMED_REF_CLAUSE = "inputs.checkout_ref == ''"
 CLIENT_KEY = "civm-img-${{ steps.civm.outputs.k }}"
 
@@ -111,7 +111,7 @@ NAMED = {
 }
 
 # step-name prefix that may fail -> the cache path that must then stay unpublished
-PULLS = {"Pull civm image": CLIENT_DIR, "Pull pfSense image": "image", "Install host tools": APT_DIR}
+PULLS = {"Pull civm image": CLIENT_DIR, "Pull pfSense image": "image", "Install the smoke + UI harness": UV_DIR}
 
 
 def _saved(job_id: str, scenario: Scenario, restore: str, fail: str | None = None) -> list[str] | None:
@@ -123,6 +123,7 @@ def _saved(job_id: str, scenario: Scenario, restore: str, fail: str | None = Non
             "github.ref": scenario.ref,
             "inputs.checkout_ref": scenario.checkout_ref,
             "inputs.pkg_artifact_prefix": "",
+            "needs.ci-image.result": "success",
             "needs.prepare.result": "success",
             "needs.prepare.outputs.run": "true",
             "needs.build-pkg.result": "success",
@@ -202,7 +203,7 @@ def test_both_jobs_agree_on_the_immutable_digest_key() -> None:
     }
 
 
-@pytest.mark.parametrize("label", ["Install oras", "civm", "Pull civm image"])
+@pytest.mark.parametrize("label", ["civm", "Pull civm image"])
 def test_writer_provisions_exactly_as_ui_does(label: str) -> None:
     """The executed provisioning tests drive ui's steps; identical text means they cover the writer too."""
     ui, writer = _step("ui", label), _step(WRITER, label)
@@ -238,7 +239,7 @@ def test_a_trusted_run_saves_the_client_image_once_from_the_writer_on_a_miss(sce
     saved = _all_saved(scenario, "miss")
 
     assert [job_id for job_id, paths in saved.items() if CLIENT_DIR in (paths or [])] == [WRITER]
-    assert {"image", APT_DIR} <= {path for paths in saved.values() for path in paths or []}, (
+    assert {"image", UV_DIR} <= {path for paths in saved.values() for path in paths or []}, (
         "the other caches keep priming"
     )
 

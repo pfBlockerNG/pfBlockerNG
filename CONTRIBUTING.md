@@ -41,11 +41,12 @@ pin today:
 | Tool | Version | Used by |
 | --- | --- | --- |
 | Python | 3.11 (`.python-version`); packages from `uv.lock` | pytest, mypy, Ruff, the policy checkers |
-| PHP | 8.3 **and** 8.5 (from the supported-version matrix) | `php -l`, PHPStan, PHPCS, PHPUnit |
+| PHP | 8.3, 8.4 **and** 8.5 (from the supported-version matrix) | `php -l`, PHPStan, PHPCS, PHPUnit |
 | ShellCheck | v0.11.0 | shell lint |
 | shellspec | 0.28.1 | the shell suite (run under `dash`) |
 | actionlint | 1.7.12 | workflow lint |
-| Node | current LTS | markdownlint, the widget and webassets JS tests |
+| Node | 24.19.0 | markdownlint, the widget and webassets JS tests |
+| Go | 1.27.0 | the pfB-DNS gateway build and the Go gate |
 
 macOS (Homebrew):
 

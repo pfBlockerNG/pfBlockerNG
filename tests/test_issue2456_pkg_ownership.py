@@ -873,7 +873,7 @@ def test_nightly_wires_real_live_downgrade_with_both_exact_identities() -> None:
     inputs = downgrade["with"]
 
     assert direct["with"]["pytest_filter"] == "test_install_from_live_nightly_url"
-    assert resolver["needs"] == ["prepare", "ingest-pkg"]
+    assert resolver["needs"] == ["ci-image", "prepare", "ingest-pkg"]
     assert resolver["outputs"] == {
         "source_sha": "${{ steps.identity.outputs.source_sha }}",
         "version": "${{ steps.identity.outputs.version }}",

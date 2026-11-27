@@ -506,7 +506,6 @@ def test_build_pkgs_portable_leg_step_carries_row_identity_and_abi() -> None:
 def test_release_dependency_builder_receives_structured_reproducibility_inputs() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     build_steps = workflow["jobs"]["build-pkgs-portable"]["steps"]
-    setup = next(step for step in build_steps if step.get("name") == "Set up the pinned dependency-package toolchain")
     sync = next(step for step in build_steps if step.get("name") == "Sync the locked dependency-package toolchain")
     extras = next(step for step in build_steps if step.get("name") == "Resolve release-line extras")
     record = next(step for step in build_steps if step.get("name") == "Write the destination-bound build record")
@@ -527,10 +526,17 @@ def test_release_dependency_builder_receives_structured_reproducibility_inputs()
     ]
 
     read_matrix_outputs = workflow["jobs"]["read-matrix"]["outputs"]
-    assert setup["with"] == {"version": "0.12.6", "activate-environment": True}
-    assert sync["run"] == "uv sync --locked --only-group dep-pkg-build"
-    assert build_steps.index(extras) < build_steps.index(setup) < build_steps.index(sync)
-    assert setup["if"] == "steps.extras.outputs.extra_pkgs != '[]'"
+    # uv and the pinned Python are baked into the ci image (UV_VERSION is pinned by test_ci_tool_pins.py), so
+    # only the sync remains, and the synced venv goes on PATH where the activated environment used to put it.
+    assert workflow["jobs"]["build-pkgs-portable"].get("container", {}).get("image") == (
+        "${{ needs.ci-image.outputs.ci }}"
+    )
+    assert sync["run"].splitlines() == [
+        "set -eu",
+        "uv sync --locked --only-group dep-pkg-build",
+        'echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"',
+    ]
+    assert build_steps.index(extras) < build_steps.index(sync)
     assert sync["if"] == "steps.extras.outputs.extra_pkgs != '[]'"
     assert pinned_builder["uses"] == "actions/checkout@v7"
     assert pinned_builder["with"]["ref"] == (
