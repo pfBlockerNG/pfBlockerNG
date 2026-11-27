@@ -12,8 +12,8 @@ disables silently. These gates cover what actionlint cannot:
    a value reaches the job as a literal dollar-string (schema-legal, so
    actionlint accepts it). Paths derived from runner variables belong in
    ``run:`` bodies.
-2. Every workflow arming the hermetic egress gate installs ``iptables`` and
-   proves it usable before the suite runs (issue #2261).
+2. Every workflow arming the hermetic egress gate runs in the image that bakes ``iptables``,
+   with the capability to use it, and proves it usable before the suite runs (issue #2261).
 3. The ``actionlint`` job keeps its embedded ShellCheck pass over ``run:``
    bodies, and no config filters that pass's findings away (issue #2241).
 4. Dispatchable workflows own top-level concurrency; artifact actions pin the
@@ -154,7 +154,8 @@ def test_env_map_scanner_catches_a_planted_offence() -> None:
 # iptables in its error text. Both rules come from review mutations on PR #2262.
 _ARMING = re.compile(r"^\s*SMOKE_BLOCK_EGRESS:\s*['\"]?[^'\"\s#]")
 _IPTABLES_SETUP = (
-    ("installs iptables", re.compile(r"\bapt-get install\b.*\biptables\b")),
+    ("runs in the ci-vm image", re.compile(r"image:\s*\$\{\{\s*needs\.ci-image\.outputs\.ci_vm\s*\}\}")),
+    ("grants --cap-add NET_ADMIN", re.compile(r"options:.*--cap-add NET_ADMIN")),
     ("proves iptables usable", re.compile(r"\biptables\b.*-S\s+OUTPUT")),
 )
 _JOB_KEY = re.compile(r"^  ([A-Za-z0-9_.-]+):\s*$", re.MULTILINE)
@@ -184,16 +185,24 @@ def _egress_arming_jobs(text: str) -> list[tuple[str, list[str]]]:
     ]
 
 
-def test_egress_gating_workflows_install_and_prove_iptables() -> None:
-    """Any job that arms the hermetic egress gate (sets SMOKE_BLOCK_EGRESS) runs
-    `sudo iptables` from tests/smoke/helpers.py, so the runner needs the binary AND
-    the privilege to use it (issue #2261). A runner missing either fails every
-    hermetic case halfway through the suite instead of at setup, so the arming job
-    must install iptables and prove it usable up front.
+def _ci_stage_installs(dockerfile: str, package: str) -> bool:
+    """True when the Dockerfile's ``ci`` stage apt-installs ``package``; ``ci-vm`` is ``FROM ci``."""
+    stage = re.split(r"^FROM .* AS ci$", dockerfile, maxsplit=1, flags=re.MULTILINE)[1]
+    stage = stage.split("FROM ci AS ci-vm", 1)[0]
+    return re.search(rf"apt-get install[^&;]*\s{package}\s", stage) is not None
 
-    Scoped per JOB, not per file: Actions jobs get their own runner and share no
-    state, so a sibling setup job installing iptables leaves the armed job exactly
-    as unprotected as no install at all."""
+
+def test_egress_gating_workflows_run_where_iptables_is_usable() -> None:
+    """Any job that arms the hermetic egress gate (sets SMOKE_BLOCK_EGRESS) runs
+    `sudo iptables` from tests/smoke/helpers.py, so the job needs the binary AND
+    the privilege to use it (issue #2261). The ci-vm image bakes the binary, the
+    container's `--cap-add NET_ADMIN` is the privilege, and the job proves both up
+    front: a job missing either fails every hermetic case halfway through the suite
+    instead of at setup.
+
+    Scoped per JOB, not per file: Actions jobs get their own container and share no
+    state, so a sibling job holding the setup leaves the armed job exactly as
+    unprotected as no setup at all."""
     armed: list[tuple[str, list[str]]] = []
     for path in _workflow_files():
         armed += [
@@ -206,20 +215,37 @@ def test_egress_gating_workflows_install_and_prove_iptables() -> None:
     )
     offenders = [f"{where}: {', '.join(missing)}" for where, missing in armed if missing]
     assert not offenders, (
-        "a job arming SMOKE_BLOCK_EGRESS must install iptables and prove it usable "
-        "in that same job, or block_egress fails every hermetic case mid-run:\n  " + "\n  ".join(offenders)
+        "a job arming SMOKE_BLOCK_EGRESS must run in the ci-vm image with NET_ADMIN and prove "
+        "iptables usable in that same job, or block_egress fails every hermetic case mid-run:\n  "
+        + "\n  ".join(offenders)
     )
+
+
+def test_the_ci_image_bakes_iptables_into_ci_and_ci_vm() -> None:
+    """The egress gate's binary comes from the image: ``ci`` installs it and ``ci-vm`` builds on ``ci``."""
+    dockerfile = (ROOT / ".github/docker/Dockerfile").read_text(encoding="utf-8")
+    assert "FROM ci AS ci-vm" in dockerfile
+    assert _ci_stage_installs(dockerfile, "iptables"), "the ci stage of the Dockerfile must apt-install iptables"
+    assert not _ci_stage_installs(dockerfile.replace(" iptables", " "), "iptables")
 
 
 def test_the_egress_scan_reads_only_the_arming_job() -> None:
     """Vacuity guard: the setup has to sit in the armed job itself. A two-job
-    workflow whose OTHER job installs and probes iptables is reported, and moving
-    the same two steps into the armed job clears it."""
-    setup = "      - run: sudo apt-get install -y iptables\n      - run: sudo iptables -w -S OUTPUT\n"
-    armed = '    steps:\n      - run: pytest\n        env:\n          SMOKE_BLOCK_EGRESS: "1"\n'
-    elsewhere = f"jobs:\n  setup:\n    steps:\n{setup}  smoke:\n{armed}"
-    assert _egress_arming_jobs(elsewhere) == [("smoke", ["installs iptables", "proves iptables usable"])]
-    assert _egress_arming_jobs(f"jobs:\n  setup:\n    steps:\n      - run: true\n  smoke:\n{armed}{setup}") == [
+    workflow whose OTHER job holds the image, capability and probe is reported, and
+    moving the same setup into the armed job clears it."""
+    setup = (
+        "    container:\n"
+        "      image: ${{ needs.ci-image.outputs.ci_vm }}\n"
+        "      options: --init --device /dev/kvm --cap-add NET_ADMIN\n"
+        "    steps:\n"
+        "      - run: sudo iptables -w -S OUTPUT\n"
+    )
+    armed = '      - run: pytest\n        env:\n          SMOKE_BLOCK_EGRESS: "1"\n'
+    elsewhere = f"jobs:\n  setup:\n{setup}  smoke:\n    steps:\n{armed}"
+    assert _egress_arming_jobs(elsewhere) == [
+        ("smoke", ["runs in the ci-vm image", "grants --cap-add NET_ADMIN", "proves iptables usable"])
+    ]
+    assert _egress_arming_jobs(f"jobs:\n  setup:\n    steps:\n      - run: true\n  smoke:\n{setup}{armed}") == [
         ("smoke", [])
     ]
 

@@ -104,6 +104,7 @@ def test_mutation_jobs_exist_in_the_workflow() -> None:
 DRY_RUN_SAFE_JOBS = frozenset(
     {
         "read-matrix",  # reads the build matrix from repo state; no external effect
+        "ci-image",  # builds (or finds) the CI images; unconditional, and the same in a dry run
         # issue #1855: both of these now check out prepare-release's PINNED SHA (the tag
         # does not exist yet at build time), falling back to the dispatch ref in dry-run --
         # a needs-output value pick, no dry_run reference at all, still unconditional.

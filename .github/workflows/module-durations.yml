@@ -44,9 +44,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Builds the ci image once per ci-image.yml input hash (an unchanged hash reuses the
+  # published one); `refresh` runs inside it instead of installing uv (#3852).
+  ci-image:
+    uses: ./.github/workflows/ci-image.yml
+    permissions:
+      contents: read
+      packages: write
+
   refresh:
     name: Rebuild + commit module-durations.txt
+    needs: ci-image
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     # workflow_run: only the nightly (schedule) full run, and only if it passed.
     # workflow_dispatch: the operator vouches the given run was a full fan-out.
     if: >-

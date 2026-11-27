@@ -15,7 +15,7 @@ def test_version_guard_rejects_each_hostile_pin_shape(tmp_path: Path) -> None:
         ('- uses: "actions/checkout@v6"', "actions/checkout", "actions/checkout@v6"),
         ("- uses : actions/checkout@v6", "actions/checkout", "actions/checkout@v6"),
         ("- uses: actions/checkout@v7#junk", "actions/checkout", "actions/checkout@v7#junk"),
-        ("- uses: 'astral-sh/setup-uv@v7\"'", "astral-sh/setup-uv", 'astral-sh/setup-uv@v7"'),
+        ("- uses: 'actions/checkout@v7\"'", "actions/checkout", 'actions/checkout@v7"'),
         ("- uses: actions/checkout@v7 junk", "actions/checkout", "actions/checkout@v7 junk"),
         ("- uses: actions/checkout@ v6", "actions/checkout", "actions/checkout@ v6"),
     )
@@ -32,7 +32,7 @@ def test_version_guard_accepts_valid_yaml_scalar_shapes(tmp_path: Path) -> None:
         ("- uses: actions/checkout@v7", "actions/checkout"),
         ("- uses : actions/checkout@v7", "actions/checkout"),
         ('- uses: "actions/checkout@v7" # comment', "actions/checkout"),
-        ("- uses: 'astral-sh/setup-uv@v10.2.0' # comment", "astral-sh/setup-uv"),
+        ("- uses: 'actions/checkout@v7' # comment", "actions/checkout"),
     )
     for index, (uses, action) in enumerate(cases):
         seen, offenders = scan([_workflow(tmp_path / f"good-{index}.yml", uses)])

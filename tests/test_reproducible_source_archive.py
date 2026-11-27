@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import importlib.util
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -18,11 +19,14 @@ from typing import Any
 
 import pytest
 
-from tests._workflow_steps import extract_before, extract_between
+from tests._workflow_steps import extract_between
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build-source-archive.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+DOCKERFILE = ROOT / ".github" / "docker" / "Dockerfile"
+ARCHIVE_PYTHON = "3.11.15"  # the exact interpreter the source archive is built with
+_ARCHIVE_IMAGE = "image: ${{ needs.ci-image.outputs.ci }}"
 SOURCE_EPOCH = 1_700_000_000
 SAFE_MEMBER = "src/usr/local/pkg/config file [test];$HOME.inc"
 EXEC_MEMBER = "src/usr/local/bin/run [safe];$(touch escaped).sh"
@@ -405,16 +409,11 @@ def _release_job() -> str:
     return extract_between(workflow, "  release:", "\n  # ── 2b")
 
 
-def _assert_archive_tool_pin_precedes_build(release_job: str) -> None:
-    pin_name = "      - name: Pin source archive Python"
-    archive_name = "      - name: Build source archive"
-    pin_start = release_job.index(pin_name)
-    archive_start = release_job.index(archive_name)
-    pin_step = extract_before(release_job[pin_start:], "\n      - name:")
-
-    assert "uses: actions/setup-python@v7" in pin_step
-    assert 'python-version: "3.11.15"' in pin_step
-    assert pin_start < archive_start, "the exact source-archive Python pin must precede the archive build"
+def _assert_archive_python_comes_from_the_pinned_image(release_job: str, dockerfile: str) -> None:
+    assert _ARCHIVE_IMAGE in release_job, "the release job must run in the ci image that bakes the archive Python"
+    assert re.search(rf"^ARG PYTHON_VERSION={re.escape(ARCHIVE_PYTHON)}$", dockerfile, re.MULTILINE), (
+        f"the ci image must bake Python {ARCHIVE_PYTHON}: the source archive is built with it"
+    )
 
 
 def test_release_workflow_pins_and_uses_the_source_archive_builder() -> None:
@@ -422,7 +421,7 @@ def test_release_workflow_pins_and_uses_the_source_archive_builder() -> None:
     archive_step = extract_between(release_job, "      - name: Build source archive", "\n      - name:")
 
     assert "runs-on: ubuntu-24.04" in release_job
-    _assert_archive_tool_pin_precedes_build(release_job)
+    _assert_archive_python_comes_from_the_pinned_image(release_job, DOCKERFILE.read_text(encoding="utf-8"))
     assert "set -eu" in archive_step
     assert 'SOURCE_EPOCH="$(git show -s --format=%ct HEAD)"' in archive_step
     assert 'python3 "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/build-source-archive.py"' in archive_step
@@ -430,15 +429,16 @@ def test_release_workflow_pins_and_uses_the_source_archive_builder() -> None:
     assert "tar -czf" not in archive_step
 
 
-def test_moving_archive_python_pin_after_build_goes_red() -> None:
+def test_archive_python_check_goes_red_without_the_image_or_the_pin() -> None:
     release_job = _release_job()
-    pin_start = release_job.index("      - name: Pin source archive Python")
-    pin_end = release_job.index("\n      - name:", pin_start + 1)
-    pin_step = release_job[pin_start:pin_end]
-    without_pin = release_job[:pin_start] + release_job[pin_end:]
-    archive_start = without_pin.index("      - name: Build source archive")
-    archive_end = without_pin.index("\n      - name:", archive_start + 1)
-    moved = without_pin[:archive_end] + "\n" + pin_step + without_pin[archive_end:]
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    _assert_archive_python_comes_from_the_pinned_image(release_job, dockerfile)
 
-    with pytest.raises(AssertionError, match="must precede"):
-        _assert_archive_tool_pin_precedes_build(moved)
+    with pytest.raises(AssertionError, match="ci image that bakes"):
+        _assert_archive_python_comes_from_the_pinned_image(
+            release_job.replace(_ARCHIVE_IMAGE, "image: ubuntu:24.04"), dockerfile
+        )
+    with pytest.raises(AssertionError, match="must bake Python"):
+        _assert_archive_python_comes_from_the_pinned_image(
+            release_job, dockerfile.replace(f"ARG PYTHON_VERSION={ARCHIVE_PYTHON}", "ARG PYTHON_VERSION=3.12.0")
+        )

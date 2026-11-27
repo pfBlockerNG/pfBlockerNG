@@ -1,0 +1,102 @@
+name: CI image
+
+# Builds the `ci` and `ci-vm` images that every installing job runs inside (#3852), plus the
+# `unbound` and `unbound-py` images the two Docker Unbound oracle suites run (#3884). The tag
+# is a hash of the build inputs (.github/docker/ plus the Go module's go.mod and go.sum), so
+# unchanged inputs reuse the published image and changed ones are built once, here, before
+# any job needs it.
+
+on:
+  workflow_call:
+    outputs:
+      ci:
+        description: Full ref of the ci image for this commit's build inputs
+        value: ${{ jobs.build.outputs.ci }}
+      ci_vm:
+        description: Full ref of the ci-vm image for this commit's build inputs
+        value: ${{ jobs.build.outputs.ci_vm }}
+      unbound:
+        description: Full ref of the Unbound image the Go ACL oracle runs, for this commit's build inputs
+        value: ${{ jobs.build.outputs.unbound }}
+      unbound_py:
+        description: Full ref of the Unbound + python3-unbound image the dns_proxy integration tests run
+        value: ${{ jobs.build.outputs.unbound_py }}
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# One group per caller run, queued never cancelled: a fan-out's legs each call this workflow,
+# so the first call builds and every later one finds the tags and skips.
+concurrency:
+  group: ci-image-${{ github.run_id }}-${{ github.run_attempt }}
+  queue: max
+  cancel-in-progress: false
+
+env:
+  # Hashed for the tag AND passed to buildx as the build context: one path, so a file the
+  # Dockerfile can COPY can never be missing from the hash.
+  CONTEXT_DIR: .github/docker
+  # The named context `gomod` holds this whole directory, but only its go.mod and go.sum are
+  # hashed, so the Dockerfile may COPY nothing else from it.
+  GO_MODULE_DIR: go/pfb_dns_gateway
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      ci: ${{ steps.hash.outputs.ci }}
+      ci_vm: ${{ steps.hash.outputs.ci_vm }}
+      unbound: ${{ steps.hash.outputs.unbound }}
+      unbound_py: ${{ steps.hash.outputs.unbound_py }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Hash the build context
+        id: hash
+        run: |
+          set -euo pipefail
+          # mode, blob id and path of every tracked file: COPY keeps a file's mode as well as its bytes.
+          hash=$(git ls-files -s -z "$CONTEXT_DIR" "$GO_MODULE_DIR/go.mod" "$GO_MODULE_DIR/go.sum" | sha256sum | cut -d' ' -f1)
+          {
+            echo "ci=ghcr.io/pfblockerng/pfblockerng-ci:$hash"
+            echo "ci_vm=ghcr.io/pfblockerng/pfblockerng-ci-vm:$hash"
+            echo "unbound=ghcr.io/pfblockerng/pfblockerng-ci-unbound:$hash"
+            echo "unbound_py=ghcr.io/pfblockerng/pfblockerng-ci-unbound-py:$hash"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+      - name: Build and push the images when missing
+        env:
+          CI_REF: ${{ steps.hash.outputs.ci }}
+          CI_VM_REF: ${{ steps.hash.outputs.ci_vm }}
+          UNBOUND_REF: ${{ steps.hash.outputs.unbound }}
+          UNBOUND_PY_REF: ${{ steps.hash.outputs.unbound_py }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if docker manifest inspect "$CI_REF" >/dev/null 2>&1 && docker manifest inspect "$CI_VM_REF" >/dev/null 2>&1 \
+            && docker manifest inspect "$UNBOUND_REF" >/dev/null 2>&1 && docker manifest inspect "$UNBOUND_PY_REF" >/dev/null 2>&1; then
+            echo "::notice::all four tags exist; skipping the build"
+            exit 0
+          fi
+          if [ "$EVENT_NAME" = pull_request ] && [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "::error::fork PRs cannot publish images: this PR changes .github/docker/ or the Go module files, so the CI images for it do not exist yet. A maintainer must run ci-image.yml from a branch of this repository first."
+            exit 1
+          fi
+          docker buildx build --target ci -t "$CI_REF" --build-context gomod="$GO_MODULE_DIR" --push "$CONTEXT_DIR"
+          docker buildx build --target ci-vm -t "$CI_VM_REF" --build-context gomod="$GO_MODULE_DIR" --push "$CONTEXT_DIR"
+          docker buildx build --target unbound -t "$UNBOUND_REF" --build-context gomod="$GO_MODULE_DIR" --push "$CONTEXT_DIR"
+          docker buildx build --target unbound-py -t "$UNBOUND_PY_REF" --build-context gomod="$GO_MODULE_DIR" --push "$CONTEXT_DIR"
