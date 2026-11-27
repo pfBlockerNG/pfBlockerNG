@@ -1223,7 +1223,7 @@ def test_subdomain_only_mask_blocks_subdomains_alone(deployed_vm: SmokeVM, clien
         h.reload(deployed_vm, "update")
 
         h.flush_unbound_name(deployed_vm, sub)
-        ans = h.dns_probe_client_until(client_vm, sub, _blocked)
+        ans = h.dns_probe_client(client_vm, sub, "A")
         assert _blocked(ans), f".{host}^ must block {sub} once the feed loads, got {ans}"
         h.flush_unbound_name(deployed_vm, host)
         ans = h.dns_probe_client(client_vm, host, "A")
