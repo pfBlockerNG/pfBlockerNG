@@ -4674,14 +4674,15 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	}
 	$feedFlags .= ' --rsync-bin ' . escapeshellarg($pfb['rsync_bin'] ?? PFB_RSYNC_BIN);
 	$feedFlags .= ' --user-agent ' . escapeshellarg(trim((string) $pfb['curl_defaults'][CURLOPT_USERAGENT]));
-	// issue #4038: the Core Updater loop's folders, given with its switch off: without --update-loop an Update still runs --update-cmd
-	// alone, and --main-log, which Core refuses without the switch, waits for the cutover (#3977); only --resource-dir is read today (GetResources)
+	// issue #4038: the Core Updater loop's folders; #3977: with its switch on, an Update is the loop, which runs --update-cmd once as
+	// the Outpost apply, and its lines also go to the package log (--main-log)
 	$loopFlags = '';
 	foreach (['resource-dir' => "{$pfb['dbdir']}/store", 'hook-dir' => PFB_HOOK_SCRIPT_DIR, 'python-wrapper' => PFB_PYTHON_WRAPPER,
 	    'db-dir' => $pfb['dbdir'], 'geoip-dir' => $pfb['geoipshare'], 'cc-dir' => $pfb['ccdir'], 'log-dir' => $pfb['logdir'],
 	    'pkg-dir' => '/usr/local/pkg/pfblockerng', 'asn-table' => '/usr/local/www/pfblockerng/pfblockerng_asn.txt'] as $flag => $path) {
 		$loopFlags .= " --{$flag} " . escapeshellarg($path);
 	}
+	$loopFlags .= ' --update-loop --main-log ' . escapeshellarg($pfb['log']);
 	// issue #4309: optional HAProxy SPOP (SPOA) listener on pfb-core
 	$spoaFlags = '';
 	$spoaIsUnix = FALSE;
@@ -9013,7 +9014,8 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$wrapper = escapeshellarg("{$proxyDir}/pfb_dns.sh");
 	$command = "/bin/sh {$wrapper}{$addresses} --port {$port} --upstream {$upstream}" .
 	    " --tls-pem {$cert} --ctl-socket {$ctl}{$tlsFlags}{$ddrFlags}" . $module .
-	    ' --module-dir /var/unbound --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file ' . $ready;
+	    ' --module-dir /var/unbound --core-socket ' . escapeshellarg($pfb['core_socket']) . // #3977: the DNSBL data comes from Core
+	    ' --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file ' . $ready;
 	// The command lines of the processes this script keeps and signals: the supervisor (its daemon -t title is pfb_dns_proxy), the
 	// wrapper before it execs (a space in a case pattern is escaped), and pfb-dns itself, as the wrapper execs it, by its installed path.
 	$proxyArgs = '*pfb_dns_proxy*|/bin/sh\ ' . PFB_DNS_PROXY_DIR . '/pfb_dns.sh\ *|' . PFB_DNS_PROXY_DIR . '/bin/freebsd-*/pfb-dns*';

@@ -422,7 +422,7 @@ manifest and excludes stages; legacy fixed `pfb_py_raw/` manifests remain readab
   Unbound. A data-path restart fallback never restores the pre-update cache.
 - **Fail-closed:** a bad/partial build keeps the last-good snapshot serving.
 
-**On the Core input** (issue #4036; `--core-socket`, not yet started by the rc script): pfB-DNS takes the DNSBL data from
+**On the Core input** (issue #4036; `--core-socket`, which the rc script passes since #3977): pfB-DNS takes the DNSBL data from
 the Core API instead of PHP's files. `go/pfb_dns_gateway/coreinput` caches the `dnsbl/*` resources in a folder of its own,
 `pfb_dns` in the module directory (0700; issue #4251), in the same file shapes, and the decider builds from them unchanged (`decider/pfb_core_input.go`). There is no sentinel and
 no applied marker. Every 10 s a poller asks Core whether the manifest changed and fetches only what changed. A body the last

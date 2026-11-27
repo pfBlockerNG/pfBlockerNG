@@ -230,8 +230,8 @@ final class PfbCoreServiceTest extends TestCase
 	}
 
 	/**
-	 * Issue #4038 (9k): the Core Updater loop's path flags, passed with the switch off: no --update-loop, so a real Update still runs
-	 * the update program, and no --main-log, which Core refuses without the switch.
+	 * Issue #4038 (9k): the Core Updater loop's path flags; #3977: with the switch on (--update-loop), so a real Update is the
+	 * Core Updater's loop, which runs the update program once as the Outpost apply, and its lines also go to the package log.
 	 *
 	 * @return list<string>
 	 */
@@ -240,7 +240,8 @@ final class PfbCoreServiceTest extends TestCase
 		$pfb = $GLOBALS['pfb'];
 		return ['--resource-dir', "{$pfb['dbdir']}/store", '--hook-dir', '/usr/local/pkg/pfblockerng/hooks', '--python-wrapper', PFB_PYTHON_WRAPPER,
 			'--db-dir', $pfb['dbdir'], '--geoip-dir', '/usr/local/share/GeoIP', '--cc-dir', '/usr/local/share/GeoIP/cc', '--log-dir', $pfb['logdir'],
-			'--pkg-dir', '/usr/local/pkg/pfblockerng', '--asn-table', '/usr/local/www/pfblockerng/pfblockerng_asn.txt'];
+			'--pkg-dir', '/usr/local/pkg/pfblockerng', '--asn-table', '/usr/local/www/pfblockerng/pfblockerng_asn.txt',
+			'--update-loop', '--main-log', $pfb['log']];
 	}
 
 	/** @param list<string> $dirs @return list<string> the flags of the feed phase (issue #3975) Core is started with */

@@ -1438,6 +1438,7 @@ final class DnsProxyServiceTest extends TestCase
 			'/bin/sh', "{$gateway}/pfb_dns.sh", ...$addresses,
 			'--port', $port, '--upstream', '127.0.0.1:5353',
 			'--tls-pem', $this->certFile(), '--ctl-socket', $this->ctlSocket(), ...$dotFlags, ...$tls, ...$module, '--module-dir', '/var/unbound',
+			'--core-socket', $GLOBALS['pfb']['core_socket'], // #3977: the DNSBL data comes from Core
 			'--unbound-conf', '/var/unbound/unbound.conf', '--user', 'unbound', '--ready-file', $this->readyFile(),
 		];
 	}
