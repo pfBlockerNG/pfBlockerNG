@@ -181,6 +181,9 @@ func (u *updater) workList() error {
 		}
 	}
 	u.sinks.Errors = u.errors
+	if err := u.moveDNSBLOrig(); err != nil {
+		return err
+	}
 	fetcher, err := u.fetcher()
 	if err != nil {
 		return err

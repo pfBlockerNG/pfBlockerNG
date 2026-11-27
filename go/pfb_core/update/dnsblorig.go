@@ -108,3 +108,19 @@ func removeDNSBLOrigSources(src func(string) string) error {
 	}
 	return nil
 }
+
+// moveDNSBLOrig is the cutover's move, run by every Update before it decides its work (issue #4258's contract): the DNSBL
+// feed folder is recovered first, then PHP's downloads are moved into it. Once nothing is left to move it costs one
+// directory read. A move that fails fails the Update, so nothing is published over a half-moved feed, and the next Update
+// tries once more: an error a retry never clears (a directory at a sidecar name, EXDEV, EACCES) fails each Update visibly.
+func (u *updater) moveDNSBLOrig() error {
+	if info, err := os.Lstat(u.db("dnsbl")); err == nil && info.IsDir() {
+		if err := feedstage.Recover(u.db("dnsbl")); err != nil {
+			return fmt.Errorf("the DNSBL feed folder cannot be recovered before PHP's downloads in dnsblorig move into it: %w", err)
+		}
+	}
+	if err := MoveDNSBLOrig(u.loop.DBDir); err != nil {
+		return fmt.Errorf("PHP's DNSBL downloads in dnsblorig cannot be moved into the DNSBL feed folder: %w", err)
+	}
+	return nil
+}
