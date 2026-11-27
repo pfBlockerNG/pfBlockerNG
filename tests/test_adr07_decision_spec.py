@@ -422,12 +422,12 @@ def reconcile(rules: Iterable[Rule]) -> list[Rule]:
     """Drop every FEED rule whose signature matches a FEED ``$badfilter``; drop
     the badfilter rules themselves; keep all USER rules (sovereignty, fact 7)."""
     rules = list(rules)
-    bad_sigs = {r.signature for r in rules if r.badfilter and r.provenance is Provenance.FEED}
+    bad_sigs = {(r.kind, r.signature) for r in rules if r.badfilter and r.provenance is Provenance.FEED}
     out: list[Rule] = []
     for r in rules:
         if r.badfilter:
             continue  # the $badfilter rule never emits a decision
-        if r.provenance is Provenance.FEED and r.signature in bad_sigs:
+        if r.provenance is Provenance.FEED and (r.kind, r.signature) in bad_sigs:
             continue  # pruned by a feed $badfilter
         out.append(r)
     return out

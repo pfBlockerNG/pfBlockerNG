@@ -4496,7 +4496,8 @@ class Rule:
         signature       the ``$badfilter`` match key:
                         ``(key_or_pattern, tuple(sorted DNS-options)) MINUS $badfilter``,
                         with a REGEX key written ``/pattern/`` and a ``.domain^`` rule
-                        marked, so rules of different types never share one (#4284, #4286).
+                        marked, so a regex, an anchor and a ``.domain^`` never share one
+                        (#4284, #4286); reconcile() also matches on ``kind``.
                         Two rules with the same signature are the same target+options
                         (a feed ``$badfilter`` prunes a feed rule with a matching
                         signature during reconcile()).
@@ -5418,8 +5419,8 @@ def reconcile(
     argument and no module global, never compiles/executes a regex -- two calls on
     equal inputs yield equal results. Steps (ADR.md SS2):
 
-      1. $BADFILTER PRUNE (feed-only): collect the signatures of FEED rules carrying
-         ``$badfilter``; drop every FEED rule with a matching signature; the
+      1. $BADFILTER PRUNE (feed-only): collect the (kind, signature) of FEED rules carrying
+         ``$badfilter``; drop every FEED rule with a matching pair; the
          ``$badfilter`` rules themselves emit nothing. USER rules are IMMUNE (never
          collected, never pruned -- sovereignty, fact 7).
       2. REGEX REDUCTION: a reducible regex Rule folds to a domain rule (block ->
@@ -5445,14 +5446,15 @@ def reconcile(
     rule_list = list(rules)
 
     # --- Step 1: feed-only $badfilter prune ------------------------------- #
-    bad_sigs = {r.signature for r in rule_list if r.badfilter and r.provenance == RULE_PROV_FEED}
+    # issue #4286: keyed by kind too, so an allow's $badfilter never prunes a block, nor the reverse.
+    bad_sigs = {(r.kind, r.signature) for r in rule_list if r.badfilter and r.provenance == RULE_PROV_FEED}
     result = ReconcileResult()
     survivors: list[Rule] = []
     for r in rule_list:
         if r.badfilter:
             result.skipped_badfilter += 1
             continue  # the $badfilter rule itself never emits a decision
-        if r.provenance == RULE_PROV_FEED and r.signature in bad_sigs:
+        if r.provenance == RULE_PROV_FEED and (r.kind, r.signature) in bad_sigs:
             result.pruned += 1
             continue  # pruned by a feed $badfilter (USER rules are never here)
         survivors.append(r)

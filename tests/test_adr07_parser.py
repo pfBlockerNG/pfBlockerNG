@@ -201,7 +201,7 @@ class TestRegex:
         assert r is not None
         assert r.target == P.RULE_TARGET_REGEX
         assert r.badfilter is True and r.important is False
-        # signature MINUS $badfilter -> the bare pattern, no opts (prunes the plain /re/).
+        # signature MINUS $badfilter -> the slashed pattern, no opts (prunes the plain /re/).
         assert r.signature == (r"/ad[0-9]\.example\.com$/", ())
 
     def test_allow_regex_with_options(self) -> None:
@@ -451,3 +451,15 @@ class TestSpecAgreement:
         assert prod.key_or_pattern == oracle.key
         assert prod.wildcard == oracle.wildcard
         assert prod.signature == oracle.signature
+
+    @pytest.mark.parametrize(
+        "line",
+        ["/ads[0-9]\\.x\\.com/", "/ads[0-9]\\.x\\.com/$important", "/^x\\.com$/", "@@/ads[0-9]\\.x/", "/x/$badfilter"],
+    )
+    def test_regex_signature_matches_oracle(self, line: str) -> None:
+        """issue #4286: the oracle and production key a regex signature on '/pattern/' alike, reducible or not."""
+        oracle = spec.parse_abp_line(line, spec.Provenance.FEED)
+        prod = P.parse_abp(line)
+        assert oracle is not None and prod is not None
+        assert prod.signature == oracle.signature
+        assert prod.signature[0].startswith("/")

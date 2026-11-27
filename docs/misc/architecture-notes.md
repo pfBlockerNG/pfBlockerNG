@@ -136,7 +136,9 @@ zone is dropped instead of becoming an exact block. That happens on TLD Exclusio
 PSL feed policy's `apex` demotion, which tallies it as `suffix_drop`. The TLD Exclusion drop is
 not tallied, because it follows the user's own setting. The `$badfilter` signature of
 `.host^` carries a marker, so `.host^$badfilter` prunes only `.host^`, and no `||host^` or
-`/re/` badfilter prunes it.
+`/re/` badfilter prunes it. Since issue #4286 a regex's signature is `/pattern/`, so `||host^$badfilter`
+never prunes the regex `/host/`, and `reconcile()` also matches on the rule's kind, so an
+`@@` rule's `$badfilter` never prunes a block rule, nor the reverse.
 
 The manifest build is the sole DNSBL classifier in every TLD mode. PHP publishes each feed's
 raw rows and metadata, then `pfb_unbound.py` routes plain and ABP rows through the production
