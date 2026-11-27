@@ -21,6 +21,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_cli_update_request')]
 #[CoversFunction('pfb_cli_update_run')]
 #[CoversFunction('pfb_cli_deprecation_warning')]
+#[CoversFunction('pfb_cli_deprecate')]
 final class CliUpdateVerbsTest extends TestCase
 {
 	/** @var list<array{0: string, 1: array}> every call the fake Core got: method, params */
@@ -52,6 +53,8 @@ final class CliUpdateVerbsTest extends TestCase
 			'forcecheck with the hashes'  => [['forcecheck', 'scope=dnsbl', 'hashes=true'],
 				['trigger' => 'manual', 'scope' => 'dnsbl', 'force' => 'both']],
 			'forcecheck unknown scope'    => [['forcecheck', 'scope=x'], ['trigger' => 'manual', 'scope' => 'both', 'force' => 'download']],
+			'the last scope given'        => [['pfb_trigger', 'scope=ip', 'scope=dnsbl'],
+				['trigger' => 'manual', 'scope' => 'dnsbl', 'force' => 'none']],
 			'an Extra verb is none'       => [['dcc'], NULL],
 			'the tick is none'            => [['tick'], NULL],
 		];
@@ -245,6 +248,47 @@ final class CliUpdateVerbsTest extends TestCase
 		$this->assertSame(1, $code);
 		$this->assertStringContainsString('unavailable: the worker status cannot be read', $this->err);
 		$this->assertSame(1 + PFB_CLI_UNAVAILABLE_POLLS, count($this->calls), 'the start and the bounded run of unavailable answers');
+	}
+
+	/**
+	 * Core stamps an Update's start twice: when it admits it, which GetUpdate reports until the worker publishes, and in the
+	 * worker's own status. A second can fall between the two: the same Update a second later is still ours.
+	 */
+	public function testTheSameUpdateStampedASecondLaterIsStillOurs(): void
+	{
+		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), self::update(TRUE, "a\n", '2', NULL, 100),
+			self::update(FALSE, "b\n", '4', 'success', 101)));
+
+		$this->assertSame(0, $code, $this->err);
+		$this->assertSame("a\nb\n", $this->out);
+	}
+
+	/**
+	 * A deprecated verb says so on stderr and in the main log, as the verbs did when their pass logged it: a crontab that
+	 * discards the CLI's output still leaves the line in pfblockerng.log. `cron` names the request it is now.
+	 */
+	public function testADeprecatedVerbSaysSoOnStderrAndInTheMainLog(): void
+	{
+		$saved = $GLOBALS['pfb']['log'] ?? NULL;
+		$GLOBALS['pfb']['log'] = tempnam(sys_get_temp_dir(), 'pfb_cli_log_');
+		try {
+			pfb_cli_deprecate('cron', function (string $s): void { $this->err .= $s; });
+			$log = (string) file_get_contents($GLOBALS['pfb']['log']);
+		} finally {
+			@unlink($GLOBALS['pfb']['log']);
+			$GLOBALS['pfb']['log'] = $saved;
+		}
+
+		$this->assertStringContainsString("DEPRECATED: pfblockerng verb 'cron'", $this->err);
+		$this->assertStringContainsString('scope=both force=false trigger=manual', $this->err, 'the request cron is now');
+		$this->assertStringContainsString("DEPRECATED: pfblockerng verb 'cron'", $log);
+	}
+
+	public function testAVerbThatIsNotDeprecatedSaysNothing(): void
+	{
+		pfb_cli_deprecate('pfb_trigger', function (string $s): void { $this->err .= $s; });
+
+		$this->assertSame('', $this->err);
 	}
 
 	public function testACoreLostWhileTheUpdateRunsIsAFailure(): void
