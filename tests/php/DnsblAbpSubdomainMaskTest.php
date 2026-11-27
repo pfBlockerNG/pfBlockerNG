@@ -49,4 +49,18 @@ final class DnsblAbpSubdomainMaskTest extends TestCase
 	{
 		$this->assertFalse(pfb_dnsbl_is_abp_rule_line($line), "[{$line}]");
 	}
+
+	/** A '.host^' is an Adblock rule, so it makes a headerless feed an Adblock feed, as '||host^' does (#4272 rule). */
+	public function testASubdomainOnlyMaskMakesAHeaderlessFeedAnAdblockFeed(): void
+	{
+		$path = (string) tempnam(sys_get_temp_dir(), 'pfb_mask_feed_');
+		try {
+			file_put_contents($path, "example.com\nhttp://foo.example.net/path\n");
+			$this->assertFalse(pfb_dnsbl_feed_is_abp($path), 'control: plain lines alone');
+			file_put_contents($path, "example.com\nhttp://foo.example.net/path\n.ads.example.org^\n");
+			$this->assertTrue(pfb_dnsbl_feed_is_abp($path));
+		} finally {
+			@unlink($path);
+		}
+	}
 }
