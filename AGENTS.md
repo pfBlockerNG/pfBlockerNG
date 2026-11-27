@@ -24,6 +24,10 @@ worktrees, landing, tests, issues, commits) carry over; *this package mechanics*
   approaches, architecturally significant change). Apply to autonomous flows too.
   It never collapses host-OS mutation, developer-host root, or copying a CI runner
   step onto a laptop — ask / `ready-for-human` even if comments look unanimous (#3203).
+- **Development loop** (owner, 2026-11-27): small steps, each checked only against what it touches —
+  its test-first tests plus tests of code it changes or likely affects (one PHPUnit file,
+  `go test -run`, `pytest -k`; coverage data when available). Full suite
+  (`scripts/agent/run-gates.sh --diff origin/<base>`) once at the end, before opening or pushing to a PR.
 - **Evidence:** claim without run artifact = ASSUMED; environmental claims written into
   artifacts probed in-session first; no self-exemption from MUST rule without quoting
   authorizing user message; debugging list ≥2 hypotheses + discriminating probe
@@ -116,11 +120,6 @@ New implementation-plan ADRs stopped (wayfinder map #1383).
 Test law (five principles, full text in `testing.md`): red-before/green-after test-first
 proof · every change ships with its tests · no coverage theater · front-end changes need
 front-end tests · tests document intent.
-
-Test runs (owner, 2026-11-27): while iterating, run only the change's tests and those of code it
-touches or likely affects (one PHPUnit file, `go test -run`, `pytest -k`; coverage data when
-available). Full suite (`scripts/agent/run-gates.sh --diff origin/<base>`) once before opening or
-pushing to a PR.
 
 ## Repository structure
 
