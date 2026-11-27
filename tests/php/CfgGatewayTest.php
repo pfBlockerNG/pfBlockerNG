@@ -217,66 +217,37 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	/**
-	 * Toggle field (pfb_dnsbl_lenient): 'on'/'off' read; Off writes ''.
+	 * Mode field (pfb_dnsbl_parse_mode, issue #4272): each canonical token round-trips; the
+	 * retired pfb_dnsbl_lenient checkbox tokens read as their behaviour and write canonically.
 	 *
 	 * Scenario:
-	 *   Background: pfb_dnsbl_lenient stored as 'on', legacy 'off', or ''.
-	 *     Given v.  When read/write.
-	 *     Then 'on' remains 'on'; legacy 'off' and empty both write canonical empty Off.
+	 *   Given a stored token.  When read then written back.
+	 *   Then 'strict'/'ports'/'lenient' are unchanged; legacy 'on' writes 'lenient';
+	 *   legacy '' and 'off' write 'ports'.
 	 */
-	public function testLenientFieldRoundTripOn(): void
+	public function testParseModeFieldRoundTrips(): void
 	{
-		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient';
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_parse_mode';
+		foreach ([
+			'strict' => [PfbDnsblParseMode::Strict, 'strict'],
+			'ports' => [PfbDnsblParseMode::Ports, 'ports'],
+			'lenient' => [PfbDnsblParseMode::Lenient, 'lenient'],
+			'on' => [PfbDnsblParseMode::Lenient, 'lenient'],
+			'' => [PfbDnsblParseMode::Ports, 'ports'],
+			'off' => [PfbDnsblParseMode::Ports, 'ports'],
+			// A hand-edited or restored token in another case keeps its mode, as a toggle's does.
+			'STRICT' => [PfbDnsblParseMode::Strict, 'strict'],
+			' Lenient ' => [PfbDnsblParseMode::Lenient, 'lenient'],
+		] as $stored => [$mode, $written]) {
+			$this->seedConfig($path, $stored);
+			$this->assertSame($stored, config_get_path($path));
 
-		// Given: canonical 'on'.
-		$this->seedConfig($path, 'on');
+			$enum = PfbConfig::read('dnsbl/pfb_dnsbl_parse_mode');
+			$this->assertSame($mode, $enum, "stored [{$stored}]");
 
-		// Before: raw 'on'.
-		$this->assertSame('on', config_get_path($path));
-
-		// When/After.
-		$enum = PfbConfig::read('dnsbl/pfb_dnsbl_lenient');
-		$this->assertSame(PfbToggle::On, $enum);
-
-		PfbConfig::write('dnsbl/pfb_dnsbl_lenient', $enum);
-		$this->assertSame('on', config_get_path($path));
-	}
-
-	public function testLenientFieldRoundTripOff(): void
-	{
-		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient';
-
-		// Given: legacy 'off' (read-compatible; never written).
-		$this->seedConfig($path, 'off');
-
-		// Before: raw 'off'.
-		$this->assertSame('off', config_get_path($path));
-
-		// When/After.
-		$enum = PfbConfig::read('dnsbl/pfb_dnsbl_lenient');
-		$this->assertSame(PfbToggle::Off, $enum);
-
-		PfbConfig::write('dnsbl/pfb_dnsbl_lenient', $enum);
-		$this->assertSame('', config_get_path($path));
-	}
-
-	public function testLenientFieldEmptyNormalisesToOff(): void
-	{
-		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient';
-
-		// Given: '' (pre-ADR-22 install, key never written).
-		$this->seedConfig($path, '');
-
-		// Before: raw ''.
-		$this->assertSame('', config_get_path($path));
-
-		// When/After: Off remains the canonical empty token.
-		$enum = PfbConfig::read('dnsbl/pfb_dnsbl_lenient');
-		$this->assertSame(PfbToggle::Off, $enum);
-
-		PfbConfig::write('dnsbl/pfb_dnsbl_lenient', $enum);
-		// Checkbox Off stores as ''.
-		$this->assertSame('', config_get_path($path));
+			PfbConfig::write('dnsbl/pfb_dnsbl_parse_mode', $enum);
+			$this->assertSame($written, config_get_path($path), "stored [{$stored}] written back");
+		}
 	}
 
 	/**
@@ -637,19 +608,19 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame(PfbToggle::On, $result, 'pfb_keep absent -> PfbToggle::On (default on)');
 	}
 
-	public function testReadReturnsRegisteredDefaultForLenientAbsentKey(): void
+	public function testReadReturnsRegisteredDefaultForParseModeAbsentKey(): void
 	{
-		// pfb_dnsbl_lenient default is 'off' -> PfbToggle::Off.
+		// pfb_dnsbl_parse_mode default is 'ports' -> PfbDnsblParseMode::Ports (issue #4272).
 		// Before: key absent.
 		$this->assertNull(
-			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient')
+			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_parse_mode')
 		);
 
 		// When.
-		$result = PfbConfig::read('dnsbl/pfb_dnsbl_lenient');
+		$result = PfbConfig::read('dnsbl/pfb_dnsbl_parse_mode');
 
-		// Then: Off.
-		$this->assertSame(PfbToggle::Off, $result, 'pfb_dnsbl_lenient absent -> Off');
+		// Then: Allow Ports.
+		$this->assertSame(PfbDnsblParseMode::Ports, $result, 'pfb_dnsbl_parse_mode absent -> Ports');
 	}
 
 	public function testReadReturnsRegisteredDefaultForPlainStringAbsentKey(): void
@@ -1674,7 +1645,7 @@ final class CfgGatewayTest extends TestCase
 			// issue #3694: DDR's target name and the name pfB-DNS answers A and AAAA for
 			'pfb_dns_name',
 			'global_log',
-			'pfb_dnsbl_lenient',
+			'pfb_dnsbl_parse_mode',
 			'pfb_py_reply',
 			'pfb_idn',
 			'pfb_idn_block_malicious',
@@ -1892,13 +1863,13 @@ final class CfgGatewayTest extends TestCase
 
 	public function testWriteEmitsExplicitOffTokenBeforeStorage(): void
 	{
-		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient';
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_noaaaa';
 
 		// Before: absent.
 		$this->assertNull(config_get_path($path));
 
 		// When: write Off enum.
-		PfbConfig::write('dnsbl/pfb_dnsbl_lenient', PfbToggle::Off);
+		PfbConfig::write('dnsbl/pfb_noaaaa', PfbToggle::Off);
 
 		// After: stored as the empty checkbox token; PfbToggle::Off backing remains 'off'.
 		$this->assertSame('', config_get_path($path));
@@ -2805,6 +2776,7 @@ final class CfgGatewayTest extends TestCase
 		$samples_by_read_adapter = [
 			'pfb_cfg_toggle_read'           => ['on', '', 'junk'],
 			'pfb_cfg_idn_mode_read'         => ['on', 'confusable', 'off', 'all', 'junk'],
+			'pfb_cfg_dnsbl_parse_mode_read' => ['strict', 'ports', 'lenient', 'on', 'off', '', 'junk'],
 			'pfb_cfg_top1m_source_read'     => ['tranco', 'cisco', 'openpagerank', 'majestic', 'cloudflare', 'alexa', 'domcop', 'junk'],
 			'pfb_cfg_alias_delta_mode_read' => ['auto', 'delta', 'replace', '', 'junk'],
 			'pfb_cfg_reentry_timeout_adapter' => ['60', '7200', '5', 'junk'],
@@ -3269,7 +3241,8 @@ final class CfgGatewayTest extends TestCase
 
 		$alias_of_section = array_flip(PFB_SECTIONS);
 		$registry         = pfb_cfg_registry();
-		$retired = ['pfb_interval', 'pfb_min', 'pfb_hour', 'pfb_dailystart'];
+		// issue #4272: pfb_dnsbl_lenient was renamed to dnsbl/pfb_dnsbl_parse_mode (registry old_name).
+		$retired = ['pfb_interval', 'pfb_min', 'pfb_hour', 'pfb_dailystart', 'pfb_dnsbl_lenient'];
 		foreach ($retired as $bare) {
 			$this->assertArrayHasKey($bare, $fixture, "historical fixture must retain retired key '{$bare}'");
 		}

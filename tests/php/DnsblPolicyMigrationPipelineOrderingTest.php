@@ -177,8 +177,8 @@ final class DnsblPolicyMigrationPipelineOrderingTest extends TestCase
 	{
 		$result = $this->runInstallSequence();
 
-		$this->assertSame(PfbToggle::Off, PfbConfig::read('dnsbl/pfb_dnsbl_lenient'),
-			'a genuinely fresh install must take the NEWCFG default (off), never the OLDCFG grandfather (on)');
+		$this->assertSame(PfbDnsblParseMode::Ports, PfbConfig::read('dnsbl/pfb_dnsbl_parse_mode'),
+			'a genuinely fresh install must take the NEWCFG default (ports), never the OLDCFG grandfather (lenient)');
 		$this->assertSame([], $result['groups'], 'a genuinely fresh install has no groups to convert');
 	}
 
@@ -241,7 +241,7 @@ final class DnsblPolicyMigrationPipelineOrderingTest extends TestCase
 
 		$result = $this->runInstallSequence();
 
-		$this->assertSame(PfbToggle::On, PfbConfig::read('dnsbl/pfb_dnsbl_lenient'),
+		$this->assertSame(PfbDnsblParseMode::Lenient, PfbConfig::read('dnsbl/pfb_dnsbl_parse_mode'),
 			'a box with real DNSBL groups is an existing install for EVERY dnsbl/* field, '
 			. 'not just the two #3288 introduces');
 	}

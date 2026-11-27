@@ -544,7 +544,7 @@ func TestFeedLogsAreStreamedToTheSink(t *testing.T) {
 		}
 	})
 	t.Run("DNSBL", func(t *testing.T) {
-		cfg := DNSBLConfig{DNSBLIP: true, Lenient: true}
+		cfg := DNSBLConfig{DNSBLIP: true, ParseMode: ParseLenient}
 		var cut recorder
 		_, err := ParseDNSBLFeed(&thenError{data: "bücher.de\ninvalid_domain\n", err: errRead}, cfg, io.Discard, cut.sink())
 		want := []FailRecord{{LineNo: 2, Line: "invalid_domain", Raw: "invalid_domain"}}
@@ -604,7 +604,7 @@ func TestFailingLinesAreNotRetained(t *testing.T) {
 	})
 	t.Run("DNSBL", func(t *testing.T) {
 		measure(t, func(sink Sink) (any, error) {
-			return ParseDNSBLFeed(&repeatReader{line: "invalid_domain\n", n: lines}, DNSBLConfig{DNSBLIP: true, Lenient: true}, io.Discard, sink)
+			return ParseDNSBLFeed(&repeatReader{line: "invalid_domain\n", n: lines}, DNSBLConfig{DNSBLIP: true, ParseMode: ParseLenient}, io.Discard, sink)
 		})
 	})
 }

@@ -86,7 +86,7 @@ def test_plain_cidr_lines_collected_as_ranges_and_bad_mask_rejected(
     v6_cidr_before = h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, V6_CIDR)
     try:
         h.inject(vm, spec)
-        h.set_dnsbl_lenient(vm, lenient)
+        h.set_dnsbl_parse_mode(vm, "lenient" if lenient else "strict")
         h.reload(vm, "update")
 
         h.flush_unbound_name(vm, control)
@@ -118,5 +118,5 @@ def test_plain_cidr_lines_collected_as_ranges_and_bad_mask_rejected(
         )
     finally:
         h.reset(vm)
-        h.set_dnsbl_lenient(vm, True)
+        h.set_dnsbl_parse_mode(vm, "lenient")
         vm.ssh("/bin/rm", "-f", feed_url)

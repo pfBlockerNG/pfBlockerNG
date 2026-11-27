@@ -23,7 +23,7 @@ final class DnsblFeedLoopWiringTest extends TestCase
 		. "10.0.0.1\n"				// private: suppressed unless the list is custom
 		. "2001:4860:4860::8888\n"
 		. "http://evil.example/path\n"		// a URL path: strict parsing skips it, lenient keeps the host
-		. "||9.9.9.9^\n"			// an IP anchor: an IP when dnsbl_ip is on, an ABP row when off
+		. "0.0.0.0 9.9.9.9\n"		// a hosts-line IP target: an IP when dnsbl_ip is on, no row when off
 		. "# Append critical updates below\n"
 		. "after.example\n";
 
@@ -69,9 +69,9 @@ final class DnsblFeedLoopWiringTest extends TestCase
 	 *
 	 * @return array{rows: list<string>, ip4: mixed, ip6: mixed, updateip: mixed}
 	 */
-	private function runLoop(bool $custom, string $dnsbl_ip, PfbToggle $lenient): array
+	private function runLoop(bool $custom, string $dnsbl_ip, PfbDnsblParseMode $mode, string $feed = self::FEED): array
 	{
-		file_put_contents("{$this->tmp}/feed.txt", self::FEED);
+		file_put_contents("{$this->tmp}/feed.txt", $feed);
 		$scope = pfb_test_page_eval(
 			pfb_test_page_region(self::APPLY,
 				'$pfb_dnsbl_state = pfb_dnsbl_parse_state();',
@@ -83,7 +83,7 @@ final class DnsblFeedLoopWiringTest extends TestCase
 				'pfb_parse_path'	=> "{$this->tmp}/feed.txt",
 				'pfb'			=> $GLOBALS['pfb'] + [
 					'dnsbl_ip'		=> $dnsbl_ip,
-					'dnsbl_lenient'		=> $lenient,
+					'dnsbl_parse_mode'	=> $mode,
 					'dnsbl_parse_err'	=> "{$this->tmp}/parse_err.log",
 					'updateip'		=> FALSE,
 				],
@@ -104,29 +104,46 @@ final class DnsblFeedLoopWiringTest extends TestCase
 			'ip4'		=> ['9.9.9.9'],
 			'ip6'		=> ['2001:4860:4860::8888'],
 			'updateip'	=> TRUE,
-		], $this->runLoop(FALSE, 'Enabled', PfbToggle::Off));
+		], $this->runLoop(FALSE, 'Enabled', PfbDnsblParseMode::Ports));
 	}
 
 	public function testCustomListKeepsPrivateIp(): void
 	{
-		$this->assertSame(['10.0.0.1', '9.9.9.9'], $this->runLoop(TRUE, 'Enabled', PfbToggle::Off)['ip4']);
+		$this->assertSame(['10.0.0.1', '9.9.9.9'], $this->runLoop(TRUE, 'Enabled', PfbDnsblParseMode::Ports)['ip4']);
 	}
 
 	public function testDnsblIpDisabledCollectsNoIps(): void
 	{
 		$this->assertSame([
-			'rows'		=> ['["d","example.com"]', '["a","||9.9.9.9^"]'],
+			'rows'		=> ['["d","example.com"]'],
 			'ip4'		=> [],
 			'ip6'		=> [],
 			'updateip'	=> FALSE,
-		], $this->runLoop(FALSE, 'Disabled', PfbToggle::Off));
+		], $this->runLoop(FALSE, 'Disabled', PfbDnsblParseMode::Ports));
 	}
 
 	public function testLenientKeepsUrlHost(): void
 	{
 		$this->assertSame(
 			['["d","example.com"]', '["d","evil.example"]'],
-			$this->runLoop(FALSE, 'Enabled', PfbToggle::On)['rows']
+			$this->runLoop(FALSE, 'Enabled', PfbDnsblParseMode::Lenient)['rows']
 		);
+	}
+
+	/**
+	 * issue #4272: the feed's kind is read from the file into the parse context. An Adblock-headed feed keeps its
+	 * hostnames and drops its path rules; a custom list with the same lines is Adblock only by that header.
+	 */
+	public function testAnAdblockFeedIsParsedAsAdblock(): void
+	{
+		$feed = "[Adblock Plus 2.0]\n.imgur.com/lumbar.gif\nimgur.com\n";
+		$this->assertSame(['["d","imgur.com"]'], $this->runLoop(FALSE, 'Enabled', PfbDnsblParseMode::Lenient, $feed)['rows']);
+		$this->assertSame(['["d","imgur.com"]'], $this->runLoop(TRUE, 'Enabled', PfbDnsblParseMode::Lenient, $feed)['rows']);
+
+		// Without the header a feed is Adblock by an Adblock rule, except a custom list.
+		$feed = "||ads.example.com^\n.imgur.com/lumbar.gif\n";
+		$this->assertSame(['["a","||ads.example.com^"]'], $this->runLoop(FALSE, 'Enabled', PfbDnsblParseMode::Lenient, $feed)['rows']);
+		$this->assertSame(['["a","||ads.example.com^"]', '["d","imgur.com"]'],
+			$this->runLoop(TRUE, 'Enabled', PfbDnsblParseMode::Lenient, $feed)['rows']);
 	}
 }

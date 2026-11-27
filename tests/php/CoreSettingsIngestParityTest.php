@@ -182,7 +182,7 @@ final class CoreSettingsIngestParityTest extends TestCase
 		$ids = array_column($doc['cases'], 'id');
 		$this->assertSame(array_values(array_unique($ids)), $ids, 'a case id appears once');
 		foreach (['defaults', 'suppression-on', 'suppression-off', 'cidr-disabled', 'cidr-v4-lowest', 'cidr-v4-highest-v6-highest', 'cidr-out-of-range', 'cidr-garbage',
-			'dnsbl-ip-disabled', 'dnsbl-ip-deny-inbound', 'lenient-on', 'lenient-off', 'lenient-absent', 'filter-on', 'filter-off', 'filter-absent',
+			'dnsbl-ip-disabled', 'dnsbl-ip-deny-inbound', 'parse-mode-strict', 'parse-mode-ports', 'parse-mode-lenient', 'parse-mode-legacy-on', 'parse-mode-legacy-off', 'parse-mode-absent', 'filter-on', 'filter-off', 'filter-absent',
 			'allowlist-valid', 'allowlist-invalid-dropped', 'allowlist-base64-garbage', 'allowlist-spaces-and-blank-lines', 'allowlist-ipv6-zone',
 			'proxy-none', 'proxy-host-and-port', 'proxy-host-port-user-and-password', 'proxy-user-without-password', 'proxy-url-with-userinfo', 'proxy-url-with-crlf',
 			'proxy-url-with-https-scheme', 'proxy-url-with-socks5-scheme', 'proxy-url-with-socks4-scheme', 'proxy-port-negative', 'proxy-port-beyond-65535',
@@ -205,7 +205,7 @@ final class CoreSettingsIngestParityTest extends TestCase
 			'scheduled-work-disabled-string', 'skipfeed-limit-beyond-page', 'skipfeed-limit-negative', 'skipfeed-limit-string', 'feed-sanity-string'] as $id) {
 			$this->assertContains($id, $refused, "the hostile row {$id}");
 		}
-		$this->assertSame(['suppression', 'suppressionCidrV4', 'suppressionCidrV6', 'dnsblIp', 'dnsblLenient', 'feedHostFilter', 'feedHostAllowlist', 'selfAddresses',
+		$this->assertSame(['suppression', 'suppressionCidrV4', 'suppressionCidrV6', 'dnsblIp', 'dnsblParseMode', 'feedHostFilter', 'feedHostAllowlist', 'selfAddresses',
 			'proxyUrl', 'proxyUser', 'proxyPassword', 'proxyUnusable', 'scheduledWorkDisabled', 'applyWindow', 'skipFeedLimit', 'feedSanity'], array_keys($doc['defaults']), 'the defaults name every field in the protocol order');
 	}
 
@@ -223,7 +223,7 @@ final class CoreSettingsIngestParityTest extends TestCase
 			'supp'    => static fn(): bool => $pfb['supp'] === PfbToggle::On,
 			'floors'  => static fn(): array => pfb_list_cidr_floors([], 'auto', (string) $pfb['supp_cidr'], (string) $pfb['supp_cidr_v6']),
 			'dnsblIp' => static fn(): bool => pfb_dnsblip_action_value($pfb['dnsblconfig']['action'] ?? NULL) !== 'Disabled',
-			'lenient' => static fn(): bool => $pfb['dnsbl_lenient'] === PfbToggle::On,
+			'parseMode' => static fn(): string => $pfb['dnsbl_parse_mode']->value,
 			'filter'  => static fn(): bool => pfb_feed_filter_enabled(),
 			'allow'   => static fn(): array => pfb_feed_internal_allowlist(),
 			'cronDisabled' => static fn(): bool => pfb_cron_disabled(),

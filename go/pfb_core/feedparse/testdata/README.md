@@ -70,7 +70,8 @@ evaluates it, since it is inline code there.
 Case: `id`, `description`, `config` and `lines`; one case is one feed file, its lines parsed in order with the parser's
 per-feed state (CSV detection, reverse format, the hpHosts end marker) carried between them.
 
-- `config`: `dnsbl_ip` (bool: IPs in a domain feed are collected), `lenient` (bool: permissive scheme handling),
+- `config`: `dnsbl_ip` (bool: IPs in a domain feed are collected), `parse_mode` (`strict`, `ports` or `lenient`: the Feed
+  Line Parsing setting, issue #4272), `abp_feed` (bool: the feed is an Adblock feed, as `dnsbl_kind.json` decides it),
   `custom` (bool: a user list), `suppression` (bool: the global Suppression setting, `$pfb['supp']`).
 - `lines`: non-empty; each `{"line" | "line_hex", "expect", optional "old_expect", optional "appliance"}`, the line as
   `fgets()` returns it (its `\n` included). `old_expect` has the shape of `expect` and is present only where Core differs from
@@ -109,6 +110,12 @@ per-feed state (CSV detection, reverse format, the hpHosts end marker) carried b
   is refused by Core and accepted by PCRE; `{,n}` is read as `{0,n}`, which is PCRE2 >= 10.43 (probed on 10.46); an older
   PCRE2 may read it differently.
 
+## `dnsbl_kind.json`: whether a DNSBL feed is an Adblock feed (`pfb_dnsbl_feed_is_abp()`, `pfb_dnsbl_feed_has_abp_header()`)
+
+Case: `id`, `description`, the feed bytes (`input` or `input_hex`) and `expect`: `{"feed": bool, "custom": bool}`, the answer for a
+downloaded feed (an Adblock-family header on the first non-blank line, or any line not led by `#` that is an Adblock rule or an
+AdGuard HTML filter) and for a custom list (the header alone). Issue #4272; Core's `DNSBLFeedIsABP()`.
+
 ## `feed.json`: whole feeds through the per-feed loops (`pfb_ip_parse_feed()`, `pfb_dnsbl_parse_feed()`)
 
 Top level: `{"schema": 1, "ip": [...], "dnsbl": [...]}`; ids are unique across both lists. A case is one feed file as the parse stage
@@ -144,7 +151,7 @@ IP case (`ip`):
 
 DNSBL case (`dnsbl`):
 
-- `config`: `dnsbl_ip`, `lenient`, `custom`, `suppression` (as in `dnsbl.json`).
+- `config`: `dnsbl_ip`, `parse_mode`, `abp_feed`, `custom`, `suppression` (as in `dnsbl.json`).
 - `expect`: `out`/`out_hex`, the NDJSON rows written to the `.bk` (`["d","name"]` or `["a","rule"]` and a newline, `json_encode` with
   `JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE`); `ip4`, `ip6`, the lists written to `_v4.ip` and
   `_v6.ip` (`array_unique`, first-seen order, the IPs the feed carried); `updateip`; `scheme_skipped`, the strict-scheme count behind

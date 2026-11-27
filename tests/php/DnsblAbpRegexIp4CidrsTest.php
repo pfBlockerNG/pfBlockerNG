@@ -61,7 +61,8 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 			'header'    => 'testfeed',
 			'custom'    => $custom,
 			'dnsbl_ip'  => $dnsblIp !== 'Disabled',
-			'lenient'   => TRUE,
+			'parse_mode' => PfbDnsblParseMode::Lenient,
+			'abp_feed'   => FALSE,
 			'parse_err' => $this->failLog,
 		];
 		$warnings = [];

@@ -140,7 +140,7 @@ func TestFeedLineCeilingSkipsAndBoundsLargeLines(t *testing.T) {
 		var got DNSBLFeed
 		var err error
 		growth := heapGrowth(t, func() {
-			got, err = ParseDNSBLFeed(in, DNSBLConfig{Lenient: true}, &out, Sink{
+			got, err = ParseDNSBLFeed(in, DNSBLConfig{ParseMode: ParseLenient}, &out, Sink{
 				Fail: func(rec FailRecord) { fails = append(fails, rec) },
 			})
 		})

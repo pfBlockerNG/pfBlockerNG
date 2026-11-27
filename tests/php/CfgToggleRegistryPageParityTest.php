@@ -272,12 +272,9 @@ final class CfgToggleRegistryPageParityTest extends TestCase
 	 * (`$pfb['<mirror>']['<key>'] ?: ''`), so absent and every falsy token must
 	 * collapse to Off through the gateway too.
 	 *
-	 * `pfb_dnsbl_lenient` is the one recorded divergence: the page declared `''`
-	 * while the registry declares `'off'` — two spellings of the same Off under
-	 * the #2120 toggle contract, which the matrix pins state by state. Its
-	 * `grandfather => [PFB_GF_ABSENT => 'on']` arm is an install/upgrade-time
-	 * write (pfblockerng.inc's registry pass), never a read-time resolution, so
-	 * a genuinely absent key resolves through the registered default here.
+	 * The seventh #2812 site, `pfb_dnsbl_lenient`, is no toggle any more: issue
+	 * #4272 renamed it to the three-way `dnsbl/pfb_dnsbl_parse_mode`
+	 * (DnsblParseModeTest).
 	 *
 	 * @var array<string,array{0:string,1:string,2:string}>
 	 */
@@ -295,11 +292,6 @@ final class CfgToggleRegistryPageParityTest extends TestCase
 		'dnsbl/pfb_regex_cap' => [
 			'installedpackages/pfblockerngdnsblsettings/config/0',
 			'pfblockerng_dnsbl.php:91',
-			self::SHAPE_FALSY_EMPTY,
-		],
-		'dnsbl/pfb_dnsbl_lenient' => [
-			'installedpackages/pfblockerngdnsblsettings/config/0',
-			'pfblockerng_dnsbl.php:95',
 			self::SHAPE_FALSY_EMPTY,
 		],
 		'gen/enable_cb' => [
@@ -355,10 +347,8 @@ final class CfgToggleRegistryPageParityTest extends TestCase
 	}
 
 	/**
-	 * Every one of the seven is registered, adapter-bearing, and its registered
-	 * default is spelled out as a literal. For six, the default is the page's
-	 * own `''`; for `pfb_dnsbl_lenient` it is the registry's canonical `'off'`
-	 * — the recorded page/registry spelling divergence, both reading Off.
+	 * Every one of the six toggles is registered, adapter-bearing, and its registered
+	 * default is the page's own `''`, spelled out as a literal.
 	 */
 	public function testAll2812SitesAreRegisteredClassifiedToggles(): void
 	{
@@ -366,12 +356,11 @@ final class CfgToggleRegistryPageParityTest extends TestCase
 			'dnsbl/pfb_dnsbl'                   => '',
 			'dnsbl/pfb_idn_escalate_suspicious' => '',
 			'dnsbl/pfb_regex_cap'               => '',
-			'dnsbl/pfb_dnsbl_lenient'           => 'off',
 			'gen/enable_cb'                     => '',
 		];
 
 		$this->assertSame(array_keys(self::FIELDS_2812), array_keys($expected_defaults),
-			'the default table must cover exactly the seven #2812 fields under test');
+			'the default table must cover exactly the six #2812 toggles under test');
 
 		$registry = pfb_cfg_registry();
 		foreach (self::FIELDS_2812 as $path_key => [, $site,]) {

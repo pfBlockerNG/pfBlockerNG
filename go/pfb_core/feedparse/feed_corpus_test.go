@@ -53,10 +53,11 @@ type dnsblCaseJSON struct {
 	ID          *string `json:"id"`
 	Description *string `json:"description"`
 	Config      *struct {
-		DNSBLIP     *bool `json:"dnsbl_ip"`
-		Lenient     *bool `json:"lenient"`
-		Custom      *bool `json:"custom"`
-		Suppression *bool `json:"suppression"`
+		DNSBLIP     *bool      `json:"dnsbl_ip"`
+		ParseMode   *ParseMode `json:"parse_mode"`
+		ABPFeed     *bool      `json:"abp_feed"`
+		Custom      *bool      `json:"custom"`
+		Suppression *bool      `json:"suppression"`
 	} `json:"config"`
 	feedInput
 	Expect *struct {
@@ -191,13 +192,14 @@ func corpusItems(where string, raws []json.RawMessage) ([]string, error) {
 
 func (c dnsblCaseJSON) load() (dnsblFeedCase, error) {
 	k, e := c.Config, c.Expect
-	if k == nil || e == nil || k.DNSBLIP == nil || k.Lenient == nil || k.Custom == nil || k.Suppression == nil || e.IP4 == nil || e.IP6 == nil ||
+	if k == nil || e == nil || k.DNSBLIP == nil || k.ParseMode == nil || !k.ParseMode.Valid() || k.ABPFeed == nil || k.Custom == nil || k.Suppression == nil || e.IP4 == nil || e.IP6 == nil ||
 		e.UpdateIP == nil || e.SchemeSkipped == nil || e.Stop == nil || e.Messages == nil {
 		return dnsblFeedCase{}, errors.New("config and expect need every key")
 	}
 	want := dnsblFeedCase{
-		id:            *c.ID,
-		cfg:           DNSBLConfig{DNSBLIP: *k.DNSBLIP, Lenient: *k.Lenient, Custom: *k.Custom, Suppression: *k.Suppression},
+		id: *c.ID,
+		cfg: DNSBLConfig{DNSBLIP: *k.DNSBLIP, ParseMode: *k.ParseMode, ABPFeed: *k.ABPFeed, Custom: *k.Custom, Suppression: *k.Suppression,
+			ICANN: corpusICANN()},
 		ip4:           *e.IP4,
 		ip6:           *e.IP6,
 		updateIP:      *e.UpdateIP,
@@ -383,7 +385,7 @@ var errRead = errors.New("connection reset")
 // and no placeholder takes the place of a feed nobody finished reading.
 func TestFeedReadAndWriteErrors(t *testing.T) {
 	ipCfg := IPConfig{VType: "_v4", PFType: "auto"}
-	dnsCfg := DNSBLConfig{DNSBLIP: true, Lenient: true}
+	dnsCfg := DNSBLConfig{DNSBLIP: true, ParseMode: ParseLenient}
 	broken := func(good string) *thenError {
 		return &thenError{data: good, err: errRead}
 	}
@@ -446,7 +448,7 @@ func (r *thenError) Read(p []byte) (int, error) {
 // Malformed documents each break one rule of the schema; the runner must refuse every one.
 func TestFeedCorpusLoaderIsStrict(t *testing.T) {
 	const ip = `{"id": "a", "description": "d", "config": {"vtype": "_v4", "pftype": "auto", "custom": false, "cidr_floor_v4": "Disabled", "cidr_floor_v6": "Disabled", "suppression": false, "placeholder": "127.1.7.7"}, "input": "1.2.3.4\n", "expect": {"out": "1.2.3.4\n", "parse_fail": 0, "suppressed": false, "details": [], "messages": [], "placeholder": ""}}`
-	const dn = `{"id": "b", "description": "d", "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false}, "input": "a.example\n", "expect": {"out": "[\"d\",\"a.example\"]\n", "ip4": [], "ip6": [], "updateip": false, "scheme_skipped": 0, "stop": false, "details": [], "messages": []}}`
+	const dn = `{"id": "b", "description": "d", "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false}, "input": "a.example\n", "expect": {"out": "[\"d\",\"a.example\"]\n", "ip4": [], "ip6": [], "updateip": false, "scheme_skipped": 0, "stop": false, "details": [], "messages": []}}`
 	doc := func(ip, dn string) string { return `{"schema": 1, "ip": [` + ip + `], "dnsbl": [` + dn + `]}` }
 	if _, _, err := loadFeedCorpus([]byte(doc(ip, dn))); err != nil {
 		t.Fatalf("the well-formed document is refused: %v", err)
@@ -476,7 +478,7 @@ func TestFeedCorpusLoaderIsStrict(t *testing.T) {
 		"detail order":               doc(strings.Replace(ip, `"details": []`, `"details": [{"line_no": 2, "line": "a", "raw": "a"}, {"line_no": 1, "line": "a", "raw": "a"}]`, 1), dn),
 		"detail hex is UTF-8":        doc(strings.Replace(ip, `"details": []`, `"details": [{"line_no": 1, "line": {"hex": "61"}, "raw": "a"}]`, 1), dn),
 		"unknown dnsbl config":       doc(ip, strings.Replace(dn, `"custom": false,`, `"custom": false, "x": true,`, 1)),
-		"dnsbl flag not a bool":      doc(ip, strings.Replace(dn, `"lenient": true`, `"lenient": 1`, 1)),
+		"dnsbl flag not a bool":      doc(ip, strings.Replace(dn, `"abp_feed": false`, `"abp_feed": 0`, 1)),
 		"dnsbl ip not unique":        doc(ip, strings.Replace(dn, `"ip4": []`, `"ip4": ["1.2.3.4", "1.2.3.4"]`, 1)),
 		"dnsbl missing stop":         doc(ip, strings.Replace(dn, `"stop": false, `, ``, 1)),
 		"dnsbl missing messages":     doc(ip, strings.Replace(dn, `, "messages": []`, ``, 1)),
