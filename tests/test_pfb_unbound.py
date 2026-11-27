@@ -545,6 +545,24 @@ class TestDbSubsystem:
             f"expected 1, got {con.execute('SELECT totalqueries FROM resolver WHERE row = 0').fetchone()[0]!r}"
         )
 
+    def test_group_epoch_check_reaches_the_apex_payload_of_a_subdomain_only_zone(
+        self, tmp_path: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """issue #4284: a '.host^' zone blocks its own key through its "apex" payload, so the owner
+        of that payload is a Group queries can be counted against, and its missing epoch is reported."""
+        db = str(tmp_path / "dnsbl.sqlite")
+        pfb_unbound.pfb["pfb_py_dnsbl"] = db
+        pfb_unbound.pfb["sqlite3_dnsbl_con"] = True
+        pfb_unbound.pfb_db_validate(pfb_unbound.DB_DNSBL)
+        con = pfb_unbound._db_conns[pfb_unbound.DB_DNSBL]
+        pfb_unbound._db_create(pfb_unbound.DB_DNSBL, con.cursor())
+        con.execute("INSERT INTO dnsbl_group_epochs VALUES ('Mask', 'custom', lower(hex(randomblob(16))))")
+        con.commit()
+        apex = {"group_owner": "Anchor", "group_origin": "custom"}
+        zone_db = {"webhop.net": {"group_owner": "Mask", "group_origin": "custom", "apex": apex}}
+        pfb_unbound._db_group_epochs(True, {}, zone_db)
+        assert "('Anchor', 'custom')" in capsys.readouterr().err
+
     def test_dnsbl_counter_per_group(self, tmp_path: Any) -> None:
         db = str(tmp_path / "dnsbl.sqlite")
         pfb_unbound.pfb["pfb_py_dnsbl"] = db

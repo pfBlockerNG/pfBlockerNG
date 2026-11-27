@@ -3211,15 +3211,20 @@ def _db_group_epochs(
             return {}
     missing: set[tuple[str, str]] = set()
     for rules in rule_dbs:
-        for rule in rules.values():
-            while rule is not None:
+        for top in rules.values():
+            # issue #4284: a '.host^' zone also blocks through its nested "apex" payload.
+            pending: list[Any] = [top]
+            while pending:
+                rule = pending.pop()
+                if not isinstance(rule, dict):
+                    continue
                 origin = rule.get("group_origin", "custom")
                 owner = rule.get("group_owner")
                 if owner is None and "index" in rule:
                     owner = resolve_feed_group(rule["index"], feed_groups)[1]
                 if owner and (owner, origin) not in epochs:
                     missing.add((owner, origin))
-                rule = rule.get("top1m_fallback")
+                pending += [rule.get("top1m_fallback"), rule.get("apex")]
     if missing:
         sys.stderr.write("[pfBlockerNG]: DNSBL accounting unavailable for owners: {}\n".format(sorted(missing)))
     return epochs
@@ -4477,6 +4482,8 @@ class Rule:
                         inner pattern (REGEX).
         wildcard        DOMAIN only: True -> domain + all subdomains (zone); False ->
                         exact (data). Ignored for REGEX.
+        apex            DOMAIN only: False for AdGuard's subdomain-only ``.domain^``
+                        (issue #4284), which blocks the subdomains and never the domain.
         important       the rule carried ``$important`` (raises its feed band 1/2 ->
                         3/4). Always meaningless for, but recorded on, USER rules
                         (they are sovereign regardless).
@@ -4504,6 +4511,7 @@ class Rule:
     log: str
     signature: tuple[str, tuple[str, ...]]
     wildcard: bool = False
+    apex: bool = True
 
 
 @dataclass
@@ -4534,6 +4542,8 @@ class BuildResult:
     reconciled rule:
         data_db[domain]          = {"log": <flag>, "index": <int>, "important": bool, "band": int}
         zone_db[registrable]     = {"log": <flag>,        "index": <int>, "important": bool, "band": int}
+                                   (+ "apex": <payload> | False for a '.host^' zone: the payload that
+                                   blocks the key itself, or False when nothing does)
         feed_group_index_db[idx] = {"feed": <str>, "group": <str>}
         white_db[domain]         = {"wildcard": bool, "important": bool, "band": int}
         regex_db[name]           = {"re": <compiled>, "important": bool, "band": int}   (ABP block-regex)
@@ -4831,6 +4841,10 @@ def _dnsbl_parse_abp_regex(stripped: str) -> tuple[str, str, str] | None:
 
 _DNSBL_ABP_COSMETIC_PREFIX_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._,~*-")
 
+# issue #4284: AdGuard's subdomain-only mask '.host^', optionally with '$options'; twin of
+# the pattern in PHP's pfb_dnsbl_is_abp_rule_line().
+_DNSBL_SUBDOMAIN_MASK_RE = re.compile(r"\.[A-Za-z0-9_.-]+\^(?:\$.*)?", re.DOTALL)
+
 
 def _dnsbl_is_abp_rule_line(line: str) -> bool:
     """Capture guard: should ``build()`` route ``line`` to ``parse_abp()``?
@@ -4861,6 +4875,8 @@ def _dnsbl_is_abp_rule_line(line: str) -> bool:
     if line.startswith(","):
         return False
     if line.startswith("||") or line.startswith("@@"):
+        return True
+    if _DNSBL_SUBDOMAIN_MASK_RE.fullmatch(line):
         return True
     if "#" in line:
         hits = [(line.find(m), len(m)) for m in _DNSBL_ELEMENT_HIDING_MARKERS]
@@ -4898,6 +4914,7 @@ def parse_abp(
     KEEP (-> Rule):
         ``||domain^`` (+DNS-options)                 block, domain, wildcard
         ``@@||domain^`` (+DNS-options)               allow, domain, wildcard
+        ``.domain^`` (+DNS-options)                  block, domain, wildcard, no apex
         ``<ip> domain`` (hosts)                      block, domain, wildcard
         plain bare ``domain``                        block, domain, wildcard
         ``/re/`` (block) / ``@@/re/`` (allow)        block/allow, regex (raw inner)
@@ -4957,9 +4974,16 @@ def parse_abp(
 
     # ---- network rules: @@||domain^ (allow) / ||domain^ (block) ---------- #
     is_allow = s.startswith("@@||")
-    is_block = s.startswith("||")
+    # issue #4284: AdGuard's '.domain^' blocks the subdomains of domain, never domain itself.
+    is_subdomains = _DNSBL_SUBDOMAIN_MASK_RE.fullmatch(s) is not None
+    is_block = s.startswith("||") or is_subdomains
     if is_allow or is_block:
-        rest = s[4:] if is_allow else s[2:]
+        if is_allow:
+            rest = s[4:]
+        elif is_subdomains:
+            rest = s[1:]
+        else:
+            rest = s[2:]
         anchor, _, opts_str = rest.partition("$")
         # split the anchor at the ABP separator ``^``; reject any path token
         host = anchor.split("^", 1)[0]
@@ -4990,8 +5014,11 @@ def parse_abp(
             feed=feed,
             group=group,
             log=log,
-            signature=(dom, dns_opts),
+            # A marker no option token can spell keeps '.domain^' apart from '||domain^' and
+            # from a '/domain/' regex in $badfilter pruning.
+            signature=(dom, ("<subdomains>", *dns_opts) if is_subdomains else dns_opts),
             wildcard=True,  # ||domain^ / @@||domain^ cover the domain + subdomains
+            apex=not is_subdomains,
         )
 
     # ---- hosts: "<ip> <domain>" ----------------------------------------- #
@@ -5303,7 +5330,8 @@ class BlockDomainRule:
     ``cls`` is DNSBL_CLASS_DATA (exact) or DNSBL_CLASS_ZONE (wildcard); ``key`` is
     the anchor domain itself for a ZONE (ABP ``||host^`` covers subdomains at any
     depth -- no registrable-parent reduction, #718) or the exact domain for DATA
-    (an exact fold, or a TLD-exclusion carve-out).
+    (an exact fold, or a TLD-exclusion carve-out). ``apex`` False (a ZONE from
+    ``.host^``, issue #4284) leaves the key itself unblocked.
     """
 
     cls: str
@@ -5314,6 +5342,7 @@ class BlockDomainRule:
     feed: str
     group: str
     log: str
+    apex: bool = True
 
 
 @dataclass(frozen=True)
@@ -5490,8 +5519,11 @@ def reconcile(
             # plain/hosts path concept and must not demote an ABP anchor. TLD exclusion still
             # opts a domain out of wildcarding (transparent exact DATA), and a
             # wildcard=False fold (exact /^D$/) stays forced to DATA.
+            apex = r.apex  # False only for a '.host^' domain rule
             if wildcard and domain not in exclusion:
                 cls, key = DNSBL_CLASS_ZONE, domain
+            elif not apex:
+                continue  # issue #4284: exact DATA would block only the excluded apex
             else:
                 cls, key = DNSBL_CLASS_DATA, domain
             result.block_domains.append(
@@ -5504,6 +5536,7 @@ def reconcile(
                     feed=r.feed,
                     group=r.group,
                     log=r.log,
+                    apex=apex,
                 )
             )
         # NOTE: a plain user rule alone does NOT force ``important_rules`` -- the fast
@@ -5972,7 +6005,8 @@ def build(
     (feed, group)) -- accounting only, no gate DECISION changes. issue #2371 adds a
     real gate: a FEED entry AT its winning public suffix is dropped ('ignore',
     tallied 'suffix_drop') or a wildcard ZONE anchor demoted to exact DATA ('apex',
-    tallied 'suffix_demote'); USER provenance is exempt in every state.
+    tallied 'suffix_demote'); USER provenance is exempt in every state. A '.host^' zone
+    (issue #4284) has no exact form, so 'apex' drops it too ('suffix_drop').
     """
     # issue #3050: dot-stripped ONCE here; every consumer below reads these as-is.
     blacklist_roots = frozenset(t.strip(".") for t in config.get("tld_wildcard_blacklist", []))
@@ -6005,7 +6039,8 @@ def build(
         else set()
     )
     # issue #3648: zone key whose last writer is a TOP1M-filtered row -> the key's last
-    # unfiltered payload (None when it has none); _zone_entry_for() reads it.
+    # unfiltered payload (None when it has none); _zone_entry_for() reads it. issue #4284: a
+    # '.host^' apex payload's fallback can itself carry a TOP1M filter, resolved the same way.
     zone_top1m: dict[str, dict[str, Any] | None] = {}
 
     def track_zone_top1m(key: str, filtered: bool) -> None:
@@ -6015,6 +6050,20 @@ def build(
             return
         prior = zone_db.get(key)
         zone_top1m[key] = prior if prior is not None and key not in zone_top1m else zone_top1m.get(key)
+
+    def apex_writer(key: str) -> dict[str, Any] | None:
+        # The payload that blocks zone ``key`` itself before the next write, carrying its TOP1M
+        # filter (the end-of-build pass below marks only the key's last writer), or None.
+        def blocker(entry: dict[str, Any] | None) -> dict[str, Any] | None:
+            apex = None if entry is None else entry.get("apex", entry)
+            return apex if isinstance(apex, dict) else None
+
+        writer = blocker(zone_db.get(key))
+        # A nested apex payload already carries its own TOP1M filter; the key's filter belongs to
+        # the '.host^' that holds it.
+        if writer is None or key not in zone_top1m or writer is not zone_db.get(key):
+            return writer
+        return {**writer, "top1m": top1m, "top1m_fallback": blocker(zone_top1m[key])}
 
     def index_for(feed: str, group: str) -> int:
         nonlocal next_index
@@ -6229,6 +6278,10 @@ def build(
                     _tally_reject(rejects, b.feed or "DNSBL", b.group or "DNSBL", "suffix_drop")
                     continue
                 if policy == "apex" and cls == DNSBL_CLASS_ZONE:
+                    if not b.apex:
+                        # issue #4284: exact DATA would block only the apex '.host^' excludes.
+                        _tally_reject(rejects, b.feed or "DNSBL", b.group or "DNSBL", "suffix_drop")
+                        continue
                     _tally_reject(rejects, b.feed or "DNSBL", b.group or "DNSBL", "suffix_demote")
                     cls = DNSBL_CLASS_DATA
             idx = index_for(b.feed or "DNSBL", b.group or "DNSBL")
@@ -6236,6 +6289,11 @@ def build(
             payload = {"log": b.log or "0", "index": idx, "important": b.important, "band": b.band}
             top1m_row = bool(top1m_rows) and (b.feed, b.group) in top1m_rows
             if cls == DNSBL_CLASS_ZONE:
+                if not b.apex:
+                    # issue #4284: a '.host^' blocks the key's subdomains; the key keeps the payload
+                    # that already blocked it (apex = a.apex or b.apex), with that payload's own
+                    # band, attribution and TOP1M filter.
+                    payload["apex"] = apex_writer(b.key) or False
                 if top1m_rows:
                     track_zone_top1m(b.key, top1m_row)
                 zone_db[b.key] = payload
@@ -6834,22 +6892,29 @@ def iter_domain_suffixes(name: str) -> Iterator[str]:
         q = q.split(".", 1)[-1]
 
 
-def _zone_entry_for(q_name: str, entry: dict[str, Any]) -> dict[str, Any] | None:
-    """The zone payload that blocks ``q_name`` (issue #3648): an entry last written by a
+def _zone_entry_for(q_name: str, key: str, entry: dict[str, Any]) -> dict[str, Any] | None:
+    """The zone payload at ``key`` that blocks ``q_name`` (issue #3648): an entry last written by a
     TOP1M-filtered Group yields, for a name TOP1M lists, to the key's last unfiltered writer --
-    or blocks nothing when there is none. All filtered zones share one immutable name set."""
+    or blocks nothing when there is none. All filtered zones share one immutable name set.
+    issue #4284: a ``.host^`` entry blocks ``key`` itself only through its ``"apex"`` payload
+    (the rule that blocked ``key`` before it); ``"apex": False`` means none did. An apex
+    payload's fallback can be filtered too, so each fallback is resolved like the entry."""
     top1m = entry.get("top1m")
     if top1m is not None and _top1m_listed(q_name, top1m):
+        # A '.host^' apex payload's fallback can carry a TOP1M filter of its own.
         fallback: dict[str, Any] | None = entry.get("top1m_fallback")
-        return fallback
-    return entry
+        return None if fallback is None else _zone_entry_for(q_name, key, fallback)
+    if key != q_name or "apex" not in entry:
+        return entry
+    apex = entry["apex"]
+    return _zone_entry_for(q_name, key, apex) if apex else None
 
 
 def find_zone_match(q_name: str, zone_db: dict[str, Any]) -> tuple[str, dict] | tuple[None, None]:
     for q in iter_domain_suffixes(q_name):
         entry = zone_db.get(q)
         if entry is not None:
-            entry = _zone_entry_for(q_name, entry)
+            entry = _zone_entry_for(q_name, q, entry)
             if entry is not None:
                 return q, entry
     return None, None
@@ -7202,7 +7267,7 @@ def _scan_block_band(
         for q in iter_domain_suffixes(q_name):
             entry = zone_db.get(q)
             if entry is not None:
-                entry = _zone_entry_for(q_name, entry)
+                entry = _zone_entry_for(q_name, q, entry)
                 if entry is not None:
                     band = _block_entry_band(entry)
                     if band > best:

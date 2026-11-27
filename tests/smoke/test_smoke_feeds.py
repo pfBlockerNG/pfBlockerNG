@@ -1149,8 +1149,7 @@ def test_headerless_adblock_feed_is_parsed_as_adblock(deployed_vm: SmokeVM, clie
       ``<suffix>^`` and ``.<subonly>^``, and ``<port>:8080``, all resolving before the load,
     When  the feed loads in Lenient mode,
     Then  ``<anchored>``, ``<exact>``, ``<suffix>`` and ``<port>`` are blocked, while ``<cosmetic>``,
-      ``<path>`` and ``<subonly>`` (a subdomains-only mask, which pfBlockerNG cannot express)
-      still resolve.
+      ``<path>`` and ``<subonly>`` (a subdomains-only mask, issue #4284) still resolve.
     """
     names = {
         k: h.unique_domain(f"abp4272{k}") for k in ("anchor", "cosm", "path", "exact", "suffix", "subonly", "port")
@@ -1195,6 +1194,42 @@ def test_headerless_adblock_feed_is_parsed_as_adblock(deployed_vm: SmokeVM, clie
     finally:
         h.reset(deployed_vm)
         h.set_dnsbl_parse_mode(deployed_vm, "lenient")
+        deployed_vm.ssh("/bin/rm", "-f", feed_url)
+
+
+@pytest.mark.timeout(300)
+def test_subdomain_only_mask_blocks_subdomains_alone(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """issue #4284: AdGuard's ``.host^`` blocks the subdomains of ``host``, never ``host``.
+
+    Given a feed holding ``.<host>^``, with ``<host>`` and ``ads.<host>`` resolving before the load,
+    When  the feed loads,
+    Then  ``ads.<host>`` is blocked, while ``<host>`` still resolves.
+    """
+    host = h.unique_domain("sub4284")
+    sub = f"ads.{host}"
+    feed_url = _scheme_feed_path(deployed_vm, "smoke_4284_subonly.txt", ["! Title: smoke 4284", f".{host}^"])
+    spec = h.DnsblCase(aliasname="smoke4284sub", feed_url=feed_url, header="smoke4284sub", mode=h.DnsblMode.VIP)
+
+    def _blocked(ans: h.DnsAnswer) -> bool:
+        return h.is_vip(ans) or h.is_null_ip(ans)
+
+    try:
+        h.unblock_egress()
+        for name in (host, sub):
+            before = h.dns_probe_client(client_vm, name, "A")
+            assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
+
+        h.inject(deployed_vm, spec)
+        h.reload(deployed_vm, "update")
+
+        h.flush_unbound_name(deployed_vm, sub)
+        ans = h.dns_probe_client(client_vm, sub, "A")
+        assert _blocked(ans), f".{host}^ must block {sub} once the feed loads, got {ans}"
+        h.flush_unbound_name(deployed_vm, host)
+        ans = h.dns_probe_client(client_vm, host, "A")
+        assert h.resolves_to(ans, STUB_DNS_A), f".{host}^ must not block {host}, got {ans}"
+    finally:
+        h.reset(deployed_vm)
         deployed_vm.ssh("/bin/rm", "-f", feed_url)
 
 
