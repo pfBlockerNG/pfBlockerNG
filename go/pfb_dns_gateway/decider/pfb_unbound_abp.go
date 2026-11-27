@@ -49,7 +49,9 @@ const (
 const DNSBL_LABEL_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789-_"
 
 // ruleSignature is Python's (key_or_pattern, tuple(sorted DNS options)). Go cannot compare a tuple holding a slice, so
-// dnsOpts is the option names joined by ",": only "important" can occur in it, so the join is injective.
+// dnsOpts is the option names joined by ",": only "important" and the "<subdomains>" marker can occur in it, so the join
+// is injective. A regex key is written "/pattern/" and a '.domain^' rule carries the marker, so a regex, an anchor and a
+// '.domain^' never share a signature (issues #4284, #4286); reconcile() also matches on the rule's kind.
 type ruleSignature struct {
 	keyOrPattern string
 	dnsOpts      string
@@ -67,6 +69,8 @@ type rule struct {
 	log          string
 	signature    ruleSignature
 	wildcard     bool
+	// subdomainsOnly is Python's apex=False: AdGuard's '.domain^' blocks the subdomains, never the domain (issue #4284).
+	subdomainsOnly bool
 }
 
 type parsedEntry struct {
@@ -207,11 +211,15 @@ func dnsblParseAbpRegex(stripped string) (kind, inner, optsStr string, ok bool) 
 
 const DNSBL_ABP_COSMETIC_PREFIX_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._,~*-"
 
+// dnsblSubdomainMaskRE is AdGuard's subdomain-only mask '.host^', optionally with '$options' (issue #4284); twin of the
+// pattern in PHP's pfb_dnsbl_is_abp_rule_line() and feedparse's isABPRuleLine().
+var dnsblSubdomainMaskRE = regexp.MustCompile(`(?s)^\.[A-Za-z0-9_.-]+\^(?:\$.*)?$`)
+
 func dnsblIsAbpRuleLine(line string) bool {
 	if strings.HasPrefix(line, ",") {
 		return false
 	}
-	if strings.HasPrefix(line, "||") || strings.HasPrefix(line, "@@") {
+	if strings.HasPrefix(line, "||") || strings.HasPrefix(line, "@@") || dnsblSubdomainMaskRE.MatchString(line) {
 		return true
 	}
 	if strings.Contains(line, "#") {
@@ -277,17 +285,22 @@ func parseAbp(line, provenance, feed, group, log string, tally rejectTally) *rul
 			feed:         feed,
 			group:        group,
 			log:          log,
-			signature:    ruleSignature{inner, strings.Join(dnsOpts, ",")},
-			wildcard:     false,
+			// issue #4286: the slashes keep a regex apart from a domain rule with the same text.
+			signature: ruleSignature{"/" + inner + "/", strings.Join(dnsOpts, ",")},
+			wildcard:  false,
 		}
 	}
 
 	isAllow := strings.HasPrefix(s, "@@||")
-	isBlock := strings.HasPrefix(s, "||")
+	// issue #4284: AdGuard's '.domain^' blocks the subdomains of domain, never domain itself.
+	isSubdomains := dnsblSubdomainMaskRE.MatchString(s)
+	isBlock := strings.HasPrefix(s, "||") || isSubdomains
 	if isAllow || isBlock {
 		rest := s[2:]
 		if isAllow {
 			rest = s[4:]
+		} else if isSubdomains {
+			rest = s[1:]
 		}
 		anchor, optsStr, _ := strings.Cut(rest, "$")
 		host, tail, _ := strings.Cut(anchor, "^")
@@ -317,18 +330,23 @@ func parseAbp(line, provenance, feed, group, log string, tally rejectTally) *rul
 		if isAllow {
 			kind = DNSBL_KIND_ALLOW
 		}
+		if isSubdomains {
+			// A marker no option token can spell keeps '.domain^' apart from '||domain^' and from a '/domain/' regex.
+			dnsOpts = append([]string{"<subdomains>"}, dnsOpts...)
+		}
 		return &rule{
-			kind:         kind,
-			target:       RULE_TARGET_DOMAIN,
-			keyOrPattern: dom,
-			important:    important,
-			badfilter:    badfilter,
-			provenance:   provenance,
-			feed:         feed,
-			group:        group,
-			log:          log,
-			signature:    ruleSignature{dom, strings.Join(dnsOpts, ",")},
-			wildcard:     true, // ||domain^ / @@||domain^ cover the domain + subdomains
+			kind:           kind,
+			target:         RULE_TARGET_DOMAIN,
+			keyOrPattern:   dom,
+			important:      important,
+			badfilter:      badfilter,
+			provenance:     provenance,
+			feed:           feed,
+			group:          group,
+			log:            log,
+			signature:      ruleSignature{dom, strings.Join(dnsOpts, ",")},
+			wildcard:       true, // ||domain^ / @@||domain^ cover the domain + subdomains
+			subdomainsOnly: isSubdomains,
 		}
 	}
 
@@ -528,6 +546,8 @@ type blockDomainRule struct {
 	feed       string
 	group      string
 	log        string
+	// subdomainsOnly (a ZONE from '.host^', issue #4284) leaves the key itself unblocked.
+	subdomainsOnly bool
 }
 
 type allowDomainRule struct {
@@ -563,10 +583,15 @@ type reconcileResult struct {
 // reconcile never reads tlds (Python keeps it for signature stability) and mutates no argument.
 func reconcile(rules []rule, tlds map[string]map[string]string, exclusion map[string]struct{}, tally rejectTally) reconcileResult {
 	// --- Step 1: feed-only $badfilter prune
-	badSigs := map[ruleSignature]struct{}{}
+	// issue #4286: keyed by kind too, so an allow's $badfilter never prunes a block, nor the reverse.
+	type kindSignature struct {
+		kind      string
+		signature ruleSignature
+	}
+	badSigs := map[kindSignature]struct{}{}
 	for _, r := range rules {
 		if r.badfilter && r.provenance == RULE_PROV_FEED {
-			badSigs[r.signature] = struct{}{}
+			badSigs[kindSignature{r.kind, r.signature}] = struct{}{}
 		}
 	}
 	var result reconcileResult
@@ -576,7 +601,7 @@ func reconcile(rules []rule, tlds map[string]map[string]string, exclusion map[st
 			result.skippedBadfilter++
 			continue // the $badfilter rule itself never emits a decision
 		}
-		if _, pruned := badSigs[r.signature]; r.provenance == RULE_PROV_FEED && pruned {
+		if _, pruned := badSigs[kindSignature{r.kind, r.signature}]; r.provenance == RULE_PROV_FEED && pruned {
 			result.pruned++
 			continue // pruned by a feed $badfilter (USER rules are never here)
 		}
@@ -649,16 +674,19 @@ func reconcile(rules []rule, tlds map[string]map[string]string, exclusion map[st
 			cls := DNSBL_CLASS_DATA
 			if _, excluded := exclusion[domain]; wildcard && !excluded {
 				cls = DNSBL_CLASS_ZONE
+			} else if r.subdomainsOnly {
+				continue // issue #4284: exact DATA would block only the excluded apex
 			}
 			result.blockDomains = append(result.blockDomains, blockDomainRule{
-				cls:        cls,
-				key:        domain,
-				band:       band,
-				important:  r.important,
-				provenance: r.provenance,
-				feed:       r.feed,
-				group:      r.group,
-				log:        r.log,
+				cls:            cls,
+				key:            domain,
+				band:           band,
+				important:      r.important,
+				provenance:     r.provenance,
+				feed:           r.feed,
+				group:          r.group,
+				log:            r.log,
+				subdomainsOnly: r.subdomainsOnly,
 			})
 		}
 	}

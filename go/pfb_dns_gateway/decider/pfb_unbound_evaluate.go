@@ -192,7 +192,7 @@ func scanBlockBand(qName string, cfg evaluateConfig, dataDB, zoneDB map[string]*
 	if cfg.zoneDB {
 		for q := range iterDomainSuffixes(qName) {
 			if entry := zoneDB[q]; entry != nil {
-				if entry = zoneEntryFor(qName, entry); entry != nil {
+				if entry = zoneEntryFor(qName, q, entry); entry != nil {
 					if band := blockEntryBand(entry); band > best {
 						best, bestMeta = band, &blockMeta{kind: "zone", block: entry, matched: q}
 					}

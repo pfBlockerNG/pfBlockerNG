@@ -441,7 +441,7 @@ func (m *pfbUnbound) dbGroupEpochs(wanted bool, s *snapshot) map[[2]string]strin
 }
 
 // missingEpochOwners are the (owner, origin) pairs the snapshot's data, zone and regex rules count into that have no epoch
-// row, sorted. A zone entry's TOP1M fallback chain counts too.
+// row, sorted. A zone entry's TOP1M fallback chain counts too, and so does a '.host^' zone's apex payload (issue #4284).
 func missingEpochOwners(epochs map[[2]string]string, s *snapshot) [][2]string {
 	missing := map[[2]string]bool{}
 	note := func(owner, origin string) {
@@ -451,7 +451,13 @@ func missingEpochOwners(epochs map[[2]string]string, s *snapshot) [][2]string {
 	}
 	for _, rules := range []map[string]*blockEntry{s.dataDB, s.zoneDB} {
 		for _, entry := range rules {
-			for rule := entry; rule != nil; rule = rule.top1mFallback {
+			for pending := []*blockEntry{entry}; len(pending) > 0; {
+				rule := pending[len(pending)-1]
+				pending = pending[:len(pending)-1]
+				if rule == nil {
+					continue
+				}
+				pending = append(pending, rule.top1mFallback, rule.apex)
 				origin, owner := "custom", ""
 				if rule.hasGroupOrigin {
 					origin = rule.groupOrigin

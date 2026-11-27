@@ -51,7 +51,7 @@ func allowPriority(important, user bool) int {
 }
 
 // blockEntry is a dataDB / zoneDB payload: {"log", "index", "important", "band"} plus, for a zone,
-// "group_owner", "group_origin", "top1m" and "top1m_fallback".
+// "group_owner", "group_origin", "top1m", "top1m_fallback" and, for a '.host^' zone, "apex".
 type blockEntry struct {
 	log                           string
 	index                         int
@@ -63,6 +63,10 @@ type blockEntry struct {
 	top1m         map[string]struct{}
 	hasTop1m      bool
 	top1mFallback *blockEntry // nil = Python None
+	// subdomainsOnly marks a '.host^' zone (issue #4284), whose apex is the payload that blocks the key itself: the one
+	// that blocked it before the '.host^' was written, or nil (Python's "apex": False) when none did.
+	subdomainsOnly bool
+	apex           *blockEntry
 }
 
 func blockEntryBand(entry *blockEntry) int {
@@ -529,20 +533,31 @@ func iterDomainSuffixes(name string) iter.Seq[string] {
 	}
 }
 
-// zoneEntryFor is the zone payload that blocks qName (issue #3648): an entry last written by a TOP1M-filtered Group
-// yields, for a name TOP1M lists, to the key's last unfiltered writer, or blocks nothing (nil) when there is none.
-func zoneEntryFor(qName string, entry *blockEntry) *blockEntry {
+// zoneEntryFor is the zone payload at key that blocks qName (issue #3648): an entry last written by a TOP1M-filtered
+// Group yields, for a name TOP1M lists, to the key's last unfiltered writer, or blocks nothing (nil) when there is none.
+// issue #4284: a '.host^' entry blocks key itself only through its apex payload, and nil means none did. An apex
+// payload's fallback can be filtered too, so each fallback is resolved like the entry.
+func zoneEntryFor(qName, key string, entry *blockEntry) *blockEntry {
 	if entry.hasTop1m && top1mListed(qName, entry.top1m) {
-		return entry.top1mFallback
+		if entry.top1mFallback == nil {
+			return nil
+		}
+		return zoneEntryFor(qName, key, entry.top1mFallback)
 	}
-	return entry
+	if key != qName || !entry.subdomainsOnly {
+		return entry
+	}
+	if entry.apex == nil {
+		return nil
+	}
+	return zoneEntryFor(qName, key, entry.apex)
 }
 
 // findZoneMatch returns the matching zone key and its payload; a nil payload is Python's (None, None).
 func findZoneMatch(qName string, zoneDB map[string]*blockEntry) (string, *blockEntry) {
 	for q := range iterDomainSuffixes(qName) {
 		if entry := zoneDB[q]; entry != nil {
-			if entry = zoneEntryFor(qName, entry); entry != nil {
+			if entry = zoneEntryFor(qName, q, entry); entry != nil {
 				return q, entry
 			}
 		}
