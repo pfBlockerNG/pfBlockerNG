@@ -6897,12 +6897,13 @@ def _zone_entry_for(q_name: str, key: str, entry: dict[str, Any]) -> dict[str, A
     issue #4284: a ``.host^`` entry blocks ``key`` itself only through its ``"apex"`` payload
     (the rule that blocked ``key`` before it); ``"apex": False`` means none did."""
     top1m = entry.get("top1m")
-    found: dict[str, Any] | None = entry
     if top1m is not None and _top1m_listed(q_name, top1m):
-        found = entry.get("top1m_fallback")
-    if found is None or key != q_name or "apex" not in found:
-        return found
-    apex = found["apex"]
+        # A '.host^' apex payload's fallback can carry a TOP1M filter of its own.
+        fallback: dict[str, Any] | None = entry.get("top1m_fallback")
+        return None if fallback is None else _zone_entry_for(q_name, key, fallback)
+    if key != q_name or "apex" not in entry:
+        return entry
+    apex = entry["apex"]
     return _zone_entry_for(q_name, key, apex) if apex else None
 
 
