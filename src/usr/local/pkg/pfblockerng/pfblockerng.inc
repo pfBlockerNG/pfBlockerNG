@@ -292,9 +292,11 @@ function pfb_update_start(string $scope, string $force, callable $call): string 
 	return gettext('The Update was not started: ') . $failure;
 }
 
-// issue #4260: how long a CLI update verb follows its Update, in one-second polls of GetUpdate (4 h); the Update itself goes on
-// when the wait ends, and the Update page still shows it
+// issue #4260: how long a CLI update verb follows its Update, in polls of GetUpdate one second apart (each call bounded by
+// PFB_CORE_PAGE_TIMEOUT); the Update itself goes on when the wait ends, and the Update page still shows it
 const PFB_CLI_UPDATE_POLLS = 14400;
+// issue #4260: Core's `unavailable` answers in a row a CLI verb takes for a result not recorded yet; past them it is a fault
+const PFB_CLI_UNAVAILABLE_POLLS = 60;
 
 /**
  * The Update a pfblockerng.php update verb asks Core for (issue #4260, #3977's coverage matrix): StartUpdate's parameters
@@ -345,9 +347,10 @@ function pfb_cli_deprecation_warning(string $verb): string {
  * log itself). The exit status is the Update's result: 0 for success, PFB_EXIT_LOCKED for an Update skipped (the pass was
  * deferred) or refused because one runs (`conflict`: reported, nothing queued), 1 otherwise. A Core that is down or refuses the
  * caller (not root) is a message on $err and 1, never a pass run in-process. Each call is bounded by PFB_CORE_PAGE_TIMEOUT, and
- * $sleep (one second) parts the polls, at most $polls of them. An Update that started before the request ($now, Unix seconds, read
- * before StartUpdate on the host Core runs on) is the one before ours, which GetUpdate can still report right after StartUpdate:
- * the verb waits for its own.
+ * $sleep (one second) parts the polls, at most $polls of them. Ours is the Update of the trigger, scope and force asked for that
+ * started no earlier than the request ($now, Unix seconds, read before StartUpdate on the host Core runs on): GetUpdate can still
+ * report the one before right after StartUpdate, and the verb waits for its own. `unavailable` is a result not recorded yet,
+ * asked again up to PFB_CLI_UNAVAILABLE_POLLS times in a row.
  *
  * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
  * @param ?callable(string): void $out
@@ -365,22 +368,26 @@ function pfb_cli_update_run(array $request, callable $call, ?callable $out, call
 	}
 	$params = [];
 	$started = NULL;
+	$unavailable = 0;
 	for ($poll = 0; $poll < $polls; $poll++) {
 		if ($poll > 0) {
 			$sleep();
 		}
 		$answer = $call('GetUpdate', $params, NULL, PFB_CORE_PAGE_TIMEOUT);
-		if (($answer['body']['error']['code'] ?? NULL) === 'unavailable') {
-			continue;	// the result of an Update that just ended waits to be recorded: Core reports it once it is, within the wait
-		}
 		$failure = pfb_update_core_failure($answer);
+		if (($answer['body']['error']['code'] ?? NULL) === 'unavailable' && ++$unavailable < PFB_CLI_UNAVAILABLE_POLLS) {
+			continue;	// the result of an Update that just ended waits to be recorded: Core reports it once it is
+		}
+		$unavailable = 0;
 		if ($failure !== NULL) {
 			$err("pfBlockerNG Core did not report the Update: {$failure}\n");
 			return 1;
 		}
 		$body = $answer['body'];
 		$update = is_array($body['update'] ?? NULL) ? $body['update'] : [];
-		if ($started === NULL && is_int($update['startedAt'] ?? NULL) && $update['startedAt'] < $asked) {
+		$asked_for = ($update['trigger'] ?? NULL) === $request['trigger'] && ($update['scope'] ?? NULL) === ($request['scope'] ?? NULL)
+			&& ($update['force'] ?? NULL) === ($request['force'] ?? NULL);
+		if ($started === NULL && is_int($update['startedAt'] ?? NULL) && ($update['startedAt'] < $asked || !$asked_for)) {
 			continue;	// the Update before ours
 		}
 		$started ??= $update['startedAt'] ?? NULL;
