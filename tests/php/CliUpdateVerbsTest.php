@@ -130,8 +130,8 @@ final class CliUpdateVerbsTest extends TestCase
 		$this->assertSame('StartUpdate', $method);
 		$this->assertSame(['trigger' => 'manual', 'scope' => 'ip', 'force' => 'parse'], array_diff_key($params, ['requestId' => 1]));
 		$this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $params['requestId']);
-		$this->assertSame([['GetUpdate', []], ['GetUpdate', ['after' => '6']], ['GetUpdate', ['after' => '6']]],
-			array_slice($this->calls, 1), 'the log is read from the cursor Core gave');
+		$this->assertSame([['GetUpdate', []], ['GetUpdate', ['after' => '6']], ['GetUpdate', ['after' => '6']], ['GetUpdate', ['after' => '11']]],
+			array_slice($this->calls, 1), 'the log is read from the cursor Core gave, to where it stops advancing');
 	}
 
 	/**
