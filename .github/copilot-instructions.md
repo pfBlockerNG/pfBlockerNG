@@ -12,8 +12,6 @@ When performing a pull request code review on GitHub, as any review bot, strictl
 
 Do NOT review, inspect, or comment on any of the following paths or patterns. Treat them as excluded content:
 
-- **Generated code graphs and metadata:**
-  - `.codegraph/**` (internal code intelligence indices and SQLite databases)
 - **Documentation and archives:**
   - `docs/**` (design documents, runbooks, historical records, and incidents)
   - `legacy/**` (historical ADR corpus, benchmarks, and legacy tools)

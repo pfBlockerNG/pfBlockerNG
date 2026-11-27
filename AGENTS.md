@@ -75,8 +75,7 @@ client mechanics.
 
 ## Repository intelligence routing
 
-At session start read `.agents/context/repository-intelligence.md` (CodeGraph and Serena
-routing; per-worktree `.codegraph/` invariants).
+At session start read `.agents/context/repository-intelligence.md` (navigation tools).
 
 ## Routing table — read on trigger, not up front
 

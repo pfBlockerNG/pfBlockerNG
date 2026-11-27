@@ -13,7 +13,6 @@ WORKTREE_DOCS = (
 )
 LANDING_POLICY = ROOT / ".agents" / "policy" / "landing.md"
 REQUIRED_HOOKS = {
-    "pre-start": "sh scripts/agent/init-worktree-tools.sh .",
     "post-merge": "git worktree prune",
     "post-remove": "git worktree prune",
 }

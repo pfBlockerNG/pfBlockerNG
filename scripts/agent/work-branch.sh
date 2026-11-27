@@ -9,8 +9,7 @@
 #               worktree) at an ABSOLUTE path (default <repo-parent>/.<repo-name>_worktrees/<branch
 #               with '/' replaced by '-'>; a relative --path anchors below that sibling
 #               root, while an absolute --path stays exact). An existing branch or path
-#               gets a `-<epoch>` suffix (collision rule). Every created worktree
-#               initializes CodeGraph and enabled Serena tools.
+#               gets a `-<epoch>` suffix (collision rule).
 #               Prints `BRANCH<TAB>PATH` instead.
 #   --base REF  worktree base (default origin/devel)
 #   --claim     with `issue … --worktree`: assign an UNCLAIMED issue to the caller
@@ -119,8 +118,7 @@ cut_worktree() {
 		# wt registers the worktree BEFORE running its pre-start hook and leaves the
 		# tree behind when that hook fails. Falling back over the top of it would hit
 		# `already exists`, and the reserved branch could then not be deleted because
-		# the orphan has it checked out. Reclaim it — that also discards the marker a
-		# half-run hook left, so the retry initializes for real. Reclaim ONLY a tree
+		# the orphan has it checked out. Reclaim it, but ONLY a tree
 		# holding the branch this call just reserved: at a shared explicit --path a
 		# concurrent creator may already own the tree, and removing that destroys it.
 		# Anything else left at the path is deliberately not reclaimed — it cannot be
@@ -310,27 +308,6 @@ main() {
 			echo "work-branch.sh: failed to delete reserved branch '$branch' after worktree creation failure" >&2
 		exit "$worktree_status"
 	done
-	initializer=${PFB_INIT_WORKTREE_TOOLS:-$(dirname "$0")/init-worktree-tools.sh}
-	# A `wt` cut already ran the initializer through `.config/wt.toml`'s pre-start hook,
-	# and the CodeGraph index it leaves is the marker that the tools are in place. Only
-	# the fallback route (and a pre-start that did not run) still needs the direct call.
-	initializer_status=0
-	if [ ! -f "$path/.codegraph/codegraph.db" ]; then
-		sh "$initializer" "$path"
-		initializer_status=$?
-	fi
-	if [ "$initializer_status" -ne 0 ]; then
-		echo "work-branch.sh: removing worktree and branch after tool initialization failure" >&2
-		git worktree remove --force "$path" >/dev/null 2>&1 || {
-			echo "work-branch.sh: failed to remove incomplete worktree '$path'" >&2
-			exit 1
-		}
-		git branch -D "$branch" >/dev/null 2>&1 || {
-			echo "work-branch.sh: failed to delete incomplete branch '$branch'" >&2
-			exit 1
-		}
-		exit "$initializer_status"
-	fi
 	printf '%s\t%s\n' "$branch" "$path"
 }
 

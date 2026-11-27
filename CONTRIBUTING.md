@@ -143,7 +143,7 @@ committed):
 | Malformed or mismatched trailer | push is rejected |
 
 Activate the hooks once after cloning (git cannot auto-apply a committed hooks
-path); the command also bootstraps CodeGraph when it is installed:
+path):
 
 ```sh
 sh scripts/setup-hooks.sh

@@ -1,7 +1,7 @@
 #!/bin/sh
-# Install, update, and activate the supported agent intelligence tools.
+# Install, update, and activate the supported agent host tools.
 # Usage: sh scripts/agent/setup-agent-tools.sh [REPOSITORY]
-# Supports macOS and Debian-family Linux; reruns update tools and detected client integrations.
+# Supports macOS and Debian-family Linux; reruns update the tools.
 
 set -eu
 
@@ -122,56 +122,6 @@ configure_worktrunk() {
 	mv "$worktrunk_tmp" "$worktrunk_config"
 }
 
-disable_serena_dashboard() {
-	serena_config=$HOME/.serena/serena_config.yml
-	[ -f "$serena_config" ] || fail "Serena did not create '$serena_config'"
-	serena_tmp=$(mktemp "$HOME/.serena/serena_config.yml.XXXXXX") || exit 1
-	if ! awk -v single_key="'web_dashboard'" '
-		function is_dashboard_key(line, colon, key) {
-			colon = index(line, ":")
-			if (!colon) return 0
-			key = substr(line, 1, colon - 1)
-			sub(/[[:space:]]+$/, "", key)
-			return key == "web_dashboard" ||
-				key == "\"web_dashboard\"" ||
-				key == single_key
-		}
-		is_dashboard_key($0) {
-			root_keys++
-			print "web_dashboard: false"
-			next
-		}
-		{ print }
-		END { if (root_keys != 1) exit 1 }
-	' "$serena_config" > "$serena_tmp"; then
-		rm -f "$serena_tmp"
-		return 1
-	fi
-	mv "$serena_tmp" "$serena_config"
-}
-
-setup_serena_client() {
-	if serena_output=$(serena setup "$2" 2>&1); then
-		return 0
-	else
-		serena_status=$?
-	fi
-	case "$serena_output" in
-		*'already exists'*) ;;
-		*)
-			printf '%s\n' "$serena_output" >&2
-			return "$serena_status"
-			;;
-	esac
-	case "$1" in
-		claude) claude mcp remove serena -s user || return $? ;;
-		codex) codex mcp remove serena || return $? ;;
-		grok) grok mcp remove serena || return $? ;;
-		*) return "$serena_status" ;;
-	esac
-	serena setup "$2"
-}
-
 install_receiving_code_review() {
 	source=$root/scripts/agent/skills/receiving-code-review
 	destination_parent=$HOME/.agents/skills
@@ -200,22 +150,6 @@ install_receiving_code_review() {
 	rm -rf "$previous"
 }
 
-configure_agents() {
-	if command -v claude >/dev/null 2>&1; then
-		setup_serena_client claude claude-code
-	fi
-	if command -v codex >/dev/null 2>&1; then
-		setup_serena_client codex codex
-	fi
-	if command -v grok >/dev/null 2>&1; then
-		setup_serena_client grok grok
-		if ! grok mcp doctor codegraph --json >/dev/null 2>&1; then
-			grok mcp remove codegraph >/dev/null 2>&1 || true
-			grok mcp add codegraph -- codegraph serve --mcp
-		fi
-	fi
-}
-
 main() {
 	[ "$#" -le 1 ] || usage
 
@@ -237,9 +171,7 @@ main() {
 		fail "'$target' is not a git worktree"
 	root=$(CDPATH='' cd "$root" && pwd -P) || exit 2
 	setup_hooks=$root/scripts/setup-hooks.sh
-	init_tools=$root/scripts/agent/init-worktree-tools.sh
 	[ -f "$setup_hooks" ] || fail "required repository helper '$setup_hooks' is missing"
-	[ -f "$init_tools" ] || fail "required repository helper '$init_tools' is missing"
 
 	if [ -n "${XDG_BIN_HOME:-}" ]; then
 		xdg_bin_home=$XDG_BIN_HOME
@@ -249,9 +181,8 @@ main() {
 		xdg_bin_home=$HOME/.local/bin
 	fi
 	uv_tool_bin=${UV_TOOL_BIN_DIR:-$xdg_bin_home}
-	codegraph_bin=${CODEGRAPH_BIN_DIR:-$HOME/.local/bin}
 	cargo_bin=${CARGO_HOME:-$HOME/.cargo}/bin
-	PATH="$uv_tool_bin:$codegraph_bin:$xdg_bin_home:$cargo_bin:$PATH"
+	PATH="$uv_tool_bin:$xdg_bin_home:$cargo_bin:$PATH"
 	export PATH
 
 	# An installed package manager is used as found, never self-updated (#3106):
@@ -268,39 +199,18 @@ main() {
 			;;
 	esac
 	require_tool uv
-	# Pin serena-agent (env-overridable for a one-off): serena cannot ride the
-	# repository lockfile -- every release past the GHSA-37h2-6p4f-mp3q fix
-	# (1.5.2) exact-pins its dependency fleet, which cannot coexist with the
-	# lock's smoke/dev pins (#3414) -- so this literal IS the pin. Bump it
-	# deliberately instead of floating a dashboard/advisory regression in.
-	serena_agent_version=${SERENA_AGENT_VERSION:-1.7.0}
-	uv tool install --upgrade "serena-agent==$serena_agent_version"
 	(cd "$root" && sh "$setup_hooks")
 	uv tool install --upgrade ast-grep-cli
 	uv tool install --upgrade semgrep
-	require_tool serena
 	require_tool ast-grep
 	require_tool semgrep
-
-	if command -v codegraph >/dev/null 2>&1; then
-		codegraph upgrade
-	else
-		install_from_url 'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh'
-	fi
-	require_tool codegraph
-	codegraph install -l global -y -t auto
 
 	install_from_url 'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh'
 	require_tool wt
 	wt config shell install --yes
 	configure_worktrunk
 
-	serena init
-	disable_serena_dashboard
-	configure_agents
 	install_receiving_code_review
-
-	sh "$init_tools" "$root"
 }
 
 main "$@"

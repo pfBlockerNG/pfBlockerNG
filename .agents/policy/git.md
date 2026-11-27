@@ -31,15 +31,10 @@ wt --yes switch --create <branch> --base origin/devel   # cut off the latest bas
 wt remove --foreground --yes <branch>   # run from any directory OUTSIDE it
 ```
 
-`wt` runs the tracked `.config/wt.toml` `pre-start` hook, which initializes CodeGraph
-and enabled Serena tools. Run `init-worktree-tools.sh <path>` by hand only for
-a cut that came back without a CodeGraph index (fallback route, or a pre-start that did
-not run). CodeGraph is mandatory; Serena is skipped when absent or under OMP.
-
-`work-branch.sh … --worktree` fetches, cuts below
-`<repo-parent>/.<repo-name>_worktrees/<sanitized-branch>`, and initializes tools. It
+`work-branch.sh … --worktree` fetches and cuts below
+`<repo-parent>/.<repo-name>_worktrees/<sanitized-branch>`. It
 routes through `wt` under the same fallback rule. Relative paths stay below that root;
-absolute paths stay exact; initialization failure rolls back the worktree and branch.
+absolute paths stay exact.
 
 Matching Worktrunk placement: `worktree-path = "{{ repo_path }}/../.{{ repo }}_worktrees/{{ branch | sanitize }}"`
 in `~/.config/worktrunk/config.toml`. `wt remove` deletes only branches it verifies as
@@ -94,8 +89,7 @@ session looks dead by mtime alone. Leftovers of ended sessions: `sessions.md`.
 
 Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath`). If
 `git config core.hooksPath` not `.githooks`, agent runs it at session start
-(idempotent). When CodeGraph is installed, the same setup creates the checkout's
-exact-root index. Any GitHub Actions workflow that commits code runs it after checkout too.
+(idempotent). Any GitHub Actions workflow that commits code runs it after checkout too.
 
 - **`pre-commit`** — fast lint, style, and policy checks, path-scoped to staged file types
   (Python → ruff; Markdown → markdownlint; shell → shebang gate + `sh -n` +
