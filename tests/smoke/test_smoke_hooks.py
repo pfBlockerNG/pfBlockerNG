@@ -719,24 +719,21 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
             timeout=30.0,
             interval=1.0,
         )
-        h.wait_until(
-            lambda: (
-                stream_marker in deployed_vm.ssh("cat", _CORE_UPDATE_LOG).stdout
-                and done_marker not in deployed_vm.ssh("cat", _CORE_UPDATE_LOG).stdout
-            ),
-            timeout=10.0,
-            interval=0.2,
-        )
-        runlog_now = deployed_vm.ssh("cat", _CORE_UPDATE_LOG).stdout
-        assert stream_marker in runlog_now, (
-            f"hook marker {stream_marker!r} did not reach the Update's log while waiting for release "
-            f"(Fix A regressed):\n{runlog_now[-1500:]}"
-        )
-        # Caught it before release: the closing marker is absent — proves we observed a live
-        # stream into the per-run log, not the post-exit flush.
-        assert done_marker not in runlog_now, (
-            f"caught the marker only AFTER the hook finished ({done_marker!r} already present) — "
-            f"not a live-stream proof:\n{runlog_now[-1500:]}"
+
+        # Until the cutover the Update program sends a hook's own output to the main log alone (the Core Updater
+        # writes it to the Update's transcript): the live stream is observed there, each marker counted from before
+        # the pass.
+        def streamed() -> tuple[int, int]:
+            return (
+                h.count_log_marker(deployed_vm, h.PFB_LOG, stream_marker) - persisted_before,
+                h.count_log_marker(deployed_vm, h.PFB_LOG, done_marker) - persisted_before_done,
+            )
+
+        h.wait_until(lambda: streamed() == (1, 0), timeout=10.0, interval=0.2)
+        assert streamed() == (1, 0), (
+            f"hook marker {stream_marker!r} did not reach {h.PFB_LOG} while the hook waited for release, or "
+            f"{done_marker!r} was already there (not a live-stream proof):\n"
+            f"{deployed_vm.ssh('cat', h.PFB_LOG).stdout[-1500:]}"
         )
     finally:
         # Release the hook first, then let the pass settle before cleanup and persistence checks.
