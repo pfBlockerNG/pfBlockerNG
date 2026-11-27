@@ -123,7 +123,7 @@ final class DnsblFeedLineRoutingTest extends TestCase
 			'important mask'         => ['imgur.com^$important', [['a', '||imgur.com^$important']]],
 			'subdomain-only mask'    => ['.imgur.com^', []],
 			'wildcard mask'          => ['*.imgur.com^', []],
-			'badfilter mask'         => ['imgur.com^$badfilter', [['a', '||imgur.com^$badfilter']]],
+			'badfilter mask'         => ['imgur.com^$badfilter', []],
 			'AdGuard extended CSS'   => ['eksisozluk.com#$?#.ads', [['a', 'eksisozluk.com#$?#.ads']]],
 			'AdGuard HTML filter'    => ['imgur.com$$script[data-src]', []],
 			'hosts line, IP target'  => ['0.0.0.0 1.2.3.4', []],

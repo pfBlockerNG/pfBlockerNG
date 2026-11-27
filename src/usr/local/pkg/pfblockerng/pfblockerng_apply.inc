@@ -2605,8 +2605,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								$ip6_decision = ['count' => 0, 'loggable' => FALSE];
 								$pfb_scheme_skipped = 0;	// ADR-22: per-feed strict scheme/path skips
 								$dnsbl_lineno = 0;		// issue #1004: per-line counter for the parse-error detail sink
-								// issue #4272: a custom list is the user's own and keeps per-line routing.
-								$abp_feed = !$custom && pfb_dnsbl_feed_is_abp($pfb_parse_path);
+								// issue #4272: a custom list is the user's own; only an explicit Adblock header makes it Adblock.
+								$abp_feed = $custom ? pfb_dnsbl_feed_has_abp_header($pfb_parse_path) : pfb_dnsbl_feed_is_abp($pfb_parse_path);
 
 								// Parse downloaded file for Domain names
 								if (($fhandle = @fopen($pfb_parse_path, 'r')) !== FALSE) {

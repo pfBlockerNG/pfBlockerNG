@@ -2997,9 +2997,9 @@ function pfb_dnsbl_feed_has_abp_header(string $path): bool {
 // The ICANN top-level domains of the shipped Public Suffix List, as a lower-case ASCII set. Every ICANN
 // entry's last label counts: 'ck', 'mm' and 'np' appear only in wildcard rules such as '*.np'.
 function pfb_psl_icann_tlds(): array {
-	static $tlds = NULL;
-	if ($tlds !== NULL) {
-		return $tlds;
+	static $tlds = [];
+	if ($tlds !== []) {
+		return $tlds;	// an unreadable PSL is retried, never cached empty
 	}
 	$tlds = [];
 	$icann = FALSE;
@@ -3053,8 +3053,9 @@ function pfb_dnsbl_abp_feed_host(string $token): ?string {
 // hosts feed), or an AdGuard DNS hostname mask. Returns the row it becomes, or NULL to drop it. A mask maps
 // to the closest pfBlockerNG rule that never blocks more than AdGuard (with Wildcard Blocking off): '|host^',
 // '|host|' and '://host^' are the host alone; 'host^' and 'host|' match any hostname ending in 'host', so
-// '||host^', carrying '$important' or '$badfilter'; '.host^', '*' and every other modifier have no
-// pfBlockerNG form (AdGuard ignores a rule with an unknown one).
+// '||host^', carrying '$important'; '.host^', '*' and every other modifier have no pfBlockerNG form (AdGuard
+// ignores a rule with an unknown one). '$badfilter' too: as '||host^$badfilter' it would prune every feed's
+// '||host^' in reconcile(), while AdGuard's 'host^$badfilter' disables only the 'host^' rule.
 function pfb_dnsbl_abp_feed_line(string $line): ?array {
 	if (str_contains($line, "\0")) {
 		return NULL;
@@ -3073,12 +3074,12 @@ function pfb_dnsbl_abp_feed_line(string $line): ?array {
 	    ($host = pfb_dnsbl_abp_feed_host($m[1])) !== NULL) {
 		return [PfbDnsblRowKind::Domain, $host];
 	}
-	if (!preg_match('/^(\||:\/\/)?([^|^$*\/]+)[|^](\$important|\$badfilter)?$/D', $line, $m) ||
+	if (!preg_match('/^(\||:\/\/)?([^|^$*\/]+)[|^](\$important)?$/D', $line, $m) ||
 	    ($host = pfb_dnsbl_abp_feed_host($m[2])) === NULL) {
 		return NULL;
 	}
 	if ($m[1] !== '') {
-		return ($m[3] ?? '') === '$badfilter' ? NULL : [PfbDnsblRowKind::Domain, $host];
+		return [PfbDnsblRowKind::Domain, $host];
 	}
 	return [PfbDnsblRowKind::Abp, '||' . $host . '^' . ($m[3] ?? '')];
 }

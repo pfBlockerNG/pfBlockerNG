@@ -96,8 +96,8 @@ final class DnsblAbpFeedHeaderTest extends TestCase
 		$this->assertIsString($code);
 
 		// issue #4272 owner decision: a header or, failing it, any Adblock rule makes the feed Adblock.
-		// A custom list is the user's own: it keeps per-line routing.
-		$detect  = strpos($code, '$abp_feed = !$custom && pfb_dnsbl_feed_is_abp($pfb_parse_path);');
+		// A custom list is the user's own: only an explicit Adblock header makes it an Adblock feed.
+		$detect  = strpos($code, '$abp_feed = $custom ? pfb_dnsbl_feed_has_abp_header($pfb_parse_path) : pfb_dnsbl_feed_is_abp($pfb_parse_path);');
 		$loop    = strpos($code, 'while (($line = @fgets($fhandle)) !== FALSE)', (int) $detect);
 		$capture = strpos($code, 'if (pfb_dnsbl_is_abp_rule_line($line)) {', (int) $loop);
 		// issue #4272 owner decision: only a hostname, a hosts line or a hostname mask of an Adblock feed goes on.

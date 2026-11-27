@@ -21,10 +21,11 @@ use PHPUnit\Framework\TestCase;
  *  - 'host^' and 'host|' anchor only the end, which AdGuard matches on any hostname ending in 'host':
  *    '||host^' (the host and its subdomains) is the label-boundary subset;
  *  - '.host^' (subdomains only) and '*' masks have no pfBlockerNG form and are dropped;
- *  - '$important' and '$badfilter' ride along on '||host^' (parse_abp() honours both); an exact
- *    mask keeps no modifier ('|host^$important' is the host alone, '|host^$badfilter' is dropped);
- *    any other modifier scopes the rule ($client, $ctag, $dnstype, $denyallow), rewrites instead of
- *    blocking ($dnsrewrite) or is unknown, which AdGuard says makes it ignore the whole rule: dropped.
+ *  - '$important' rides along on '||host^'; an exact mask keeps no modifier ('|host^$important' is the
+ *    host alone). '$badfilter' is dropped: as '||host^$badfilter' it would prune every feed's '||host^'
+ *    in reconcile(), while AdGuard's 'host^$badfilter' disables only the 'host^' rule. Any other
+ *    modifier scopes the rule ($client, $ctag, $dnstype, $denyallow), rewrites instead of blocking
+ *    ($dnsrewrite) or is unknown, which AdGuard says makes it ignore the whole rule: dropped too.
  */
 final class DnsblAbpFeedLineTest extends TestCase
 {
@@ -81,7 +82,7 @@ final class DnsblAbpFeedLineTest extends TestCase
 			'mask, subdomains only'         => ['.example.com^', NULL],
 			'mask, wildcard label'          => ['*.example.com^', NULL],
 			'mask, inner wildcard'          => ['ad*.example.com^', NULL],
-			'mask, badfilter'               => ['ads.example.com^$badfilter', ['a', '||ads.example.com^$badfilter']],
+			'mask, badfilter'               => ['ads.example.com^$badfilter', NULL],
 			'mask, TLD under wildcard rule' => ['tracker.gov.mm^', ['a', '||tracker.gov.mm^']],
 			'mask, client'                  => ['ads.example.com^$client=192.168.1.5', NULL],
 			'mask, ctag'                    => ['ads.example.com^$ctag=device_tv', NULL],

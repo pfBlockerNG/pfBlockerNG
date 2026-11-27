@@ -115,8 +115,8 @@ non-IPv6 `[…]` is dropped as a control line.
 **Amended by issue #4272: an Adblock feed is parsed as Adblock again.** A feed is an Adblock feed
 when its first non-blank line is an Adblock-family header (`[Adblock Plus 2.0]`, `[uBlock Origin]`,
 `[AdGuard]`; `pfb_dnsbl_feed_has_abp_header()`) or, failing that, when any line that is not `#`-led
-is an Adblock rule or an AdGuard HTML filter (`pfb_dnsbl_feed_is_abp()`). Custom lists keep per-line
-routing. In an Adblock feed, each line goes to the capture guard above (which now also knows
+is an Adblock rule or an AdGuard HTML filter (`pfb_dnsbl_feed_is_abp()`). A custom list is an
+Adblock feed only by its header. In an Adblock feed, each line goes to the capture guard above (which now also knows
 AdGuard's `#$?#`, `#@$?#`, `#@?#`, `#@%#` and `#@$#` cosmetic markers) or to
 `pfb_dnsbl_abp_feed_line()`, which keeps only an LDH hostname with an ICANN TLD (optionally
 `:port` and `/`), a hosts line, or an AdGuard DNS hostname mask, and drops everything else. A kept
