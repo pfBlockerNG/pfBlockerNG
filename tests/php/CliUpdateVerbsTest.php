@@ -325,6 +325,20 @@ final class CliUpdateVerbsTest extends TestCase
 		$this->assertStringContainsString('reports no start of this Update', $this->err);
 	}
 
+	/**
+	 * Core gives at most 64 KiB of the log per GetUpdate, even once the Update has ended: the verb reads on with the cursor until a
+	 * page comes back empty, so a terminal sees the whole log, then exits with the result.
+	 */
+	public function testTheLogLeftWhenTheUpdateEndsIsReadToItsEnd(): void
+	{
+		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), self::update(FALSE, "page1\n", '6', 'success'),
+			self::update(FALSE, "page2\n", '12', 'success'), self::update(FALSE, '', '12', 'success')));
+
+		$this->assertSame(0, $code, $this->err);
+		$this->assertSame("page1\npage2\n", $this->out);
+		$this->assertSame(['after' => '12'], $this->calls[3][1]);
+	}
+
 	public function testACoreLostWhileTheUpdateRunsIsAFailure(): void
 	{
 		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), self::update(TRUE, '', '0'),
