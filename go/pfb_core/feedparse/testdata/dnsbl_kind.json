@@ -56,6 +56,7 @@
   {"id":"csv_line_with_commas","description":"CSV line with commas","input":"a,b,c.example.com\n","expect":{"feed":false,"custom":false}},
   {"id":"rule_after_many_plain_lines","description":"rule after many plain lines","input":"example.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\nexample.com\n||late.example^\n","expect":{"feed":true,"custom":false}},
   {"id":"header_with_trailing_text","description":"header with trailing text","input":"[Adblock Plus 2.0] x\nexample.com\n","expect":{"feed":false,"custom":false}},
-  {"id":"nul_in_a_rule_line","description":"NUL in a rule line","input":"||a\u0000b.example^\n","expect":{"feed":true,"custom":false}}
+  {"id":"nul_in_a_rule_line","description":"NUL in a rule line","input":"||a\u0000b.example^\n","expect":{"feed":true,"custom":false}},
+  {"id":"subdomain_only_mask","description":"issue #4284: a subdomain-only mask makes a headerless feed an Adblock feed","input":"example.com\nhttp://foo.example.net/path\n.ads.example.org^\n","expect":{"feed":true,"custom":false}}
  ]
 }

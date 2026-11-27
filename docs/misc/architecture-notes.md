@@ -127,6 +127,27 @@ Core's feed parser does the same (issue #4273): the DNSBL feed stage classifies 
 `feedparse.DNSBLFeedIsABP()` before it parses it, `abpFeedLine()` is `pfb_dnsbl_abp_feed_line()`, and the parse
 mode and the PSL's ICANN TLD set are part of the stage's parse settings, so a change to either reparses a reused feed.
 
+**Amended by issue #4284 (ported to devel by #4287): zone entries can leave out their apex.** The
+capture guard (PHP's `pfb_dnsbl_is_abp_rule_line()`, feedparse's `isABPRuleLine()` and the decider's
+`dnsblIsAbpRuleLine()`) also takes AdGuard's subdomain-only mask `.host^` (optionally `$options`), in
+any feed, so it also makes a headerless feed an Adblock feed. The decider's `parseAbp()` reads it as a
+block rule that leaves out the apex, and `build()` writes it as a zone entry whose apex payload is the
+one that already blocked the key, or none. The coverage is `apex = a.apex || b.apex`, so a `.host^`
+never unblocks a host that another rule blocks. The key itself is still decided by that earlier
+payload, with its own band, attribution and TOP1M filter. The suffix walk (`zoneEntryFor()`) uses the
+apex payload when the matched key is the query name itself, and keeps walking up when there is none. A
+`.host^` whose key cannot be a zone is dropped instead of becoming an exact block. That happens on TLD
+Exclusion, and under the PSL feed policy's `apex` demotion, which tallies it as `suffix_drop`. The TLD
+Exclusion drop is not tallied, because it follows the user's own setting. The `$badfilter` signature of
+`.host^` carries a marker, so `.host^$badfilter` prunes only `.host^`, and no `||host^` or `/re/`
+badfilter prunes it.
+
+**Amended by issue #4286 (ported to devel by #4287): a `$badfilter` prunes only a rule of its own
+type.** `reconcile()` prunes a feed rule whose kind (block or allow) and signature both match a feed
+`$badfilter`. A regex's signature key is `/pattern/`, so `||host^$badfilter` never prunes the regex
+`/host/`, and an `@@` rule's `$badfilter` never prunes a block rule, nor the reverse. Hosts and
+bare-domain lines take the plain path, which `$badfilter` never reaches.
+
 The manifest build is the sole DNSBL classifier in every TLD mode. PHP publishes each feed's
 raw rows and metadata, then the gateway's decider routes plain and ABP rows through the production
 matcher build. PHP does not re-read an aggregate feed or rebuild per-group plaintext summaries;

@@ -473,7 +473,7 @@ func TestZoneEntryFor(t *testing.T) {
 		{"fallback not used for an unlisted name", "evil.example", shadowing, shadowing},
 		{"empty TOP1M set lists nothing", "popular.example", empty, empty},
 	} {
-		if got := zoneEntryFor(c.query, c.entry); got != c.want {
+		if got := zoneEntryFor(c.query, c.query, c.entry); got != c.want {
 			t.Errorf("%s: zoneEntryFor(%q) = %+v, want %+v", c.name, c.query, got, c.want)
 		}
 	}

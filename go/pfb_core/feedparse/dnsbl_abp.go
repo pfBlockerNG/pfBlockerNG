@@ -60,12 +60,16 @@ func startsWithPCRESpace(s string) bool {
 
 const abpCosmeticPrefix = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._,~*-"
 
-// pfb_dnsbl_is_abp_rule_line(): the line is an ABP-shaped rule ('||'/'@@' anchor, element hiding, '/regex/').
+// abpSubdomainMaskRE is AdGuard's subdomain-only mask '.host^', optionally with '$options' (issue #4284).
+var abpSubdomainMaskRE = regexp.MustCompile(`(?s)^\.[A-Za-z0-9_.-]+\^(?:\$.*)?$`)
+
+// pfb_dnsbl_is_abp_rule_line(): the line is an ABP-shaped rule ('||'/'@@' anchor, '.host^' mask, element hiding,
+// '/regex/').
 func isABPRuleLine(line string) bool {
 	if strings.HasPrefix(line, ",") {
 		return false
 	}
-	if strings.HasPrefix(line, "||") || strings.HasPrefix(line, "@@") {
+	if strings.HasPrefix(line, "||") || strings.HasPrefix(line, "@@") || abpSubdomainMaskRE.MatchString(line) {
 		return true
 	}
 	if strings.Contains(line, "#") {

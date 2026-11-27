@@ -572,7 +572,8 @@ func build(manifest buildManifest, config buildConfig, lineReader lineReader, to
 		}
 	}
 	// issue #3648: zone key whose last writer is a TOP1M-filtered row -> the key's last unfiltered payload (nil when
-	// it has none); the final loop reads it. A key present with a nil value is Python's None.
+	// it has none); the final loop reads it. A key present with a nil value is Python's None. issue #4284: a '.host^'
+	// apex payload's fallback can itself carry a TOP1M filter, resolved the same way.
 	zoneTop1m := map[string]*blockEntry{}
 
 	trackZoneTop1m := func(key string, filtered bool) {
@@ -587,6 +588,26 @@ func build(manifest buildManifest, config buildConfig, lineReader lineReader, to
 		} else {
 			zoneTop1m[key] = zoneTop1m[key]
 		}
+	}
+
+	// apexWriter is the payload that blocks zone key itself before the next write, carrying its TOP1M filter (the final
+	// loop marks only the key's last writer), or nil.
+	apexWriter := func(key string) *blockEntry {
+		blocker := func(entry *blockEntry) *blockEntry {
+			if entry != nil && entry.subdomainsOnly {
+				return entry.apex
+			}
+			return entry
+		}
+		writer := blocker(zoneDB[key])
+		// A nested apex payload already carries its own TOP1M filter; the key's filter belongs to the '.host^' that
+		// holds it.
+		if _, tracked := zoneTop1m[key]; writer == nil || !tracked || writer != zoneDB[key] {
+			return writer
+		}
+		filtered := *writer
+		filtered.top1m, filtered.hasTop1m, filtered.top1mFallback = top1m, true, blocker(zoneTop1m[key])
+		return &filtered
 	}
 
 	indexFor := func(feed, group string) int {
@@ -769,7 +790,8 @@ func build(manifest buildManifest, config buildConfig, lineReader lineReader, to
 		importantRules = importantRules || result.importantRules
 
 		// Domain blocks -> dataDB/zoneDB (carry band + $important). issue #2371: a FEED rule AT a suffix boundary is
-		// dropped ('ignore') or demoted from ZONE to DATA at the SAME key ('apex', band/important/log preserved).
+		// dropped ('ignore') or demoted from ZONE to DATA at the SAME key ('apex', band/important/log preserved). A
+		// '.host^' zone (issue #4284) has no exact form, so 'apex' drops it too ('suffix_drop').
 		for _, b := range result.blockDomains {
 			cls := b.cls
 			if b.provenance == RULE_PROV_FEED && pslFeedPolicyActive {
@@ -779,6 +801,11 @@ func build(manifest buildManifest, config buildConfig, lineReader lineReader, to
 					continue
 				}
 				if policy == "apex" && cls == DNSBL_CLASS_ZONE {
+					if b.subdomainsOnly {
+						// issue #4284: exact DATA would block only the apex '.host^' excludes.
+						tallyReject(rejects, orDefault(b.feed, "DNSBL"), orDefault(b.group, "DNSBL"), "suffix_drop")
+						continue
+					}
 					tallyReject(rejects, orDefault(b.feed, "DNSBL"), orDefault(b.group, "DNSBL"), "suffix_demote")
 					cls = DNSBL_CLASS_DATA
 				}
@@ -788,6 +815,11 @@ func build(manifest buildManifest, config buildConfig, lineReader lineReader, to
 			payload := &blockEntry{log: orDefault(b.log, "0"), index: idx, important: b.important, band: b.band}
 			_, top1mRow := top1mRows[feedGroup{b.feed, b.group}]
 			if cls == DNSBL_CLASS_ZONE {
+				if b.subdomainsOnly {
+					// issue #4284: a '.host^' blocks the key's subdomains; the key keeps the payload that already
+					// blocked it (apex = a.apex || b.apex), with that payload's own band, attribution and TOP1M filter.
+					payload.subdomainsOnly, payload.apex = true, apexWriter(b.key)
+				}
 				if len(top1mRows) > 0 {
 					trackZoneTop1m(b.key, top1mRow)
 				}

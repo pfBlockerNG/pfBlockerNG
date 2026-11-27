@@ -172,7 +172,8 @@ var (
 // abpFeedLine is pfb_dnsbl_abp_feed_line(): in an Adblock feed, a line that is not an Adblock rule is kept only as a
 // hostname (with ':<port>' and/or '/'), a hosts line (its first host, all of them real hostnames) or an AdGuard DNS
 // hostname mask. '|host^', '|host|' and '://host^' are the host alone; 'host^' and 'host|' become '||host^', keeping
-// '$important'; '.host^', '*' masks and every other modifier are dropped. ok is false for a dropped line.
+// '$important'; '*' masks and every other modifier are dropped ('.host^' never gets here: the capture guard takes it
+// first, issue #4284). ok is false for a dropped line.
 func (t *ICANNTLDs) abpFeedLine(line string) (DNSBLRow, bool) {
 	if strings.Contains(line, "\x00") {
 		return DNSBLRow{}, false

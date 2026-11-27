@@ -5048,7 +5048,7 @@
     {"line": "imgur.com|\n", "expect": {"rows": [["a", "||imgur.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "imgur.com^$important\n", "expect": {"rows": [["a", "||imgur.com^$important"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "|imgur.com^$important\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": ".imgur.com^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ".imgur.com^\n", "expect": {"rows": [["a", ".imgur.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "*.imgur.com^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "ad*.imgur.com^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "imgur.com^$badfilter\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -5114,7 +5114,7 @@
     {"line": "imgur.com|\n", "expect": {"rows": [["a", "||imgur.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "imgur.com^$important\n", "expect": {"rows": [["a", "||imgur.com^$important"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "|imgur.com^$important\n", "expect": {"rows": [["d", "imgur.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": ".imgur.com^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ".imgur.com^\n", "expect": {"rows": [["a", ".imgur.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "*.imgur.com^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "ad*.imgur.com^\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "imgur.com^$badfilter\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -5176,6 +5176,26 @@
     {"line": "site.com#@$#body { color: red }\n", "expect": {"rows": [["a", "site.com#@$#body { color: red }"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "a.com,b.com#$?#.ads\n", "expect": {"rows": [["a", "a.com,b.com#$?#.ads"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "site.com#$#body { color: red }\n", "expect": {"rows": [["a", "site.com#$#body { color: red }"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
+   ]
+  },
+  {
+   "id": "issue4284_subdomain_mask_lenient",
+   "description": "issue #4284: AdGuard's subdomain-only mask '.host^' is an ABP rule in any feed, so no parse mode cuts it to the host",
+   "config": {"dnsbl_ip": true, "parse_mode": "lenient", "abp_feed": false, "custom": false, "suppression": false},
+   "lines": [
+    {"line": ".webhop.net^\n", "expect": {"rows": [["a", ".webhop.net^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ".webhop.net^$important\n", "expect": {"rows": [["a", ".webhop.net^$important"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ".ads.example.com^\n", "expect": {"rows": [["a", ".ads.example.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
+   ]
+  },
+  {
+   "id": "issue4284_subdomain_mask_strict",
+   "description": "issue #4284: AdGuard's subdomain-only mask '.host^' is an ABP rule in any feed, so no parse mode cuts it to the host",
+   "config": {"dnsbl_ip": true, "parse_mode": "strict", "abp_feed": false, "custom": false, "suppression": false},
+   "lines": [
+    {"line": ".webhop.net^\n", "expect": {"rows": [["a", ".webhop.net^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ".webhop.net^$important\n", "expect": {"rows": [["a", ".webhop.net^$important"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ".ads.example.com^\n", "expect": {"rows": [["a", ".ads.example.com^"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
    ]
   }
  ]
