@@ -44,14 +44,16 @@ _STOP = "/tmp/pfb_smoke_lock_stop"
 # pfblockerng_sync_cron()): the skip line appears ONLY on a refused pass, the
 # CRON START banner ONLY on a proceeding one — each test asserts one present
 # and the other absent, so neither negative assertion can pass vacuously.
-_SKIP_LINE = "Feed pass [ cron ] skipped -- another pfBlockerNG feed pass is running"
-_START_LINE = "CRON  PROCESS  START"
+# Since #4260 the cron verb is Core's `manual` Update, whose program runs the `sync` pass.
+_SKIP_LINE = "Feed pass [ sync ] skipped -- another pfBlockerNG feed pass is running"
+# A section every proceeding sync pass logs, whether pfBlockerNG is on (UPDATE PROCESS START) or off (Saving).
+_START_LINE = "===[  Aliastables / Rules  ]"
 
-# The CLI contract for a deferred pass (5a19a2ef, issue #2945): pfb_feed_pass_exit_code()
-# returns PFB_EXIT_LOCKED for a deferral, 0 for a completed pass and 1 for a failed one.
-# The exact code is asserted, not "non-zero", so the three stay apart.
+# The CLI contract for a deferred pass (5a19a2ef, issue #2945): PFB_EXIT_LOCKED for a deferral, 0 for a completed
+# pass and 1 for a failed one. The exact code is asserted, not "non-zero", so the three stay apart. Since #4260 the
+# verb starts the Update through Core, whose Update program defers, and says so for the Update Core reports skipped.
 _EX_TEMPFAIL = 75
-_DEFERRAL_MESSAGE = "pfBlockerNG feed pass deferred: feed-pass lock is held"
+_DEFERRAL_MESSAGE = "pfBlockerNG feed pass deferred: the Update was skipped while another pass holds its lock"
 
 # Real on-box lock holder: acquires the SAME flock the funnels use, signals
 # readiness, then waits for the stop file. Self-terminating (120 s deadline)

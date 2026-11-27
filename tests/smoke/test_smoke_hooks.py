@@ -297,7 +297,11 @@ def test_post_hook_output_precedes_end_marker(deployed_vm: SmokeVM) -> None:
 
 
 def test_hooks_trigger_values(deployed_vm: SmokeVM) -> None:
-    """``PFB_TRIGGER`` differs by verb: ``update`` ⇒ ``cron``; ``updatednsbl`` ⇒ ``force-reload``.
+    """``PFB_TRIGGER`` differs by verb: ``update`` ⇒ ``update``; ``updatednsbl`` ⇒ ``force-reload``.
+
+    Since #4260 the reload's ``pfb_trigger ... trigger=cron`` is a Core ``manual`` Update, as every bypass entry
+    is, so its hooks see ``update`` as a Run Now's do; before, the verb called ``sync_package_pfblockerng('cron')``
+    in-process.
 
     Two distinct branches of ``pfb_hook_trigger`` (``inc:1853``), read off the SAME
     post hook across two reloads. Verified from the CLI dispatch: ``update`` calls
@@ -312,14 +316,14 @@ def test_hooks_trigger_values(deployed_vm: SmokeVM) -> None:
     marker = h.hook_marker_path(token, "post")
     h.set_update_hooks(deployed_vm, [h.env_dump_hook(token, "post")])
 
-    # update ⇒ sync_package_pfblockerng('cron') ⇒ PFB_TRIGGER=cron.
+    # update ⇒ a Core manual Update ⇒ PFB_TRIGGER=update.
     h.clear_hook_markers(deployed_vm, token)
     h.reload(deployed_vm, "update")
     env_cron = h.read_hook_env(deployed_vm, marker)
     assert env_cron is not None, "post hook did not run for 'update'"
-    assert env_cron.get("PFB_TRIGGER") == "cron", f"'update' PFB_TRIGGER should be cron, got {env_cron}"
+    assert env_cron.get("PFB_TRIGGER") == "update", f"'update' PFB_TRIGGER should be update, got {env_cron}"
 
-    # updatednsbl ⇒ PFB_TRIGGER=force-reload (distinct from the cron value above).
+    # updatednsbl ⇒ PFB_TRIGGER=force-reload (distinct from the update value above).
     h.clear_hook_markers(deployed_vm, token)
     h.reload(deployed_vm, "updatednsbl")
     env_fr = h.read_hook_env(deployed_vm, marker)
@@ -632,33 +636,18 @@ def test_hooks_spawned_daemon_does_not_stall_pass(deployed_vm: SmokeVM) -> None:
 
 
 @pytest.mark.timeout(120)
-def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -> None:
-    """A post hook's output reaches the PER-RUN log WHILE it runs — the file the live tail reads.
+def test_post_hook_output_reaches_the_main_log_once(deployed_vm: SmokeVM) -> None:
+    """A post hook's output reaches the main log exactly once per hook run.
 
-    THE BEHAVIOUR (issue #680, Fix A): pfb_run_hooks appends each hook's stdout/stderr to
-    pfb_run_log_target() — the per-run log ($pfb['runlog']) WHILE a run is active — instead of
-    the cumulative log. The #671 AJAX Update-page tail reads the per-run log, so before this fix
-    a hook's own output (a HAProxy-reload hook's lines, the closing run block) went to the
-    cumulative log the tail no longer reads and was MISSING from the live view — exactly the
-    user's alpha.14 report. pfb_logger() still mirrors the surrounding "[ pfB Hook ] …" markers
-    into the same per-run file, so header and hook output interleave and stream together.
+    Since #4260 the CLI starts a Core Update, whose Update program runs the pass: a hook's output goes to the main
+    log through the capture fanout, and the CLI echoes the Update's log only to a terminal, so a verb whose stdout is
+    appended to the main log adds no second copy. The live stream of a hook's output into the per-run log (#680) was
+    the in-process pass's; until the cutover a Core-run pass, a Run Now's included, writes it once the hook ends, and
+    the Core Updater then writes it to the Update's transcript as it runs.
 
-    DETACHED launch + log polling, for the same reason as the bg-daemon test (an
-    SSH-synchronous reload would confound the observation). The per-run log is truncated at run
-    start (pfb_runlog_begin), so the slice we read is exactly this pass — no manual truncate.
-
-    Given an enabled post hook that emits a marker, waits on an explicit release marker, then
-        emits a closing marker,
-    When a pass runs,
-    Then the leading marker is in the PER-RUN log before release (closing marker absent).
-
-    Red→green discriminator for Fix A: FIXED → the leading marker reaches the per-run log while
-    the hook waits for release. PRE-FIX → the hook's stdout went to the CUMULATIVE log, never the
-    per-run log, so the marker is absent — the failing assertion, mirroring the missing live-view
-    output.
-
-    Also proves the main-log sink receives each hook byte once. The capture fanout writes
-    output to the main log while draining; there is no post-run persist copy to duplicate.
+    Given an enabled post hook that emits a marker, waits on an explicit release marker, then emits a closing marker,
+    When a detached verb, its stdout appended to the main log, runs a pass and the hook is released,
+    Then each marker is in the main log exactly once.
     """
     token = "stream"
     stream_marker = f"STREAM_{token}_MARK"
@@ -667,8 +656,6 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
     release_marker = h.hook_marker_path(token, "release")
     post_hook = {
         "script": f"hook_post_{token}_slow.sh",
-        # Emit the marker FIRST (streams immediately if live), then hold the hook open until
-        # release before the closing marker + exit.
         "_body": (
             f"#!/bin/sh\n/bin/echo {stream_marker}\n/usr/bin/touch {emitted_marker}\n"
             f"while [ ! -f {release_marker} ]; do /bin/sleep 1; done\n"
@@ -687,73 +674,34 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
     persisted_before = h.count_log_marker(deployed_vm, h.PFB_LOG, stream_marker)
     persisted_before_done = h.count_log_marker(deployed_vm, h.PFB_LOG, done_marker)
 
+    persisted_delta = -1
+    persisted_delta_done = -1
     try:
-        # Dispatch DETACHED (mirrors the GUI's mwexec_bg): returns at once; observe via the log.
-        # The launcher's own stdout rides the cumulative log (as the GUI does) — the point of the
-        # fix is that the HOOK's output lands in the per-run log regardless of the launcher target.
+        # Detached, its stdout appended to the main log as the GUI's mwexec_bg does.
         deployed_vm.ssh(
             f"nohup {h.PHP_BIN} {h.PFB_CLI} pfb_trigger scope=both force=false trigger=cron "
             f">> {h.PFB_LOG} 2>&1 </dev/null &"
         )
-
-        # Wait for the pass to REACH the post hook: its runner header is logged (by pfb_logger,
-        # mirrored into the per-run log) before the hook's exec() in BOTH old and new code.
-        h.wait_until(
-            lambda: f"hook_post_{token}_slow.sh" in deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout,
-            timeout=30.0,
-            interval=1.0,
-        )
-
-        # THE BARRIER: the script creates emitted_marker only after echo(1) has appended the
-        # leading marker. Once observed, the per-run log read is authoritative; elapsed time
-        # performs no assertion work.
-        h.wait_until(
-            lambda: h.hook_marker_exists(deployed_vm, emitted_marker),
-            timeout=30.0,
-            interval=1.0,
-        )
-        h.wait_until(
-            lambda: (
-                stream_marker in deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout
-                and done_marker not in deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout
-            ),
-            timeout=10.0,
-            interval=0.2,
-        )
-        runlog_now = deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout
-        assert stream_marker in runlog_now, (
-            f"hook marker {stream_marker!r} did not reach the PER-RUN log while waiting for release "
-            f"(Fix A regressed):\n{runlog_now[-1500:]}"
-        )
-        # Caught it before release: the closing marker is absent — proves we observed a live
-        # stream into the per-run log, not the post-exit flush.
-        assert done_marker not in runlog_now, (
-            f"caught the marker only AFTER the hook finished ({done_marker!r} already present) — "
-            f"not a live-stream proof:\n{runlog_now[-1500:]}"
-        )
+        # The hook runs: it creates emitted_marker once its first marker is written.
+        h.wait_until(lambda: h.hook_marker_exists(deployed_vm, emitted_marker), timeout=30.0, interval=1.0)
     finally:
-        # Release the hook first, then let the pass settle before cleanup and persistence checks.
         deployed_vm.ssh("/usr/bin/touch", release_marker)
-        persisted_delta = -1
-        persisted_delta_done = -1
         try:
             h.wait_no_active_pfb_task(deployed_vm, timeout=40.0)
-            # Exactly one main-log copy per hook run; a second fanout route would duplicate it.
             persisted_delta = h.count_log_marker(deployed_vm, h.PFB_LOG, stream_marker) - persisted_before
             persisted_delta_done = h.count_log_marker(deployed_vm, h.PFB_LOG, done_marker) - persisted_before_done
         finally:
             h.clear_update_hooks(deployed_vm)
             deployed_vm.ssh("/bin/rm", "-f", emitted_marker, release_marker)
-        assert persisted_delta == 1, (
-            f"hook marker {stream_marker!r} was persisted into {h.PFB_LOG} {persisted_delta} time(s) "
-            "for one hook run (expected exactly 1):\n"
-            f"{deployed_vm.ssh('cat', h.PFB_LOG).stdout[-4000:]}"
-        )
-        assert persisted_delta_done == 1, (
-            f"hook marker {done_marker!r} was persisted into {h.PFB_LOG} {persisted_delta_done} time(s) "
-            "for one hook run (expected exactly 1):\n"
-            f"{deployed_vm.ssh('cat', h.PFB_LOG).stdout[-4000:]}"
-        )
+    log = deployed_vm.ssh("cat", h.PFB_LOG).stdout[-4000:]
+    assert persisted_delta == 1, (
+        f"hook marker {stream_marker!r} was persisted into {h.PFB_LOG} {persisted_delta} time(s) "
+        f"for one hook run (expected exactly 1):\n{log}"
+    )
+    assert persisted_delta_done == 1, (
+        f"hook marker {done_marker!r} was persisted into {h.PFB_LOG} {persisted_delta_done} time(s) "
+        f"for one hook run (expected exactly 1):\n{log}"
+    )
 
 
 # --------------------------------------------------------------------------- #

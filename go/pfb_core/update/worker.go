@@ -378,6 +378,7 @@ type Admission struct {
 	logGen      int64
 	occurrences map[string]int64
 	published   func()
+	startedAt   int64 // the gate's admission stamp, which the worker's status carries: an Update has one start (#4260)
 }
 
 func (a *Admission) Close() error {
@@ -442,8 +443,12 @@ func (a *Admission) Launch(ctx context.Context, c *Command, req Request, log *os
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return Result{}, err
 	}
+	started := a.startedAt
+	if started == 0 {
+		started = time.Now().Unix()
+	}
 	state := workerState{
-		Version: workerVersion, Nonce: hex.EncodeToString(nonce[:]), Path: c.Path, Request: req, StartedAt: time.Now().Unix(),
+		Version: workerVersion, Nonce: hex.EncodeToString(nonce[:]), Path: c.Path, Request: req, StartedAt: started,
 		LogGen: a.logGen, Occurrences: a.occurrences, Loop: c.Loop,
 	}
 	if err := writeWorkerState(log.Name()+".request", state); err != nil {

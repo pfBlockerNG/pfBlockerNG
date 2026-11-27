@@ -462,7 +462,7 @@ test_smoke_hooks.py::test_hooks_trigger_values 3.24
 test_smoke_hooks.py::test_hooks_webhook_dnsbl_guard_branch 4.64
 test_smoke_hooks.py::test_hooks_webhook_fires_on_ip_change 3.63
 test_smoke_hooks.py::test_post_hook_output_precedes_end_marker 1.66
-test_smoke_hooks.py::test_post_hook_output_streams_into_runlog_during_run 4.67
+test_smoke_hooks.py::test_post_hook_output_reaches_the_main_log_once 4.67
 test_smoke_ip_feed_numeric_host.py 11.73
 test_smoke_ip_feed_numeric_host.py::test_ip_feed_numeric_host_collects_decoded_ipv4 11.73
 test_smoke_ip_obfuscation.py 35.32

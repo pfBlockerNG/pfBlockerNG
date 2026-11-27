@@ -2436,21 +2436,28 @@ DNSBL statistics rows of removed groups, and `--resource-dir` in the rc script. 
 `tests/php/OutpostApplyTest.php` (through corpus A's worker) and `tests/smoke/test_smoke_outpost_apply.py`.
 
 **Deprecated-verb migration map** (each old verb still works through an adapter; the deprecation
-line is logged for the three operator-facing verbs):
+line is logged for the operator-facing verbs, on the CLI's stderr and in the main log). Since issue #4260 the CLI verbs start a Core `manual` Update
+(`pfb_cli_update_request()`, `pfb_cli_update_run()`): the CLI follows it to its end and runs no pass itself, and the
+Update program (`core_update`) runs the pass with the request below. `cron` and `pfb_trigger ... trigger=cron` are a
+`manual` Update too (owner, #3977: bypass entries are "manual or apply, as fits"; Core's `retry` runs the due Extras
+first), so their hooks see `update` where the in-process pass gave `cron`, and the `update` verb no longer takes the
+`cron` reuse plan the string path kept for it.
 
-| Legacy verb | New request | `PFB_TRIGGER` | Deprecation logged |
+| Legacy verb | Core Update | `PFB_TRIGGER` | Deprecation logged |
 | --- | --- | --- | --- |
-| `cron` | `{both, force=FALSE, cron}` | `cron` | no (internal scheduled pass) |
-| `update` (GUI Update) | `{both, force=FALSE, manual}` | `update` | yes |
-| `updateip` | `{ip, force=TRUE, force}` | `force-reload` | yes |
-| `updatednsbl` | `{dnsbl, force=TRUE, force}` | `force-reload` | yes |
-| `noupdates` / `''` (HA) | `{both, force=FALSE, cron/manual}` | `cron` / `update` | no (internal) |
+| `cron` | `manual`, `both`, force `none` | `update` | yes |
+| `update` (GUI Update) | `manual`, `both`, force `none` | `update` | yes |
+| `updateip` | `manual`, `ip`, force `parse` | `force-reload` | yes |
+| `updatednsbl` | `manual`, `dnsbl`, force `parse` | `force-reload` | yes |
+| `pfb_trigger` | `manual`, its scope, force `parse` with `force=true` else `none` | `force-reload` / `update` | no |
+| `forcecheck` | `manual`, its scope, force `download` (`both` with `hashes=true`) | `update` | no |
+| `noupdates` / `''` (HA) | in-process `{both, force=FALSE, cron/manual}` | `cron` / `update` | no (internal) |
 
 Deprecation line: `DEPRECATED: pfblockerng verb '<verb>' — use explicit request (<hint>); removal
 scheduled`. **Removal timeline:** the verb strings keep working through the current major series;
 removal is targeted for a future **major** release (announced in its release notes), at which point
 callers must use `pfb_trigger` / the request array. External scripts should migrate during this
-window. `PFB_TRIGGER` values are unchanged across the migration, so the ADR-12 hook contract holds.
+window. `PFB_TRIGGER` values hold for the in-process callers; the CLI verbs' are those of a Core `manual` Update (above).
 
 ### One trigger-tick + the due-ledger
 
@@ -2468,9 +2475,9 @@ lock, and log maintenance) and asks Core for the Updates it needs. Install, upgr
 `pfblockerng_retire_cron_jobs()`, which removes every crontab entry an earlier version installed (the tick, the old fleet jobs, `metrics`,
 `clearip`/`cleardnsbl`, quoted forms included) and installs none; non-pfB cron jobs are left untouched.
 
-Since issue #3941 the tick no longer dispatches the feed pass (Core does, through the `core_update` verb), and the `cron` verb
-(`pfblockerng.php cron`, `pfblockerng_sync_cron()`) is not a scheduler entry point any more: no feed is named, so it checks only
-the feeds with a `*.fail` retry marker (and applies what that changed). It stays for the smoke harness (the feed-pass lock tests) and for running that retry by hand.
+Since issue #3941 the tick no longer dispatches the feed pass (Core does, through the `core_update` verb), and since issue #4260 the
+`cron` verb (`pfblockerng.php cron`) starts a Core `manual` Update and follows it, deprecated (owner, #3977): it stays for people who
+call it by hand and for the smoke harness (the feed-pass lock tests).
 
 **Metrics export lane (#3522, #3996):** Core runs `--metrics-cmd` (`pfb_core_metrics.sh`) every minute while `maintenance.enabled` and
 `maintenance.metricsExport` are both on; the wrapper runs `/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php
@@ -2523,9 +2530,10 @@ another pass holds it; the tick pre-checks a busy probe and **defers** (not skip
 dispatch via
 the existing `pending` mechanism, so the run retries next tick. A lock deferral (dispatcher or
 feed-pass) exits **0** for the unattended shapes — the array request `trigger=cron force=false`
-(issue #2505) and the bare `cron` verb (issue #2491) — because the pass stands down with its durable
-retry state intact; every operator-initiated request (`trigger=manual`/`force`, any `force=true`,
-Force Check, the deprecated string verbs) keeps exiting **1**. Dispatcher-lock deferrals in both
+(issue #2505) — because the pass stands down with its durable retry state intact; every
+operator-initiated request keeps exiting **1**. The CLI verbs (issue #4260) run no pass: they exit
+`PFB_EXIT_LOCKED` (75) when Core reports their Update skipped (the Update program deferred) or refuses it
+with `conflict` (one runs), 0 for success and 1 otherwise. Dispatcher-lock deferrals in both
 funnels also raise a `LOG_NOTICE` syslog line (feed-pass parity), so a wedged holder is visible
 outside `pfblockerng.log`. The `bl`/`bls`/`dcc` download verbs
 are deliberately unguarded (`bls` runs synchronously inside a pass — a pass-level lock there would
