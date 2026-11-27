@@ -1197,6 +1197,7 @@ def test_headerless_adblock_feed_is_parsed_as_adblock(deployed_vm: SmokeVM, clie
         deployed_vm.ssh("/bin/rm", "-f", feed_url)
 
 
+@pytest.mark.timeout(300)
 def test_subdomain_only_mask_blocks_subdomains_alone(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """issue #4284: AdGuard's ``.host^`` blocks the subdomains of ``host``, never ``host``.
 
