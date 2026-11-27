@@ -2605,7 +2605,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								$ip6_decision = ['count' => 0, 'loggable' => FALSE];
 								$pfb_scheme_skipped = 0;	// ADR-22: per-feed strict scheme/path skips
 								$dnsbl_lineno = 0;		// issue #1004: per-line counter for the parse-error detail sink
-								$abp_feed = pfb_dnsbl_feed_is_abp($pfb_parse_path);
+								// issue #4272: a custom list is the user's own and keeps per-line routing.
+								$abp_feed = !$custom && pfb_dnsbl_feed_is_abp($pfb_parse_path);
 
 								// Parse downloaded file for Domain names
 								if (($fhandle = @fopen($pfb_parse_path, 'r')) !== FALSE) {
@@ -2682,7 +2683,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 													continue;
 												}
 												if ($abp_kept[0] === PfbDnsblRowKind::Abp) {
-													@fwrite($dhandle, pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, $abp_kept[1]));
+													$domain_data = pfb_dnsbl_ndjson_emit_row(...$abp_kept);
+													@fwrite($dhandle, $domain_data);
 													continue;
 												}
 												$line = $abp_kept[1];

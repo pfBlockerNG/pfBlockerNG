@@ -2988,38 +2988,38 @@ function pfb_dnsbl_staging_first_line(string $path): string {
 }
 
 // issue #4272: a feed whose first non-blank line is an Adblock-family header ('[Adblock Plus 2.0]',
-// '[uBlock Origin]', '[AdGuard]') is parsed as Adblock only -- its lines never reach the plain-domain path.
+// '[uBlock Origin]', '[AdGuard]') is an Adblock feed (see pfb_dnsbl_feed_is_abp()).
 function pfb_dnsbl_feed_has_abp_header(string $path): bool {
 	$line = pfb_dnsbl_scrub_line(pfb_dnsbl_strip_bom(pfb_dnsbl_staging_first_line($path)));
 	return preg_match('/^\[\s*(?:adblock|ublock|adguard)[^\]]*\]$/iD', $line) === 1;
 }
 
-// The ICANN top-level domains of the shipped Public Suffix List, as a lower-case ASCII set (cached per path).
-function pfb_psl_icann_tlds(string $path = ''): array {
-	$path = $path === '' ? __DIR__ . '/dnsbl_psl' : $path;
-	static $cache = [];
-	if (isset($cache[$path])) {
-		return $cache[$path];
+// The ICANN top-level domains of the shipped Public Suffix List, as a lower-case ASCII set. Every ICANN
+// entry's last label counts: 'ck', 'mm' and 'np' appear only in wildcard rules such as '*.np'.
+function pfb_psl_icann_tlds(): array {
+	static $tlds = NULL;
+	if ($tlds !== NULL) {
+		return $tlds;
 	}
 	$tlds = [];
 	$icann = FALSE;
-	foreach (@file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $entry) {
+	foreach (@file(__DIR__ . '/dnsbl_psl', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $entry) {
 		if (str_starts_with($entry, '// ===')) {
 			$icann = str_contains($entry, 'BEGIN ICANN');
 			continue;
 		}
-		if ($icann && !str_contains($entry, '.') && !str_starts_with($entry, '//') && !str_starts_with($entry, '#')) {
-			$ascii = idn_to_ascii($entry, IDNA_NONTRANSITIONAL_TO_ASCII) ?: $entry;
-			$tlds[strtolower($ascii)] = TRUE;
+		if ($icann && !str_starts_with($entry, '//')) {
+			$tld = substr(strrchr('.' . $entry, '.'), 1);
+			$tlds[strtolower(idn_to_ascii($tld, IDNA_NONTRANSITIONAL_TO_ASCII) ?: $tld)] = TRUE;
 		}
 	}
-	return $cache[$path] = $tlds;
+	return $tlds;
 }
 
 // issue #4272: a feed is Adblock when its first non-blank line is an Adblock-family header or any line is
-// an Adblock rule. A '#'-led line counts only as a real cosmetic rule ('##' then a selector, or another
-// marker): hosts and IP feeds open with '#####' banners and '### Title' comments. AdGuard's HTML filters
-// ('site$$script[...]', '$@$') count too; the parse loop then drops them.
+// an Adblock rule. A '#'-led line never counts: hosts and IP feeds open with banners such as '#####',
+// '###-----' or '##Title:'. AdGuard's HTML filters ('site$$script[...]', '$@$') count too; the parse loop
+// then drops them.
 function pfb_dnsbl_feed_is_abp(string $path): bool {
 	if (pfb_dnsbl_feed_has_abp_header($path)) {
 		return TRUE;
@@ -3031,12 +3031,8 @@ function pfb_dnsbl_feed_is_abp(string $path): bool {
 	$abp = FALSE;
 	while (!$abp && ($line = fgets($fh)) !== FALSE) {
 		$line = pfb_dnsbl_scrub_line(pfb_dnsbl_strip_bom($line));
-		if (str_starts_with($line, '#')) {
-			$abp = pfb_dnsbl_is_abp_rule_line($line) &&
-			    preg_match('/^(?:##(?:[.#][A-Za-z_-]|[\[*:A-Za-z])|#[@$?%]+#)/', $line) === 1;
-		} else {
-			$abp = pfb_dnsbl_is_abp_rule_line($line) || preg_match('/^[A-Za-z0-9._,~*-]+\$@?\$/', $line) === 1;
-		}
+		$abp = !str_starts_with($line, '#') &&
+		    (pfb_dnsbl_is_abp_rule_line($line) || preg_match('/^[A-Za-z0-9._,~*-]+\$@?\$/', $line) === 1);
 	}
 	fclose($fh);
 	return $abp;
@@ -3044,6 +3040,7 @@ function pfb_dnsbl_feed_is_abp(string $path): bool {
 
 // A real hostname, lower-case ASCII: every label letters, digits and inner hyphens, and an ICANN TLD.
 function pfb_dnsbl_abp_feed_host(string $token): ?string {
+	$token = rtrim($token, '.');
 	$host = strtolower(idn_to_ascii($token, IDNA_NONTRANSITIONAL_TO_ASCII) ?: $token);
 	if (strlen($host) > 253 || !preg_match('/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)$/D', $host, $m)) {
 		return NULL;
@@ -3054,10 +3051,14 @@ function pfb_dnsbl_abp_feed_host(string $token): ?string {
 // issue #4272: in an Adblock feed, a line that is not an Adblock rule is kept only as a hostname (with
 // ':<port>' and/or '/'), a hosts line ('<ip> <host> [aliases] [# comment]', the first host kept as in a
 // hosts feed), or an AdGuard DNS hostname mask. Returns the row it becomes, or NULL to drop it. A mask maps
-// to the closest pfBlockerNG rule that never blocks more than AdGuard: '|host^', '|host|' and '://host^'
-// are the host alone; 'host^' and 'host|' match any hostname ending in 'host', so '||host^'; '.host^', '*'
-// and every modifier but '$important' have no pfBlockerNG form (AdGuard ignores a rule with an unknown one).
+// to the closest pfBlockerNG rule that never blocks more than AdGuard (with Wildcard Blocking off): '|host^',
+// '|host|' and '://host^' are the host alone; 'host^' and 'host|' match any hostname ending in 'host', so
+// '||host^', carrying '$important' or '$badfilter'; '.host^', '*' and every other modifier have no
+// pfBlockerNG form (AdGuard ignores a rule with an unknown one).
 function pfb_dnsbl_abp_feed_line(string $line): ?array {
+	if (str_contains($line, "\0")) {
+		return NULL;
+	}
 	$line = trim(preg_replace('/\s#.*$/s', '', $line));
 	$fields = preg_split('/\s+/', $line, -1, PREG_SPLIT_NO_EMPTY) ?: [];
 	if (count($fields) >= 2 && is_ipaddr($fields[0])) {
@@ -3072,14 +3073,14 @@ function pfb_dnsbl_abp_feed_line(string $line): ?array {
 	    ($host = pfb_dnsbl_abp_feed_host($m[1])) !== NULL) {
 		return [PfbDnsblRowKind::Domain, $host];
 	}
-	if (!preg_match('/^(\||:\/\/)?([^|^$*\/]+)[|^](?:\$important)?$/D', $line, $m) ||
+	if (!preg_match('/^(\||:\/\/)?([^|^$*\/]+)[|^](\$important|\$badfilter)?$/D', $line, $m) ||
 	    ($host = pfb_dnsbl_abp_feed_host($m[2])) === NULL) {
 		return NULL;
 	}
 	if ($m[1] !== '') {
-		return [PfbDnsblRowKind::Domain, $host];
+		return ($m[3] ?? '') === '$badfilter' ? NULL : [PfbDnsblRowKind::Domain, $host];
 	}
-	return [PfbDnsblRowKind::Abp, '||' . $host . '^' . (str_ends_with($line, '$important') ? '$important' : '')];
+	return [PfbDnsblRowKind::Abp, '||' . $host . '^' . ($m[3] ?? '')];
 }
 
 // The DNSBL verbatim-reuse fork (pfblockerng.inc sync loop): skip re-parsing

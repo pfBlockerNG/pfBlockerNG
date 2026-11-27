@@ -2836,13 +2836,14 @@ $section->addInput(new Form_Select(
 	$options_pfb_dnsbl_parse_mode
 ))->setHelp('How a domain is taken from a feed line that is not a plain domain (Strict, Allow Ports, or Lenient).'
 		. '<div class="infoblock">'
-		. 'Adblock-format feeds always use their own rules: only <strong>||domain^</strong>-style rules block domains.<ul>'
+		. 'Adblock-format feeds (an Adblock header, or any Adblock rule) use their own rules: <strong>||domain^</strong>-style rules, '
+		. 'plain hostnames, hosts lines and AdGuard DNS hostname masks block domains, and every other line is dropped.<ul>'
 		. '<li><strong>Strict</strong> - keep only <strong>domain</strong>, <strong>domain/</strong> or <strong>scheme://domain/</strong>, '
 		. 'optionally followed by a space and a <strong>#</strong> comment.</li>'
 		. '<li><strong>Allow Ports</strong> - as Strict, and also <strong>domain:port</strong>.</li>'
 		. '<li><strong>Lenient</strong> - strip any <strong>scheme://</strong>, port, path, query or fragment and keep the domain.</li></ul>'
 		. 'Strict and Allow Ports skip and log every other line (a path, query, fragment, user info, or an invalid scheme).<br />'
-		. 'New installs default to Allow Ports; upgraded installs keep their previous behaviour.'
+		. 'New installs default to Allow Ports. An upgraded install that had Lenient parsing on stays Lenient; one that had it off becomes Allow Ports.'
 		. '</div>');
 
 $section->addInput(new Form_Select(

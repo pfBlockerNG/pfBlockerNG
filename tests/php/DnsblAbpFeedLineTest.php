@@ -21,9 +21,10 @@ use PHPUnit\Framework\TestCase;
  *  - 'host^' and 'host|' anchor only the end, which AdGuard matches on any hostname ending in 'host':
  *    '||host^' (the host and its subdomains) is the label-boundary subset;
  *  - '.host^' (subdomains only) and '*' masks have no pfBlockerNG form and are dropped;
- *  - '$important' keeps its rule; any other modifier scopes the rule ($client, $ctag, $dnstype,
- *    $denyallow), rewrites instead of blocking ($dnsrewrite), disables another rule ($badfilter) or
- *    is unknown, which AdGuard says makes it ignore the whole rule: the line is dropped.
+ *  - '$important' and '$badfilter' ride along on '||host^' (parse_abp() honours both); an exact
+ *    mask keeps no modifier ('|host^$important' is the host alone, '|host^$badfilter' is dropped);
+ *    any other modifier scopes the rule ($client, $ctag, $dnstype, $denyallow), rewrites instead of
+ *    blocking ($dnsrewrite) or is unknown, which AdGuard says makes it ignore the whole rule: dropped.
  */
 final class DnsblAbpFeedLineTest extends TestCase
 {
@@ -49,7 +50,12 @@ final class DnsblAbpFeedLineTest extends TestCase
 			'double slash'                  => ['example.com//', NULL],
 			'path'                          => ['example.com/ads', NULL],
 			'glued comment'                 => ['example.com#ad', NULL],
-			'trailing dot'                  => ['example.com.', NULL],
+			'trailing dot'                  => ['example.com.', ['d', 'example.com']],
+			'longest hostname'              => [str_repeat('a', 63) . '.' . str_repeat('b', 63) . '.' . str_repeat('c', 63) . '.' . str_repeat('d', 57) . '.com',
+			                                    ['d', str_repeat('a', 63) . '.' . str_repeat('b', 63) . '.' . str_repeat('c', 63) . '.' . str_repeat('d', 57) . '.com']],
+			'hostname too long'             => [str_repeat('a', 63) . '.' . str_repeat('b', 63) . '.' . str_repeat('c', 63) . '.' . str_repeat('d', 58) . '.com', NULL],
+			'TLD only under a wildcard rule' => ['ads.com.np', ['d', 'ads.com.np']],
+			'NUL byte'                      => ["1.2.3.4\0 ads.example.com", NULL],
 			// hosts lines
 			'hosts, 0.0.0.0'                => ['0.0.0.0 ads.example.com', ['d', 'ads.example.com']],
 			'hosts, 127.0.0.1'              => ['127.0.0.1 tracker.example.org', ['d', 'tracker.example.org']],
@@ -75,13 +81,15 @@ final class DnsblAbpFeedLineTest extends TestCase
 			'mask, subdomains only'         => ['.example.com^', NULL],
 			'mask, wildcard label'          => ['*.example.com^', NULL],
 			'mask, inner wildcard'          => ['ad*.example.com^', NULL],
-			'mask, badfilter'               => ['ads.example.com^$badfilter', NULL],
+			'mask, badfilter'               => ['ads.example.com^$badfilter', ['a', '||ads.example.com^$badfilter']],
+			'mask, TLD under wildcard rule' => ['tracker.gov.mm^', ['a', '||tracker.gov.mm^']],
 			'mask, client'                  => ['ads.example.com^$client=192.168.1.5', NULL],
 			'mask, ctag'                    => ['ads.example.com^$ctag=device_tv', NULL],
 			'mask, dnstype'                 => ['ads.example.com^$dnstype=AAAA', NULL],
 			'mask, denyallow'               => ['example.com^$denyallow=cdn.example.com', NULL],
 			'mask, dnsrewrite'              => ['ads.example.com^$dnsrewrite=1.2.3.4', NULL],
 			'mask, important and dnstype'   => ['ads.example.com^$important,dnstype=A', NULL],
+			'mask, anchored badfilter'      => ['|ads.example.com^$badfilter', NULL],
 			'mask, URL modifier'            => ['example.com^$third-party', NULL],
 			'mask, bad label'               => ['_ads.example.com^', NULL],
 			'mask, unknown TLD'             => ['ads.example.notatld^', NULL],

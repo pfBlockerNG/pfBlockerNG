@@ -7,8 +7,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * issue #4272, at the DNSBL parse loop itself:
- *  - in an Adblock-headed feed a line either takes the ABP path or is dropped, so a path rule never
- *    becomes a domain block;
+ *  - in an Adblock feed a line takes the ABP path, is kept as a hostname, hosts line or hostname mask,
+ *    or is dropped, so a path rule never becomes a domain block;
  *  - in strict mode a domain line is kept only as '(<scheme>://)?<domain>/?', optionally followed by
  *    a space and a '#' comment.
  *
@@ -23,6 +23,7 @@ final class DnsblFeedLineRoutingTest extends TestCase
 	private string $failLog = '';
 	private string $mainLog = '';
 	private mixed $savedPfb = NULL;
+	private string $lastDomainData = '';
 
 	public static function setUpBeforeClass(): void
 	{
@@ -82,7 +83,9 @@ final class DnsblFeedLineRoutingTest extends TestCase
 		$rev_format = FALSE;
 		$alienvault_types = [];
 		$dhandle = fopen('php://memory', 'w+');
+		$domain_data = '';
 		eval(self::$region);
+		$this->lastDomainData = $domain_data;
 		rewind($dhandle);
 		$rows = [];
 		while (($row = fgets($dhandle)) !== FALSE) {
@@ -120,11 +123,18 @@ final class DnsblFeedLineRoutingTest extends TestCase
 			'important mask'         => ['imgur.com^$important', [['a', '||imgur.com^$important']]],
 			'subdomain-only mask'    => ['.imgur.com^', []],
 			'wildcard mask'          => ['*.imgur.com^', []],
-			'badfilter mask'         => ['imgur.com^$badfilter', []],
+			'badfilter mask'         => ['imgur.com^$badfilter', [['a', '||imgur.com^$badfilter']]],
 			'AdGuard extended CSS'   => ['eksisozluk.com#$?#.ads', [['a', 'eksisozluk.com#$?#.ads']]],
 			'AdGuard HTML filter'    => ['imgur.com$$script[data-src]', []],
 			'hosts line, IP target'  => ['0.0.0.0 1.2.3.4', []],
 		];
+	}
+
+	/** A mask row counts as feed output: a feed of masks alone must not be taken for an empty one ('No Domains Found'). */
+	public function testAMaskRowIsFeedOutput(): void
+	{
+		$this->assertSame([['a', '||imgur.com^']], $this->parseLine('imgur.com^', TRUE, FALSE));
+		$this->assertNotSame('', $this->lastDomainData);
 	}
 
 	/** An AdGuard extended cosmetic rule takes the ABP path in any feed, so Lenient never cuts its site out. */

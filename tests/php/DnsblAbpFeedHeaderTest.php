@@ -7,8 +7,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * issue #4272: a DNSBL feed whose first non-blank line is an Adblock-family header is parsed as
- * Adblock only. Its lines either take the ABP path or are dropped, so a path rule such as
- * EasyPrivacy's '.imgur.com/lumbar.gif' can never become a block of the whole domain.
+ * Adblock. Its lines take the ABP path, are kept as a hostname, hosts line or hostname mask, or are
+ * dropped, so a path rule such as EasyPrivacy's '.imgur.com/lumbar.gif' never blocks the whole domain.
  */
 final class DnsblAbpFeedHeaderTest extends TestCase
 {
@@ -96,7 +96,8 @@ final class DnsblAbpFeedHeaderTest extends TestCase
 		$this->assertIsString($code);
 
 		// issue #4272 owner decision: a header or, failing it, any Adblock rule makes the feed Adblock.
-		$detect  = strpos($code, '$abp_feed = pfb_dnsbl_feed_is_abp($pfb_parse_path);');
+		// A custom list is the user's own: it keeps per-line routing.
+		$detect  = strpos($code, '$abp_feed = !$custom && pfb_dnsbl_feed_is_abp($pfb_parse_path);');
 		$loop    = strpos($code, 'while (($line = @fgets($fhandle)) !== FALSE)', (int) $detect);
 		$capture = strpos($code, 'if (pfb_dnsbl_is_abp_rule_line($line)) {', (int) $loop);
 		// issue #4272 owner decision: only a hostname, a hosts line or a hostname mask of an Adblock feed goes on.
