@@ -45,7 +45,8 @@ final class DnsblFeedIdnWildcardTest extends TestCase
 	private function convertFeedLine(string $feedLine): array
 	{
 		$state = pfb_dnsbl_parse_state();
-		$ctx = ['header' => 'testfeed', 'custom' => FALSE, 'dnsbl_ip' => FALSE, 'lenient' => TRUE, 'parse_err' => $this->failLog];
+		$ctx = ['header' => 'testfeed', 'custom' => FALSE, 'dnsbl_ip' => FALSE, 'parse_mode' => PfbDnsblParseMode::Lenient, 'abp_feed' => FALSE,
+			'parse_err' => $this->failLog];
 
 		$prev = setlocale(LC_CTYPE, '0');
 		setlocale(LC_CTYPE, 'C');
