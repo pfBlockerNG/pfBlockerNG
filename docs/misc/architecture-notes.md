@@ -133,7 +133,8 @@ key itself is still decided by that earlier payload, with its own band, attribut
 filter. The suffix walk (`_zone_entry_for()`) uses the `"apex"` payload when the matched key is
 the query name itself, and keeps walking up when it is `false`. A `.host^` whose key cannot be a
 zone is dropped instead of becoming an exact block. That happens on TLD Exclusion, and under the
-PSL feed policy's `apex` demotion, which tallies it as `suffix_drop`. The `$badfilter` signature of
+PSL feed policy's `apex` demotion, which tallies it as `suffix_drop`. The TLD Exclusion drop is
+not tallied, because it follows the user's own setting. The `$badfilter` signature of
 `.host^` is `.host`, so `||host^$badfilter` does not prune it.
 
 The manifest build is the sole DNSBL classifier in every TLD mode. PHP publishes each feed's

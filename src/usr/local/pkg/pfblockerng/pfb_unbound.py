@@ -3211,15 +3211,20 @@ def _db_group_epochs(
             return {}
     missing: set[tuple[str, str]] = set()
     for rules in rule_dbs:
-        for rule in rules.values():
-            while rule is not None:
+        for top in rules.values():
+            # issue #4284: a '.host^' zone also blocks through its nested "apex" payload.
+            pending: list[Any] = [top]
+            while pending:
+                rule = pending.pop()
+                if not isinstance(rule, dict):
+                    continue
                 origin = rule.get("group_origin", "custom")
                 owner = rule.get("group_owner")
                 if owner is None and "index" in rule:
                     owner = resolve_feed_group(rule["index"], feed_groups)[1]
                 if owner and (owner, origin) not in epochs:
                     missing.add((owner, origin))
-                rule = rule.get("top1m_fallback")
+                pending += [rule.get("top1m_fallback"), rule.get("apex")]
     if missing:
         sys.stderr.write("[pfBlockerNG]: DNSBL accounting unavailable for owners: {}\n".format(sorted(missing)))
     return epochs
@@ -5999,7 +6004,8 @@ def build(
     (feed, group)) -- accounting only, no gate DECISION changes. issue #2371 adds a
     real gate: a FEED entry AT its winning public suffix is dropped ('ignore',
     tallied 'suffix_drop') or a wildcard ZONE anchor demoted to exact DATA ('apex',
-    tallied 'suffix_demote'); USER provenance is exempt in every state.
+    tallied 'suffix_demote'); USER provenance is exempt in every state. A '.host^' zone
+    (issue #4284) has no exact form, so 'apex' drops it too ('suffix_drop').
     """
     # issue #3050: dot-stripped ONCE here; every consumer below reads these as-is.
     blacklist_roots = frozenset(t.strip(".") for t in config.get("tld_wildcard_blacklist", []))
@@ -6051,6 +6057,8 @@ def build(
             return apex if isinstance(apex, dict) else None
 
         writer = blocker(zone_db.get(key))
+        # A nested apex payload already carries its own TOP1M filter; the key's filter belongs to
+        # the '.host^' that holds it.
         if writer is None or key not in zone_top1m or writer is not zone_db.get(key):
             return writer
         return {**writer, "top1m": top1m, "top1m_fallback": blocker(zone_top1m[key])}
