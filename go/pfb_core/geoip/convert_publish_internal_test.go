@@ -332,3 +332,15 @@ func TestAGenerationThatCannotBeWrittenIsRemoved(t *testing.T) {
 	}
 	assertPrevious(t, c)
 }
+
+// A generation records the MaxMind locale it was built with (#3977), so the next Update converts the lists again when the
+// configured locale differs.
+func TestAGenerationRecordsTheLocaleItWasBuiltWith(t *testing.T) {
+	c, log := conversionRoot(t, testBlocks)
+	if !c.Run(context.Background()) {
+		t.Fatalf("conversion failed:\n%s", log)
+	}
+	if b, err := os.ReadFile(filepath.Join(c.CCDir, ".geoip_locale")); err != nil || string(b) != c.Locale+"\n" {
+		t.Errorf(".geoip_locale = %q, %v; want %q", b, err, c.Locale+"\n")
+	}
+}

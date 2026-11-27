@@ -176,7 +176,7 @@ func field(rec []string, i int) string {
 }
 
 // Run converts the CSVs and publishes the new generation whole: the continent files, the per-country lists, Top
-// Spammers, the ISO list (.geoip_isos) and the geo-catalog (.geo_catalog). False leaves the previous generation in place; maxmind_ver is written as the
+// Spammers, the ISO list (.geoip_isos), the geo-catalog (.geo_catalog) and the locale (.geoip_locale). False leaves the previous generation in place; maxmind_ver is written as the
 // conversion goes, as today.
 func (c Conversion) Run(ctx context.Context) bool {
 	c.CCDir = filepath.Clean(c.CCDir) // a trailing slash would put the generations inside the live one
@@ -419,6 +419,7 @@ func (c Conversion) build(ctx context.Context, locations, maxmindVer string) (st
 	}
 	s[".geo_catalog"] = c.split(s)
 	s[".geoip_isos"] = []byte(isoList.String())
+	s[".geoip_locale"] = []byte(c.Locale + "\n") // #3977: the locale the lists were built with; a changed one converts again
 	return s, true, nil
 }
 

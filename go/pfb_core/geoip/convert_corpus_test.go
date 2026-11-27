@@ -274,6 +274,8 @@ func todays(t *testing.T, root string) map[string][]byte {
 			return nil
 		}
 		switch {
+		case top == gen && rest == ".geoip_locale":
+			return nil // the Core Updater's own record of the locale (#3977); today's conversion writes none
 		case top == gen && (rest == ".geoip_isos" || strings.HasPrefix(rest, ".geoip_isos/")):
 			rel = "db/geoip.txt" + strings.TrimPrefix(rest, ".geoip_isos")
 		case top == gen:

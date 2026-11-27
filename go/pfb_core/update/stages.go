@@ -209,6 +209,7 @@ func (u *updater) workList() error {
 			return extrasRun(fetcher, ctx, v)
 		},
 		GeoIPShare: u.loop.GeoIPDir, DBDir: u.loop.DBDir, CCDir: u.ccDir(), Settings: extrasSettings(u.snap), Enabled: true,
+		Locale: settingText(u.snap["extras"], "maxmindLocale"),
 		Convert: geoip.Conversion{Share: u.loop.GeoIPDir, CCDir: u.ccDir(), LogDir: u.loop.LogDir,
 			Locale: settingText(u.snap["extras"], "maxmindLocale"), Now: now, Log: u.extrasLog}.Run,
 		ASNTable: func(ctx context.Context) {

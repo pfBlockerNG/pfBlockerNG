@@ -3,6 +3,7 @@ package update
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -37,6 +38,7 @@ type Extras struct {
 	// GeoIPShare and DBDir are $pfb['geoipshare'] and $pfb['dbdir']; CCDir is the country folder ($pfb['ccdir']).
 	GeoIPShare, DBDir, CCDir string
 	Settings                 feedfetch.ExtrasSettings
+	Locale                   string                     // the configured MaxMind locale (extras.maxmindLocale)
 	Enabled                  bool                       // pfBlockerNG is on ($pfb['enable']); off, extra:bl runs nothing
 	Convert                  func(context.Context) bool // the country conversion: geoip.Conversion.Run
 	ASNTable                 func(context.Context)      // the ASN conversion the download runs after a new asn.csv: geoip.ASNTable.Run
@@ -102,7 +104,25 @@ func (x Extras) Stage(ctx context.Context, due []string) ExtrasOutcome {
 			out.Attempted = append(out.Attempted, id)
 		}
 	}
+	// #3977: a changed MaxMind locale converts the country lists again from the local CSVs, with no download.
+	if recorded, changed := x.localeChanged(); changed && x.Convert != nil {
+		if x.Log != nil {
+			fmt.Fprintf(x.Log, "\n  MaxMind locale changed (%q to %q): converting the country lists again\n", recorded, x.Locale)
+		}
+		out.GeoIPChanged = x.Convert(ctx) || out.GeoIPChanged
+	}
 	return out
+}
+
+// localeChanged: MaxMind is configured, the country lists are there, and the locale they record (.geoip_locale, written by
+// the conversion; none for lists built before it was recorded) is not the configured one.
+func (x Extras) localeChanged() (recorded string, changed bool) {
+	if x.Settings.MaxMindAccount == "" || x.Settings.MaxMindKey == "" || x.countriesMissing() {
+		return "", false
+	}
+	b, _ := os.ReadFile(filepath.Join(x.CCDir, ".geoip_locale"))
+	recorded = strings.TrimSpace(string(b))
+	return recorded, recorded != x.Locale
 }
 
 // ClearGeoIPUpdate removes geoip.update, the marker of a MaxMind download not yet consumed: the caller's, once the
