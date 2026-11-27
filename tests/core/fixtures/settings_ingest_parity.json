@@ -122,6 +122,8 @@
     {"id":"cidr-v4-fraction","description":"The IPv4 limit is a whole number.","ingest":{"suppressionCidrV4":1.5},"field":"suppressionCidrV4"},
     {"id":"cidr-v6-over-64","description":"The IPv6 limit is 0 to 64.","ingest":{"suppressionCidrV6":65},"field":"suppressionCidrV6"},
     {"id":"dnsbl-ip-string","description":"dnsblIp is a bool.","ingest":{"dnsblIp":"yes"},"field":"dnsblIp"},
+    {"id":"dnsbl-parse-mode-unknown","description":"dnsblParseMode is strict, ports or lenient.","ingest":{"dnsblParseMode":"x"},"field":"dnsblParseMode"},
+    {"id":"dnsbl-parse-mode-bool","description":"dnsblParseMode is a string.","ingest":{"dnsblParseMode":true},"field":"dnsblParseMode"},
     {"id":"filter-string","description":"feedHostFilter is a bool, not the stored token.","ingest":{"feedHostFilter":"on"},"field":"feedHostFilter"},
     {"id":"allowlist-not-an-address","description":"An allowlist entry is an address or a CIDR.","ingest":{"feedHostAllowlist":[{"cidr":"not-an-ip"}]},"field":"feedHostAllowlist[0].cidr"},
     {"id":"allowlist-prefix-too-long","description":"An IPv4 prefix is at most 32.","ingest":{"feedHostAllowlist":[{"cidr":"10.0.0.0/33"}]},"field":"feedHostAllowlist[0].cidr"},

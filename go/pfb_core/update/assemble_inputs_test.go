@@ -109,3 +109,26 @@ func TestAChangeTheOutpostHoldsWaitsForTheApplyWindow(t *testing.T) {
 		}
 	}
 }
+
+// GIVEN ingest.dnsblParseMode and the package's dnsbl_psl
+// WHEN the loop builds its stages
+// THEN the DNSBL stage parses with that mode and with the PSL's ICANN TLDs, which an Adblock feed's hostnames need (#4273).
+func TestTheParseModeAndTheICANNTLDsReachTheDNSBLStage(t *testing.T) {
+	for _, mode := range []string{"strict", "ports", "lenient"} {
+		fx := newLoopFixture(t)
+		fx.settings["ingest"]["dnsblParseMode"] = mode
+		fx.reply(t)
+		touch(t, filepath.Join(fx.pkg, "dnsbl_psl"), "// ===BEGIN ICANN DOMAINS===\ncom\n*.np\n// ===END ICANN DOMAINS===\n")
+		u := fx.updater(t, manual())
+		if err := u.snapshot(); err != nil {
+			t.Fatal(err)
+		}
+		if err := u.workList(); err != nil {
+			t.Fatal(err)
+		}
+		cfg := u.stages["dnsbl"].Config
+		if string(cfg.ParseMode) != mode || cfg.ICANN.Len() != 2 {
+			t.Errorf("dnsblParseMode %s: the DNSBL stage has mode %q and %d ICANN TLDs, want %s and 2", mode, cfg.ParseMode, cfg.ICANN.Len(), mode)
+		}
+	}
+}

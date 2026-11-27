@@ -37,3 +37,24 @@ func TestAnAdblockFeedIsParsedAsAdblock(t *testing.T) {
 		})
 	}
 }
+
+// Scenario: a custom list is an Adblock feed only by its header (#4273, as pfb_dnsbl_feed_has_abp_header() decides it).
+// Given a custom list holding an Adblock rule, a path line and a hostname under a TLD that is not ICANN, when the stage parses
+// it in Lenient mode, then the path line keeps Lenient's host cut and the hostname stays: the list is not parsed as Adblock.
+func TestACustomListIsAdblockOnlyByItsHeader(t *testing.T) {
+	stage, _, source := localStage(t)
+	icann, err := feedparse.LoadICANNTLDs("../../../../src/usr/local/pkg/pfblockerng/dnsbl_psl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage.Config.ParseMode, stage.Config.ICANN = feedparse.ParseLenient, icann
+	feed := testFeed("dnsbl", "enabled", "auto", "file://"+source)
+	feed.Custom, feed.CustomText, feed.Source = true, "||ads.example.com^\nimgur.com/lumbar.gif\nrouter.lan\n", ""
+	if got := run(stage, feed, "none"); got.Disposition != "changed" {
+		t.Fatalf("Run = %+v", got)
+	}
+	want := "[\"a\",\"||ads.example.com^\"]\n[\"d\",\"imgur.com\"]\n[\"d\",\"router.lan\"]\n"
+	if got := readFile(t, filepath.Join(stage.Paths.FeedDir, feed.Name+".parsed.ndjson")); got != want {
+		t.Errorf("rows = %q, want %q", got, want)
+	}
+}
