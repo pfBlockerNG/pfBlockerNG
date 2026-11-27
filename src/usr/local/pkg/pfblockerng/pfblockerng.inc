@@ -726,8 +726,9 @@ function pfb_get_vip_options(int $family, bool $pkg_xml_format = false) {
 }
 
 function pfb_validate_vips(string $interface, string|null $vip4 = '', string|null $vip6 = ''): array {
-	$enabled4 = !empty($vip4);
-	$enabled6 = !empty($vip6);
+	// 'none' is the VIP selectors' "no VIP" option; the wizard can store it verbatim (#4276).
+	$enabled4 = !empty($vip4) && $vip4 !== 'none';
+	$enabled6 = !empty($vip6) && $vip6 !== 'none';
 	if (!$enabled4 && !$enabled6) {
 		return [false, gettext('no VIP configured')];
 	}
