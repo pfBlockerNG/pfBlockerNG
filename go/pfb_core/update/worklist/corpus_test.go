@@ -20,9 +20,9 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update/feedstage"
 )
 
-// corpusFile is the work-list corpus shared with today's pfblockerng_sync_cron() and pfb_update_check(), replayed there by
-// tests/php/UpdateLoopWorklistCorpusTest.php through pfb_core_update_run(). Where Core differs on purpose a case keeps
-// today's answer in old_expect and says why in departure; this runner asserts expect.
+// corpusFile is the work-list corpus taken from the PHP Update's pfblockerng_sync_cron() and pfb_update_check(), which
+// replayed it until the cutover (#3977). Where Core differs on purpose a case keeps the PHP answer in old_expect and says
+// why in departure; this runner asserts expect.
 const corpusFile = "../../../../tests/updateloop/fixtures/worklist/scenarios.json"
 
 type corpusFeed struct {

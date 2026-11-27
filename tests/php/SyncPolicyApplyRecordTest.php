@@ -197,16 +197,6 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		);
 	}
 
-	/** The `apply` Update Core would run for that request (the `core_update` verb), the apply itself answering $applies. */
-	private function serveApply(bool $applies): int
-	{
-		return pfb_core_update_serve(
-			(string) json_encode(['version' => 1, 'trigger' => 'apply']),
-			"{$this->dir}/apply-result.json",
-			['sync' => static fn (): bool => $applies]
-		);
-	}
-
 	/** A pending manual apply in the due ledger (or, with $ledgerPending FALSE, none), inside the apply window unless $outsideWindow. */
 	private function seedPendingCron(bool $outsideWindow, bool $ledgerPending = TRUE): void
 	{
@@ -294,21 +284,6 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$apply = $this->apply();
 		$this->assertSame('waiting', $apply['outcome'] ?? NULL);
 		$this->assertSame(self::REASON_WINDOW, $apply['reason'] ?? NULL);
-		$this->assertLastStillChanged();
-	}
-
-	// ---- (c) manual apply fails inside the window ---------------------------------------
-
-	public function testFailedManualApplySettlesAnOpenRecordAsFailed(): void
-	{
-		$this->seedRecord('waiting');
-		$this->seedPendingCron(FALSE);
-
-		$this->assertSame(1, $this->serveApply(FALSE), 'the apply failed');
-		$this->assertTrue(pfb_pending_changes(), 'the pending mark is kept for the next tick');
-		$apply = $this->apply();
-		$this->assertSame('failed', $apply['outcome'] ?? NULL);
-		$this->assertSame(self::REASON_FAILED, $apply['reason'] ?? NULL);
 		$this->assertLastStillChanged();
 	}
 
@@ -738,25 +713,14 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->assertNull($this->apply(), 'deferred outside the window');
 
 		$this->resetEnvironment();
-		$this->seedPendingCron(FALSE);
-		$this->assertSame(1, $this->serveApply(FALSE));
-		$this->assertNull($this->apply(), 'failed inside the window');
-
-		$this->resetEnvironment();
 		$this->seedApplyEnvironment();
 		sync_package_pfblockerng();
 		$this->assertNull($this->apply(), 'a completed local apply');
 		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_receive.json', 'no state file is created for it');
 	}
 
-	public function testAnAppliedRecordIsNotReopenedByALaterLocalFailureOrDeferral(): void
+	public function testAnAppliedRecordIsNotReopenedByALaterLocalDeferral(): void
 	{
-		$time = $this->seedRecord('applied');
-		$this->seedPendingCron(FALSE);
-		$this->assertSame(1, $this->serveApply(FALSE));
-		$this->assertSame(['time' => $time, 'outcome' => 'applied'], $this->apply(), 'a failed local apply');
-
-		$this->resetEnvironment();
 		$time = $this->seedRecord('applied');
 		$this->seedPendingCron(TRUE);
 		$this->tick(static function (): void {});

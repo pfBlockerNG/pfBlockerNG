@@ -10,11 +10,10 @@ import (
 	"testing"
 )
 
-// requestFixture is tests/core/fixtures/update_request_v1.json: the version 1 requests Core writes, which the Outpost
-// worker's tests feed to pfb_core_update_request() (tests/php/CoreUpdateServeTest.php), and members, the names a request
-// may hold, which that test compares with the fields the worker accepts. A member Core adds, drops or renames fails
-// TestTheFixtureListsEveryMemberOfTheVersion1Request until members changes, and then the worker's test until the worker
-// accepts exactly the new list (issue #4035: the worker refused lifecycle and pkgOp once).
+// requestFixture is tests/core/fixtures/update_request_v1.json: the version 1 requests Core writes to an Update program run
+// without the loop, which only the test binary does since #3977 (the Outpost serves version 2 alone), and members, the names
+// a request may hold. A member Core adds, drops or renames fails TestTheFixtureListsEveryMemberOfTheVersion1Request until
+// members changes.
 type requestFixture struct {
 	Requests []json.RawMessage `json:"requests"`
 	Members  []string          `json:"members"`
