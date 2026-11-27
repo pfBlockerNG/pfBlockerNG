@@ -20852,8 +20852,8 @@ function pfb_dnsbl_policy_upgrade(): bool {
 // decision (issue #1921) -- seeding new keys into an otherwise-EMPTY dnsbl section
 // there would flip that section's mode to OLDCFG for every OTHER registered dnsbl/*
 // field before the pass ever sees it, wrongly applying an ABSENT-grandfather map meant
-// only for a genuine upgrade. Confirmed against dnsbl/pfb_dnsbl_lenient, now pfb_dnsbl_parse_mode (grandfather
-// ABSENT -> 'on') via an executed probe: the same latent interaction already reaches
+// only for a genuine upgrade. Confirmed against dnsbl/pfb_dnsbl_lenient (grandfather ABSENT -> 'on'; now
+// dnsbl/pfb_dnsbl_parse_mode, ABSENT -> 'lenient') via an executed probe: the same latent interaction already reaches
 // gen/pfb_alias_delta_mode through pfb_schedule_migrate (#2308) today, empirically
 // observed to yield 'replace' instead of the intended fresh-install 'auto'. #2371 does
 // not fix that pre-existing interaction; it avoids adding a second instance of it by
