@@ -135,7 +135,8 @@ the query name itself, and keeps walking up when it is `false`. A `.host^` whose
 zone is dropped instead of becoming an exact block. That happens on TLD Exclusion, and under the
 PSL feed policy's `apex` demotion, which tallies it as `suffix_drop`. The TLD Exclusion drop is
 not tallied, because it follows the user's own setting. The `$badfilter` signature of
-`.host^` is `.host`, so `||host^$badfilter` does not prune it.
+`.host^` carries a marker, so `.host^$badfilter` prunes only `.host^`, and no `||host^` or
+`/re/` badfilter prunes it.
 
 The manifest build is the sole DNSBL classifier in every TLD mode. PHP publishes each feed's
 raw rows and metadata, then `pfb_unbound.py` routes plain and ABP rows through the production

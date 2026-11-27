@@ -5014,8 +5014,9 @@ def parse_abp(
             feed=feed,
             group=group,
             log=log,
-            # '.' keeps a '||domain^$badfilter' from pruning '.domain^' (another rule).
-            signature=("." + dom if is_subdomains else dom, dns_opts),
+            # A marker no option token can spell keeps '.domain^' apart from '||domain^' and
+            # from a '/domain/' regex in $badfilter pruning.
+            signature=(dom, ("<subdomains>", *dns_opts) if is_subdomains else dns_opts),
             wildcard=True,  # ||domain^ / @@||domain^ cover the domain + subdomains
             apex=not is_subdomains,
         )
