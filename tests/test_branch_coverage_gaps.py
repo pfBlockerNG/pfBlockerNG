@@ -93,7 +93,9 @@ def _make_rule(
         feed="F",
         group="G",
         log="1",
-        signature=signature if signature is not None else (key_or_pattern, ()),
+        signature=signature
+        if signature is not None
+        else ("/" + key_or_pattern + "/" if target == RULE_TARGET_REGEX else key_or_pattern, ()),
         wildcard=wildcard,
     )
 

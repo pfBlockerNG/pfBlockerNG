@@ -28,8 +28,9 @@ WHAT THE ORACLE ENCODES (mirrors ADR.md SS2 + RESULTS SS1c/SS1f)
     AdGuard modifiers whose ONLY effect is a rewrite (``$dnsrewrite`` /
     ``$dnstype`` / ``$client`` / ``$ctag``), and IP-valued anchors (those go to
     the PHP firewall pass -- Python returns None, the no-leak contract).
-  * Reconcile: feed-only ``$badfilter`` prune (signature = pattern + sorted
-    DNS-options, minus ``$badfilter``); anchored-regex REDUCTION to a
+  * Reconcile: feed-only ``$badfilter`` prune on (kind, signature), the signature being
+    the pattern (a regex as ``/pattern/``) + sorted DNS-options, minus ``$badfilter``
+    (issue #4286); anchored-regex REDUCTION to a
     domain/wildcard rule (so a reducible ``/re/`` decides IDENTICALLY to its
     dict form); priority bands (RESULTS SS1f).
   * Decide: ``decide(rules, query) -> Decision`` -- the 6-band numeric
@@ -60,7 +61,7 @@ handoff so Phases 4-6 implement the same thing):
     full query name), block or ``@@`` allow.
   * ``$important`` raises a feed rule from band 1/2 to 3/4 (inverts allow-vs-block
     WITHIN the feed: a feed ``||x^$important`` (3) beats a feed ``@@x^`` (2)).
-  * ``$badfilter`` is feed-only and removes the matching FEED rule by signature;
+  * ``$badfilter`` is feed-only and removes the FEED rule of the same kind and signature;
     the ``$badfilter`` rule itself never blocks. A user rule with the same
     signature is NOT pruned (sovereignty).
 
@@ -107,7 +108,8 @@ class Rule:
     """A typed ABP rule (DNS-only). ``key`` is the domain literal for DOMAIN
     targets (with ``wildcard`` saying whether subdomains are covered) or the
     regex inner pattern for REGEX targets. ``signature`` is the $badfilter match
-    key (pattern + sorted DNS-options, minus $badfilter)."""
+    key (pattern, a regex written ``/pattern/``, + sorted DNS-options, minus $badfilter);
+    reconcile() matches it together with ``kind``."""
 
     kind: Kind
     target: Target
@@ -318,8 +320,9 @@ def parse_abp_line(line: str, provenance: Provenance) -> Rule | None:
                 # A reducible regex folds to a DOMAIN rule for MATCHING, but its
                 # $badfilter signature must stay the original regex body (inner): a
                 # literal ||domain^$badfilter must NOT prune a reducible regex, and
-                # vice-versa. Mirrors production parse_abp (signature=(inner, ...)).
-                signature=(inner, tuple(sorted(sig_opts))),
+                # vice-versa. The slashes keep it apart even when the body equals the domain
+                # text (issue #4286). Mirrors production parse_abp.
+                signature=("/" + inner + "/", tuple(sorted(sig_opts))),
             )
         try:
             re.compile(inner)
@@ -334,7 +337,7 @@ def parse_abp_line(line: str, provenance: Provenance) -> Rule | None:
             important=important,
             badfilter=badfilter,
             options=dns_opts,
-            signature=(inner, tuple(sorted(sig_opts))),
+            signature=("/" + inner + "/", tuple(sorted(sig_opts))),
         )
 
     # ---- network rules: @@||domain^ (allow) / ||domain^ (block) ---------- #
@@ -418,15 +421,15 @@ def parse_abp_line(line: str, provenance: Provenance) -> Rule | None:
 
 
 def reconcile(rules: Iterable[Rule]) -> list[Rule]:
-    """Drop every FEED rule whose signature matches a FEED ``$badfilter``; drop
+    """Drop every FEED rule whose kind and signature match a FEED ``$badfilter``; drop
     the badfilter rules themselves; keep all USER rules (sovereignty, fact 7)."""
     rules = list(rules)
-    bad_sigs = {r.signature for r in rules if r.badfilter and r.provenance is Provenance.FEED}
+    bad_sigs = {(r.kind, r.signature) for r in rules if r.badfilter and r.provenance is Provenance.FEED}
     out: list[Rule] = []
     for r in rules:
         if r.badfilter:
             continue  # the $badfilter rule never emits a decision
-        if r.provenance is Provenance.FEED and r.signature in bad_sigs:
+        if r.provenance is Provenance.FEED and (r.kind, r.signature) in bad_sigs:
             continue  # pruned by a feed $badfilter
         out.append(r)
     return out

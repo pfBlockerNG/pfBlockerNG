@@ -138,6 +138,12 @@ not tallied, because it follows the user's own setting. The `$badfilter` signatu
 `.host^` carries a marker, so `.host^$badfilter` prunes only `.host^`, and no `||host^` or
 `/re/` badfilter prunes it.
 
+**Amended by issue #4286: a `$badfilter` prunes only a rule of its own type.** `reconcile()`
+prunes a feed rule whose kind (block or allow) and signature both match a feed `$badfilter`.
+A regex's signature key is `/pattern/`, so `||host^$badfilter` never prunes the regex
+`/host/`, and an `@@` rule's `$badfilter` never prunes a block rule, nor the reverse. Hosts and
+bare-domain lines take the plain path, which `$badfilter` never reaches.
+
 The manifest build is the sole DNSBL classifier in every TLD mode. PHP publishes each feed's
 raw rows and metadata, then `pfb_unbound.py` routes plain and ABP rows through the production
 matcher build. PHP does not re-read an aggregate feed or rebuild per-group plaintext summaries;
