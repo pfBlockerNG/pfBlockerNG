@@ -320,8 +320,7 @@ function pfb_cli_update_request(array $argv): ?array {
 	$scope = in_array($scope, ['ip', 'dnsbl', 'both'], TRUE) ? $scope : 'both';
 	$manual = static fn (string $scope, string $force): array => ['trigger' => 'manual', 'scope' => $scope, 'force' => $force];
 	return match ($argv[1] ?? '') {
-		'cron' => $manual('both', 'none'),
-		'update' => $manual('both', 'none'),
+		'cron', 'update' => $manual('both', 'none'),
 		'updateip' => $manual('ip', 'parse'),
 		'updatednsbl' => $manual('dnsbl', 'parse'),
 		'pfb_trigger' => $manual($scope, in_array('force=true', $args, TRUE) ? 'parse' : 'none'),
