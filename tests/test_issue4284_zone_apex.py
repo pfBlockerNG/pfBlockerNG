@@ -208,3 +208,11 @@ def test_a_listed_host_is_attributed_to_the_unfiltered_end_of_its_fallback_chain
         top1m_feeds=frozenset({1, 3}),
     )
     assert _hit(result, "webhop.net") == (P.PRIO_FEED_BLOCK, "GRP0")
+
+
+def test_a_subdomain_only_badfilter_prunes_only_subdomain_only_masks() -> None:
+    """CodeRabbit on #4285: '.example.com^$badfilter' shared the regex '/.example.com/' signature."""
+    rules = [P.parse_abp(line) for line in ("/.example.com/", ".example.com^", ".example.com^$badfilter")]
+    result = P.reconcile([r for r in rules if r is not None], {}, set())
+    assert [r.pattern for r in result.block_regex_irreducible] == [".example.com"]
+    assert (result.pruned, result.block_domains) == (1, [])
