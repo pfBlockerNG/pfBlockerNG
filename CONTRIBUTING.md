@@ -34,9 +34,10 @@ repo. This guide is the *how-to* (setup, subsystems, build, test, release); `AGE
 
 ### Toolchain setup
 
-CI runs every gate directly on the runner with pinned tool versions, and a local run is
-graded by whatever is on your `PATH` — so install the same versions. What the workflows
-pin today:
+CI runs every gate inside the `ci` and `ci-vm` images built from
+[`.github/docker/Dockerfile`](.github/docker/Dockerfile), whose `ARG`s are the single home of
+each pinned tool version. A local run is graded by whatever is on your `PATH` — so install
+the same versions. What the image pins today:
 
 | Tool | Version | Used by |
 | --- | --- | --- |
