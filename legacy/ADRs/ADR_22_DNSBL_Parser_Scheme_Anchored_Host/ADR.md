@@ -321,3 +321,39 @@ logging; live-VM smoke for both toggle states + migration) — no separate manua
 - New install does not default to strict (§4.12 fails).
 - Strict-mode skips not logged per-line AND per-feed (§4.13 fails).
 - `python -m pytest` count changes unexpectedly.
+
+## 8. Post-merge amendments (2026-11-27 — issue #4272)
+
+A user report on 4.0.0.b4 (EasyPrivacy's `.imgur.com/lumbar.gif` null-blocking all of
+`imgur.com`) overturned three pieces of this ADR. The sections above are left as written for
+the record; **this section is the authoritative correction.** The fix landed on `release/4.0`
+as `464f5872d` (PR #4278); `devel`'s Go feed parser follows in #4273.
+
+1. **§2.1: the single checkbox is a three-way mode.** `pfb_dnsbl_lenient` is replaced by
+   `dnsbl/pfb_dnsbl_parse_mode` (a `PfbDnsblParseMode` enum, registry `old_name`
+   `pfb_dnsbl_lenient`), shown as the "Feed Line Parsing" select:
+   - **Strict** keeps a domain only as `(<RFC 3986 scheme>://)?<domain>/?`, optionally
+     followed by a whitespace-separated `#` comment.
+   - **Allow Ports** is Strict plus an optional `:<1-65535>` port.
+   - **Lenient** is §2.1's ON behaviour, unchanged.
+
+   Both strict modes skip, log and count (§2.3) every other line: a path, query, fragment,
+   `;` parameters, userinfo, or an empty, out-of-range or domain-less port. The resolution is
+   `strict = (mode !== Lenient)`, `allow_port = (mode === Ports)`. New installs default to
+   **Allow Ports**, not Strict: under Strict the shipped STUN feed, whose every line is
+   `host:3478`, produced no domains.
+2. **§2.2 / §2.7: migration, and the "path stripping is NOT changed" premise.** Strict now
+   rejects a path, query, fragment, `;` parameters, port or userinfo *without* a scheme too.
+   §2.4's rule only ran on scheme-bearing lines, so strict silently cut `host/path` down to
+   `host`. An upgrade maps:
+   - absent (pre-ADR-22) or `'on'` → Lenient;
+   - `''` or `'off'` (the old strict, which kept `host:port`) → Allow Ports.
+
+   The grandfather map is `[ABSENT => 'lenient']`; the read adapter maps the legacy
+   `'on'`/`''`/`'off'` tokens, and the installer's writeback stores the canonical token.
+3. **§2.7 "ABP-header path: NOT changed": an Adblock feed no longer reaches this parser's
+   modes.** A feed is an Adblock feed when its first non-blank line is an Adblock-family
+   header, or when any line that is not `#`-led is an Adblock rule (ADR-62 §9). In it, a line
+   that is not an Adblock rule is kept only as a hostname (optionally `:port` and `/`), a hosts
+   line, or an AdGuard DNS hostname mask, whatever the mode; every other line is dropped.
+   The mode applies only to feeds that are not Adblock feeds.

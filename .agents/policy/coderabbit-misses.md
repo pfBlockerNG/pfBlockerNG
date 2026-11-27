@@ -13,6 +13,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 16,384-byte budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `464f5872d`  dnsbl (4.0): parse Adblock feeds as Adblock, add a parsing mode  (#4278) — two quota notices, no review.
 - `ade1a7895`  dnsbl: refresh the PSL and TLD Allow data (4.0)  (#4238) — two quota notices; data-only backport; review and Codex clean
 - `dab470ffc`  core: publish the settings revision key whole  (#4204) — two quota notices, the second from an early re-ask; Codex unavailable
 - `43d7e5ddf`  smoke: end-to-end CrowdSec bouncer tests against a stub LAPI  (#4121) — reviewed `a17a700fd` only; Codex at its limit

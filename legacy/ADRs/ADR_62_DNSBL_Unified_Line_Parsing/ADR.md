@@ -607,3 +607,30 @@ end-to-end** rather than staying as a safety net for a hole that no longer exist
   `unlink_if_exists` beside the verbatim-reuse and rebuild-completion sites) are deleted
   outright — the marker they swept was already retired by Phase 5; sweeping a name that can
   never reappear is dead code, not tolerance.
+
+## 9. Post-merge amendments (2026-11-27 — issue #4272)
+
+**This section is the authoritative correction** of Decision 1's "per-line, never per-feed"
+routing, overturned by #4272 (landed on `release/4.0` as `464f5872d`, PR #4278; `devel`'s Go
+parser follows in #4273). Per-line routing sent every line the capture guard did not recognise
+down the plain-domain path, so EasyPrivacy's `.imgur.com/lumbar.gif` became a block of all of
+`imgur.com`, and the AdGuard Turkish filter's `site#$?#…` cosmetic rules blocked whole sites.
+
+- **Feed-level Adblock classification returns, as a gate, not a format hint.**
+  `pfb_dnsbl_feed_is_abp()` marks a feed as Adblock when its first non-blank line is an
+  Adblock-family header (`[Adblock…]`, `[uBlock…]`, `[AdGuard…]`;
+  `pfb_dnsbl_feed_has_abp_header()`), or when any line that is not `#`-led is an Adblock rule
+  or an AdGuard HTML filter (`$$`, `$@$`). `#`-led lines never count: hosts and IP feeds open
+  with `#####`-style banners. A custom list is an Adblock feed only by its header. Nothing is
+  written to the manifest; `format_hint` stays retired (§8).
+- **The capture guard stays the only ABP routing authority** (Decision item 2), and its
+  element-hiding marker family gains AdGuard's `#$?#`, `#@$?#`, `#@?#`, `#@%#` and `#@$#` in
+  both `pfb_dnsbl_is_abp_rule_line()` and `_DNSBL_ELEMENT_HIDING_MARKERS`, so `parse_abp()`
+  skips them.
+- **In an Adblock feed, a line the guard does not capture** goes to
+  `pfb_dnsbl_abp_feed_line()` instead of the plain path. It is kept only as an LDH hostname
+  with an ICANN TLD (optionally `:port` and `/`), which re-enters the plain path as a bare host;
+  a hosts line (its first host); or an AdGuard DNS hostname mask (`|host^`, `|host|`,
+  `://host^` as the host alone; `host^`, `host|` as an ABP `||host^` row, keeping
+  `$important`). Every other line is dropped. IP extraction runs on Adblock rule lines only.
+- **Every other feed keeps per-line routing** exactly as Decision 1 describes.
