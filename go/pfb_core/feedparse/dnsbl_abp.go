@@ -70,7 +70,8 @@ func isABPRuleLine(line string) bool {
 	}
 	if strings.Contains(line, "#") {
 		first, markerLen := -1, 0
-		for _, m := range []string{"##", "#@#", "#?#", "#%#", "#$#"} {
+		// AdGuard's extended markers are cosmetic too (issue #4272).
+		for _, m := range []string{"##", "#@#", "#?#", "#%#", "#$#", "#$?#", "#@$?#", "#@?#", "#@%#", "#@$#"} {
 			if pos := strings.Index(line, m); pos >= 0 && (first < 0 || pos < first) {
 				first, markerLen = pos, len(m)
 			}

@@ -20,6 +20,7 @@ import (
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/dnsbl"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedparse"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/geoip"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/hooks"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/applied"
@@ -186,7 +187,11 @@ func (u *updater) workList() error {
 	}
 	ingest := u.snap["ingest"]
 	cfg := feedstage.Config{Suppression: flag(ingest, "suppression"), FloorV4: num(ingest, "suppressionCidrV4"),
-		FloorV6: num(ingest, "suppressionCidrV6"), DNSBLIP: flag(ingest, "dnsblIp"), Lenient: flag(ingest, "dnsblLenient")}
+		FloorV6: num(ingest, "suppressionCidrV6"), DNSBLIP: flag(ingest, "dnsblIp"), ParseMode: feedparse.ParseMode(str(ingest, "dnsblParseMode"))}
+	// An Adblock feed keeps a hostname only under an ICANN TLD of the shipped PSL (pfb_psl_icann_tlds(), issue #4272).
+	if cfg.ICANN, err = feedparse.LoadICANNTLDs(filepath.Join(u.loop.PkgDir, "dnsbl_psl")); err != nil || cfg.ICANN.Len() == 0 {
+		u.sinks.Line(true, "\n  [ dnsbl_psl ] has no ICANN TLDs: Adblock feeds keep no hostnames, hosts lines or hostname masks\n")
+	}
 	stage := func(dir string, parseErrors io.Writer) *feedstage.Stage {
 		return &feedstage.Stage{Paths: feedstage.Paths{FeedDir: dir, ScriptDirs: u.loop.ScriptDirs, GeoIPDir: u.ccDir()}, Fetcher: fetcher,
 			Config: cfg, Log: u.lineWriter(), Errors: u.errors, Transcript: u.sinks.Transcript, ParseErrors: parseErrors}

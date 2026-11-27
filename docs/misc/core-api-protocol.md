@@ -389,7 +389,7 @@ once and reads again, and the Update's start reads the backend again ([Update an
 | `suppressionCidrV4` | int 0 to 17 (0: Disabled), `0` | ip `suppression_cidr`: plain digits 1 to 17, else 0 |
 | `suppressionCidrV6` | int 0 to 64 (0: Disabled), `0` | ip `suppression_cidr_v6`: plain digits 1 to 64, else 0 |
 | `dnsblIp` | bool, `false` | DNSBL `action` is valid and not `Disabled` (`pfb_dnsblip_action_value()`) |
-| `dnsblLenient` | bool, `false` | DNSBL `pfb_dnsbl_lenient` is `on` |
+| `dnsblParseMode` | enum `strict`, `ports`, `lenient`; `ports` | DNSBL `pfb_dnsbl_parse_mode` through `PfbDnsblParseMode` (#4272): the retired checkbox token `on` reads `lenient`; `off`, `''` and an absent key read `ports` |
 | `feedHostFilter` | bool, `true` | `pfb_feed_filter_enabled()` |
 | `feedHostAllowlist` | list keyed by `cidr`, `[]`; item `{cidr: string}` | `pfb_feed_internal_allowlist()`: IP addresses and CIDRs, each once |
 | `selfAddresses` | list keyed by `address`, `[]`; item `{address: string}` | the addresses `pfb_ip_is_self()` accepts beyond `127.0.0.1` and `::1` |

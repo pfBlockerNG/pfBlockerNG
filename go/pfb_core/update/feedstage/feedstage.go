@@ -40,7 +40,9 @@ type Paths struct {
 type Config struct {
 	Suppression      bool
 	FloorV4, FloorV6 int // the Suppression CIDR Limit per family; 0 is Disabled
-	DNSBLIP, Lenient bool
+	DNSBLIP          bool
+	ParseMode        feedparse.ParseMode  // the Feed Line Parsing mode (issue #4272)
+	ICANN            *feedparse.ICANNTLDs // the TLDs an Adblock feed's hostnames need; nil keeps none
 }
 
 // Feed is one feed as the caller resolved it from the settings.
@@ -603,7 +605,8 @@ func (s *Stage) ipConfig(f Feed) feedparse.IPConfig {
 }
 
 func (s *Stage) dnsblConfig(f Feed) feedparse.DNSBLConfig {
-	return feedparse.DNSBLConfig{DNSBLIP: s.Config.DNSBLIP, Lenient: s.Config.Lenient, Custom: f.Custom, Suppression: s.Config.Suppression}
+	return feedparse.DNSBLConfig{DNSBLIP: s.Config.DNSBLIP, ParseMode: s.Config.ParseMode, Custom: f.Custom, Suppression: s.Config.Suppression,
+		ICANN: s.Config.ICANN}
 }
 
 func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input io.Reader, probePath string,
@@ -664,11 +667,21 @@ func (s *Stage) parseIP(ctx context.Context, f Feed, feed feedfetch.Feed, input 
 	return withRecord(feed, source, result)
 }
 
-func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, input io.Reader, post feedparse.PostScript,
+func (s *Stage) parseDNSBL(ctx context.Context, f Feed, feed feedfetch.Feed, input io.ReadSeeker, post feedparse.PostScript,
 	source, disposition string, result Result, sink feedparse.Sink) Result {
+	// An Adblock feed is parsed as Adblock (issue #4272): its kind is read from the whole feed first.
+	cfg := s.dnsblConfig(f)
+	abp, err := feedparse.DNSBLFeedIsABP(input, f.Custom)
+	if err == nil {
+		_, err = input.Seek(0, io.SeekStart)
+	}
+	if err != nil {
+		return failedFeed(f.ID, "parse", "dnsbl_parse_failed")
+	}
+	cfg.ABPFeed = abp
 	// The rows are written only when the parse yields one: rows the run does not publish are never in its folder.
 	rows := &lazyFile{path: feedPath(feed, ".parsed.ndjson")}
-	parsed, err := feedparse.ParseDNSBLFeed(input, s.dnsblConfig(f), rows, sink)
+	parsed, err := feedparse.ParseDNSBLFeed(input, cfg, rows, sink)
 	if errors.Join(err, rows.Close()) != nil {
 		return failedFeed(f.ID, "parse", "dnsbl_parse_failed")
 	}

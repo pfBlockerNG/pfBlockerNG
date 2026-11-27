@@ -17,7 +17,7 @@ func ingestProjection() Projection {
 		{Name: "suppressionCidrV4", Type: TypeInt, Default: int64(0), Min: new(int64(0)), Max: new(int64(17))}, // 0: Disabled
 		{Name: "suppressionCidrV6", Type: TypeInt, Default: int64(0), Min: new(int64(0)), Max: new(int64(64))}, // 0: Disabled
 		{Name: "dnsblIp", Type: TypeBool, Default: false},
-		{Name: "dnsblLenient", Type: TypeBool, Default: false},
+		{Name: "dnsblParseMode", Type: TypeEnum, Default: "ports", Enum: []string{"strict", "ports", "lenient"}}, // issue #4272
 		{Name: "feedHostFilter", Type: TypeBool, Default: true},
 		{Name: "feedHostAllowlist", Type: TypeList, Default: []any{}, Key: "cidr", Check: checkAllowEntry,
 			Items: []Field{{Name: "cidr", Type: TypeString, Default: ""}}},

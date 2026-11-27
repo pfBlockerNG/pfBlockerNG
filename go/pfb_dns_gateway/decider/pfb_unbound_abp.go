@@ -175,7 +175,8 @@ func dnsblClassifyOptions(optsStr string) (dnsOpts []string, important, badfilte
 	return kept, important, badfilter, true
 }
 
-var DNSBL_ELEMENT_HIDING_MARKERS = []string{"##", "#@#", "#?#", "#%#", "#$#"}
+// AdGuard's extended markers are cosmetic too (issue #4272), in lockstep with pfb_dnsbl_is_abp_rule_line().
+var DNSBL_ELEMENT_HIDING_MARKERS = []string{"##", "#@#", "#?#", "#%#", "#$#", "#$?#", "#@$?#", "#@?#", "#@%#", "#@$#"}
 
 func dnsblParseAbpRegex(stripped string) (kind, inner, optsStr string, ok bool) {
 	var body string

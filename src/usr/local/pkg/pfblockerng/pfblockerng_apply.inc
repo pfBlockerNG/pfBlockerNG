@@ -274,7 +274,7 @@ function pfb_dnsbl_parse_state(): array {
  * marker). IPs found go to $state['ip4'] / $state['ip6'] and set $state['updateip'].
  *
  * @param array{csv_type:string,csv_parser:bool,run_once:bool,rev_format:bool,ip4:list<string>,ip6:list<string>,scheme_skipped:int,updateip:bool} $state
- * @param array{header:string,custom:bool,dnsbl_ip:bool,lenient:bool,parse_err:string} $ctx
+ * @param array{header:string,custom:bool,dnsbl_ip:bool,parse_mode:PfbDnsblParseMode,abp_feed:bool,parse_err:string} $ctx
  * @return array{row:?string,stop:bool}
  */
 function pfb_dnsbl_parse_line(string $line, int $lineno, array &$state, array $ctx): array {
@@ -300,8 +300,9 @@ function pfb_dnsbl_parse_line(string $line, int $lineno, array &$state, array $c
 	// hosts-line target that is itself an IP address is
 	// pulled to the firewall alias here -- never passed to
 	// the decider (no double-handling, no leak) -- checked BEFORE
-	// the generic verbatim capture below.
-	if ($ctx['dnsbl_ip']) {
+	// the generic verbatim capture below. An Adblock feed's IPs come only
+	// from its Adblock rules (issue #4272).
+	if ($ctx['dnsbl_ip'] && (!$ctx['abp_feed'] || pfb_dnsbl_is_abp_rule_line($line))) {
 		$abp_ip = pfb_dnsbl_abp_extract_ip($line);
 		if ($abp_ip === FALSE) {
 			pfb_parse_fail_log($header, $line, $oline, $parse_err, $lineno);
@@ -334,6 +335,19 @@ function pfb_dnsbl_parse_line(string $line, int $lineno, array &$state, array $c
 	// skipped).
 	if (pfb_dnsbl_is_abp_rule_line($line)) {
 		return ['row' => pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, $line), 'stop' => FALSE];
+	}
+
+	// issue #4272: an Adblock feed's other lines are dropped (path rules such as
+	// '.imgur.com/lumbar.gif'), except a hostname, a hosts line or a hostname mask.
+	if ($ctx['abp_feed']) {
+		$abp_kept = pfb_dnsbl_abp_feed_line($line);
+		if ($abp_kept === NULL) {
+			return PFB_DNSBL_LINE_NO_ROW;
+		}
+		if ($abp_kept[0] === PfbDnsblRowKind::Abp) {
+			return ['row' => pfb_dnsbl_ndjson_emit_row(...$abp_kept), 'stop' => FALSE];
+		}
+		$line = $abp_kept[1];
 	}
 
 	// If 'tab' character found, replace with whitespace
@@ -441,8 +455,8 @@ function pfb_dnsbl_parse_line(string $line, int $lineno, array &$state, array $c
 	}
 
 	if (!$lite) {
-		$line = pfb_dnsbl_extract_host($line, !$ctx['lenient'], $header, $oline,
-			$lineno, $parse_err, $state['scheme_skipped']);
+		$line = pfb_dnsbl_extract_host($line, $ctx['parse_mode'] !== PfbDnsblParseMode::Lenient, $header, $oline,
+			$lineno, $parse_err, $state['scheme_skipped'], $ctx['parse_mode'] === PfbDnsblParseMode::Ports);
 		if ($line === FALSE) {
 			return PFB_DNSBL_LINE_NO_ROW;
 		}
@@ -528,7 +542,7 @@ function pfb_dnsbl_parse_line(string $line, int $lineno, array &$state, array $c
  * @param resource $in
  * @param resource $out
  * @param array{csv_type:string,csv_parser:bool,run_once:bool,rev_format:bool,ip4:list<string>,ip6:list<string>,scheme_skipped:int,updateip:bool} $state
- * @param array{header:string,custom:bool,dnsbl_ip:bool,lenient:bool,parse_err:string} $ctx
+ * @param array{header:string,custom:bool,dnsbl_ip:bool,parse_mode:PfbDnsblParseMode,abp_feed:bool,parse_err:string} $ctx
  * @return array{rows:int,stop:bool}
  */
 function pfb_dnsbl_parse_feed($in, $out, array &$state, array $ctx): array {
@@ -2929,12 +2943,14 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								$ip_decision = ['count' => 0, 'loggable' => FALSE];
 								$ip6_decision = ['count' => 0, 'loggable' => FALSE];
 								$pfb_dnsbl_state = pfb_dnsbl_parse_state();	// CSV detection, reverse format, IPs found, ADR-22 strict scheme skips
+								// issue #4272: a custom list is the user's own; only an explicit Adblock header makes it Adblock.
 								$pfb_dnsbl_ctx = [
-									'header'    => $header,
-									'custom'    => (bool) $custom,
-									'dnsbl_ip'  => $pfb['dnsbl_ip'] != 'Disabled',
-									'lenient'   => $pfb['dnsbl_lenient'] === PfbToggle::On,
-									'parse_err' => $pfb['dnsbl_parse_err'],
+									'header'     => $header,
+									'custom'     => (bool) $custom,
+									'dnsbl_ip'   => $pfb['dnsbl_ip'] != 'Disabled',
+									'parse_mode' => $pfb['dnsbl_parse_mode'],
+									'abp_feed'   => $custom ? pfb_dnsbl_feed_has_abp_header($pfb_parse_path) : pfb_dnsbl_feed_is_abp($pfb_parse_path),
+									'parse_err'  => $pfb['dnsbl_parse_err'],
 								];
 
 								// Parse downloaded file for Domain names
