@@ -164,7 +164,7 @@ class TestRegex:
         assert r.kind == P.DNSBL_KIND_BLOCK
         assert r.target == P.RULE_TARGET_REGEX
         assert r.key_or_pattern == r"ad[0-9]\.example\.com$"  # raw, unparsed
-        assert r.signature == (r"ad[0-9]\.example\.com$", ())
+        assert r.signature == (r"/ad[0-9]\.example\.com$/", ())
 
     def test_allow_regex_raw_inner(self) -> None:
         r = P.parse_abp(r"@@/whitelist-[a-z]+\.example$/")
@@ -193,8 +193,8 @@ class TestRegex:
         assert r.target == P.RULE_TARGET_REGEX
         assert r.key_or_pattern == r"ad[0-9]\.example\.com$"  # raw, options stripped
         assert r.important is True and r.badfilter is False
-        # $important participates in the signature; the pattern stays the key.
-        assert r.signature == (r"ad[0-9]\.example\.com$", ("important",))
+        # $important participates in the signature; the slashed pattern stays the key (#4286).
+        assert r.signature == (r"/ad[0-9]\.example\.com$/", ("important",))
 
     def test_block_regex_badfilter(self) -> None:
         r = P.parse_abp(r"/ad[0-9]\.example\.com$/$badfilter")
@@ -202,7 +202,7 @@ class TestRegex:
         assert r.target == P.RULE_TARGET_REGEX
         assert r.badfilter is True and r.important is False
         # signature MINUS $badfilter -> the bare pattern, no opts (prunes the plain /re/).
-        assert r.signature == (r"ad[0-9]\.example\.com$", ())
+        assert r.signature == (r"/ad[0-9]\.example\.com$/", ())
 
     def test_allow_regex_with_options(self) -> None:
         r = P.parse_abp(r"@@/whitelist-[a-z]+\.example$/$important")
@@ -216,7 +216,7 @@ class TestRegex:
         r = P.parse_abp(r"/ad[0-9]\.example$/$important,badfilter")
         assert r is not None
         assert r.important is True and r.badfilter is True
-        assert r.signature == (r"ad[0-9]\.example$", ("important",))
+        assert r.signature == (r"/ad[0-9]\.example$/", ("important",))
 
     @pytest.mark.parametrize(
         "line",

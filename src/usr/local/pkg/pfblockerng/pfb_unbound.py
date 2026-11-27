@@ -4494,7 +4494,9 @@ class Rule:
         feed/group/log  the per-feed manifest row metadata (attached by the caller;
                         ``parse_abp`` plumbs whatever it is given through unchanged).
         signature       the ``$badfilter`` match key:
-                        ``(key_or_pattern, tuple(sorted DNS-options)) MINUS $badfilter``.
+                        ``(key_or_pattern, tuple(sorted DNS-options)) MINUS $badfilter``,
+                        with a REGEX key written ``/pattern/`` and a ``.domain^`` rule
+                        marked, so rules of different types never share one (#4284, #4286).
                         Two rules with the same signature are the same target+options
                         (a feed ``$badfilter`` prunes a feed rule with a matching
                         signature during reconcile()).
@@ -4968,7 +4970,8 @@ def parse_abp(
             feed=feed,
             group=group,
             log=log,
-            signature=(inner, dns_opts),
+            # issue #4286: the slashes keep a regex apart from a domain rule with the same text.
+            signature=("/" + inner + "/", dns_opts),
             wildcard=False,
         )
 

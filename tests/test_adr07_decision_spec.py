@@ -318,8 +318,9 @@ def parse_abp_line(line: str, provenance: Provenance) -> Rule | None:
                 # A reducible regex folds to a DOMAIN rule for MATCHING, but its
                 # $badfilter signature must stay the original regex body (inner): a
                 # literal ||domain^$badfilter must NOT prune a reducible regex, and
-                # vice-versa. Mirrors production parse_abp (signature=(inner, ...)).
-                signature=(inner, tuple(sorted(sig_opts))),
+                # vice-versa. The slashes keep it apart even when the body equals the domain
+                # text (issue #4286). Mirrors production parse_abp.
+                signature=("/" + inner + "/", tuple(sorted(sig_opts))),
             )
         try:
             re.compile(inner)
@@ -334,7 +335,7 @@ def parse_abp_line(line: str, provenance: Provenance) -> Rule | None:
             important=important,
             badfilter=badfilter,
             options=dns_opts,
-            signature=(inner, tuple(sorted(sig_opts))),
+            signature=("/" + inner + "/", tuple(sorted(sig_opts))),
         )
 
     # ---- network rules: @@||domain^ (allow) / ||domain^ (block) ---------- #
