@@ -20,7 +20,8 @@ use PHPUnit\Framework\TestCase;
  *  - '|host^', '|host|' and '://host^' anchor both ends of the hostname: the host alone, a domain row;
  *  - 'host^' and 'host|' anchor only the end, which AdGuard matches on any hostname ending in 'host':
  *    '||host^' (the host and its subdomains) is the label-boundary subset;
- *  - '.host^' (subdomains only) and '*' masks have no pfBlockerNG form and are dropped;
+ *  - '*' masks have no pfBlockerNG form and are dropped; '.host^' (subdomains only) never gets here:
+ *    the capture guard takes it to parse_abp() first (issue #4284);
  *  - '$important' rides along on '||host^'; an exact mask keeps no modifier ('|host^$important' is the
  *    host alone). '$badfilter' is dropped: as '||host^$badfilter' it would prune every feed's '||host^'
  *    in reconcile(), while AdGuard's 'host^$badfilter' disables only the 'host^' rule. Any other
