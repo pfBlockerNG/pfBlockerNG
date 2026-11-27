@@ -16,9 +16,10 @@
 //	                    launches an independent worker per Update; the worker runs PATH with request on stdin, stdout/stderr in
 //	                    update.log and its result on fd 3. Without it those methods answer unavailable. Stopping Core ends
 //	                    scheduling and observation, not an admitted worker; a restarted Core observes or reconciles its receipt.
-//	                    Exit status 75 means the worker deferred the Update: its result is skipped and nothing is recorded
+//	                    Exit status 75 means the worker deferred the Update: its result is skipped and nothing is recorded.
+//	                    Needs --update-loop (#3977): the Outpost serves no version 1 request
 //	--update-loop       run each Update through the Core Updater loop (issue #4038), which runs the --update-cmd program
-//	                    once as the Outpost apply (version 2); off when absent, and the rc script does not pass it yet. The
+//	                    once as the Outpost apply (version 2). The
 //	                    worker reads the settings itself and is given the path flags (--settings-backend-cmd, --resource-dir,
 //	                    --feed-local-dir, --script-dir, --rsync-bin, --hook-dir, --python-wrapper, --main-log, --db-dir,
 //	                    --geoip-dir, --cc-dir, --log-dir, --pkg-dir, --asn-table, --zoneinfo) and --user-agent in its request
@@ -111,6 +112,18 @@ const shutdownGrace = 3 * time.Second // below the rc script's 5 s before KILL
 // ownSignals is whether run owns the process's signals; main sets it. run installs them once the flags say which mode
 // runs, the one-shot's before any Notify, so that a SIGINT or SIGHUP inherited ignored is never unignored for a moment.
 var ownSignals bool
+
+// programMode is whether an Update may run the --update-cmd program without the loop; only the test binary sets it, whose
+// API, gate and restart tests drive Core through a fake program. The Outpost serves no version 1 request since #3977.
+var programMode bool
+
+// updateModeReason is the usage error of an Update program given without the loop, "" when there is none.
+func updateModeReason(updateLoop bool, updateCmd string, programMode bool) string {
+	if updateCmd != "" && !updateLoop && !programMode {
+		return "--update-cmd needs --update-loop"
+	}
+	return ""
+}
 
 func run(ctx context.Context, args []string, stderr io.Writer) int {
 	fl := flag.NewFlagSet("pfb-core", flag.ContinueOnError)
@@ -215,8 +228,9 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		runner := hooks.Runner{Dir: hookDir, Python: pythonWrapper, SignalLag: 250 * time.Millisecond}
 		return runHooks(ctx, runHooksWhen, *stateDir, *backendCmd, runner, os.Stdin, os.Stdout, stderr)
 	}
-	reason := ""
+	reason := updateModeReason(*updateLoop, updateCmd, programMode)
 	switch {
+	case reason != "":
 	case *updateLoop && updateCmd == "":
 		reason = "--update-loop needs --update-cmd"
 	case mainLog != "" && !*updateLoop:
