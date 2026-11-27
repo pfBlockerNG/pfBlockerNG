@@ -247,29 +247,12 @@ if ($_POST) {
 			$input_errors[] = 'Apply outbound rules to firewall traffic requires at least one Inbound interface.';
 		}
 
-		// Apply MaxMind locale changes if required
+		// #3977: a MaxMind locale change is only saved. The Core Updater records the locale it built the GeoIP lists with
+		// and converts them again on the next Update when the configured one differs.
 		if (in_array($_POST['maxmind_locale'], array('en', 'fr', 'de', 'pt-BR', 'ja', 'zh-CN', 'es')) &&
 		    in_array($pconfig['maxmind_locale'], array('en', 'fr', 'de', 'pt-BR', 'ja', 'zh-CN', 'es'))) {
-
-			$maxmind	= $pconfig['maxmind_locale'];
-			$p_maxmind	= $_POST['maxmind_locale'];
-
-			if ($maxmind != $p_maxmind) {
-				exec('/bin/ps -wx', $result_cron);
-				if (!preg_grep("/pfblockerng[.]php\s+?(uc|gc|ugc)/", $result_cron)) {
-					if (!$input_errors) {
-						// Execute MaxMind update and generate pfSense Notice message on completion
-						$maxmind_esc    = escapeshellarg($maxmind);
-						$p_maxmind_esc  = escapeshellarg($p_maxmind);
-						mwexec_bg("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php ugc {$maxmind_esc} {$p_maxmind_esc} >> {$pfb['extraslog']} 2>&1");
-
-						$savemsg = "The MaxMind language locale is being changed from [ {$maxmind_esc} to {$p_maxmind_esc} ]. "
-							. "A pfSense Notice message will be submitted on completion.";
-					}
-				} else {
-					$input_errors[] = 'MaxMind GeoIP conversion already in process!';
-					$input_errors[] = 'Cannot change Language Locale at this time!';
-				}
+			if ($pconfig['maxmind_locale'] != $_POST['maxmind_locale'] && !$input_errors) {
+				$savemsg = 'The next Update converts the MaxMind GeoIP lists to the new language locale.';
 			}
 		}
 		else {
