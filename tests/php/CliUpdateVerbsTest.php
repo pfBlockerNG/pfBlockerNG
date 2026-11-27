@@ -113,8 +113,13 @@ final class CliUpdateVerbsTest extends TestCase
 
 	public function testTheUpdateIsStartedThenFollowedToItsEndWithItsLog(): void
 	{
+		$ours = static function (array $answer): array {
+			$answer['body']['update'] = ['scope' => 'ip', 'force' => 'parse'] + $answer['body']['update'];
+			return $answer;
+		};
 		$code = $this->follow(['trigger' => 'manual', 'scope' => 'ip', 'force' => 'parse'], $this->core(self::ok([]),
-			self::update(TRUE, "first\n", '6'), self::update(TRUE, '', '6'), self::update(FALSE, "last\n", '11', 'success')));
+			$ours(self::update(TRUE, "first\n", '6')), $ours(self::update(TRUE, '', '6')),
+			$ours(self::update(FALSE, "last\n", '11', 'success'))));
 
 		$this->assertSame(0, $code);
 		$this->assertSame("first\nlast\n", $this->out, 'the Update log goes to stdout, each chunk once');
