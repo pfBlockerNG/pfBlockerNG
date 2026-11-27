@@ -572,3 +572,11 @@ class TestCorpusEquivalence:
         probes.update({"doubleclick.net", "ad.doubleclick.net", "unrelated.example", "example.com"})
         for q in sorted(probes):
             assert _resolve(res, q) == spec.decide(ora_rules, q).outcome, q
+
+
+def test_oracle_badfilter_prunes_only_its_own_kind() -> None:
+    """issue #4286: the reference oracle keys the prune on (kind, signature) like production."""
+    lines = ["||x.example^", "@@||x.example^$badfilter", "@@||y.example^", "||y.example^$badfilter"]
+    rules = [spec.parse_abp_line(line, spec.Provenance.FEED) for line in lines]
+    kept = spec.reconcile([r for r in rules if r is not None])
+    assert sorted((r.kind.value, r.key) for r in kept) == [("allow", "y.example"), ("block", "x.example")]

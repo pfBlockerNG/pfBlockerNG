@@ -4498,9 +4498,9 @@ class Rule:
                         with a REGEX key written ``/pattern/`` and a ``.domain^`` rule
                         marked, so a regex, an anchor and a ``.domain^`` never share one
                         (#4284, #4286); reconcile() also matches on ``kind``.
-                        Two rules with the same signature are the same target+options
-                        (a feed ``$badfilter`` prunes a feed rule with a matching
-                        signature during reconcile()).
+                        Two rules of the same kind with the same signature are the same
+                        target+options (a feed ``$badfilter`` prunes a feed rule with a
+                        matching kind and signature during reconcile()).
     """
 
     kind: str
