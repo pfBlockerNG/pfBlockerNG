@@ -292,6 +292,27 @@ function pfb_update_start(string $scope, string $force, callable $call): string 
 	return gettext('The Update was not started: ') . $failure;
 }
 
+/**
+ * A page save that changes what the Outpost applies (#3977, owner 2026-11-27: General, CrowdSec, the Alerts page's whitelist
+ * and custom-list edits): ask Core for an `apply` Update. NULL once Core started it; otherwise the change is marked pending,
+ * which the next Update applies, and the line to show the person says so. The call is bounded by PFB_CORE_PAGE_TIMEOUT.
+ *
+ * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ */
+function pfb_apply_update_start(callable $call): ?string {
+	$answer = $call('StartUpdate', ['requestId' => bin2hex(random_bytes(16)), 'trigger' => 'apply'], NULL, PFB_CORE_PAGE_TIMEOUT);
+	$failure = pfb_update_core_failure($answer);
+	if ($failure === NULL) {
+		return NULL;
+	}
+	pfb_mark_pending_changes();
+	if (($answer['body']['error']['code'] ?? NULL) === 'conflict') {
+		return gettext('An Update is running: the change is applied by an Update the quarter-hour check starts after the Update that runs ends.');
+	}
+	return gettext('The change is saved, but pfBlockerNG Core did not start the Update that applies it: ') . $failure .
+	    gettext('. The next Update applies it.');
+}
+
 // issue #4260: how long a CLI update verb follows its Update, in polls of GetUpdate one second apart (each call bounded by
 // PFB_CORE_PAGE_TIMEOUT); the Update itself goes on when the wait ends, and the Update page still shows it
 const PFB_CLI_UPDATE_POLLS = 14400;
@@ -17781,38 +17802,6 @@ function pfb_dnsbl_whitelist_lines() {
 	return $out;
 }
 
-// ADR-06 (#51): collect the TEMPORARY per-alert DNSBL unlock store ($pfb['dnsbl_unlock'], CSV
-// "domain,type" rows toggled by the alerts Lock/Unlock icon) as domains for the gateway's build
-// manifest (config.user_unlock), merged into whiteDB as band-6 user allows. Deliberately
-// temporary: lives in /tmp, deleted by a full update/Force/Cron, so a FULL build emits an EMPTY
-// user_unlock and re-locks every unlock (documented in the alerts icon tooltip); only the
-// incremental alerts path feeds the live store into the manifest. PFBL-01: the store is a plain
-// file re-read here, so this reader is its own trust boundary — each domain re-validates via
-// pfb_filter(PFB_FILTER_DOMAIN) before entering the manifest; a failing row is SKIPPED + logged.
-function pfb_dnsbl_unlock_lines() {
-	global $pfb;
-
-	$out = array();
-	$store = pfb_unlock('read', 'dnsbl', '', '', '');
-	if (is_array($store)) {
-		foreach (array_keys($store) as $domain) {
-			$domain = trim((string) $domain);
-			if ($domain === '') {
-				continue;
-			}
-			// PFBL-01: the store is re-read from a plain file; re-validate each
-			// domain before it enters the manifest (skip the row + log on failure).
-			if (empty(pfb_filter($domain, PFB_FILTER_DOMAIN, 'pfb_dnsbl_unlock_lines'))) {
-				pfb_logger("\npfb_dnsbl_unlock_lines: Unlock domain failed validation [ " .
-					substr(htmlspecialchars($domain), 0, 100) . " ] *skipping*", 2);
-				continue;
-			}
-			$out[] = $domain;
-		}
-	}
-	return $out;
-}
-
 // The address of an ABP '||' / empty-scheme '://' anchor host: port dropped, CIDR honoured
 // (pfb_dnsbl_cidr), URI-bracketed IPv6 unwrapped (#938), padded octets decimal, any client-decoded
 // IPv4 spelling. Address or range string, FALSE for a numeric-shaped but invalid host or CIDR, else ''.
@@ -19723,38 +19712,69 @@ function pfb_unbound_python_sources_whitelist() {
 }
 
 
-// ADR-06 (#51): update ONLY the manifest's config.user_unlock in place, recomputed
-// from the live temporary-unlock store (pfb_dnsbl_unlock_lines). Mirrors
-// pfb_unbound_python_sources_whitelist(): the alerts Lock/Unlock icon toggles the
-// pfb_unlock state without a full feed re-enumeration, so patch the manifest and let
-// the query-time whiteDB rebuild from it on the next reload. The alerts handler's
-// reload (pfb_reload_unbound) does NOT delete the store, so store and manifest stay in
-// step; a full update/Force/Cron is the only thing that clears both.
-//
-// issue #4264 (owner, 2026-11-24): Core holds the temporary unlocks, so the same set goes to Core too (SetTemporaryUnlocks),
-// which republishes dnsbl/manifest's unlock rows for pfB-DNS on the Core input; until the cutover the patch below still
-// applies, so both paths give the same set. A Core that does not take it is logged and never stops the patch. The pass of a
-// Core Update re-locks while Core holds its gate, and that Update's end re-locks Core's set, so it does not ask Core.
-function pfb_unbound_python_sources_unlock(?callable $call = NULL) {
-	global $pfb;
-	$domains = pfb_dnsbl_unlock_lines();
-	$error = empty($pfb['core_update']) ? pfb_set_temporary_unlocks($call ?? 'pfb_core_call', $domains) : NULL;
-	if ($error !== NULL) {
-		pfb_logger("\n Core did not take the temporary DNSBL unlocks: {$error}\n", 1);
+/**
+ * The temporary DNSBL unlocks Core holds (#3977, owner 2026-11-27: Core's set is the Alerts page's source of truth), as
+ * domain => type; an entry that is no domain or whose type is no word is left out. A Core that does not answer gives none, and
+ * $error says why, as one line; it is NULL otherwise. The call is bounded by PFB_CORE_PAGE_TIMEOUT.
+ *
+ * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ * @return array<string, string>
+ */
+function pfb_dnsbl_unlocks(callable $call, ?string &$error = NULL): array {
+	$answer = $call('GetTemporaryUnlocks', [], NULL, PFB_CORE_PAGE_TIMEOUT);
+	if (($error = pfb_update_core_failure($answer)) !== NULL) {
+		return [];
 	}
-	return pfb_unbound_python_sources_patch('user_unlock', $domains);
+	$set = [];
+	foreach ((array) ($answer['body']['unlocks'] ?? []) as $u) {
+		$domain = is_array($u) && is_string($u['domain'] ?? NULL) ? $u['domain'] : '';
+		$type = is_array($u) && is_string($u['type'] ?? NULL) ? $u['type'] : '';
+		if ($domain !== '' && $type !== '' && preg_match('/^\w{1,64}$/', $type) === 1 &&
+		    !empty(pfb_filter($domain, PFB_FILTER_DOMAIN, 'pfb_dnsbl_unlocks'))) {
+			$set[$domain] = $type;
+		}
+	}
+	return $set;
 }
 
 /**
- * Hand Core the whole set of temporary DNSBL unlocks (issue #4264): NULL once Core took it, otherwise why not, as one line for
- * the log. The call is bounded by PFB_CORE_PAGE_TIMEOUT.
+ * Hand Core the whole set of temporary DNSBL unlocks, domain => type (SetTemporaryUnlocks, issue #4264): NULL once Core took it,
+ * otherwise why not, as one line to show. The call is bounded by PFB_CORE_PAGE_TIMEOUT.
  *
  * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
- * @param list<string> $domains
+ * @param array<string, string> $set
  */
-function pfb_set_temporary_unlocks(callable $call, array $domains): ?string {
-	return pfb_update_core_failure($call('SetTemporaryUnlocks', ['requestId' => bin2hex(random_bytes(16)), 'domains' => $domains],
+function pfb_dnsbl_unlocks_set(callable $call, array $set): ?string {
+	$unlocks = [];
+	foreach ($set as $domain => $type) {
+		$unlocks[] = ['domain' => (string) $domain, 'type' => (string) $type];
+	}
+	return pfb_update_core_failure($call('SetTemporaryUnlocks', ['requestId' => bin2hex(random_bytes(16)), 'unlocks' => $unlocks],
 		NULL, PFB_CORE_PAGE_TIMEOUT));
+}
+
+/**
+ * The Alerts page's Lock ('lock') or Unlock ('unlock') of one domain: Core's set is read, the domain added or removed, and the
+ * set sent back. NULL once Core holds the change (or the domain already was as asked), otherwise why not, as one line to show
+ * the person: a Core that cannot give its set is sent nothing, since a set sent without it would drop every other unlock.
+ *
+ * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ */
+function pfb_dnsbl_unlock_toggle(callable $call, string $mode, string $domain, string $type): ?string {
+	$error = NULL;
+	$set = pfb_dnsbl_unlocks($call, $error);
+	if ($error !== NULL) {
+		return $error;
+	}
+	if ($mode === 'unlock' ? isset($set[$domain]) : !isset($set[$domain])) {
+		return NULL;
+	}
+	if ($mode === 'unlock') {
+		$set[$domain] = $type;
+	} else {
+		unset($set[$domain]);
+	}
+	return pfb_dnsbl_unlocks_set($call, $set);
 }
 
 
