@@ -2997,9 +2997,9 @@ function pfb_dnsbl_feed_has_abp_header(string $path): bool {
 // The ICANN top-level domains of the shipped Public Suffix List, as a lower-case ASCII set. Every ICANN
 // entry's last label counts: 'ck', 'mm' and 'np' appear only in wildcard rules such as '*.np'.
 function pfb_psl_icann_tlds(): array {
-	static $tlds = [];
-	if ($tlds !== []) {
-		return $tlds;	// an unreadable PSL is retried, never cached empty
+	static $tlds = NULL;
+	if ($tlds !== NULL) {
+		return $tlds;
 	}
 	$tlds = [];
 	$icann = FALSE;
@@ -3012,6 +3012,9 @@ function pfb_psl_icann_tlds(): array {
 			$tld = substr(strrchr('.' . $entry, '.'), 1);
 			$tlds[strtolower(idn_to_ascii($tld, IDNA_NONTRANSITIONAL_TO_ASCII) ?: $tld)] = TRUE;
 		}
+	}
+	if ($tlds === []) {
+		pfb_logger("\n  [ dnsbl_psl ] has no ICANN TLDs: Adblock feeds keep no hostnames, hosts lines or hostname masks\n", 1);
 	}
 	return $tlds;
 }
