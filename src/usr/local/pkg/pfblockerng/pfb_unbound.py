@@ -6038,7 +6038,8 @@ def build(
         else set()
     )
     # issue #3648: zone key whose last writer is a TOP1M-filtered row -> the key's last
-    # unfiltered payload (None when it has none); _zone_entry_for() reads it.
+    # unfiltered payload (None when it has none); _zone_entry_for() reads it. issue #4284: a
+    # '.host^' apex payload's fallback can itself carry a TOP1M filter, resolved the same way.
     zone_top1m: dict[str, dict[str, Any] | None] = {}
 
     def track_zone_top1m(key: str, filtered: bool) -> None:
@@ -6895,7 +6896,8 @@ def _zone_entry_for(q_name: str, key: str, entry: dict[str, Any]) -> dict[str, A
     TOP1M-filtered Group yields, for a name TOP1M lists, to the key's last unfiltered writer --
     or blocks nothing when there is none. All filtered zones share one immutable name set.
     issue #4284: a ``.host^`` entry blocks ``key`` itself only through its ``"apex"`` payload
-    (the rule that blocked ``key`` before it); ``"apex": False`` means none did."""
+    (the rule that blocked ``key`` before it); ``"apex": False`` means none did. An apex
+    payload's fallback can be filtered too, so each fallback is resolved like the entry."""
     top1m = entry.get("top1m")
     if top1m is not None and _top1m_listed(q_name, top1m):
         # A '.host^' apex payload's fallback can carry a TOP1M filter of its own.

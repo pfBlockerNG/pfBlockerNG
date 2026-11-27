@@ -199,3 +199,12 @@ def test_a_listed_host_stays_unblocked_through_nested_top1m_fallbacks() -> None:
     )
     assert not _blocks(result, "webhop.net")
     assert _blocks(result, "someone.webhop.net")
+
+
+def test_a_listed_host_is_attributed_to_the_unfiltered_end_of_its_fallback_chain() -> None:
+    result = _build(
+        [["||webhop.net^"], ["||webhop.net^"], [".webhop.net^"], ["||webhop.net^"], [".webhop.net^"]],
+        top1m=["webhop.net"],
+        top1m_feeds=frozenset({1, 3}),
+    )
+    assert _hit(result, "webhop.net") == (P.PRIO_FEED_BLOCK, "GRP0")
