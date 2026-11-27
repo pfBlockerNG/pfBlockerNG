@@ -4309,7 +4309,7 @@ if (!defined('PFB_DNS_PROXY_SOCKSTAT')) {
 	define('PFB_DNS_PROXY_SOCKSTAT', '/usr/bin/sockstat');
 }
 if (!defined('PFB_DNS_PROXY_START_WAIT')) {
-	define('PFB_DNS_PROXY_START_WAIT', PFB_UNBOUND_START_WAIT);
+	define('PFB_DNS_PROXY_START_WAIT', 60);
 }
 // Seconds pfb_dns_proxy_certificate_push() waits for each of its steps (connect, send, reply): below the 5 s the gateway gives a
 // connection on its control socket, above what a gateway that is serving needs.
