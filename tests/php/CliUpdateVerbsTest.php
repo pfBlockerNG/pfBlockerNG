@@ -28,6 +28,9 @@ final class CliUpdateVerbsTest extends TestCase
 	private string $out = '';
 	private string $err = '';
 
+	/** The request the verbs make, and the one the fake Core's Updates report (update()). */
+	private const MANUAL = ['trigger' => 'manual', 'scope' => 'both', 'force' => 'none'];
+
 	/** @return array<string, array{0: list<string>, 1: ?array}> */
 	public static function verbs(): array
 	{
@@ -153,20 +156,20 @@ final class CliUpdateVerbsTest extends TestCase
 	#[DataProvider('results')]
 	public function testTheExitStatusIsTheUpdatesResult(string $result, int $code): void
 	{
-		$this->assertSame($code, $this->follow(['trigger' => 'retry'], $this->core(self::ok([]), self::update(FALSE, '', '0', $result))));
+		$this->assertSame($code, $this->follow(self::MANUAL, $this->core(self::ok([]), self::update(FALSE, '', '0', $result))));
 	}
 
 	/** A deferred pass, which once said so on the CLI's stderr, still does: Core reports it as the Update's result `skipped`. */
 	public function testASkippedUpdateSaysThePassWasDeferred(): void
 	{
-		$this->follow(['trigger' => 'retry'], $this->core(self::ok([]), self::update(FALSE, '', '0', 'skipped')));
+		$this->follow(self::MANUAL, $this->core(self::ok([]), self::update(FALSE, '', '0', 'skipped')));
 
 		$this->assertSame("pfBlockerNG feed pass deferred: the Update was skipped while another pass holds its lock\n", $this->err);
 	}
 
 	public function testAnUpdateThatRunsAlreadyIsAConflictReportedAndNothingQueued(): void
 	{
-		$code = $this->follow(['trigger' => 'retry'], $this->core(['status' => 409, 'body' => ['error' => ['code' => 'conflict',
+		$code = $this->follow(self::MANUAL, $this->core(['status' => 409, 'body' => ['error' => ['code' => 'conflict',
 			'message' => 'an Update is running']], 'error' => NULL]));
 
 		$this->assertSame(PFB_EXIT_LOCKED, $code);
@@ -188,7 +191,7 @@ final class CliUpdateVerbsTest extends TestCase
 	#[DataProvider('refusals')]
 	public function testACoreThatDoesNotStartTheUpdateIsAClearFailureWithoutAFallback(array $answer): void
 	{
-		$this->assertSame(1, $this->follow(['trigger' => 'retry'], $this->core($answer)));
+		$this->assertSame(1, $this->follow(self::MANUAL, $this->core($answer)));
 		$this->assertStringStartsWith('pfBlockerNG Core did not start the Update: ', $this->err);
 		$this->assertCount(1, $this->calls);
 	}
@@ -199,7 +202,7 @@ final class CliUpdateVerbsTest extends TestCase
 	 */
 	public function testAnUnavailableCoreIsAskedAgainUntilTheResultIsRecorded(): void
 	{
-		$code = $this->follow(['trigger' => 'retry'], $this->core(self::ok([]), self::update(TRUE, "x\n", '2'),
+		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), self::update(TRUE, "x\n", '2'),
 			['status' => 503, 'body' => ['error' => ['code' => 'unavailable', 'message' => 'an Update result is waiting to be recorded']],
 				'error' => NULL],
 			self::update(FALSE, "y\n", '4', 'success')));
@@ -210,9 +213,38 @@ final class CliUpdateVerbsTest extends TestCase
 		$this->assertSame(['after' => '2'], $this->calls[3][1], 'the cursor stands across the unavailable answer');
 	}
 
+	/**
+	 * An Update that started in the very second the verb asked, but is not the one it asked for (a tick's Update that was
+	 * skipped at once), is not ours: ours is the one with the trigger, scope and force the verb asked for.
+	 */
+	public function testAnUpdateOfTheSameSecondThatIsNotTheOneAskedForIsNotOurs(): void
+	{
+		$tick = self::update(FALSE, "tick\n", '3', 'skipped', 100);
+		$tick['body']['update']['trigger'] = 'scheduled';
+		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), $tick, self::update(TRUE, "ours\n", '5', NULL, 100),
+			self::update(FALSE, '', '5', 'success', 100)));
+
+		$this->assertSame(0, $code, $this->err);
+		$this->assertSame("ours\n", $this->out);
+	}
+
+	/**
+	 * Core answers `unavailable` for faults that last too (a receipt Recover cannot read): past a bound of answers in a row the
+	 * verb stops, with Core's message, instead of waiting out the whole wait in silence.
+	 */
+	public function testACoreThatStaysUnavailableEndsTheVerbWithItsMessage(): void
+	{
+		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), ['status' => 503, 'body' => ['error' => [
+			'code' => 'unavailable', 'message' => 'the worker status cannot be read']], 'error' => NULL]), 1000);
+
+		$this->assertSame(1, $code);
+		$this->assertStringContainsString('unavailable: the worker status cannot be read', $this->err);
+		$this->assertSame(1 + PFB_CLI_UNAVAILABLE_POLLS, count($this->calls), 'the start and the bounded run of unavailable answers');
+	}
+
 	public function testACoreLostWhileTheUpdateRunsIsAFailure(): void
 	{
-		$code = $this->follow(['trigger' => 'retry'], $this->core(self::ok([]), self::update(TRUE, '', '0'),
+		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), self::update(TRUE, '', '0'),
 			['status' => 0, 'body' => NULL, 'error' => 'the Core API cannot be reached: Connection refused']));
 
 		$this->assertSame(1, $code);
@@ -221,7 +253,7 @@ final class CliUpdateVerbsTest extends TestCase
 
 	public function testAnUpdateThatOutlivesTheWaitIsAFailureAndKeepsRunning(): void
 	{
-		$code = $this->follow(['trigger' => 'retry'], $this->core(self::ok([]), self::update(TRUE, '', '0')), 3);
+		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), self::update(TRUE, '', '0')), 3);
 
 		$this->assertSame(1, $code);
 		$this->assertStringContainsString('still runs', $this->err);
@@ -230,7 +262,7 @@ final class CliUpdateVerbsTest extends TestCase
 
 	public function testALaterUpdateInPlaceOfOursIsNoResultOfOurs(): void
 	{
-		$code = $this->follow(['trigger' => 'retry'], $this->core(self::ok([]), self::update(TRUE, '', '0', NULL, 100),
+		$code = $this->follow(self::MANUAL, $this->core(self::ok([]), self::update(TRUE, '', '0', NULL, 100),
 			self::update(TRUE, '', '0', NULL, 200)));
 
 		$this->assertSame(1, $code);
