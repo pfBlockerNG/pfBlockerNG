@@ -235,8 +235,9 @@ func TestSkipFeedPassed(t *testing.T) {
 }
 
 // A group's custom list is a feed of its own on a manual Update, which compares its text (feedstage); a scheduled
-// or apply Update never runs it: today's scheduled pass does not select it, and Core's apply builds nothing.
-func TestCustomListRunsOnManualOnly(t *testing.T) {
+// Update never runs it, as today's scheduled pass does not select it. An apply Update runs it (#3977, owner 2026-11-27):
+// a page save asks for an apply, and a custom list it edited is rebuilt there, one left as it was being a no-op.
+func TestCustomListRunsOnManualAndApply(t *testing.T) {
 	f := newFixture(t, "http://192.0.2.1/list")
 	f.group["customList"] = "198.51.100.7\n"
 	f.group["whoisConvert"] = true
@@ -245,7 +246,7 @@ func TestCustomListRunsOnManualOnly(t *testing.T) {
 		want int
 	}{
 		{Input{Trigger: "manual", Scope: "ip", Force: "parse"}, 2},
-		{Input{Trigger: "apply"}, 0},
+		{Input{Trigger: "apply"}, 1},
 		{Input{Trigger: "manual", Scope: "dnsbl", Force: "none"}, 0},
 		{Input{Trigger: "scheduled", Feeds: []string{"ipv4:A_v4"}}, 1},
 	} {
@@ -253,6 +254,11 @@ func TestCustomListRunsOnManualOnly(t *testing.T) {
 		plan := build(t, f.input(c.req))
 		if len(plan.Items) != c.want {
 			t.Fatalf("%+v: items %+v, want %d", c.req, plan.Items, c.want)
+		}
+		if c.req.Trigger == "apply" {
+			if item := plan.Items[0]; item.Feed.ID != "custom:ipv4:G4" || item.Change.Force != "none" {
+				t.Fatalf("apply item %+v, want the custom list with force none: it compares its own text", item)
+			}
 		}
 		if c.want != 2 {
 			continue

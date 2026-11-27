@@ -164,7 +164,9 @@ func Build(ctx context.Context, in Input) (Plan, error) {
 	}
 	var want func(id string) bool
 	if in.Trigger == "apply" {
-		want = func(id string) bool { return b.pending[id] } // an apply reads the pending feeds' folders only
+		// an apply reads the pending feeds' folders and the custom lists (#3977: a page save's apply rebuilds a custom list it
+		// edited; one left as it was compares equal)
+		want = func(id string) bool { return b.pending[id] || strings.HasPrefix(id, "custom:") }
 	}
 	cands, err := b.candidates(scope, want)
 	if err != nil {
@@ -175,7 +177,13 @@ func Build(ctx context.Context, in Input) (Plan, error) {
 	case in.Trigger == "scheduled" || in.Trigger == "retry":
 		plan = b.scheduled(cands)
 	case in.Trigger == "apply":
-		plan = Plan{Decision: Now} // exactly the pending feeds, which settle adds: no probe, no outcome, no Extras
+		// the pending feeds, which settle adds, and the custom lists, as a pass runs them: no probe, no outcome, no Extras
+		plan = Plan{Decision: Now}
+		for _, c := range cands {
+			if c.feed.Custom {
+				plan.Items = append(plan.Items, b.prepare(c, feedstage.Change{Force: "none"}))
+			}
+		}
 	case in.Force == "none" || in.Force == "parse":
 		plan = b.pass(cands, in.Force)
 	default:
