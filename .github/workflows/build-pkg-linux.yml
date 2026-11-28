@@ -108,6 +108,11 @@ on:
         required: false
         type: string
         default: ""
+      checkout_ref:
+        description: "Git ref to package (issue #4315). Blank (default) = actions/checkout's default, the caller's own ref."
+        required: false
+        type: string
+        default: ""
     outputs:
       artifact:
         description: "Name of the uploaded package artifact"
@@ -147,10 +152,14 @@ jobs:
         # (the way the FreeBSD path pins the port's USE_GITHUB fetch to the SHA).
         uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.checkout_ref }}
           persist-credentials: false
 
-      - name: Cache the uv downloads
-        uses: actions/cache@v6
+      # Restore and save as separate steps: a caller-named checkout_ref run must not write the
+      # cache trusted runs restore (issue #3489), and actions/cache@ would save in its post step.
+      - name: Restore cached uv downloads
+        id: uvcache
+        uses: actions/cache/restore@v6
         with:
           path: ~/.cache/uv
           key: uv-dep-pkg-build-${{ hashFiles('uv.lock') }}
@@ -164,6 +173,13 @@ jobs:
           set -eu
           uv sync --locked --only-group dep-pkg-build
           echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Save uv downloads to cache
+        if: steps.uvcache.outputs.cache-hit != 'true' && inputs.checkout_ref == ''
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cache/uv
+          key: uv-dep-pkg-build-${{ hashFiles('uv.lock') }}
 
       - name: Require a zstd encoder
         # The ci image bakes zstd, and its version cannot change a .pkg's contents. Assert

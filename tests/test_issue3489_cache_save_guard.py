@@ -1,7 +1,7 @@
 """Issue #3489 -- a run testing a caller-named ref must not write the caches trusted runs restore.
 
-``smoke-single.yml`` (job ``smoke``) and ``ui-tests.yml`` (job ``ui``) check out
-``inputs.checkout_ref``: the code under test can come from a ref the caller names.
+``smoke-single.yml`` (job ``smoke``), ``ui-tests.yml`` (job ``ui``) and ``build-pkg-linux.yml``
+(job ``build``) check out ``inputs.checkout_ref``: the code under test can come from a ref the caller names.
 Anything such a run saves into the Actions cache (the pfSense/civm image dirs and uv's download
 cache, all via ``actions/cache/save``) is then restored by later runs of the default ref, so the
 named ref could poison them. Restores stay unguarded: a custom-ref run still READS the cache.
@@ -20,7 +20,8 @@ WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 # (workflow, job) -> number of actions/cache/save steps. The counts are a vacuity guard:
 # a renamed or removed save step must fail here rather than leave nothing to check.
 # The client image is cached by the checkout-free `client-image` job, not by `ui` (#3687).
-SAVE_STEP_COUNTS = {("smoke-single.yml", "smoke"): 3, ("ui-tests.yml", "ui"): 2}
+# build-pkg-linux.yml packages the caller-named ref smoke-single.yml hands it (#4315).
+SAVE_STEP_COUNTS = {("smoke-single.yml", "smoke"): 3, ("ui-tests.yml", "ui"): 2, ("build-pkg-linux.yml", "build"): 1}
 JOBS = pytest.mark.parametrize(("workflow", "job"), list(SAVE_STEP_COUNTS), ids=lambda v: str(v))
 
 UNTRUSTED_REF_CLAUSE = "inputs.checkout_ref == ''"
@@ -31,7 +32,7 @@ def _steps(workflow: str, job: str, uses_prefix: str) -> list[dict[str, Any]]:
     really does check out the caller-named ref (else this guard has nothing to protect)."""
     workflow_doc = yaml.safe_load((WORKFLOWS / workflow).read_text(encoding="utf-8"))
     steps: list[dict[str, Any]] = workflow_doc["jobs"][job]["steps"]
-    checkouts = [s["with"]["ref"] for s in steps if str(s.get("uses", "")).startswith("actions/checkout@")]
+    checkouts = [s.get("with", {}).get("ref") for s in steps if str(s.get("uses", "")).startswith("actions/checkout@")]
     assert checkouts == ["${{ inputs.checkout_ref }}"], f"{workflow}:{job} checkout refs: {checkouts}"
     return [s for s in steps if str(s.get("uses", "")).startswith(uses_prefix)]
 

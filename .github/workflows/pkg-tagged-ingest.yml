@@ -162,7 +162,9 @@ jobs:
       smoke_repo_expected_source_sha: ${{ inputs.source_sha }}
       smoke_repo_expected_version: ${{ inputs.portversion }}
       smoke_repo_expected_channel: ${{ inputs.channel }}
-      checkout_ref: ${{ github.workflow_sha }}
+      # Build and test the release's own source with its own recipe, never devel's (issue #4315).
+      channel: ${{ inputs.channel }}
+      checkout_ref: ${{ inputs.source_sha }}
     secrets: inherit
 
   finalize-pkg:
