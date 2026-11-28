@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Enforce the context-taxonomy byte budgets and routing headers (map #1383, #1437).
+"""Check the context-taxonomy byte budgets and enforce the routing headers (map #1383, #1437).
 
 AGENTS.md is the canonical agent bootstrap; `.agents/policy/` + `.agents/context/`
 hold the routed policy/context files; hook capsules ride `.claude/settings.json`.
-Every surface has a byte budget so the hot context cannot silently re-accrete
-(taxonomy #1386 anti-monolith rules), and every file the bootstrap's routing
+Every surface has a byte budget, a guideline that keeps the hot context from silently re-accreting
+(taxonomy #1386 anti-monolith rules; #4310: reported, never a failure), and every file the bootstrap's routing
 table references must carry a `Scope:` + `Load-when:` header so it stays
 routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 
@@ -48,7 +48,8 @@ Usage:
     check_context_budget.py --all           # CI gate (context-budget.yml) + unconditional full check
     [--root PATH]                           # repo root (default: script's repo)
 
-Exit status: 0 = clean or skipped, 1 = violations (printed), 2 = usage/git error.
+Exit status: 0 = clean, skipped or only byte-budget guidelines (printed as `guideline: ...`), 1 = errors (printed),
+2 = usage/git error.
 """
 
 from __future__ import annotations
@@ -588,6 +589,16 @@ def touches_context_surface(changed: list[str]) -> bool:
     return False
 
 
+# A byte-budget finding: a file or capsule over its budget, or a ledger entry or header over its cap. The hook-command
+# cap ("capsule command ... > cap", "hook command ... > cap") is not one: it guards shlex (#1504), not the context.
+_GUIDELINE_RE = re.compile(r" \d+ bytes > budget \d+$|: (?:entry|header) is \d+ bytes > cap \d+$")
+
+
+def is_guideline(violation: str) -> bool:
+    """Whether a finding is a byte budget (#4310: reported as a guideline, never a failure)."""
+    return _GUIDELINE_RE.search(violation) is not None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -621,14 +632,19 @@ def main(argv: list[str] | None = None) -> int:
     except (subprocess.CalledProcessError, OSError) as exc:
         print(f"context-budget: git failed: {exc}", file=sys.stderr)
         return 2
+    errors = 0
     for violation in violations:
+        # #4310: a byte budget is a guideline: reported, never a failure. Everything else (routing headers, capsule
+        # parity and producers, the ledger's format, the hook-command parser cap) stays an error.
+        guideline = is_guideline(violation)
+        errors += not guideline
         # A tracked name that is not valid UTF-8 reaches here byte-exactly, as
         # os.fsdecode renders it -- lone surrogates no stdout codec can encode.
         # Escaping them through UTF-8 in BOTH directions keeps every other name
         # intact whatever stdout's codec is, so the gate reports the file it
         # measured instead of dying on the report (issue #3073).
-        print(violation.encode("utf-8", "backslashreplace").decode())
-    return 1 if violations else 0
+        print(("guideline: " if guideline else "") + violation.encode("utf-8", "backslashreplace").decode())
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":

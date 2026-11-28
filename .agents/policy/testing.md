@@ -20,9 +20,11 @@ Tests = how change proves itself. **Five non-negotiable principles govern every 
 
 ### Production proof and test maintenance
 
-Red→green proves change to existing production behaviour, not tests: test maintenance, deletions and
-fixture/golden refreshes need no tests-of-tests or historical RED. Removing production code is its own red/green (its
-tests break; deleting them is green): no test that it is gone; list callers in PR body.
+Red→green proves a change to existing production behaviour. It does not apply to the tests themselves: maintaining,
+refactoring, trimming or deleting tests and refreshing fixtures or goldens need no tests of the tests and no historical
+RED for each changed test file. Removing production code needs no separate proof either: the removal breaks that
+code's tests (the red), and deleting or trimming them is the green. Write no test that asserts removed code is gone;
+the PR body lists what called it and shows that nothing does now.
 In the Frozen RED table, record these as **N/A — test maintenance** with the reason,
 current file hash and relevant verification, rather than inventing a failing run.
 

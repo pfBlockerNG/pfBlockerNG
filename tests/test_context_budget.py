@@ -5,7 +5,7 @@ must fire on the violating shape and stay quiet on the compliant one):
 budgets per surface class, boundary at the exact budget,
 routing-table extraction/resolution, both header shapes, capsule extraction,
 and the conditional --staged/--diff trigger through the CLI against scratch
-git repos. One test pins the live repository tree itself within budget.
+git repos. One test pins the live repository tree free of errors (byte budgets are guidelines, #4310).
 """
 
 from __future__ import annotations
@@ -320,12 +320,12 @@ def test_ledger_ordinary_header_prose_passes(tmp_path: Path, prose: str) -> None
     assert ccb.check_ledger_entries(tmp_path) == []
 
 
-def test_ledger_live_header_passes_within_its_cap(tmp_path: Path) -> None:
-    # The LIVE header, not a paraphrase: it must stay inside the cap the gate
-    # enforces, so a header edit that would trip the gate fails here first.
+def test_ledger_live_header_opens_a_valid_ledger(tmp_path: Path) -> None:
+    # The LIVE header, not a paraphrase: a header edit that breaks the ledger's shape fails here first. Its byte cap is
+    # a guideline (#4310), so only the errors count.
     live_header = (_REPO_ROOT / ccb.LEDGER).read_text(encoding="utf-8").split("\n- ", 1)[0]
     _write(tmp_path, ccb.LEDGER, f"{live_header}\n- `deadbeef`  a title  (#1)\n")
-    assert ccb.check_ledger_entries(tmp_path) == []
+    assert [v for v in ccb.check_ledger_entries(tmp_path) if not ccb.is_guideline(v)] == []
 
 
 def test_ledger_prose_after_the_first_entry_fires(tmp_path: Path) -> None:
@@ -1027,14 +1027,14 @@ def test_cli_staged_skips_when_no_context_surface_staged(tmp_path: Path) -> None
     assert "skipped" in proc.stdout
 
 
-def test_cli_staged_runs_and_fails_on_staged_over_budget_policy(tmp_path: Path) -> None:
+def test_cli_staged_reports_a_staged_over_budget_policy_as_a_guideline(tmp_path: Path) -> None:
     root = _scratch_repo(tmp_path)
     _git_commit(root, "base")
     _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
     subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
     proc = _run_cli(root, "--staged")
-    assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert ".agents/policy/alpha.md" in proc.stdout and "> budget 12288" in proc.stdout
+    assert proc.returncode == 0, proc.stdout + proc.stderr  # #4310: a byte budget is a guideline
+    assert ".agents/policy/alpha.md" in proc.stdout and "guideline: " in proc.stdout and "> budget 12288" in proc.stdout
 
 
 def test_cli_staged_checks_index_content_not_working_tree(tmp_path: Path) -> None:
@@ -1046,8 +1046,8 @@ def test_cli_staged_checks_index_content_not_working_tree(tmp_path: Path) -> Non
     subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
     _write(root, ".agents/policy/alpha.md", f"# Alpha\n\n{_HEADER}")
     proc = _run_cli(root, "--staged")
-    assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert ".agents/policy/alpha.md" in proc.stdout and "> budget 12288" in proc.stdout
+    assert proc.returncode == 0, proc.stdout + proc.stderr  # #4310: a byte budget is a guideline
+    assert ".agents/policy/alpha.md" in proc.stdout and "guideline: " in proc.stdout and "> budget 12288" in proc.stdout
 
 
 def test_cli_staged_ignores_unstaged_working_tree_violation(tmp_path: Path) -> None:
@@ -1062,7 +1062,7 @@ def test_cli_staged_ignores_unstaged_working_tree_violation(tmp_path: Path) -> N
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
-def test_cli_diff_fires_on_over_budget_commit_vs_base(tmp_path: Path) -> None:
+def test_cli_diff_reports_an_over_budget_commit_vs_base_as_a_guideline(tmp_path: Path) -> None:
     root = _scratch_repo(tmp_path)
     git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com"]
     subprocess.run([*git, "commit", "-qm", "base"], check=True, env=scrubbed_git_env())
@@ -1070,8 +1070,8 @@ def test_cli_diff_fires_on_over_budget_commit_vs_base(tmp_path: Path) -> None:
     subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
     subprocess.run([*git, "commit", "-qm", "bloat"], check=True, env=scrubbed_git_env())
     proc = _run_cli(root, "--diff", "HEAD~1")
-    assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert ".agents/policy/alpha.md" in proc.stdout and "> budget 12288" in proc.stdout
+    assert proc.returncode == 0, proc.stdout + proc.stderr  # #4310: a byte budget is a guideline
+    assert ".agents/policy/alpha.md" in proc.stdout and "guideline: " in proc.stdout and "> budget 12288" in proc.stdout
 
 
 def test_cli_all_flags_non_ascii_named_policy_file(tmp_path: Path) -> None:
@@ -1081,9 +1081,19 @@ def test_cli_all_flags_non_ascii_named_policy_file(tmp_path: Path) -> None:
     _write(root, ".agents/policy/pölicy.md", "# P\n\n" + _HEADER + "x" * 20_000)
     subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
     proc = _run_cli(root, "--all")
-    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.returncode == 0, proc.stdout + proc.stderr  # #4310: a byte budget is a guideline
     # NFC/NFD filename normalization differs per OS — match the ASCII tail only.
-    assert "licy.md" in proc.stdout and "> budget 12288" in proc.stdout
+    assert "licy.md" in proc.stdout and "guideline: " in proc.stdout and "> budget 12288" in proc.stdout
+
+
+def test_cli_all_still_fails_on_a_routed_file_without_its_header(tmp_path: Path) -> None:
+    # #4310: byte budgets are guidelines; a routed file the bootstrap cannot route stays an error.
+    root = _scratch_repo(tmp_path)
+    _write(root, ".agents/policy/alpha.md", "# Alpha\n\nno routing header here\n")
+    subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
+    proc = _run_cli(root, "--all")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert ".agents/policy/alpha.md" in proc.stdout and "guideline: " not in proc.stdout
 
 
 def test_cli_all_clean_scratch_repo_exits_zero(tmp_path: Path) -> None:
@@ -1130,16 +1140,17 @@ def test_ci_workflow_arms_the_red_canary() -> None:
     # violation; deleting the step must fail here rather than go unnoticed.
     text = (_REPO_ROOT / ".github/workflows/context-budget.yml").read_text(encoding="utf-8")
     assert "Red canary" in text
-    assert f"bytes > budget {ccb.POLICY_BUDGET}" in text
-    assert f"> cap {ccb.LEDGER_ENTRY_MAX}" in text
+    assert f'expect_report 0 "guideline: $canary: 12289 bytes > budget {ccb.POLICY_BUDGET}"' in text
+    assert "expect_report 1 'entry does not match" in text
 
 
-# --- the live tree stays within its own budgets --------------------------------
+# --- the live tree has no errors (its byte budgets are guidelines) --------------------------------
 
 
-def test_live_repository_tree_is_clean() -> None:
+def test_live_repository_tree_has_no_errors() -> None:
+    # #4310: byte budgets are guidelines the tree may exceed; every other finding is an error.
     tracked = _tracked(_REPO_ROOT)
-    assert ccb.run_checks(_REPO_ROOT, tracked) == []
+    assert [v for v in ccb.run_checks(_REPO_ROOT, tracked) if not ccb.is_guideline(v)] == []
 
 
 # --- the live CodeRabbit ledger: recorded SHAs, recorded order, stated format ---
