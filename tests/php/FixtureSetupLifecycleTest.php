@@ -30,16 +30,8 @@ final class FixtureSetupLifecycleTest extends TestCase
 	public static function setupFixtureRows(): array
 	{
 		return [
-			'DownloadGeoipStagePublishTest' => [
-				'DownloadGeoipStagePublishTest', 'testTheExtractionFlagGateTracksWhetherTheHostTarIsLibarchive',
-				['dir'], FALSE,
-			],
 			'DownloadStagePublishTest' => [
 				'DownloadStagePublishTest', 'testSuccessfulExtractionPublishesTheStagedContent',
-				['dir'], FALSE,
-			],
-			'DownloadStagePublishDirTest' => [
-				'DownloadStagePublishDirTest', 'testSuccessfulExtractionPublishesTheStagedDirectory',
 				['dir'], FALSE,
 			],
 			'GeoipPackageGenerationTest' => [
@@ -211,49 +203,6 @@ PHP;
 				"{$class}::\${$p} ({$path}) survived process exit without tearDown() running -- " .
 				'no shutdown fallback removed it');
 		}
-	}
-
-	/** Exercise the read-only share shape used by the GeoIP permission fixture. */
-	private function buildGeoipReadOnlyShareExitScript(string $ctorMethod): string
-	{
-		$class = 'DownloadGeoipStagePublishTest';
-		$root = var_export(realpath(self::ROOT), TRUE);
-		$ctorLit = var_export($ctorMethod, TRUE);
-
-		return <<<PHP
-require {$root} . '/vendor/autoload.php';
-require {$root} . '/tests/php/bootstrap.php';
-require {$root} . '/tests/php/{$class}.php';
-set_error_handler(static function (int \$severity, string \$message): bool { return TRUE; });
-\$object = new {$class}({$ctorLit});
-\$object->assertTrue(TRUE);
-\$result = pfb_test_as_unprivileged(static function () use (\$object): array {
-(new ReflectionMethod({$class}::class, 'setUp'))->invoke(\$object);
-\$dir = (new ReflectionProperty({$class}::class, 'dir'))->getValue(\$object);
-\$share = (new ReflectionProperty({$class}::class, 'share'))->getValue(\$object);
-file_put_contents(\$share . '/leftover.txt', 'stale-share-content');
-chmod(\$share, 0555);
-\$exists = is_dir(\$dir) && file_get_contents(\$share . '/leftover.txt') === 'stale-share-content';
-	return compact('dir', 'share', 'exists');
-});
-echo json_encode(\$result);
-PHP;
-	}
-
-	public function testProcessExitRemovesAReadOnlyGeoipShareWithoutTeardown(): void
-	{
-		$root = $this->newObservationRoot('exit_readonly_share_DownloadGeoipStagePublishTest');
-		$result = $this->runChild(
-			$root,
-			$this->buildGeoipReadOnlyShareExitScript('testTheExtractionFlagGateTracksWhetherTheHostTarIsLibarchive')
-		);
-
-		$this->assertTrue($result['exists'], 'the read-only fixture was never populated');
-		$this->assertStringStartsWith("{$root}/", $result['dir'],
-			'DownloadGeoipStagePublishTest::$dir was allocated outside the observed root');
-		$this->assertStringStartsWith($result['dir'] . '/', $result['share'],
-			'DownloadGeoipStagePublishTest::$share must sit inside $dir for this test to watch it');
-		$this->assertDirectoryDoesNotExist($result['dir'], 'the read-only GeoIP fixture survived shutdown');
 	}
 
 	/**

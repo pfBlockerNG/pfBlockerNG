@@ -15,7 +15,6 @@ use PHPUnit\Framework\TestCase;
  * gives the expected reason.
  */
 #[CoversFunction('pfb_feed_host_allowed')]
-#[CoversFunction('pfb_feed_redirect_target')]
 final class FeedHostIdnMappingTest extends TestCase
 {
 	private const PERCENT_REASON = 'feed host is percent-encoded';
@@ -64,16 +63,6 @@ final class FeedHostIdnMappingTest extends TestCase
 		$pinned = '';
 		$allowed = pfb_feed_host_allowed($host, $reason, $pinned);
 		$this->assertSame([FALSE, $want, ''], [$allowed, $reason, $pinned], 'host ' . json_encode($host));
-	}
-
-	public function testRedirectToJoinerHostIsRejected(): void
-	{
-		$host = "10.0.0.1\u{200C}";
-		$this->answer($host);
-		$reason = '';
-		$pinned = '';
-		$target = pfb_feed_redirect_target("http://{$host}:8443/", 'https://feeds.example.com/list.txt', $reason, $pinned);
-		$this->assertSame([FALSE, self::IDN_REASON, ''], [$target, $reason, $pinned]);
 	}
 
 	/** @return array<string, array{string}> */

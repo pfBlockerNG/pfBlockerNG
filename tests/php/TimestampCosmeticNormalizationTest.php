@@ -9,13 +9,10 @@ use PHPUnit\Framework\TestCase;
  * outside the two genuine wrong-year bugs (DnsblAliasUpdateTimestampFormatTest /
  * ClearSqliteTimestampFormatTest cover those). Each site here already carried a
  * year; the changes are
- * pure format polish. Top-level producers have no off-appliance callable seam, so
- * retained pins use php_strip_whitespace() and never production comments.
+ * pure format polish.
  */
 final class TimestampCosmeticNormalizationTest extends TestCase
 {
-	private const PFBLOCKERNG_PHP    = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng.php';
-
 	private string $savedTz;
 
 	protected function setUp(): void
@@ -31,27 +28,9 @@ final class TimestampCosmeticNormalizationTest extends TestCase
 		date_default_timezone_set($this->savedTz);
 	}
 
-	private function codeSource(string $path): string
-	{
-		$source = php_strip_whitespace($path);
-		$this->assertNotSame('', $source, "could not read comment-free source: {$path}");
-		return $source;
-	}
-
 	// -----------------------------------------------------------------------
-	// pfblockerng.php:843 -- MaxMind version file gmdate ('D, j M Y H:i:s T' -> 'Y-m-d H:i:s')
+	// widget.php -- MaxMind version line consumer
 	// -----------------------------------------------------------------------
-
-	public function testMaxmindGmdateSourceUsesIsoFormat(): void
-	{
-		$source = $this->codeSource(self::PFBLOCKERNG_PHP);
-		$this->assertStringContainsString(
-			"@gmdate('Y-m-d H:i:s', pfb_file_mtime(\$maxmind_cont));",
-			$source,
-			'the MaxMind version-file gmdate format changed -- update this oracle'
-		);
-		$this->assertStringNotContainsString("gmdate('D, j M Y H:i:s T'", $source, 'the OLD RFC-2822-ish format must be gone');
-	}
 
 	/**
 	 * widget.php:524's `grep -o 'Last-.*' maxmind_ver` extracts the WHOLE rest of

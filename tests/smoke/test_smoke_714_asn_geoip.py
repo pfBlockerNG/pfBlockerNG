@@ -1,14 +1,7 @@
-"""Live-VM smoke coverage for the #714 audit fixes: ASN log redirect (c1), GeoIP
-single-IP overwrite (c8), and the IP-side parse-fail counter (b2) — plus the #1906
-credential-normalization crash on the same ASN extras path.
+"""Live-VM smoke coverage for the #714 audit fixes: GeoIP single-IP overwrite (c8) and
+the IP-side parse-fail counter (b2, b3). The ASN extras cases (c1 and #1906) went with the
+PHP ASN extras path (issue #3977).
 
-All three fixes live in ``sync_package_pfblockerng()`` / ``pfb_download()``
-(``pfblockerng.inc``):
-
-* **c1** (``pfb_download()``, ASN extras path) — ``exec("... asn_table >> {$logtype}
-  2>&1")`` redirected asn_table's output into a file literally named after the numeric
-  LOGGER TYPE (e.g. ``3``) instead of appending it to the pfBlockerNG log. Fixed to
-  reuse ``{$elog}`` like every sibling ``exec()`` in the function.
 * **c8** (GeoIP continent build) — ``if ($file_chk <= 1)`` treated a continent file
   with exactly ONE genuine IP the same as an EMPTY one, overwriting it with the
   empty-file placeholder. Fixed to ``if ($file_chk == 0)``.
@@ -16,23 +9,14 @@ All three fixes live in ``sync_package_pfblockerng()`` / ``pfb_download()``
   OUTSIDE the ``while (fgets...)`` loop, so it evaluated only the LAST line read
   instead of running once per unparseable line. Moved inside the loop.
 
-The fourth case is issue **#1906** (``test_1906_asn_dispatch_reaches_the_download``): the
-ASN extras entries carry no ``username``/``password`` keys, and the per-type credential
-branch in ``pfblockerng_download_extras()`` skipped normalizing them, so the undefined key
-(NULL) fataled on ``PfbDownloadRequest``'s ``string $username`` and aborted the run before
-any download. It is deliberately **token-free** — a bogus token still has to reach the
-network — because #1906 escaped exactly by being reachable only through c1's licensed,
-CI-absent token.
+**b2 is CI-runnable**: a local feed + a Force IP reload
+(``test_714_b2_parse_fail_counts_every_bad_line``) reproduces deterministically with no
+external credentials needed.
 
-**b2 and #1906 are CI-runnable**: a local feed + a Force IP reload
-(``test_714_b2_parse_fail_counts_every_bad_line``), respectively a staged dummy token, each
-reproduce deterministically with no external credentials needed.
-
-**c1 and c8 are OUT-OF-CI / dispatch-only**: c1 needs a real, licensed IPinfo ASN
-account token (``SMOKE_ASN_SRC``); c8 needs a real MaxMind GeoIP account
-(``SMOKE_GEOIP_KEY``/``SMOKE_GEOIP_ACCOUNT``) — both external, licensed data sources
+**c8 is OUT-OF-CI / dispatch-only**: it needs a real MaxMind GeoIP account
+(``SMOKE_GEOIP_KEY``/``SMOKE_GEOIP_ACCOUNT``), an external, licensed data source
 absent from CI (see ``test_smoke_aggregate.py``'s "WHAT STAYS MAINTAINER-MANUAL" for
-the sibling GeoIP-download limitation). Each SKIPS cleanly without its env var(s);
+the sibling GeoIP-download limitation). It SKIPS cleanly without its env vars;
 authored faithfully for a maintainer to validate live per ADR-04 §7.
 
 DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke`` in
@@ -72,173 +56,6 @@ def deployed_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
         yield smoke_vm
     finally:
         h.collect_host_diagnostics(smoke_vm)
-
-
-# --------------------------------------------------------------------------- #
-# c1 — ASN extras download must log to PFB_LOG, never a stray numeric-named file.
-# --------------------------------------------------------------------------- #
-
-ASN_TOKEN_ENV = "SMOKE_ASN_SRC"
-# pfblockerng_download_extras() (pfblockerng.php, verb 'asn') passes $logtype=3 for the
-# ASN CLI verb; pre-fix, `exec("... >> {$logtype} 2>&1")` created this stray file in the
-# CLI's SSH-session working directory (root's home) instead of appending to PFB_LOG.
-_ASN_STRAY_FILE = "/root/3"
-_ASN_EXTRAS_LOG = "/var/log/pfblockerng/extras.log"
-_ASN_TABLE_MARKER = "ASN Lookup Table has been updated"
-
-
-@pytest.mark.timeout(300)
-def test_714_c1_asn_table_logs_not_stray_file(deployed_vm: SmokeVM) -> None:
-    """#714 c1 (pfblockerng.inc:8966, pfb_download()): asn_table's output must land in
-    the pfBlockerNG log, never a stray file named after the numeric logger type.
-
-    OUT-OF-CI / dispatch-only: the ASN database download needs a real, licensed IPinfo
-    account token (external data source, absent from CI) — SKIPS unless SMOKE_ASN_SRC
-    is set. Authored faithfully for a maintainer to validate live per ADR-04 §7.
-
-    Given (before) no stray "3" file sits in the CLI's working directory,
-    When  a real IPinfo ASN token is configured and `pfblockerng.php asn` runs the ASN
-      database download + asn_table rebuild,
-    Then  still no stray "3" file appears, and extras.log gained a fresh "ASN Lookup
-      Table has been updated" line — asn_table genuinely ran and its own log line
-      landed where it always has, proving the exec()'s redirect fix didn't merely
-      relocate the leak.
-    """
-    token = os.environ.get(ASN_TOKEN_ENV)
-    if not token:
-        pytest.skip(
-            f"{ASN_TOKEN_ENV} not set — the ASN database download needs a real, licensed "
-            "IPinfo account token (absent from CI); dispatch-only, validate live (ADR-04 §7)"
-        )
-    token = cast(str, token)
-
-    try:
-        # BEFORE: no stray numeric-logtype file yet.
-        before_stray = deployed_vm.ssh(f"test -e {_ASN_STRAY_FILE} && echo PRESENT || echo ABSENT").stdout.strip()
-        assert before_stray == "ABSENT", f"stray {_ASN_STRAY_FILE} already present before the ASN run: {before_stray}"
-        table_before = h.count_log_marker(deployed_vm, _ASN_EXTRAS_LOG, _ASN_TABLE_MARKER)
-
-        snippet = (
-            f"$c = config_get_path({h._php_str(h.CFG_IP_SETTINGS)}, array());\n"  # noqa: SLF001
-            f"$c['asn_token'] = {h._php_str(token)};\n"  # noqa: SLF001
-            f"config_set_path({h._php_str(h.CFG_IP_SETTINGS)}, $c);\n"  # noqa: SLF001
-            "write_config('pfBlockerNG smoke #714 c1: ASN token');\n"
-            "echo 'OK';"
-        )
-        res = h.php_eval(deployed_vm, snippet)
-        assert "OK" in res.stdout, f"could not stage the ASN token: {res.stdout!r} {res.stderr!r}"
-
-        result = deployed_vm.ssh(h.PHP_BIN, h.PFB_CLI, "asn", timeout=180)
-        assert result.returncode == 0, (
-            f"`pfblockerng.php asn` failed: rc={result.returncode} stdout={result.stdout[-2000:]!r} "
-            f"stderr={result.stderr!r}"
-        )
-
-        after_stray = deployed_vm.ssh(f"test -e {_ASN_STRAY_FILE} && echo PRESENT || echo ABSENT").stdout.strip()
-        assert after_stray == "ABSENT", (
-            f"stray {_ASN_STRAY_FILE} appeared after the ASN run — asn_table's output leaked to a "
-            f"file named after the numeric $logtype instead of the pfBlockerNG log: {after_stray}"
-        )
-        table_after = h.count_log_marker(deployed_vm, _ASN_EXTRAS_LOG, _ASN_TABLE_MARKER)
-        assert table_after > table_before, (
-            f"expected a new {_ASN_TABLE_MARKER!r} line in {_ASN_EXTRAS_LOG} after `pfblockerng.php asn` "
-            f"(before={table_before}, after={table_after}) — asn_table must have actually run"
-        )
-    finally:
-        h.reset(deployed_vm)
-
-
-# --------------------------------------------------------------------------- #
-# #1906 — the ASN extras download must reach the network, not fatal on its own
-# missing credential keys.
-# --------------------------------------------------------------------------- #
-
-# pfblockerng_download_extras() brackets its per-feed loop with these two pfb_logger()
-# lines. The END line is the oracle: an uncaught TypeError inside the loop kills the
-# CLI, so the START line lands and the END line never does.
-_EXTRAS_START_MARKER = "Download Process Starting"
-_EXTRAS_END_MARKER = "Download Process Ended"
-# Any syntactically valid token: IPinfo rejects it, which is fine — the download only has
-# to be ATTEMPTED. Deliberately not a real token; see the module docstring.
-_ASN_DUMMY_TOKEN = "smoke1906dummytoken"  # noqa: S105 — not a credential, a rejected placeholder
-
-
-@pytest.mark.timeout(300)
-def test_1906_asn_dispatch_reaches_the_download(deployed_vm: SmokeVM) -> None:
-    """#1906: `pfblockerng.php asn` must survive its own extras-credential normalization.
-
-    Scenario: the ASN extras entries ($pfb['extras'][3] and [4]) are built with only
-      url/file_dwn/file/folder/type — no username/password keys at all.
-    Given  an ASN token is configured, so the ASN extras survive into the download loop,
-    When   the ASN CLI verb runs the extras download,
-    Then   the dispatcher exits 0 and the loop's closing "Download Process Ended" line
-      lands in the extras log.
-
-    Pre-fix, the per-type credential branch normalized every feed type EXCEPT 'asn', so
-    $feed['username'] reached PfbDownloadRequest's non-nullable `string $username` as an
-    undefined array key (NULL). The resulting uncaught TypeError exited 255 mid-loop:
-    no ASN database, and on the 'dcc' cron path no MaxMind country-ISO rebuild either.
-
-    The token is a rejected dummy on purpose: whether IPinfo accepts it decides only
-    whether the DOWNLOAD succeeds, not whether the request could be CONSTRUCTED — which
-    is the whole of #1906, and is what c1's licensed-token gate hid from CI.
-    """
-    # php_eval PERSISTS to config.xml and h.reset() only drops DERIVED state, so the dummy
-    # token would leak into every later case on this VM. Snapshot it now, restore it in the
-    # finally. An absent key reads back as '' and is restored as '': pfb_global() coerces the
-    # field with `?: ''` and the CLI gates on empty(), so the two are the same state.
-    prior_token = h.config_get(deployed_vm, f"{h.CFG_IP_SETTINGS}/asn_token")
-    try:
-        start_before = h.count_log_marker(deployed_vm, _ASN_EXTRAS_LOG, _EXTRAS_START_MARKER)
-        end_before = h.count_log_marker(deployed_vm, _ASN_EXTRAS_LOG, _EXTRAS_END_MARKER)
-
-        snippet = (
-            f"$c = config_get_path({h._php_str(h.CFG_IP_SETTINGS)}, array());\n"  # noqa: SLF001
-            f"$c['asn_token'] = {h._php_str(_ASN_DUMMY_TOKEN)};\n"  # noqa: SLF001
-            f"config_set_path({h._php_str(h.CFG_IP_SETTINGS)}, $c);\n"  # noqa: SLF001
-            "write_config('pfBlockerNG smoke #1906: dummy ASN token');\n"
-            "echo 'OK';"
-        )
-        res = h.php_eval(deployed_vm, snippet)
-        assert "OK" in res.stdout, f"could not stage the dummy ASN token: {res.stdout!r} {res.stderr!r}"
-
-        result = deployed_vm.ssh(h.PHP_BIN, h.PFB_CLI, "asn", timeout=180)
-        assert result.returncode == 0, (
-            f"`pfblockerng.php asn` must not fatal on a feed with no credential keys: "
-            f"rc={result.returncode} (255 = PHP fatal) stdout={result.stdout[-2000:]!r} "
-            f"stderr={result.stderr[-2000:]!r}"
-        )
-        assert "TypeError" not in f"{result.stdout}{result.stderr}", (
-            f"`pfblockerng.php asn` emitted a TypeError: stdout={result.stdout[-2000:]!r} "
-            f"stderr={result.stderr[-2000:]!r}"
-        )
-
-        start_after = h.count_log_marker(deployed_vm, _ASN_EXTRAS_LOG, _EXTRAS_START_MARKER)
-        end_after = h.count_log_marker(deployed_vm, _ASN_EXTRAS_LOG, _EXTRAS_END_MARKER)
-        assert start_after > start_before, (
-            f"expected a new {_EXTRAS_START_MARKER!r} line in {_ASN_EXTRAS_LOG} after "
-            f"`pfblockerng.php asn` (before={start_before}, after={start_after}) — the extras "
-            "download loop must have been entered at all"
-        )
-        assert end_after > end_before, (
-            f"expected a new {_EXTRAS_END_MARKER!r} line in {_ASN_EXTRAS_LOG} after "
-            f"`pfblockerng.php asn` (before={end_before}, after={end_after}) — the loop must run "
-            "to completion; a missing END line with a present START line is the #1906 fatal "
-            "killing the CLI mid-loop"
-        )
-    finally:
-        restore = (
-            f"$c = config_get_path({h._php_str(h.CFG_IP_SETTINGS)}, array());\n"  # noqa: SLF001
-            f"$c['asn_token'] = {h._php_str(prior_token)};\n"  # noqa: SLF001
-            f"config_set_path({h._php_str(h.CFG_IP_SETTINGS)}, $c);\n"  # noqa: SLF001
-            "write_config('pfBlockerNG smoke #1906: restore ASN token');\n"
-            "echo 'OK';"
-        )
-        assert "OK" in h.php_eval(deployed_vm, restore).stdout, (
-            "could not restore the pre-test ASN token — later cases on this VM would inherit "
-            f"the dummy {_ASN_DUMMY_TOKEN!r}"
-        )
-        h.reset(deployed_vm)
 
 
 # --------------------------------------------------------------------------- #

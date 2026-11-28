@@ -17,7 +17,7 @@ use PHPUnit\Framework\TestCase;
  *     above-7200 / non-scalar all resolve to the finite 1800-second default, never to
  *     "no timeout" (the issue #2488 degradation class);
  *   - ONE global budget serves every re-entry verb (GeoIP, blacklist, TOP1M, ASN) —
- *     it reaches the PHP seam through pfb_reentry_budget()/pfb_reentry_cmd();
+ *     it reaches the PHP seam through pfb_reentry_budget();
  *   - the shell seam normalizes against the SAME window and the SAME default, so a
  *     single stored value means the same number of seconds in both languages.
  *
@@ -28,7 +28,6 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_reentry_timeout')]
 #[CoversFunction('pfb_reentry_budget')]
-#[CoversFunction('pfb_reentry_cmd')]
 final class ReentryTimeoutSettingTest extends TestCase
 {
 	private const SHELL = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.sh';
@@ -84,17 +83,6 @@ final class ReentryTimeoutSettingTest extends TestCase
 	private function store(mixed $raw): void
 	{
 		config_set_path(self::PATH, $raw);
-	}
-
-	/**
-	 * The `<secs>` word the composed command hands timeout(1), read off the `-k 5 `
-	 * anchor so an EMPTY duration is captured as '' rather than matching something else.
-	 */
-	private function durationToken(string $cmd): string
-	{
-		$this->assertSame(1, preg_match('/ -k 5 ([^ ]*) /', $cmd, $m),
-			"the built command carries no '-s TERM -k 5 <secs>' bound at all: {$cmd}");
-		return $m[1];
 	}
 
 	// ── The window itself ───────────────────────────────────────────────────────
@@ -190,8 +178,6 @@ final class ReentryTimeoutSettingTest extends TestCase
 		$this->store('60');
 
 		$this->assertSame(60, pfb_reentry_budget(NULL), 'the stored minimum must become the resolved budget');
-		$this->assertSame('60', $this->durationToken(pfb_reentry_cmd('dc', ['scheduled'], "{$this->tmp}/out")),
-			'the stored minimum must be the duration timeout(1) gets');
 	}
 
 	public function testTheStoredMaximumReachesTheSeamAsTheDuration(): void
@@ -199,8 +185,6 @@ final class ReentryTimeoutSettingTest extends TestCase
 		$this->store('7200');
 
 		$this->assertSame(7200, pfb_reentry_budget(NULL), 'the stored maximum must become the resolved budget');
-		$this->assertSame('7200', $this->durationToken(pfb_reentry_cmd('dc', ['scheduled'], "{$this->tmp}/out")),
-			'the stored maximum must be the duration timeout(1) gets');
 	}
 
 	public function testAnAbsentSettingKeepsTheFiniteDefaultOnTheSeam(): void
@@ -209,58 +193,6 @@ final class ReentryTimeoutSettingTest extends TestCase
 		$this->assertNull(config_get_path(self::PATH));
 
 		$this->assertSame(1800, pfb_reentry_budget(NULL), 'an absent setting must resolve to the finite default');
-		$this->assertSame('1800', $this->durationToken(pfb_reentry_cmd('al', ['scheduled'], "{$this->tmp}/out")),
-			'an absent setting must leave the seam on its 1800s default');
-	}
-
-	/** @return array<string, array{0: mixed}> */
-	public static function hostileStoredValues(): array
-	{
-		return [
-			'empty'      => [''],
-			'zero'       => ['0'],
-			'below the minimum' => ['5'],
-			'above the maximum' => ['7201'],
-			'non-numeric' => ['forever'],
-			'negative'   => ['-1'],
-			'overflow'   => ['99999999999999999999'],
-			'array'      => [['5']],
-			'float'      => [900.0],
-		];
-	}
-
-	#[DataProvider('hostileStoredValues')]
-	public function testAHostileStoredValueCannotWeakenTheSeamsBound(mixed $raw): void
-	{
-		$this->store($raw);
-
-		set_error_handler(static function (int $severity, string $message, string $file, int $line): never {
-			throw new ErrorException($message, 0, $severity, $file, $line);
-		});
-		try {
-			$secs = $this->durationToken(pfb_reentry_cmd('bls', ['scheduled', 'x'], "{$this->tmp}/out"));
-		} finally {
-			restore_error_handler();
-		}
-
-		$this->assertSame((string) PFB_REENTRY_TIMEOUT, $secs,
-			"a hostile stored budget must fall back to the finite default; got [{$secs}]");
-		$this->assertMatchesRegularExpression('/^[0-9]+$/', $secs,
-			"issue #2488: no stored value may leave timeout(1) an empty or non-numeric duration; got [{$secs}]");
-	}
-
-	public function testOneGlobalBudgetServesEveryReentryVerb(): void
-	{
-		// The owner ruling: ONE global nested-pass budget, no per-subsystem override.
-		$this->store('600');
-
-		$durations = [];
-		foreach (['al', 'bls', 'dc', 'asn', 'asn_shell', 'bu', 'dnsbl-control'] as $verb) {
-			$durations[$verb] = $this->durationToken(pfb_reentry_cmd($verb, [], "{$this->tmp}/out"));
-		}
-
-		$this->assertSame(array_fill_keys(array_keys($durations), '600'), $durations,
-			'every re-entry verb must read the SAME global budget -- no per-subsystem window');
 	}
 
 	public function testAnExplicitCallerBudgetStillWinsOverTheStoredSetting(): void
@@ -289,20 +221,6 @@ final class ReentryTimeoutSettingTest extends TestCase
 
 		$this->assertSame(900, pfb_reentry_budget(NULL),
 			'the authoritative field gateway must win over a stale pfb_global section mirror');
-	}
-
-	public function testTheReaperModeAndTheFileCaptureSurviveAConfiguredBudget(): void
-	{
-		// issue #2016's semantics are preserved, not traded for configurability.
-		$this->store('7200');
-		$out = "{$this->tmp}/capture.out";
-
-		$cmd = pfb_reentry_cmd('dc', ['scheduled'], $out);
-
-		$this->assertStringNotContainsString('--foreground', $cmd,
-			"a configured budget must not move the seam out of default (reaper) mode: {$cmd}");
-		$this->assertStringEndsWith('> ' . escapeshellarg($out) . ' 2>&1 < /dev/null', $cmd,
-			"a configured budget must not disturb the file capture or the /dev/null stdin: {$cmd}");
 	}
 
 	// ── Both seams, one window ──────────────────────────────────────────────────

@@ -171,10 +171,6 @@ PHP;
 	public static function inlineFixtureRows(): array
 	{
 		return [
-			'blacklist finalize' => [
-				'pfb2764_', 'DownloadExtractionExitCodeTest', 'testBlacklistTarFinalizeTreatsDirectoryOnlyTreeAsEmpty',
-				'', ['/feed_cat'],
-			],
 			'exact prefetch' => [
 				'pfb_833_exact_', 'IpPrefetchTest', 'test_single_file_folder_exact_match_resolves_correctly_per_row_and_batched',
 				'', [],

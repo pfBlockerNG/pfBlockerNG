@@ -92,30 +92,6 @@ final class FeedPassLockTest extends TestCase
 		return "{$this->dbdir}/pfb_feed_pass.lock";
 	}
 
-	public function testStandaloneExtrasProcessHoldsDispatcherAndFeedLocks(): void
-	{
-		$GLOBALS['pfb']['schedule_state_dir'] = $this->dbdir;
-		$this->assertTrue(pfb_extras_process_begin());
-		$this->assertTrue(is_resource($GLOBALS['pfb_schedule_dispatch_lock'] ?? NULL));
-		$this->assertTrue(is_resource($GLOBALS['pfb_feed_pass_lock'] ?? NULL));
-		pfb_schedule_dispatch_release();
-	}
-
-	public function testExtrasFeedContentionPreservesOuterDispatcherLock(): void
-	{
-		$GLOBALS['pfb']['schedule_state_dir'] = $this->dbdir;
-		$this->assertTrue(pfb_schedule_dispatch_begin());
-		$outer = $GLOBALS['pfb_schedule_dispatch_lock'];
-		$holder = fopen($this->lockPath(), 'c');
-		$this->assertNotFalse($holder);
-		$this->rawFps[] = $holder;
-		$this->assertTrue(flock($holder, LOCK_EX));
-
-		$this->assertFalse(pfb_extras_process_begin());
-		$this->assertSame($outer, $GLOBALS['pfb_schedule_dispatch_lock'] ?? NULL);
-		$this->assertTrue(is_resource($GLOBALS['pfb_schedule_dispatch_lock'] ?? NULL));
-	}
-
 	/** A second, independent fd probing the lock -- proves whether it is held. */
 	private function rawProbeStillLocked(): bool
 	{

@@ -16,7 +16,6 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_geoip_generation_read_lock')]
 #[CoversFunction('pfb_geoip_isos_path')]
 #[CoversFunction('pfb_geoip_retire_php_isos')]
-#[CoversFunction('pfb_stage_publish_dir_merge_swap')]
 final class GeoipGoLayoutTest extends TestCase
 {
 	private string $dir;
@@ -108,119 +107,5 @@ final class GeoipGoLayoutTest extends TestCase
 		pfb_geoip_retire_php_isos("{$this->dir}/share/cc", "{$this->dir}/db");
 
 		$this->assertFileExists("{$this->dir}/db/geoip.txt");
-	}
-
-	public function testPhpsShareMergeNeverReplacesAGoArchivesMemberLink(): void
-	{
-		$share = "{$this->dir}/share";
-		$this->assertTrue(mkdir("{$share}/..GeoLite2-Country.tar.gz.7.89abcdef"));
-		file_put_contents("{$share}/..GeoLite2-Country.tar.gz.7.89abcdef/GeoLite2-Country.mmdb", 'go');
-		$this->assertTrue(symlink('..GeoLite2-Country.tar.gz.7.89abcdef', "{$share}/.GeoLite2-Country.tar.gz"));
-		$this->assertTrue(symlink('.GeoLite2-Country.tar.gz/GeoLite2-Country.mmdb', "{$share}/GeoLite2-Country.mmdb"));
-		$this->assertTrue(mkdir("{$this->dir}/staged"));
-		file_put_contents("{$this->dir}/staged/GeoLite2-Country.mmdb", 'php');
-
-		$this->assertFalse(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
-
-		$this->assertTrue(is_link("{$share}/GeoLite2-Country.mmdb"), 'the member link stays a link');
-		$this->assertSame('go', file_get_contents("{$share}/GeoLite2-Country.mmdb"));
-	}
-
-	public function testALinkThatNamesNoGoGenerationIsNoMemberLinkOfTheCoreUpdater(): void
-	{
-		// an administrator's layout: the Core Updater would replace such a link too (feedfetch entryLink)
-		$share = "{$this->dir}/share";
-		$this->assertTrue(mkdir("{$this->dir}/elsewhere"));
-		file_put_contents("{$this->dir}/elsewhere/GeoLite2-ASN.mmdb", 'admin');
-		$this->assertTrue(symlink("{$this->dir}/elsewhere", "{$share}/.custom"));
-		$this->assertTrue(symlink('.custom/GeoLite2-ASN.mmdb', "{$share}/GeoLite2-ASN.mmdb"));
-		$this->assertTrue(mkdir("{$this->dir}/staged"));
-		file_put_contents("{$this->dir}/staged/GeoLite2-ASN.mmdb", 'php');
-
-		$this->assertTrue(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
-
-		$this->assertSame('php', file_get_contents("{$share}/GeoLite2-ASN.mmdb"));
-	}
-
-	public function testPhpsShareMergeNeverReplacesAGoArchiveLink(): void
-	{
-		// a staged entry named like an archive link would leave every member link of it dangling (feedfetch mergeable)
-		$share = "{$this->dir}/share";
-		$this->assertTrue(mkdir("{$share}/..A.1.0123abcd"));
-		file_put_contents("{$share}/..A.1.0123abcd/m", 'go');
-		$this->assertTrue(symlink('..A.1.0123abcd', "{$share}/.A"));
-		$this->assertTrue(symlink('.A/m', "{$share}/m"));
-		$this->assertTrue(mkdir("{$this->dir}/staged"));
-		file_put_contents("{$this->dir}/staged/.A", 'php');
-
-		$this->assertFalse(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
-
-		$this->assertTrue(is_link("{$share}/.A"));
-		$this->assertSame('go', file_get_contents("{$share}/m"));
-	}
-
-	public function testPhpsShareMergeNeverStagesADotEntry(): void
-	{
-		// what the Core Updater names its own (archive links, their generations, locks); a dangling archive link included
-		$share = "{$this->dir}/share";
-		$this->assertTrue(symlink('..A.1.0123abcd', "{$share}/.A"));
-		$this->assertTrue(mkdir("{$this->dir}/staged"));
-		file_put_contents("{$this->dir}/staged/.A", 'php');
-
-		$this->assertFalse(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
-
-		$this->assertTrue(is_link("{$share}/.A"));
-	}
-
-	public function testPhpsShareMergeStillPublishesADotMemberOfItsOwn(): void
-	{
-		// an archive made on a Mac carries ._* and .DS_Store members: today's merge publishes them, and still does
-		$share = "{$this->dir}/share";
-		$this->assertTrue(mkdir("{$this->dir}/staged"));
-		file_put_contents("{$this->dir}/staged/.DS_Store", 'mac');
-		file_put_contents("{$this->dir}/staged/GeoLite2-Country.mmdb", 'php');
-
-		$this->assertTrue(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
-
-		$this->assertSame('mac', file_get_contents("{$share}/.DS_Store"));
-		$this->assertSame('php', file_get_contents("{$share}/GeoLite2-Country.mmdb"));
-	}
-
-	public function testPhpsShareMergeNeverReplacesTheGoCountryFolderLink(): void
-	{
-		$share = "{$this->dir}/share";
-		$this->assertTrue(mkdir("{$this->dir}/staged"));
-		file_put_contents("{$this->dir}/staged/cc", 'php');
-
-		$this->assertFalse(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
-
-		$this->assertTrue(is_link("{$share}/cc"));
-	}
-
-	public function testALinkNamingAnotherMemberIsNoMemberLinkOfIt(): void
-	{
-		$share = "{$this->dir}/share";
-		$this->assertTrue(mkdir("{$share}/..A.1.0123abcd"));
-		file_put_contents("{$share}/..A.1.0123abcd/other", 'go');
-		$this->assertTrue(symlink('..A.1.0123abcd', "{$share}/.A"));
-		$this->assertTrue(symlink('.A/other', "{$share}/m"));
-		$this->assertTrue(mkdir("{$this->dir}/staged"));
-		file_put_contents("{$this->dir}/staged/m", 'php');
-
-		$this->assertTrue(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
-
-		$this->assertSame('php', file_get_contents("{$share}/m"));
-	}
-
-	public function testPhpsShareMergeStillReplacesItsOwnFiles(): void
-	{
-		$share = "{$this->dir}/share";
-		file_put_contents("{$share}/GeoLite2-Country.mmdb", 'old');
-		$this->assertTrue(mkdir("{$this->dir}/staged"));
-		file_put_contents("{$this->dir}/staged/GeoLite2-Country.mmdb", 'php');
-
-		$this->assertTrue(pfb_stage_publish_dir_merge_swap("{$this->dir}/staged", $share));
-
-		$this->assertSame('php', file_get_contents("{$share}/GeoLite2-Country.mmdb"));
 	}
 }

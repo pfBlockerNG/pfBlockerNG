@@ -17,7 +17,6 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_filter')]
 #[CoversFunction('pfb_feed_host_allowed')]
-#[CoversFunction('pfb_feed_redirect_target')]
 final class FeedEntryVettingLiteralHostTest extends TestCase
 {
 	private const CONFIGURED_IP = '10.20.30.40';
@@ -148,19 +147,6 @@ final class FeedEntryVettingLiteralHostTest extends TestCase
 				"host {$h}"
 			);
 		}
-	}
-
-	/**
-	 * Scenario: a redirect Location whose host is a bracketed IPv6 literal is refused by
-	 * pfb_feed_redirect_target(), which re-runs the same guard on every hop.
-	 */
-	public function testRedirectToBracketedIpv6HostIsRejected(): void
-	{
-		$GLOBALS['pfb_test_resolve_map']['[fd00::1].'] = [['type' => 'A', 'data' => self::CONFIGURED_IP]];
-		$reason = '';
-		$pinned = '';
-		$target = pfb_feed_redirect_target('http://[fd00::1]:8080/x', 'https://feeds.example.com/list.txt', $reason, $pinned);
-		$this->assertSame([FALSE, self::BRACKET_REASON, ''], [$target, $reason, $pinned]);
 	}
 
 	// --- D: controls (must pass before and after) ---

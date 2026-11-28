@@ -30,7 +30,6 @@ final class TempDirLeakGuardTest extends TestCase
 		'TickCronTest.php',
 		'QuietHoursApplyTest.php',
 		'PfbSyncStatusLedgerTest.php',
-		'CountryNetworksCountGuardTest.php',
 	];
 
 	public function testFixtureTeardownsLeaveNothingUnderTmpdir(): void

@@ -29,11 +29,6 @@
 // Tests: tests/php/CfgAdaptersTest.php.
 // ---------------------------------------------------------------------------
 
-enum PfbScheduleTerminalResult: string {
-	case Success = 'success';
-	case RetryCapReached = 'retry-cap-reached';
-}
-
 // PfbStoredEnum — the contract every config-backed enum implements. Reads own raw-token
 // fallback; field-aware gateway writes own empty Off storage and absence deletion.
 interface PfbStoredEnum
@@ -365,29 +360,6 @@ function pfb_top1m_providers(): array
 			'licence'	=> 'CC BY-NC 4.0 — non-commercial use, attribution required',
 		),
 	);
-}
-
-// ADR-59: build the caller header(s) a provider's 'auth' descriptor needs. Pure / no I/O,
-// so it is unit-testable and -- because it never logs -- the token only ever reaches
-// pfb_download()'s CURLOPT_HTTPHEADER, never a log line. 'auth' is 'none' (keyless) or
-// {header, scheme} (Cloudflare's Bearer token); an empty token/keyless provider yields
-// array() so pfb_download() sends no Authorization header -- the #886 preserve+warn path
-// keeps the previous TOP1M whitelist and warns on a resulting failure.
-//
-// @return string[] zero or one header line, e.g. ['Authorization: Bearer <token>'].
-function pfb_top1m_auth_headers(array $provider, string $token): array
-{
-	$auth = $provider['auth'] ?? 'none';
-	if (!is_array($auth) || empty($auth['header']) || $token === '') {
-		return array();
-	}
-	// Defense-in-depth (#892 review): a token stored via a non-UI path (hand-edited
-	// config.xml, HA sync, a restored backup) is not re-validated by PFB_FILTER_TOKEN --
-	// strip CR/LF here so it can never inject an extra header/split the request.
-	$token  = str_replace(["\r", "\n"], '', $token);
-	$scheme = $auth['scheme'] ?? '';
-	$value  = ($scheme !== '') ? "{$scheme} {$token}" : $token;
-	return array("{$auth['header']}: {$value}");
 }
 
 /** Read a PfbAliasDeltaMode from a raw stored value. */
@@ -6028,33 +6000,6 @@ function pfb_schedule_dispatch_release(): void
 	unset($GLOBALS['pfb_schedule_dispatch_lock']);
 }
 
-/** Hold scheduler and feed locks through a standalone Extras process. */
-function pfb_extras_process_begin(): bool
-{
-	$dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock'])
-		|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
-	if (!pfb_schedule_dispatch_begin()) {
-		// issue #2592: name the guard (#2496) + feed-pass syslog parity (#2505); rc deliberately unchanged.
-		pfb_logger("\n Extras process deferred: dispatcher lock unavailable.\n", 1);
-		logger(LOG_NOTICE, localize_text('Feed pass [ extras ] deferred - the scheduler dispatcher lock is unavailable.'),
-			LOG_PREFIX_PKG_PFBLOCKERNG);
-		return FALSE;
-	}
-	$contended = FALSE;
-	if (!pfb_feed_pass_begin('extras', $contended)) {
-		// issue #3012: begin() logs its own skip line only for contention, so an
-		// acquisition error would otherwise leave no record naming extras processing.
-		if (!$contended) {
-			pfb_logger("\n Extras processing skipped: the feed pass lock could not be acquired.\n", 1);
-		}
-		if ($dispatch_owner) {
-			pfb_schedule_dispatch_release();
-		}
-		return FALSE;
-	}
-	return TRUE;
-}
-
 /**
  * pfb_due_ledger_is_due — is the named job due to run on this tick?
  *
@@ -6225,22 +6170,6 @@ function pfb_next_tick_boundary(int $tick_min, int $cur_hour, int $cur_min, int 
 		return [($cur_hour + 1) % 24, 0, 3600 - $cur_hour_sec];
 	}
 	return [$cur_hour, $next_min, ($next_min * 60) - $cur_hour_sec];
-}
-
-/** Foreground production runner used while the dispatch lock is held. */
-function pfb_schedule_extra_run(string $job, string $argument = '', bool &$changed = FALSE): bool
-{
-	global $pfb;
-	$args = [];
-	if ($job === 'dcc' || $job === 'bl') {
-		$args[] = 'scheduled';
-	}
-	if ($argument !== '') {
-		$args[] = $argument;
-	}
-	$status = pfb_reentry_exec($job, $args, $pfb['extraslog']);
-	$changed = $status === 2 || $status === 3;
-	return $status === 0 || $status === 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -7959,27 +7888,6 @@ function pfb_sync_status_flatten(array $data, ?string $facility = null): array
 		}
 	}
 	return $out;
-}
-
-/**
- * pfb_dnsbl_download_ledger_update — translate one DNSBL feed's download result into
- * the sync-status ledger. FALSE opens facility=dnsbl stage=download for $item; TRUE
- * closes the same key. Mirrors pfb_ip_download_ledger_update() (issue #998).
- *
- * @param bool   $download_ok TRUE when pfb_download() succeeded for this item.
- * @param string $item        The pfB_/DNSBL_-prefixed alias, NOT the per-row $header --
- *                             the widget's deep-link match depends on the prefix.
- * @param string $message     Human-readable failure text (ignored on success).
- * @param string $ledger_dir  Directory that contains pfb_sync_status.json.
- * @return void
- */
-function pfb_dnsbl_download_ledger_update(bool $download_ok, string $item, string $message, string $ledger_dir): void
-{
-	if ($download_ok) {
-		pfb_sync_status_close('dnsbl', $item, 'download', $ledger_dir);
-	} else {
-		pfb_sync_status_open('dnsbl', $item, 'download', $message, $ledger_dir);
-	}
 }
 
 /**

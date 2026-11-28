@@ -16,15 +16,12 @@ use PHPUnit\Framework\TestCase;
  *     blank no-op, not an "invalid subnet" input error.
  *   - pfb_get_hooks(): a hook whose script is only Unicode whitespace has no
  *     script and is skipped like an empty one.
- *   - pfb_feed_redirect_target(): a Location of only Unicode whitespace has no
- *     target — refuse it up front instead of resolving it as a relative URL.
  *   - pfb_lint_sh_diagnostics()/pfb_lint_py_diagnostics(): a stderr of only
  *     Unicode whitespace carries no diagnostic — degrade to the no-diagnostic/
  *     launch-failed warning instead of surfacing a whitespace "error".
  */
 #[CoversFunction('pfb_validate_suppression_line')]
 #[CoversFunction('pfb_get_hooks')]
-#[CoversFunction('pfb_feed_redirect_target')]
 #[CoversFunction('pfb_lint_sh_diagnostics')]
 #[CoversFunction('pfb_lint_py_diagnostics')]
 final class Issue1787BlankEmptyCallSitesTest extends TestCase
@@ -94,20 +91,6 @@ final class Issue1787BlankEmptyCallSitesTest extends TestCase
 		// script is as script-less as an empty one.
 		$this->assertCount(1, $hooks);
 		$this->assertSame('echo ok', $hooks[0]['script']);
-	}
-
-	// --- pfb_feed_redirect_target -----------------------------------------
-
-	public function testRedirectLocationOfOnlyUnicodeWhitespaceHasNoTarget(): void
-	{
-		$reason = '';
-		$pinned = '';
-		$result = pfb_feed_redirect_target(self::NBSP, 'https://feed.example/list.txt', $reason, $pinned);
-		// A whitespace-only Location is "no target" — refused before any
-		// relative-URL resolution or host re-vetting runs.
-		$this->assertFalse($result);
-		$this->assertSame('feed redirect has no target', $reason);
-		$this->assertSame('', $pinned);
 	}
 
 	// --- pfb_lint_sh_diagnostics / pfb_lint_py_diagnostics ----------------

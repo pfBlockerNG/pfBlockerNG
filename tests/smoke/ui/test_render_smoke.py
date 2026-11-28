@@ -4611,56 +4611,6 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
     assert "dnsbl_vip_sinkhole_pages" not in excluded_names
 
 
-def test_blacklist_download_name_keys_on_provider_id() -> None:
-    """Pin the CLI-only provider-naming contract that Tier-A HTTP rendering cannot execute.
-
-    A Blacklist provider's category filenames are derived from its download file name, so
-    keying that name on a feed URL literal renames the whole category set the day the URL
-    moves. Same reasoning as the sibling pins above: ``pfblockerng.php`` is the CLI
-    dispatcher and is never served, so the contract is asserted at the source rather than
-    through an HTTP render (issue #2636).
-    """
-    source_path = helpers.SMOKE_DIR.parent.parent / "src/usr/local/www/pfblockerng/pfblockerng.php"
-    source = source_path.read_text(encoding="utf-8")
-
-    assert re.search(r"if\s*\(\s*\$item\['xml'\]\s*==\s*'ut1'\s*\)", source), (
-        "the ut1.tar.gz filename patch must key on the provider id"
-    )
-    assert "ftp://ftp.ut-capitole.fr" not in source, (
-        "the filename patch must not key on a feed URL literal -- a URL change would "
-        "silently rename every UT1 category file"
-    )
-
-
-def test_pfblockerng_download_extras_uses_typed_download_result() -> None:
-    """Pin the CLI-only download contract that Tier-A HTTP rendering cannot execute.
-
-    ``pfblockerng.php`` is never served directly: it is the CLI dispatcher; the
-    ``pfblockerng_geoip.inc`` module owns generated GeoIP pages. Keep this source assertion in the
-    ``ui_render`` module so the changed PHP call shape still has a front-end
-    coverage pairing without pretending an HTTP render reaches this function.
-    """
-    source_path = helpers.SMOKE_DIR.parent.parent / "src/usr/local/www/pfblockerng/pfblockerng.php"
-    source = source_path.read_text(encoding="utf-8")
-
-    declaration = "function pfblockerng_download_extras("
-    start = source.index(declaration)
-    remainder = source[start + len(declaration) :]
-    next_function = re.search(r"^function\s+\w+\s*\(", remainder, flags=re.MULTILINE)
-    assert next_function is not None, "pfblockerng_download_extras() must be followed by another function"
-    function_source = source[start : start + len(declaration) + next_function.start()]
-
-    assert re.search(r"pfb_download\(\s*new\s+PfbDownloadRequest\(", function_source, flags=re.DOTALL), (
-        "pfblockerng_download_extras() must construct PfbDownloadRequest"
-    )
-    assert re.search(r"\)\s*\)\s*->\s*success\b", function_source, flags=re.DOTALL), (
-        "pfblockerng_download_extras() must consume PfbDownloadResult->success"
-    )
-    assert not re.search(r"pfb_download\(\s*(?!new\s+PfbDownloadRequest\b)", function_source, flags=re.DOTALL), (
-        "retired positional pfb_download() call shape must not return"
-    )
-
-
 def test_dnsbl_regex_save_uses_package_python_wrapper() -> None:
     """Pin the POST-only validator path that a Tier-A GET cannot execute.
 

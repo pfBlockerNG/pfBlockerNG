@@ -159,36 +159,6 @@ final class DownloadStagePublishTest extends TestCase
 	}
 
 	/**
-	 * The ZIP inner-content gate unlinks whatever it probes, so the piped SFS/hpHosts
-	 * branch must probe its staged copy: probing after publication would delete the
-	 * publication the staging exists to protect.
-	 */
-	public function testPipedZipBranchValidatesContentBeforePublishing(): void
-	{
-		$source = file_get_contents(self::INC);
-		$this->assertNotFalse($source);
-
-		$open = strpos($source, 'if (!pfb_stage_publish($orig_download,'
-			. "\n\t\t\t\t    static function (string \$staged) use (\$file_dwn_esc, \$list_url,");
-		$this->assertNotFalse($open,
-			'the piped ZIP branch no longer stages with the list URL in scope for its MIME probe');
-
-		$close = strpos($source, '})) {', $open);
-		$this->assertNotFalse($close);
-		$callback = substr($source, $open, $close - $open);
-
-		// The probe's VERDICT must gate the publication. Asserting only that the
-		// constant appears passes while the call's result is computed and discarded,
-		// which republishes the rejected content and loses the previous file.
-		$this->assertMatchesRegularExpression(
-			'/if \(!pfb_filter\(\s*array\(escapeshellarg\(\$staged\), \$staged, \$list_url\),'
-			. '\s*PFB_FILTER_FILE_MIME[^)]*\)\) \{\s*\$inner_rejected = TRUE;\s*return [^;]+;\s*\}/',
-			$callback,
-			'the piped ZIP branch must reject the staged content before it is published, '
-			. 'not merely probe it');
-	}
-
-	/**
 	 * Preserving the last-good file means a failed extraction no longer leaves an
 	 * empty one for the downstream MIME gate to reject, so each branch must fail the
 	 * download itself rather than falling through onto the stale publication.
@@ -204,25 +174,5 @@ final class DownloadStagePublishTest extends TestCase
 			'expected the decompress branches to publish through pfb_stage_publish()');
 		$this->assertSame($occurrences - 1, substr_count($source, 'if (!pfb_stage_publish('),
 			'every pfb_stage_publish() call must sit directly in a failure guard');
-	}
-
-	/**
-	 * The decompress branches no longer redirect onto a live publication. The
-	 * gunzip-to-header form survives exactly once: the TOP1M branch, which
-	 * reassigns that variable to its own staged path first (issue #1542).
-	 */
-	public function testDecompressBranchesNoLongerRedirectOntoLiveFiles(): void
-	{
-		$source = file_get_contents(self::INC);
-		$this->assertNotFalse($source);
-
-		// Counted, never matched against the haystack: this file is ~700 KB and a
-		// containment matcher would dump all of it into the failure output. Matched
-		// with \s* so respacing the redirect cannot smuggle one of these back in.
-		$this->assertSame(0, preg_match_all('/>\s*\{\$file_org_esc\}/', $source),
-			'a decompress branch still redirects onto the live .orig publication');
-		$this->assertSame(1, preg_match_all('/>\s*\{\$header_esc\}/', $source),
-			'expected exactly one redirect onto {$header_esc}: the TOP1M branch, which '
-			. 'reassigns that variable to its own staged path first');
 	}
 }

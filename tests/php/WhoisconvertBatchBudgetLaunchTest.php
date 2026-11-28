@@ -2,15 +2,13 @@
 
 declare(strict_types=1);
 
-use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Execute the real WHOIS feed producer and the custom-list CLI argument shape.
+ * Execute the real WHOIS feed producer through the custom-list CLI argument shape.
  * The complete sync_package_pfblockerng() pass is not run off-appliance.
  * External lookup outcomes and date(1) are controlled; batch logic stays real.
  */
-#[CoversFunction('pfb_download_fetch')]
 final class WhoisconvertBatchBudgetLaunchTest extends TestCase
 {
 	private const PFB_SH = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.sh';
@@ -106,14 +104,6 @@ final class WhoisconvertBatchBudgetLaunchTest extends TestCase
 		chmod($faux, 0755);
 	}
 
-	/** Model a timed-out lookup without depending on timeout(1)'s scheduler. */
-	private function writeTimeoutThatExpires(): void
-	{
-		$faux = "{$this->tmp}/timeout";
-		file_put_contents($faux, "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> \"\${TIMEOUT_ARGS}\"\nexit 124\n");
-		chmod($faux, 0755);
-	}
-
 	/** Completed lookups execute directly under the controlled clock. */
 	private function writeTimeoutPassthrough(): void
 	{
@@ -160,42 +150,6 @@ final class WhoisconvertBatchBudgetLaunchTest extends TestCase
 	private function log(): string
 	{
 		return (string) @file_get_contents("{$this->tmp}/pfblockerng.log");
-	}
-
-	/** A clipped lookup failure must restore the previous feed data. */
-	public function test_pfblockerng_inc_whois_site_launches_the_bounded_batch(): void
-	{
-		$GLOBALS['pfb']['log']    = "{$this->tmp}/pfblockerng.log";
-		$GLOBALS['pfb']['errlog'] = "{$this->tmp}/error.log";
-		$GLOBALS['pfb']['script'] = $this->writeShim();
-		$this->writeHost();
-		$this->writeDate(1000);
-		$this->writeTimeoutThatExpires();
-		$this->exportSeams('2');
-		// A prior .orig proves the timed-out single-entry launch follows the
-		// existing #2015 failure/restore path.
-		file_put_contents("{$this->tmp}/orig/SiteOne.orig", "198.51.100.7\n");
-
-		$request = new PfbDownloadRequest(
-			listUrl: 'd1.example',
-			downloadPath: "{$this->tmp}/d1",
-			flex: FALSE,
-			header: 'SiteOne',
-			format: 'whois',
-			logType: 1,
-			versionType: '_v4',
-		);
-
-		$result = pfb_download_fetch($request);
-
-		$this->assertTrue($result->success, 'the whois branch must treat the bounded batch as the launch outcome');
-		// Clipping is an external-command contract, not a wall-clock verdict.
-		$args = (string) file_get_contents("{$this->tmp}/timeout.args");
-		$this->assertSame(1, preg_match('/ -k 5 2 .* -t A d1\.example/', $args),
-			"the launched lookup must be clipped to the 2s batch budget, got: {$args}");
-		$this->assertFileExists("{$this->tmp}/orig/SiteOne.fail");
-		$this->assertSame("198.51.100.7\n", (string) file_get_contents("{$this->tmp}/orig/SiteOne.orig"),
-			'the timed-out single-entry launch restores the prior data (found stays false)');
 	}
 
 	/** Exhausting the batch budget keeps the completed prefix, never the remainder. */

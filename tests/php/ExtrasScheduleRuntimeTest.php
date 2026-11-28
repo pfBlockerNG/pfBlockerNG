@@ -7,7 +7,6 @@ use PHPUnit\Framework\TestCase;
 /** Issue #2308: Extras share the runtime schedule, but never the feed cron cache. */
 final class ExtrasScheduleRuntimeTest extends TestCase
 {
-	private string $dir = '';
 	private mixed $originalPfb = NULL;
 	private mixed $originalConfig = NULL;
 
@@ -16,24 +15,12 @@ final class ExtrasScheduleRuntimeTest extends TestCase
 		$this->originalPfb = $GLOBALS['pfb'];
 		$this->originalConfig = $GLOBALS['config'] ?? NULL;
 		$GLOBALS['config'] ??= [];
-		$this->dir = sys_get_temp_dir() . '/pfb_extra_schedule_' . getmypid() . '_' . uniqid();
-		mkdir($this->dir, 0777, TRUE);
 	}
 
 	protected function tearDown(): void
 	{
 		$GLOBALS['pfb'] = $this->originalPfb;
 		$GLOBALS['config'] = $this->originalConfig;
-		rmdir_recursive($this->dir);
-	}
-
-	/**
-	 * #2016: the extras runner now spawns through pfb_reentry_exec(), so a row that
-	 * drives it needs a real timeout(1): the bootstrap's, which fails loud when missing.
-	 */
-	private function realTimeout(): string
-	{
-		return $GLOBALS['pfb_test_timeout'];
 	}
 
 	private function general(string $master = ''): array
@@ -81,58 +68,6 @@ final class ExtrasScheduleRuntimeTest extends TestCase
 		$this->assertNotSame($base['config_hash'], $weekly['config_hash']);
 		$this->assertNotSame($base['config_hash'], $disabled['config_hash']);
 		$this->assertStringNotContainsString('secret', $base['config_hash']);
-	}
-
-	public function testExtraRunnerUsesConfiguredPhpSynchronously(): void
-	{
-		$script = $this->dir . '/php';
-		$args = $this->dir . '/args';
-		file_put_contents($script, "#!/bin/sh\n"
-			. "printf '%s\\n' \"\$*\" >> " . escapeshellarg($args) . "\n"
-			. "printf 'child output: %s\\n' \"\$*\"\n");
-		chmod($script, 0755);
-		$GLOBALS['pfb']['php'] = $script;
-		$GLOBALS['pfb']['extraslog'] = $this->dir . '/extras.log';
-		$GLOBALS['pfb']['timeout'] = $this->realTimeout();
-
-		$this->assertTrue(pfb_schedule_extra_run('dcc'));
-		$this->assertTrue(pfb_schedule_extra_run('bl', 'one,two'));
-		$this->assertSame([
-			'/usr/local/www/pfblockerng/pfblockerng.php dcc scheduled',
-			'/usr/local/www/pfblockerng/pfblockerng.php bl scheduled one,two',
-		], file($args, FILE_IGNORE_NEW_LINES));
-		$this->assertSame([
-			'child output: /usr/local/www/pfblockerng/pfblockerng.php dcc scheduled',
-			'child output: /usr/local/www/pfblockerng/pfblockerng.php bl scheduled one,two',
-		], file($GLOBALS['pfb']['extraslog'], FILE_IGNORE_NEW_LINES));
-	}
-
-	public function testScheduledDccReportsTop1mChangeWithoutTreatingItAsFailure(): void
-	{
-		$script = $this->dir . '/php-changed';
-		file_put_contents($script, "#!/bin/sh\nexit 2\n");
-		chmod($script, 0755);
-		$GLOBALS['pfb']['php'] = $script;
-		$GLOBALS['pfb']['extraslog'] = $this->dir . '/extras.log';
-		$GLOBALS['pfb']['timeout'] = $this->realTimeout();
-		$changed = FALSE;
-
-		$this->assertTrue(pfb_schedule_extra_run('dcc', '', $changed));
-		$this->assertTrue($changed);
-	}
-
-	public function testScheduledDccPreservesTop1mChangeWhenAnotherExtraFails(): void
-	{
-		$script = $this->dir . '/php-failed-changed';
-		file_put_contents($script, "#!/bin/sh\nexit 3\n");
-		chmod($script, 0755);
-		$GLOBALS['pfb']['php'] = $script;
-		$GLOBALS['pfb']['extraslog'] = $this->dir . '/extras.log';
-		$GLOBALS['pfb']['timeout'] = $this->realTimeout();
-		$changed = FALSE;
-
-		$this->assertFalse(pfb_schedule_extra_run('dcc', '', $changed));
-		$this->assertTrue($changed, 'TOP1M change must survive an unrelated DCC failure');
 	}
 
 	public function testMalformedBlacklistIdentitySuppressesRuntimeInsteadOfThrowing(): void

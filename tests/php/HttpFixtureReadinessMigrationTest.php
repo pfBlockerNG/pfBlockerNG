@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /** Issue #2904: every php -S fixture proves its own nonce event before use. */
@@ -35,64 +34,6 @@ final class HttpFixtureReadinessMigrationTest extends TestCase
 			}
 			rmdir($this->workdir);
 		}
-	}
-
-	/** @return array<string,array{class-string,file-string,string,3?:string}> */
-	public static function rawReadinessSites(): array
-	{
-		return [
-			'redirect credential servers' => [DownloadRedirectCredentialScopeTest::class, __DIR__ . '/DownloadRedirectCredentialScopeTest.php', 'startOneServer', 'startServers'],
-			'extracted payload archive' => [DownloadExtractedPayloadSanityTest::class, __DIR__ . '/DownloadExtractedPayloadSanityTest.php', 'downloadArchive'],
-			'retry body reset origin' => [DownloadRetryBodyResetTest::class, __DIR__ . '/DownloadRetryBodyResetTest.php', 'startFlakyServer'],
-			'cURL incomplete origin' => [DownloadCurlIncompleteTest::class, __DIR__ . '/DownloadCurlIncompleteTest.php', 'startServer'],
-			'download size refusal origin' => [DownloadSizeRefusalTest::class, __DIR__ . '/DownloadSizeRefusalTest.php', 'startServer'],
-			'GeoIP ZIP publication' => [GeoipZipPublicationTest::class, __DIR__ . '/GeoipZipPublicationTest.php', 'downloadGeoip'],
-			'TOP1M change-detect probe' => [Top1mDccDetectorTest::class, __DIR__ . '/Top1mDccDetectorTest.php', 'testChangeDetectUsesActualHttpProbeBodyAndMetadata'],
-			'TOP1M DCC download' => [Top1mDccDetectorTest::class, __DIR__ . '/Top1mDccDetectorTest.php', 'downloadTop1m'],
-			'TOP1M semantic validation' => [Top1mDownloadSemanticValidationTest::class, __DIR__ . '/Top1mDownloadSemanticValidationTest.php', 'downloadBody'],
-			'TOP1M provider matrix' => [Top1mSemanticMatrixTest::class, __DIR__ . '/Top1mSemanticMatrixTest.php', 'downloadSource'],
-		];
-	}
-
-	#[DataProvider('rawReadinessSites')]
-	public function testFixtureSiteRequiresOwnedNonceEventAndBindDiagnostics(
-		string $class,
-		string $file,
-		string $method,
-		?string $routerMethod = NULL
-	): void {
-		require_once $file;
-		$reflection = new ReflectionMethod($class, $method);
-		$lines = file($file);
-		$this->assertIsArray($lines);
-		$source = implode('', array_slice(
-			$lines,
-			$reflection->getStartLine() - 1,
-			$reflection->getEndLine() - $reflection->getStartLine() + 1
-		));
-		if ($routerMethod !== NULL) {
-			$routerReflection = new ReflectionMethod($class, $routerMethod);
-			$source .= implode('', array_slice(
-				$lines,
-				$routerReflection->getStartLine() - 1,
-				$routerReflection->getEndLine() - $routerReflection->getStartLine() + 1
-			));
-		}
-
-		$this->assertStringNotContainsString(
-			'fsockopen(',
-			$source,
-			"{$file}::{$method} must not accept raw connectivity as fixture readiness"
-		);
-		$this->assertStringContainsString(
-			'pfb_test_http_fixture_event_received(',
-			$source,
-			"{$file}::{$method} must wait for its router's exact nonce event"
-		);
-		$this->assertStringContainsString('READY_TOKEN', $source);
-		$this->assertStringContainsString('/__pfb_ready/', $source);
-		$this->assertStringContainsString('proc_get_status(', $source);
-		$this->assertStringContainsString('stderr=', $source);
 	}
 
 	public function testReachableForeignListenerCannotSatisfyNonceReadiness(): void

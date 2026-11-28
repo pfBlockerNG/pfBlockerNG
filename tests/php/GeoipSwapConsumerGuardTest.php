@@ -46,24 +46,6 @@ final class GeoipSwapConsumerGuardTest extends TestCase
 		$this->assertStringContainsString('pfb_geoip_generation_read_unlock($geoip_lock);', $inc);
 	}
 
-	public function testCountryPublicationHoldsExclusiveLockUntilSentinelRemoval(): void
-	{
-		$source = php_strip_whitespace(
-			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php'
-		);
-		$lock = strpos($source, '$publication_lock = pfb_geoip_generation_publication_lock($live_ccdir);');
-		$sentinel = strpos($source, 'file_put_contents($swap_sentinel, $generation, LOCK_EX)');
-		$remove = strrpos($source, 'unlink_if_exists($swap_sentinel);');
-		$unlock = strrpos($source, 'pfb_geoip_generation_publication_unlock($publication_lock);');
-		$this->assertIsInt($lock);
-		$this->assertIsInt($sentinel);
-		$this->assertIsInt($remove);
-		$this->assertIsInt($unlock);
-		$this->assertLessThan($sentinel, $lock);
-		$this->assertLessThan($remove, $sentinel);
-		$this->assertLessThan($unlock, $remove);
-	}
-
 	public function testDirectReaderBlocksAnExclusiveSwapForTheWholeLookup(): void
 	{
 		unlink($this->dir . '/.pfb_generation_swapping');

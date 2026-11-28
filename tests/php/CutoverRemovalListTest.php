@@ -19,6 +19,8 @@ final class CutoverRemovalListTest extends TestCase
 	{
 		return array_map(static fn (string $name): array => [$name], array_combine($names = [
 			'pfblockerng_sync_cron', 'pfb_update_check', 'sync_package_pfblockerng',
+			'pfb_top1m_dispatch_if_changed', 'pfblockerng_download_extras', 'pfblockerng_uc_countries',
+			'pfb_schedule_extra_run', 'pfb_feed_normalize',
 		], $names));
 	}
 
@@ -27,6 +29,7 @@ final class CutoverRemovalListTest extends TestCase
 	{
 		return array_map(static fn (string $path): array => [$path], array_combine($paths = [
 			'usr/local/pkg/pfblockerng/pfblockerng_cron.inc',
+			'usr/local/pkg/pfblockerng/pfb_feed_normalize.py',
 		], $paths));
 	}
 
@@ -52,5 +55,15 @@ final class CutoverRemovalListTest extends TestCase
 		$loads = array_filter(self::mentions(basename($path)), static fn (string $line): bool =>
 			preg_match('/\b(require|include)(_once)?\b/', $line) === 1);
 		$this->assertSame([], array_values($loads));
+	}
+
+	/** The Extras verbs are gone: the Core Updater fetches and converts every Extra in its Updates (#3977). */
+	public function testTheExtrasVerbsAreGoneFromTheCli(): void
+	{
+		$page = php_strip_whitespace(self::SRC . '/usr/local/www/pfblockerng/pfblockerng.php');
+		foreach (['dc', 'dcc', 'bu', 'uc', 'gc', 'al', 'asn', 'asn_shell', 'bl', 'bls', 'ugc'] as $verb) {
+			$this->assertStringNotContainsString("case '{$verb}':", $page, $verb);
+			$this->assertStringNotContainsString("'{$verb}',", $page, "{$verb} in the verb list");
+		}
 	}
 }

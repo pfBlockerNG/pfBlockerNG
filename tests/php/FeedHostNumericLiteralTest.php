@@ -7,7 +7,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * pfb_feed_host_allowed() / pfb_feed_redirect_target(): a numeric host that is not a canonical
+ * pfb_feed_host_allowed(): a numeric host that is not a canonical
  * dotted quad ('2130706433', '0x7f000001', '127.1', '0177.0.0.1') is rejected before any DNS
  * lookup.
  *
@@ -18,7 +18,6 @@ use PHPUnit\Framework\TestCase;
  * still resolves the name passes the host; only a reject that runs first gives the new reason.
  */
 #[CoversFunction('pfb_feed_host_allowed')]
-#[CoversFunction('pfb_feed_redirect_target')]
 final class FeedHostNumericLiteralTest extends TestCase
 {
 	private const REASON = 'feed host is a non-canonical IP literal';
@@ -91,15 +90,6 @@ final class FeedHostNumericLiteralTest extends TestCase
 		$pinned = '';
 		$allowed = pfb_feed_host_allowed('167772161', $reason, $pinned);
 		$this->assertSame([FALSE, self::REASON, ''], [$allowed, $reason, $pinned]);
-	}
-
-	public function testRedirectToNumericHostIsRejected(): void
-	{
-		$this->answer('0x7f000001', self::PUBLIC_ANSWER);
-		$reason = '';
-		$pinned = '';
-		$target = pfb_feed_redirect_target('http://0x7f000001:8443/', 'https://feeds.example.com/list.txt', $reason, $pinned);
-		$this->assertSame([FALSE, self::REASON, ''], [$target, $reason, $pinned]);
 	}
 
 	/** @return array<string, array{string, string}> */

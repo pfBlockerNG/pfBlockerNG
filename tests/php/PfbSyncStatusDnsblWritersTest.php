@@ -18,19 +18,14 @@ require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
  * the three restart-fallback branches never call a ledger function directly
  * is a SEPARATE, source-inspection-only invariant (the tail's write is
  * deterministic/idempotent-by-key, so no end-state assertion can prove it) --
- * see testRestartFallbackBranchesNeverCallLedgerFunctionsDirectly. The
- * feed-download pair (pfb_dnsbl_download_ledger_update()) mirrors the IP
- * side's PfbSyncStatusIpWritersTest Pair 1.
+ * see testRestartFallbackBranchesNeverCallLedgerFunctionsDirectly.
  *
  * Functions under test:
  *   pfb_dnsbl_apply_ledger_update(): void
  *   pfb_reload_unbound(...) -- the zero-downtime swap + restart-fallback paths.
- *   pfb_dnsbl_download_ledger_update(bool $download_ok, string $item, string $message,
- *                                      string $ledger_dir): void
  */
 #[CoversFunction('pfb_dnsbl_apply_ledger_update')]
 #[CoversFunction('pfb_reload_unbound')]
-#[CoversFunction('pfb_dnsbl_download_ledger_update')]
 final class PfbSyncStatusDnsblWritersTest extends TestCase
 {
 	use DnsProxyReadySeedTrait;
@@ -202,45 +197,6 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 
 		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
 		$this->assertCount(1, $open, 'two consecutive non-converged reads must refresh, never duplicate');
-	}
-
-	// -----------------------------------------------------------------------
-	// pfb_dnsbl_download_ledger_update() -- feed download fail/success (#998)
-	// -----------------------------------------------------------------------
-
-	public function testDnsblDownloadFailureOpensEntry(): void
-	{
-		pfb_dnsbl_download_ledger_update(FALSE, 'DNSBL_Example', '[ DNSBL_Example - Example ] Download FAIL', $this->dir);
-
-		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
-		$this->assertCount(1, $open, 'a DNSBL download failure must open exactly one entry');
-		$this->assertSame('dnsbl', $open[0]['facility']);
-		$this->assertSame('DNSBL_Example', $open[0]['item']);
-		$this->assertSame('download', $open[0]['stage']);
-		$this->assertStringContainsString('Download FAIL', $open[0]['message']);
-	}
-
-	public function testDnsblDownloadSuccessClosesEntry(): void
-	{
-		pfb_dnsbl_download_ledger_update(FALSE, 'DNSBL_Example', 'Download FAIL', $this->dir);
-		// Before-state: the entry is genuinely open first, so the success close
-		// below is a real transition, not a no-op that happens to leave zero entries.
-		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'));
-
-		pfb_dnsbl_download_ledger_update(TRUE, 'DNSBL_Example', '', $this->dir);
-
-		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
-			'a paired download success must close the SAME key');
-	}
-
-	public function testDnsblDownloadFailureTwiceRefreshesWithoutDuplicating(): void
-	{
-		pfb_dnsbl_download_ledger_update(FALSE, 'DNSBL_Example', 'HTTP 404', $this->dir);
-		pfb_dnsbl_download_ledger_update(FALSE, 'DNSBL_Example', 'HTTP 500', $this->dir);
-
-		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
-		$this->assertCount(1, $open, 'two consecutive failures on the SAME item must refresh, never duplicate');
-		$this->assertSame('HTTP 500', $open[0]['message'], 'message must be the LATEST refresh');
 	}
 
 	// -----------------------------------------------------------------------

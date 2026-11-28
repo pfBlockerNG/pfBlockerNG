@@ -651,7 +651,6 @@ def test_default_smoke_skips_are_allowlisted(tmp_path: Path, capsys: pytest.Capt
     testcases = "".join(
         f'<testcase classname="{classname}" name="{name}"><skipped message="expected"/></testcase>'
         for classname, name in (
-            ("tests.smoke.test_smoke_714_asn_geoip", "test_714_c1_asn_table_logs_not_stray_file"),
             ("tests.smoke.test_smoke_714_asn_geoip", "test_714_c8_geoip_single_ip_preserved"),
             ("tests.smoke.test_smoke_boot", "test_control_name_resolves"),
             ("tests.smoke.test_smoke_helpers", "test_reset_returns_to_baseline"),
