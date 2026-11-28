@@ -362,7 +362,9 @@ def _check_crowdsec_module(crowdsec: Path, *, vendored: bool) -> dict[str, str]:
     return dict(requires)
 
 
-def _vendor_crowdsec(go: str, crowdsec: Path, requires: dict[str, str], scratch: Path, *, vendored: bool) -> Path:
+def _vendor_crowdsec(
+    go: str, crowdsec: Path, core: Path, requires: dict[str, str], scratch: Path, *, vendored: bool
+) -> Path:
     """A scratch copy of ``crowdsec`` with its CROWDSEC_OWN_MODULES vendored as `go mod vendor` would write them."""
     copy = scratch / CROWDSEC_MODULE.name
     shutil.copytree(crowdsec, copy, ignore=lambda src, names: ["vendor"] if src == os.fspath(crowdsec) else [])
@@ -370,7 +372,9 @@ def _vendor_crowdsec(go: str, crowdsec: Path, requires: dict[str, str], scratch:
     vendor.mkdir(parents=True, exist_ok=True)
     kept: dict[str, list[str]] = {}
     for module in sorted(requires):
-        kept[module] = _vendor_own(go, crowdsec, copy, module, requires[module], vendored=vendored)
+        # In --vendored ports builds, shared own-modules (e.g. bart) are unpacked once under go/pfb_core/vendor/.
+        src = crowdsec if (not vendored or (crowdsec / "vendor" / module).is_dir()) else core
+        kept[module] = _vendor_own(go, src, copy, module, requires[module], vendored=vendored)
     (vendor / "modules.txt").write_text(
         "".join(f"{line}\n" for module in sorted(kept) for line in kept[module]), encoding="utf-8"
     )
@@ -541,7 +545,7 @@ def build_pfb_dns(
             _vendor_core(go, core, core_modules, tree / "vendor", scratch, vendored=vendored) if core_modules else core
         )
         crowdsec_tree = (
-            _vendor_crowdsec(go, crowdsec, crowdsec_modules, scratch, vendored=vendored)
+            _vendor_crowdsec(go, crowdsec, core, crowdsec_modules, scratch, vendored=vendored)
             if crowdsec_modules
             else crowdsec
         )
