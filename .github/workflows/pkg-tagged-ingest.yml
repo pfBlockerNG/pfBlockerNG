@@ -162,9 +162,11 @@ jobs:
       smoke_repo_expected_source_sha: ${{ inputs.source_sha }}
       smoke_repo_expected_version: ${{ inputs.portversion }}
       smoke_repo_expected_channel: ${{ inputs.channel }}
-      # Build and test the release's own source with its own recipe, never devel's (issue #4315).
+      # Build the release's own source with its own recipe, never devel's (issue #4315); the
+      # harness runs from this workflow's ref, which release lines (release/3.3) may not carry.
       channel: ${{ inputs.channel }}
-      checkout_ref: ${{ inputs.source_sha }}
+      build_ref: ${{ inputs.source_sha }}
+      checkout_ref: ${{ github.workflow_sha }}
     secrets: inherit
 
   finalize-pkg:

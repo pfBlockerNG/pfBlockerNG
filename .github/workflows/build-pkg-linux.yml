@@ -109,7 +109,7 @@ on:
         type: string
         default: ""
       checkout_ref:
-        description: "Git ref to package (issue #4315). Blank (default) = actions/checkout's default, the caller's own ref."
+        description: "Git ref whose src/ is packaged (issue #4315). The build tooling (scripts, uv.lock) always comes from the workflow's own ref. Blank (default) = package the caller's own ref."
         required: false
         type: string
         default: ""
@@ -148,11 +148,20 @@ jobs:
 
     steps:
       - name: Checkout the branch under test
-        # This checkout IS --local-src: the builder packages this exact tree
+        # Without checkout_ref this checkout IS --local-src: the builder packages this exact tree
         # (the way the FreeBSD path pins the port's USE_GITHUB fetch to the SHA).
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
+
+      - name: Checkout the caller-named package source
+        # issue #4315: a release line's tree may lack this ref's tooling (release/3.3 has no uv.lock),
+        # so only its source is taken from checkout_ref; it becomes --local-src.
+        if: inputs.checkout_ref != ''
+        uses: actions/checkout@v7
+        with:
           ref: ${{ inputs.checkout_ref }}
+          path: pkg-src
           persist-credentials: false
 
       # Restore and save as separate steps: a caller-named checkout_ref run must not write the
@@ -204,6 +213,7 @@ jobs:
           PHP_VERSION:  ${{ inputs.php_version }}
           EXTRA_PKGS:   ${{ inputs.extra_pkgs }}
           DEP_ARTIFACT_NAME: ${{ inputs.dep_artifact_name }}
+          LOCAL_SRC:    ${{ inputs.checkout_ref != '' && 'pkg-src' || '.' }}
         run: |
           set -eu
           # Run-body export, not an env: map value (issue #2231).
@@ -225,7 +235,8 @@ jobs:
             --channel    "$CHANNEL" \
             --abi        "$ABI" \
             --py-flavor  "$PY_FLAVOR" \
-            --php        "$PHP_VERSION")"
+            --php        "$PHP_VERSION" \
+            --local-src  "$LOCAL_SRC")"
           {
             echo "ports_dir=${PFB_RUN_ROOT}/${RUN_ID}/ports"
             # build-leg.sh defaults the recipe variant to CE; expose that resolved
@@ -253,7 +264,7 @@ jobs:
           if [ "$ORIGIN_COUNT" -gt 0 ]; then
             PORTS_DIR="${PFB_RUN_ROOT}/${RUN_ID}/ports"
             PORTS_SHA="$(git -C "$PORTS_DIR" rev-parse HEAD)"
-            SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+            SOURCE_DATE_EPOCH="$(git -C "$LOCAL_SRC" show -s --format=%ct HEAD)"
             mkdir -p "$DEP_PKG_DIR"
             I=0
             while [ "$I" -lt "$ORIGIN_COUNT" ]; do
@@ -288,6 +299,9 @@ jobs:
           echo "dep_artifact_name=${DEP_ARTIFACT_NAME:-pfBlockerNG-deppkgs-fbsd${FREEBSD_MAJOR}}" >> "$GITHUB_OUTPUT"
 
       - name: Verify direct portable-builder parity
+        # The spec rebuilds this workflow's own tree, which pairs only with its own channel; a
+        # caller-named source (another release line, issue #4315) is not what it checks.
+        if: inputs.checkout_ref == ''
         # The selected file is deliberately outside the default *_spec.sh glob;
         # --fail-no-examples makes a typo in either path or tag fail this build.
         env:

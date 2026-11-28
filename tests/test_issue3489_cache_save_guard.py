@@ -33,7 +33,7 @@ def _steps(workflow: str, job: str, uses_prefix: str) -> list[dict[str, Any]]:
     workflow_doc = yaml.safe_load((WORKFLOWS / workflow).read_text(encoding="utf-8"))
     steps: list[dict[str, Any]] = workflow_doc["jobs"][job]["steps"]
     checkouts = [s.get("with", {}).get("ref") for s in steps if str(s.get("uses", "")).startswith("actions/checkout@")]
-    assert checkouts == ["${{ inputs.checkout_ref }}"], f"{workflow}:{job} checkout refs: {checkouts}"
+    assert "${{ inputs.checkout_ref }}" in checkouts, f"{workflow}:{job} checkout refs: {checkouts}"
     return [s for s in steps if str(s.get("uses", "")).startswith(uses_prefix)]
 
 
