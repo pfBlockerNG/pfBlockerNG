@@ -85,11 +85,12 @@ CORE_MODULES = (
     "github.com/oschwald/maxminddb-golang/v2",
     "github.com/zeebo/xxh3",
 )
-# Modules Core vendors itself, at any version, because the gateway does not carry them: go4.org/netipx (issue #4033).
-CORE_OWN_MODULES = ("go4.org/netipx",)
-# The CrowdSec bouncer (issue #4069): standard library only, so it is built in place with nothing to vendor.
+# Modules Core vendors itself (not in the gateway): go4.org/netipx (#4033) and github.com/gaissmai/bart (#4309).
+CORE_OWN_MODULES = ("go4.org/netipx", "github.com/gaissmai/bart")
+# The CrowdSec bouncer (#4069): allowed own modules (bart for SPOA LPM, #4309); empty go.mod builds in place.
 CROWDSEC_MODULE = Path("go") / "pfb_crowdsec"
 CROWDSEC_BINARY = "pfb_crowdsec"
+CROWDSEC_OWN_MODULES = ("github.com/gaissmai/bart",)
 # The files Go copies from a module's root into vendor/ beside its packages.
 _LICENSE_PREFIXES = (
     "AUTHORS",
@@ -333,14 +334,47 @@ def _check_core_module(core: Path, gateway: Path, *, vendored: bool) -> dict[str
     return dict(requires)
 
 
-def _check_crowdsec_module(crowdsec: Path) -> None:
-    """The bouncer's module must stay standard library only: no require, no replace, no vendor/."""
-    if (crowdsec / "vendor").exists():
-        raise BuildError(f"{CROWDSEC_MODULE}/vendor/ is refused: the module is standard library only")
+def _check_crowdsec_module(crowdsec: Path, *, vendored: bool) -> dict[str, str]:
+    """The (module, version) pfb_crowdsec requires, once each is in CROWDSEC_OWN_MODULES and no replace is present."""
+    vendor = crowdsec / "vendor"
+    if vendor.exists():
+        if not vendored:
+            raise BuildError(f"{CROWDSEC_MODULE}/vendor/ is refused without --vendored")
+        own = [Path(m) for m in CROWDSEC_OWN_MODULES]
+        extra = [
+            p.relative_to(vendor).as_posix()
+            for p in sorted(vendor.rglob("*"))
+            if not any(p.relative_to(vendor).is_relative_to(m) or m.is_relative_to(p.relative_to(vendor)) for m in own)
+        ]
+        if extra:
+            raise BuildError(
+                f"{CROWDSEC_MODULE}/vendor/ may hold only the directories of {', '.join(CROWDSEC_OWN_MODULES)}: "
+                f"found {', '.join(extra[:5])}"
+            )
     requires, replaced = _parse_go_mod(crowdsec / "go.mod")
-    if requires or replaced:
-        shown = ", ".join(module for module, _version in requires) or "a replace"
-        raise BuildError(f"{CROWDSEC_MODULE}/go.mod names {shown}: the module is standard library only")
+    if replaced:
+        raise BuildError(f"{CROWDSEC_MODULE}/go.mod carries a replace directive")
+    for module, _version in requires:
+        if module not in CROWDSEC_OWN_MODULES:
+            raise BuildError(
+                f"{CROWDSEC_MODULE}/go.mod requires {module}; allowed: {', '.join(CROWDSEC_OWN_MODULES) or 'none'}"
+            )
+    return dict(requires)
+
+
+def _vendor_crowdsec(go: str, crowdsec: Path, requires: dict[str, str], scratch: Path, *, vendored: bool) -> Path:
+    """A scratch copy of ``crowdsec`` with its CROWDSEC_OWN_MODULES vendored as `go mod vendor` would write them."""
+    copy = scratch / CROWDSEC_MODULE.name
+    shutil.copytree(crowdsec, copy, ignore=lambda src, names: ["vendor"] if src == os.fspath(crowdsec) else [])
+    vendor = copy / "vendor"
+    vendor.mkdir(parents=True, exist_ok=True)
+    kept: dict[str, list[str]] = {}
+    for module in sorted(requires):
+        kept[module] = _vendor_own(go, crowdsec, copy, module, requires[module], vendored=vendored)
+    (vendor / "modules.txt").write_text(
+        "".join(f"{line}\n" for module in sorted(kept) for line in kept[module]), encoding="utf-8"
+    )
+    return copy
 
 
 def _copy_files(src: Path, dst: Path, wanted: Callable[[str], bool] = lambda _name: True) -> None:
@@ -378,12 +412,28 @@ def _vendor_own(go: str, core: Path, copy: Path, module: str, version: str, *, v
     directive = re.search(r"^go (\S+)$", text, re.MULTILINE)
     if not directive:
         raise BuildError(f"{go_mod} has no go directive")
-    # shortcut: a root .go file tagged `//go:build ignore` is copied (Go's vendor drops it), upgrade if one appears
-    # shortcut: only the module's root package is vendored (all Core imports today); a subpackage import fails go build
-    _copy_files(
-        tree, copy / "vendor" / module, lambda name: not name.endswith("_test.go") and name not in ("go.mod", "go.sum")
-    )
-    return [f"# {module} {version}", f"## explicit; go {directive.group(1)}", module]
+    # Vendor root + internal/ subpackages (skipping internal/tests and hidden dirs, matching `go mod vendor`).
+    packages: list[str] = []
+    for root_str, dirs, files in os.walk(tree):
+        root_p = Path(root_str)
+        rel = root_p.relative_to(tree)
+        if rel == Path("."):
+            dirs[:] = [d for d in sorted(dirs) if d == "internal"]
+        else:
+            dirs[:] = sorted(
+                d
+                for d in dirs
+                if not d.startswith(".") and d != "testdata" and not (rel == Path("internal") and d == "tests")
+            )
+        dst_dir = copy / "vendor" / module / rel
+        has_go = any(f.endswith(".go") and not f.endswith("_test.go") for f in files)
+        if rel == Path(".") or has_go:
+            _copy_files(
+                root_p, dst_dir, lambda name: not name.endswith("_test.go") and name not in ("go.mod", "go.sum")
+            )
+        if has_go:
+            packages.append(module if rel == Path(".") else f"{module}/{rel.as_posix()}")
+    return [f"# {module} {version}", f"## explicit; go {directive.group(1)}", *sorted(packages)]
 
 
 def _vendor_core(
@@ -475,8 +525,7 @@ def build_pfb_dns(
         if present and out_dir.is_relative_to(built.resolve()):
             raise BuildError(f"--out-dir {out_dir} is inside the module being built")
     core_modules = _check_core_module(core, module, vendored=vendored) if has_core else {}
-    if has_crowdsec:
-        _check_crowdsec_module(crowdsec)
+    crowdsec_modules = _check_crowdsec_module(crowdsec, vendored=vendored) if has_crowdsec else {}
     stamp = int((module / "go.mod").stat().st_mtime)
     core_stamp = int((core / "go.mod").stat().st_mtime) if has_core else 0
     crowdsec_stamp = int((crowdsec / "go.mod").stat().st_mtime) if has_crowdsec else 0
@@ -491,13 +540,18 @@ def build_pfb_dns(
         core_tree = (
             _vendor_core(go, core, core_modules, tree / "vendor", scratch, vendored=vendored) if core_modules else core
         )
+        crowdsec_tree = (
+            _vendor_crowdsec(go, crowdsec, crowdsec_modules, scratch, vendored=vendored)
+            if crowdsec_modules
+            else crowdsec
+        )
         version = _run_go(go, ["env", "GOVERSION"], tree, "amd64", "reading the Go version")
         for target, (goarch, machine) in TARGETS.items():
             builds = [(tree, BINARY, stamp, targets)]
             if has_core:
                 builds.append((core_tree, CORE_BINARY, core_stamp, core_targets))
             if has_crowdsec:
-                builds.append((crowdsec, CROWDSEC_BINARY, crowdsec_stamp, crowdsec_targets))
+                builds.append((crowdsec_tree, CROWDSEC_BINARY, crowdsec_stamp, crowdsec_targets))
             for built, binary, mtime, record in builds:
                 record[target] = _build_one(
                     go, built, out_dir / target / binary, target, goarch, machine, freebsd_major, mtime

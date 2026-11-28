@@ -1140,7 +1140,7 @@ _CORE_VENDOR_PREFIX = "../go/pfb_core/vendor/"
 # Core's vendor/ is cut from the gateway's). Widening is an owner call, like the GL_TUPLE allow-list below. The
 # pfBlockerNG xxh3 fork (#3925) left this list when upstream github.com/zeebo/xxh3 replaced it (owner decision
 # 2026-11-24, #4036): Core takes that from the gateway's vendor/.
-_CORE_OWN_MODULES = frozenset({"go4.org/netipx"})
+_CORE_OWN_MODULES = frozenset({"go4.org/netipx", "github.com/gaissmai/bart"})
 # Go's three pseudo-version forms: vX.0.0-<ts>-<rev>, vX.Y.Z-0.<ts>-<rev>, vX.Y.Z-pre.0.<ts>-<rev> (any rev).
 _PSEUDO_VERSION = re.compile(r"^v\d+\.(?:0\.0-|\d+\.\d+-(?:[^+]*\.)?0\.)\d{14}-[0-9A-Za-z]+(?:\+.*)?$")
 # Owner decision (#3511/#3779): the only modules GL_TUPLE may supply (their `go-import` is gitlab.com/cznic/<project>)

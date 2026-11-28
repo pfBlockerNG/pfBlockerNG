@@ -281,6 +281,13 @@ def vendored_gateway(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, by
     shutil.copytree(ROOT / "go", root / "go")
     if REAL_NETIPX_VERSION:
         copy_writable(downloaded_module(NETIPX, REAL_NETIPX_VERSION), root / "go" / "pfb_core" / "vendor" / NETIPX)
+    bart_m = re.search(
+        r"^\s*github\.com/gaissmai/bart\s+(\S+)", (ROOT / "go" / "pfb_core" / "go.mod").read_text(), re.MULTILINE
+    )
+    if bart_m:
+        bart_tree = downloaded_module("github.com/gaissmai/bart", bart_m.group(1))
+        copy_writable(bart_tree, root / "go" / "pfb_core" / "vendor" / "github.com/gaissmai/bart")
+        copy_writable(bart_tree, root / "go" / "pfb_crowdsec" / "vendor" / "github.com/gaissmai/bart")
     module = root / "go" / "pfb_dns_gateway"
     vendor = subprocess.run(
         ["go", "mod", "vendor"], cwd=module, capture_output=True, text=True, check=False, timeout=WATCHDOG_SECONDS
@@ -1417,7 +1424,7 @@ def test_a_download_that_go_sum_does_not_pin_is_refused_and_go_sum_is_not_repair
     assert (root / "go" / "pfb_core" / "go.sum").read_text(encoding="utf-8") == sums
 
 
-OWN_ONLY = f"vendor/ may hold only the directories of {NETIPX}: "
+OWN_ONLY = f"vendor/ may hold only the directories of {NETIPX}, github.com/gaissmai/bart: "
 # (the mode, a file Core's vendor/ holds, what the error must say)
 STRAY_VENDOR_ENTRIES = {
     "builder-refuses-even-the-own-module": ("builder", f"{NETIPX}/ipset.go", ["vendor/"]),
@@ -1425,8 +1432,8 @@ STRAY_VENDOR_ENTRIES = {
     "another-module": ("vendored", f"{X_NET}/idna/idna.go", ["golang.org"]),
     "file-beside-the-own-module": ("vendored", "go4.org/stray.txt", ["go4.org/stray.txt"]),
     # xxh3 is the gateway's (#4036): neither upstream nor the retired fork may sit in Core's own vendor/
-    "upstream-xxh3": ("vendored", f"{XXH3}/xxh3.go", [OWN_ONLY + "github.com"]),
-    "retired-xxh3-fork": ("vendored", f"{XXH3_FORK}/xxh3.go", [OWN_ONLY + "github.com"]),
+    "upstream-xxh3": ("vendored", f"{XXH3}/xxh3.go", [OWN_ONLY + "github.com/zeebo"]),
+    "retired-xxh3-fork": ("vendored", f"{XXH3_FORK}/xxh3.go", [OWN_ONLY + "github.com/pfBlockerNG"]),
 }
 
 
@@ -1471,8 +1478,12 @@ def test_real_crowdsec_cross_builds_a_dependency_free_freebsd_elf_for_each_archi
         assert os.access(binary, os.X_OK), f"{target}/pfb_crowdsec is not executable"
         assert crowdsec[target]["sha256"] == hashlib.sha256(data).hexdigest()
         shown = subprocess.run(["go", "version", "-m", str(binary)], capture_output=True, text=True, check=True)
-        deps = [line for line in shown.stdout.splitlines() if line.strip().startswith(("dep\t", "=>"))]
-        assert deps == [], f"{target}/pfb_crowdsec links dependencies:\n{shown.stdout}"
+        deps = [
+            line.strip()
+            for line in shown.stdout.splitlines()
+            if line.strip().startswith(("dep\t", "=>")) and "github.com/gaissmai/bart" not in line
+        ]
+        assert deps == [], f"{target}/pfb_crowdsec links disallowed dependencies:\n{shown.stdout}"
 
 
 @pytest.mark.parametrize("mode", ["builder", "vendored"])
@@ -1508,7 +1519,9 @@ def test_a_crowdsec_module_with_dependencies_is_refused_and_writes_nothing(
     root = write_tiny_crowdsec(write_tiny_module(tmp_path / "src-tree"), go_mod=go_mod)
     result = run_helper(root, tmp_path / "out", extra=["--vendored"] if mode == "vendored" else [])
     assert result.returncode == 1, f"a pfb_crowdsec go.mod with a {shape} was built"
-    assert "go/pfb_crowdsec" in result.stderr and "standard library" in result.stderr, result.stderr
+    assert "go/pfb_crowdsec" in result.stderr and ("requires" in result.stderr or "replace" in result.stderr), (
+        result.stderr
+    )
     assert list((tmp_path / "out").rglob("pfb*")) == [], "binaries were written for a refused source"
 
 
