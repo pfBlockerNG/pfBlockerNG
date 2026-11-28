@@ -5296,6 +5296,11 @@ function pfb_apply_objects(array $new_aliases, array $new_aliases_list, array $p
 
 		// Call function for Ramdisk processes.
 		pfb_aliastables('update');
+
+		// issue #4309: hot-swap pfb-core's in-memory SPOA radix tree without reloading HAProxy
+		if (PfbConfig::read('ip/spoa_enable') === PfbToggle::On && function_exists('pfb_core_call')) {
+			pfb_core_call('ReloadSPOA', array('requestId' => 'apply-' . bin2hex(random_bytes(8))));
+		}
 	}
 	else {
 		// Don't execute on user 'save'

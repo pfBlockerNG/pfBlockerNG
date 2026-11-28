@@ -99,6 +99,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/hooks"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/spoa"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/scheduler"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
@@ -166,6 +167,23 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		}
 		group, groupSet = int(gid), true
 		return nil
+	})
+	var spoaListen, spoaAliases string
+	fl.Func("spoa-listen", "HAProxy SPOP listen address (127.0.0.1:port, [::1]:port, or unix:/abs/path)", func(v string) error {
+		if v == "" {
+			spoaListen = ""
+			return nil
+		}
+		if _, _, err := spoa.ParseListen(v); err != nil {
+			return err
+		}
+		spoaListen = v
+		return nil
+	})
+	fl.StringVar(&spoaAliases, "spoa-aliases", "", "comma-separated IP aliases exposed via SPOA (empty: all deny aliases)")
+	spoaGroup, spoaGroupSet := 0, false
+	fl.Func("spoa-socket-group", "group id for a Unix SPOA socket", func(v string) error {
+		return parseOptionalGID(v, &spoaGroup, &spoaGroupSet)
 	})
 	if err := fl.Parse(args); err != nil {
 		return 2
@@ -268,8 +286,36 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 			RsyncBin: feed.RsyncBin, HookDir: hookDir, PythonWrapper: pythonWrapper, MainLog: mainLog, DBDir: dbDir, GeoIPDir: geoipDir,
 			CCDir: ccDir, LogDir: logDir, PkgDir: pkgDir, ASNTable: asnTable, Zoneinfo: *zoneinfo, UserAgent: feed.UserAgent}
 	}
-	sched, gate := newUpdates(updateCmd, maintenanceCmd, *zoneinfo, *stateDir, loop, store, lanes, logger.Printf) // nil without --update-cmd
-	methods := coreMethods(*stateDir, store, resourceStore, sched, gate)
+	var spoaEng *spoaEngine
+	var spoaDone chan error
+	if spoaListen != "" {
+		spoaEng = newSPOAEngine(spoaListen, dbDir, store, spoaAliases, logger.Printf)
+		snap := spoaEng.Reload()
+		spoaSrv, err := spoa.Listen(spoa.ServerConfig{
+			Listen:      spoaListen,
+			SocketGroup: spoaGroup,
+			GroupSet:    spoaGroupSet,
+			Logf:        logger.Printf,
+			Handler:     spoaEng.Handle,
+		})
+		if err != nil {
+			logger.Printf("cannot listen for SPOA on %s: %v", spoaListen, err)
+			return 1
+		}
+		spoaEng.srv = spoaSrv
+		spoaDone = make(chan error, 1)
+		go func() { spoaDone <- spoaSrv.Serve(ctx) }()
+		logger.Printf("serving SPOA on %s (%d v4, %d v6 prefixes across %d aliases)", spoaListen, snap.entriesV4, snap.entriesV6, len(snap.aliases))
+	}
+	var onUpdateDone func()
+	if spoaEng != nil {
+		onUpdateDone = func() {
+			s := spoaEng.Reload()
+			logger.Printf("spoa reloaded after update: gen %d (%d v4, %d v6 prefixes)", s.generation, s.entriesV4, s.entriesV6)
+		}
+	}
+	sched, gate := newUpdates(updateCmd, maintenanceCmd, *zoneinfo, *stateDir, loop, store, lanes, logger.Printf, onUpdateDone) // nil without --update-cmd
+	methods := coreMethods(*stateDir, store, resourceStore, sched, gate, spoaEng)
 	srv, err := listen(options{socket: *socket, allowUID: allowUID, clientUIDs: clients, socketGroup: group, groupSet: groupSet,
 		methods: methods, logf: logger.Printf})
 	if err != nil {
@@ -303,20 +349,30 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		logger.Printf("shutdown: %v", err)
 	}
 	<-served
+	if spoaDone != nil {
+		if err := <-spoaDone; err != nil {
+			logger.Printf("spoa stopped: %v", err)
+		}
+	}
 	logger.Printf("stopped")
 	return 0
 }
 
-// coreMethods is every method Core serves, over Core's state directory, its settings, its resource store (nil: none) and
-// its Updates (nil: none).
+// coreMethods is every method Core serves, over Core's state directory, its settings, its resource store (nil: none),
+// its Updates (nil: none), and its optional SPOA engine (nil: disabled).
 func coreMethods(stateDir string, store *settings.Store, resourceStore *resources.Store, sched *scheduler.Scheduler,
-	gate *update.Gate) map[string]method {
+	gate *update.Gate, spoaEng ...*spoaEngine) map[string]method {
+	var eng *spoaEngine
+	if len(spoaEng) > 0 {
+		eng = spoaEng[0]
+	}
 	methods := productionMethods()
 	maps.Copy(methods, settingsMethods(store))
 	maps.Copy(methods, resourceMethods(resourceStore))
 	maps.Copy(methods, updateMethods(stateDir, sched, gate))
 	maps.Copy(methods, appliedMethods(stateDir))
 	maps.Copy(methods, unlockMethods(resourceStore, gate))
+	maps.Copy(methods, spoaMethods(eng))
 	return methods
 }
 

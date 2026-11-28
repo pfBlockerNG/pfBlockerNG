@@ -31,6 +31,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_crowdsec/spoa"
 )
 
 const (
@@ -110,6 +112,28 @@ func serve(cfg *config, out io.Writer, dial func() (*syslog.Writer, error), pfct
 		log.errorf("%v", err)
 		return 1
 	}
+	var spoaDone chan error
+	if d.spoa != nil {
+		scfg := spoa.ServerConfig{
+			Listen:  cfg.SPOAListen,
+			Logf:    log.warnf,
+			Handler: d.spoa.Handle,
+		}
+		if cfg.SPOASocketGroup != nil {
+			scfg.SocketGroup = *cfg.SPOASocketGroup
+			scfg.GroupSet = true
+		}
+		srv, err := spoa.Listen(scfg)
+		if err != nil {
+			log.errorf("spoa listener on %s: %v", cfg.SPOAListen, err)
+			d.shutdown(context.WithoutCancel(ctx))
+			return 1
+		}
+		d.spoaSrv = srv
+		spoaDone = make(chan error, 1)
+		go func() { spoaDone <- srv.Serve(ctx) }()
+		log.infof("SPOA listener serving on %s (appsec=%t)", cfg.SPOAListen, d.spoa.appSec != nil)
+	}
 	ticker := time.NewTicker(cfg.interval)
 	defer ticker.Stop()
 	usage := time.NewTicker(usageInterval)
@@ -117,6 +141,11 @@ func serve(cfg *config, out io.Writer, dial func() (*syslog.Writer, error), pfct
 	status := time.NewTicker(cfg.interval)
 	defer status.Stop()
 	d.run(ctx, ticker.C, usage.C, status.C, usr1, nil)
+	if spoaDone != nil {
+		if err := <-spoaDone; err != nil {
+			log.warnf("SPOA listener exited: %v", err)
+		}
+	}
 	log.infof("stopped")
 	return 0
 }

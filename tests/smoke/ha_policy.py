@@ -279,8 +279,21 @@ UNSEEDED_LOCAL_KEYS = {
     f"{GEN}/pfb_dns_listen_added": "the apply pass's own record of addresses it inserted; a seeded value would make a later disable remove a server the pass did not add",
     **{
         f"{CROWDSEC}/{leaf}": "the CrowdSec bouncer stays off in this harness, so its node-local settings change nothing; "
-        "tests/php/CrowdsecSyncTest.php pins that they never travel (#4071)"
-        for leaf in ("api_key", "log_level", "rules_all_interfaces", "rules_interfaces")
+        "tests/php/CrowdsecSyncTest.php pins that they never travel (#4071, #4309)"
+        for leaf in (
+            "api_key",
+            "log_level",
+            "rules_all_interfaces",
+            "rules_interfaces",
+            "spoa_enable",
+            "spoa_listen",
+            "appsec_timeout",
+        )
+    },
+    **{
+        f"{IP}/{leaf}": "the pfb-core HAProxy SPOA listener stays off in this harness; "
+        "tests/php/SyncPolicyOwnershipTest.php pins that its node-local toggle and listen address never travel (#4309)"
+        for leaf in ("spoa_enable", "spoa_listen")
     },
 }
 

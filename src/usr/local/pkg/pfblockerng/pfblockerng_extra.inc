@@ -2561,6 +2561,63 @@ function pfb_cfg_registry(): array
 			'sync'          => 'policy',
 			'no_grandfather' => 'new key; absent reads On = the IPv6 rules are generated while the bouncer runs',
 		],
+		// issue #4309: local HAProxy SPOP (SPOA) listeners for pfb-core IP lists and pfb_crowdsec decisions
+		'ip/spoa_enable' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads Off = no pfb-core SPOA listener',
+		],
+		'ip/spoa_listen' => [
+			'default'       => '127.0.0.1:10090',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads 127.0.0.1:10090 default loopback listen address',
+		],
+		'ip/spoa_aliases' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'policy',
+			'no_grandfather' => 'new key; absent reads \'\' = all active Deny aliases',
+		],
+		'crowdsec/spoa_enable' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads Off = no pfb_crowdsec SPOA listener',
+		],
+		'crowdsec/spoa_listen' => [
+			'default'       => '127.0.0.1:10091',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads 127.0.0.1:10091 default loopback listen address',
+		],
+		'crowdsec/appsec_url' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'policy',
+			'no_grandfather' => 'new key; absent reads \'\' = AppSec passthrough disabled',
+		],
+		'crowdsec/appsec_timeout' => [
+			'default'       => '500ms',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads 500ms default AppSec HTTP timeout',
+		],
+		'crowdsec/appsec_failure_action' => [
+			'default'       => 'passthrough',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'policy',
+			'no_grandfather' => 'new key; absent reads passthrough (fail-open on AppSec outage)',
+		],
 	];
 
 	foreach ([...PFB_DNS_POLICY_FIELDS, 'pfb_dns_dot_port6', 'pfb_dns_doh_port6', 'pfb_dns_doq_port6'] as $key) {

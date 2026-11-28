@@ -56,8 +56,13 @@ final class CrowdsecSettingsTest extends TestCase
 		yield 'rules_interfaces'     => ['crowdsec/rules_interfaces', '', 'local', FALSE];
 		yield 'rules_log'            => ['crowdsec/rules_log', '', 'policy', TRUE];
 		yield 'rules_tag'            => ['crowdsec/rules_tag', '', 'policy', FALSE];
-		yield 'rule_v4'              => ['crowdsec/rule_v4', 'on', 'policy', TRUE];
-		yield 'rule_v6'              => ['crowdsec/rule_v6', 'on', 'policy', TRUE];
+		yield 'rule_v4'               => ['crowdsec/rule_v4', 'on', 'policy', TRUE];
+		yield 'rule_v6'               => ['crowdsec/rule_v6', 'on', 'policy', TRUE];
+		yield 'spoa_enable'           => ['crowdsec/spoa_enable', '', 'local', TRUE];
+		yield 'spoa_listen'           => ['crowdsec/spoa_listen', '127.0.0.1:10091', 'local', FALSE];
+		yield 'appsec_url'            => ['crowdsec/appsec_url', '', 'policy', FALSE];
+		yield 'appsec_timeout'        => ['crowdsec/appsec_timeout', '500ms', 'local', FALSE];
+		yield 'appsec_failure_action' => ['crowdsec/appsec_failure_action', 'passthrough', 'policy', FALSE];
 	}
 
 	public function testTheSectionHasItsOwnAlias(): void
@@ -84,7 +89,10 @@ final class CrowdsecSettingsTest extends TestCase
 	public function testTheKeyIsTheOnlyCredentialAndNeverPolicy(): void
 	{
 		$policy = array_keys(array_filter(pfb_cfg_registry(), static fn (array $e, string $k): bool => str_starts_with($k, 'crowdsec/') && $e['sync'] === 'policy', ARRAY_FILTER_USE_BOTH));
-		$this->assertSame(['crowdsec/enable', 'crowdsec/lapi_url', 'crowdsec/rules_log', 'crowdsec/rules_tag', 'crowdsec/rule_v4', 'crowdsec/rule_v6'], $policy);
+		$this->assertSame([
+			'crowdsec/enable', 'crowdsec/lapi_url', 'crowdsec/rules_log', 'crowdsec/rules_tag',
+			'crowdsec/rule_v4', 'crowdsec/rule_v6', 'crowdsec/appsec_url', 'crowdsec/appsec_failure_action',
+		], $policy);
 	}
 
 	// ---- validation ----------------------------------------------------------------------
@@ -125,8 +133,13 @@ final class CrowdsecSettingsTest extends TestCase
 			'rules_interfaces'     => 'lan,opt1',
 			'rules_log'            => 'on',
 			'rules_tag'            => 'cs_block-1',
-			'rule_v4'              => 'on',
-			'rule_v6'              => '',
+			'rule_v4'               => 'on',
+			'rule_v6'               => '',
+			'spoa_enable'           => '',
+			'spoa_listen'           => '127.0.0.1:10091',
+			'appsec_url'            => '',
+			'appsec_timeout'        => '500ms',
+			'appsec_failure_action' => 'passthrough',
 		], $out['values']);
 	}
 

@@ -11,6 +11,20 @@ type familyBans struct {
 	Origins map[string]int `json:"origins"`
 }
 
+type spoaStatus struct {
+	Enabled       bool   `json:"enabled"`
+	Listen        string `json:"listen"`
+	AppSecEnabled bool   `json:"appsec_enabled"`
+	Lookups       uint64 `json:"lookups"`
+	Blocked       uint64 `json:"blocked"`
+	Errors        uint64 `json:"errors"`
+	AppSecLookups uint64 `json:"appsec_lookups"`
+	AppSecBlocked uint64 `json:"appsec_blocked"`
+	AppSecErrors  uint64 `json:"appsec_errors"`
+	EntriesV4     int    `json:"entries_v4"`
+	EntriesV6     int    `json:"entries_v6"`
+}
+
 // status is the status file the Status page and the metrics export read. Times are Unix seconds, 0 for never;
 // maps are keyed "ipv4" and "ipv6". It never holds the key.
 type status struct {
@@ -25,6 +39,7 @@ type status struct {
 	LAPIErrors             uint64                `json:"lapi_errors"`
 	Banned                 map[string]familyBans `json:"banned"`
 	Dropped                map[string]counter    `json:"dropped"`
+	SPOA                   *spoaStatus           `json:"spoa,omitempty"`
 }
 
 // writeStatus replaces path atomically: a temp file in the same directory, mode 0644, renamed over it.

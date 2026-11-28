@@ -22,7 +22,7 @@ import (
 // The optional maintenance command owns a distinct worker lane and fixed maintenance.log receipts in stateDir; the Update log,
 // scheduler state and Update receipts remain independent. The schedule is read in the --zoneinfo zone (empty: the local zone).
 // A loop (--update-loop) makes each Update run the Core Updater loop with its paths instead of the program.
-func newUpdates(path, maintenancePath, zoneinfo, stateDir string, loop *update.Loop, st *settings.Store, lanes *laneSettings, logf func(string, ...any)) (*scheduler.Scheduler, *update.Gate) {
+func newUpdates(path, maintenancePath, zoneinfo, stateDir string, loop *update.Loop, st *settings.Store, lanes *laneSettings, logf func(string, ...any), onDone ...func()) (*scheduler.Scheduler, *update.Gate) {
 	if path == "" {
 		return nil, nil
 	}
@@ -30,7 +30,15 @@ func newUpdates(path, maintenancePath, zoneinfo, stateDir string, loop *update.L
 	sched := scheduler.New(scheduler.Config{Model: scheduleModel(st), StatePath: filepath.Join(stateDir, "schedule_state.json"),
 		LogPath: logPath, Loc: time.Local, Zone: hostZone(zoneinfo, logf), Logf: logf, Maintenance: gateMaintenance(maintenance(maintenancePath, stateDir), lanes, logf)})
 	command := &update.Command{Path: path, Loop: loop}
-	gate := update.New(logPath, nil, sched.Done)
+	doneHook := func(req update.Request, res update.Result, runErr error) {
+		sched.Done(req, res, runErr)
+		for _, fn := range onDone {
+			if fn != nil {
+				fn()
+			}
+		}
+	}
+	gate := update.New(logPath, nil, doneHook)
 	gate.Admit = command.Admit
 	sched.Bind(func(req update.Request, commit func() (map[string]int64, error)) error {
 		return gate.Start(req, commit)

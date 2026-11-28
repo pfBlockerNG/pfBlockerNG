@@ -27,7 +27,7 @@ const coreModule = "github.com/pfBlockerNG/pfBlockerNG/go/pfb_core"
 // Core itself at a pinned pseudo-version. github.com/oschwald/maxminddb-golang/v2: dMax's country lookup (#4038, owner
 // decision of 2026-11-23), pinned to the version of go/pfb_dns_gateway, the same reader pfB-DNS uses.
 var allowedModules = []string{"golang.org/x/net", "golang.org/x/sys", "golang.org/x/text", "github.com/zeebo/xxh3", "go4.org/netipx",
-	"github.com/oschwald/maxminddb-golang/v2"}
+	"github.com/oschwald/maxminddb-golang/v2", "github.com/gaissmai/bart"}
 
 func moduleAllowed(path string) bool {
 	for _, m := range allowedModules {
