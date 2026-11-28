@@ -4300,8 +4300,8 @@ const PFB_CORE_VALIDATE_TIMEOUT = 3;
 // waits, and the poll comes once a second, so a wedged Core must not hold one for pfb_core_call()'s default 30 s.
 const PFB_CORE_PAGE_TIMEOUT = 5;
 // Overridable before load (a unit test must not touch the appliance's rc.d), like the Unbound start budgets above;
-// the wait is the seconds an activation gives the proxy to become READY, the Unbound startup budget (30 s) with no
-// setting of its own: pfb_dns_proxy_await_ready().
+// the wait is the seconds an activation gives the proxy to become READY (pfb_dns_proxy_await_ready()): 60 s, longer than
+// the Unbound startup budget, as the gateway loads the DNSBL data first and that load grows with the lists (issue #4302).
 if (!defined('PFB_DNS_PROXY_RCFILE')) {
 	define('PFB_DNS_PROXY_RCFILE', '/usr/local/etc/rc.d/pfb_dns_proxy.sh');
 }
@@ -9665,7 +9665,7 @@ function pfb_dns_proxy_serving_ready(): bool {
 }
 
 /**
- * Wait (bounded, PFB_DNS_PROXY_START_WAIT: the Unbound startup budget) for the proxy to serve (pfb_dns_proxy_serving_ready()): start_service() and
+ * Wait (bounded, PFB_DNS_PROXY_START_WAIT: 60 s) for the proxy to serve (pfb_dns_proxy_serving_ready()): start_service() and
  * restart_service() return before the new proxy has bound anything. NEVER call it with the DNS config lock held.
  */
 function pfb_dns_proxy_await_ready(): bool {

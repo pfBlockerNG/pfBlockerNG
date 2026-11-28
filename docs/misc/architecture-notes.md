@@ -823,7 +823,7 @@ variable): the boot hook's background start and an apply's `start_service()` oth
 check before `daemon(8)` has written a pidfile and both launch. A start that cannot take the lock logs an error and exits 75.
 
 Every caller that starts or restarts the proxy waits for serving readiness (`pfb_dns_proxy_await_ready()`, on
-`pfb_dns_proxy_serving_ready()`: the 30 s Unbound startup budget, never under a lock): `pfb_dns_proxy_restart()`
+`pfb_dns_proxy_serving_ready()`: 60 s, never under a lock): `pfb_dns_proxy_restart()`
 (the reload and installer), and `pfb_dns_proxy_ensure_running()` only when it started or restarted the gateway.
 The boot check (`dns_check`, backgrounded beside its own start) uses the same `pfb_dns_proxy_confirm_ready()`, except while the cannot-serve marker stands (the rc script's start refused
 for a stranger): there it runs `pfb_dns_proxy_ensure_running()`, which moves Unbound off the stranger or keeps the gateway stopped with the notice (above).

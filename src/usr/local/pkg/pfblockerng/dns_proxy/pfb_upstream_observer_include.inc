@@ -41,9 +41,9 @@
  * gets the pfB-DNS startup notice and the Resolver stays moved (pfb_dns_proxy_confirm_ready()). The ready marker says the front end can answer
  * queries; it is no proof that recursion works, which needs the Unbound this hook runs before.
  *
- * That command is bounded by timeout(1), 360 s: an outer salvage deadline, not a proved bound on normal completion. Its parts are the 30 s
+ * That command is bounded by timeout(1), 360 s: an outer salvage deadline, not a proved bound on normal completion. Its parts are the 60 s
  * readiness budget, the bounded status and socket probes of the startup check and, when another process holds Unbound's loopback backend ports
- * (issue #3848), a move of that pair: one bounded socket scan to find a free pair, the config lock wait (10 s) and a second 30 s wait for the
+ * (issue #3848), a move of that pair: one bounded socket scan to find a free pair, the config lock wait (10 s) and a second 60 s wait for the
  * restarted gateway. pfSense's services_unbound_configure(), which the move calls, is outside any total. The move restarts Unbound and the gateway,
  * daemons meant to outlive the check, so timeout(1) runs in its --foreground mode: it signals only the check itself and never reaps what the check
  * started (docs/misc/external-process-waits.md, "Choosing the mode").
