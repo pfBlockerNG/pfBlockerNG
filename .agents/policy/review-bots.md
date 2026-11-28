@@ -1,8 +1,8 @@
 # PR review bots (CodeRabbit, Codex) — the contract
 
 Scope: every GitHub PR that carries a product, CI, test, or script change.
-Load when: a PR is ready to be judged, a Fair Usage / "Review limit
-reached" notice appears, or you are dispatching the CLI-in-CI workflow.
+Load when: a PR is ready to be judged, or a Fair Usage / "Review limit
+reached" notice appears.
 
 - **Owner:** repo owner. **Last-verified:** 2026-08-17.
 - **Why:** CodeRabbit's review is beneficial, but Fair Usage is
@@ -133,10 +133,8 @@ second on-request review bot. It reads the shared rules through the `AGENTS.md`
 
 Only the **repo owner**, in conversation, may spend a slot anyway or name
 another reviewer. No labels. Agents never invent a substitute, and
-the adversarial review still runs. CLI-in-CI is #2436:
-`.github/workflows/coderabbit-cli.yml` is **dispatch-only** (not on push)
-so it cannot walk the PR Fair Usage band by itself. It needs the secret
-`CODERABBIT_API_KEY` (Agentic key), and its findings are file-level.
+the adversarial review still runs. The project uses CodeRabbit's free PR
+reviews only: no CodeRabbit CLI and no paid substitute (owner, 2026-11-28).
 
 ## Missed-review backlog
 
