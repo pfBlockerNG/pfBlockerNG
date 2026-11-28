@@ -98,6 +98,13 @@ trait SyncPolicyFixtureTrait
 			'crowdsec/log_level',
 			'crowdsec/rules_all_interfaces',
 			'crowdsec/rules_interfaces',
+
+			// issue #4309: local HAProxy SPOA listener toggles, bind addresses and per-node AppSec timeout
+			'ip/spoa_enable',
+			'ip/spoa_listen',
+			'crowdsec/spoa_enable',
+			'crowdsec/spoa_listen',
+			'crowdsec/appsec_timeout',
 		]);
 	}
 

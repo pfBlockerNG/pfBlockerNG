@@ -7,17 +7,21 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_crowdsec/spoa"
 )
 
 // daemon keeps the two tables equal to the LAPI's active bans (spec D1). All of its state lives in one goroutine; run
 // makes its LAPI requests on others and takes their results back.
 type daemon struct {
-	cfg  *config
-	log  *logger
-	pf   *pfctl
-	api  *lapiClient
-	bans *banSet
-	now  func() time.Time
+	cfg     *config
+	log     *logger
+	pf      *pfctl
+	api     *lapiClient
+	bans    *banSet
+	spoa    *spoaState
+	spoaSrv *spoa.Server
+	now     func() time.Time
 
 	started   time.Time
 	synced    bool    // the last pull succeeded; the next one is a delta, else a full pull (startup=true)
@@ -32,7 +36,18 @@ type daemon struct {
 }
 
 func newDaemon(cfg *config, log *logger, pf *pfctl, api *lapiClient, now func() time.Time) *daemon {
-	return &daemon{cfg: cfg, log: log, pf: pf, api: api, bans: newBanSet(), now: now, started: now()}
+	var sp *spoaState
+	if cfg != nil && cfg.SPOAListen != "" {
+		sp = newSPOAState(cfg, log)
+	}
+	return &daemon{cfg: cfg, log: log, pf: pf, api: api, bans: newBanSet(), spoa: sp, now: now, started: now()}
+}
+
+func (d *daemon) refreshSPOA() {
+	if d.spoa == nil {
+		return
+	}
+	d.spoa.swap(d.bans.buildSPOATree(d.cfg.APIKey))
 }
 
 func (d *daemon) tables() [2]string { return [2]string{d.cfg.TableV4, d.cfg.TableV6} }
@@ -79,6 +94,7 @@ func (d *daemon) finishPull(ctx context.Context, full bool, resp *streamResponse
 // the tables are reconciled (so also when an add failed and the reconcile installed them).
 func (d *daemon) apply(ctx context.Context, resp *streamResponse) []netip.Addr {
 	res := d.bans.apply(resp)
+	d.refreshSPOA()
 	d.logUnused(res)
 	tables := d.tables()
 	for f, bans := range res.del {
@@ -106,6 +122,7 @@ func (d *daemon) replace(ctx context.Context, resp *streamResponse) []netip.Addr
 	old := d.bans
 	d.bans = newBanSet()
 	res := d.bans.apply(resp)
+	d.refreshSPOA()
 	d.logUnused(res)
 	tables := d.tables()
 	var fresh []netip.Addr
@@ -249,6 +266,26 @@ func (d *daemon) writeStatus() {
 	for f := range 2 {
 		st.Banned[ipTypes[f]] = familyBans{Total: len(d.bans.keys(family(f))), Origins: d.origins(family(f))}
 		st.Dropped[ipTypes[f]] = d.dropped[f]
+	}
+	if d.spoa != nil {
+		v4, v6 := d.spoa.counts()
+		sp := &spoaStatus{
+			Enabled:       true,
+			Listen:        d.cfg.SPOAListen,
+			AppSecEnabled: d.spoa.appSec != nil,
+			AppSecLookups: d.spoa.appsecLookups.Load(),
+			AppSecBlocked: d.spoa.appsecBlocked.Load(),
+			AppSecErrors:  d.spoa.appsecErrors.Load(),
+			EntriesV4:     v4,
+			EntriesV6:     v6,
+		}
+		if d.spoaSrv != nil {
+			m := d.spoaSrv.Metrics()
+			sp.Lookups = m.Lookups
+			sp.Blocked = m.Blocked
+			sp.Errors = m.Errors
+		}
+		st.SPOA = sp
 	}
 	if err := writeStatus(d.cfg.StatusFile, st); err != nil {
 		d.log.warnf("writing %s: %v", d.cfg.StatusFile, err)

@@ -91,6 +91,9 @@ $pconfig['v4suppression']	= pfb_b64_text(PfbConfig::read('ip/v4suppression'));
 // v6suppression may remain absent until the first post-upgrade save; the registered
 // empty default reaches the same decoder fallback as the former guarded section read.
 $pconfig['v6suppression']	= pfb_b64_text(PfbConfig::read('ip/v6suppression'));
+$pconfig['spoa_enable']		= PfbConfig::read('ip/spoa_enable');
+$pconfig['spoa_listen']		= PfbConfig::read('ip/spoa_listen');
+$pconfig['spoa_aliases']	= PfbConfig::read('ip/spoa_aliases');
 
 // Select array options
 $options_asn_reporting 		= [	'disabled'	=> 'Disabled',
@@ -148,7 +151,7 @@ if ($_POST) {
 		}
 
 		// issue #1723: sanitize at ingestion -- first step, before any evaluation.
-		foreach (array('ip_placeholder', 'asn_token', 'autorule_suffix', 'maxmind_account', 'maxmind_key') as $pfb_text_field) {
+		foreach (array('ip_placeholder', 'asn_token', 'autorule_suffix', 'maxmind_account', 'maxmind_key', 'spoa_listen', 'spoa_aliases') as $pfb_text_field) {
 			$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));
 		}
 		foreach (array('v4suppression', 'v6suppression') as $pfb_text_area_field) {
@@ -202,6 +205,14 @@ if ($_POST) {
 		$pfb_asn_token_post = (string) ($_POST['asn_token'] ?? '');
 		if ($pfb_asn_token_post !== '' && empty(pfb_filter($pfb_asn_token_post, PFB_FILTER_WORD, 'asn_token'))) {
 			$input_errors[] = 'IPinfo Token Invalid';
+		}
+
+		$pfb_spoa_listen_post = $_POST['spoa_listen'] !== '' ? $_POST['spoa_listen'] : PFB_CORE_SPOA_DEFAULT_LISTEN;
+		if (!pfb_spoa_listen_valid($pfb_spoa_listen_post)) {
+			$input_errors[] = gettext('HAProxy SPOA Listen Address must be 127.0.0.1:<port>, [::1]:<port>, or unix:/abs/path.');
+		}
+		if (!pfb_spoa_aliases_valid($_POST['spoa_aliases'])) {
+			$input_errors[] = gettext('HAProxy SPOA Aliases must be empty or a comma-separated list of alias names (A-Z, a-z, 0-9, _, -).');
 		}
 
 		// issue #1723: the ingestion prologue already normalized CRLF/CR to LF, so
@@ -304,6 +315,9 @@ if ($_POST) {
 			// issue #1723: already sanitized by the ingestion prologue -- plain encode.
 			$pfb['iconfig']['v4suppression']	= base64_encode($_POST['v4suppression'] ?? '');
 			$pfb['iconfig']['v6suppression']	= base64_encode($_POST['v6suppression'] ?? '');
+			$pfb['iconfig']['spoa_enable']		= pfb_filter($_POST['spoa_enable'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
+			$pfb['iconfig']['spoa_listen']		= $pfb_spoa_listen_post;
+			$pfb['iconfig']['spoa_aliases']		= $_POST['spoa_aliases'];
 
 			// ADR-11: per-type aggregate aliases multi-select -> CSV scalar (sanitised to the
 			// known option keys; default none). Gateway-registered in the general section, so
@@ -330,6 +344,7 @@ if ($_POST) {
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			if (!pfb_dns_config_write_failed($pfb_written)) {
 				pfb_core_settings_changed(NULL, TRUE);	// Core reads these settings (issue #4031); a failure never undoes the save
+				pfb_core_service();	// refresh pfb_core.sh SPOA flags (#4309)
 			}
 			if (!empty($savemsg)) {
 				header("Location: /pfblockerng/pfblockerng_ip.php?savemsg={$savemsg}");
@@ -761,6 +776,50 @@ $section->addInput(new Form_Input(
 	. 'This IP address will be used as a placeholder IP to avoid empty Feeds/Aliases.'
 );
 
+$form->add($section);
+
+$section = new Form_Section('HAProxy SPOA Listener', 'ip_spoa', COLLAPSIBLE|SEC_CLOSED);
+$section->addInput(new Form_Checkbox(
+	'spoa_enable',
+	gettext('HAProxy SPOA'),
+	gettext('Enable'),
+	pfb_cfg_toggle_read($pconfig['spoa_enable'] ?? NULL) === PfbToggle::On,
+	'on'
+))->setHelp('Expose a local HAProxy SPOP (SPOA) listener in <code>pfb-core</code> evaluating client IPs against an in-memory radix tree of pfBlockerNG IP lists (hot-swapped on feed updates with zero HAProxy reload). '
+	. 'Returns <code>txn.pfb.blocked</code>, <code>txn.pfb.alias</code>, <code>txn.pfb.feed</code>, and <code>txn.pfb.action</code>.');
+
+$section->addInput(new Form_Input(
+	'spoa_listen',
+	gettext('SPOA Listen Address'),
+	'text',
+	$pconfig['spoa_listen'] ?: PFB_CORE_SPOA_DEFAULT_LISTEN,
+	['placeholder' => PFB_CORE_SPOA_DEFAULT_LISTEN]
+))->setHelp('Default: <strong>127.0.0.1:10090</strong> (works with pfSense HAProxy\'s default <code>/var/empty</code> chroot). '
+	. 'Accepts <code>127.0.0.1:&lt;port&gt;</code>, <code>[::1]:&lt;port&gt;</code>, or <code>unix:/abs/path/to/spoa.sock</code>.');
+
+$section->addInput(new Form_Input(
+	'spoa_aliases',
+	gettext('SPOA Aliases (optional)'),
+	'text',
+	$pconfig['spoa_aliases'] ?? '',
+	['placeholder' => 'Leave blank for all active Deny aliases']
+))->setHelp('Optional comma-separated list of IP alias or feed names (e.g. <code>pfB_PRI1_v4,pfB_PRI1_v6</code>). Leave blank to evaluate all active Deny lists. '
+	. 'HAProxy may also pass an <code>alias</code> argument per message to narrow one frontend to a single alias.');
+
+$csListen = (string) PfbConfig::read('crowdsec/spoa_listen');
+$coreListen = ($pconfig['spoa_listen'] ?? '') !== '' ? (string) $pconfig['spoa_listen'] : PFB_CORE_SPOA_DEFAULT_LISTEN;
+$spoaSnippets = pfb_spoa_haproxy_snippets(
+	$coreListen,
+	$csListen !== '' ? $csListen : PFB_CROWDSEC_SPOA_DEFAULT_LISTEN,
+	(string) PfbConfig::read('crowdsec/appsec_url') !== ''
+);
+$section->addInput(new Form_StaticText(
+	gettext('HAProxy SPOE Snippet'),
+	'<p>Copy into HAProxy\'s SPOE engine config (<code>/var/etc/haproxy/spoe-pfb-core.conf</code>) and frontend/backend settings:</p>'
+	. '<pre style="max-height:240px;overflow:auto;">'
+	. htmlspecialchars($spoaSnippets['spoe_core'] . "\n\n" . $spoaSnippets['haproxy_backends'] . "\n\n" . $spoaSnippets['haproxy_frontend'], ENT_QUOTES, 'UTF-8')
+	. '</pre>'
+));
 $form->add($section);
 
 print_callout('<p>Saved changes are applied automatically at a schedule check, normally within 15 minutes while pfBlockerNG is enabled. If an <strong>Automatic Apply Window</strong> is set on <strong>General</strong>, changes wait for that window. To apply them now, open <strong>Update</strong> and use <strong>Run Now</strong>.</p>');

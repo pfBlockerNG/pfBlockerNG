@@ -52,7 +52,7 @@ const PFB_CROWDSEC_TAG_PATTERN = '/^[A-Za-z0-9_-]{1,63}$/D';
 const PFB_CROWDSEC_KEY_PATTERN = '/^[\x21-\x7e]{1,256}$/D';
 // The section's fields in the spec's order, and those the generated rules depend on (the enable and the rule settings)
 const PFB_CROWDSEC_FIELDS = ['enable', 'lapi_url', 'api_key', 'log_level', 'rules_all_interfaces', 'rules_interfaces', 'rules_log',
-	'rules_tag', 'rule_v4', 'rule_v6'];
+	'rules_tag', 'rule_v4', 'rule_v6', 'spoa_enable', 'spoa_listen', 'appsec_url', 'appsec_timeout', 'appsec_failure_action'];
 const PFB_CROWDSEC_RULE_FIELDS = ['enable', 'rules_all_interfaces', 'rules_interfaces', 'rules_log', 'rules_tag', 'rule_v4', 'rule_v6'];
 
 /**
@@ -171,6 +171,41 @@ function pfb_crowdsec_validate(array $post, string $storedKey, array $interfaces
 	$values['rule_v4'] = $toggle('rule_v4');
 	$values['rule_v6'] = $toggle('rule_v6');
 
+	$values['spoa_enable'] = $toggle('spoa_enable');
+	$spoaListen = is_string($post['spoa_listen'] ?? '') ? pfb_sanitize_text($post['spoa_listen'] ?? '') : NULL;
+	if ($spoaListen === '') {
+		$spoaListen = PFB_CROWDSEC_SPOA_DEFAULT_LISTEN;
+	}
+	if ($spoaListen === NULL || !pfb_spoa_listen_valid($spoaListen)) {
+		$errors[] = gettext('The SPOA listen address must be 127.0.0.1:<port>, [::1]:<port>, or unix:/abs/path.');
+		$spoaListen = PFB_CROWDSEC_SPOA_DEFAULT_LISTEN;
+	}
+	$values['spoa_listen'] = $spoaListen;
+
+	$appsecUrl = is_string($post['appsec_url'] ?? '') ? pfb_sanitize_text($post['appsec_url'] ?? '') : NULL;
+	if ($appsecUrl === NULL || ($appsecUrl !== '' && !pfb_crowdsec_url_valid($appsecUrl))) {
+		$errors[] = gettext('The AppSec URL must be an http:// or https:// URL with a host, without credentials, query or fragment.');
+		$appsecUrl = '';
+	}
+	$values['appsec_url'] = $appsecUrl;
+
+	$appsecTimeout = is_string($post['appsec_timeout'] ?? '') ? pfb_sanitize_text($post['appsec_timeout'] ?? '') : NULL;
+	if ($appsecTimeout === '') {
+		$appsecTimeout = PFB_CROWDSEC_APPSEC_DEFAULT_TIMEOUT;
+	}
+	if ($appsecTimeout === NULL || !pfb_spoa_timeout_valid($appsecTimeout)) {
+		$errors[] = gettext('The AppSec timeout must be between 50ms and 30s (e.g. 500ms or 2s).');
+		$appsecTimeout = PFB_CROWDSEC_APPSEC_DEFAULT_TIMEOUT;
+	}
+	$values['appsec_timeout'] = $appsecTimeout;
+
+	$appsecAction = $post['appsec_failure_action'] ?? 'passthrough';
+	if (!is_string($appsecAction) || !in_array($appsecAction, PFB_CROWDSEC_APPSEC_FAILURE_ACTIONS, TRUE)) {
+		$errors[] = gettext('The AppSec failure action must be passthrough or deny.');
+		$appsecAction = 'passthrough';
+	}
+	$values['appsec_failure_action'] = $appsecAction;
+
 	return ['values' => $values, 'errors' => $errors];
 }
 
@@ -181,7 +216,7 @@ function pfb_crowdsec_validate(array $post, string $storedKey, array $interfaces
  * @param array<string, PfbToggle|string> $settings pfb_crowdsec_settings()
  */
 function pfb_crowdsec_config_json(array $settings): string {
-	return json_encode([
+	$doc = [
 		'api_url'          => (string) $settings['lapi_url'],
 		'api_key'          => (string) $settings['api_key'],
 		'update_frequency' => '10s',
@@ -189,7 +224,21 @@ function pfb_crowdsec_config_json(array $settings): string {
 		'table_v6'         => PFB_CROWDSEC_TABLES['ipv6'],
 		'log_level'        => (string) $settings['log_level'],
 		'status_file'      => PFB_CROWDSEC_STATUS,
-	], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
+	];
+	$spoaOn = ($settings['spoa_enable'] ?? NULL) === PfbToggle::On || ($settings['spoa_enable'] ?? '') === 'on';
+	if ($spoaOn) {
+		$listen = (string) ($settings['spoa_listen'] ?? PFB_CROWDSEC_SPOA_DEFAULT_LISTEN);
+		$doc['spoa_listen'] = $listen !== '' ? $listen : PFB_CROWDSEC_SPOA_DEFAULT_LISTEN;
+		$appsecUrl = (string) ($settings['appsec_url'] ?? '');
+		if ($appsecUrl !== '') {
+			$doc['appsec_url'] = $appsecUrl;
+			$timeout = (string) ($settings['appsec_timeout'] ?? PFB_CROWDSEC_APPSEC_DEFAULT_TIMEOUT);
+			$doc['appsec_timeout'] = $timeout !== '' ? $timeout : PFB_CROWDSEC_APPSEC_DEFAULT_TIMEOUT;
+			$action = (string) ($settings['appsec_failure_action'] ?? 'passthrough');
+			$doc['appsec_failure_action'] = in_array($action, PFB_CROWDSEC_APPSEC_FAILURE_ACTIONS, TRUE) ? $action : 'passthrough';
+		}
+	}
+	return json_encode($doc, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
 }
 
 /**
@@ -369,6 +418,18 @@ function pfb_crowdsec_status_read(string $path = PFB_CROWDSEC_STATUS): ?array {
 		    || in_array(NULL, $status['dropped'][$family], TRUE)) {
 			return NULL;
 		}
+	}
+	$spoaRaw = $get($doc, 'spoa');
+	if ($spoaRaw instanceof stdClass) {
+		$spoa = [
+			'enabled'        => (bool) $get($spoaRaw, 'enabled'),
+			'listen'         => is_string($get($spoaRaw, 'listen')) ? $get($spoaRaw, 'listen') : '',
+			'appsec_enabled' => (bool) $get($spoaRaw, 'appsec_enabled'),
+		];
+		foreach (['lookups', 'blocked', 'errors', 'appsec_lookups', 'appsec_blocked', 'appsec_errors', 'entries_v4', 'entries_v6'] as $sf) {
+			$spoa[$sf] = $count($get($spoaRaw, $sf)) ?? 0;
+		}
+		$status['spoa'] = $spoa;
 	}
 	return $status;
 }

@@ -158,6 +158,65 @@ $section->addInput(new Form_Checkbox(
 ));
 $form->add($section);
 
+$section = new Form_Section('HAProxy SPOA Listener');
+$section->addInput(new Form_Checkbox(
+	'spoa_enable',
+	gettext('HAProxy SPOA'),
+	gettext('Enable'),
+	($pconfig['spoa_enable'] ?? '') === 'on',
+	'on'
+))->setHelp('Expose a local HAProxy SPOP (SPOA) listener serving cached CrowdSec LAPI decisions with zero fail-closed 503 outages during remote LAPI restarts. '
+	. 'Returns <code>txn.crowdsec.remediation</code>, <code>txn.crowdsec.origin</code>, and <code>txn.crowdsec.scenario</code>.');
+
+$section->addInput(new Form_Input(
+	'spoa_listen',
+	gettext('SPOA Listen Address'),
+	'text',
+	$pconfig['spoa_listen'] ?? PFB_CROWDSEC_SPOA_DEFAULT_LISTEN,
+	['placeholder' => PFB_CROWDSEC_SPOA_DEFAULT_LISTEN]
+))->setHelp('Default: <strong>127.0.0.1:10091</strong> (works with pfSense HAProxy\'s default <code>/var/empty</code> chroot). '
+	. 'Accepts <code>127.0.0.1:&lt;port&gt;</code>, <code>[::1]:&lt;port&gt;</code>, or <code>unix:/abs/path/to/spoa.sock</code>.');
+
+$section->addInput(new Form_Input(
+	'appsec_url',
+	gettext('AppSec Engine URL (optional)'),
+	'text',
+	$pconfig['appsec_url'] ?? '',
+	['placeholder' => 'http://192.0.2.10:7422']
+))->setHelp('Optional CrowdSec Security Engine AppSec endpoint for L7 WAF inspection of requests not already blocked locally. Leave blank for pure local IP/range remediation.');
+
+$section->addInput(new Form_Input(
+	'appsec_timeout',
+	gettext('AppSec Timeout'),
+	'text',
+	$pconfig['appsec_timeout'] ?? PFB_CROWDSEC_APPSEC_DEFAULT_TIMEOUT,
+	['placeholder' => PFB_CROWDSEC_APPSEC_DEFAULT_TIMEOUT]
+))->setHelp('Bounded HTTP timeout per AppSec check (50ms to 30s, default <strong>500ms</strong>).');
+
+$section->addInput(new Form_Select(
+	'appsec_failure_action',
+	gettext('AppSec Failure Action'),
+	$pconfig['appsec_failure_action'] ?? 'passthrough',
+	['passthrough' => gettext('Passthrough (fail-open, recommended)'), 'deny' => gettext('Deny (fail-closed)')]
+))->setHelp('Action when the remote AppSec endpoint times out or is unreachable. <strong>Passthrough</strong> avoids 503 outages during Security Engine restarts.')
+  ->setAttribute('style', 'width: auto');
+
+$coreListen = (string) PfbConfig::read('ip/spoa_listen');
+$csListen = ($pconfig['spoa_listen'] ?? '') !== '' ? (string) $pconfig['spoa_listen'] : PFB_CROWDSEC_SPOA_DEFAULT_LISTEN;
+$snippets = pfb_spoa_haproxy_snippets(
+	$coreListen !== '' ? $coreListen : PFB_CORE_SPOA_DEFAULT_LISTEN,
+	$csListen,
+	($pconfig['appsec_url'] ?? '') !== ''
+);
+$section->addInput(new Form_StaticText(
+	gettext('HAProxy SPOE Snippet'),
+	'<p>Copy into HAProxy\'s SPOE engine config (<code>/var/etc/haproxy/spoe-pfb-crowdsec.conf</code>) and frontend/backend settings:</p>'
+	. '<pre style="max-height:240px;overflow:auto;">'
+	. htmlspecialchars($snippets['spoe_crowdsec'] . "\n\n" . $snippets['haproxy_backends'] . "\n\n" . $snippets['haproxy_frontend'], ENT_QUOTES, 'UTF-8')
+	. '</pre>'
+));
+$form->add($section);
+
 print($form);
 include('foot.inc');
 ?>

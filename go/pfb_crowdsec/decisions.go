@@ -8,6 +8,8 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_crowdsec/spoa"
 )
 
 type family int
@@ -21,11 +23,12 @@ var ipTypes = [2]string{"ipv4", "ipv6"}
 
 // decision is the LAPI's Decision object; fields the bouncer does not use are ignored.
 type decision struct {
-	ID     int64  `json:"id"`
-	Origin string `json:"origin"`
-	Type   string `json:"type"`
-	Scope  string `json:"scope"`
-	Value  string `json:"value"`
+	ID       int64  `json:"id"`
+	Origin   string `json:"origin"`
+	Scenario string `json:"scenario"`
+	Type     string `json:"type"`
+	Scope    string `json:"scope"`
+	Value    string `json:"value"`
 }
 
 // streamResponse is the LAPI's DecisionsStreamResponse.
@@ -57,34 +60,31 @@ func decodeStream(r io.Reader) (*streamResponse, error) {
 type ban struct {
 	key    string
 	fam    family
-	single bool       // a single address (a /32 or /128 counts as one)
-	addr   netip.Addr // set when single
+	single bool         // a single address (a /32 or /128 counts as one)
+	addr   netip.Addr   // set when single
+	prefix netip.Prefix // normalized masked prefix
 }
 
-// parseBan maps a decision to a ban. use is false for decisions the bouncer does not enforce (types other than ban,
-// scopes other than ip and range); err is set for a ban whose value is not an address or prefix.
-func parseBan(d decision) (b ban, use bool, err error) {
-	if !strings.EqualFold(d.Type, "ban") || !(strings.EqualFold(d.Scope, "ip") || strings.EqualFold(d.Scope, "range")) {
-		return ban{}, false, nil
-	}
+// parseAddressPrefix parses a decision value into a normalized ban entry.
+func parseAddressPrefix(value string) (ban, error) {
 	var prefix netip.Prefix
-	if addr, aerr := netip.ParseAddr(d.Value); aerr == nil {
+	if addr, aerr := netip.ParseAddr(value); aerr == nil {
 		if addr.Zone() != "" {
-			return ban{}, false, errors.New("zoned address")
+			return ban{}, errors.New("zoned address")
 		}
 		prefix = netip.PrefixFrom(addr.Unmap(), addr.Unmap().BitLen())
-	} else if p, perr := netip.ParsePrefix(d.Value); perr == nil {
+	} else if p, perr := netip.ParsePrefix(value); perr == nil {
 		if p.Addr().Is4In6() {
 			p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
 			if !p.IsValid() {
-				return ban{}, false, errors.New("invalid prefix")
+				return ban{}, errors.New("invalid prefix")
 			}
 		}
 		prefix = p.Masked()
 	} else {
-		return ban{}, false, errors.New("not an address or prefix")
+		return ban{}, errors.New("not an address or prefix")
 	}
-	b.fam = inet
+	b := ban{fam: inet, prefix: prefix}
 	if prefix.Addr().Is6() {
 		b.fam = inet6
 	}
@@ -93,16 +93,34 @@ func parseBan(d decision) (b ban, use bool, err error) {
 	} else {
 		b.key = prefix.String()
 	}
+	return b, nil
+}
+
+// parseBan maps a decision to a ban. use is false for decisions the bouncer does not enforce (types other than ban,
+// scopes other than ip and range); err is set for a ban whose value is not an address or prefix.
+func parseBan(d decision) (b ban, use bool, err error) {
+	if !strings.EqualFold(d.Type, "ban") || !(strings.EqualFold(d.Scope, "ip") || strings.EqualFold(d.Scope, "range")) {
+		return ban{}, false, nil
+	}
+	b, err = parseAddressPrefix(d.Value)
+	if err != nil {
+		return ban{}, false, err
+	}
 	return b, true, nil
+}
+
+type decisionMeta struct {
+	origin   string
+	scenario string
 }
 
 type banEntry struct {
 	ban
-	ids map[int64]string // decision id -> origin
+	ids map[int64]decisionMeta // decision id -> origin + scenario
 }
 
-// origin is the origin of the entry's lowest-numbered decision.
-func (e *banEntry) origin() string {
+// lowestMeta returns the origin and scenario of the entry's lowest-numbered decision.
+func (e *banEntry) lowestMeta() decisionMeta {
 	first := true
 	var low int64
 	for id := range e.ids {
@@ -113,12 +131,18 @@ func (e *banEntry) origin() string {
 	return e.ids[low]
 }
 
-// banSet is the daemon's view of the active bans: per value, the decisions that ban it.
+// origin is the origin of the entry's lowest-numbered decision.
+func (e *banEntry) origin() string { return e.lowestMeta().origin }
+
+// banSet is the daemon's view of the active bans (and optional captcha decisions for SPOA): per value, the decisions that cover it.
 type banSet struct {
-	entries map[string]*banEntry
+	entries  map[string]*banEntry
+	captchas map[string]*banEntry
 }
 
-func newBanSet() *banSet { return &banSet{entries: map[string]*banEntry{}} }
+func newBanSet() *banSet {
+	return &banSet{entries: map[string]*banEntry{}, captchas: map[string]*banEntry{}}
+}
 
 // applyResult is the net change of one pull, per family and sorted, plus what was not used.
 type applyResult struct {
@@ -153,6 +177,18 @@ func (s *banSet) apply(r *streamResponse) applyResult {
 		return b, true
 	}
 	for _, d := range r.Deleted {
+		if strings.EqualFold(d.Type, "captcha") && (strings.EqualFold(d.Scope, "ip") || strings.EqualFold(d.Scope, "range")) {
+			if b, err := parseAddressPrefix(d.Value); err == nil {
+				if e := s.captchas[b.key]; e != nil {
+					delete(e.ids, d.ID)
+					if len(e.ids) == 0 {
+						delete(s.captchas, b.key)
+					}
+				}
+			}
+			res.skipped++
+			continue
+		}
 		b, ok := touch(d)
 		if !ok {
 			continue
@@ -165,16 +201,28 @@ func (s *banSet) apply(r *streamResponse) applyResult {
 		}
 	}
 	for _, d := range r.New {
+		if strings.EqualFold(d.Type, "captcha") && (strings.EqualFold(d.Scope, "ip") || strings.EqualFold(d.Scope, "range")) {
+			if b, err := parseAddressPrefix(d.Value); err == nil {
+				e := s.captchas[b.key]
+				if e == nil {
+					e = &banEntry{ban: b, ids: map[int64]decisionMeta{}}
+					s.captchas[b.key] = e
+				}
+				e.ids[d.ID] = decisionMeta{origin: d.Origin, scenario: d.Scenario}
+			}
+			res.skipped++
+			continue
+		}
 		b, ok := touch(d)
 		if !ok {
 			continue
 		}
 		e := s.entries[b.key]
 		if e == nil {
-			e = &banEntry{ban: b, ids: map[int64]string{}}
+			e = &banEntry{ban: b, ids: map[int64]decisionMeta{}}
 			s.entries[b.key] = e
 		}
-		e.ids[d.ID] = d.Origin
+		e.ids[d.ID] = decisionMeta{origin: d.Origin, scenario: d.Scenario}
 	}
 	for key, t := range seen {
 		_, now := s.entries[key]
@@ -213,4 +261,39 @@ func (s *banSet) origins(f family) map[string]int {
 		}
 	}
 	return out
+}
+
+// spoaDecision is the immutable remediation record stored in the SPOA radix tree.
+type spoaDecision struct {
+	Remediation string // "ban" or "captcha"
+	Origin      string
+	Scenario    string
+}
+
+// buildSPOATree constructs an immutable radix tree of active captcha and ban decisions (ban wins over captcha on the same prefix).
+func (s *banSet) buildSPOATree(secret string) *spoa.RadixTree[spoaDecision] {
+	b := spoa.NewRadixBuilder[spoaDecision]()
+	redact := func(origin string) string {
+		if secret != "" && strings.Contains(origin, secret) {
+			return "(hidden)"
+		}
+		return origin
+	}
+	for _, e := range s.captchas {
+		m := e.lowestMeta()
+		b.Insert(e.prefix, spoaDecision{
+			Remediation: "captcha",
+			Origin:      redact(m.origin),
+			Scenario:    m.scenario,
+		}, false)
+	}
+	for _, e := range s.entries {
+		m := e.lowestMeta()
+		b.Insert(e.prefix, spoaDecision{
+			Remediation: "ban",
+			Origin:      redact(m.origin),
+			Scenario:    m.scenario,
+		}, true)
+	}
+	return b.Build()
 }

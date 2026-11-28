@@ -4662,6 +4662,24 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	    'pkg-dir' => '/usr/local/pkg/pfblockerng', 'asn-table' => '/usr/local/www/pfblockerng/pfblockerng_asn.txt'] as $flag => $path) {
 		$loopFlags .= " --{$flag} " . escapeshellarg($path);
 	}
+	// issue #4309: optional HAProxy SPOP (SPOA) listener on pfb-core
+	$spoaFlags = '';
+	$spoaIsUnix = FALSE;
+	if (PfbConfig::read('ip/spoa_enable') === PfbToggle::On) {
+		$spoaListen = (string) PfbConfig::read('ip/spoa_listen');
+		if (!pfb_spoa_listen_valid($spoaListen)) {
+			$spoaListen = PFB_CORE_SPOA_DEFAULT_LISTEN;
+		}
+		$spoaFlags .= ' --spoa-listen ' . escapeshellarg($spoaListen);
+		$spoaAliases = (string) PfbConfig::read('ip/spoa_aliases');
+		if ($spoaAliases !== '' && pfb_spoa_aliases_valid($spoaAliases)) {
+			$spoaFlags .= ' --spoa-aliases ' . escapeshellarg($spoaAliases);
+		}
+		$spoaIsUnix = str_starts_with($spoaListen, 'unix:');
+	}
+	$spoaGroupShell = $spoaIsUnix
+		? "\tspoa_group=''\n\tif gid=\"\$(/usr/bin/id -g www 2>/dev/null)\"; then\n\t\tcase \"\${gid}\" in\n\t\t\t''|*[!0-9]*) ;;\n\t\t\t*) spoa_group=\"--spoa-socket-group \${gid}\" ;;\n\t\tesac\n\tfi\n"
+		: "\tspoa_group=''\n";
 	$dir = escapeshellarg($coreDir);
 	$lockfile = escapeshellarg($pfb['core_lockfile']);
 	// pgrep/pkill -f patterns (extended regular expressions): the supervisor, by daemon(8)'s title or, until it is set, by its own command
@@ -4730,12 +4748,13 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 		esac
 	fi
 
+{$spoaGroupShell}
 	rc_stop || exit 1
 	# Anything the daemon runs that starts this service again must take the lock
 	unset PFB_CORE_START_LOCKED
 	# Detach std fds (#662): the caller's pipe (the package-manager capture during an install) must not stay open in the daemon
-	# shellcheck disable=SC2086 # clients is the ids' flags, numbers only: each word one argument
-	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} --maintenance-cmd {$maintenanceCmd} --metrics-cmd {$metricsCmd} --counters-cmd {$countersCmd} --zoneinfo /etc/localtime \${clients}{$loopFlags}{$feedFlags} </dev/null >/dev/null 2>&1
+	# shellcheck disable=SC2086 # clients and spoa_group are numeric id flags: each word one argument
+	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} --maintenance-cmd {$maintenanceCmd} --metrics-cmd {$metricsCmd} --counters-cmd {$countersCmd} --zoneinfo /etc/localtime \${clients} \${spoa_group}{$loopFlags}{$feedFlags}{$spoaFlags} </dev/null >/dev/null 2>&1
 	daemonstatus="\$?"
 	if [ "\${daemonstatus}" -ne 0 ]; then
 		/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: daemon(8) failed with status \${daemonstatus} - not started"
@@ -10648,7 +10667,8 @@ if (isset($argv[1])) {
 				exit;
 			}
 			// The CrowdSec bouncer's trackers and tables (#4164): this branch exits before the includes at the end of this file
-			require_once __DIR__ . '/pfblockerng_crowdsec.inc';
+			require_once __DIR__ . '/pfblockerng_spoa.inc';
+require_once __DIR__ . '/pfblockerng_crowdsec.inc';
 			pfb_daemon_filterlog();
 			exit;
 	}
@@ -14835,6 +14855,28 @@ function pfb_metrics_render(array $s): string {
 	$family('pfblockerng_crowdsec_last_pull_timestamp_seconds', "Unix time of the CrowdSec bouncer's last successful pull.", $one('last_pull'));
 	$family('pfblockerng_crowdsec_last_error_timestamp_seconds', "Unix time of the CrowdSec bouncer's last error, 0 for none.", $one('last_error_time'));
 
+	// issue #4309: HAProxy SPOA metrics for pfb_crowdsec and pfb-core
+	$csSpoa = is_array($cs['spoa'] ?? NULL) ? $cs['spoa'] : NULL;
+	$oneCsSpoa = static fn (string $field): array => ($csSpoa !== NULL && isset($csSpoa[$field])) ? array(array(array(), $csSpoa[$field])) : array();
+	$family('pfblockerng_crowdsec_spoa_lookups_total', 'HAProxy SPOA lookups handled by pfb_crowdsec.', $oneCsSpoa('lookups'));
+	$family('pfblockerng_crowdsec_spoa_blocked_total', 'HAProxy SPOA requests blocked by pfb_crowdsec.', $oneCsSpoa('blocked'));
+	$family('pfblockerng_crowdsec_spoa_errors_total', 'HAProxy SPOA protocol or handler errors in pfb_crowdsec.', $oneCsSpoa('errors'));
+	$family('pfblockerng_crowdsec_spoa_appsec_lookups_total', 'HAProxy SPOA requests forwarded to CrowdSec AppSec.', $oneCsSpoa('appsec_lookups'));
+	$family('pfblockerng_crowdsec_spoa_appsec_blocked_total', 'HAProxy SPOA requests blocked by CrowdSec AppSec.', $oneCsSpoa('appsec_blocked'));
+	$family('pfblockerng_crowdsec_spoa_appsec_errors_total', 'CrowdSec AppSec evaluation errors or timeouts.', $oneCsSpoa('appsec_errors'));
+
+	$coreSpoa = is_array($s['spoa'] ?? NULL) && !empty($s['spoa']['enabled']) ? $s['spoa'] : NULL;
+	$oneCoreSpoa = static fn (string $field): array => ($coreSpoa !== NULL && isset($coreSpoa[$field])) ? array(array(array(), $coreSpoa[$field])) : array();
+	$family('pfblockerng_spoa_lookups_total', 'HAProxy SPOA lookups handled by pfb-core.', $oneCoreSpoa('lookups'));
+	$family('pfblockerng_spoa_blocked_total', 'HAProxy SPOA requests blocked by pfb-core.', $oneCoreSpoa('blocked'));
+	$family('pfblockerng_spoa_errors_total', 'HAProxy SPOA protocol or handler errors in pfb-core.', $oneCoreSpoa('errors'));
+	$coreSpoaEntries = array();
+	if ($coreSpoa !== NULL) {
+		$coreSpoaEntries[] = array(array('ip_type' => 'ipv4'), (int) ($coreSpoa['entriesV4'] ?? 0));
+		$coreSpoaEntries[] = array(array('ip_type' => 'ipv6'), (int) ($coreSpoa['entriesV6'] ?? 0));
+	}
+	$family('pfblockerng_spoa_entries', 'IP prefixes loaded in the pfb-core SPOA radix tree, per address family.', $coreSpoaEntries);
+
 	$rows = array();
 	foreach ($s['source_up'] as $source => $up) {
 		$rows[] = array(array('source' => $source), $up ? 1 : 0);
@@ -15160,6 +15202,16 @@ function pfb_metrics_collect(?callable $core_call = NULL): array {
 		});
 	}
 
+	$spoa = NULL;
+	if (PfbConfig::read('ip/spoa_enable') === PfbToggle::On && function_exists('pfb_core_call')) {
+		$spoa = $guard('spoa', function () use (&$up): ?array {
+			$reply = pfb_core_call('GetSPOAStatus', array());
+			$ok = ($reply['status'] ?? 0) === 200 && is_array($reply['body'] ?? NULL) && !empty($reply['body']['enabled']);
+			$up['spoa'] = $ok;
+			return $ok ? $reply['body'] : NULL;
+		});
+	}
+
 	return array(
 		'version'          => pfb_pkg_ver(),
 		'ip_tables'        => $ip_tables,
@@ -15174,6 +15226,7 @@ function pfb_metrics_collect(?callable $core_call = NULL): array {
 		'feed_failing'     => $feed_failing,
 		'pass'             => $pass,
 		'crowdsec'         => $crowdsec,
+		'spoa'             => $spoa,
 		'source_up'        => $up,
 	);
 }
@@ -30323,6 +30376,7 @@ function pfb_build_autorule_list(
 require_once __DIR__ . '/pfblockerng_apply.inc';
 require_once __DIR__ . '/pfblockerng_cron.inc';
 require_once __DIR__ . '/pfblockerng_geoip.inc';
+require_once __DIR__ . '/pfblockerng_spoa.inc';
 require_once __DIR__ . '/pfblockerng_crowdsec.inc';
 
 /**

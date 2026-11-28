@@ -301,6 +301,15 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngcrowdsec/config/0/rules_tag',
 		'installedpackages/pfblockerngcrowdsec/config/0/rule_v4',
 		'installedpackages/pfblockerngcrowdsec/config/0/rule_v6',
+		// issue #4309: HAProxy SPOA listener settings for pfb-core and pfb_crowdsec
+		'installedpackages/pfblockerngipsettings/config/0/spoa_enable',
+		'installedpackages/pfblockerngipsettings/config/0/spoa_listen',
+		'installedpackages/pfblockerngipsettings/config/0/spoa_aliases',
+		'installedpackages/pfblockerngcrowdsec/config/0/spoa_enable',
+		'installedpackages/pfblockerngcrowdsec/config/0/spoa_listen',
+		'installedpackages/pfblockerngcrowdsec/config/0/appsec_url',
+		'installedpackages/pfblockerngcrowdsec/config/0/appsec_timeout',
+		'installedpackages/pfblockerngcrowdsec/config/0/appsec_failure_action',
 		// issue #3688: resolver VIP fields on package general config
 		'installedpackages/pfblockerng/config/0/pfb_dns_listen_vip',
 		'installedpackages/pfblockerng/config/0/pfb_dns_listen_vip_only',
