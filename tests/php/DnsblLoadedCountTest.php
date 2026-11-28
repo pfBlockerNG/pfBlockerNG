@@ -14,9 +14,6 @@ use PHPUnit\Framework\TestCase;
  * "no emitted count" means "nothing is loaded", and the pass says 0. Before this, a
  * reinstall printed the pre-uninstall total on the line directly above
  * "DNSBL manifest not loaded: … DNSBL not loaded".
- *
- * The same artifact is the RAM basis pfb_unbound_py_swap_fits_ram() projects the
- * zero-downtime swap from, so a stale value is not merely a cosmetic log lie.
  */
 #[CoversFunction('pfb_update_unbound')]
 final class DnsblLoadedCountTest extends TestCase
@@ -104,13 +101,8 @@ final class DnsblLoadedCountTest extends TestCase
 		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], '{"version":1,"config":{},"feeds":[]}');
 		file_put_contents($GLOBALS['pfb']['unbound_py_reject_stats'], '[]');
 		file_put_contents("{$this->dir}/unbound.conf", "python-script: pfb_unbound.py\n");
-		file_put_contents("{$this->dir}/pfb_py_reload", "1\n");
-		file_put_contents("{$this->dir}/pfb_py_reload.applied", "1\n");
 		file_put_contents($GLOBALS['pfb']['chroot_cmd'], "#!/bin/sh\nexit 0\n");
 		chmod($GLOBALS['pfb']['chroot_cmd'], 0755);
-		$GLOBALS['pfb_test_unbound_py_sentinel_published'] = static function (string $path, int $generation): void {
-			file_put_contents("{$path}.applied", "{$generation}\n");
-		};
 	}
 
 	protected function tearDown(): void
@@ -134,11 +126,7 @@ final class DnsblLoadedCountTest extends TestCase
 		} else {
 			unset($GLOBALS['config']['unbound']);
 		}
-		unset(
-			$GLOBALS['pfb_test_process_running'],
-			$GLOBALS['pfb_test_sysctl'],
-			$GLOBALS['pfb_test_unbound_py_sentinel_published']
-		);
+		unset($GLOBALS['pfb_test_process_running']);
 		rmdir_recursive($this->dir);
 	}
 

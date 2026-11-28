@@ -11,8 +11,8 @@ use PHPUnit\Framework\TestCase;
 /**
  * issue #3515 -- in proxy mode the module lives in the DNS proxy, which re-reads the lists and the ini only
  * when it boots. Every pfb_reload_unbound() path that restarts the Resolver (a config change, a data update
- * the zero-downtime swap cannot take, a dead host) therefore restarts the proxy too, after Unbound is back;
- * the zero-downtime swap, which the proxy applies in place, never restarts it; and outside proxy mode the
+ * the data fast path cannot take, a dead host) therefore restarts the proxy too, after Unbound is back;
+ * the data fast path, whose data the proxy takes from Core, never restarts it; and outside proxy mode the
  * proxy service is never touched.
  *
  * restart_service() returns before the new proxy has written its pidfile, so the apply ledger -- which reads
@@ -32,8 +32,8 @@ final class DnsProxyReloadRestartTest extends TestCase
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const GLOBALS = [
 		'pfb', 'config', 'g', 'pfb_test_process_running', 'pfb_test_valid_pids', 'pfb_test_service_calls',
-		'pfb_test_service_hook', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles', 'pfb_test_swap_wait_s',
-		'pfb_test_unbound_py_sentinel_published', 'pfb_test_try_lock_fail', 'pfb_test_file_notices',
+		'pfb_test_service_hook', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles',
+		'pfb_test_try_lock_fail', 'pfb_test_file_notices',
 		'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_interfaces',
 	];
 
@@ -148,13 +148,6 @@ final class DnsProxyReloadRestartTest extends TestCase
 		file_put_contents("{$this->dir}/unbound.conf", "python-script: pfb_unbound.py\n");
 	}
 
-	private function applyEveryPublishedGeneration(): void
-	{
-		$GLOBALS['pfb_test_unbound_py_sentinel_published'] = static function (string $path, int $generation): void {
-			file_put_contents("{$path}.applied", "{$generation}\n");
-		};
-	}
-
 	public function testProxyModeRestartPathRestartsTheProxyAfterUnboundAndAfterRegeneratingItsScript(): void
 	{
 		// Given the Resolver is moved aside and the pass changed the module's config (restart path)
@@ -189,9 +182,9 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->assertCount(1, $seen);
 	}
 
-	public function testProxyModeDataUpdateTheSwapCannotTakeRestartsTheProxyToo(): void
+	public function testProxyModeDataUpdateTheFastPathCannotTakeRestartsTheProxyToo(): void
 	{
-		// Given a data update while the proxy host is down: no zero-downtime path
+		// Given a data update while the proxy host is down: no fast path
 		$this->setProxyMode();
 		$this->seedSwapFixture();
 		$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = FALSE;
@@ -203,21 +196,20 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->assertSame([['restart_service', 'pfb_dns_proxy']], array_column($seen, 'call'));
 	}
 
-	public function testProxyModeZeroDowntimeSwapNeverRestartsTheProxyOrUnbound(): void
+	public function testProxyModeDataFastPathNeverRestartsTheProxyOrUnbound(): void
 	{
-		// Given a data update the live proxy applies in place
+		// Given a data update while the live proxy hosts the module
 		$this->setProxyMode();
 		$this->seedSwapFixture();
 		$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = TRUE;
-		$this->applyEveryPublishedGeneration();
 		$seen = [];
 		$this->observeServiceCalls($seen);
 		$before = $this->startAttempts();
 
 		$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
 
-		$this->assertTrue($swapped, 'before: the swap took the fast path');
-		$this->assertSame([], $seen, 'the proxy applies the swap itself: no restart');
+		$this->assertTrue($swapped, 'before: the data took the fast path');
+		$this->assertSame([], $seen, 'the proxy takes the data from Core itself: no restart');
 		$this->assertSame($before, $this->startAttempts());
 	}
 
@@ -236,25 +228,24 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->assertStringNotContainsStringIgnoringCase('python', $log, 'the Update calls DNSBL python: ' . $log);
 	}
 
-	public function testAnUpdateTakingTheZeroDowntimeSwapNamesDnsblWithoutPython(): void
+	public function testAnUpdateTakingTheDataFastPathNamesDnsblWithoutPython(): void
 	{
-		// Given a data update the live proxy applies in place (issue #3850)
+		// Given a data update while the live proxy hosts the module (issue #3850)
 		$this->setProxyMode();
 		$this->seedSwapFixture();
 		$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = TRUE;
-		$this->applyEveryPublishedGeneration();
 
-		$this->assertTrue(pfb_reload_unbound('enabled', FALSE, TRUE), 'before: the swap took the fast path');
+		$this->assertTrue(pfb_reload_unbound('enabled', FALSE, TRUE), 'before: the data took the fast path');
 
-		// Then the swap's line names DNSBL, not python
+		// Then the reload's line names DNSBL, not python
 		$log = (string) file_get_contents($GLOBALS['pfb']['log']);
-		$this->assertStringContainsString("Reloading Unbound Resolver (DNSBL) [ zero-downtime swap ]", $log, $log);
+		$this->assertStringContainsString("Reloading Unbound Resolver (DNSBL) [ pfB-DNS takes the data from Core ]", $log, $log);
 		$this->assertStringNotContainsStringIgnoringCase('python', $log, $log);
 	}
 
 	/**
-	 * @return array<string,array{string,string,bool}> the part the gateway reports degraded, its reason, and whether the zero-downtime swap is still
-	 *   taken (docs/misc/dns-gateway-transports.md "Applied status": only the decider's three manifest reasons are a module the swap can rebuild)
+	 * @return array<string,array{string,string,bool}> the part the gateway reports degraded, its reason, and whether the data fast path is still
+	 *   taken (docs/misc/dns-gateway-transports.md "Applied status": only the decider's three manifest reasons are a module the next build ends)
 	 */
 	public static function degradedParts(): array
 	{
@@ -265,18 +256,18 @@ final class DnsProxyReloadRestartTest extends TestCase
 			'DNSBL is not blocking: the module booted with no ini, which only a restart reads (issue #3889)' =>
 				['dnsbl', 'Failed to load ini configuration. Ini file missing.', FALSE],
 			'DNSBL is not blocking for a reason this package does not know: the restart is the safe path' => ['dnsbl', 'a newer gateway\'s reason', FALSE],
-			'DNSBL is not blocking: the module booted with its manifest absent, which the swap that builds it ends (issue #3895)' =>
+			'DNSBL is not blocking: the module booted with its manifest absent, which the build ends (issue #3895)' =>
 				['dnsbl', 'DNSBL manifest absent: /var/unbound/pfb_py_sources.json -- DNSBL not loaded', TRUE],
 			'DNSBL is not blocking: the module booted with a manifest it could not read' =>
 				['dnsbl', "Failed to load DNSBL manifest '/var/unbound/pfb_py_sources.json': Expecting value: line 1 column 1 (char 0)", TRUE],
 			'DNSBL is not blocking: the module booted with a manifest it could not build' =>
 				['dnsbl', 'Failed to build DNSBL structures from raw: feed list is not a list', TRUE],
-			'another part is degraded: the module is there to swap' => ['ddr', '--ddr needs --dns-name', TRUE],
+			'another part is degraded: the module is there' => ['ddr', '--ddr needs --dns-name', TRUE],
 		];
 	}
 
 	#[DataProvider('degradedParts')]
-	public function testTheSwapIsNotTakenWhileTheGatewayBootedWithoutItsModule(string $part, string $reason, bool $swapped): void
+	public function testTheFastPathIsNotTakenWhileTheGatewayBootedWithoutItsModule(string $part, string $reason, bool $swapped): void
 	{
 		// Given a data update, a live proxy that hosts the module, and a gateway whose applied status lists a degraded part
 		$this->setProxyMode();
@@ -284,11 +275,6 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->proxyServes();
 		$this->seedRunningGateway();
 		$this->gatewayStatus(['degraded' => [['part' => $part, 'reason' => $reason]]]);
-		$flipped = FALSE;
-		$GLOBALS['pfb_test_unbound_py_sentinel_published'] = static function (string $path, int $generation) use (&$flipped): void {
-			$flipped = TRUE;
-			file_put_contents("{$path}.applied", "{$generation}\n");
-		};
 		$seen = [];
 		$this->observeServiceCalls($seen);
 		$before = $this->startAttempts();
@@ -296,11 +282,9 @@ final class DnsProxyReloadRestartTest extends TestCase
 		// When the reload runs as a data-only update
 		$taken = pfb_reload_unbound('enabled', FALSE, TRUE);
 
-		// Then a module-less gateway is restarted (the restart boots the module again) instead of being sent a generation it cannot apply,
-		// which the swap would wait out for the whole PFB_DNSBL_SWAP_WAIT; a module with no DNSBL build applies the swap, and any other
-		// degraded part leaves the swap as it was
+		// Then a module-less gateway is restarted (the restart boots the module again); a module with no DNSBL build takes the next
+		// build from Core, and any other degraded part leaves the fast path as it was
 		$this->assertSame($swapped, $taken);
-		$this->assertSame($swapped, $flipped, 'the sentinel was published only for a swap');
 		$this->assertSame($swapped ? [] : [['restart_service', 'pfb_dns_proxy']], array_column($seen, 'call'));
 		$this->assertSame($swapped, $this->startAttempts() === $before, 'Unbound restarted only on the restart path');
 	}

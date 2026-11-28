@@ -13,9 +13,8 @@ use PHPUnit\Framework\TestCase;
  * already-persisted content -- no re-download, re-parse, or re-dedup:
  *   - ip:    pfb_ip_apply_retry() -- a pfctl replace/kill against the aliasdir
  *            mirror, reusing pfb_pfctl_table_op()'s own ledger wiring.
- *   - dnsbl: pfb_dnsbl_apply_retry() -- re-publish the reload sentinel only
- *            (no wait, no restart -- see RESULTS/05_Results.txt), then re-run
- *            the existing convergence decision.
+ *   - dnsbl: pfb_dnsbl_apply_ledger_update() -- re-run the convergence decision
+ *            (pfB-DNS running, #3977); no wait, no restart.
  * Unbounded (ADR SS2.4): no attempt counter, no backoff -- a continued failure
  * simply stays open for the next reconciliation slot. Semantics #5: download/parse/dedup
  * stages are never touched by this step.
@@ -25,11 +24,9 @@ use PHPUnit\Framework\TestCase;
  *
  * Functions under test:
  *   pfb_ip_apply_retry(string $item): void
- *   pfb_dnsbl_apply_retry(): void
  *   pfblockerng_tick() -- the new due-ledger reconciliation step.
  */
 #[CoversFunction('pfb_ip_apply_retry')]
-#[CoversFunction('pfb_dnsbl_apply_retry')]
 #[CoversFunction('pfblockerng_tick')]
 final class TickApplyReconciliationTest extends TestCase
 {
@@ -219,16 +216,6 @@ final class TickApplyReconciliationTest extends TestCase
 	private function assertApplyReservation(): void
 	{
 		$this->assertNull(pfb_due_ledger_read_entry('apply_reconcile', $this->dir), 'the tick keeps no apply_reconcile ledger entry');
-	}
-
-	private function writeSentinel(int $gen): void
-	{
-		file_put_contents("{$this->dir}/pfb_py_reload", "{$gen}\n");
-	}
-
-	private function writeApplied(int $gen): void
-	{
-		file_put_contents("{$this->dir}/pfb_py_reload.applied", "{$gen}\n");
 	}
 
 	/**
@@ -453,20 +440,13 @@ final class TickApplyReconciliationTest extends TestCase
 
 	/**
 	 * Scenario:
-	 *   Given an open (dnsbl,dnsbl,apply) entry (sentinel=5, applied=3 --
-	 *   genuinely not converged) with the DNS proxy hosting the module and running.
-	 *   When  pfblockerng_tick() runs once.
-	 *   Then  the reload sentinel was bumped again (a real re-flip attempt --
-	 *         the spy, not just "no crash").
-	 *   And   the entry is STILL open -- 'applied' never catches up in this
-	 *         test (no real watcher process), so convergence genuinely stays
-	 *         broken (no backoff, no counter).
+	 *   Given an open (dnsbl,dnsbl,apply) entry with pfB-DNS owning the Resolver and its proxy down.
+	 *   When  pfblockerng_tick() runs once with the proxy still down.
+	 *   Then  the entry is STILL open (no backoff, no counter).
 	 */
-	public function testTickRetriesOpenDnsblApplyEntryAndLeavesItOpenOnContinuedFailure(): void
+	public function testTickLeavesOpenDnsblApplyEntryOpenWhileThePfbDnsProxyIsDown(): void
 	{
-		$this->pfbDnsHostsTheModule(TRUE);
-		$this->writeSentinel(5);
-		$this->writeApplied(3);
+		$this->pfbDnsHostsTheModule(FALSE);
 
 		// Seed via the real decision function -- matches how production opens this key.
 		pfb_dnsbl_apply_ledger_update();
@@ -474,14 +454,8 @@ final class TickApplyReconciliationTest extends TestCase
 
 		$this->tick();
 
-		$sentinelAfter = (int) trim((string) file_get_contents("{$this->dir}/pfb_py_reload"));
-		$this->assertGreaterThan(5, $sentinelAfter,
-			"expected pfblockerng_tick() to re-flip the reload sentinel past 5, got {$sentinelAfter} -- "
-			. 'the reconciliation step never attempted a retry');
-
 		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
-		$this->assertCount(1, $open, 'applied never catches up in this test, so convergence genuinely stays '
-			. 'broken -- the entry must stay open (no backoff, no counter)');
+		$this->assertCount(1, $open, 'the proxy is still down, so the entry must stay open');
 		$this->assertSame('dnsbl', $open[0]['item']);
 		$this->assertSame('apply', $open[0]['stage']);
 		$this->assertApplyReservation();
@@ -490,49 +464,22 @@ final class TickApplyReconciliationTest extends TestCase
 	/**
 	 * Scenario:
 	 *   Given the SAME seeded open (dnsbl,dnsbl,apply) entry as above.
-	 *   And   the underlying condition is FIXED before the tick runs (applied
-	 *         catches up to sentinel out-of-band -- e.g. the watcher finished).
+	 *   And   the pfB-DNS proxy comes up before the tick runs.
 	 *   When  pfblockerng_tick() runs once.
 	 *   Then  the entry clears within one due reconciliation attempt, no restart / Force Reload.
 	 */
-	public function testTickClearsDnsblApplyEntryOnceUnderlyingConditionIsFixed(): void
+	public function testTickClearsDnsblApplyEntryOnceThePfbDnsProxyRuns(): void
 	{
-		$this->pfbDnsHostsTheModule(TRUE);
-		$this->writeSentinel(5);
-		$this->writeApplied(3);
-
+		$this->pfbDnsHostsTheModule(FALSE);
 		pfb_dnsbl_apply_ledger_update();
 		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'));
 
-		// Fixed out-of-band: applied has caught up to the sentinel.
-		$this->writeApplied(5);
+		$this->pfbDnsHostsTheModule(TRUE);
 
 		$this->tick();
 
 		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
-			'a fixed underlying convergence condition must clear within one due reconciliation attempt');
-	}
-
-	// -----------------------------------------------------------------------
-	// KILL-GATE support -- pfb_dnsbl_apply_retry() never re-flips when nothing
-	// could consume it (the module host down): stays cheap, never a false "attempt".
-	// -----------------------------------------------------------------------
-
-	public function testDnsblRetryDoesNotFlipSentinelWhenTheProxyIsNotRunning(): void
-	{
-		$this->pfbDnsHostsTheModule(FALSE);
-		$this->writeSentinel(5);
-		$this->writeApplied(3);
-
-		pfb_dnsbl_apply_ledger_update();
-		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'));
-
-		$this->tick();
-
-		$sentinelAfter = (int) trim((string) file_get_contents("{$this->dir}/pfb_py_reload"));
-		$this->assertSame(5, $sentinelAfter,
-			'The module host is not running -- nothing can consume a re-flipped sentinel, so '
-			. "pfb_dnsbl_apply_retry() must not bump it (got {$sentinelAfter}, expected unchanged 5)");
+			'a running pfB-DNS proxy must clear the entry within one due reconciliation attempt');
 	}
 
 	// -----------------------------------------------------------------------

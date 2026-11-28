@@ -1676,9 +1676,6 @@ function pfb_emit_entry_reject_stats(string $path): void {
 }
 
 
-
-
-
 // Punycode-convert a domain, preserving a leading '.' wildcard marker; returns '' when the
 // conversion fails. idn_to_ascii() rejects a leading dot, so strip exactly ONE and re-prefix
 // it (issue #1730/#1740: ltrim() would promote an invalid '..host' row to the wildcard form).
@@ -1714,7 +1711,6 @@ function pfb_strip_wildcard_marker(string $row, string $reference): string {
 	}
 	return $stripped;
 }
-
 
 
 /**
@@ -3313,16 +3309,6 @@ if (!defined('PFB_REENTRY_TIMEOUT_MIN')) {
 }
 if (!defined('PFB_REENTRY_TIMEOUT_MAX')) {
 	define('PFB_REENTRY_TIMEOUT_MAX', 7200);
-}
-
-// Budget (seconds) for the ADR-10 applied-generation wait. Expiry is NOT a failure:
-// the previous snapshot keeps serving and ADR-61 tick reconciliation retries -- the
-// practical failure latency is that wait's liveness probe (Unbound gone), not this.
-// The value is ANCHORED to PFB_REENTRY_TIMEOUT's precedent for one long-running
-// operator-triggered operation, never derived from it: that knob bounds an external
-// subprocess and kills it on expiry, this bounds an in-process marker poll.
-if (!defined('PFB_DNSBL_SWAP_WAIT')) {
-	define('PFB_DNSBL_SWAP_WAIT', 1800);
 }
 
 // The re-entry target. Single-sourced so no caller composes the child command itself.
@@ -6709,7 +6695,6 @@ EOF;
 }
 
 
-
 /**
  * Is this an address a client can be given: valid, no zone, not link-local, not loopback (127.0.0.0/8, ::1)?
  *
@@ -8803,7 +8788,7 @@ function pfb_dns_proxy_backend_problem(?array $applied): ?string {
  * published one (a listener that cannot bind, which its supervisor restarts every few seconds), the marker an earlier
  * incarnation left, a live supervisor with no child and a marker with no live child are all NOT ready.
  *
- * pfb_dns_proxy_running() stays the pidfile-only LIVENESS predicate (is the module host up? what the zero-downtime swap and the
+ * pfb_dns_proxy_running() stays the pidfile-only LIVENESS predicate (is the module host up? what the data fast path and the
  * ledger ask). This one is the gateway alone: the frontend's listener evidence and the certificate push ride on it. The serving
  * predicate pfb_dns_proxy_serving_ready() adds the Unbound backend the gateway forwards to, and is what an activation waits for.
  */
@@ -10805,7 +10790,6 @@ function pfb_logger($log, $logtype) {
  */
 
 
-
 /*
  * issue #2851: resolve a STORED or SUBMITTED nested-pass timeout to the seconds the seam
  * may use. Whole seconds inside [PFB_REENTRY_TIMEOUT_MIN, PFB_REENTRY_TIMEOUT_MAX] are
@@ -12354,9 +12338,6 @@ function pfb_pkg_op_tears_down(string $op): bool {
 }
 
 
-
-
-
 /*
  * Return the deprecation warning string for a legacy verb string, or '' if not deprecated.
  *
@@ -12380,9 +12361,6 @@ function pfb_verb_deprecation_warning($verb) {
 	}
 	return "DEPRECATED: pfblockerng verb '{$v}' — use explicit request ({$map[$v]}); removal scheduled";
 }
-
-
-
 
 
 // Determine 'list' details
@@ -13796,7 +13774,6 @@ function pfb_ip_apply_retry(string $item): void {
 }
 
 
-
 // Whether pf table $table holds no entry (a table that does not exist holds none), as pfb_pfctl_table_count() reads it but from
 // the first line of `pfctl -T show` only: the listing of a large table never reaches PHP.
 function pfb_pfctl_table_empty(string $table): bool {
@@ -14819,8 +14796,6 @@ function dnsbl_save_stats(): bool {
 }
 
 
-
-
 // Issue #4053: the DNSBL web server (lighttpd), its NAT redirect, certificate and auto-created VIP are removed. This strips
 // whatever an earlier version left: the exact pfB DNSBL NAT rows, the lighttpd conf and certificate, the running service and
 // the marked auto-VIP (pfb_dnsbl_vip_retire()). Idempotent, so a restored old backup is cleaned by the next apply.
@@ -15279,12 +15254,6 @@ function pfb_dnsbl_whitelist_lines() {
 }
 
 
-
-
-
-
-
-
 // Decode a host the way the WHATWG URL parser (browsers) and libcurl do, so hex/octal/DWORD and
 // short spellings ('0xC0A80164', '0300.0250.01.0144', '192.168.356') map to the address a client
 // actually dials. Returns NULL when $host is not numeric-shaped (last label neither all digits nor
@@ -15361,7 +15330,6 @@ function pfb_ipv4_numeric_host(string $host): ?array {
 }
 
 
-
 // The IPv4 address inside an IPv4-mapped IPv6 literal (::ffff:0:0/96), else NULL. A client
 // connecting to one sends an IPv4 packet, which no v6 table entry matches.
 function pfb_ipv4_from_mapped(string $ip): ?string {
@@ -15375,14 +15343,6 @@ function pfb_ipv4_from_mapped(string $ip): ?string {
 	}
 	return inet_ntop(substr($bin, 12));
 }
-
-
-
-
-
-
-
-
 
 
 // ADR-10: atomically publish a file to the chroot (/var/unbound). The same-directory
@@ -15776,61 +15736,13 @@ function pfb_top1m_teardown_call(?callable $teardown = NULL): bool {
 }
 
 
-// ADR-10: flip the zero-downtime RELOAD SENTINEL (the all-or-nothing commit that
-// wakes the Python reload-watcher). The sentinel host path is /var/unbound/pfb_py_reload
-// (Unbound is chrooted at /var/unbound; the module opens it as the chroot-relative
-// "pfb_py_reload"). Its content is a monotonically NON-DECREASING
-// base-10 integer GENERATION on the FIRST LINE. The watcher swaps IFF the freshly-read
-// generation is a STRICT ADVANCE over its last-seen value, so we write current+1 (or 1
-// when the sentinel is absent/empty/non-integer). The write is atomic (stage -> fsync ->
-// rename via pfb_unbound_py_atomic_write) so the watcher's directory watch sees a clean
-// RENAME and never reads a half-written integer. Returns TRUE when the sentinel advanced.
-function pfb_unbound_py_flip_sentinel() {
-	global $pfb;
-
-	$sentinel = "{$pfb['dnsbldir']}/pfb_py_reload";
-
-	$cur = 0;
-	if (file_exists($sentinel)) {
-		$raw = @file_get_contents($sentinel);
-		if ($raw !== FALSE) {
-			$first = strtok($raw, "\n");
-			if ($first !== FALSE) {
-				$first = trim($first);
-				if ($first !== '' && ctype_digit($first)) {
-					$cur = (int) $first;
-				}
-			}
-		}
-	}
-
-	$next = $cur + 1;
-	if (!pfb_unbound_py_atomic_write($sentinel, "{$next}\n")) {
-		return FALSE;
-	}
-	$published_hook = $GLOBALS['pfb_test_unbound_py_sentinel_published'] ?? NULL;
-	if (is_callable($published_hook)) {
-		$published_hook($sentinel, $next);
-	}
-
-	// Return the generation just published (>= 1) so the caller can wait for the
-	// watcher's applied-generation marker to reach it -- the readiness handshake that
-	// replaces "wait for the Unbound restart" for a no-restart data update (ADR-10).
-	return $next;
-}
-
-
 // Poll (bounded) an applied-generation/sequence marker file until its first line
-// parses as an integer >= $target, or $timeout_s elapses. Shared by
-// pfb_unbound_py_wait_applied() (the ADR-10 reload-watcher handshake) and
+// parses as an integer >= $target, or $timeout_s elapses. Used by
 // pfb_unbound_py_wait_control_applied() (the control-channel watcher). 200 ms
-// poll interval; returns TRUE once applied, FALSE on timeout. An optional $alive probe
-// is consulted marker-first -- an already-applied target returns TRUE without it -- and
-// a FALSE breaks the wait: a dead consumer can never apply (issue #3200).
-function pfb_unbound_py_wait_marker($path, $target, $timeout_s, ?callable $alive = NULL) {
+// poll interval; returns TRUE once applied, FALSE on timeout.
+function pfb_unbound_py_wait_marker($path, $target, $timeout_s) {
 	$target = (int) $target;
 	$deadline = microtime(TRUE) + (float) $timeout_s;
-	$next_alive = 0.0;
 
 	do {
 		if (file_exists($path)) {
@@ -15845,17 +15757,6 @@ function pfb_unbound_py_wait_marker($path, $target, $timeout_s, ?callable $alive
 				}
 			}
 		}
-		// Marker-first: liveness is only consulted when this pass still needs the
-		// consumer. Throttled to ~1/s because the probe forks (pgrep) while this loop
-		// polls at 200 ms: over a full PFB_DNSBL_SWAP_WAIT that was ~9000 forks beside
-		// a RAM-heavy rebuild, and the wait already tolerates minutes of latency.
-		$now = microtime(TRUE);
-		if ($alive !== NULL && $now >= $next_alive) {
-			if (!$alive()) {
-				return FALSE;
-			}
-			$next_alive = $now + 1.0;
-		}
 		usleep(200000);	// 200 ms between polls
 	} while (microtime(TRUE) < $deadline);
 
@@ -15863,27 +15764,8 @@ function pfb_unbound_py_wait_marker($path, $target, $timeout_s, ?callable $alive
 }
 
 
-// ADR-10: wait (bounded) for the reload-watcher to APPLY a published generation. After
-// flipping the sentinel to $gen, blocks until the watcher writes a value >= $gen to the applied
-// marker (/var/unbound/pfb_py_reload.applied) — restoring the "lists live on return" invariant
-// the restart had. Queries NEVER stop during the wait (zero-downtime/zero-dropped). Returns
-// TRUE once applied; FALSE on timeout (in flight, not an error) or liveness loss. Default
-// liveness is the module host (the DNS proxy): the reload watcher
-// lives inside it, so a dead host can never apply the generation (issue #3200).
-// Poll cadence (~2s) + rebuild time bound the latency; the budget decides only how long
-// this caller waits before reporting the swap still in flight.
-function pfb_unbound_py_wait_applied($gen, $timeout_s = PFB_DNSBL_SWAP_WAIT, ?callable $alive = NULL) {
-	global $pfb;
-
-	$alive ??= static fn (): bool => pfb_unbound_py_host_running();
-
-	return pfb_unbound_py_wait_marker("{$pfb['dnsbldir']}/pfb_py_reload.applied", $gen, $timeout_s, $alive);
-}
-
-
 // Poll until the control-channel watcher has applied sequence $seq (or beyond), confirming
-// the published command was consumed. Mirrors pfb_unbound_py_wait_applied() in structure:
-// reads the applied marker (/var/unbound/pfb_py_control.applied), parses the first line as
+// the published command was consumed. Reads the applied marker (/var/unbound/pfb_py_control.applied), parses the first line as
 // an integer, and returns TRUE when the stored value >= $seq. Returns FALSE on timeout.
 // A $timeout_s <= 0 is never passed here (the caller guards); 200 ms poll interval.
 function pfb_unbound_py_wait_control_applied($seq, $timeout_s = 5) {
@@ -16060,47 +15942,6 @@ function pfb_unbound_py_write_control($cmd, $ip = '', $duration = '', $wait_time
 }
 
 
-// ADR-10: PRIMARY RAM gate for the zero-downtime swap (the Python watcher re-checks it as a
-// safety net). The background rebuild holds OLD + NEW matcher structures resident at once
-// (~2x transient); on a constrained box that bust would OOM mid-swap. Mirrors the Python
-// projection: 2 * loaded_entries * 276 B + 64 MiB headroom, measured against hw.usermem.
-// Returns TRUE when the projected build FITS (zero-downtime allowed); FALSE -> the caller
-// takes the restart fallback. Unknown RAM/count -> FALSE (fail-closed: restart never doubles,
-// frees the old set by dying before rebuilding).
-function pfb_unbound_py_swap_fits_ram() {
-	global $pfb;
-
-	// Bytes-per-entry + headroom mirror the gateway's RELOAD_BYTES_PER_ENTRY (276) and
-	// RELOAD_RAM_HEADROOM_BYTES (64 MiB). Keep the two ends of this contract in step.
-	$bytes_per_entry = 276;
-	$headroom	 = 64 * 1024 * 1024;
-
-	// Loaded entry count = the live snapshot size the gateway's build emits (data+zone).
-	$loaded = @file_get_contents($pfb['unbound_py_count']);
-	if ($loaded === FALSE) {
-		return FALSE;
-	}
-	$loaded = trim((string) $loaded);
-	if ($loaded === '' || !ctype_digit($loaded)) {
-		// No emitted count yet (first build) -> cannot project -> fail-closed to restart.
-		return FALSE;
-	}
-	$entries = (int) $loaded;
-
-	// hw.usermem = physical memory minus the kernel's wired pages (bytes). This is the
-	// AUTHORITATIVE pre-flip gate; the Python watcher re-checks the same TOTAL-RAM basis
-	// (SC_PHYS_PAGES) as a coarse backstop, so a swap PHP approves here is not then
-	// second-guessed away on free-page tightness (which would force a needless restart).
-	$usermem = get_single_sysctl('hw.usermem');
-	if (!is_numeric($usermem) || (int) $usermem <= 0) {
-		return FALSE;
-	}
-
-	$projected = 2 * $entries * $bytes_per_entry;
-	return ((int) $usermem >= $projected + $headroom);
-}
-
-
 // PFBL-01: validate a feed header / list label before it is used to derive a file
 // path or a manifest key. Returns the header UNCHANGED when it validates via
 // pfb_filter(PFB_FILTER_WORD); returns FALSE on rejection, after logging the
@@ -16116,7 +15957,6 @@ function pfb_sanitise_feed_header(string $header, string $reference = 'pfb_sanit
 	}
 	return $header;
 }
-
 
 
 // ADR-06: Build the shell->Python contract: the per-feed manifest ($pfb['unbound_py_sources'])
@@ -18867,48 +18707,14 @@ function pfb_unbound_py_ccache_flush($names) {
 }
 
 
-// Read a reload/applied marker's first-line generation with the IDENTICAL parsing
-// convention as pfb_unbound_py_flip_sentinel()/_wait_marker() (first line, trim,
-// ctype_digit) -- an absent/empty/non-integer file reads as 0, the shared "never
-// flipped yet" baseline pfb_dnsbl_converged() relies on for its 0 == 0 case.
-function pfb_unbound_py_marker_generation(string $path): int {
-	if (!file_exists($path)) {
-		return 0;
-	}
-	$raw = @file_get_contents($path);
-	if ($raw === FALSE) {
-		return 0;
-	}
-	$first = strtok($raw, "\n");
-	if ($first === FALSE) {
-		return 0;
-	}
-	$first = trim($first);
-	if ($first === '' || !ctype_digit($first)) {
-		return 0;
-	}
-	return (int) $first;
-}
-
-// ADR-61: is DNSBL's live matcher state actually caught up with what it was told to
-// become? TRUE iff the sentinel/applied generations agree (or neither has ever been
-// written) and the module host is running (pfb_unbound_py_host_running()). Pure
-// read -- no writes, no waiting/polling. Reused by pfb_reload_unbound()'s own
-// apply-stage writer/clearer and by the tick reconciliation step.
+// ADR-61: is DNSBL caught up with what it was told to become? #3977: pfB-DNS takes the DNSBL data from Core on its own, so DNSBL
+// is converged while pfB-DNS hosts the module and runs. Reused by pfb_reload_unbound()'s apply-stage writer/clearer and by the tick.
 function pfb_dnsbl_converged(): bool {
-	global $pfb;
-
-	$sentinel = pfb_unbound_py_marker_generation("{$pfb['dnsbldir']}/pfb_py_reload");
-	$applied  = pfb_unbound_py_marker_generation("{$pfb['dnsbldir']}/pfb_py_reload.applied");
-	if ($sentinel !== $applied) {
-		return FALSE;
-	}
-
 	return pfb_unbound_py_host_running();
 }
 
 // ADR-61: the DNSBL apply-stage writer/clearer decision, shared by every point in
-// pfb_reload_unbound() where convergence might settle (the zero-downtime swap's own
+// pfb_reload_unbound() where convergence might settle (the data fast path's own
 // success return, and the shared restart path's completion). Kept separate from
 // pfb_dnsbl_converged() so it stays directly unit-testable.
 function pfb_dnsbl_apply_ledger_update(): bool {
@@ -18926,25 +18732,6 @@ function pfb_dnsbl_apply_ledger_update(): bool {
 			$pfb['dbdir']);
 	}
 	return $converged;
-}
-
-// ADR-61: tick-driven reconciliation for a stuck (dnsbl,dnsbl,apply) ledger entry.
-// A full Unbound restart (pfb_stop_start_unbound(): a real ~30s stop-wait plus an
-// actual daemon restart) is deliberately out of scope for a per-tick retry -- only
-// re-publishes the reload sentinel (one atomic file write, no wait_applied poll,
-// no restart), and only when the DNS proxy hosting the module is live to consume
-// it; otherwise nothing safe/cheap is left to try, so the entry just stays open.
-function pfb_dnsbl_apply_retry(): void {
-	global $pfb;
-
-	if (!pfb_dnsbl_converged()
-	    && pfb_unbound_py_host_running()
-	    && empty($pfb['dnsbl_python_unmount'])
-	    && !file_exists("{$pfb['dnsbldir']}/unbound.tmp")) {
-		pfb_unbound_py_flip_sentinel();
-	}
-
-	pfb_dnsbl_apply_ledger_update();
 }
 
 // ADR-65: surface a still-open DNSBL manifest parse-stage ledger entry (Python's
@@ -18967,14 +18754,9 @@ function pfb_dnsbl_manifest_failure_notice(): bool {
 	return FALSE;
 }
 
-// Reload Resolver. ADR-10: $datapath signals a pure DNSBL-DATA update (feed/cron or a #51
-// custom-list edit) already published atomically to the manifest. When the DNS proxy hosts the module (pfB-DNS)
-// and runs, no config change is pending, and the RAM gate fits, this
-// takes the ZERO-DOWNTIME fast path (flip the reload sentinel, no restart). Any other case falls back to the restart
-// (fail-safe; PHP is the PRIMARY gate — never "flip and hope"). Returns TRUE only after the
-// applied-generation handshake; FALSE = restart fallback (resolver broken) OR unconfirmed-
-// in-flight (issue #3200): queries keep the previous snapshot and the ADR-61 tick retry
-// re-publishes until the swap converges.
+// Reload Resolver. $datapath signals a pure DNSBL-DATA update (feed/cron or a #51 custom-list edit). When the DNS proxy hosts the
+// module (pfB-DNS) and runs and no config change is pending, pfB-DNS takes the data from Core itself (#3977) and this returns TRUE
+// without a restart. Any other case restarts; FALSE = the restart failed (resolver broken).
 function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable $apply_ledger = NULL) {
 	global $g, $pfb;
 	$apply_ledger ??= static function (): bool {
@@ -18987,98 +18769,19 @@ function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable 
 		$type = ' (DNSBL)';
 	}
 
-	// ZERO-DOWNTIME DATA FAST PATH (no restart). Eligible iff this is a data-only update
-	// while the DNS proxy hosts the module and is up, NO config change is staged (a pending
-	// unbound.tmp or an unmount-in-progress means the resolver config changed -> restart),
-	// and the primary RAM gate says the ~2x transient build fits. Otherwise fall through
-	// to the restart path below (also the fallback when the swap is unavailable).
+	// DATA FAST PATH (no restart). #3977: pfB-DNS polls Core for the DNSBL data, so a data-only update while the DNS proxy hosts
+	// the module and is up, with NO config change staged (a pending unbound.tmp or an unmount-in-progress means the resolver config
+	// changed -> restart), has nothing left to do here. Otherwise fall through to the restart path below.
 	if ($datapath &&
 	    $mode == 'enabled' &&
 	    pfb_unbound_py_host_running() &&
 	    !pfb_dns_proxy_dnsbl_restart_wanted() &&
 	    empty($pfb['dnsbl_python_unmount']) &&
 	    !file_exists("{$pfb['dnsbldir']}/unbound.tmp")) {
-
-		if (pfb_unbound_py_swap_fits_ram()) {
-			// Suppress the DNSBL Queries daemon's control-socket use during the swap +
-			// flush (parity with pfb_update_unbound, which also touches this marker).
-			touch("{$pfb['dnsbl_file']}.sync");
-
-			$gen = pfb_unbound_py_flip_sentinel();
-			if ($gen !== FALSE) {
-				pfb_logger("\nReloading Unbound Resolver{$type} [ zero-downtime swap ]", 1);
-
-				$swap_wait_s = (int) ($GLOBALS['pfb_test_swap_wait_s'] ?? 0);
-				if ($swap_wait_s <= 0) {
-					$swap_wait_s = PFB_DNSBL_SWAP_WAIT;
-				}
-
-				// Readiness handshake: block (bounded) until the watcher APPLIES this
-				// generation, so the new lists are LIVE before we return -- the ADR-12
-				// post hook + the #51 alert page then see the new state, not a pending
-				// async swap. Queries keep flowing on the old snapshot during the wait.
-				if (pfb_unbound_py_wait_applied($gen, $swap_wait_s)) {
-					pfb_logger(" completed", 1);
-					// Clear the daemon-suppression marker before this early return: the
-					// alert/#51 path (pfb_reload_unbound called from pfblockerng_alerts.php)
-					// has no later clear_work_files, so '.sync' would otherwise leak and keep
-					// the DNSBL Queries daemon suppressed. The restart-fallback paths below
-					// reach the normal clear, so this is the only fast-path exit that needs it.
-					unlink_if_exists("{$pfb['dnsbl_file']}.sync");
-					// ADR-61: this swap just confirmed applied == sentinel -- a second,
-					// independent convergence point besides the restart path's completion.
-					$converged = $apply_ledger();
-					pfb_unbound_py_gc($converged);
-					return TRUE;
-				}
-
-				// issue #3200: expiry is NOT a failure -- a slow/declined rebuild stays
-				// in flight, the previous snapshot keeps serving, and ADR-61 tick
-				// reconciliation re-publishes. Liveness, not the clock, separates
-				// in-flight from broken: a dead module host can never apply the generation.
-				if (pfb_unbound_py_host_running()) {
-					pfb_logger(" swap not confirmed within {$swap_wait_s}s -- swap still in flight, previous lists serving", 1);
-					// Same leak rationale as the flip-failure branch below (#713 bug 3):
-					// the alert/#51 caller has no later clear_work_files.
-					unlink_if_exists("{$pfb['dnsbl_file']}.sync");
-					// Open the pending (dnsbl,dnsbl,apply) entry NOW: no restart tail runs
-					// to write it, and tick reconciliation keys on this entry.
-					$converged = $apply_ledger();
-					// Skip the publication lock when convergence is already known
-					// false: GC is a documented no-op then, and this branch runs on
-					// every in-flight expiry. A swap that landed between the wait and
-					// this read still reports TRUE, so the useful case still collects.
-					if ($converged) {
-						pfb_unbound_py_gc($converged);
-					}
-					return FALSE;
-				}
-
-				// The module host exited during the swap: nothing will ever apply the generation,
-				// so fall through to the restart tail -- restarting is what brings DNS
-				// back with the new manifest.
-				pfb_logger("\nADR-10: swap unconfirmed -- the module host exited during the swap; recovering via restart", 2);
-				unlink_if_exists("{$pfb['dnsbl_file']}.sync");
-			}
-			else {
-				// Sentinel flip failed (could not stage/rename) -> fall back to the restart
-				// so the new lists still load (don't leave a flipped-but-no-op state).
-				pfb_logger("\nADR-10: sentinel flip failed -- falling back to Unbound restart", 2);
-				// Same rationale as the timeout branch above: the inline restart path
-				// below does not touch '.sync', and clearing it here only exists to stop
-				// the marker leaking to the alert/#51 caller (no later clear_work_files).
-				unlink_if_exists("{$pfb['dnsbl_file']}.sync");
-			}
-		}
-		else {
-			// PRIMARY RAM gate declined: the box cannot fit the ~2x transient build.
-			// Restart instead (it never doubles -- it frees the old set by dying before
-			// rebuilding) so the new lists actually load.
-			pfb_logger("\nADR-10: RAM-constrained box -- using Unbound restart instead of the zero-downtime swap", 1);
-		}
+		pfb_logger("\nReloading Unbound Resolver{$type} [ pfB-DNS takes the data from Core ]", 1);
+		pfb_unbound_py_gc($apply_ledger());
+		return TRUE;
 	}
-
-
 
 	if ($mode == 'enabled' && is_process_running('unbound') && !$pfb['dnsbl_python_unmount'] && !$pfbpython) {
 
@@ -19151,7 +18854,7 @@ function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable 
 	}
 
 	// issue #3515: the proxy hosts the module and re-reads lists and ini only when it boots, so it restarts with
-	// the Resolver (the zero-downtime swap returns above and never gets here). A disabled pass gives the Resolver back.
+	// the Resolver (the data fast path returns above and never gets here). A disabled pass gives the Resolver back.
 	// restart_service() returns before the new proxy serves, which the ledger below depends on: wait for it to be READY.
 	// A proxy that is not leaves the Resolver moved; its startup notice says why (pfb_dns_proxy_confirm_ready()).
 	// Under a package operation a running proxy keeps serving and the restart is deferred to the next update (issue #3566); a dead one is started.
@@ -19274,20 +18977,11 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	// Load new DNSBL updates
 	if (is_service_running('unbound')) {
 
-		// ADR-10: a feed/cron DNSBL-DATA update takes the zero-downtime swap when the
-		// reload introduces NO config change ($pfbpython FALSE -> unbound.conf/ini/mounts
-		// unchanged). The manifest + per-feed raw were already published atomically by
-		// pfb_unbound_python_sources() above; flip the sentinel, no restart. A config
-		// change ($pfbpython TRUE) -> $datapath FALSE -> the restart path. The bulk
-		// fast path optionally flushes the full resolver cache after the applied-generation
-		// handshake; restart paths use Unbound's normal cache lifecycle.
-		$datapath = !$pfbpython;
-		$swapped = pfb_reload_unbound($mode, $pfbpython, $datapath);
-		if ($datapath && $swapped &&
-		    ($pfb['dnsbl_cache_flush'] ?? PfbToggle::Off) === PfbToggle::On) {
-			pfb_unbound_control_exec("{$pfb['chroot_cmd']} flush_zone +c . 2>&1 < /dev/null",
-				'flush_zone');
-		}
+		// A feed/cron DNSBL-DATA update needs no restart when the reload introduces NO config change ($pfbpython FALSE ->
+		// unbound.conf/ini/mounts unchanged): pfB-DNS takes the data from Core (#3977). A config change ($pfbpython TRUE) ->
+		// $datapath FALSE -> the restart path. No resolver cache flush: pfB-DNS answers before Unbound and clears its own
+		// decision cache on a new snapshot (#3977 owner decision, 2026-11-27).
+		pfb_reload_unbound($mode, $pfbpython, !$pfbpython);
 	}
 
 	// Start Unbound Service with new DNSBL Updates
@@ -19343,8 +19037,6 @@ function pfb_top1m_active_provider(): array
 }
 
 
-
-
 // Validate IPv4 IP addresses
 function validate_ipv4($ipaddr) {
 	if (str_contains($ipaddr, "\0")) {
@@ -19378,7 +19070,6 @@ function pfb_ip_exact_entry_pattern($entry): ?string {
 
 	return '^' . str_replace('.', '\.', $entry) . '$';
 }
-
 
 
 // Explode IP for evaluations
@@ -20638,7 +20329,6 @@ function pfb_dnsbl_policy_upgrade(): bool {
 }
 
 
-
 // issue #2371: fresh-install detector for the feed-at-suffix PSL policy fields
 // (dnsbl/pfb_psl_feed_private_policy, dnsbl/pfb_psl_feed_icann_policy). Same
 // empty($dconfig)-on-the-operator-view idiom as pfb_schedule_migrate's $is_fresh, but
@@ -21076,10 +20766,6 @@ function pfb_feed_host_allowed($host, &$reason, &$pinned, &$ascii_host = '') {
 }
 
 
-
-
-
-
 // Issue #890: redact the query string and userinfo ('user:pass@') from a feed/download URL
 // before it is written to any log — either can carry a credential, and log files ship inside
 // pfSense support bundles. scheme/host/port/path are kept for diagnosability. A well-formed
@@ -21131,10 +20817,6 @@ function pfb_redact_url($url) {
 	}
 	return $redacted;
 }
-
-
-
-
 
 
 // Determine reason for download failure
@@ -23654,8 +23336,6 @@ function pfb_alerts_ip_replay_step($entry): array {
 }
 
 
-
-
 // Map a numeric SQLite3 handle index (1-7, see pfb_open_sqlite() callers) to its
 // table name + CREATE statement. Extracted as a pure function so the index->table
 // mapping is unit-testable without a live SQLite3 file (issue #713 bug 10: table 6
@@ -23813,7 +23493,6 @@ function pfb_close_sqlite($db_handle) {
 		unset($db_handle);
 	}
 }
-
 
 
 // Function to 1) Collect lastevent and 2) Save lastevent to SQLite 'lastevent' Database
@@ -24052,7 +23731,6 @@ function pfb_runlog_begin() {
 		$pfb['runlog_active'] = TRUE;
 	}
 }
-
 
 
 // Load/convert Feeds (w/alternative aliasname(s), if user-configured) and return as array

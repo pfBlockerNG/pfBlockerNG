@@ -10,15 +10,14 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * issue #3770 -- DNSBL runs only through pfB-DNS, so the only host of the DNSBL module is the DNS proxy while it owns the Resolver
- * and DNSBL is on. Unbound is never asked: not by the liveness predicate, the convergence verdict, the zero-downtime swap, nor the
- * tick retry -- whatever its process, its unbound.conf or the python keys in config.xml still say. Every "not hosted" row starts
+ * and DNSBL is on. Unbound is never asked: not by the liveness predicate, the convergence verdict nor the data
+ * fast path -- whatever its process, its unbound.conf or the python keys in config.xml still say. Every "not hosted" row starts
  * from a legacy box that really runs Unbound with pfb_unbound.py wired (process up, conf and config.xml naming it), so a verdict
  * that still consults Unbound would answer the opposite and fail it. The texts say where DNSBL runs when pfB-DNS does not.
  */
 #[CoversFunction('pfb_unbound_py_host_running')]
 #[CoversFunction('pfb_dnsbl_converged')]
 #[CoversFunction('pfb_dnsbl_apply_ledger_update')]
-#[CoversFunction('pfb_dnsbl_apply_retry')]
 #[CoversFunction('pfb_reload_unbound')]
 #[CoversFunction('pfb_dns_proxy_unmoved_effect')]
 #[CoversFunction('pfb_dns_status')]
@@ -92,7 +91,7 @@ final class DnsblHostIsPfbDnsOnlyTest extends TestCase
 			$GLOBALS['pfb_test_process_running'],
 			$GLOBALS['pfb_test_valid_pids'],
 			$GLOBALS['pfb_test_file_notices'],
-			$GLOBALS['pfb_test_unbound_py_sentinel_published'],
+			$GLOBALS['pfb_test_swap_wait_s'],
 			$GLOBALS['pfb_test_service_hook']
 		);
 		rmdir_recursive($this->dir);
@@ -119,17 +118,6 @@ final class DnsblHostIsPfbDnsOnlyTest extends TestCase
 	private function setProxyUp(bool $up): void
 	{
 		$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = $up;
-	}
-
-	private function writeGenerations(int $sentinel, int $applied): void
-	{
-		file_put_contents("{$this->dir}/pfb_py_reload", "{$sentinel}\n");
-		file_put_contents("{$this->dir}/pfb_py_reload.applied", "{$applied}\n");
-	}
-
-	private function sentinel(): int
-	{
-		return pfb_unbound_py_marker_generation("{$this->dir}/pfb_py_reload");
 	}
 
 	/** Unbound answers "up" everywhere except inside its own stop/start, which the double models as a clean restart. */
@@ -164,9 +152,8 @@ final class DnsblHostIsPfbDnsOnlyTest extends TestCase
 	#[DataProvider('proxyPidRows')]
 	public function testAnUnboundLoadingThePythonModuleIsNotAHostWhenPfbDnsDoesNotOwnTheResolver(bool $proxyUp): void
 	{
-		// Given DNSBL on, a legacy Unbound that is up with pfb_unbound.py wired, current generations, and no pfB-DNS ownership
+		// Given DNSBL on, a legacy Unbound that is up with pfb_unbound.py wired, and no pfB-DNS ownership
 		$this->legacyUnboundLoadsTheModule();
-		$this->writeGenerations(3, 3);
 		$this->setProxyUp($proxyUp);
 
 		// Then nothing hosts the module: not live, not converged, and the apply entry says why
@@ -186,7 +173,6 @@ final class DnsblHostIsPfbDnsOnlyTest extends TestCase
 	{
 		// Given pfB-DNS owning the Resolver, DNSBL on, the proxy up, and an Unbound that is down with a conf without the module
 		$this->pfbDnsOwnsTheResolver();
-		$this->writeGenerations(3, 3);
 		$this->setProxyUp(TRUE);
 		file_put_contents("{$this->dir}/unbound.conf", "server:\n\tmodule-config: \"validator iterator\"\n");
 
@@ -202,7 +188,6 @@ final class DnsblHostIsPfbDnsOnlyTest extends TestCase
 		// Given pfB-DNS owning the Resolver with DNSBL on, the proxy down, and a legacy Unbound up and wired
 		$this->pfbDnsOwnsTheResolver();
 		$this->legacyUnboundLoadsTheModule();
-		$this->writeGenerations(3, 3);
 		$this->setProxyUp(FALSE);
 
 		// Then it is not live nor converged, and the entry names the proxy, not the missing ownership
@@ -215,54 +200,47 @@ final class DnsblHostIsPfbDnsOnlyTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// The zero-downtime swap and the tick retry never target Unbound
+	// The data fast path: pfB-DNS only
 	// -----------------------------------------------------------------------
 
-	public function testADataUpdateTakesNoZeroDowntimeSwapWhenPfbDnsDoesNotHostEvenWithAnUnboundWiredToThePythonModule(): void
+	public function testADataUpdateRestartsWhenPfbDnsDoesNotHostEvenWithAnUnboundWiredToThePythonModule(): void
 	{
-		// Given DNSBL on, no pfB-DNS ownership, a legacy Unbound up with pfb_unbound.py in config.xml and unbound.conf, and a
-		// watcher double that would apply any generation published
+		// Given DNSBL on, no pfB-DNS ownership, a legacy Unbound up with pfb_unbound.py in config.xml and unbound.conf
 		file_put_contents($GLOBALS['pfb']['unbound_py_count'], "10\n");
 		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], '{"version":1,"config":{},"feeds":[]}');
 		file_put_contents($GLOBALS['pfb']['unbound_py_reject_stats'], '[]');
 		$this->legacyUnboundLoadsTheModule();
 		$this->unboundUpExceptDuringRestart();
-		$GLOBALS['pfb_test_unbound_py_sentinel_published'] = static function (string $path, int $generation): void {
-			file_put_contents("{$path}.applied", "{$generation}\n");
-		};
 		$log = (string) $GLOBALS['pfb_test_unbound_start_log'];
 		$starts = file_exists($log) ? count(file($log, FILE_IGNORE_NEW_LINES) ?: []) : 0;
 
 		// When a data-only update reloads the Resolver
 		pfb_reload_unbound('enabled', FALSE, TRUE);
 
-		// Then no generation was published for an Unbound that does not host the module, and the restart path ran
-		$this->assertFileDoesNotExist("{$this->dir}/pfb_py_reload", 'the sentinel was not flipped');
+		// Then the restart path ran: an Unbound that does not host the module takes no fast path
 		$this->assertGreaterThan($starts, file_exists($log) ? count(file($log, FILE_IGNORE_NEW_LINES) ?: []) : 0, 'the restart path ran');
 	}
 
-	/** @return array<string, array{bool, int}> pfB-DNS owns the Resolver (the proxy is up), expected sentinel after the retry */
-	public static function applyRetryRows(): array
+	public function testADataUpdateWhilePfbDnsHostsPublishesNothingWaitsForNothingAndConverges(): void
 	{
-		return [
-			'pfB-DNS hosts and runs: the stuck swap is re-published' => [TRUE, 6],
-			'a legacy Unbound up and wired, no pfB-DNS: nothing hosts the module' => [FALSE, 5],
-		];
-	}
+		// Given pfB-DNS owning the Resolver and up: it polls Core for the DNSBL data itself (#3977), so no watcher reads a
+		// sentinel and nothing writes an applied marker. The RAM gate would allow a swap, and the swap wait is cut to 1 s.
+		file_put_contents($GLOBALS['pfb']['unbound_py_count'], "10\n");
+		$this->pfbDnsOwnsTheResolver();
+		$this->setProxyUp(TRUE);
+		$this->unboundUpExceptDuringRestart();
+		$GLOBALS['pfb_test_swap_wait_s'] = 1;
+		$log = (string) $GLOBALS['pfb_test_unbound_start_log'];
+		$starts = file_exists($log) ? count(file($log, FILE_IGNORE_NEW_LINES) ?: []) : 0;
 
-	#[DataProvider('applyRetryRows')]
-	public function testTheTickRetryRepublishesTheSentinelOnlyForAHostingProxy(bool $owned, int $expected): void
-	{
-		$this->legacyUnboundLoadsTheModule();
-		if ($owned) {
-			$this->pfbDnsOwnsTheResolver();
-			$this->setProxyUp(TRUE);
-		}
-		$this->writeGenerations(5, 3);
+		// When a data-only update reloads the Resolver
+		$applied = pfb_reload_unbound('enabled', FALSE, TRUE);
 
-		pfb_dnsbl_apply_retry();
-
-		$this->assertSame($expected, $this->sentinel());
+		// Then it is applied at once: no sentinel, no restart, and the DNSBL apply entry is closed
+		$this->assertTrue($applied, 'pfB-DNS takes the data from Core: there is nothing to wait for');
+		$this->assertFileDoesNotExist("{$this->dir}/pfb_py_reload", 'no sentinel is published');
+		$this->assertSame([], $this->openApplyEntries(), 'DNSBL converges while pfB-DNS runs');
+		$this->assertSame($starts, file_exists($log) ? count(file($log, FILE_IGNORE_NEW_LINES) ?: []) : 0, 'no restart');
 	}
 
 	// -----------------------------------------------------------------------

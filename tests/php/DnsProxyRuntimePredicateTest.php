@@ -11,8 +11,8 @@ use PHPUnit\Framework\TestCase;
 /**
  * issue #3515, #3770 -- the DNSBL module lives in the DNS proxy process while pfB-DNS owns the Resolver (the Resolver is moved
  * aside: pfb_dns_proxy_saved() !== NULL) and DNSBL is on; Unbound never hosts it. Every "is the Python DNSBL runtime alive"
- * decision must follow the module host, so data swaps, ADR-61 retries and the manifest notice take the zero-downtime path
- * against the proxy and never against Unbound.
+ * decision must follow the module host, so the data fast path, DNSBL convergence and the manifest notice follow the proxy and
+ * never Unbound.
  *
  * Each row names its mode. A proxy-mode row keeps the Unbound process in the OPPOSITE state to the proxy (and unbound.conf
  * without pfb_unbound.py), so a verdict that still consults Unbound fails. A non-proxy row leaves the proxy pidfile in the
@@ -21,8 +21,6 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_proxy_running')]
 #[CoversFunction('pfb_unbound_py_host_running')]
 #[CoversFunction('pfb_dnsbl_converged')]
-#[CoversFunction('pfb_dnsbl_apply_retry')]
-#[CoversFunction('pfb_unbound_py_wait_applied')]
 #[CoversFunction('pfb_reload_unbound')]
 #[CoversFunction('pfb_update_unbound')]
 final class DnsProxyRuntimePredicateTest extends TestCase
@@ -93,8 +91,6 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 			$GLOBALS['pfb_test_process_running'],
 			$GLOBALS['pfb_test_valid_pids'],
 			$GLOBALS['pfb_test_file_notices'],
-			$GLOBALS['pfb_test_swap_wait_s'],
-			$GLOBALS['pfb_test_unbound_py_sentinel_published'],
 			$GLOBALS['pfb_test_service_hook']
 		);
 		rmdir_recursive($this->dir);
@@ -161,17 +157,6 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		});
 	}
 
-	private function writeGenerations(int $sentinel, int $applied): void
-	{
-		file_put_contents("{$this->dir}/pfb_py_reload", "{$sentinel}\n");
-		file_put_contents("{$this->dir}/pfb_py_reload.applied", "{$applied}\n");
-	}
-
-	private function sentinel(): int
-	{
-		return pfb_unbound_py_marker_generation("{$this->dir}/pfb_py_reload");
-	}
-
 	private function writeUnboundConf(bool $referencesPfbUnbound): void
 	{
 		file_put_contents(
@@ -180,20 +165,13 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		);
 	}
 
-	/** A live generation for the swap path: RAM projection input, manifest, and a watcher that applies at once. */
+	/** A live generation for the data path: entry count, manifest and a conf naming the module. */
 	private function seedSwapFixture(): void
 	{
 		file_put_contents($GLOBALS['pfb']['unbound_py_count'], "10\n");
 		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], '{"version":1,"config":{},"feeds":[]}');
 		file_put_contents($GLOBALS['pfb']['unbound_py_reject_stats'], '[]');
 		$this->writeUnboundConf(TRUE);
-	}
-
-	private function applyEveryPublishedGeneration(): void
-	{
-		$GLOBALS['pfb_test_unbound_py_sentinel_published'] = static function (string $path, int $generation): void {
-			file_put_contents("{$path}.applied", "{$generation}\n");
-		};
 	}
 
 	/** Unbound start attempts the harness double has recorded so far (a restart reached pfb_stop_start_unbound). */
@@ -300,7 +278,6 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 	public function testProxyModeConvergesOnTheProxyPidAloneNotOnUnboundNorItsConf(): void
 	{
 		$this->setProxyMode(TRUE);
-		$this->writeGenerations(3, 3);
 		$this->writeUnboundConf(FALSE);
 		$this->setUnboundUp(FALSE);
 		$this->setProxyUp(FALSE);
@@ -315,24 +292,12 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 	public function testProxyModeDoesNotConvergeWhileTheProxyIsDownEvenIfUnboundIsFullyWired(): void
 	{
 		$this->setProxyMode(TRUE);
-		$this->writeGenerations(3, 3);
 		$this->writeUnboundConf(TRUE);
 		$this->setUnboundUp(TRUE);
 		$this->setProxyUp(FALSE);
 
 		$this->assertFalse(pfb_dnsbl_converged(),
 			'a live Unbound wired to pfb_unbound.py is not the module host in proxy mode');
-	}
-
-	public function testProxyModeDoesNotConvergeWhileTheGenerationsDisagree(): void
-	{
-		$this->setProxyMode(TRUE);
-		$this->writeGenerations(5, 3);
-		$this->setProxyUp(TRUE);
-		$this->assertFalse(pfb_dnsbl_converged(), 'sentinel 5 vs applied 3 is a swap in flight');
-
-		$this->writeGenerations(5, 5);
-		$this->assertTrue(pfb_dnsbl_converged(), 'the same box converges once the generations agree');
 	}
 
 	// The observer (pfb_upstream_observer.py) is the python module Unbound runs in proxy mode while it forwards. It
@@ -356,7 +321,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->setUnboundUp(TRUE);
 		$this->writeUnboundConfWithObserver();
 
-		// Then nothing hosts the module: the swap and the retries must not target a module nobody hosts
+		// Then nothing hosts the module
 		$this->assertFalse(pfb_unbound_py_host_running());
 	}
 
@@ -373,44 +338,10 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// P4 -- pfb_dnsbl_apply_retry(): re-publish the sentinel only if the host is alive
+	// P5 -- pfb_reload_unbound(): the data fast path follows the module host
 	// -----------------------------------------------------------------------
 
-	/** @return array<string, array{bool, bool, bool, bool}> proxy mode, proxy up, Unbound up, re-flips */
-	public static function applyRetryRows(): array
-	{
-		return [
-			'proxy mode, proxy up, Unbound down: re-flips' => [TRUE, TRUE, FALSE, TRUE],
-			'proxy mode, proxy down, Unbound up: nothing could consume it' => [TRUE, FALSE, TRUE, FALSE],
-			'no proxy, Unbound up, proxy pid dead: Unbound is no module host' => [FALSE, FALSE, TRUE, FALSE],
-			'no proxy, Unbound down, proxy pid live: nothing could consume it' => [FALSE, TRUE, FALSE, FALSE],
-		];
-	}
-
-	#[DataProvider('applyRetryRows')]
-	public function testApplyRetryRepublishesTheSentinelOnlyWhileTheModuleHostIsAlive(
-		bool $proxyMode,
-		bool $proxyUp,
-		bool $unboundUp,
-		bool $reflips
-	): void {
-		$this->setProxyMode($proxyMode);
-		$this->setPythonKeys(!$proxyMode);
-		$this->setProxyUp($proxyUp);
-		$this->setUnboundUp($unboundUp);
-		$this->writeGenerations(5, 3);
-		$this->assertSame(5, $this->sentinel(), 'before-state: a stuck swap, sentinel 5 applied 3');
-
-		pfb_dnsbl_apply_retry();
-
-		$this->assertSame($reflips ? 6 : 5, $this->sentinel());
-	}
-
-	// -----------------------------------------------------------------------
-	// P5 -- pfb_reload_unbound(): the zero-downtime fast path follows the module host
-	// -----------------------------------------------------------------------
-
-	public function testProxyModeDataUpdateSwapsInPlaceWhileTheProxyIsUpEvenWithUnboundDown(): void
+	public function testProxyModeDataUpdateNeedsNoRestartWhileTheProxyIsUpEvenWithUnboundDown(): void
 	{
 		$this->setProxyMode(TRUE);
 		$this->seedSwapFixture();
@@ -419,16 +350,14 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		pfb_dnsbl_apply_ledger_update();
 		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'), 'before-state: a stale apply entry is open');
 		$this->setProxyUp(TRUE);
-		$this->applyEveryPublishedGeneration();
 		$starts = $this->startAttempts();
 
 		$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
 
-		$this->assertTrue($swapped, 'the proxy applied the generation: the swap is confirmed');
-		$this->assertSame(1, $this->sentinel(), 'the sentinel was flipped');
-		$this->assertSame($starts, $this->startAttempts(), 'no Unbound restart on the zero-downtime path');
+		$this->assertTrue($swapped, 'the proxy takes the data from Core');
+		$this->assertSame($starts, $this->startAttempts(), 'no Unbound restart on the data path');
 		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
-			'the confirmed swap converges on the proxy and closes the apply entry');
+			'the data path converges on the proxy and closes the apply entry');
 	}
 
 	public function testProxyModeDataUpdateRestartsWhenTheProxyIsDownEvenIfUnboundIsUp(): void
@@ -438,13 +367,10 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->setUnboundUpExceptDuringRestart();
 		$this->setProxyUp(FALSE);
 		$this->proxyComesUpReadyWhenStarted();
-		$this->applyEveryPublishedGeneration();
 		$starts = $this->startAttempts();
 
 		pfb_reload_unbound('enabled', FALSE, TRUE);
 
-		$this->assertFileDoesNotExist("{$this->dir}/pfb_py_reload",
-			'no module host to consume a generation: the sentinel must not be flipped');
 		$this->assertGreaterThan($starts, $this->startAttempts(), 'the restart path ran');
 	}
 
@@ -455,109 +381,11 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->seedSwapFixture();
 		$this->setUnboundUp(FALSE);
 		$this->setProxyUp(TRUE);
-		$this->applyEveryPublishedGeneration();
 		$starts = $this->startAttempts();
 
 		pfb_reload_unbound('enabled', FALSE, TRUE);
 
-		$this->assertFileDoesNotExist("{$this->dir}/pfb_py_reload",
-			'pfB-DNS does not own the Resolver: a live proxy pid must not open the zero-downtime path');
-		$this->assertGreaterThan($starts, $this->startAttempts(), 'the restart path ran');
-	}
-
-	public function testProxyModeSwapThatIsSlowButHostedStaysInFlightWithoutARestart(): void
-	{
-		$GLOBALS['pfb_test_swap_wait_s'] = 1;
-		$this->setProxyMode(TRUE);
-		$this->seedSwapFixture();
-		$this->writeGenerations(0, 0);
-		$this->setUnboundUp(FALSE);
-		$this->setProxyUp(TRUE);
-		$starts = $this->startAttempts();
-
-		[$clock, $reload] = $this->clockedReload();
-		$swapped = $reload('enabled', FALSE, TRUE);
-
-		$this->assertSame(FALSE, $swapped, 'an unconfirmed swap reads as not swapped');
-		$this->assertStringContainsString('swap still in flight', $this->logText(),
-			'the proxy is alive: slowness is in flight, not broken');
-		$this->assertSame($starts, $this->startAttempts(), 'a live module host is never restarted for being slow');
-		$this->assertSame(array_fill(0, 5, 200000), $clock->sleeps, 'the swap waited its whole 1 s budget in 200 ms polls, then reported in flight');
-	}
-
-	public function testProxyModeSwapRecoversViaRestartWhenTheProxyDiesDuringTheSwap(): void
-	{
-		$GLOBALS['pfb_test_swap_wait_s'] = 3;
-		$this->setProxyMode(TRUE);
-		$this->seedSwapFixture();
-		$this->writeGenerations(0, 0);
-		$this->setUnboundUp(FALSE);
-		$calls = 0;
-		$this->setProxyUp(static function () use (&$calls): bool {
-			$calls++;
-			return $calls === 1;
-		});
-		$this->proxyComesUpReadyWhenStarted();
-		$starts = $this->startAttempts();
-
-		pfb_reload_unbound('enabled', FALSE, TRUE);
-
-		$this->assertStringContainsString('recovering via restart', $this->logText(),
-			'a dead module host can never apply the generation');
-		$this->assertGreaterThan($starts, $this->startAttempts(), 'the restart path ran');
-	}
-
-	// -----------------------------------------------------------------------
-	// P6 -- pfb_unbound_py_wait_applied(): the default liveness probe
-	// -----------------------------------------------------------------------
-
-	public function testProxyModeWaitFollowsTheProxyAndIgnoresUnbound(): void
-	{
-		$this->setProxyMode(TRUE);
-		$this->writeGenerations(1, 0);
-		$this->setUnboundUp(FALSE);
-		$this->setProxyUp(function (): bool {
-			file_put_contents("{$this->dir}/pfb_py_reload.applied", "1\n");
-			return TRUE;
-		});
-
-		$this->assertTrue(pfb_unbound_py_wait_applied(1, 5),
-			'the live proxy keeps the wait going until its applied marker lands');
-	}
-
-	public function testProxyModeWaitGivesUpAtOnceWhenTheProxyIsGoneWithoutAskingUnbound(): void
-	{
-		$this->setProxyMode(TRUE);
-		$this->writeGenerations(1, 0);
-		$this->setProxyUp(FALSE);
-		$unboundProbes = 0;
-		$this->setUnboundUp(static function () use (&$unboundProbes): bool {
-			$unboundProbes++;
-			return TRUE;
-		});
-
-		$this->assertFalse(pfb_unbound_py_wait_applied(1, 1));
-		$this->assertSame(0, $unboundProbes, 'the Unbound process is not the consumer in proxy mode');
-	}
-
-	public function testWithoutTheProxyTheWaitGivesUpAtOnceAndAsksNeitherUnboundNorTheProxyPid(): void
-	{
-		$this->setProxyMode(FALSE);
-		$this->writeGenerations(1, 0);
-		$unboundProbes = 0;
-		$this->setUnboundUp(static function () use (&$unboundProbes): bool {
-			$unboundProbes++;
-			return TRUE;
-		});
-		$proxyProbes = 0;
-		$this->setProxyUp(static function () use (&$proxyProbes): bool {
-			$proxyProbes++;
-			return TRUE;
-		});
-
-		$this->assertFalse(pfb_unbound_py_wait_applied(1, 1), 'nothing hosts the module, so nothing can apply the generation');
-		$this->assertSame(0, $unboundProbes, 'the Unbound process is never the consumer');
-		$this->assertSame(0, $proxyProbes, 'the proxy pid is not the consumer when pfB-DNS does not own the Resolver');
+		$this->assertGreaterThan($starts, $this->startAttempts(), 'pfB-DNS does not own the Resolver: a live proxy pid opens no data path');
 	}
 
 	// -----------------------------------------------------------------------
@@ -583,14 +411,12 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->setProxyMode($proxyMode);
 		$this->setPythonKeys($keys);
 		$this->seedSwapFixture();
-		$this->writeGenerations(1, 1);
 		file_put_contents("{$this->dir}/pfb_py_status.json", json_encode([
 			['facility' => 'dnsbl', 'item' => 'pfb_py_sources.json', 'stage' => 'parse',
 				'message' => 'DNSBL manifest absent', 'first_seen' => 1, 'last_seen' => 2],
 		]));
 		$this->setUnboundUpExceptDuringRestart();
 		$this->setProxyUp($proxyMode);
-		$this->applyEveryPublishedGeneration();
 
 		set_error_handler(static function (int $severity, string $message): bool {
 			return $severity === E_NOTICE && str_contains($message, 'tempnam(): file created in the system');

@@ -6463,7 +6463,7 @@ function pfblockerng_tick(
 							if ($entry['facility'] === 'ip') {
 								pfb_ip_apply_retry($entry['item']);
 							} elseif ($entry['facility'] === 'dnsbl') {
-								pfb_dnsbl_apply_retry();
+								pfb_dnsbl_apply_ledger_update();
 							}
 						}
 					}

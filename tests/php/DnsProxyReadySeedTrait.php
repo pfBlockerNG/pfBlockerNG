@@ -198,7 +198,7 @@ trait DnsProxyReadySeedTrait
 
 	/**
 	 * pfb_reload_unbound() with the waits it reaches loaded onto a virtual clock: the proxy's readiness wait (restart, confirm,
-	 * await) and the DNSBL swap wait (wait applied, wait marker). Their polls are ticks, so no test waits on the host.
+	 * await). Its polls are ticks, so no test waits on the host.
 	 *
 	 * @return array{0: PfbFlockClockFixture, 1: string} the clock, and the reload's name in the namespace it was loaded into
 	 */
@@ -206,7 +206,7 @@ trait DnsProxyReadySeedTrait
 	{
 		$clock = new PfbFlockClockFixture();
 		$namespace = $clock->loadChain(
-			['pfb_reload_unbound', 'pfb_unbound_py_wait_applied', 'pfb_unbound_py_wait_marker', 'pfb_dns_proxy_restart', 'pfb_dns_proxy_confirm_ready', 'pfb_dns_proxy_await_ready'],
+			['pfb_reload_unbound', 'pfb_dns_proxy_restart', 'pfb_dns_proxy_confirm_ready', 'pfb_dns_proxy_await_ready'],
 			['PFB_DNS_PROXY_START_WAIT' => 1]
 		);
 

@@ -107,8 +107,7 @@ final class Top1mTeardownDirectoryTest extends TestCase
 	 * issue #2607: every pfb_py_* artifact Python emits describes the generation the manifest
 	 * defines, and Python rewrites them only for a build that produced a snapshot — so none of
 	 * them may survive the manifest's teardown. Left behind, each is read back as live:
-	 * pfb_py_count by the update log and by pfb_unbound_py_swap_fits_ram(), which sizes the
-	 * zero-downtime swap's RAM projection from it; pfb_py_reject_stats by
+	 * pfb_py_count by the update log; pfb_py_reject_stats by
 	 * pfb_emit_entry_reject_stats(), which replays a dead generation's stage=entries lines;
 	 * pfb_py_regex_count by the DNSBL_Regex alias count. After a `pkg delete` + reinstall all
 	 * three describe a snapshot that is no longer loaded.

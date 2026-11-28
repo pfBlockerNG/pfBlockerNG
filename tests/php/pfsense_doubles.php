@@ -1594,16 +1594,6 @@ if (!function_exists('sigkillbyname')) {
 	}
 }
 
-if (!function_exists('get_single_sysctl')) {
-	// pfSense pfsense-utils.inc: read one sysctl OID as a string. pfb_unbound_py_swap_fits_ram()
-	// reads 'hw.usermem' to project whether a zero-downtime swap fits in RAM. Tests seed
-	// $GLOBALS['pfb_test_sysctl'][$oid]; default a generous 16 GiB so the swap-eligibility
-	// gate passes unless a test deliberately RAM-starves it.
-	function get_single_sysctl($oid) {
-		return $GLOBALS['pfb_test_sysctl'][$oid] ?? (string) (16 * 1024 * 1024 * 1024);
-	}
-}
-
 // --- pfb_remove_states() doubles (#702/#705) ---
 //
 // The kill-states validation walk (pfb_remove_states) reaches two util.inc
