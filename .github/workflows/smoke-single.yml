@@ -264,6 +264,16 @@ on:
         required: false
         type: string
         default: ""
+      channel:
+        description: "Ports recipe the branch .pkg is built with (stable, testing, edge, nightly). Default nightly: devel pairs with the -nightly port. The tagged ingest passes the release's own channel (issue #4315). Call-only: workflow_dispatch is at GitHub's 25-input cap, so a dispatch builds nightly."
+        required: false
+        type: string
+        default: "nightly"
+      build_ref:
+        description: "Git ref whose source the self-built branch .pkg packages (issue #4315), passed to build-pkg-linux.yml's checkout_ref; the suite still runs from checkout_ref. Blank (default) = the caller's own ref. Call-only, like channel."
+        required: false
+        type: string
+        default: ""
       checkout_ref:
         description: "Git ref the test code itself is checked out from (issue #1859). Set by release.yml to the pinned release SHA so the suite verifies the source it ships. Empty (default) = inherit the caller's ref, which is correct for every non-release run."
         required: false
@@ -318,7 +328,11 @@ jobs:
       contents: read
       packages: write
     with:
-      channel: nightly
+      # A dispatch has no channel input (see its workflow_call definition): fall back to nightly.
+      channel: ${{ inputs.channel || 'nightly' }}
+      # Package source only (issue #4315): the tagged ingest builds the release's source_sha while
+      # the suite still runs from checkout_ref. Blank = the caller's own ref, as before.
+      checkout_ref: ${{ inputs.build_ref }}
       # Build a .pkg whose ABI + dep names match THIS leg's image. A bare dispatch
       # keeps the workflow's min-CE defaults; the fan-out passes per-leg values from
       # the ci-metadata version matrix so each leg gets an ABI/flavor-matched .pkg
@@ -652,7 +666,9 @@ jobs:
       # Only for the `repo` marker (the default `smoke` flow doesn't read it).
       - name: Build a nightly .pkg (repo-flow nightly smoke)
         # build-leg.sh: shared build path; prints the resolved .pkg path on stdout.
-        if: ${{ (inputs.pytest_marker || 'smoke') == 'repo' }}
+        # A non-nightly caller (the tagged ingest, issue #4315) never collects the nightly cases that
+        # read this .pkg, so it must not hinge on the nightly recipe matching this checkout.
+        if: ${{ (inputs.pytest_marker || 'smoke') == 'repo' && (inputs.channel || 'nightly') == 'nightly' }}
         env:
           PHP_VERSION:  ${{ inputs.php_version }}
           PY_FLAVOR:    ${{ inputs.py_flavor }}

@@ -5,9 +5,10 @@
 `uv sync` of the dependency-package toolchain) restore the package manager's download cache first, as
 the `test-typing` job in test.yml does.
 
-A cache step counts only when it is an `actions/cache@` step on the manager's directory, keyed on the
-lock file the install reads, and it sits BEFORE the first step that fetches and runs whenever that step
-does: a cache restored after the install, or skipped while the install runs, caches nothing.
+A cache step counts only when it is an `actions/cache@` (or `actions/cache/restore@`) step on the
+manager's directory, keyed on the lock file the install reads, and it sits BEFORE the first step that
+fetches and runs whenever that step does: a cache restored after the install, or skipped while the
+install runs, caches nothing.
 """
 
 from __future__ import annotations
@@ -23,6 +24,9 @@ ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOWS = ROOT / ".github/workflows"
 
 Step = dict[str, Any]
+# A job that checks out a caller-named ref restores with actions/cache/restore@ and saves in a
+# separate guarded step (issue #3489); the restore caches the install exactly as actions/cache@ does.
+_RESTORING_CACHE = ("actions/cache@", "actions/cache/restore@")
 
 _NPM_LOCK = "tools/webassets/package-lock.json"
 # (workflow, job): every job that runs `uv sync` at job time
@@ -50,10 +54,10 @@ def _cache_gaps(steps: list[Step], fetching: int, path: str, lock: str) -> list[
     caches = [
         i
         for i, s in enumerate(steps)
-        if str(s.get("uses", "")).startswith("actions/cache@") and (s.get("with") or {}).get("path") == path
+        if str(s.get("uses", "")).startswith(_RESTORING_CACHE) and (s.get("with") or {}).get("path") == path
     ]
     if not caches:
-        return [f"no actions/cache@ step on {path}"]
+        return [f"no actions/cache@ or actions/cache/restore@ step on {path}"]
     cache = steps[caches[0]]
     gaps = []
     if caches[0] > fetching:
@@ -133,7 +137,11 @@ def test_the_cache_check_rejects_each_way_a_cache_can_cache_nothing() -> None:
         return _cache_gaps(list(steps), steps.index(sync), "~/.cache/uv", lock)
 
     assert gaps({**cache, "if": "inputs.x"}, sync) == []
-    assert gaps(sync) == ["no actions/cache@ step on ~/.cache/uv"]
+    assert gaps(sync) == ["no actions/cache@ or actions/cache/restore@ step on ~/.cache/uv"]
+    assert gaps({**cache, "uses": "actions/cache/restore@v6", "if": "inputs.x"}, sync) == []
+    assert gaps({**cache, "uses": "actions/cache/save@v6", "if": "inputs.x"}, sync) == [
+        "no actions/cache@ or actions/cache/restore@ step on ~/.cache/uv"
+    ]
     assert gaps(sync, {**cache, "if": "inputs.x"}) == ["the cache is step 1, after the fetching step 0"]
     assert gaps({**cache, "if": "inputs.x"}, sync, lock="trusted/uv.lock") == [
         "the key `uv-${{ hashFiles('uv.lock') }}` does not hash trusted/uv.lock"
