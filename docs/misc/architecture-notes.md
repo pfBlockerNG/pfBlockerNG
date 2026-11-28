@@ -979,7 +979,7 @@ before `rc.start_packages` begins, and the proxy must keep its pids and keep ans
 prints the daemon launch, the listening socket, Unbound's process start, the first correct answers and Unbound's sync as
 separate times; a launch is not an answer.
 
-The named recovery component waits total 340 s before the final readiness probes. A readiness check now reads a bounded
+The boot check's named component waits are listed in `external-process-waits.md` ("DNS proxy boot check budget"). A readiness check now reads a bounded
 applied-status response from the private control socket, then the bounded native `sockstat` ownership probe.
 The earlier `ps`/`sockstat` timing sum does not describe this path; the current component bounds are documented in
 `external-process-waits.md`. They are not a measured whole-path bound: core restart work also runs untimed mount,
