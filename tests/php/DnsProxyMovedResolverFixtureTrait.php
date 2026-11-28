@@ -69,7 +69,6 @@ trait DnsProxyMovedResolverFixtureTrait
 			'unbound_py_sources' => "{$this->tmp}/pfb_sources.json", 'unbound_py_count' => "{$this->tmp}/pfb_py_count",
 			'unbound_py_rawdir' => "{$this->tmp}/pfb_py_raw", 'unbound_py_reject_stats' => "{$this->tmp}/pfb_py_reject_stats.json",
 			'chroot_cmd' => '/bin/echo', 'php' => PHP_BINARY,
-			'dnsbl_cache_flush' => PfbToggle::Off,
 			'keep' => PfbToggle::On,
 		]);
 		// Nothing of an apply pass's own state (save, install, reuse_dnsbl): a restore runs from the installer and the Reports pages too

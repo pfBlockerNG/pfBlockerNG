@@ -885,7 +885,7 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
     # No host override on the name — it would shadow the DNSBL block (served as
     # local-data before the python module); an allowed name resolves via the stub.
     spec = h.DnsblCase(aliasname="smokeunlocktmp", feed_url=feed_url, header="smokeunlocktmp")
-    with h.CaseContext(deployed_vm, spec), h.DnsblCacheFlushEnabled(deployed_vm):
+    with h.CaseContext(deployed_vm, spec):
         # Egress OPEN: the update path deadlocks under a dark egress, and the allowed
         # (unlock) probe must reach the controlled stub. The block probes return the VIP
         # locally, so there is no false-green from leaving egress open.
@@ -961,7 +961,7 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
     feed_name = "smoke_dnsbl_feedupd.txt"
     feed_url = h.write_local_feed(deployed_vm, feed_name, f"{other}\n")
     spec = h.DnsblCase(aliasname="smokefeedupd", feed_url=feed_url, header="smokefeedupd")
-    with h.CaseContext(deployed_vm, spec), h.DnsblCacheFlushEnabled(deployed_vm):
+    with h.CaseContext(deployed_vm, spec):
         h.unblock_egress()  # the allowed (before-state) probe must reach the controlled stub
 
         # BEFORE: the target is not on the feed yet -> it RESOLVES via the stub sentinel.

@@ -59,7 +59,6 @@ trait SyncPolicyFixtureTrait
 			'ip/maxmind_key',
 			'ip/asn_token',
 
-			'dnsbl/pfb_cache_flush',
 			'dns/pfb_dns_saved',
 			'dns/pfb_dns_dnsbl_migrated',
 			'dns_shared/pfb_dns_doh',

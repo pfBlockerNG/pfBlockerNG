@@ -212,7 +212,6 @@ LOCAL_SEEDS: dict[str, tuple[str, str]] = {
     f"{IP}/outbound_interface": ("lan", "wan"),
     f"{DNSBL}/dnsbl_redir_int": ("lan", ""),
     f"{DNSBL}/dnsbl_dot_block_int": ("lan", ""),
-    f"{DNSBL}/pfb_cache_flush": ("on", ""),
     f"{DNSBL}/pfb_py_reply": ("on", ""),
     f"{DNSBL}/pfb_py_cache_max": ("5000", "20000"),
     f"{DNSBL}/pfb_control": ("on", ""),

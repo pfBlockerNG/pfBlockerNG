@@ -2105,18 +2105,6 @@ def test_feeds_dnsbl_tab_drops_the_decommissioned_antisocial_feed(
     assert "AntiSocial_UK_BD" not in resp.text, "DNSBL Feeds tab still offers the decommissioned AntiSocial_UK_BD feed"
 
 
-def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """DNSBL page exposes the default-off full-cache trade-off without PHP diagnostics."""
-    path = "/pfblockerng/pfblockerng_dnsbl.php"
-    resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
-    assert result.ok, f"DNSBL cache-flush render oracle failed: {result.detail}"
-    assert 'name="pfb_cache_flush"' in resp.text, "DNSBL page is missing the cache-flush checkbox"
-    assert "When disabled, cached allowed answers remain until their DNS TTL expires" in resp.text, (
-        "DNSBL cache-flush help must explain the default-disabled TTL trade-off"
-    )
-
-
 def test_pfb_dns_page_renders_the_toggle_its_help_and_the_status(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:

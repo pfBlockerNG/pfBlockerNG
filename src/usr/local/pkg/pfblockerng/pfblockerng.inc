@@ -3578,7 +3578,6 @@ function pfb_global() {
 	$pfb['dnsbl_policy_legacy']	= $pfb_dnsbl_policy['legacy'];		// TRUE while dnsbl/global_log_mode is genuinely absent (not fresh)
 	$pfb['dnsbl_top1m']	= PfbConfig::read('dnsbl/top1m_enable');							// TOP1M whitelist
 	$pfb['dnsbl_top1m_type']	= PfbConfig::read('dnsbl/top1m_source');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
-	$pfb['dnsbl_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
 	$pfb['pfb_dns']	= PfbConfig::read('dns/pfb_dns');							// [ #3515 ] pfB-DNS: DNS proxy front end, the only host of DNSBL (default off)
 	// issue #4272: Strict / Allow Ports / Lenient (ADR-22's checkbox widened). New installs
 	// default to Allow Ports; an upgrade keeps its behaviour (registry grandfather + adapter).

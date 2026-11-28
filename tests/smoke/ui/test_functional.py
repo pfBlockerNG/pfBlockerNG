@@ -226,13 +226,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         field="pfb_gp",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_gp",
     ),
-    ToggleFlow(
-        name="dnsbl_cache_flush",
-        page="/pfblockerng/pfblockerng_dnsbl.php",
-        field="pfb_cache_flush",
-        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush",
-        # Adapter-backed unchecked saves use the canonical empty Off token.
-    ),
     # issue #3515: pfB-DNS, the DNS proxy (default '' = off). Since issue #3856 it saves with the rest of DNS General,
     # on the page's one Save button.
     ToggleFlow(

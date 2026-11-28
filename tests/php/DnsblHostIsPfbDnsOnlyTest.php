@@ -53,7 +53,6 @@ final class DnsblHostIsPfbDnsOnlyTest extends TestCase
 			'chroot_cmd' => '/bin/echo',
 			'dnsbl_python_unmount' => FALSE,
 
-			'dnsbl_cache_flush' => PfbToggle::Off,
 			'enable' => PfbToggle::On,
 			'dnsbl' => PfbToggle::On,
 			'pfb_dns' => PfbToggle::On,	// requested: DNSBL runs only while pfB-DNS is on, so "not hosted" rows are about ownership, not the switch

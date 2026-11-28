@@ -58,7 +58,7 @@ final class ResolverCacheRetirementTest extends TestCase
 	}
 
 	#[DataProvider('storedSettings')]
-	public function testUpgradeRetiresOnlyCurrentResolverCacheSetting(array $legacy, string $flush): void
+	public function testUpgradeRetiresOnlyTheCurrentResolverCacheSettings(array $legacy, string $flush): void
 	{
 		$current = $legacy + ['pfb_cache_flush' => $flush, 'pfb_dnsbl' => 'on', 'unrelated' => 'preserve-me'];
 		config_set_path(self::DNSBL, ['pfb_cache' => 'on', 'pfb_cache_flush' => 'on']);
@@ -69,12 +69,13 @@ final class ResolverCacheRetirementTest extends TestCase
 		pfb_install_registry_writeback([self::DNSBL => config_get_path(self::DNSBL)]);
 		$first = config_get_path(self::DNSBL);
 		$this->assertArrayNotHasKey('pfb_cache', $first, 'the obsolete current setting survives upgrade');
-		$this->assertSame($flush, $first['pfb_cache_flush'], 'Clear Resolver Cache must retain its stored choice');
+		$this->assertArrayNotHasKey('pfb_cache_flush', $first, 'Clear Resolver Cache survives upgrade: #3977 retired the resolver cache flush');
+		$this->assertSame('on', $first['pfb_dnsbl']);
 		$this->assertSame('preserve-me', $first['unrelated']);
 
 		$this->assertSame($snapshot, file_get_contents($this->dir . '/settings-3.3.xml'), 'the saved 3.3 family must remain byte-identical');
 		pfb_run_migrations();
 		pfb_install_registry_writeback([self::DNSBL => config_get_path(self::DNSBL)]);
-		$this->assertSame($first, config_get_path(self::DNSBL), 'a repeated upgrade must not recreate the retired setting');
+		$this->assertSame($first, config_get_path(self::DNSBL), 'a repeated upgrade must not recreate the retired settings');
 	}
 }

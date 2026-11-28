@@ -22,7 +22,7 @@ final class DnsblRetiredModuleFirstPassTest extends TestCase
 	private const LEGACY_CONF = "server:\n\tinterface: 127.0.0.1\n\tmodule-config: \"python validator iterator\"\n\npython:\npython-script: pfb_unbound.py\n";
 	private const PFB_KEYS = [
 		'dnsbldir', 'dbdir', 'dnsbl_file', 'dnsdir', 'dnsbl_cache', 'unbound_py_count', 'unbound_py_sources',
-		'unbound_py_rawdir', 'unbound_py_reject_stats', 'chroot_cmd', 'dnsbl_python_unmount', 'dnsbl_cache_flush',
+		'unbound_py_rawdir', 'unbound_py_reject_stats', 'chroot_cmd', 'dnsbl_python_unmount',
 		'enable', 'dnsbl', 'pfb_dns', 'save', 'dnsbl_tld_wildcard', 'domain_update', 'reuse_dnsbl', 'dnsbl_unlock', 'keep',
 		'install', 'errlog', 'log', 'python_removal_failed',
 	];
@@ -60,7 +60,6 @@ final class DnsblRetiredModuleFirstPassTest extends TestCase
 			'unbound_py_reject_stats' => "{$this->chroot}/pfb_py_reject_stats.json",
 			'chroot_cmd' => "{$this->dir}/unbound-control",
 			'dnsbl_python_unmount' => FALSE,
-			'dnsbl_cache_flush' => PfbToggle::Off,
 			'enable' => PfbToggle::On,
 			'dnsbl' => PfbToggle::On,
 			'pfb_dns' => PfbToggle::On,

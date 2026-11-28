@@ -1373,15 +1373,6 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'ADR-59 Cloudflare Radar credential; new 4.0 field, \'\' = none',
 		],
 
-		// Full resolver-cache flush after a successful DNSBL data swap. Default off.
-		'dnsbl/pfb_cache_flush' => [
-			'default'       => '',
-			'read_adapter'  => 'pfb_cfg_toggle_read',
-			'write_adapter' => 'pfb_cfg_toggle_write',
-			'sync'          => 'local',
-			'no_grandfather' => 'the post-swap flush exists only in the 4.0 no-reload pipeline; latency delta is the accepted zero-downtime redesign itself, not this default; default-off is a uniform decision at introduction',
-		],
-
 		// issue #3288: the selected CONCRETE mechanism -- one of the seven tokens;
 		// never '' or 'default' (that's dnsbl/global_log_mode below). Default
 		// 'disabled_log' fresh; existing installs grandfather to 'enabled'.
@@ -3838,14 +3829,14 @@ function pfb_sync_scope_migrate(array $cfg): ?array
 	return $cfg;
 }
 
-/** Retire only the current DNSBL Resolver cache preference; saved settings families stay intact. */
+/** Retire only the current DNSBL Resolver cache preferences (#3701, #3977 the flush); saved settings families stay intact. */
 function pfb_resolver_cache_migrate(array $cfg): ?array
 {
-	if (!array_key_exists('pfb_cache', $cfg)) {
+	$retired = array_intersect_key($cfg, ['pfb_cache' => TRUE, 'pfb_cache_flush' => TRUE]);
+	if ($retired === []) {
 		return NULL;
 	}
-	unset($cfg['pfb_cache']);
-	return $cfg;
+	return array_diff_key($cfg, $retired);
 }
 
 /**
@@ -3957,7 +3948,7 @@ function pfb_migration_registry(): array
 			'id'      => 'issue3701-resolver-cache-retire',
 			'section' => $dnsbl,
 			'apply'   => 'pfb_resolver_cache_migrate',
-			'message' => 'pfBlockerNG: removed obsolete Resolver cache preference (issue #3701)',
+			'message' => 'pfBlockerNG: removed obsolete Resolver cache preferences (issues #3701, #3977)',
 			'since'   => '4.0.0',
 		],
 		// issue #3770: DNSBL runs only through pfB-DNS; the first run turns pfB-DNS on where DNSBL is on and records its marker, and rewrites no other key.

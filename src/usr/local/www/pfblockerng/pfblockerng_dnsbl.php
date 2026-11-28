@@ -32,9 +32,8 @@ $pfb['dconfig'] = PfbConfig::readSection('installedpackages/pfblockerngdnsblsett
 // issue #1669 slice C: General-settings toggle gating the CodeMirror 6 live-highlight
 // overlay for the pfb_regex_list field below (registered in the general section,
 // default on, LENIENT adapter -- mirrors pfb_keep; owned/rendered by
-// pfblockerng_general.php). Read via the PfbConfig gateway -- matches this page's
-// pfb_cache_flush precedent (PfbConfig::read() returns the enum directly here,
-// compared with ===, not ->value).
+// pfblockerng_general.php). Read via the PfbConfig gateway (PfbConfig::read() returns
+// the enum directly here, compared with ===, not ->value).
 $pfb_syntaxhl_on = pfb_editor_enabled();
 
 $pfb_dnsbl_editor = pfb_dnsbl_editor_render($pfb_syntaxhl_on);
@@ -59,7 +58,6 @@ $pconfig['pfb_control_legacy']	= PfbConfig::read('dnsbl/pfb_control_legacy');
 // bytes instead of the effective Default/Override-ready values.
 $pconfig['global_log']		= $pfb['dnsbl_global_log'];
 $pconfig['global_log_mode']	= $pfb['dnsbl_global_mode']->toStored();
-$pconfig['pfb_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');
 
 $pconfig['pfb_psl_include_private'] = PfbConfig::read('dnsbl/pfb_psl_include_private');
 $pconfig['pfb_psl_allow_private'] = PfbConfig::read('dnsbl/pfb_psl_allow_private');
@@ -800,8 +798,7 @@ if ($_POST) {
 			$psl_feed_icann_policy = pfb_filter($_POST['pfb_psl_feed_icann_policy'] ?? '', PFB_FILTER_WORD, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_control']		= pfb_filter($_POST['pfb_control'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_control_legacy']	= pfb_filter($_POST['pfb_control_legacy'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			unset($pfb['dconfig']['pfb_cache']);
-			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
+			unset($pfb['dconfig']['pfb_cache'], $pfb['dconfig']['pfb_cache_flush']);
 
 			// issue #1887: checkbox-absent is the owner-ruled empty Off token.
 			$pfb['dconfig']['pfb_idn_block_malicious']	= pfb_filter($_POST['pfb_idn_block_malicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
@@ -3135,16 +3132,6 @@ $form->add($section);
 
 
 $section = new Form_Section('DNS Caching', 'dnsbl_caches', COLLAPSIBLE|SEC_CLOSED);
-$section->addInput(new Form_Checkbox(
-	'pfb_cache_flush',
-	gettext('Clear Resolver Cache'),
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_cache_flush']) === PfbToggle::On,
-	'on'
-))->setHelp('Default: <strong>Disabled</strong><br />Clear Unbound\'s resolver cache after a DNSBL update without restarting Unbound.'
-	. '<div class="infoblock">When enabled, newly blocked domains take effect immediately when an allowed answer was already cached, but also discards unrelated answers and can temporarily increase DNS latency and upstream queries. '
-	. 'When disabled, cached allowed answers remain until their DNS TTL expires. Resolver restarts already clear the cache; exact Alerts actions use targeted flushing.</div>');
-
 $section->addInput(new Form_Input(
 	'pfb_py_cache_max',
 	gettext('Decision cache max entries'),

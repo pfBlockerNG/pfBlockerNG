@@ -1790,46 +1790,6 @@ def set_dnsbl_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
         )
 
 
-def set_dnsbl_cache_flush(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
-    """Toggle the opt-in full resolver-cache flush after DNSBL data swaps."""
-    val = "on" if on else ""
-    snippet = (
-        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        f"$d['pfb_cache_flush'] = {_php_str(val)};\n"
-        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
-        "write_config('pfBlockerNG smoke: toggle pfb_cache_flush');\n"
-        "echo 'OK';"
-    )
-    result = php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(
-            f"set_dnsbl_cache_flush({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
-        )
-
-
-class DnsblCacheFlushEnabled:
-    """Enable bulk cache flushing for one smoke case, then restore its default."""
-
-    def __init__(self, vm: SmokeVM) -> None:
-        self.vm = vm
-
-    def __enter__(self) -> DnsblCacheFlushEnabled:
-        set_dnsbl_cache_flush(self.vm, True)
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        try:
-            set_dnsbl_cache_flush(self.vm, False)
-        except Exception as reset_exc:  # noqa: BLE001
-            if exc and exc[0] is not None:
-                print(
-                    "[smoke] cache-flush option restore failed during teardown "
-                    f"(suppressed; original error stands): {reset_exc!r}"
-                )
-            else:
-                raise
-
-
 def set_package_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     """Toggle the pfBlockerNG MASTER switch (``enable_cb``) at ``CFG_GLOBAL``.
 

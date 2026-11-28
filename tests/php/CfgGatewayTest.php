@@ -153,7 +153,6 @@ final class CfgGatewayTest extends TestCase
 			'gen/pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
 			'dnsbl/pfb_psl_include_private' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_include_private',
 			'dnsbl/pfb_psl_allow_private' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_allow_private',
-			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 			'dns/pfb_dns'    => 'installedpackages/pfblockerngdns/config/0/pfb_dns',
 			'dns_shared/pfb_dns_doh' => 'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doh',
 			'dns_shared/pfb_dns_doq' => 'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doq',
@@ -191,7 +190,6 @@ final class CfgGatewayTest extends TestCase
 			'gen/enable_cb'        => 'installedpackages/pfblockerng/config/0/enable_cb',
 			'dnsbl/pfb_dnsbl'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
 			'gen/pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
-			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 			'dns/pfb_dns'    => 'installedpackages/pfblockerngdns/config/0/pfb_dns',
 			'dns_shared/pfb_dns_doh' => 'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doh',
 			'dns_shared/pfb_dns_doq' => 'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doq',
@@ -401,14 +399,6 @@ final class CfgGatewayTest extends TestCase
 		// When/Then: returns Off (default '').
 		$result = PfbConfig::read('gen/pfb_feed_sanity');
 		$this->assertSame(PfbToggle::Off, $result, 'pfb_feed_sanity absent -> Off (default)');
-	}
-
-	public function testReadReturnsOffDefaultForDnsblCacheFlushAbsentKey(): void
-	{
-		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush';
-		$this->assertNull(config_get_path($path));
-		$this->assertSame(PfbToggle::Off, PfbConfig::read('dnsbl/pfb_cache_flush'),
-			'pfb_cache_flush absent -> Off (default)');
 	}
 
 	/** issue #3515 (pfB-DNS): the enable toggle has a section of its own and reads Off while absent. */
@@ -1621,7 +1611,6 @@ final class CfgGatewayTest extends TestCase
 			'top1m_count',
 			'top1m_inclusion',
 			'top1m_token', // ADR-59 P5
-			'pfb_cache_flush',
 			// issue #3515: pfB-DNS enable toggle and the Resolver snapshot it keeps (pfblockerngdns section)
 			'pfb_dns',
 			'pfb_dns_saved',
@@ -3241,8 +3230,8 @@ final class CfgGatewayTest extends TestCase
 
 		$alias_of_section = array_flip(PFB_SECTIONS);
 		$registry         = pfb_cfg_registry();
-		// issue #4272: pfb_dnsbl_lenient was renamed to dnsbl/pfb_dnsbl_parse_mode (registry old_name).
-		$retired = ['pfb_interval', 'pfb_min', 'pfb_hour', 'pfb_dailystart', 'pfb_dnsbl_lenient'];
+		// issue #4272: pfb_dnsbl_lenient was renamed to dnsbl/pfb_dnsbl_parse_mode (registry old_name). #3977 retired pfb_cache_flush.
+		$retired = ['pfb_interval', 'pfb_min', 'pfb_hour', 'pfb_dailystart', 'pfb_dnsbl_lenient', 'pfb_cache_flush'];
 		foreach ($retired as $bare) {
 			$this->assertArrayHasKey($bare, $fixture, "historical fixture must retain retired key '{$bare}'");
 		}

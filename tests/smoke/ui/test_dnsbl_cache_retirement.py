@@ -1,4 +1,4 @@
-"""The obsolete Resolver cache control is retired; Clear Resolver Cache still works."""
+"""The Resolver cache controls are retired: the obsolete cache (#3701) and Clear Resolver Cache (#3977)."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 SECTION = "installedpackages/pfblockerngdnsblsettings/config/0"
+RETIRED = ("pfb_cache", "pfb_cache_flush")
 
 
 class _Checkboxes(HTMLParser):
@@ -32,39 +33,34 @@ class _Checkboxes(HTMLParser):
 
 
 @pytest.mark.ui_render
-def test_dnsbl_renders_only_the_supported_resolver_cache_control(webui: WebUI) -> None:
+def test_dnsbl_renders_no_resolver_cache_control(webui: WebUI) -> None:
     response = webui.get(PAGE)
     assert response.status_code == 200, f"DNSBL GET returned {response.status_code}"
     assert not looks_like_login_page(response.text), "DNSBL GET returned the login page"
     controls = _Checkboxes(response.text).names
-    assert "pfb_cache_flush" in controls, f"Clear Resolver Cache checkbox missing: {sorted(controls)}"
-    assert "pfb_cache" not in controls, "obsolete Resolver cache checkbox is still offered"
+    assert "pfb_py_cache_max" in response.text, "the DNS Caching section lost its decision cache setting"
+    for name in RETIRED:
+        assert name not in controls, f"retired Resolver cache checkbox {name} is still offered"
 
 
 @pytest.mark.ui_e2e
-def test_dnsbl_save_ignores_retired_cache_and_preserves_clear_cache_toggle(
+def test_dnsbl_save_drops_the_retired_resolver_cache_settings(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    cache = f"{SECTION}/pfb_cache"
-    flush = f"{SECTION}/pfb_cache_flush"
-    original_cache = helpers.config_get_state(smoke_vm, cache)
-    original_flush = helpers.config_get_state(smoke_vm, flush)
+    paths = {name: f"{SECTION}/{name}" for name in RETIRED}
+    originals = {name: helpers.config_get_state(smoke_vm, path) for name, path in paths.items()}
     try:
-        helpers.config_restore_state(smoke_vm, cache, (True, "on"))
-        assert helpers.config_get_state(smoke_vm, cache) == (True, "on")
-        helpers.config_restore_state(smoke_vm, flush, (True, ""))
-        assert helpers.config_get_state(smoke_vm, flush) == (True, ""), "could not seed Clear Resolver Cache Off"
-        for token in ("on", ""):
-            response = webui.post(PAGE, {"pfb_cache": "on", "pfb_cache_flush": token}, timeout=300.0)
-            assert not looks_like_login_page(response.text), "DNSBL POST returned the login page"
-            assert helpers.config_get_state(smoke_vm, flush) == (True, token), (
-                f"Clear Resolver Cache POST {token!r} did not persist"
-            )
-            assert helpers.config_get_state(smoke_vm, cache)[0] is False, "normal save recreated obsolete pfb_cache"
-            controls = _Checkboxes(webui.get(PAGE).text).names
-            assert "pfb_cache_flush" in controls, "Clear Resolver Cache disappeared after save"
-            assert "pfb_cache" not in controls, "obsolete Resolver cache returned after save"
+        for path in paths.values():
+            helpers.config_restore_state(smoke_vm, path, (True, "on"))
+            assert helpers.config_get_state(smoke_vm, path) == (True, "on"), f"could not seed {path}"
+        response = webui.post(PAGE, {"pfb_cache": "on", "pfb_cache_flush": "on"}, timeout=300.0)
+        assert not looks_like_login_page(response.text), "DNSBL POST returned the login page"
+        for name, path in paths.items():
+            assert helpers.config_get_state(smoke_vm, path)[0] is False, f"a DNSBL save kept retired {name}"
+        controls = _Checkboxes(webui.get(PAGE).text).names
+        for name in RETIRED:
+            assert name not in controls, f"retired {name} returned after save"
     finally:
-        helpers.config_restore_state(smoke_vm, cache, original_cache)
-        helpers.config_restore_state(smoke_vm, flush, original_flush)
+        for name, path in paths.items():
+            helpers.config_restore_state(smoke_vm, path, originals[name])

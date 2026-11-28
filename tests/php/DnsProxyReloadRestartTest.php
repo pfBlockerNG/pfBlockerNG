@@ -61,7 +61,6 @@ final class DnsProxyReloadRestartTest extends TestCase
 			'chroot_cmd' => '/bin/echo',
 			'dnsbl_python_unmount' => FALSE,
 
-			'dnsbl_cache_flush' => PfbToggle::Off,
 			'enable' => PfbToggle::On,
 			'pfb_dns' => PfbToggle::On,
 			'dnsbl' => PfbToggle::On,
