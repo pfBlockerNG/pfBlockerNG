@@ -62,7 +62,7 @@ from collections.abc import Callable, Iterator
 import pytest
 
 from . import helpers as h
-from .conftest import FIXTURES_DIR, STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
+from .conftest import FIXTURES_DIR, GUEST_TO_HOST_ALIAS, STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
 
@@ -2196,6 +2196,120 @@ def test_cron_200_reingest_changed_remote_feed(
             reset_exc = exc
         if reset_exc is not None:
             raise reset_exc
+
+
+@pytest.mark.timeout(600)
+def test_cron_200_reingest_changed_easylist_feed_classified_text_x_asm(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """issue #4304: a changed easylist.to ABP feed that libmagic calls text/x-asm is re-ingested on cron.
+
+    The cron change-detection probe downloads the changed body to ``{file}.md5.raw`` and the
+    ingest reuses it. The MIME gate's easylist exception (``text/x-asm`` -> ``text/plain``) keys
+    on the feed host, so it must still see ``easylist.to`` on that reuse path, not the local
+    probe-body path (which has no host and made the gate refuse the list).
+
+    ``easylist.to`` reaches the mock feed server through a smoke control Host Override (guest
+    config, local-data): it resolves to the SLIRP host alias, which the module fixture already
+    allowlists for the feed-host filter. An upstream answer would not do: the Resolver's DNS
+    rebinding protection strips an RFC 1918 address from it, so the feed host would not resolve.
+    The module baseline reset removes the override with the other smoke control rows.
+
+    Scenario (BDD):
+      Given an ABP feed served as ``http://easylist.to:<port>/...`` is loaded (``dom_old``
+        blocked; .etag=etag_v1) and ``dom_new`` is NOT blocked;
+      And the changed body carries a ``.text`` line, so the guest's libmagic reports text/x-asm;
+      When the body is updated + ETag bumped to etag_v2, pfb_reuse is OFF and
+        pfb_dailystart matches now, and the ``cron`` verb runs;
+      Then the detector logs "( content changed )" for this feed,
+        no ``stage=mime reason=mime_not_allowed`` reject is logged for it,
+        and ``dom_new`` becomes VIP-blocked while ``dom_old`` stays blocked.
+    """
+    feed_host = "easylist.to"
+    dom_old = h.unique_domain("p4304old")
+    dom_new = h.unique_domain("p4304new")
+    header = "smokep4304asm"
+    etag_v1 = '"p4304-etag-v1"'
+    etag_v2 = '"p4304-etag-v2"'
+    feed_name = "p4304_easylist_asm.txt"
+    body_v1 = f"! Title: smoke 4304\n||{dom_old}^\n"
+    # The ``.text`` line is what makes libmagic classify an ABP list as assembler source.
+    body_v2 = f"! Title: smoke 4304\n.text\n||{dom_old}^\n||{dom_new}^\n"
+
+    try:
+        h.unblock_egress()
+
+        # GIVEN — the guest's libmagic classifies the changed body as text/x-asm (probed, not assumed).
+        probe = deployed_vm.ssh(
+            "f=$(/usr/bin/mktemp /tmp/p4304.XXXXXX) && "
+            f'printf %s {shlex.quote(body_v2)} > "$f" && /usr/bin/file -b --mime-type "$f"; '
+            'rc=$?; /bin/rm -f "$f"; exit $rc'
+        )
+        detected = probe.stdout.strip()
+        assert probe.returncode == 0 and detected == "text/x-asm", (
+            "guest libmagic classification of the changed ABP body:\n"
+            f"  expected: text/x-asm\n  actual:   {detected!r} (rc={probe.returncode}, stderr={probe.stderr!r})"
+        )
+
+        mock_feeds.register(feed_name, body_v1)
+        mock_feeds.enable_etag(feed_name, etag_v1)
+        feed_url = f"http://{feed_host}:{mock_feeds.port}/{feed_name}"
+
+        spec = h.DnsblCase(
+            aliasname="smokep4304asm",
+            feed_url=feed_url,
+            header=header,
+            mode=h.DnsblMode.VIP,
+            control_local_data={feed_host: {"A": GUEST_TO_HOST_ALIAS}},
+        )
+        h.inject(deployed_vm, spec)
+        h.reload(deployed_vm, "updatednsbl")
+
+        # BEFORE: dom_old blocked, dom_new resolves.
+        h.flush_unbound_name(deployed_vm, dom_old)
+        ans_old_before = h.dns_probe_client_until(client_vm, dom_old, h.is_vip)
+        assert h.is_vip(ans_old_before), (
+            f"BEFORE: {dom_old}: expected VIP-blocked (initial ingest from {feed_url}), actual {ans_old_before}"
+        )
+        ans_new_before = h.dns_probe_client(client_vm, dom_new, "A")
+        assert not h.is_vip(ans_new_before), (
+            f"BEFORE: {dom_new}: expected not blocked (not listed yet), actual {ans_new_before}"
+        )
+
+        # WHEN — update body + bump ETag on the server, then run the cron verb.
+        mock_feeds.set_content(feed_name, body_v2, etag=etag_v2)
+        h.pin_cron_due(deployed_vm)
+        chg_marker = h.detector_status_marker(header, "( content changed )")
+        chg_before = h.count_log_marker(deployed_vm, h.PFB_LOG, chg_marker)
+        mime_marker = f"pfb_validate: REJECT feed={header} stage=mime reason=mime_not_allowed"
+        mime_before = h.count_log_marker(deployed_vm, h.PFB_LOG, mime_marker)
+
+        h.reload(deployed_vm, "cron")
+
+        # THEN — the probe saw the change, so the ingest took the probe-body reuse path.
+        chg_after = h.count_log_marker(deployed_vm, h.PFB_LOG, chg_marker)
+        assert chg_after > chg_before, (
+            f"{chg_marker!r} count: expected > {chg_before}, actual {chg_after} — the probe did not report the change"
+        )
+
+        # THEN — the MIME gate kept the easylist exception on the reuse path.
+        mime_after = h.count_log_marker(deployed_vm, h.PFB_LOG, mime_marker)
+        assert mime_after == mime_before, (
+            f"{mime_marker!r} count: expected {mime_before}, actual {mime_after} — the reused text/x-asm "
+            f"body from {feed_host} was refused by the MIME gate"
+        )
+
+        # THEN — the new body was published: dom_new blocked, dom_old still blocked.
+        h.flush_unbound_name(deployed_vm, dom_new)
+        ans_new_after = h.dns_probe_client_until(client_vm, dom_new, h.is_vip, timeout=120.0)
+        assert h.is_vip(ans_new_after), (
+            f"AFTER cron: {dom_new}: expected VIP-blocked (changed feed re-ingested), actual {ans_new_after}"
+        )
+        ans_old_after = h.dns_probe_client(client_vm, dom_old, "A")
+        assert h.is_vip(ans_old_after), f"AFTER cron: {dom_old}: expected VIP-blocked, actual {ans_old_after}"
+
+    finally:
+        h.reset(deployed_vm)
 
 
 @pytest.mark.timeout(600)
