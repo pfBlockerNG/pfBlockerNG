@@ -26,7 +26,6 @@ final class GeoipInstallRetireTest extends TestCase
 		$this->assertStringContainsString("\$pfb['geoip_isos']\t= pfb_geoip_isos_path(\$pfb['ccdir'], \$pfb['dbdir']);",
 			(string) file_get_contents("{$src}pfblockerng.inc"));
 		$apply = (string) file_get_contents("{$src}pfblockerng_apply.inc");
-		$this->assertStringContainsString("!file_exists(\$pfb['geoip_isos']) ||", $apply);
 		$this->assertStringNotContainsString("{\$pfb['dbdir']}/geoip.txt", $apply);
 	}
 }

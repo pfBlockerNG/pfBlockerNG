@@ -33,11 +33,11 @@ require_once __DIR__ . '/support/HttpFixtureReadiness.php';
  * A "bls" step runs pfblockerng_download_extras() as the bls verb does, which prints the Blacklist report: a line per
  * blacklist row, compared as report where a step names it.
  *
- * A "whitelist" step runs pfblockerng_top1m(), the TOP1M whitelist build, with the scenario's provider, TLD inclusions
- * (comma-separated, set as given: the pfb_filter() CSV check before it is not part of the build) and count.
+ * A "whitelist" step ran pfblockerng_top1m(), the TOP1M whitelist build, which the Go cutover removed from PHP (#3977):
+ * only the Go corpus runs those steps. Every whitelist step is a scenario's last, so the steps before it still run here,
+ * and a scenario made only of whitelist steps is not listed.
  */
 #[CoversFunction('pfb_download')]
-#[CoversFunction('pfblockerng_top1m')]
 final class ExtrasParityCorpusTest extends TestCase
 {
 	private string $root = '';
@@ -56,6 +56,10 @@ final class ExtrasParityCorpusTest extends TestCase
 	{
 		$cases = [];
 		foreach (glob(__DIR__ . '/../extras/fixtures/parity/*.json') ?: [] as $file) {
+			$case = json_decode((string) file_get_contents($file), TRUE, 512, JSON_THROW_ON_ERROR);
+			if (self::phpSteps($case) === []) {
+				continue;
+			}
 			$cases[basename($file, '.json')] = [$file];
 		}
 		return $cases;
@@ -136,7 +140,7 @@ final class ExtrasParityCorpusTest extends TestCase
 		}
 		$routes = $case['routes'] ?? [];
 
-		foreach ($case['steps'] as $i => $step) {
+		foreach (self::phpSteps($case) as $i => $step) {
 			$label = basename($file) . " step {$i} ({$step['run']})";
 			$routes = $step['routes'] ?? $routes;
 			$this->writeRoutes($routes);
@@ -159,31 +163,18 @@ final class ExtrasParityCorpusTest extends TestCase
 				$before[$rel] = @fileinode("{$this->root}/{$rel}");
 			}
 
-			$this->assertContains($step['run'], ['download', 'dcc', 'bls', 'whitelist'], "{$label}: unknown run");
-			if ($step['run'] === 'whitelist') {
-				$whitelist = "{$GLOBALS['pfb']['dbdir']}/pfbalexawhitelist.txt";
-				$inode = @fileinode($whitelist);
-				$GLOBALS['pfb']['dnsbl_top1m_inc'] = $case['settings']['top1m_inclusions'] ?? '';
-				$GLOBALS['pfb']['dnsbl_top1m_cnt'] = (string) ($case['settings']['top1m_count'] ?? 1000);
-				// pfblockerng_download_extras() clears these itself; a whitelist step must not report an earlier step's.
-				$GLOBALS['pfb']['maxmind_feed_error'] = FALSE;
-				$GLOBALS['pfb']['top1m_changed'] = FALSE;
-				pfblockerng_top1m();
-				clearstatcache();
-				$actual = ['ok' => is_file($whitelist) && @fileinode($whitelist) !== $inode];
-			} else {
-				// dcc is the cron verb whose TOP1M row runs the change detector first; bls prints the Blacklist report.
-				$GLOBALS['argv'] = ['pfblockerng.php', in_array($step['run'], ['dcc', 'bls'], TRUE) ? $step['run'] : 'extras'];
-				$GLOBALS['pfb']['extras'] = [];
-				foreach ($step['extras'] as $extra) {
-					$GLOBALS['pfb']['extras'][] = $this->extra($extra);
-				}
-				ob_start();
-				$actual = ['ok' => pfblockerng_download_extras(30, $step['run'] === 'bls' ? 'blacklist' : 3)];
-				$report = (string) ob_get_clean();
-				if (array_key_exists('report', $want)) {
-					$actual['report'] = $report;
-				}
+			$this->assertContains($step['run'], ['download', 'dcc', 'bls'], "{$label}: unknown run");
+			// dcc is the cron verb whose TOP1M row runs the change detector first; bls prints the Blacklist report.
+			$GLOBALS['argv'] = ['pfblockerng.php', in_array($step['run'], ['dcc', 'bls'], TRUE) ? $step['run'] : 'extras'];
+			$GLOBALS['pfb']['extras'] = [];
+			foreach ($step['extras'] as $extra) {
+				$GLOBALS['pfb']['extras'][] = $this->extra($extra);
+			}
+			ob_start();
+			$actual = ['ok' => pfblockerng_download_extras(30, $step['run'] === 'bls' ? 'blacklist' : 3)];
+			$report = (string) ob_get_clean();
+			if (array_key_exists('report', $want)) {
+				$actual['report'] = $report;
 			}
 			$actual['maxmind_error'] = (bool) ($GLOBALS['pfb']['maxmind_feed_error'] ?? FALSE);
 			$actual['top1m_changed'] = (bool) ($GLOBALS['pfb']['top1m_changed'] ?? FALSE);
@@ -222,6 +213,24 @@ final class ExtrasParityCorpusTest extends TestCase
 			$this->assertSame($want, $actual, "{$label}: {$case['description']}\nlog:\n" .
 				(string) file_get_contents($GLOBALS['pfb']['log']));
 		}
+	}
+
+	/**
+	 * A scenario's steps up to its first whitelist step: the TOP1M whitelist build left PHP with #3977.
+	 *
+	 * @param array<string,mixed> $case
+	 * @return array<int,array<string,mixed>>
+	 */
+	private static function phpSteps(array $case): array
+	{
+		$steps = [];
+		foreach ($case['steps'] as $i => $step) {
+			if ($step['run'] === 'whitelist') {
+				break;
+			}
+			$steps[$i] = $step;
+		}
+		return $steps;
 	}
 
 	/** The negative control of a null expectation: a directory where nothing is expected must not read as absent. */

@@ -16,7 +16,8 @@ use PHPUnit\Framework\TestCase;
  * A scenario (the Go runner refuses unknown keys):
  *   description  what it pins; departure says why Go differs when old_expect is present.
  *   when         the fire point. rows: the stored hook rows. vars: the context (name => value), as pfb_run_hooks() takes it.
- *   trigger      the request trigger: pfb_req_to_hook_trigger() of it must be vars.TRIGGER.
+ *   trigger      the request trigger. Its PHP check, pfb_req_to_hook_trigger() of it must be vars.TRIGGER, left
+ *                with the PHP Update pass (#3977).
  *   lifecycle    $pfb['hook_lifecycle']. pkgOp: the operation of a pkg process the run is under (install, upgrade, reinstall,
  *                delete), as pfb_pkg_operation() reads it from the process table.
  *   python       "none": the wrapper reports no interpreter; else it reports one and runs a .py hook through /bin/sh.
@@ -37,7 +38,6 @@ use PHPUnit\Framework\TestCase;
  * within the second fails loudly instead of passing for the wrong reason.
  */
 #[CoversFunction('pfb_run_hooks')]
-#[CoversFunction('pfb_req_to_hook_trigger')]
 final class HookRunnerCorpusTest extends TestCase
 {
 	private const STAMP = '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} /m';
@@ -163,10 +163,6 @@ final class HookRunnerCorpusTest extends TestCase
 		$vars = [];
 		foreach ($sc['vars'] as $name => $value) {
 			$vars[(string) $name] = $this->content($value);
-		}
-		if (array_key_exists('trigger', $sc)) {
-			$this->assertSame($vars['TRIGGER'] ?? NULL, pfb_req_to_hook_trigger($sc['trigger']),
-				"vars.TRIGGER is what pfb_req_to_hook_trigger() makes of trigger {$sc['trigger']}");
 		}
 		$this->stage($sc);
 		$root = $this->root;

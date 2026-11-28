@@ -3,9 +3,9 @@
 declare(strict_types=1);
 
 /**
- * Child process for OutpostApplyCorpusTest (#4037, corpus A): runs the real sync_package_pfblockerng() over the PHPUnit
- * doubles for one scenario of tests/outpost/fixtures/apply/ and writes what each pass did as JSON. argv: scenario file,
- * work directory, result file.
+ * Child process for OutpostApplyTest (#4037): runs the real version 2 Outpost apply over the PHPUnit doubles for each step of
+ * one scenario and writes what each step did as JSON. argv: scenario file, work directory, result file. The update pass the
+ * steps once ran instead is gone with the cutover (#3977).
  *
  * A child per scenario because the `post` hook directory is a constant fixed when pfblockerng.inc loads; the hook is a
  * shell script that appends its PFB_* environment to a file, so the context it records is the one a real hook receives.
@@ -620,11 +620,10 @@ foreach ($sc['steps'] as $step) {
 	$GLOBALS['pfb']['save']                      = !empty($step['save']);
 
 	$v2 = [];
-	if (isset($step['apply'])) {
-		[$returned, $v2] = corpus_v2_apply($step['apply'], $work, $repo);
-	} else {
-		$returned = sync_package_pfblockerng();
+	if (!isset($step['apply'])) {
+		throw new InvalidArgumentException('every step is an apply: the update pass is gone (#3977)');
 	}
+	[$returned, $v2] = corpus_v2_apply($step['apply'], $work, $repo);
 	corpus_assert_sandboxed($pfb, $work, $repo);
 
 	$mirrors = [];

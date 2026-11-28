@@ -74,14 +74,14 @@ final class UnboundPythonSourcesTest extends TestCase
 
 		// Plain feed: NDJSON domain rows (#1083).
 		file_put_contents("{$this->tmp}/dnsbl/feed1.txt",
-			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'example.com') .
-			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'foo.com') .
+			self::ndjsonRow(PfbDnsblRowKind::Domain, 'example.com') .
+			self::ndjsonRow(PfbDnsblRowKind::Domain, 'foo.com') .
 			'{"kind":"domain","domain":"","log":"1","feed":"f","group":"g"}' . "\n");  // empty domain => skipped
 
 		// ABP feed: NDJSON abp rows, raw payload passed through verbatim.
 		file_put_contents("{$this->tmp}/dnsbl/abpfeed.txt",
-			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, '||ads.example^') .
-			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, '@@||good.example^'));
+			self::ndjsonRow(PfbDnsblRowKind::Abp, '||ads.example^') .
+			self::ndjsonRow(PfbDnsblRowKind::Abp, '@@||good.example^'));
 	}
 
 	protected function tearDown(): void
@@ -98,6 +98,12 @@ final class UnboundPythonSourcesTest extends TestCase
 		}
 
 		rmdir_recursive($this->tmp);
+	}
+
+	/** The compact NDJSON row the Update pass wrote (its emitter left with the Go cutover, #3977). */
+	private static function ndjsonRow(PfbDnsblRowKind $kind, string $payload): string
+	{
+		return json_encode([$kind, $payload], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) . "\n";
 	}
 
 	private function feeds(): array
@@ -164,7 +170,7 @@ final class UnboundPythonSourcesTest extends TestCase
 	public function testPermitFeedCarriesModeIntoManifest(): void
 	{
 		file_put_contents("{$this->tmp}/dnsbl/permitfeed.txt",
-			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'allow.example.com'));
+			self::ndjsonRow(PfbDnsblRowKind::Domain, 'allow.example.com'));
 		$m = pfb_unbound_python_sources([
 			['header' => 'permitfeed', 'group' => 'g', 'log' => '1', 'provenance' => 'feed', 'mode' => 'permit'],
 		]);
@@ -220,7 +226,7 @@ final class UnboundPythonSourcesTest extends TestCase
 	public function testMalformedNonJsonLineIsSkippedNotExtracted(): void
 	{
 		file_put_contents("{$this->tmp}/dnsbl/stalefeed.txt",
-			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'legit.example') .
+			self::ndjsonRow(PfbDnsblRowKind::Domain, 'legit.example') .
 			"not valid ndjson,stale-block.example,stale2.example##.ad\n");
 		$manifest = pfb_unbound_python_sources([
 			['header' => 'stalefeed', 'group' => 'g', 'log' => '1', 'provenance' => 'feed'],
@@ -577,7 +583,7 @@ final class UnboundPythonSourcesTest extends TestCase
 		// Given a build whose feed list carries one non-\w header among valid rows
 		// (its source file even exists, so only the validation can be the skip cause)
 		file_put_contents("{$this->tmp}/dnsbl/bad.header.txt",
-			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'example.com'));
+			self::ndjsonRow(PfbDnsblRowKind::Domain, 'example.com'));
 		$feeds = $this->feeds();
 		$feeds[] = ['header' => 'bad.header', 'group' => 'g', 'log' => '1'];
 		$this->assertSame('', $this->logContents(), 'log must start empty');

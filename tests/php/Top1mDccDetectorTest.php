@@ -763,14 +763,6 @@ PHP;
 		$this->assertStringContainsString("if (!pfblockerng_uc_countries('/usr/local/www/pfblockerng'))", $source);
 	}
 
-	public function testLockedSyncMarksInternalDcChildAsParentOwned(): void
-	{
-		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
-		$this->assertIsString($source);
-		$this->assertStringContainsString("\$maxmind_status = pfb_reentry_exec('dc', ['scheduled'], \$pfb['log']);", $source);
-		$this->assertStringContainsString('!in_array($maxmind_status, [0, 2], TRUE) || !pfb_geoip_generation_ready()', $source);
-	}
-
 	public function testUnrelatedExtrasFailureDoesNotBlockMaxmindConversion(): void
 	{
 		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php');

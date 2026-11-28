@@ -17,7 +17,6 @@ use PHPUnit\Framework\TestCase;
  */
 final class ReentryBoundsTest extends TestCase
 {
-	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	private const EXTRA = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc';
 
 	/** Wall-clock salvage ceiling (seconds) for the executed rows -- far above the 2s budget. */
@@ -347,50 +346,6 @@ final class ReentryBoundsTest extends TestCase
 	// Each pin is POSITIVE (the site reaches the seam) AND NEGATIVE (no unbounded
 	// composition survives there) -- the negative is what a "remove the bound here"
 	// mutant has to kill. php_strip_whitespace() keeps comments out of both halves.
-
-	public function testTop1mFetchRoutesTheAlReentryThroughTheBoundedSeam(): void
-	{
-		$scope = $this->scope(php_strip_whitespace(self::APPLY),
-			'function pfb_top1m_fetch_if_needed(', 'function pfb_top1m_reprocess_needed(');
-
-		$this->assertSame(1, substr_count($scope, "pfb_reentry_exec('al', ['scheduled']);"),
-			'the TOP1M refresh must preserve exactly one scheduled child call');
-		$this->assertStringNotContainsString('pfblockerng.php', $scope,
-			'the TOP1M refresh must compose no re-entry command of its own');
-		$this->assertStringNotContainsString('/usr/local/bin/php', $scope,
-			'the TOP1M refresh must name no interpreter of its own');
-	}
-
-	public function testBlacklistDownloadRoutesTheBlsReentryThroughTheBoundedSeam(): void
-	{
-		$scope = $this->scope(php_strip_whitespace(self::APPLY),
-			'Downloading Blacklist Database(s) [', 'pfb_prune_failed_bl_lists($lists, $pfb_return);');
-
-		$this->assertSame(
-			1,
-			substr_count($scope, "pfb_reentry_exec('bls', ['scheduled', \$bl_string], NULL, \$pfb_return);"),
-			'$pfb_return must stay the output destination of exactly one child call'
-		);
-		$this->assertStringNotContainsString('pfblockerng.php', $scope,
-			'the blacklist download must compose no re-entry command of its own');
-		$this->assertStringNotContainsString('/usr/local/bin/php', $scope,
-			'the blacklist download must name no interpreter of its own');
-	}
-
-	public function testMaxmindDownloadRoutesTheDcReentryThroughTheBoundedSeam(): void
-	{
-		$scope = $this->scope(php_strip_whitespace(self::APPLY),
-			'MaxMind Database downloading and processing ( approx 4MB )',
-			'pfb_logger("MaxMind processing failed; update deferred.\n", 2);');
-
-		$this->assertSame(1, substr_count($scope, "\$maxmind_status = pfb_reentry_exec('dc'"), $scope);
-		$this->assertStringContainsString('in_array($maxmind_status, [0, 2], TRUE)', $scope,
-			'the existing deferral must keep reading the seam status, so 124 defers the pass');
-		$this->assertStringNotContainsString('pfblockerng.php', $scope,
-			'the MaxMind download must compose no re-entry command of its own');
-		$this->assertStringNotContainsString('/usr/local/bin/php', $scope,
-			'the MaxMind download must name no interpreter of its own');
-	}
 
 	public function testScheduleExtraRunRoutesEveryExtraJobThroughTheBoundedSeam(): void
 	{

@@ -221,7 +221,6 @@ final class CoreSettingsIngestParityTest extends TestCase
 		$curl = $pfb['curl_defaults'];
 		$seen = [
 			'supp'    => static fn(): bool => $pfb['supp'] === PfbToggle::On,
-			'floors'  => static fn(): array => pfb_list_cidr_floors([], 'auto', (string) $pfb['supp_cidr'], (string) $pfb['supp_cidr_v6']),
 			'dnsblIp' => static fn(): bool => pfb_dnsblip_action_value($pfb['dnsblconfig']['action'] ?? NULL) !== 'Disabled',
 			'parseMode' => static fn(): string => $pfb['dnsbl_parse_mode']->value,
 			'filter'  => static fn(): bool => pfb_feed_filter_enabled(),
@@ -237,6 +236,9 @@ final class CoreSettingsIngestParityTest extends TestCase
 			'proxy'   => static fn(): array => ['host' => $curl[CURLOPT_PROXY] ?? NULL, 'port' => $curl[CURLOPT_PROXYPORT] ?? NULL, 'userpwd' => $curl[CURLOPT_PROXYUSERPWD] ?? NULL],
 		];
 		foreach ($case['php'] as $key => $expected) {
+			if ($key === 'floors') {	// issue #3977: pfb_list_cidr_floors() left with the PHP Update pass; Go reads the limits
+				continue;
+			}
 			if ($key === 'self') {
 				$probes = array_keys($expected);
 				$actual = array_combine($probes, array_map('pfb_ip_is_self', $probes));

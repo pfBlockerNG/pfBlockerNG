@@ -222,19 +222,6 @@ final class PfbFeedNormalizeTest extends TestCase
 		$this->assertTrue($res['changed']);
 	}
 
-	// --- wiring guard: only the parse-loop consumers normalize ---
-
-	/** #993: both live parse loops are unsafe off-appliance; only comment-free outer pins remain. */
-	public function testLiveFeedDispatchNormalizesOnlyAtParseConsumers(): void
-	{
-		$apply = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
-		$this->assertSame(2, substr_count($apply, '$pfb_norm = pfb_feed_normalize('),
-			'live download consumers must normalize exactly once per DNSBL/IP parse loop');
-		$inc = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
-		$this->assertSame(0, substr_count($inc, '$pfb_norm = pfb_feed_normalize('),
-			'the download/firewall orchestration include must not normalize before its live parse consumers');
-	}
-
 	// --- the Python converter leg (real charset_normalizer where available) ---
 
 	private static function converterInterpreter(): ?string

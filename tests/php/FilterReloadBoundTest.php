@@ -115,14 +115,14 @@ final class FilterReloadBoundTest extends TestCase
 	}
 
 	/**
-	 * sync_package_pfblockerng() runs to the end of the apply pass, so its route-pin
-	 * scope is the stripped source from the declaration to end-of-file.
+	 * pfb_apply_objects() and the pfb_apply_settle() after it run to the end of the apply
+	 * pass, so its route-pin scope is the stripped source from the declaration to end-of-file.
 	 */
 	private function syncScope(string $source): string
 	{
-		$from = strpos($source, 'function sync_package_pfblockerng(');
+		$from = strpos($source, 'function pfb_apply_objects(');
 		if ($from === FALSE) {
-			throw new RuntimeException('route-pin scope start not found: sync_package_pfblockerng');
+			throw new RuntimeException('route-pin scope start not found: pfb_apply_objects');
 		}
 		return substr($source, $from);
 	}
@@ -362,16 +362,5 @@ final class FilterReloadBoundTest extends TestCase
 		$window = substr($scope, max(0, $clear - 250), 350);
 		$this->assertStringContainsString('$pfb_filter_reload_unknown', $window,
 			'the closing clear must be gated so a launch-failure pending mark survives the rest of the pass');
-	}
-
-	// #3481: the pass applies the version it read; that is only true if every mark it read is in the config it reloads.
-	public function testThePassReadsThePendingVersionBeforeItReloadsTheConfig(): void
-	{
-		$scope = $this->syncScope(php_strip_whitespace(self::APPLY));
-		$read = strpos($scope, 'pfb_pending_changes_token()');
-		$reload = strpos($scope, 'pfb_global()');
-		$this->assertNotFalse($read, 'before-state check: the pass reads the pending version');
-		$this->assertNotFalse($reload, 'before-state check: the pass reloads its config through pfb_global()');
-		$this->assertLessThan($reload, $read, 'the pending version must be read before the config is reloaded');
 	}
 }

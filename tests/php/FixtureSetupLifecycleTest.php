@@ -42,21 +42,9 @@ final class FixtureSetupLifecycleTest extends TestCase
 				'DownloadStagePublishDirTest', 'testSuccessfulExtractionPublishesTheStagedDirectory',
 				['dir'], FALSE,
 			],
-			'GeoipOrigTrailingNewlineWiringTest' => [
-				'GeoipOrigTrailingNewlineWiringTest', 'testPublicationPipelineOrdersMirrorBeforeConsumer',
-				['dir'], TRUE,
-			],
 			'GeoipPackageGenerationTest' => [
 				'GeoipPackageGenerationTest', 'testPackageUmbrellaGeneratesContinentAndReputationPagesAcrossStateTransitions',
 				['tmp'], FALSE,
-			],
-			'GunzipTrailingNewlineWiringTest' => [
-				'GunzipTrailingNewlineWiringTest', 'testGunzipPipelineTerminatesBeforeEtConsumer',
-				['dir'], TRUE,
-			],
-			'PfbResolveListScriptTest' => [
-				'PfbResolveListScriptTest', 'testContainedFileResolvesToPrimaryDir',
-				['dir1', 'dir2'], FALSE,
 			],
 			'PrivPageMatchesTest' => [
 				'PrivPageMatchesTest', 'testNoDuplicateMatchEntries',

@@ -18,7 +18,6 @@ use PHPUnit\Framework\TestCase;
  * pfb_filterlog_timestamp(). Issue #4053 removed pfb_log_event(), the block page's dnsbl.log writer.
  */
 #[CoversFunction('pfb_logger')]
-#[CoversFunction('pfb_parse_fail_log')]
 #[CoversFunction('pfb_log_iso_timestamp')]
 #[CoversFunction('pfb_filterlog_timestamp')]
 #[CoversFunction('pfb_open_sqlite')]
@@ -381,68 +380,6 @@ final class LogTimestampBaselineTest extends TestCase
 		);
 		$this->assertStringStartsNotWith('1970-01-01', $ts_formatted, 'must never silently stamp the Unix epoch on a parse failure');
 	}
-
-	// -----------------------------------------------------------------------
-	// §1.3 row: dnsbl_parse_err -- ADR-60 P3: pfb_parse_fail_log() now writes the
-	// same unambiguous ISO-8601 format as every other log type.
-	// -----------------------------------------------------------------------
-
-	public function testParsedFailWritesIsoTimestampFormat(): void
-	{
-		$logfile = $this->tempFile('pfb_parsedfail_');
-
-		// issue #1004: trailing $lineno column added -- pinned explicitly (5) here.
-		pfb_parse_fail_log('pfbtestheader', 'some parse line', 'orig line', $logfile, 5);
-
-		$written = (string) file_get_contents($logfile);
-		$this->assertMatchesRegularExpression(
-			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},pfbtestheader,some parse line,orig line,5\n$/',
-			$written,
-			"pfb_parse_fail_log() must write the unambiguous 'Y-m-d H:i:s' format now; got: {$written}"
-		);
-	}
-
-	/**
-	 * Regression (issue #1004): $oline reaches pfb_parse_fail_log() as a raw fgets()
-	 * line (trailing "\n"). The writer must strip it and terminate the row itself,
-	 * so the appended $lineno cannot split the record and empty the NEXT row's
-	 * field0 timestamp -- which ADR-60's field0 age-cutoff would read as expired.
-	 */
-	public function testParsedFailRawFgetsLineDoesNotSplitTheRecord(): void
-	{
-		$logfile = $this->tempFile('pfb_parsedfail_nl_');
-
-		pfb_parse_fail_log('pfbtestheader', 'l1', "orig line one\n", $logfile, 4);
-		pfb_parse_fail_log('pfbtestheader', 'l2', "orig line two\n", $logfile, 9);
-
-		$written = (string) file_get_contents($logfile);
-		$lines   = explode("\n", rtrim($written, "\n"));
-		$this->assertCount(2, $lines, "each parse-error record must be one physical line; got: {$written}");
-		foreach ($lines as $l) {
-			$this->assertMatchesRegularExpression(
-				'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},/',
-				$l,
-				"every physical line must start with a parseable field0 timestamp: {$l}"
-			);
-		}
-	}
-
-	/**
-	 * Hostile-input row (e): the new ISO timestamp's ':' characters must not
-	 * introduce an extra comma that would shift dnsbl_parse_err's CSV columns.
-	 */
-	public function testParsedFailIsoTimestampHasNoExtraCommaFields(): void
-	{
-		$logfile = $this->tempFile('pfb_parsedfail_csv_');
-
-		// issue #1004: 5 columns now (timestamp,header,line,oline,lineno) -- field0 unmoved.
-		pfb_parse_fail_log('pfbtestheader', 'some parse line', 'orig line', $logfile, 5);
-
-		$written = (string) file_get_contents($logfile);
-		$fields = explode(',', $written);
-		$this->assertCount(5, $fields, "the ISO timestamp must not shift dnsbl_parse_err's CSV columns; got: {$written}");
-	}
-
 
 	// -----------------------------------------------------------------------
 	// The shared ISO-8601 helper -- wired in by Phases 2-4 (every log-timestamp

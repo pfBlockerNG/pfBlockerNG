@@ -151,16 +151,6 @@ final class CoreSettingsFeedsParityTest extends TestCase
 			"{$case['id']}: the adapter's write validation accepts what its read answered");
 	}
 
-	public function testTodaysPhpStillBuildsAnIpGroupsListInTheFolderOfItsActionOrInversions(): void
-	{
-		$source = (string) file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
-
-		foreach (["pfb_dnsbl_toggle_enabled(\$list['autoaddrnot_in'] ?? '')", "pfb_dnsbl_toggle_enabled(\$list['autoaddrnot_out'] ?? '')", "\$list['action'] = 'Alias_Native';",
-			"if (!pfb_group_action_valid(\$list['action'] ?? NULL, \$ltype === 'pfblockerngdnsbl' ? 'dnsbl' : 'ipv4'))"] as $statement) {
-			$this->assertStringContainsString($statement, $source, "the apply pass still has: {$statement}");
-		}
-	}
-
 	/**
 	 * @param array<string, mixed> $row
 	 */

@@ -14,8 +14,8 @@ use PHPUnit\Framework\TestCase;
  * their IPv4 and IPv6 countries and the list class their action and Advanced Inbound/Outbound inversions give) as the parity fixture
  * tests/core/fixtures/settings_feeds_geoip_parity.json; go/pfb_core/settings passes the same file.
  *   - A case is a config.xml: `php` is what the apply pass makes of each continent it names (the statements of
- *     sync_package_pfblockerng() at pfblockerng_apply.inc "Find all enabled Continents lists" and the continent loop, replayed here
- *     with their source anchored below), `groups` (each over the fixture's defaults) is what the settings adapter's read answers.
+ *     sync_package_pfblockerng() at pfblockerng_apply.inc "Find all enabled Continents lists" and the continent loop, replayed
+ *     here), `groups` (each over the fixture's defaults) is what the settings adapter's read answers.
  *     Where Core and today's PHP differ (a country the pass would pass on as typed) the case says why.
  *   - A refused row is a whole value Core refuses to read; the adapter's write refuses it too, naming the field.
  */
@@ -28,7 +28,6 @@ final class CoreSettingsFeedsGeoipParityTest extends TestCase
 	use PfbNoPhpWarningTrait;
 
 	private const FIXTURE = __DIR__ . '/../core/fixtures/settings_feeds_geoip_parity.json';
-	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 
 	private array $priorConfig;
 	private array $priorG;
@@ -179,24 +178,6 @@ final class CoreSettingsFeedsGeoipParityTest extends TestCase
 		foreach (['group-name-outside', 'group-tenth', 'group-repeated', 'group-missing', 'countriesV4-three-letters', 'countriesV4-lower-case', 'countriesV4-path',
 			'countriesV4-repeated', 'countriesV6-three-letters', 'countriesV6-repeated', 'action-outside', 'list-class-outside'] as $id) {
 			$this->assertContains($id, $refused, "the hostile row {$id}");
-		}
-	}
-
-	public function testTheApplyPassStillReadsTheContinentsAsTheObserverReplaysIt(): void
-	{
-		$source = (string) file_get_contents(self::APPLY);
-
-		foreach ([
-			"\$cont_key = 'pfblockerng' . strtolower(str_replace(' ', '', \$continent));",
-			"'countries4' => '_v4', 'countries6' => '_v6'",
-			"!pfb_group_action_valid(\$continent_config['action'] ?? NULL, 'geoip')",
-			"foreach (explode(',', \$continent_config[\$c_type]) as \$iso)",
-			"pfb_determine_list_detail(\$continent_config['action'], \"{\$cc_alias}\", \$cc_name, '0')",
-			"pfb_dnsbl_toggle_enabled(\$continent_config['autoaddrnot_in'] ?? '')",
-			"pfb_dnsbl_toggle_enabled(\$continent_config['autoaddrnot_out'] ?? '')",
-			"pfb_dnsbl_toggle_enabled(\$list['autoaddrnot_in'] ?? '')",
-		] as $statement) {
-			$this->assertStringContainsString($statement, $source, "the apply pass still has: {$statement}");
 		}
 	}
 

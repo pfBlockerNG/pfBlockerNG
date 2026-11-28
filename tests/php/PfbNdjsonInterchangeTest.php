@@ -8,10 +8,9 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * NDJSON interchange -- compact tagged-array writers plus schema-v1 object fallback.
+ * NDJSON interchange -- compact tagged-array reader plus schema-v1 object fallback.
  */
 #[CoversClass(PfbDnsblRowKind::class)]
-#[CoversFunction('pfb_dnsbl_ndjson_emit_row')]
 #[CoversFunction('pfb_dnsbl_ndjson_parse_row')]
 final class PfbNdjsonInterchangeTest extends TestCase
 {
@@ -153,137 +152,5 @@ final class PfbNdjsonInterchangeTest extends TestCase
 			['kind' => PfbDnsblRowKind::Abp, 'raw' => '@@||legacy.example^'],
 			pfb_dnsbl_ndjson_parse_row('{"kind":"abp","raw":"@@||legacy.example^"}')
 		);
-	}
-
-	// =========================================================================
-	// Round-trip + determinism -- emit() -> parse() identity, compact tagged shape.
-	// =========================================================================
-
-	public static function domainRoundTripProvider(): array
-	{
-		return [
-			'plain ASCII domain'               => ['example.com'],
-			'punycode domain'                  => ['xn--nxasmq6b.com'],
-			'domain with quote and backslash'  => ['ex"a\\mple.com'],
-			'domain with raw newline'          => ["example\ncom"],
-		];
-	}
-
-	#[DataProvider('domainRoundTripProvider')]
-	public function testEmitDomainRowRoundTripsAndStaysSingleLine(string $domain): void
-	{
-		$line = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, $domain);
-
-		$this->assertStringStartsWith('["d","', $line, 'compact domain tag first');
-		$this->assertSame(1, substr_count($line, "\n"), 'exactly one raw newline byte -- the trailing one');
-		$this->assertStringEndsWith("\n", $line);
-
-		$parsed = pfb_dnsbl_ndjson_parse_row(rtrim($line, "\n"));
-		$this->assertIsArray($parsed, 'the emitted line must parse back');
-		$this->assertSame($domain, $parsed['domain'], 'round-trip must recover the exact original domain, escaping notwithstanding');
-		$this->assertSame(['kind' => PfbDnsblRowKind::Domain, 'domain' => $domain], $parsed);
-	}
-
-	public static function abpRoundTripProvider(): array
-	{
-		return [
-			'adblock network rule'       => ['||example.com^'],
-			'allow exception rule'       => ['@@||allow.example^'],
-			'regex rule'                 => ['/^ad[0-9]+\\./'],
-			'hosts-style line'           => ['0.0.0.0 host.example'],
-			'comma and hash raw'         => ['ads,tracker#comment'],
-			'tab spaces shell regex raw' => ["@@||x^\$important\t  /[a-z]+/;\$(x)"],
-		];
-	}
-
-	#[DataProvider('abpRoundTripProvider')]
-	public function testEmitAbpRowRoundTrips(string $raw): void
-	{
-		$line = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, $raw);
-
-		$this->assertStringStartsWith('["a","', $line, 'compact ABP tag first');
-		$this->assertSame(1, substr_count($line, "\n"));
-
-		$parsed = pfb_dnsbl_ndjson_parse_row(rtrim($line, "\n"));
-		$this->assertIsArray($parsed);
-		$this->assertSame($raw, $parsed['raw']);
-	}
-
-	public function testEmitAbpRowUsesExpectedTagAndUnescapedSlashes(): void
-	{
-		$line = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, '||example.com^');
-		$this->assertSame("[\"a\",\"||example.com^\"]\n", $line);
-
-		// JSON_UNESCAPED_SLASHES proof: a raw containing '/' must not gain '\/'.
-		$regexLine = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, '/^ad[0-9]+\\./');
-		$this->assertStringNotContainsString('\\/', $regexLine, 'JSON_UNESCAPED_SLASHES must leave "/" unescaped');
-	}
-
-	// =========================================================================
-	// Byte-exact emit fixtures -- pin the exact on-wire NDJSON bytes the writers
-	// produce (the Python read-side twin that once cross-checked these was retired
-	// in issue #1349).
-	// =========================================================================
-
-	public function testEmitDomainRowByteExactOutput(): void
-	{
-		$this->assertSame(
-			"[\"d\",\"example.com\"]\n",
-			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'example.com')
-		);
-	}
-
-	public function testEmitAbpRowByteExactOutput(): void
-	{
-		$this->assertSame(
-			"[\"a\",\"/^ad[0-9]+\\\\./\"]\n",
-			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, '/^ad[0-9]+\\./')
-		);
-	}
-
-	// =========================================================================
-	// Invalid-UTF-8 bytes -- json_encode() returns FALSE on malformed UTF-8, and
-	// FALSE . "\n" coerces to a bare "\n": without JSON_INVALID_UTF8_SUBSTITUTE the
-	// row is a phantom blank line, not valid interchange (issue #1083 review).
-	// =========================================================================
-
-	public static function invalidUtf8ByteProvider(): array
-	{
-		return [
-			'lone continuation byte'      => ["\xFF"],
-			'truncated 2-byte sequence'   => ["\xC3\x28"],
-		];
-	}
-
-	#[DataProvider('invalidUtf8ByteProvider')]
-	public function testEmitDomainRowWithInvalidUtf8DomainStaysAValidRow(string $badBytes): void
-	{
-		$line = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, "bad{$badBytes}domain.com");
-
-		$this->assertSame(1, substr_count($line, "\n"), 'exactly one line, never a phantom blank');
-		$this->assertNotSame("\n", $line, 'must never degrade to a bare newline');
-		$this->assertNotFalse(json_decode(rtrim($line, "\n"), TRUE), 'must stay JSON-decodable');
-
-		$row = pfb_dnsbl_ndjson_parse_row(rtrim($line, "\n"));
-		$this->assertIsArray($row, 'the emitted line must parse back as valid interchange');
-		$this->assertSame(PfbDnsblRowKind::Domain, $row['kind']);
-		$expected = $badBytes === "\xFF" ? 'bad�domain.com' : 'bad�(domain.com';
-		$this->assertSame($expected, $row['domain']);
-	}
-
-	#[DataProvider('invalidUtf8ByteProvider')]
-	public function testEmitAbpRowWithInvalidUtf8RawStaysAValidRow(string $badBytes): void
-	{
-		$line = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, "||bad{$badBytes}domain.example^");
-
-		$this->assertSame(1, substr_count($line, "\n"), 'exactly one line, never a phantom blank');
-		$this->assertNotSame("\n", $line, 'must never degrade to a bare newline');
-		$this->assertNotFalse(json_decode(rtrim($line, "\n"), TRUE), 'must stay JSON-decodable');
-
-		$row = pfb_dnsbl_ndjson_parse_row(rtrim($line, "\n"));
-		$this->assertIsArray($row, 'the emitted line must parse back as valid interchange');
-		$this->assertSame(PfbDnsblRowKind::Abp, $row['kind']);
-		$expected = $badBytes === "\xFF" ? '||bad�domain.example^' : '||bad�(domain.example^';
-		$this->assertSame($expected, $row['raw']);
 	}
 }

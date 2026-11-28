@@ -5,7 +5,6 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
-#[CoversFunction('pfb_list_script_exec')]
 #[CoversFunction('pfb_run_hooks')]
 #[CoversFunction('pfb_script_output_exec')]
 #[CoversFunction('pfb_script_output_sanitize_chunk')]
@@ -126,7 +125,8 @@ PHP);
 	{
 		$prefix = escapeshellarg((string) $GLOBALS['pfb_test_timeout']) . ' -s TERM -k 1 15 ';
 		$tail = implode(' ', array_map('escapeshellarg', $args));
-		return pfb_list_script_exec($script, basename($script), 'pre', 'Fanout fixture', $tail, $prefix);
+		// issue #3977: the list-script wrapper left with the PHP Update pass; run its command through the surviving sink seam.
+		return pfb_script_output_exec($prefix . escapeshellarg($script) . " {$tail}");
 	}
 
 	public function testListOutputIsSanitizedAndCharacterLimitedPerInvocationWhileProgressAndLaterRunsRemainVisible(): void

@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
-use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -21,13 +20,10 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_sync_receive_accepted_clear')]
 #[CoversFunction('pfblockerng_plugin_xmlrpc_recv_done')]
 #[CoversFunction('pfblockerng_tick')]
-#[CoversFunction('sync_package_pfblockerng')]
 final class SyncPolicyApplyRecordTest extends TestCase
 {
 	private const REASON_WINDOW = 'outside the apply window';
 	private const REASON_FAILED = 'apply failed; pending changes kept';
-	private const REASON_RELOAD = 'firewall reload not confirmed; pending changes kept';
-	private const REASON_APPLIED = 'update pass completed'; // these passes change no rule, so no reload is launched
 
 	private string $dir = '';
 	private string $stateDir = '';
@@ -287,146 +283,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->assertLastStillChanged();
 	}
 
-	// ---- (d) a completed apply: the real end of sync_package_pfblockerng() ---------------
-
-	private function seedApplyEnvironment(): void
-	{
-		$gen = 'installedpackages/pfblockerng/config/0';
-		foreach (['pfb_min' => '0', 'pfb_hour' => '0', 'pfb_dailystart' => '0', 'pfb_interval' => '24', 'pfb_reuse' => '', 'enable_cb' => 'on'] as $key => $value) {
-			config_set_path("{$gen}/{$key}", $value);
-		}
-		foreach (['enable_dup', 'enable_agg', 'enable_float', 'enable_log', 'killstates', 'ip_placeholder', 'inbound_deny_action', 'outbound_deny_action', 'pass_order', 'autorule_suffix'] as $key) {
-			config_set_path("installedpackages/pfblockerngipsettings/config/0/{$key}", '');
-		}
-		config_set_path('installedpackages/pfblockerngblacklist/blacklist_enable', 'Disable');
-		foreach (['enable_dedup', 'enable_pdup', 'enable_rep', 'et_update', 'ccwhite', 'ccblack', 'etblock', 'etmatch', 'p24_max_var', 'p24_dmax_var', 'p24_pmax_var', 'ccexclude'] as $key) {
-			config_set_path("installedpackages/pfblockerngreputation/config/0/{$key}", '');
-		}
-		$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
-		foreach (['top1m_enable', 'top1m_count', 'top1m_inclusion', 'pfb_py_reply', 'pfb_regex', 'pfb_regex_list', 'pfb_cname', 'tld_allow', 'pfb_py_nolog', 'pfb_noaaaa', 'pfb_noaaaa_list', 'pfb_gp', 'pfb_gp_bypass_list', 'pfb_dnsbl_rule', 'tld_wildcard', 'pfb_control'] as $key) {
-			config_set_path("{$dnsbl}/{$key}", '');
-		}
-		$GLOBALS['g']['pfblockerng_install'] = FALSE;
-		$GLOBALS['pfb']['install']      = FALSE;
-		$GLOBALS['pfb']['domain_clear'] = FALSE;
-		$GLOBALS['pfb']['save']         = FALSE;
-		pfb_mark_pending_changes();
-	}
-
-	public function testCompletedApplySettlesAnOpenRecordAsApplied(): void
-	{
-		$this->seedRecord('waiting');
-		$this->seedApplyEnvironment();
-
-		sync_package_pfblockerng();
-
-		$this->assertFalse(pfb_pending_changes(), 'before-state check: the pass applied the pending mark');
-		$apply = $this->apply();
-		$this->assertSame('applied', $apply['outcome'] ?? NULL);
-		$this->assertSame(self::REASON_APPLIED, $apply['reason'] ?? NULL, 'a pass that launched no reload does not claim one');
-		$this->assertLastStillChanged();
-	}
-
-	public function testUnclearedPendingMarkerSettlesAnOpenRecordAsFailed(): void
-	{
-		$this->seedRecord('waiting');
-		$this->seedApplyEnvironment();
-		// A due-ledger entry that cannot be rewritten keeps the marker, as an unconfirmed reload does.
-		$this->assertTrue(pfb_due_ledger_write_entry('cron', ['last_run' => 0, 'next_due' => 0, 'jitter' => 0, 'pending_apply' => TRUE], $this->dir));
-		$ledger = json_decode((string) file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
-		$ledger['dcc'] = 'not-an-entry';
-		file_put_contents($this->dir . '/pfb_due_ledger.json', json_encode($ledger));
-
-		sync_package_pfblockerng();
-
-		$apply = $this->apply();
-		$this->assertSame('failed', $apply['outcome'] ?? NULL);
-		$this->assertSame(self::REASON_RELOAD, $apply['reason'] ?? NULL);
-		$this->assertTrue(pfb_pending_changes(), 'the pending mark survives');
-		$this->assertLastStillChanged();
-	}
-
 	// ---- (d2) what a completed pass records for the receiver (#3453) ---------------------
-
-	/** An IP list row whose header is reserved: the pass skips it, which is a finding (#3453). */
-	private function seedReservedHeader(): void
-	{
-		config_set_path('installedpackages/pfblockernglistsv4/config', [[
-			'aliasname' => 'Top', 'action' => 'Deny_Inbound', 'cron' => 'EveryDay', 'autoproto_in' => '', 'autoproto_out' => '', 'agateway_in' => 'default', 'agateway_out' => 'default',
-			'row'       => [['format' => 'auto', 'state' => 'Enabled', 'url' => 'https://feeds.example/top', 'header' => 'DNSBLIP']],
-		]]);
-	}
-
-	/** @return list<string> */
-	private function noticeTitles(): array
-	{
-		return array_column($GLOBALS['pfb_test_file_notices'], 'id');
-	}
-
-	public function testLocalApplyWithoutAReceiveRecordRecordsNoFindings(): void
-	{
-		$this->seedApplyEnvironment();
-		$this->seedReservedHeader();
-
-		sync_package_pfblockerng();
-
-		$this->assertFalse(pfb_pending_changes(), 'before-state check: the pass completed');
-		$this->assertNotEmpty($GLOBALS['pfb']['reserved_header_skips'] ?? [], 'before-state check: the pass skipped a reserved header');
-		$this->assertNotContains('pfBlockerNG Sync', $this->noticeTitles(), 'a node that never received policy raises no Sync notice');
-		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_findings.json');
-		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_receive.json', 'and no receive record is created');
-	}
-
-	public function testCompletedApplyWithAReceiveRecordRecordsTheFindingsOnce(): void
-	{
-		$this->seedRecord('waiting');
-		$this->seedApplyEnvironment();
-		$this->seedReservedHeader();
-
-		sync_package_pfblockerng();
-		$this->seedApplyEnvironment();
-		$this->seedReservedHeader();
-		sync_package_pfblockerng();
-
-		$findings = pfb_sync_findings_read($this->dir)['findings'];
-		$this->assertContains('Header skipped as reserved: DNSBLIP (pfblockernglistsv4)', $findings, 'the pass captured its reserved-header skips');
-		$this->assertSame(1, count(array_keys($this->noticeTitles(), 'pfBlockerNG Sync', TRUE)), 'one notice for unchanged findings');
-	}
-
-	public function testARefusedOnlyReceiveRecordRecordsNoFindings(): void
-	{
-		$this->seedState(['accepted_digest' => NULL, 'last' => ['time' => time() - 100, 'outcome' => 'refused', 'reason' => 'syncscope is not policy']]);
-		$this->seedApplyEnvironment();
-		$this->seedReservedHeader();
-
-		sync_package_pfblockerng();
-
-		$this->assertFalse(pfb_pending_changes(), 'before-state check: the pass completed');
-		$this->assertNotEmpty($GLOBALS['pfb']['reserved_header_skips'] ?? [], 'before-state check: the pass skipped a reserved header');
-		$this->assertNotContains('pfBlockerNG Sync', $this->noticeTitles(), 'a node that never accepted a policy raises no Sync notice');
-		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_findings.json');
-	}
-
-	public function testTheSyncPageSaveStopsTheFindingsAndForgetsTheRecordedOnes(): void
-	{
-		$this->seedRecord('waiting');
-		$this->seedApplyEnvironment();
-		$this->seedReservedHeader();
-		sync_package_pfblockerng();
-		$this->assertFileExists($this->dir . '/pfb_sync_findings.json', 'before-state check: an accepting receiver records them');
-
-		pfb_sync_receive_accepted_clear($this->dir);
-
-		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_findings.json', 'the role flip forgets the stored findings');
-		$this->seedApplyEnvironment();
-		sync_package_pfblockerng();
-
-		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_findings.json', 'a former receiver records nothing on the next pass');
-		$this->assertSame(1, count(array_keys($this->noticeTitles(), 'pfBlockerNG Sync', TRUE)), 'and raises no further Sync notice');
-		$panel = pfb_sync_receiver_panel(pfb_sync_receive_state_read($this->dir), NULL, pfb_sync_findings_read($this->dir), []);
-		$this->assertNotSame('', $panel, 'the receive record keeps the panel');
-		$this->assertStringNotContainsString('failed validation', $panel, 'and it lists no findings');
-	}
 
 	// A pass that saw the accepted digest just before a Sync save can write the findings after the save removed them.
 	public function testAFormerReceiverShowsNoFindingsAnApplyWroteAfterTheSyncSave(): void
@@ -442,166 +299,13 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->assertStringNotContainsString('failed validation', $panel, 'a node that no longer accepts policy lists no findings');
 	}
 
-	public function testCompletedApplyRecordsTheCopiedAliasAndFilterState(): void
-	{
-		$this->seedApplyEnvironment();
-		config_set_path('installedpackages/pfblockerng/config/0/enable_cb', ''); // a disabled pass still reconciles both writers
-		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_copied.json', 'before-state check');
-
-		sync_package_pfblockerng();
-
-		$recorded = pfb_sync_copied_read($this->dir)['recorded'];
-		$this->assertArrayHasKey('aliases', $recorded, 'the alias writer ran the detector');
-		$this->assertArrayHasKey('filter', $recorded, 'the filter writer ran the detector');
-	}
-
-	/** The pass's own apply reconciliation fails, so it leaves the pending mark unsettled, as an unconfirmed reload does. */
-	private function breakTheDueLedger(): void
-	{
-		$this->assertTrue(pfb_due_ledger_write_entry('cron', ['last_run' => 0, 'next_due' => 0, 'jitter' => 0, 'pending_apply' => TRUE], $this->dir));
-		$ledger = json_decode((string) file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
-		$ledger['dcc'] = 'not-an-entry';
-		file_put_contents($this->dir . '/pfb_due_ledger.json', json_encode($ledger));
-	}
-
-	/**
-	 * Runs $action once from inside the next pass; the logger double is the pass's first observable
-	 * call after it captured its start. Waits for the next second first unless $sameSecond.
-	 */
-	private function duringPass(callable $action, bool $sameSecond = FALSE): ArrayObject
-	{
-		$probe = new ArrayObject(['fired' => FALSE]);
-		$GLOBALS['pfb_test_logger_calls'] = new class ($action, $probe, $sameSecond) implements ArrayAccess {
-			public function __construct(private $action, private ArrayObject $probe, private bool $sameSecond) {}
-			public function offsetExists(mixed $o): bool { return FALSE; }
-			public function offsetGet(mixed $o): mixed { return NULL; }
-			public function offsetSet(mixed $o, mixed $v): void
-			{
-				if (!$this->probe['fired']) {
-					$this->probe['fired'] = TRUE;
-					$this->sameSecond || time_sleep_until(floor(microtime(TRUE)) + 1);
-					($this->action)();
-				}
-			}
-			public function offsetUnset(mixed $o): void {}
-		};
-
-		return $probe;
-	}
-
 	/** @return array<string,mixed> outcome and reason of the apply record, nothing else */
 	private function settled(): array
 	{
 		return array_intersect_key($this->apply() ?? [], ['outcome' => 1, 'reason' => 1]);
 	}
 
-	/** @return iterable<string,array{0:bool,1:array<string,string>}> */
-	public static function passKinds(): iterable
-	{
-		yield 'completed pass'   => [FALSE, ['outcome' => 'applied', 'reason' => self::REASON_APPLIED]];
-		yield 'unconfirmed pass' => [TRUE, ['outcome' => 'failed', 'reason' => self::REASON_RELOAD]];
-	}
-
-	/** @param array<string,string> $settled */
-	#[DataProvider('passKinds')]
-	public function testTickRestampDuringAPassDoesNotHideThatThePassSettledTheRecord(bool $unconfirmed, array $settled): void
-	{
-		// The tick re-stamps an open record as waiting (outside the window) on every run, before it takes any lock.
-		$this->seedRecord('waiting', '', 100);
-		$this->seedApplyEnvironment();
-		$unconfirmed && $this->breakTheDueLedger();
-		$probe = $this->duringPass(fn () => pfb_sync_apply_record('waiting', self::REASON_WINDOW, $this->dir));
-
-		sync_package_pfblockerng();
-
-		$this->assertTrue($probe['fired'], 'before-state check: the re-stamp ran inside the pass');
-		$this->assertSame($unconfirmed, pfb_pending_changes(), 'before-state check: the pass ended as the case says');
-		$this->assertSame($settled, $this->settled());
-		$this->assertLastStillChanged();
-	}
-
-	/** @param array<string,string> $settled */
-	#[DataProvider('passKinds')]
-	public function testPassLeavesARecordReopenedAfterItStartedWaiting(bool $unconfirmed, array $settled): void
-	{
-		$this->seedRecord('waiting', '', 100);
-		$this->seedApplyEnvironment();
-		$unconfirmed && $this->breakTheDueLedger();
-		// recv_done's order: open the record, then mark pending.
-		$probe = $this->duringPass(function (): void {
-			pfb_sync_apply_record('waiting', '', $this->dir, TRUE);
-			pfb_mark_pending_changes();
-		});
-
-		sync_package_pfblockerng();
-
-		$this->assertTrue($probe['fired'], 'before-state check: the receive reopened the record inside the pass');
-		$this->assertTrue(pfb_pending_changes(), 'the receive the pass did not apply stays pending, so the next tick applies it');
-		$this->assertSame(['outcome' => 'waiting'], $this->settled(), 'the pass did not apply that receive');
-		$this->assertLastStillChanged();
-	}
-
 	// ---- (e) a mark taken during a pass belongs to the next pass -------------------------
-
-	/**
-	 * Given a pass that starts with a pending mark and finishes cleanly
-	 * When a mark is taken inside the pass
-	 * Then the marker survives it, because the pass cleared only the mark it saw at its start
-	 */
-	public function testAMarkTakenInsideACompletedPassSurvivesIt(): void
-	{
-		$this->seedApplyEnvironment();
-		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'before-state check: the pass starts with a mark');
-		$atStart = (string) file_get_contents($GLOBALS['pfb']['pending_marker']);
-		$probe = $this->duringPass(static fn () => pfb_mark_pending_changes(), TRUE);
-
-		sync_package_pfblockerng();
-
-		$this->assertTrue($probe['fired'], 'before-state check: the mark was taken inside the pass');
-		$this->assertTrue(pfb_pending_changes(), 'a mark taken during the pass must survive it, so the next tick applies what the pass did not see');
-		$this->assertNotSame($atStart, (string) file_get_contents($GLOBALS['pfb']['pending_marker']), 'and it is the mark of the pass, not the one the pass started with');
-	}
-
-	/**
-	 * Given a pass that starts with no pending mark and finishes cleanly
-	 * When a mark is taken inside the pass
-	 * Then the marker survives it, because the pass saw no mark and so clears none
-	 */
-	public function testAMarkTakenInsideACompletedPassThatStartedCleanSurvivesIt(): void
-	{
-		$this->seedApplyEnvironment();
-		unlink($GLOBALS['pfb']['pending_marker']);
-		$this->assertFileDoesNotExist($GLOBALS['pfb']['pending_marker'], 'before-state check: the pass starts with no mark');
-		$probe = $this->duringPass(static fn () => pfb_mark_pending_changes(), TRUE);
-
-		sync_package_pfblockerng();
-
-		$this->assertTrue($probe['fired'], 'before-state check: the mark was taken inside the pass');
-		$this->assertTrue(pfb_pending_changes(), 'a mark taken during a pass that saw none must survive it');
-	}
-
-	public function testACompletedPassAppliesTheMarkItSawAtItsStart(): void
-	{
-		$this->seedApplyEnvironment();
-		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'before-state check: the pass starts with a mark');
-
-		sync_package_pfblockerng();
-
-		$this->assertFalse(pfb_pending_changes(), 'an untouched mark is applied by the pass');
-	}
-
-	public function testASurvivingMarkDoesNotKeepTheLedgerPending(): void
-	{
-		$this->seedApplyEnvironment();
-		$this->assertTrue(pfb_due_ledger_write_entry('cron', ['last_run' => 0, 'next_due' => 0, 'jitter' => 0, 'pending_apply' => TRUE], $this->dir));
-		$this->assertTrue(pfb_due_ledger_is_pending('cron', $this->dir), 'before-state check: the ledger starts pending');
-		$this->duringPass(static fn () => pfb_mark_pending_changes(), TRUE);
-
-		sync_package_pfblockerng();
-
-		$this->assertTrue(pfb_pending_changes(), 'before-state check: the mark survived the pass');
-		$this->assertFalse(pfb_due_ledger_is_pending('cron', $this->dir), 'the ledger is settled; the surviving marker alone carries the next apply');
-	}
 
 	public function testTickAppliesAPendingMarkTheLedgerDoesNotCarry(): void
 	{
@@ -619,17 +323,6 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->tick($manual);
 
 		$this->assertSame(1, $manualRuns, 'the marker alone makes the tick apply');
-	}
-
-	public function testASavePassLeavesTheMarkerAlone(): void
-	{
-		$this->seedApplyEnvironment();
-		$GLOBALS['pfb']['save'] = TRUE;
-		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'before-state check: the pass starts with a mark');
-
-		sync_package_pfblockerng();
-
-		$this->assertTrue(pfb_pending_changes(), 'a settings-save pass applies no deferred change, so it stays pending');
 	}
 
 	/**
@@ -698,12 +391,6 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->assertGreaterThan($opened, $this->apply()['opened'] ?? 0, 'opening again restarts it');
 	}
 
-	private function resetEnvironment(): void
-	{
-		$this->tearDown();
-		$this->setUp();
-	}
-
 	// ---- (e) a local apply never creates or changes a record ----------------------------
 
 	public function testLocalApplyWithNoOpenRecordLeavesTheApplyRecordNull(): void
@@ -711,12 +398,6 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->seedPendingCron(TRUE);
 		$this->tick(static function (): void {});
 		$this->assertNull($this->apply(), 'deferred outside the window');
-
-		$this->resetEnvironment();
-		$this->seedApplyEnvironment();
-		sync_package_pfblockerng();
-		$this->assertNull($this->apply(), 'a completed local apply');
-		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_receive.json', 'no state file is created for it');
 	}
 
 	public function testAnAppliedRecordIsNotReopenedByALaterLocalDeferral(): void

@@ -52,15 +52,6 @@ final class UnboundInputsPublishedWholeTest extends TestCase
 			'rows appended to a staging file a killed pass left were published by the next pass');
 	}
 
-	/** Issue #4201: the apply publishes the whole CSV of every host, and flags the reload only when it was replaced. */
-	public function testTheApplyPublishesTheSafeSearchCsvAndReloadsOnlyWhenItWasReplaced(): void
-	{
-		$this->assertMatchesRegularExpression(
-			'/if\s*\(\s*pfb_ss_publish\(\s*pfb_ss_csv\(\s*\$safesearch_hosts\s*\)\s*\)\s*\)\s*\{\s*\$safesearch_update\s*=\s*TRUE;\s*touch\("\{\$pfb\[\'dnsbl_file\'\]\}\.reload"\);\s*\}/',
-			self::source('pfblockerng_apply.inc')
-		);
-	}
-
 	/** Issue #4201: an aborted removal writes the DNS proxy's module ini again, whole. */
 	public function testAnAbortedRemovalWritesTheModuleIniWhole(): void
 	{

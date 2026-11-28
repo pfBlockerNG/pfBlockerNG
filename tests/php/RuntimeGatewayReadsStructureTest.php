@@ -40,7 +40,6 @@ final class RuntimeGatewayReadsStructureTest extends TestCase
 			'ip/inbound_deny_action', 'ip/outbound_deny_action', 'ip/pass_order', 'ip/autorule_suffix',
 			'ip/ip_placeholder', '"ip/{$type}_interface"',
 		]];
-		yield 'sync_package_pfblockerng' => ['pkg/pfblockerng/pfblockerng_apply.inc', 'sync_package_pfblockerng', []];
 		yield 'pfb_global' => ['pkg/pfblockerng/pfblockerng.inc', 'pfb_global', [
 			'ip/maxmind_locale', 'ip/asn_reporting', 'ip/asn_token', 'ip/maxmind_account', 'ip/maxmind_key',
 		]];

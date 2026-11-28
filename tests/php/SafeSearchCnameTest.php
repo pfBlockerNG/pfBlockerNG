@@ -11,9 +11,6 @@ use PHPUnit\Framework\TestCase;
  * Issue #149 — pin the off-appliance contract of the SafeSearch CNAME glue that
  * feeds pfb_unbound.py's CNAME redirect (duckduckgo.com / pixabay.com):
  *
- *   - pfb_ss_csv_rows()      : formats one host's python CSV row(s). The CSV is the
- *                             boundary pfb_unbound.py parses, so its column contract
- *                             (3-col rewrite/nxdomain vs 5-col cname) is load-bearing.
  *   - pfb_ss_refresh_lines() : the pure transform behind the 15-min freshness cron —
  *                             re-bakes the #2 fallback IPs on CNAME rows in place.
  *   - pfb_ss_resolve_target(): the empty-target guard (the live drill resolution is
@@ -43,11 +40,9 @@ use PHPUnit\Framework\TestCase;
  * empty-target guard (so the refresh keeps prior baked IPs); a domain-valid target
  * passes the boundary with no rejection logged and proceeds to resolution.
  */
-#[CoversFunction('pfb_ss_csv_rows')]
 #[CoversFunction('pfb_ss_refresh_lines')]
 #[CoversFunction('pfb_ss_resolve_target')]
 #[CoversFunction('pfb_ss_publish')]
-#[CoversFunction('pfb_ss_csv')]
 final class SafeSearchCnameTest extends TestCase
 {
 	private string $tmp;
@@ -146,92 +141,6 @@ final class SafeSearchCnameTest extends TestCase
 		}
 		return $calls;
 	}
-	// --- pfb_ss_csv_rows -------------------------------------------------------
-
-	public function test_csv_rows_nxdomain_is_single_three_col_row(): void
-	{
-		// Given an nxdomain SafeSearch entry, Then a single domain,nxdomain,nxdomain row.
-		$this->assertSame(
-			"bad.example.com,nxdomain,nxdomain\n",
-			pfb_ss_csv_rows('bad.example.com', ['nxdomain' => ''])
-		);
-	}
-
-	public function test_csv_rows_a_rewrite_emits_host_and_www(): void
-	{
-		// Given an A/AAAA rewrite entry, Then a 3-col row for the host AND its www variant.
-		$this->assertSame(
-			"forcesafe.example.com,1.2.3.4,\n" .
-			"www.forcesafe.example.com,1.2.3.4,\n",
-			pfb_ss_csv_rows('forcesafe.example.com', ['A' => '1.2.3.4', 'AAAA' => ''])
-		);
-	}
-
-	public function test_csv_rows_cname_emits_five_col_with_baked_ips_and_www(): void
-	{
-		// Given a CNAME entry with baked fallback IPs, Then a 5-col cname row for the
-		// host AND its www variant, carrying target + baked v4/v6.
-		$this->assertSame(
-			"duckduckgo.com,cname,safe.duckduckgo.com,203.0.113.7,2001:db8::7\n" .
-			"www.duckduckgo.com,cname,safe.duckduckgo.com,203.0.113.7,2001:db8::7\n",
-			pfb_ss_csv_rows(
-				'duckduckgo.com',
-				['A' => 'cname', 'AAAA' => 'safe.duckduckgo.com'],
-				'203.0.113.7',
-				'2001:db8::7'
-			)
-		);
-	}
-
-	/**
-	 * Issue #4201: the CSV the apply publishes holds every SafeSearch host's rows, in order, and resolves only a CNAME
-	 * host's target to bake its fallback IPs.
-	 */
-	public function test_csv_holds_every_hosts_rows_and_resolves_only_cname_targets(): void
-	{
-		$asked = [];
-		$resolver = static function (string $target) use (&$asked): array {
-			$asked[] = $target;
-			return ['203.0.113.7', '2001:db8::7'];
-		};
-
-		$csv = pfb_ss_csv([
-			'forcesafe.example.com' => ['A' => '1.2.3.4', 'AAAA' => ''],
-			'duckduckgo.com'        => ['A' => 'cname', 'AAAA' => 'safe.duckduckgo.com'],
-		], $resolver);
-
-		$this->assertSame(
-			"forcesafe.example.com,1.2.3.4,\nwww.forcesafe.example.com,1.2.3.4,\n"
-			. "duckduckgo.com,cname,safe.duckduckgo.com,203.0.113.7,2001:db8::7\n"
-			. "www.duckduckgo.com,cname,safe.duckduckgo.com,203.0.113.7,2001:db8::7\n",
-			$csv
-		);
-		$this->assertSame(['safe.duckduckgo.com'], $asked);
-	}
-
-	/** Issue #4201: without a resolver given, the apply's CSV resolves a CNAME target through drill (pfb_ss_resolve_target). */
-	public function test_csv_resolves_a_cname_target_through_drill_by_default(): void
-	{
-		$this->installLookupFixtures(FALSE);
-
-		$this->assertSame(
-			"duckduckgo.com,cname,safe.duckduckgo.com,192.0.2.10,2001:db8::10\n"
-			. "www.duckduckgo.com,cname,safe.duckduckgo.com,192.0.2.10,2001:db8::10\n",
-			pfb_ss_csv(['duckduckgo.com' => ['A' => 'cname', 'AAAA' => 'safe.duckduckgo.com']])
-		);
-	}
-
-	public function test_csv_rows_cname_without_baked_ips_keeps_empty_columns(): void
-	{
-		// The without-baked side: a CNAME row is still 5 columns, with empty baked
-		// fields, so the column count never varies between cname rows.
-		$this->assertSame(
-			"pixabay.com,cname,safesearch.pixabay.com,,\n" .
-			"www.pixabay.com,cname,safesearch.pixabay.com,,\n",
-			pfb_ss_csv_rows('pixabay.com', ['A' => 'cname', 'AAAA' => 'safesearch.pixabay.com'])
-		);
-	}
-
 	// --- pfb_ss_refresh_lines --------------------------------------------------
 
 	public function test_refresh_updates_cname_row_when_target_resolves_to_new_ip(): void

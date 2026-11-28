@@ -285,17 +285,12 @@ final class CoreSettingsPolicyDnsblParityTest extends TestCase
 	public function testTheShippedReadersStillTakeTheInputsTheFixtureObserves(): void
 	{
 		$pfb = pfb_test_page_source(self::PFB);
-		$apply = pfb_test_page_source(self::APPLY);
 
 		$this->assertStringContainsString("pfb_text_area_decode(\$pfb['dnsblconfig']['tld_wildcard_blacklist'], TRUE, FALSE, TRUE)", $pfb, 'the manifest reads the TLD blacklist so');
 		$this->assertStringContainsString("pfb_text_area_decode(\$pfb['dnsblconfig']['tld_wildcard_exclusion'], TRUE, FALSE, TRUE)", $pfb, 'the manifest reads the TLD exclusions so');
 		$this->assertStringContainsString("'user_whitelist'=> pfb_dnsbl_whitelist_lines()", $pfb, 'the manifest takes the whitelist from pfb_dnsbl_whitelist_lines()');
 		$this->assertStringContainsString("regex_list = {\$pfb['dnsbl_regex_list']}", $pfb, 'the ini hands the stored Regex list to pfB-DNS verbatim');
 		$this->assertStringContainsString("\$tld_allow_list .= ',' . \$pfb['dnsblconfig'][\$field];", $pfb, 'the ini joins the TLD Allow buckets as stored');
-		$this->assertStringContainsString("if (\$list['order'] == 'primary')", $apply, 'a group is primary when its stored order is primary');
-		$this->assertStringContainsString("\$filter_top1m = \$list['filter_top1m'] ?? NULL;", $apply, 'a group filters TOP1M by its stored filter_top1m');
-		$this->assertStringContainsString("\$list['logging'] ?? NULL,", $apply, 'a group logs as its stored logging says');
-		$this->assertStringContainsString('pfb_cfg_toggle_read($filter_top1m) === PfbToggle::On', $pfb, 'the manifest reads the group filter as a toggle');
 	}
 
 	/** @param array<string, mixed> $case */

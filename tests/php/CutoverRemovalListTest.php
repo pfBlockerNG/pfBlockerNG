@@ -18,7 +18,7 @@ final class CutoverRemovalListTest extends TestCase
 	public static function removedFunctions(): array
 	{
 		return array_map(static fn (string $name): array => [$name], array_combine($names = [
-			'pfblockerng_sync_cron', 'pfb_update_check',
+			'pfblockerng_sync_cron', 'pfb_update_check', 'sync_package_pfblockerng',
 		], $names));
 	}
 

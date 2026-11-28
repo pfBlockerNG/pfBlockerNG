@@ -1601,7 +1601,7 @@ final class MetricsWriteTest extends TestCase
 		$dir = "{$this->root}/export";
 		mkdir($dir);
 		$this->enableExport($dir);
-		pfb_pass_status_record('last_start', 1700000000);
+		file_put_contents(pfb_pass_status_path(), json_encode(['last_start' => 1700000000, 'last_end' => 0]));
 		// use_mfs_tmpvar: /var starts empty at every boot, while config.xml still has the cron entry.
 		rmdir_recursive($GLOBALS['pfb']['dbdir']);
 		mkdir($GLOBALS['pfb']['dbdir']);

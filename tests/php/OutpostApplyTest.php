@@ -61,11 +61,24 @@ final class OutpostApplyTest extends TestCase
 			'custom' => ['192.0.2.1'], 'row' => []];
 	}
 
-	/** The first step: today's update pass builds the groups' aliases, rules and tables. */
+	/**
+	 * The first step: an apply that fetches each group's set whole builds the groups' aliases, rules and tables, as the
+	 * first Update after the cutover (#3977) does. Each set holds the group's custom entry. The step after it starts with no
+	 * cursor file unless it writes one (runSteps()): the scenarios were written against a first step that kept none.
+	 */
 	private static function prime(array $groups): array
 	{
+		$directions = ['Deny_Inbound' => ['ingress'], 'Deny_Outbound' => ['egress']];
+		$resources = $core = [];
+		foreach ($groups as $group) {
+			$id = "ip-set/{$group['aliasname']}/ipv4";
+			$resources[] = ['entries' => 1, 'direction' => $directions[$group['action']] ?? ['ingress', 'egress']]
+				+ self::resource($id, '1', 1);
+			array_push($core, self::full($id, '1', $group['custom']), self::text($group['custom']));
+		}
 		return ['config' => ['installedpackages/pfblockernglistsv4/config' => $groups,
-			'installedpackages/pfblockerng/config/0/pfb_alias_delta_mode' => 'delta']];
+			'installedpackages/pfblockerng/config/0/pfb_alias_delta_mode' => 'delta'],
+			'apply' => ['request' => self::request($resources), 'core' => $core], 'prime' => TRUE];
 	}
 
 	/** The files and kernel table of an alias at a generation the cursor file records. */
@@ -127,6 +140,10 @@ final class OutpostApplyTest extends TestCase
 		$work = sys_get_temp_dir() . '/pfb_outpost_v2_' . bin2hex(random_bytes(6));
 		mkdir($work, 0700, TRUE);
 		$this->dirs[] = $work;
+		if (!empty($steps[0]['prime'])) {
+			unset($steps[0]['prime']);
+			$steps[1]['files']['{dbdir}/pfb_apply_cursors.json'] ??= NULL;
+		}
 		file_put_contents("{$work}/scenario.json", json_encode(['description' => 'OutpostApplyTest', 'steps' => $steps], JSON_THROW_ON_ERROR));
 		$process = pfb_test_run_process([PHP_BINARY, __DIR__ . '/support/OutpostApplyCorpusWorker.php', "{$work}/scenario.json", $work,
 			"{$work}/result.json"], 300.0);
@@ -136,7 +153,7 @@ final class OutpostApplyTest extends TestCase
 		return $records;
 	}
 
-	/** One step of today's update pass that builds the groups, then the apply step: the apply's record. */
+	/** The step that builds the groups, then the apply step: the apply's record. */
 	private function applyOnce(array $apply, array $groups = ['Abuse']): array
 	{
 		return $this->runSteps([self::prime(array_map(static fn (string $name): array => self::group($name), $groups)), $apply])[1];
@@ -477,10 +494,10 @@ final class OutpostApplyTest extends TestCase
 		$this->assertNotContains('pfB_Beta_v4', array_column($r['aliases'], 'name'));
 	}
 
-	// ---- what the apply reaches, against today's update pass ----------------------------------
+	// ---- what a later apply keeps ----------------------------------------------------------------
 
-	/** The alias objects the apply registers for the aliases it holds are the ones today's update pass registers. */
-	public function testTheApplyRegistersTheAliasObjectsThePassRegisters(): void
+	/** A later apply keeps the alias objects the first one registered for the aliases it holds. */
+	public function testALaterApplyKeepsTheAliasObjectsTheFirstRegistered(): void
 	{
 		$apply = self::at([self::ABUSE => ['2', self::OLD], self::BETA => ['4', self::NEW]]) + ['apply' => [
 			'request' => self::request([self::resource(self::ABUSE, '2', 3), self::resource(self::BETA, '4', 3)]),
@@ -489,25 +506,23 @@ final class OutpostApplyTest extends TestCase
 		[$pass, $r] = $this->runSteps([self::prime([self::group('Abuse'), self::group('Beta')]), $apply]);
 
 		$this->assertSame(0, $r['exit'], $r['log']);
-		$this->assertSame(['pfB_Abuse_v4', 'pfB_Beta_v4'], array_column($pass['aliases'], 'name'), 'before: the pass registered both');
+		$this->assertSame(['pfB_Abuse_v4', 'pfB_Beta_v4'], array_column($pass['aliases'], 'name'), 'before: the first apply registered both');
 		$this->assertSame($pass['aliases'], $r['aliases']);
 	}
 
-	/** Both today's update pass and the apply end their DNS steps with the DNS proxy's start check, which reports a proxy that cannot start. */
-	public function testThePassAndTheApplyBothRunTheDnsProxyStartCheck(): void
+	/** The apply ends its DNS step with the DNS proxy's start check, which reports a proxy that cannot start. */
+	public function testTheApplyRunsTheDnsProxyStartCheck(): void
 	{
 		// our block in the Resolver's custom options and no snapshot: pfB-DNS owns the Resolver and its proxy cannot start. Each
 		// step's write of the observer's settings is refused, so nothing tries to mount the host's /usr/local folders for it.
 		$owned = ['config' => ['unbound/custom_options' => base64_encode(PFB_DNS_PROXY_MARKER . "\n"), 'unbound/python_script' => ''],
 			'writeConfigFail' => ['pfBlockerNG: Added DNSBL Unbound upstream observer settings']];
 		$apply = $owned + ['apply' => ['request' => self::request([], ['scope' => 'dnsbl'])]];
-		[$pass, $r] = $this->runSteps([array_merge_recursive(self::prime([self::group('Abuse')]), $owned), $apply]);
+		$r = $this->applyOnce($apply);
 
-		$said = 'pfB-DNS: the DNS proxy did not become ready; see the notices';
-		$this->assertStringContainsString($said, $pass['log'], 'the update pass');
 		$this->assertSame(0, $r['exit'], $r['log']);
-		$this->assertStringContainsString($said, $r['log'], 'the version 2 apply');
-		$this->assertStringNotContainsString('python mounts', $pass['log'] . $r['log'], 'nothing tried to mount a host folder');
+		$this->assertStringContainsString('pfB-DNS: the DNS proxy did not become ready; see the notices', $r['log']);
+		$this->assertStringNotContainsString('python mounts', $r['log'], 'nothing tried to mount a host folder');
 	}
 
 	/** The DNS step hands the DNS-redirect and DoT/DoQ writers its mode, in that order: with DNSBL off each removes its rows. */

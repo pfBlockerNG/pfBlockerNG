@@ -18,25 +18,6 @@ use PHPUnit\Framework\TestCase;
  */
 final class DnsblWildcardRowValidationTest extends TestCase
 {
-	private static string $applySrc;
-	private static string $applyWhitelistRegion;
-
-	public static function setUpBeforeClass(): void
-	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
-		$src = php_strip_whitespace($path);
-		if ($src === '') {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
-		}
-		self::$applySrc = $src;
-		$start = strpos(self::$applySrc, 'pfb_logger("\\n Loading DNSBL Whitelist...", 1);');
-		$end = strpos(self::$applySrc, '$pfb_whitelist .= ",localhost.localdomain,,\\n";', $start === false ? 0 : $start);
-		if ($start === false || $end === false || $end <= $start) {
-			throw new RuntimeException('test bootstrap: apply-side whitelist region not found');
-		}
-		self::$applyWhitelistRegion = substr(self::$applySrc, $start, $end - $start);
-	}
-
 	protected function setUp(): void
 	{
 		$GLOBALS['config'] = [];
@@ -122,51 +103,12 @@ final class DnsblWildcardRowValidationTest extends TestCase
 		$this->assertSame("wild.org,1\nplain.net,0\nstripme.net,0\n", pfb_unbound_python_whitelist());
 	}
 
-	// --- The grep -vF whitelist file (pfblockerng_apply.inc) ---
-
-	/**
-	 * Run the apply-side whitelist collection over the seeded suppression list.
-	 *
-	 * The block lives deep inside sync_package_pfblockerng() and is not
-	 * unit-reachable, so it is eval-extracted verbatim from the REAL source
-	 * (house precedent: tests/php/CategoryEditPostGuardTest.php).
-	 */
-	private function collectApplyWhitelist(): string
-	{
-		pfb_global();
-		$pfb = $GLOBALS['pfb'];
-		$pfb_whitelist = '';
-		eval(self::$applyWhitelistRegion);
-
-		return $pfb_whitelist;
-	}
-
-	public function testApplyWhitelistExtractionUsesExecutableBoundaryNotProductionComment(): void
-	{
-		$this->assertStringStartsWith('pfb_logger("\\n Loading DNSBL Whitelist...', self::$applyWhitelistRegion);
-	}
-
-	public function testApplyWhitelistDropsDoubleDotRow(): void
-	{
-		$this->setWhitelist("..example.com\n");
-		$this->assertSame('', $this->collectApplyWhitelist());
-	}
-
-	public function testApplyWhitelistKeepsNeighboursOfADroppedRow(): void
-	{
-		$this->setWhitelist("..example.com\n.wild.org\nplain.net\n");
-		$this->assertSame(
-			".wild.org,,\n,wild.org,,\n,plain.net,,\n,www.plain.net,,\n",
-			$this->collectApplyWhitelist()
-		);
-	}
-
 	// --- The Python No-AAAA section (pfb_unbound_python()) ---
 
 	/**
 	 * Run the No-AAAA conf-section builder over a given list, returning the
-	 * emitted `[noAAAA]` body. Same eval-extraction rationale as above; the
-	 * section is built inline inside pfb_unbound_python().
+	 * emitted `[noAAAA]` body. The section is built inline inside
+	 * pfb_unbound_python(), so it is eval-extracted verbatim from the REAL source.
 	 */
 	private function buildNoAaaaSection(string $decodedList): string
 	{

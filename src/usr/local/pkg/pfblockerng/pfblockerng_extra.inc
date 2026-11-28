@@ -5983,48 +5983,6 @@ function pfb_schedule_runtime_config(): ?array
 }
 
 
-/** Stable feed identity shared by scheduler and synchronous apply loops. */
-function pfb_schedule_feed_id(string $family, string $header): ?string
-{
-	if ($family === 'dnsbl' && preg_match('/^[A-Za-z0-9_]+$/D', $header)) {
-		return "dnsbl:{$header}";
-	}
-	if ($family === 'ipv4' && preg_match('/^[A-Za-z0-9_]+_v4$/D', $header)) {
-		return "ipv4:{$header}";
-	}
-	if ($family === 'ipv6' && preg_match('/^[A-Za-z0-9_]+_v6$/D', $header)) {
-		return "ipv6:{$header}";
-	}
-	return NULL;
-}
-
-/** Whether this row belongs to the current scheduled pass. */
-function pfb_schedule_feed_selected(string $family, string $header): bool
-{
-	global $pfb;
-	if (empty($pfb['scheduled_runtime_cron'])) {
-		return TRUE;
-	}
-	if (in_array($header, ['DNSBLIP_v4', 'DNSBLIP_v6'], TRUE)) {
-		return TRUE;
-	}
-	$id = pfb_schedule_feed_id($family, $header);
-	return $id !== NULL && isset($pfb['scheduled_selected_ids'][$id]);
-}
-
-/**
- * Report a feed's or an Extra's terminal check to the Update that runs it (issue #3941): Core records it from the result. The
- * first one stands, and it is on fd 3 at once, so the Update's death loses no check that finished (issue #4002).
- */
-function pfb_schedule_outcome_record(string $id, PfbScheduleTerminalResult $outcome): void
-{
-	global $pfb;
-	if (!isset($pfb['scheduled_outcomes'][$id])) {
-		$pfb['scheduled_outcomes'][$id] = $outcome->value;
-		pfb_core_update_report(['outcomes' => [$id => $outcome->value]]);	// a failed write is retried by the whole result at the end
-	}
-}
-
 /** Acquire the scheduler dispatcher lock, reusing this process's existing hold. */
 function pfb_schedule_dispatch_begin(float $timeout_s = 0.1, ?bool &$contended = NULL): bool
 {
@@ -7698,15 +7656,6 @@ function pfb_core_update_serve(string $stdin, string $resultPath = 'php://fd/3',
 	}
 }
 
-/** Append one result line to the Update's fd 3; FALSE when it is not written whole or no Update is served. */
-function pfb_core_update_report(array $result): bool
-{
-	global $pfb;
-	$out = $pfb['core_update_result'] ?? NULL;
-	$json = json_encode(['version' => 1] + $result);
-	return is_resource($out) && $json !== FALSE && fwrite($out, "{$json}\n") === strlen($json) + 1;
-}
-
 /** Clear the due ledger's pending_apply flag; TRUE when it is clear. A ledger that cannot be read is not clear. */
 function pfb_core_update_clear_pending_apply(float $timeout_s = 5.0): bool
 {
@@ -8013,27 +7962,6 @@ function pfb_sync_status_flatten(array $data, ?string $facility = null): array
 }
 
 /**
- * pfb_ip_download_ledger_update — translate one IP feed's download result into the
- * sync-status ledger. FALSE opens facility=ip stage=download for $item; TRUE closes
- * the same key. Extracted from the download loop so the ledger write is unit-testable
- * without invoking the full sync_package_pfblockerng() pass.
- *
- * @param bool   $download_ok TRUE when pfb_download() succeeded for this item.
- * @param string $item        The alias/feed header identifying this download.
- * @param string $message     Human-readable failure text (ignored on success).
- * @param string $ledger_dir  Directory that contains pfb_sync_status.json.
- * @return void
- */
-function pfb_ip_download_ledger_update(bool $download_ok, string $item, string $message, string $ledger_dir): void
-{
-	if ($download_ok) {
-		pfb_sync_status_close('ip', $item, 'download', $ledger_dir);
-	} else {
-		pfb_sync_status_open('ip', $item, 'download', $message, $ledger_dir);
-	}
-}
-
-/**
  * pfb_dnsbl_download_ledger_update — translate one DNSBL feed's download result into
  * the sync-status ledger. FALSE opens facility=dnsbl stage=download for $item; TRUE
  * closes the same key. Mirrors pfb_ip_download_ledger_update() (issue #998).
@@ -8051,58 +7979,6 @@ function pfb_dnsbl_download_ledger_update(bool $download_ok, string $item, strin
 		pfb_sync_status_close('dnsbl', $item, 'download', $ledger_dir);
 	} else {
 		pfb_sync_status_open('dnsbl', $item, 'download', $message, $ledger_dir);
-	}
-}
-
-/**
- * pfb_sync_status_dedup_check — mirror the shell's "Sanity check" line (pfblockerng.sh's
- * closingprocess(), 'Database Sanity check [ PASSED / FAILED ]') into the IP dedup ledger
- * key.
- * FAILED opens facility=ip item=dedup stage=dedup; PASSED closes it. No line recorded yet
- * (dedup never run) is left untouched -- nothing known to report either way.
- *
- * @param string $log_path   Absolute path to pfblockerng.log.
- * @param string $ledger_dir Directory that contains pfb_sync_status.json.
- * @return void
- */
-function pfb_sync_status_dedup_check(string $log_path, string $ledger_dir): void
-{
-	// issue #1052: bounded tail read, not @file() of the WHOLE log -- a 'nolimit'
-	// log has no size cap. The sanity line is written every dedup pass, so the
-	// last match always sits within this trailing window.
-	$tail_bytes = 65536;
-
-	$fh = @fopen($log_path, 'rb');
-	if ($fh === FALSE) {
-		return;
-	}
-	$stat   = fstat($fh);
-	$size   = ($stat !== FALSE) ? $stat['size'] : 0;
-	$offset = ($size > $tail_bytes) ? $size - $tail_bytes : 0;
-	if (fseek($fh, $offset) === -1) {
-		fclose($fh);
-		return;
-	}
-	$tail = stream_get_contents($fh);
-	fclose($fh);
-	if ($tail === FALSE) {
-		return;
-	}
-
-	$last = '';
-	foreach (explode("\n", $tail) as $line) {
-		if (strpos($line, 'Sanity check') !== FALSE) {
-			$last = $line;
-		}
-	}
-	if ($last === '') {
-		return;
-	}
-
-	if (strpos($last, 'PASSED') !== FALSE) {
-		pfb_sync_status_close('ip', 'dedup', 'dedup', $ledger_dir);
-	} else {
-		pfb_sync_status_open('ip', 'dedup', 'dedup', trim($last), $ledger_dir);
 	}
 }
 
@@ -8507,68 +8383,6 @@ function pfb_cidr_subtract_v6(array $cidrs, array $holes, ?array &$errors = null
 	}
 
 	return $out;
-}
-
-/**
- * pfb_suppress_file_v6 — set-subtract $suppfile's IPv6 suppression entries
- * from $file's member-list CIDR lines and publish the covering-CIDR
- * remainder, atomically.
- *
- * Fail-safe (ADR-53 §2.2): either input missing/unreadable -> FALSE, $file is
- * left untouched -- never a truncated publish on error. On success, publishes
- * via a same-directory tmp+rename (an atomic POSIX rename, so no reader ever
- * observes a partial file); a legitimately-empty remainder (everything
- * suppressed) still publishes an empty file, never a stale one. A byte-identical
- * remainder is left in place (issue #3158). A non-CIDR
- * line in either input is dropped and logged (pfb_logger), never fatal.
- *
- * PURE aside from the single target-file write (+ its companion log lines).
- *
- * @param  string $file     Member/deny CIDR list to carve (rewritten in place).
- * @param  string $suppfile Suppression CIDR list (the holes).
- * @return bool TRUE on a successful publish (including an empty one), FALSE
- *              on any fail-safe path (previous $file left intact).
- */
-function pfb_suppress_file_v6(string $file, string $suppfile): bool
-{
-	if (!is_readable($file) || !is_readable($suppfile)) {
-		return FALSE;
-	}
-
-	$cidrs = @file($file, FILE_IGNORE_NEW_LINES);
-	$holes = @file($suppfile, FILE_IGNORE_NEW_LINES);
-	if ($cidrs === FALSE || $holes === FALSE) {
-		return FALSE;
-	}
-
-	$errors = [];
-	$result = pfb_cidr_subtract_v6($cidrs, $holes, $errors);
-
-	foreach ($errors as $bad_token) {
-		pfb_logger("IPv6 Suppression: dropping malformed entry [ {$bad_token} ]", 2);
-	}
-
-	$body = empty($result) ? '' : implode(PHP_EOL, $result) . PHP_EOL;
-	// issue #3158: identical remainder must not move mtime.
-	if (@file_get_contents($file) === $body) {
-		@unlink($file . '.tmp');
-		return TRUE;
-	}
-	$tmp  = $file . '.tmp';
-	if (@file_put_contents($tmp, $body, LOCK_EX) === FALSE) {
-		// ADR-53 review finding H1: a failed write can still leave a stray
-		// (empty/partial, or pre-existing debris from a prior crashed run) file
-		// at $tmp -- unlink it on this branch too, matching the rename-failure
-		// branch below.
-		@unlink($tmp);
-		return FALSE;
-	}
-	if (!@rename($tmp, $file)) {
-		@unlink($tmp);
-		return FALSE;
-	}
-
-	return TRUE;
 }
 
 // ---------------------------------------------------------------------------

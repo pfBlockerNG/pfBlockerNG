@@ -25,9 +25,8 @@ declare(strict_types=1);
  * failing for good, not only through the removal's own attempt), `state` (the directory), `iniGone` (the module's ini is missing
  * when the hook starts), and two ways the proxy's start can go wrong: `startThrows` (the service handler throws) and
  * `proxyWontStart` (the rc script returns and nothing serves). `unmigratedPolicy`: the DNSBL logging policy was never migrated
- * (no apply has run since the key was introduced) and the Resolver is enabled, so the disable pass's policy upgrade turns the
- * uninstall's disable back off and the pass moves the Resolver again. `lockAfterMove`: another save holds the config lock from
- * the moment the Resolver was moved again until the recovery announces itself. `marker` (with `interface`): a Resolver pfB-DNS
+ * (no apply has run since the key was introduced) and the Resolver is enabled, so the disable pass's policy upgrade reads the
+ * settings again (#3977: pfBlockerNG stays off through it). `marker` (with `interface`): a Resolver pfB-DNS
  * never moved (no block of ours, on `interface`, loopback by default) beside this stored pfb_dns_saved, which is no snapshot
  * unless empty: nothing to restore from, and no evidence that anything was moved. `refuseWrite` ({match, answer}): pfSense answers
  * `answer` (FALSE: refused, -1: not written) for each write_config() whose description contains `match`, and config.xml on disk
@@ -124,12 +123,9 @@ function worker_service_down(string $name): void
 	}
 }
 
-/** The hook's progress line. The recovery's announcement is when the save that held the config lock (lockAfterMove) finishes. */
+/** The hook's progress line. */
 function update_status($status)
 {
-	if (!empty($GLOBALS['worker_scenario']['lockAfterMove']) && str_contains((string) $status, 'restoring the DNS proxy')) {
-		$GLOBALS['pfb_test_try_lock_fail'] = FALSE;
-	}
 }
 
 function start_service($name, $after_sync = FALSE)
@@ -346,10 +342,6 @@ $GLOBALS['pfb_test_write_config_hook'] = static function (string $desc): void {
 	}
 	unset($GLOBALS['pfb_test_write_config_result']);
 	worker_persist();
-	// lockAfterMove: another save takes the config lock just after the Resolver was moved again
-	if (!empty($GLOBALS['worker_scenario']['lockAfterMove']) && str_contains($desc, 'Moved the DNS Resolver')) {
-		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
-	}
 };
 $GLOBALS['pfb_test_config_read_hook'] = static function (): void {
 	$last = end($GLOBALS['pfb_test_config_read_calls']);

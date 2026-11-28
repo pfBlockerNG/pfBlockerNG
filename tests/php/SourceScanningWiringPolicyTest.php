@@ -41,7 +41,6 @@ final class SourceScanningWiringPolicyTest extends TestCase
 		'CategoryFeedsAliasTruncationRenderTest.php',
 		'CategoryPostdataInvalidPrefixGuardTest.php',
 		'DnsblCustomListWildcardValidationTest.php',
-		'DnsblFeedIdnWildcardTest.php',
 		'DnsblFreshPconfigTest.php',
 		'DnsblWildcardRowValidationTest.php',
 		'FeedsAltSelectedKeyTest.php',
@@ -87,7 +86,6 @@ final class SourceScanningWiringPolicyTest extends TestCase
 		'ClearSqliteTimestampFormatTest.php',
 		'CountryNetworksCountGuardTest.php',
 		'DnsblListEditorWiringTest.php',
-		'DnsblListScriptWiringTest.php',
 		'DnsblRegexHighlightWiringTest.php',
 		'DnsblRegexToggleGateWiringTest.php',
 		'EditHooksPageWiringTest.php',
@@ -95,13 +93,14 @@ final class SourceScanningWiringPolicyTest extends TestCase
 		'GeneralAllowlistEditorWiringTest.php',
 		'GeoipContinentCatStderrGuardTest.php',
 		'GeoipDocLinkTest.php',
-		'IpRegexBoundaryGuardTest.php',
-		'IpRegexPrefilterGuardTest.php',
 		'IpSuppressionEditorWiringTest.php',
 		'LintEndpointWiringTest.php',
-		'ListScriptReparseWiringTest.php',
+		'ListScriptExitStatusTest.php',
 		'LogTimestampBaselineTest.php',
+		'PfbFeedNormalizeTest.php',
 		'PfbJsCacheBustingWiringTest.php',
+		'PfbSyncStatusDnsblWritersTest.php',
+		'PfbSyncStatusIpWritersTest.php',
 		'PythonTldWildcardIniEmitTest.php',
 		'PythonWhitelistTldSegTest.php',
 		'RegexIniTransportTest.php',
@@ -115,38 +114,24 @@ final class SourceScanningWiringPolicyTest extends TestCase
 	private const RETAINED = [
 		'AlertsPfctlCheckedSitesTest.php' => 'off-limits live Alerts pfctl/render dispatch',
 		'AlertsStatPipelineLocaleSafetyTest.php' => 'off-limits live Alerts command pipeline',
-		'AliasCntGrepCountGuardTest.php' => '#993 live sync/download/firewall orchestration',
-		'DnsblCustomRowStateEnabledInvariantTest.php' => '#993 live sync row synthesis dispatch',
 		'DnsblFeedCountWiringTest.php' => 'live DNSBL and Unbound service restart dispatch',
-		'DnsblIpCountGuardTest.php' => '#993 live sync/download/firewall orchestration',
 		'DnsblPlaintextSummaryRetirementTest.php' => 'inherently cross-file retired-code invariant',
 		'DnsblRegexHelpTextTest.php' => 'page render call lacks a help-text smoke assertion',
 		'DownloadExtractionExitCodeTest.php' => 'six live archive extraction bodies',
 		'DownloadRetvalFailsafeTest.php' => 'live download fail-safe initialization and final gate',
 		'DownloadTrailingNewlineWiringTest.php' => 'live download finalization dispatch',
 		'EscapedPathFilesystemCallTest.php' => 'inherently whole-tree filesystem safety rule',
-		'GeoipOrigTrailingNewlineWiringTest.php' => '#993 live download/apply orchestration',
 		'GeoipPackageGenerationCoverageTest.php' => 'destructive package install dispatch',
 		'GeneralSyntaxHighlightToggleWiringTest.php' => 'config-backed page save dispatch',
 		'GroupActionWiringTest.php' => 'appliance config-backed page dispatch',
-		'GunzipTrailingNewlineWiringTest.php' => '#993 live download/apply orchestration',
 		'HookEditFileContainmentTest.php' => 'destructive page file operations and include boundary',
 		'InstallDnsblMoveRestartGuardTest.php' => 'destructive installer and live service restart',
 		'InstallPrePassWriteOrderTest.php' => 'destructive package installer lifecycle',
-		'IpParseLineWiringTest.php' => '#993 live sync/download/firewall orchestration',
-		'IpRecomputeOrderChangeTest.php' => '#993 live config-order recompute dispatch',
-		'IpRecomputeRanWiringTest.php' => '#993 live firewall and closing dispatch',
-		'ListScriptTransformRerunWiringTest.php' => '#993 two live sync feed loops',
-		'ListScriptExitStatusTest.php' => '#993 six live list-script loop dispatches',
-		'ListScriptFailureLedgerWiringTest.php' => '#993 four live failure-ledger loop dispatches',
 		'LogFormatConsumersTest.php' => 'live external-command and top-level page consumers',
 		'LogLinecountGuardTest.php' => 'top-level authenticated AJAX dispatch',
 		'LogNowTokenRetiredTest.php' => 'inherently whole-tree retired-code invariant',
-		'PfbFeedNormalizeTest.php' => '#993 two live sync parse loops',
 		'PfbSettingsFamilyPostInstallCaptureTest.php' => 'destructive package installer lifecycle',
 		'PfbSettingsFamilyTest.php' => 'destructive package uninstall lifecycle',
-		'PfbSyncStatusDnsblWritersTest.php' => '#993 live sync plus off-limits Alerts dispatch',
-		'PfbSyncStatusIpWritersTest.php' => '#993 live sync/download/firewall orchestration',
 		'ProbeBodyPurgeTest.php' => 'destructive package installer caller',
 		'TimestampCosmeticNormalizationTest.php' => 'multiple live top-level/external producers',
 		'UpdatePageCoreTest.php' => 'appliance-only webConfigurator page dispatch and a retired-code invariant',
@@ -186,37 +171,6 @@ final class SourceScanningWiringPolicyTest extends TestCase
 			$source = file_get_contents(__DIR__ . "/{$file}");
 			$this->assertIsString($source);
 			$this->assertStringContainsString('php_strip_whitespace', $source, $file);
-		}
-	}
-
-	public function testRewordingANearbyProductionCommentDoesNotChangeRetainedPinScope(): void
-	{
-		$sourcePath = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
-		$source = file_get_contents($sourcePath);
-		$this->assertIsString($source);
-		$rewritten = str_replace(
-			'// issue #1925: normalize once per file; the parse below reads .norm',
-			'// nearby production explanation rewritten without preserving its old words',
-			$source,
-			$count
-		);
-		$this->assertSame(1, $count, 'comment-rewording fixture drifted');
-
-		$temp = tempnam(sys_get_temp_dir(), 'pfb-comment-reword-');
-		$this->assertIsString($temp);
-		try {
-			$this->assertNotFalse(file_put_contents($temp, $rewritten));
-			$originalCode = php_strip_whitespace($sourcePath);
-			$rewrittenCode = php_strip_whitespace($temp);
-			$start = 'pfb_list_script_cleanup_staged(';
-			$end = 'if (!empty($domain_data)) {';
-			$this->assertSame(
-				$this->sourceScope($originalCode, $start, $end),
-				$this->sourceScope($rewrittenCode, $start, $end),
-				'retained DNSBL staged-script pin must ignore nearby comment wording'
-			);
-		} finally {
-			@unlink($temp);
 		}
 	}
 
@@ -287,15 +241,6 @@ final class SourceScanningWiringPolicyTest extends TestCase
 			}
 			$this->assertNotFalse(file_put_contents($destination, $content));
 		}
-	}
-
-	private function sourceScope(string $source, string $start, string $end): string
-	{
-		$from = strrpos($source, $start);
-		$this->assertNotFalse($from, "missing retained-pin start: {$start}");
-		$to = strpos($source, $end, $from + strlen($start));
-		$this->assertNotFalse($to, "missing retained-pin end: {$end}");
-		return substr($source, $from, $to + strlen($end) - $from);
 	}
 
 	private function rewordPhpComments(string $source): string

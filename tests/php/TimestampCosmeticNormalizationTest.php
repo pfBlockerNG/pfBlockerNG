@@ -8,13 +8,12 @@ use PHPUnit\Framework\TestCase;
  * ADR-60 §1.8's remaining lower-priority sites -- cosmetic ISO-8601 normalization
  * outside the two genuine wrong-year bugs (DnsblAliasUpdateTimestampFormatTest /
  * ClearSqliteTimestampFormatTest cover those). Each site here already carried a
- * year (or, for the debug filename, has zero external consumer); the changes are
+ * year; the changes are
  * pure format polish. Top-level producers have no off-appliance callable seam, so
  * retained pins use php_strip_whitespace() and never production comments.
  */
 final class TimestampCosmeticNormalizationTest extends TestCase
 {
-	private const PFBLOCKERNG_APPLY  = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	private const PFBLOCKERNG_PHP    = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng.php';
 
 	private string $savedTz;
@@ -37,43 +36,6 @@ final class TimestampCosmeticNormalizationTest extends TestCase
 		$source = php_strip_whitespace($path);
 		$this->assertNotSame('', $source, "could not read comment-free source: {$path}");
 		return $source;
-	}
-
-	// -----------------------------------------------------------------------
-	// pfblockerng_apply.inc:1791 -- the /tmp debug-snapshot filename ('M_j' -> 'Y-m-d')
-	// -----------------------------------------------------------------------
-
-	public function testDebugFilenameSourceUsesFixedWidthFormat(): void
-	{
-		$source = $this->codeSource(self::PFBLOCKERNG_APPLY);
-		$this->assertStringContainsString(
-			"\$ts = date('Y-m-d', time());",
-			$source,
-			'the /tmp debug-snapshot filename format changed -- update this oracle'
-		);
-		$this->assertStringNotContainsString("date('M_j', time());", $source, 'the OLD variable-width format must be gone');
-	}
-
-	/**
-	 * The OLD 'M_j' format was variable-width (single-vs-double-digit day, e.g.
-	 * 'Mar_4' is 5 chars, 'Mar_14' is 6) -- not lexically sortable across a month.
-	 * The NEW 'Y-m-d' is always exactly 10 characters, for ANY day of any month.
-	 */
-	public function testDebugFilenameNewFormatIsFixedWidthForAnyDay(): void
-	{
-		$singleDigitDay = date('Y-m-d', mktime(0, 0, 0, 3, 4, 2026));
-		$doubleDigitDay = date('Y-m-d', mktime(0, 0, 0, 3, 14, 2026));
-
-		$this->assertSame('2026-03-04', $singleDigitDay);
-		$this->assertSame('2026-03-14', $doubleDigitDay);
-		$this->assertSame(10, strlen($singleDigitDay), 'single-digit-day filename stamp must be fixed-width');
-		$this->assertSame(10, strlen($doubleDigitDay), 'double-digit-day filename stamp must be the SAME width');
-
-		// Red proof (characterization of the OLD bug): the OLD 'M_j' format was NOT
-		// fixed-width across single vs double-digit days.
-		$oldSingle = date('M_j', mktime(0, 0, 0, 3, 4, 2026));
-		$oldDouble = date('M_j', mktime(0, 0, 0, 3, 14, 2026));
-		$this->assertNotSame(strlen($oldSingle), strlen($oldDouble), 'sanity: the OLD format really was variable-width');
 	}
 
 	// -----------------------------------------------------------------------

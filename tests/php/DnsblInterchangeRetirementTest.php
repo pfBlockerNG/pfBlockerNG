@@ -10,14 +10,9 @@ use PHPUnit\Framework\TestCase;
  *
  * R1: pfb_dnsbl_tld_stats_finalize() keeps its TLD-mode stats bookkeeping but never (re)writes
  * the interchange files -- classification now lives solely in the manifest
- * build (pfb_unbound_python_sources() / pfb_unbound.py). R2/R3: a stale
- * on-disk copy of the retired files, alone, no longer counts as "loaded feeds"
- * nor moves the reload fingerprint -- only a raw referenced by the published
- * manifest does, in EITHER TLD toggle state.
+ * build (pfb_unbound_python_sources() / pfb_unbound.py).
  */
 #[CoversFunction('pfb_dnsbl_tld_stats_finalize')]
-#[CoversFunction('pfb_dnsbl_has_loaded_feeds')]
-#[CoversFunction('pfb_dnsbl_reload_fingerprint')]
 final class DnsblInterchangeRetirementTest extends TestCase
 {
 	private string $tmp;
@@ -68,7 +63,7 @@ final class DnsblInterchangeRetirementTest extends TestCase
 
 		file_put_contents(
 			"{$GLOBALS['pfb']['dnsbl_file']}.raw",
-			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'sub.deep.example')
+			'["d","sub.deep.example"]' . "\n"
 		);
 
 		pfb_dnsbl_tld_stats_finalize([]);
@@ -105,111 +100,5 @@ final class DnsblInterchangeRetirementTest extends TestCase
 			$GLOBALS['pfb']['alias_dnsbl_all'],
 			'DNSBL_TLD must still be registered in the alias-all list'
 		);
-	}
-
-	// --- R2: issue #546 re-key -- retired interchange files alone are not "loaded" --
-
-	public function testHasLoadedFeedsIgnoresStaleRetiredInterchangeFilesAlone(): void
-	{
-		$pfb = $this->makeLoadedFeedsPfb();
-		file_put_contents($pfb['unbound_py_data'], "stale.example,1\n");
-		file_put_contents($pfb['unbound_py_zone'], "stale-zone.example\n");
-
-		$this->assertFalse(
-			pfb_dnsbl_has_loaded_feeds($pfb),
-			'stale retired interchange files alone no longer count as loaded feeds'
-		);
-	}
-
-	/** Vacuity twin: the SAME stale files, plus a manifest-referenced raw -> TRUE. */
-	public function testHasLoadedFeedsVacuityTwinRawFileStillCounts(): void
-	{
-		$pfb = $this->makeLoadedFeedsPfb();
-		file_put_contents($pfb['unbound_py_data'], "stale.example,1\n");
-		file_put_contents($pfb['unbound_py_zone'], "stale-zone.example\n");
-		$this->publishRawFixture($pfb, "blocked.example\n");
-
-		$this->assertTrue(
-			pfb_dnsbl_has_loaded_feeds($pfb),
-			'sanity: a manifest-referenced raw must still count as loaded (proves the FALSE assertion above can fail)'
-		);
-	}
-
-	private function makeLoadedFeedsPfb(): array
-	{
-		return [
-			'unbound_py_data'   => "{$this->tmp}/pfb_py_data.txt",
-			'unbound_py_zone'   => "{$this->tmp}/pfb_py_zone.txt",
-			'unbound_py_sources'=> "{$this->tmp}/pfb_py_sources.json",
-			'unbound_py_rawdir' => "{$this->tmp}/raw",
-		];
-	}
-
-	// --- R3: fingerprint decoupling -- non-TLD mode also excludes retired files ---
-
-	public function testReloadFingerprintDecoupledFromRetiredInterchangeFiles(): void
-	{
-		$pfb = $this->makeFingerprintPfb();
-		$pfb['dnsbl_tld_wildcard'] = '';
-		file_put_contents($pfb['unbound_py_data'], 'v1');
-
-		$fp_before = pfb_dnsbl_reload_fingerprint($pfb);
-		file_put_contents($pfb['unbound_py_data'], 'v2-mutated');
-		$fp_after = pfb_dnsbl_reload_fingerprint($pfb);
-
-		$this->assertSame(
-			$fp_before,
-			$fp_after,
-			'a retired pfb_py_data.txt mutation must not move the reload fingerprint in non-TLD mode either'
-		);
-	}
-
-	/** Vacuity twin: a manifest-referenced raw mutation between snapshots MUST move it. */
-	public function testReloadFingerprintVacuityTwinRawMutationStillMovesIt(): void
-	{
-		$pfb = $this->makeFingerprintPfb();
-		$pfb['dnsbl_tld_wildcard'] = '';
-		$rawPath = $this->publishRawFixture($pfb, 'v1');
-
-		$fp_before = pfb_dnsbl_reload_fingerprint($pfb);
-		file_put_contents($rawPath, 'v2-mutated');
-		$fp_after = pfb_dnsbl_reload_fingerprint($pfb);
-
-		$this->assertNotSame(
-			$fp_before,
-			$fp_after,
-			'sanity: a real rawdir *.raw mutation must still move the fingerprint (proves the SAME assertion above can fail)'
-		);
-	}
-
-	private function makeFingerprintPfb(): array
-	{
-		return [
-			'unbound_py_data'    => "{$this->tmp}/pfb_py_data.txt",
-			'unbound_py_zone'    => "{$this->tmp}/pfb_py_zone.txt",
-			'unbound_py_wh'      => "{$this->tmp}/pfb_py_whitelist.txt",
-			'unbound_py_sources' => "{$this->tmp}/pfb_py_sources.json",
-			'unbound_py_hsts'    => "{$this->tmp}/pfb_py_hsts.txt",
-			'unbound_py_psl'     => "{$this->tmp}/dnsbl_psl",
-			'unbound_py_rawdir'  => "{$this->tmp}/raw",
-		];
-	}
-
-	private function publishRawFixture(array $pfb, string $contents): string
-	{
-		$rawPath = "{$pfb['unbound_py_rawdir']}/feed.raw";
-		file_put_contents($rawPath, $contents);
-		$manifest = [
-			'version' => 1,
-			'config' => [],
-			'feeds' => [[
-				'raw' => 'raw/feed.raw',
-				'feed' => 'feed',
-				'group' => 'test',
-				'log_flag' => '1',
-			]],
-		];
-		file_put_contents($pfb['unbound_py_sources'], json_encode($manifest));
-		return $rawPath;
 	}
 }

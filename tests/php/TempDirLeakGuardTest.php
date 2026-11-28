@@ -26,12 +26,10 @@ final class TempDirLeakGuardTest extends TestCase
 	 */
 	private const LEAKED_BEFORE_3018 = [
 		'DueLedgerTest.php',
-		'DnsblipMarkerFolderTest.php',
 		'TickCronInstallTest.php',
 		'TickCronTest.php',
 		'QuietHoursApplyTest.php',
 		'PfbSyncStatusLedgerTest.php',
-		'IpRecomputeSnapshotTest.php',
 		'CountryNetworksCountGuardTest.php',
 	];
 
