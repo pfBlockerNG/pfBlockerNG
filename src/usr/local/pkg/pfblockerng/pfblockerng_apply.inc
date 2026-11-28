@@ -1511,6 +1511,190 @@ function pfb_apply_settings(): array {
 	return compact('elog', 'new_aliases', 'new_aliases_list', 'pfb_alias_lists', 'pfb_alias_lists_all', 'ip_types', 'cont_types');
 }
 
+/**
+ * ADR-38 Amendment 1: register the package's syslog routing (the <logging> block a `pkg add` install does not copy) and
+ * materialize its syslog.d drop-in when it is missing.
+ */
+function pfb_syslog_logging_register(): void {
+	// ADR-38 Amendment 1: ensure the dedicated syslog routing is materialized.
+	// pfSense core turns a package's installedpackages/package/<n>/logging block into
+	// the syslog.d drop-in (!pfblockerng -> /var/log/pfblockerng_syslog.log), the
+	// newsyslog rotation entry, and the Status->System Logs->Packages subtab. But the
+	// `pkg add` install path does NOT copy the package XML's <logging> block into that
+	// section (only a GUI install does), so register it here, keyed on the
+	// configurationfile (channel-independent: pfBlockerNG vs pfBlockerNG-devel).
+	$pfb_pkg_logged = FALSE;
+	$pfb_log_want = pfb_syslog_logging_want();
+	foreach (config_get_path('installedpackages/package', array()) as $pfb_idx => $pfb_pkg) {
+		if (($pfb_pkg['configurationfile'] ?? '') !== 'pfblockerng.xml') {
+			continue;
+		}
+		// Write the canonical block when it is missing OR carries STALE values — not only
+		// when empty. An upgrade from an older config can leave a row with a wrong
+		// facility/filename, a missing 'logtab' (the pre-241302e block, which makes the
+		// Packages subtab read "pfBlockerNG-devel"), or a leftover <logsocket> (which would
+		// make core regenerate the now-removed in-chroot socket). Replacing the whole block
+		// on any mismatch fixes the label and drops the stale logsocket; an already-canonical
+		// row is left untouched.
+		if (pfb_syslog_logging_needs_update($pfb_pkg['logging'] ?? array(), $pfb_log_want)) {
+			config_set_path("installedpackages/package/{$pfb_idx}/logging", $pfb_log_want);
+			write_config('[pfBlockerNG] register syslog routing');
+		}
+		$pfb_pkg_logged = TRUE;
+		break;
+	}
+
+	// Materialize/refresh the routing when the drop-in is missing — covers a fresh
+	// registration AND the #484 lifecycle gap (core runs system_syslogd_start only at
+	// install/resync, so a CLI reload / uninstall->redeploy could lose the drop-in).
+	// Graceful HUP, not a restart. Emission stays gated live by the log_syslog toggle.
+	if ($pfb_pkg_logged && !file_exists('/var/etc/syslog.d/pfblockerng_syslog.log.conf')) {
+		require_once('syslog.inc');
+		system_syslogd_start(TRUE);
+	}
+}
+
+/**
+ * The boot branch (#3977): Outpost work with no Update, under the apply lock. It retires what an older version left (the
+ * block-page web server, a legacy received-policy record) and registers the syslog routing; it fetches, parses and applies
+ * nothing, since the Core Updater's first Update applies the lists.
+ */
+function pfb_outpost_boot(): bool {
+	global $pfb;
+	pfb_global();
+	$dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock']) || !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
+	$owner = !isset($GLOBALS['pfb_feed_pass_lock']);
+	$contended = FALSE;
+	if (!pfb_schedule_dispatch_begin(0.1, $contended)) {
+		pfb_logger("\n Boot: the scheduler dispatcher lock is unavailable; nothing was done.\n", 1);
+		return FALSE;
+	}
+	if (!pfb_feed_pass_begin('sync', $contended)) {
+		if ($dispatch_owner) {
+			pfb_schedule_dispatch_release();
+		}
+		pfb_logger("\n Boot: the apply lock is unavailable; nothing was done.\n", 1);
+		return FALSE;
+	}
+	$absorb = FALSE;
+	if (!pfb_apply_enter($owner, $dispatch_owner, $absorb)) {
+		return FALSE;	// pfb_apply_enter() released the locks it owned
+	}
+	try {
+		pfb_syslog_logging_register();
+		pfb_dnsbl_webserver_retire();	// issue #4053: the block-page web server, NAT and auto-VIP an older version left
+		if ($absorb) {
+			pfb_sync_receive_legacy_absorb($pfb['dbdir']);
+		}
+		pfb_logger("\nSync terminated during boot process.\nUPDATE PROCESS ENDED\n", 1);
+		logger(LOG_INFO, localize_text('Sync terminated during boot process.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+		return TRUE;
+	} finally {
+		if ($owner) {
+			pfb_feed_pass_release();
+		}
+		if ($dispatch_owner) {
+			pfb_schedule_dispatch_release();
+		}
+	}
+}
+
+/**
+ * The uninstall disable pass (#3977): Outpost apply code with no Update, under the apply lock. It turns pfBlockerNG off
+ * through the apply steps alone: the settings, the removal of the lists unless they are kept, the DNS teardown, the alias,
+ * aggregate and rule teardown, and the pre and post hooks, which an uninstall sends to pfb-core (pfb_pass_hooks()). It
+ * fetches and parses nothing. FALSE when a lock is unavailable.
+ */
+function pfb_outpost_disable_pass(): bool {
+	global $pfb;
+	$pfb['disable_pass'] = TRUE;	// pfb_global() keeps enable and DNSBL off while it is set
+	try {
+		return pfb_outpost_disable_pass_run();
+	} finally {
+		unset($pfb['disable_pass']);
+	}
+}
+
+/** The body of pfb_outpost_disable_pass(), with the settings held off. */
+function pfb_outpost_disable_pass_run(): bool {
+	global $pfb;
+	pfb_global();
+	$dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock']) || !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
+	$owner = !isset($GLOBALS['pfb_feed_pass_lock']);
+	$contended = FALSE;
+	if (!pfb_schedule_dispatch_begin(0.1, $contended)) {
+		pfb_logger("\n Disable pass: the scheduler dispatcher lock is unavailable; nothing was removed.\n", 1);
+		return FALSE;
+	}
+	if (!pfb_feed_pass_begin('sync', $contended)) {
+		if ($dispatch_owner) {
+			pfb_schedule_dispatch_release();
+		}
+		pfb_logger("\n Disable pass: the apply lock is unavailable; nothing was removed.\n", 1);
+		return FALSE;
+	}
+	$absorb = FALSE;
+	if (!pfb_apply_enter($owner, $dispatch_owner, $absorb)) {
+		return FALSE;	// pfb_apply_enter() released the locks it owned
+	}
+	try {
+		pfb_runlog_begin();
+		$pfb['filter_configure'] = $pfb['domain_update'] = $pfb['domain_clear'] = FALSE;
+		$pfb['dnsbl_publish_failed'] = $pfb['dnsbl_accounting_failed'] = FALSE;
+		$pfb['reuse_dnsbl'] = '';
+		pfb_pass_hooks('pre', ['TRIGGER' => 'update']);
+		pfb_logger("\n**Saving configuration**\n", 1);
+		['new_aliases' => $new_aliases, 'new_aliases_list' => $new_aliases_list, 'pfb_alias_lists_all' => $alias_lists_all]
+			= pfb_apply_settings();
+
+		if ($pfb['keep'] !== PfbToggle::On) {
+			pfb_logger("\n  Removing DB Files/Folders \n", 1);
+			pfb_clear_contents();
+		}
+		foreach (['_v4', '_v6'] as $vtype) {
+			unlink_if_exists("{$pfb['dbdir']}/DNSBLIP{$vtype}.txt");
+			unlink_if_exists("{$pfb['dbdir']}/DNSBLIP{$vtype}.txt.fp");
+			unlink_if_exists("{$pfb['denydir']}/DNSBLIP{$vtype}.*");
+			unlink_if_exists("{$pfb['nativedir']}/DNSBLIP{$vtype}.*");
+		}
+		if (file_exists("{$pfb['dnsbl_file']}.conf")) {
+			$pfb['domain_clear'] = TRUE;
+			@unlink("{$pfb['dnsbl_file']}.conf");
+		}
+		pfb_top1m_teardown_call();
+
+		[$mode, $update, $python] = pfb_apply_dns();
+		$dnsbl_changed = pfb_dnsbl_reload_needed(FALSE, $pfb['domain_clear'], $update, $python, FALSE, FALSE);
+		if ($dnsbl_changed) {
+			pfb_update_unbound($mode, $update, $python);
+		}
+		unlink_if_exists("{$pfb['dnsbl_file']}.reload");
+		pfb_apply_dns_proxy();
+
+		$alias_lists = $prev_sets = [];
+		pfb_build_aggregate_aliases($new_aliases, $new_aliases_list, $alias_lists, $prev_sets);
+		['changedAliases' => $alias_lists, 'ipUnlockForced' => $ip_unlock_forced]
+			= pfb_apply_objects($new_aliases, $new_aliases_list, $alias_lists, $alias_lists_all, $prev_sets, [], $absorb);
+
+		pfb_pass_hooks('post', [
+			'TRIGGER'		=> 'update',
+			'IP_CHANGED'		=> (!empty($pfb['filter_configure']) || $ip_unlock_forced) ? '1' : '0',
+			'DNSBL_CHANGED'		=> $dnsbl_changed ? '1' : '0',
+			'STATUS'		=> 'ok',
+			'CHANGED_IP_ALIASES'	=> implode(' ', array_unique(is_array($alias_lists) ? $alias_lists : [])),
+			'CHANGED_DNSBL_GROUPS'	=> '',
+		]);
+		return TRUE;
+	} finally {
+		if ($owner) {
+			pfb_feed_pass_release();
+		}
+		if ($dispatch_owner) {
+			pfb_schedule_dispatch_release();
+		}
+	}
+}
+
 // Main pfBlockerNG function
 // TEMPORARY SHIM (#4037): deleted by the cutover (#3977). It computes from files what the version 2 apply is handed.
 function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool {
@@ -1633,42 +1817,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$pfb['changed_ip_aliases']	= array();
 	$pfb['changed_dnsbl_groups']	= array();
 
-	// ADR-38 Amendment 1: ensure the dedicated syslog routing is materialized.
-	// pfSense core turns a package's installedpackages/package/<n>/logging block into
-	// the syslog.d drop-in (!pfblockerng -> /var/log/pfblockerng_syslog.log), the
-	// newsyslog rotation entry, and the Status->System Logs->Packages subtab. But the
-	// `pkg add` install path does NOT copy the package XML's <logging> block into that
-	// section (only a GUI install does), so register it here, keyed on the
-	// configurationfile (channel-independent: pfBlockerNG vs pfBlockerNG-devel).
-	$pfb_pkg_logged = FALSE;
-	$pfb_log_want = pfb_syslog_logging_want();
-	foreach (config_get_path('installedpackages/package', array()) as $pfb_idx => $pfb_pkg) {
-		if (($pfb_pkg['configurationfile'] ?? '') !== 'pfblockerng.xml') {
-			continue;
-		}
-		// Write the canonical block when it is missing OR carries STALE values — not only
-		// when empty. An upgrade from an older config can leave a row with a wrong
-		// facility/filename, a missing 'logtab' (the pre-241302e block, which makes the
-		// Packages subtab read "pfBlockerNG-devel"), or a leftover <logsocket> (which would
-		// make core regenerate the now-removed in-chroot socket). Replacing the whole block
-		// on any mismatch fixes the label and drops the stale logsocket; an already-canonical
-		// row is left untouched.
-		if (pfb_syslog_logging_needs_update($pfb_pkg['logging'] ?? array(), $pfb_log_want)) {
-			config_set_path("installedpackages/package/{$pfb_idx}/logging", $pfb_log_want);
-			write_config('[pfBlockerNG] register syslog routing');
-		}
-		$pfb_pkg_logged = TRUE;
-		break;
-	}
-
-	// Materialize/refresh the routing when the drop-in is missing — covers a fresh
-	// registration AND the #484 lifecycle gap (core runs system_syslogd_start only at
-	// install/resync, so a CLI reload / uninstall->redeploy could lose the drop-in).
-	// Graceful HUP, not a restart. Emission stays gated live by the log_syslog toggle.
-	if ($pfb_pkg_logged && !file_exists('/var/etc/syslog.d/pfblockerng_syslog.log.conf')) {
-		require_once('syslog.inc');
-		system_syslogd_start(TRUE);
-	}
+	pfb_syslog_logging_register();
 
 	// Detect boot process or package installation
 	if (is_platform_booting() || $g['pfblockerng_install']) {

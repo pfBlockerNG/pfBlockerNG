@@ -102,8 +102,8 @@ final class PackageResyncUpdateStartTest extends TestCase
 		$resync = $m[1];
 		$this->assertStringContainsString("pfb_resync_update_start('pfb_core_call'", $resync);
 		$this->assertStringContainsString('pfb_pkg_operation()', $resync);
-		$this->assertMatchesRegularExpression('~if \(platform_booting\(\)\) \{[^}]*sync_package_pfblockerng\(~s', $resync,
+		$this->assertMatchesRegularExpression('~if \(platform_booting\(\)\) \{[^}]*pfb_outpost_boot\(\);~s', $resync,
 			'the boot branch runs only at boot');
-		$this->assertSame(1, substr_count($resync, 'sync_package_pfblockerng('), 'no PHP pass outside the boot branch');
+		$this->assertSame(1, substr_count($resync, 'pfb_outpost_boot('), 'the boot branch is the only Outpost work the resync runs itself');
 	}
 }

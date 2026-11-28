@@ -112,8 +112,7 @@
 		global $pfb;
 		if (platform_booting()) {
 			// #3977: the boot branch is Outpost work with no Update: it fetches and parses nothing
-			$pfb['save'] = TRUE;
-			sync_package_pfblockerng(array('scope' => 'both', 'force' => FALSE, 'trigger' => 'manual'));
+			pfb_outpost_boot();
 		} else {
 			// #3977 (spec section 5): one Update through Core; after an install or upgrade it carries the lifecycle, so the hooks
 			// fire once in it with PFB_POST_INSTALL=1. A Core that does not start it leaves the change pending; no PHP pass runs.

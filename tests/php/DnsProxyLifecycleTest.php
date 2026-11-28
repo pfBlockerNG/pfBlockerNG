@@ -780,7 +780,7 @@ final class DnsProxyLifecycleTest extends TestCase
 		$hook = substr($source, (int) $start);
 
 		$gate = strpos($hook, 'if (!pfb_dns_proxy_deinstall()) {');
-		$pass = strpos($hook, 'sync_package_pfblockerng();');
+		$pass = strpos($hook, 'pfb_outpost_disable_pass();');
 		$restore = strpos($hook, 'if (!pfb_dns_proxy_deinstall()) {', (int) $pass);
 		$this->assertNotFalse($pass, 'the disable pass is a plain statement: its result is not consulted');
 		$this->assertNotFalse($gate, 'package removal must restore the Resolver before the disable pass tears anything down');

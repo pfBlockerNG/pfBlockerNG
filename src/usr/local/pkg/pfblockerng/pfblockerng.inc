@@ -4646,8 +4646,9 @@ function pfb_global() {
 		$pfb['curl_defaults'][CURLOPT_TCP_FASTOPEN]		= TRUE;
 	}
 
-	// Set pfBlockerNG to disabled on 're-install'
-	if (isset($pfb['install']) && $pfb['install']) {
+	// Set pfBlockerNG to disabled on 're-install', and through the whole disable pass (pfb_outpost_disable_pass()), whose
+	// steps read the settings again
+	if (!empty($pfb['install']) || !empty($pfb['disable_pass'])) {
 		$pfb['enable'] = $pfb['dnsbl'] = PfbToggle::Off;
 		$pfb['install']	= FALSE;
 	}
@@ -30645,7 +30646,7 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 	$pfb['hook_lifecycle'] = 'uninstall';
 
 	update_status("Removing pfBlockerNG...");
-	sync_package_pfblockerng();
+	pfb_outpost_disable_pass();
 	// issue #3515: the disable pass can move the Resolver again (pfb_dns_wanted() reads enable_cb, which its policy upgrade may
 	// re-read), so it is put back once more; a refused restore, or Unbound's python settings the pass could not remove, stop the removal
 	if (!pfb_dns_proxy_deinstall()) {
