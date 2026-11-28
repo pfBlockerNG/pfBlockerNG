@@ -169,7 +169,7 @@ final class DownloadStagePublishTest extends TestCase
 		$this->assertNotFalse($source);
 
 		$open = strpos($source, 'if (!pfb_stage_publish($orig_download,'
-			. "\n\t\t\t\t    static function (string \$staged) use (\$file_dwn_esc, \$list_download,");
+			. "\n\t\t\t\t    static function (string \$staged) use (\$file_dwn_esc, \$list_url,");
 		$this->assertNotFalse($open,
 			'the piped ZIP branch no longer stages with the list URL in scope for its MIME probe');
 
@@ -181,7 +181,7 @@ final class DownloadStagePublishTest extends TestCase
 		// constant appears passes while the call's result is computed and discarded,
 		// which republishes the rejected content and loses the previous file.
 		$this->assertMatchesRegularExpression(
-			'/if \(!pfb_filter\(\s*array\(escapeshellarg\(\$staged\), \$staged, \$list_download\),'
+			'/if \(!pfb_filter\(\s*array\(escapeshellarg\(\$staged\), \$staged, \$list_url\),'
 			. '\s*PFB_FILTER_FILE_MIME[^)]*\)\) \{\s*\$inner_rejected = TRUE;\s*return [^;]+;\s*\}/',
 			$callback,
 			'the piped ZIP branch must reject the staged content before it is published, '
