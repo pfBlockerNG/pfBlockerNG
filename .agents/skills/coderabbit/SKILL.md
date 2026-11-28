@@ -1,10 +1,9 @@
 ---
 name: coderabbit
 description: >
-  Asking CodeRabbit for a review, handling its Fair Usage quota notices, and
-  dispatching the CLI-in-CI workflow. Run when a PR is ready to merge, when a
-  quota / "Review limit reached" notice appears, or before dispatching the CLI
-  workflow. Loads `.agents/policy/review-bots.md`. Triggers: "ready to merge",
+  Asking CodeRabbit for a review and handling its Fair Usage quota notices. Run
+  when a PR is ready to merge or when a quota / "Review limit reached" notice
+  appears. Loads `.agents/policy/review-bots.md`. Triggers: "ready to merge",
   "Fair Usage", "rate limit", "coderabbit", "@coderabbitai", "/coderabbit".
 ---
 
@@ -42,9 +41,3 @@ countdown is live.
 Not for format-only, comment-only, lint, or mechanical APPLY of CodeRabbit's own
 suggestions. Only a material behaviour change after the review earns a second
 ask, and only one.
-
-## CLI review (separate hourly budget)
-
-Dispatch-only: Actions → **CodeRabbit CLI review** → PR number.
-Needs secret `CODERABBIT_API_KEY` (Agentic key). Findings are file-level.
-Do not enable per-push until a burst test says the 7-day PR taper is independent (#2436).

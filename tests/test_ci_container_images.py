@@ -55,7 +55,6 @@ BARE: dict[JobKey, str] = {
     ("agent-config.yml", "agent-config"): _STOCK,
     ("build-image.yml", "resolve-version"): _STOCK,
     ("ci-image.yml", "build"): "builds the images, so it cannot run inside them",
-    ("coderabbit-cli.yml", "cli-review"): "dispatch-only review tooling, not CI; tracks the vendor's latest CLI",
     ("context-budget.yml", "context-budget"): _STOCK,
     ("image-refresh.yml", "plan"): _STOCK,
     ("nightly-failure-alert.yml", "alert"): _SHELL_ONLY,
