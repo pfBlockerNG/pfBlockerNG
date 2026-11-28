@@ -1141,7 +1141,7 @@ def test_ci_workflow_arms_the_red_canary() -> None:
     text = (_REPO_ROOT / ".github/workflows/context-budget.yml").read_text(encoding="utf-8")
     assert "Red canary" in text
     assert f'expect_report 0 "guideline: $canary: {ccb.POLICY_BUDGET + 1} bytes > budget {ccb.POLICY_BUDGET}"' in text
-    assert "expect_report 1 'entry does not match" in text
+    assert 'expect_report 1 "entry does not match' in text
 
 
 # --- the live tree has no errors (its budgets are guidelines) --------------------------

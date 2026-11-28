@@ -115,11 +115,11 @@ jobs:
 
           # 2. A missed-review ledger entry that is not in the documented shape: still an error.
           printf '%s\n' '- a canary entry with no SHA' >> "$ledger"
-          expect_report 1 'entry does not match `SHA`  title  (#PR)'
+          expect_report 1 "entry does not match \`SHA\`  title  (#PR)"
           cp -- "$ledger_before" "$ledger"
 
           # 3. A ledger entry back in narrative shape (#2829): 39 bytes of entry plus a 1,900-byte story, a guideline.
-          printf -- '- `deadbeef`  a canary entry  (#1) — %s\n' "$(head -c 1900 /dev/zero | tr '\0' y)" >> "$ledger"
+          printf -- "- \`deadbeef\`  a canary entry  (#1) — %s\n" "$(head -c 1900 /dev/zero | tr '\0' y)" >> "$ledger"
           expect_report 0 "guideline: $ledger:"
           grep -qF 'entry is 1939 bytes > cap 200' canary.log || { echo 'CANARY: no entry cap'; cat canary.log; exit 1; }
           cp -- "$ledger_before" "$ledger"
