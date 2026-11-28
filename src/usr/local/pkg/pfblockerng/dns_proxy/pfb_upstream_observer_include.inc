@@ -34,7 +34,7 @@
  *
  * The rc script serializes its starts (lockf), so this background start and an apply's start_service() cannot both launch a
  * proxy. This hook never waits for readiness (it must not hold up rc.bootup or a Resolver restart). A second background command,
- * bounded by timeout(1) (360 s: an outer salvage deadline, not a proved bound on normal completion; the components include the 60 s
+ * bounded by timeout(1) (420 s: an outer salvage deadline, not a proved bound on normal completion; the components include the 60 s
  * readiness budget, a rollback's 60 s operation-lock wait, the config-lock and proxy-stop waits it bounds and its Unbound restarts; untimed
  * pfBlockerNG mount/umount execs and pfSense services_unbound_configure() are outside any total), confirms the start as an apply does, told the gateway log's size from before the start:
  * a start with problems gets the pfB-DNS startup notice, and one that does not become ready is rolled back
@@ -51,6 +51,6 @@ if (is_executable($pfb_dns_rc) && !isvalidpid('/var/run/pfb_dns_proxy.pid') && !
 	// after the start was backgrounded, it could already include them
 	$pfb_dns_since = (int) @filesize(defined('PFB_DNS_PROXY_LOG') ? PFB_DNS_PROXY_LOG : '/var/log/pfblockerng/dns_proxy.log');
 	mwexec_bg($pfb_dns_rc . ' start');
-	mwexec_bg('/usr/bin/timeout --foreground -s TERM -k 5 360 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check ' . $pfb_dns_since);
+	mwexec_bg('/usr/bin/timeout --foreground -s TERM -k 5 420 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check ' . $pfb_dns_since);
 }
 unset($pfb_dns_rc, $pfb_dns_since);

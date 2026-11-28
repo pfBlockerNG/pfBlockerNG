@@ -2406,16 +2406,16 @@ def test_boot_check_without_a_gateway_restores_the_resolver_and_dns(rig: Rig, pr
         with _decider_exits_at_every_start(vm):
             _php_ok(vm, "services_unbound_configure();", "services_unbound_configure (the boot start hook)")
             try:
-                h.wait_until(rolled_back, timeout=420.0, interval=5.0)
+                h.wait_until(rolled_back, timeout=480.0, interval=5.0)
             except RuntimeError as exc:
                 raise AssertionError(
                     f"{exc}\nthe boot start hook did not roll pfB-DNS back: toggle {h.config_get(vm, CFG_PROXY)!r}, "
                     f"snapshot kept {bool(_capture(vm).marker)}\n{_diagnostics(vm)}"
                 ) from exc
-            # The check files its notices after the Unbound restart that ends its rollback: let it finish (360 s cap)
+            # The check files its notices after the Unbound restart that ends its rollback: let it finish (420 s cap)
             h.wait_until(
                 lambda: _sh(vm, "pgrep -f 'pfblockerng.inc dns_check' >/dev/null").returncode != 0,
-                timeout=420.0,
+                timeout=480.0,
                 interval=5.0,
             )
             h.wait_unbound_ready(vm)

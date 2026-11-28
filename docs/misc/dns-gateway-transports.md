@@ -102,7 +102,7 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   retain their captured description. A gateway older than the verb answers
   `error: a message of 4294967291 bytes is not between 1 and 65536`.
 - **Decider restart.** The gateway starts a new decider with the first one's command on a new decision socket and waits up to
-  30 s for its READY. READY: the new decider takes every query from then on, the reply is `ok` and
+  60 s for its READY. READY: the new decider takes every query from then on, the reply is `ok` and
   `decider restarted: pid N took over from pid M` is logged; the old one answers the queries it holds (for as long as a query
   may take, 2 x `--timeout` + 1 s), then gets EOF and is killed when it does not leave within 3 s. No READY (the bound, an exit,
   a protocol error, or the gateway stopping): the new decider is closed and killed, the old one stays, and the reply is

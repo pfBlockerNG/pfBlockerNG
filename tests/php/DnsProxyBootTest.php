@@ -131,6 +131,16 @@ final class DnsProxyBootTest extends TestCase
 		$this->assertSame([], $this->runHook($live, 0755)['calls'], 'a Resolver restart from the GUI must not bounce the proxy');
 	}
 
+	public function testTheBootCheckIsCutOnlyAfterTheBudgetsItCoversAndTheirMargin(): void
+	{
+		// issue #4302: the check's named waits sum to 412 s (the 60 s readiness wait and 60 s operation lock among them); the cap keeps 8 s above
+		$checks = array_values(array_filter($this->runHook([], 0755)['calls'], fn (string $call): bool => str_contains($call, ' dns_check')));
+
+		$this->assertCount(1, $checks, 'the hook backgrounds one boot check');
+		$this->assertStringStartsWith('/usr/bin/timeout --foreground -s TERM -k 5 420 /usr/local/bin/php -f ', $checks[0],
+			'the outer salvage deadline stays above the 412 s the check\'s named waits sum to');
+	}
+
 	public function testItStartsNothingWithoutAnExecutableRcScript(): void
 	{
 		$this->assertSame([], $this->runHook([], NULL)['calls'], 'no rc script: pfB-DNS was never set up, or is gone');

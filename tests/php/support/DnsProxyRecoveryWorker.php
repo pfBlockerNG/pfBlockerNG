@@ -47,7 +47,7 @@ const RACE_TOGGLE = 'installedpackages/pfblockerngdns/config/0/pfb_dns';
 const RACE_SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 
 // Defined before the bootstrap, which defines only what is still undefined: the rc script and the start command are the
-// state directory's, and the operation lock's budget is the production's 30 s (the readiness wait is set on the clock below).
+// state directory's, and the operation lock's budget is 30 s (production: 60 s; the readiness wait is set on the clock below).
 define('PFB_DNS_PROXY_RCFILE', $raceRcfile);
 define('PFB_DNS_PROXY_START_WAIT', 30);
 define('PFB_UNBOUND_START_CMD', escapeshellarg($race['dir'] . '/unbound-start') . ' ' . escapeshellarg($race['role']) . ' '
@@ -331,7 +331,7 @@ $GLOBALS['pfb_test_mwexec_hook'] = static function (string $command): int {
 };
 
 // The recovery as the readiness confirmation runs it, with the rollback it calls and the bounded lock helper the rollback takes its
-// operation lock with, all on the clock: the readiness wait and the operation lock's wait are the production 30 s, virtual, so
+// operation lock with, all on the clock: the readiness wait and the operation lock's wait are 30 s (production: 60 s), virtual, so
 // the lock's positive wait is reached and observed (race_flock() and the sleep hook) without a real wait.
 $clock = new PfbFlockClockFixture();
 $namespace = $clock->loadChain(

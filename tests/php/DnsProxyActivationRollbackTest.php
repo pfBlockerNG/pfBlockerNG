@@ -2903,4 +2903,13 @@ final class DnsProxyActivationRollbackTest extends TestCase
 			}
 		}
 	}
+
+	public function testTheOperationLockWaitsAsLongAsAProxyStart(): void
+	{
+		// issue #4302: the lock is held by another rollback, whose own readiness wait is PFB_DNS_PROXY_START_WAIT; the boot check's cap sums both
+		$source = (string) file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc');
+
+		$this->assertMatchesRegularExpression('/pfb_flock_bounded\(\$operation, LOCK_EX, PFB_DNS_PROXY_START_WAIT\)/', $source,
+			'the rollback takes its operation lock with the proxy start budget');
+	}
 }
