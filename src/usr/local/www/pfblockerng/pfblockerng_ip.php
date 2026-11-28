@@ -354,7 +354,7 @@ if ($_POST) {
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			if (!pfb_dns_config_write_failed($pfb_written)) {
 				pfb_core_settings_changed(NULL, TRUE);	// Core reads these settings (issue #4031); a failure never undoes the save
-				if ($pfb_spoa_changed) {
+				if (!empty($pfb_spoa_changed)) {
 					pfb_core_service();	// refresh pfb_core.sh SPOA flags and apply to running daemon (#4309)
 					if (function_exists('restart_service')) {
 						restart_service('pfb_core');
