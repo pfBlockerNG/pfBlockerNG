@@ -44,7 +44,7 @@ Self-hosted catalog keep exact package identity, record channel metadata outside
 Each line's CI builds with the ports recipe that tracks it, set by defaults in the branch's own files (#3825): `devel` says `nightly`, a release line says `edge`. A branch cut from `devel` inherits `nightly`, so its first commit switches every default to `edge`:
 
 - `.github/workflows/build-pkg-linux.yml`: both `channel` input defaults.
-- `channel:` passed by `smoke.yml`, `ui-tests.yml`, `build-image.yml`; in `smoke-single.yml`, its call-only `channel` input default and the `|| 'nightly'` dispatch fallback (`pkg-tagged-ingest.yml` passes the tag's channel, #4315).
+- `channel:` passed by `smoke.yml`, `ui-tests.yml`, `build-image.yml`; in `smoke-single.yml`, its call-only `channel` input default and the `build-pkg` job's `|| 'nightly'` dispatch fallback, but not the nightly-`.pkg` step's `== 'nightly'` comparison, which must keep building the nightly package (`pkg-tagged-ingest.yml` passes the tag's channel, #4315).
 - `PKG_CHANNEL` in `version-tracker.yml`.
 - `_CHANNEL` default in `scripts/local-smoke.sh`; the `--channel` default in `scripts/smoke-on-box.sh`.
 - `DEFAULT_CHANNEL` in `tests/smoke/pkg_identity.py`.

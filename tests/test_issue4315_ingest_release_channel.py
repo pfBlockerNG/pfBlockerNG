@@ -92,6 +92,8 @@ def test_build_pkg_linux_packages_the_caller_named_source_with_its_own_tooling()
     ]
     assert build["env"].get("LOCAL_SRC") == "${{ inputs.checkout_ref != '' && 'pkg-src' || '.' }}", build["env"]
     assert '--local-src  "$LOCAL_SRC"' in build["run"], build["run"]
+    dep_epoch = 'git -C "$LOCAL_SRC" show -s --format=%ct HEAD'
+    assert dep_epoch in build["run"], f"dep-pkg SOURCE_DATE_EPOCH must come from the packaged tree: {build['run']}"
     assert parity.get("if") == "inputs.checkout_ref == ''", parity.get("if")
 
 

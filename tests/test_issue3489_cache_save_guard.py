@@ -22,6 +22,13 @@ WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 # The client image is cached by the checkout-free `client-image` job, not by `ui` (#3687).
 # build-pkg-linux.yml packages the caller-named ref smoke-single.yml hands it (#4315).
 SAVE_STEP_COUNTS = {("smoke-single.yml", "smoke"): 3, ("ui-tests.yml", "ui"): 2, ("build-pkg-linux.yml", "build"): 1}
+# (workflow, job) -> its checkout refs, exactly: build-pkg-linux.yml checks out its own tooling
+# first and the caller-named source second; the others check out only the caller-named ref.
+CHECKOUT_REFS = {
+    ("smoke-single.yml", "smoke"): ["${{ inputs.checkout_ref }}"],
+    ("ui-tests.yml", "ui"): ["${{ inputs.checkout_ref }}"],
+    ("build-pkg-linux.yml", "build"): [None, "${{ inputs.checkout_ref }}"],
+}
 JOBS = pytest.mark.parametrize(("workflow", "job"), list(SAVE_STEP_COUNTS), ids=lambda v: str(v))
 
 UNTRUSTED_REF_CLAUSE = "inputs.checkout_ref == ''"
@@ -33,7 +40,7 @@ def _steps(workflow: str, job: str, uses_prefix: str) -> list[dict[str, Any]]:
     workflow_doc = yaml.safe_load((WORKFLOWS / workflow).read_text(encoding="utf-8"))
     steps: list[dict[str, Any]] = workflow_doc["jobs"][job]["steps"]
     checkouts = [s.get("with", {}).get("ref") for s in steps if str(s.get("uses", "")).startswith("actions/checkout@")]
-    assert "${{ inputs.checkout_ref }}" in checkouts, f"{workflow}:{job} checkout refs: {checkouts}"
+    assert checkouts == CHECKOUT_REFS[(workflow, job)], f"{workflow}:{job} checkout refs: {checkouts}"
     return [s for s in steps if str(s.get("uses", "")).startswith(uses_prefix)]
 
 
