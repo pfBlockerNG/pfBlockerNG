@@ -3,8 +3,9 @@
 
 AGENTS.md is the canonical agent bootstrap; `.agents/policy/` + `.agents/context/`
 hold the routed policy/context files; hook capsules ride `.claude/settings.json`.
-Every surface has a byte budget, a guideline that keeps the hot context from silently re-accreting
-(taxonomy #1386 anti-monolith rules; #4310: reported, never a failure), and every file the bootstrap's routing
+Every surface has a byte budget that keeps the hot context from silently
+re-accreting (taxonomy #1386 anti-monolith rules); budgets are guidelines,
+reported but never failing (#4310). Every file the bootstrap's routing
 table references must carry a `Scope:` + `Load-when:` header so it stays
 routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 
@@ -16,11 +17,13 @@ routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 - nested `CLAUDE.md`/`AGENTS.md` dir stubs            400 B
 - `.claude/rules/*.md` (Claude soft routing backstops) 400 B
 - each hook-capsule `additionalContext` payload     1,800 B
-- any single hook command (pre-tokenization cap)   11,000 B
 - `coderabbit-misses.md` (append-only ledger)      16,384 B (owner-raised, #3329)
 - `git.md`                                         14,336 B (owner-raised, #3642)
 - each `coderabbit-misses.md` ledger entry            200 B
 - that ledger's header prose (above the list)      1,200 B
+
+One cap is an error, not a guideline: any single hook command over 11,000 B,
+rejected before tokenization (#1504).
 
 A hook command may also invoke a repo helper script (under scripts/ or
 .claude/hooks/, both trigger surfaces). Detection recognizes `*.sh`/`*.py`
@@ -79,8 +82,8 @@ PARITY_LABEL_MAX = 80
 # commands are rejected before tokenization.
 COMMAND_BYTES_MAX = CAPSULE_BUDGET * 6 + 200
 
-# Grandfathered ratchet caps for files predating the taxonomy budgets: they may
-# shrink toward POLICY_BUDGET, never grow past their cap.
+# Per-file budgets: grandfathered caps for files predating the taxonomy budgets (they should shrink toward
+# POLICY_BUDGET) and owner-raised ones.
 FILE_BUDGETS = {
     "AGENTS.md": BOOTSTRAP_BUDGET,
     "CLAUDE.md": ADAPTER_BUDGET,
@@ -91,11 +94,13 @@ FILE_BUDGETS = {
     ".agents/policy/coderabbit-misses.md": 16_384,
     # The owner raised it so the replay rule (#3642) and its trust limit fit.
     ".agents/policy/git.md": 14_336,
+    # Raised with #4310 so the removal rule reads as prose.
+    ".agents/policy/testing.md": 13_312,
 }
 
 # The append-only missed-review ledger (review-bots.md "Missed-review backlog").
-# It gains one line per missed review forever, so the only thing keeping it
-# inside its FILE_BUDGETS cap is the one-line format its own header documents. Entries
+# It gains one line per missed review forever, so what keeps it near its FILE_BUDGETS
+# guideline is the one-line format its own header documents. Entries
 # that drifted into 1,500-2,000-byte review narratives ate the whole budget and
 # left 17 bytes of headroom (#2829); the narrative belongs in that PR's audit
 # comments, and the ledger carries the pointer newest first.
@@ -634,8 +639,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     errors = 0
     for violation in violations:
-        # #4310: a byte budget is a guideline: reported, never a failure. Everything else (routing headers, capsule
-        # parity and producers, the ledger's format, the hook-command parser cap) stays an error.
         guideline = is_guideline(violation)
         errors += not guideline
         # A tracked name that is not valid UTF-8 reaches here byte-exactly, as

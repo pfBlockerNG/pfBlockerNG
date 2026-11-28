@@ -1,7 +1,7 @@
 # Context byte budgets + routing headers (map #1383, #1437) — a standalone
 # workflow, NOT a test.yml job: test.yml's global `paths-ignore` ('**/*.md')
 # would skip that entire workflow for an md-only change — the exact change
-# class this gate polices (the budgets gate re-accretion of the hot context,
+# class this gate polices (the budgets flag re-accretion of the hot context,
 # and policy/docs edits land md-only, often pushed straight to devel). The
 # `paths` lists mirror scripts/check_context_budget.py's trigger surfaces and
 # are pinned by
@@ -116,6 +116,12 @@ jobs:
           # 2. A missed-review ledger entry that is not in the documented shape: still an error.
           printf '%s\n' '- a canary entry with no SHA' >> "$ledger"
           expect_report 1 'entry does not match `SHA`  title  (#PR)'
+          cp -- "$ledger_before" "$ledger"
+
+          # 3. A ledger entry back in narrative shape (#2829): 39 bytes of entry plus a 1,900-byte story, a guideline.
+          printf -- '- `deadbeef`  a canary entry  (#1) — %s\n' "$(head -c 1900 /dev/zero | tr '\0' y)" >> "$ledger"
+          expect_report 0 "guideline: $ledger:"
+          grep -qF 'entry is 1939 bytes > cap 200' canary.log || { echo 'CANARY: no entry cap'; cat canary.log; exit 1; }
           cp -- "$ledger_before" "$ledger"
 
           rm -f canary.log

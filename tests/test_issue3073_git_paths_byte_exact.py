@@ -189,8 +189,8 @@ def test_budget_gate_reports_a_violation_whose_path_is_not_valid_utf8(tmp_path: 
 
     Given an over-budget policy file whose tracked name holds a raw 0xFF, when
     `check_context_budget.py` runs on a strict-UTF-8 stdout (`PYTHONIOENCODING`,
-    i.e. any real `*.UTF-8` locale), then it prints the size violation and exits
-    1 -- it does not die with `UnicodeEncodeError` while printing the lone
+    i.e. any real `*.UTF-8` locale), then it prints the size guideline (#4310)
+    -- it does not die with `UnicodeEncodeError` while printing the lone
     surrogate `os.fsdecode` correctly put in the path.
     """
     _seed_repo(tmp_path, (b"seed.php",))
@@ -209,10 +209,9 @@ def test_budget_gate_reports_a_violation_whose_path_is_not_valid_utf8(tmp_path: 
     stderr = proc.stderr.decode("utf-8", "backslashreplace")
 
     assert "UnicodeEncodeError" not in stderr, f"the gate died reporting instead of reporting: {stderr}"
-    assert "40000 bytes > budget" in stdout, (
+    assert "guideline: .agents/policy/bad_\\udcff_rule.md: 40000 bytes > budget" in stdout, (
         f"the over-budget file must be named in the report; stdout={stdout!r} stderr={stderr!r}"
     )
-    assert proc.returncode == 1, f"an over-budget file must fail the gate; exit={proc.returncode} stdout={stdout!r}"
 
 
 def test_budget_gate_reports_a_valid_non_ascii_name_on_a_latin1_stdout(tmp_path: Path) -> None:

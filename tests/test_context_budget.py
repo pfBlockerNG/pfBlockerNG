@@ -1034,7 +1034,7 @@ def test_cli_staged_reports_a_staged_over_budget_policy_as_a_guideline(tmp_path:
     subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
     proc = _run_cli(root, "--staged")
     assert proc.returncode == 0, proc.stdout + proc.stderr  # #4310: a byte budget is a guideline
-    assert ".agents/policy/alpha.md" in proc.stdout and "guideline: " in proc.stdout and "> budget 12288" in proc.stdout
+    assert "guideline: .agents/policy/alpha.md: " in proc.stdout and "> budget 12288" in proc.stdout
 
 
 def test_cli_staged_checks_index_content_not_working_tree(tmp_path: Path) -> None:
@@ -1047,7 +1047,7 @@ def test_cli_staged_checks_index_content_not_working_tree(tmp_path: Path) -> Non
     _write(root, ".agents/policy/alpha.md", f"# Alpha\n\n{_HEADER}")
     proc = _run_cli(root, "--staged")
     assert proc.returncode == 0, proc.stdout + proc.stderr  # #4310: a byte budget is a guideline
-    assert ".agents/policy/alpha.md" in proc.stdout and "guideline: " in proc.stdout and "> budget 12288" in proc.stdout
+    assert "guideline: .agents/policy/alpha.md: " in proc.stdout and "> budget 12288" in proc.stdout
 
 
 def test_cli_staged_ignores_unstaged_working_tree_violation(tmp_path: Path) -> None:
@@ -1071,7 +1071,7 @@ def test_cli_diff_reports_an_over_budget_commit_vs_base_as_a_guideline(tmp_path:
     subprocess.run([*git, "commit", "-qm", "bloat"], check=True, env=scrubbed_git_env())
     proc = _run_cli(root, "--diff", "HEAD~1")
     assert proc.returncode == 0, proc.stdout + proc.stderr  # #4310: a byte budget is a guideline
-    assert ".agents/policy/alpha.md" in proc.stdout and "guideline: " in proc.stdout and "> budget 12288" in proc.stdout
+    assert "guideline: .agents/policy/alpha.md: " in proc.stdout and "> budget 12288" in proc.stdout
 
 
 def test_cli_all_flags_non_ascii_named_policy_file(tmp_path: Path) -> None:
@@ -1083,7 +1083,7 @@ def test_cli_all_flags_non_ascii_named_policy_file(tmp_path: Path) -> None:
     proc = _run_cli(root, "--all")
     assert proc.returncode == 0, proc.stdout + proc.stderr  # #4310: a byte budget is a guideline
     # NFC/NFD filename normalization differs per OS — match the ASCII tail only.
-    assert "licy.md" in proc.stdout and "guideline: " in proc.stdout and "> budget 12288" in proc.stdout
+    assert "guideline: " in proc.stdout and "licy.md" in proc.stdout and "> budget 12288" in proc.stdout
 
 
 def test_cli_all_still_fails_on_a_routed_file_without_its_header(tmp_path: Path) -> None:
@@ -1140,11 +1140,31 @@ def test_ci_workflow_arms_the_red_canary() -> None:
     # violation; deleting the step must fail here rather than go unnoticed.
     text = (_REPO_ROOT / ".github/workflows/context-budget.yml").read_text(encoding="utf-8")
     assert "Red canary" in text
-    assert f'expect_report 0 "guideline: $canary: 12289 bytes > budget {ccb.POLICY_BUDGET}"' in text
+    assert f'expect_report 0 "guideline: $canary: {ccb.POLICY_BUDGET + 1} bytes > budget {ccb.POLICY_BUDGET}"' in text
     assert "expect_report 1 'entry does not match" in text
 
 
-# --- the live tree has no errors (its byte budgets are guidelines) --------------------------------
+# --- the live tree has no errors (its budgets are guidelines) --------------------------
+
+
+@pytest.mark.parametrize(
+    ("finding", "guideline"),
+    [
+        (".agents/policy/x.md: 12289 bytes > budget 12288", True),
+        (".claude/settings.json: SessionStart capsule 1801 bytes > budget 1800", True),
+        (f"{ccb.LEDGER}:3: entry is 201 bytes > cap 200", True),
+        (f"{ccb.LEDGER}: header is 1201 bytes > cap 1200", True),
+        (".claude/settings.json: SessionStart capsule command 11001 bytes > cap 11000", False),
+        (".claude/settings.json: SessionStart hook command 11001 bytes > cap 11000", False),
+        (f"{ccb.LEDGER}:3: entry does not match `SHA`  title  (#PR) — clause", False),
+        (".agents/policy/x.md: unreadable (No such file or directory)", False),
+        ("AGENTS.md: bootstrap missing — nothing to route from", False),
+    ],
+)
+def test_only_byte_budgets_are_guidelines(finding: str, guideline: bool) -> None:
+    # #4310: a byte budget (file, capsule, ledger entry or header) is a guideline; the hook-command cap guards shlex
+    # (#1504) and stays an error, as does every structural finding.
+    assert ccb.is_guideline(finding) is guideline
 
 
 def test_live_repository_tree_has_no_errors() -> None:
