@@ -213,7 +213,8 @@ class SourcePublicationBoundaryTests(unittest.TestCase):
             "smoke_repo_expected_source_sha: ${{ inputs.source_sha }}",
             "smoke_repo_expected_version: ${{ inputs.portversion }}",
             "smoke_repo_expected_channel: ${{ inputs.channel }}",
-            "checkout_ref: ${{ github.workflow_sha }}",
+            "channel: ${{ inputs.channel }}",
+            "checkout_ref: ${{ inputs.source_sha }}",
         ):
             self.assertIn(contract, live)
         live_inputs = yaml.safe_load(tagged)["jobs"]["validate-live-pages-install"]["with"]
