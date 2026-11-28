@@ -94,12 +94,30 @@ def test_the_form_offers_every_setting_and_never_renders_the_stored_key(
     html = webui.get(PAGE).text
 
     fields = scrape_form_fields(html)
-    for name in ("lapi_url", "api_key", "log_level", "rules_tag"):
+    for name in (
+        "lapi_url",
+        "api_key",
+        "log_level",
+        "rules_tag",
+        "spoa_listen",
+        "appsec_url",
+        "appsec_timeout",
+        "appsec_failure_action",
+    ):
         assert name in fields, f"the form has no {name!r} field: {sorted(fields)}"
-    for name in ("enable", "rules_all_interfaces", "rules_log", "rule_v4", "rule_v6"):
+    for name in ("enable", "rules_all_interfaces", "rules_log", "rule_v4", "rule_v6", "spoa_enable"):
         assert re.search(rf'<input[^>]*name="{name}"[^>]*type="checkbox"|type="checkbox"[^>]*name="{name}"', html), (
             f"no {name!r} checkbox"
         )
+    assert fields["spoa_listen"] == "127.0.0.1:10091", f"spoa_listen default: {fields['spoa_listen']!r}"
+    assert fields["appsec_timeout"] == "500ms", f"appsec_timeout default: {fields['appsec_timeout']!r}"
+    assert fields["appsec_failure_action"] == "passthrough", (
+        f"appsec_failure_action default: {fields['appsec_failure_action']!r}"
+    )
+    assert "spoe-agent pfb-crowdsec-agent" in html, "the page renders the HAProxy SPOE snippet"
+    assert "send-spoe-group pfb-core" in html, (
+        "the HAProxy SPOE snippet shows pfb-core short-circuiting before CrowdSec"
+    )
     assert re.search(r'<select[^>]*name="rules_interfaces\[\]"[^>]*multiple', html), "no interface multi-select"
     assert fields["log_level"] == "info", f"the log level defaults to info, got {fields['log_level']!r}"
     # A browser submits a checkbox only when it is checked: the D2 defaults
