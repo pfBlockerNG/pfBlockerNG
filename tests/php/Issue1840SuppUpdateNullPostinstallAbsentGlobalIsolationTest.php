@@ -4,19 +4,10 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-require_once __DIR__ . '/CoreUpdateServeTest.php';
 require_once __DIR__ . '/Issue1840SuppUpdateNullPostinstallTest.php';
 
 final class Issue1840SuppUpdateNullPostinstallAbsentGlobalIsolationTest extends TestCase
 {
-	public function testCoreUpdateServeRestoresAbsentGlobalG(): void
-	{
-		$this->assertRestoresAbsentGlobalG(
-			new CoreUpdateServeTest('testScheduledExtrasRunDccThenBlAndAreReportedAsSuccessfulOutcomes'),
-			"CoreUpdateServeTest::tearDown() must leave absent \$GLOBALS['g'] absent"
-		);
-	}
-
 	public function testIssue1840RestoresAbsentGlobalG(): void
 	{
 		$this->assertRestoresAbsentGlobalG(

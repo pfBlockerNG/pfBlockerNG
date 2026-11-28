@@ -90,17 +90,4 @@ final class UpdatePageCronStatusTest extends TestCase
 		$this->assertStringNotContainsString('Missing cron task', $source);
 		$this->assertStringNotContainsString('cron_exists', $source);
 	}
-
-	public function testForceValidatorsAreClearedOnlyInsideTheLockedChild(): void
-	{
-		$page = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_update.php');
-		$cron = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_cron.inc');
-		$this->assertStringNotContainsString('pfb_force_clear_validators(', $page, 'the page asks Core; the Update program clears the validators');
-		$lock = strpos($cron, "pfb_feed_pass_begin('cron', \$pfb_feed_pass_contended)");
-		$clear = strpos($cron, 'pfb_force_clear_validators(', $lock);
-		$this->assertNotFalse($lock);
-		$this->assertNotFalse($clear);
-		$this->assertGreaterThan($lock, $clear);
-	}
-
 }

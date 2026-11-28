@@ -84,7 +84,6 @@ final class GroupActionWiringTest extends TestCase
 		$root = dirname(__DIR__, 2);
 		foreach ([
 			"{$root}/src/usr/local/www/pfblockerng/pfblockerng_alerts.php",
-			"{$root}/src/usr/local/pkg/pfblockerng/pfblockerng_cron.inc",
 		] as $path) {
 			$source = php_strip_whitespace($path);
 			$this->assertNotSame('', $source, "entrypoint source missing: {$path}");

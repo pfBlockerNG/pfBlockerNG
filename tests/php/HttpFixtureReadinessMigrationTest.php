@@ -43,7 +43,6 @@ final class HttpFixtureReadinessMigrationTest extends TestCase
 		return [
 			'redirect credential servers' => [DownloadRedirectCredentialScopeTest::class, __DIR__ . '/DownloadRedirectCredentialScopeTest.php', 'startOneServer', 'startServers'],
 			'extracted payload archive' => [DownloadExtractedPayloadSanityTest::class, __DIR__ . '/DownloadExtractedPayloadSanityTest.php', 'downloadArchive'],
-			'rejected validator origin' => [DownloadRejectValidatorClearTest::class, __DIR__ . '/DownloadRejectValidatorClearTest.php', 'startOrigin'],
 			'retry body reset origin' => [DownloadRetryBodyResetTest::class, __DIR__ . '/DownloadRetryBodyResetTest.php', 'startFlakyServer'],
 			'cURL incomplete origin' => [DownloadCurlIncompleteTest::class, __DIR__ . '/DownloadCurlIncompleteTest.php', 'startServer'],
 			'download size refusal origin' => [DownloadSizeRefusalTest::class, __DIR__ . '/DownloadSizeRefusalTest.php', 'startServer'],

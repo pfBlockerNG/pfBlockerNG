@@ -842,15 +842,11 @@ final class UnboundControlIpcBoundTest extends TestCase
 	/**
 	 * No control call site anywhere under src/ may bypass the seam: every
 	 * $pfb['chroot_cmd'] use is the definition, the pure flush-command builder, a call
-	 * into the bounded seam, or the one named exception issue #2880 owns. A new raw
-	 * exec() of the control command — in this package or in the web UI — turns this red.
+	 * or a call into the bounded seam. A new raw exec() of the control command — in this package or in the web UI — turns
+	 * this red. The Alerts page's own resolver flush (#2880) is gone with the cutover (#3977).
 	 */
 	public function testNoControlSiteBypassesTheBoundedSeam(): void
 	{
-		// Owned by issue #2880 (Alerts wildcard-delete resolver flush), which bounds it
-		// with the page's own request semantics. When #2880 lands, this row goes red
-		// until the exception is dropped.
-		$deferred = ['src/usr/local/www/pfblockerng/pfblockerng_alerts.php'];
 		$root = dirname(__DIR__, 2);
 		$sources = [];
 		$walk = new RecursiveIteratorIterator(new RecursiveDirectoryIterator("{$root}/src",
@@ -864,7 +860,6 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$this->assertNotSame([], $sources, 'the package sources must be readable');
 
 		$offenders = [];
-		$deferrals = [];
 		foreach ($sources as $file) {
 			$relative = substr($file, strlen($root) + 1);
 			foreach ((array) file($file, FILE_IGNORE_NEW_LINES) as $index => $line) {
@@ -879,10 +874,6 @@ final class UnboundControlIpcBoundTest extends TestCase
 					continue;
 				}
 				$where = $relative . ':' . ($index + 1) . ': ' . trim((string) $line);
-				if (in_array($relative, $deferred, TRUE)) {
-					$deferrals[] = $where;
-					continue;
-				}
 				$offenders[] = $where;
 			}
 		}
@@ -890,8 +881,5 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$this->assertSame([], $offenders,
 			'every unbound-control call site must run through the bounded seam, got: ' .
 			implode(' | ', $offenders));
-		$this->assertCount(1, $deferrals,
-			'the #2880 exception must name exactly one real site, so a second raw spawn in ' .
-			'the same file still turns this red; drop it once #2880 lands');
 	}
 }

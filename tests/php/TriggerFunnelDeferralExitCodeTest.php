@@ -159,17 +159,6 @@ final class TriggerFunnelDeferralExitCodeTest extends TestCase
 		$this->assertDispatcherDeferralNotice();
 	}
 
-	public function testCronFunnelDispatcherDeferralRaisesSyslogNotice(): void
-	{
-		$this->holdDispatcherLock();
-
-		$this->assertTrue(pfblockerng_sync_cron(),
-			'the unattended cron funnel must retain its established TRUE internal return');
-		$this->assertStringContainsString('dispatcher lock unavailable', $this->mainLog(),
-			'before-state: the run must actually have taken the dispatcher-deferral path');
-		$this->assertDispatcherDeferralNotice();
-	}
-
 	// Operator-triggered requests retain their established FALSE internal return.
 
 	public function testManualTriggerDispatcherDeferralPreservesFalseAndNamesLock(): void

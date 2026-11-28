@@ -148,7 +148,6 @@ final class SourceScanningWiringPolicyTest extends TestCase
 		'PfbSyncStatusDnsblWritersTest.php' => '#993 live sync plus off-limits Alerts dispatch',
 		'PfbSyncStatusIpWritersTest.php' => '#993 live sync/download/firewall orchestration',
 		'ProbeBodyPurgeTest.php' => 'destructive package installer caller',
-		'SyncCronPflexOrderTest.php' => 'off-limits live scheduling surface',
 		'TimestampCosmeticNormalizationTest.php' => 'multiple live top-level/external producers',
 		'UpdatePageCoreTest.php' => 'appliance-only webConfigurator page dispatch and a retired-code invariant',
 		'ToggleMirrorComparisonGuardTest.php' => 'inherently whole-tree config-type rule',

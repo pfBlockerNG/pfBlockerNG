@@ -62,7 +62,6 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 		return [
 			'redirect credential servers' => [DownloadRedirectCredentialScopeTest::class, __DIR__ . '/DownloadRedirectCredentialScopeTest.php', 'startOneServer', 'setup', 10, FALSE],
 			'extracted payload archive' => [DownloadExtractedPayloadSanityTest::class, __DIR__ . '/DownloadExtractedPayloadSanityTest.php', 'downloadArchive', 'extracted', 10, FALSE],
-			'rejected validator origin' => [DownloadRejectValidatorClearTest::class, __DIR__ . '/DownloadRejectValidatorClearTest.php', 'startOrigin', 'setup', 20, FALSE],
 			'retry body reset origin' => [DownloadRetryBodyResetTest::class, __DIR__ . '/DownloadRetryBodyResetTest.php', 'startFlakyServer', 'setup', 10, FALSE],
 			'download size refusal origin' => [DownloadSizeRefusalTest::class, __DIR__ . '/DownloadSizeRefusalTest.php', 'startServer', 'setup', 10, FALSE],
 			'GeoIP ZIP publication' => [GeoipZipPublicationTest::class, __DIR__ . '/GeoipZipPublicationTest.php', 'downloadGeoip', 'geoip', 10, TRUE],

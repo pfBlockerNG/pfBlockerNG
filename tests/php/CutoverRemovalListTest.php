@@ -1,0 +1,56 @@
+<?php
+
+declare(strict_types=1);
+
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * #3977, the removal list: the Core Updater runs every Update, so the PHP code that sequenced, fetched, parsed, deduplicated
+ * and aggregated is gone. Each name below is neither defined nor called anywhere under src/, and each removed file is gone
+ * with every reference to it ("no dual path after this PR").
+ */
+final class CutoverRemovalListTest extends TestCase
+{
+	private const SRC = __DIR__ . '/../../src';
+
+	/** @return array<string, array{0: string}> */
+	public static function removedFunctions(): array
+	{
+		return array_map(static fn (string $name): array => [$name], array_combine($names = [
+			'pfblockerng_sync_cron', 'pfb_update_check',
+		], $names));
+	}
+
+	/** @return array<string, array{0: string}> */
+	public static function removedFiles(): array
+	{
+		return array_map(static fn (string $path): array => [$path], array_combine($paths = [
+			'usr/local/pkg/pfblockerng/pfblockerng_cron.inc',
+		], $paths));
+	}
+
+	/** @return list<string> every line under src/ that names $word as a whole word, with its path */
+	private static function mentions(string $word): array
+	{
+		exec('grep -rnw -- ' . escapeshellarg($word) . ' ' . escapeshellarg(self::SRC), $lines);
+		return $lines;
+	}
+
+	#[DataProvider('removedFunctions')]
+	public function testTheFunctionIsNeitherDefinedNorCalled(string $name): void
+	{
+		$calls = array_filter(self::mentions($name), static fn (string $line): bool => preg_match('/\b' . $name . '\s*\(/', $line) === 1
+			&& preg_match('~^[^:]+:\d+:\s*(//|\*|#)~', $line) !== 1);
+		$this->assertSame([], array_values($calls));
+	}
+
+	#[DataProvider('removedFiles')]
+	public function testTheFileIsGoneAndNothingLoadsIt(string $path): void
+	{
+		$this->assertFileDoesNotExist(self::SRC . "/{$path}");
+		$loads = array_filter(self::mentions(basename($path)), static fn (string $line): bool =>
+			preg_match('/\b(require|include)(_once)?\b/', $line) === 1);
+		$this->assertSame([], array_values($loads));
+	}
+}
