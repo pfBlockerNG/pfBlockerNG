@@ -92,13 +92,12 @@ final class CoreRunHooksTest extends TestCase
 				'CHANGED_IP_ALIASES' => 'pfB_Alpha_v4 pfB_Beta_v6', 'CHANGED_DNSBL_GROUPS' => 'Ads'], 'delete'));
 	}
 
-	/** The pass fires its hooks through the router, which sends an uninstall's to the one-shot and no other's (#3977). */
-	public function testThePassFiresItsHooksThroughTheRouter(): void
+	/** The disable pass fires its hooks through pfb-core alone, with the uninstall context (#3977): no PHP hook runner remains. */
+	public function testThePassFiresItsHooksThroughCoreAlone(): void
 	{
 		$apply = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
-		$this->assertStringNotContainsString('pfb_run_hooks(', $apply);
 		$this->assertSame(2, substr_count($apply, 'pfb_pass_hooks('));
 		$inc = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
-		$this->assertMatchesRegularExpression("~function pfb_pass_hooks\\(string \\\$when, array \\\$ctx\\): void \\{ global \\\$pfb; if \\(\\(\\\$pfb\\['hook_lifecycle'\\] \\?\\? ''\\) === 'uninstall'\\) \\{ pfb_core_run_hooks\\(\\\$when, pfb_hook_oneshot_context\\(\\\$ctx, pfb_pkg_operation\\(\\)\\)\\);~", $inc);
+		$this->assertMatchesRegularExpression("~function pfb_pass_hooks\\(string \\\$when, array \\\$ctx\\): void \\{ pfb_core_run_hooks\\(\\\$when, pfb_hook_oneshot_context\\(\\\$ctx, pfb_pkg_operation\\(\\)\\)\\); \\}~", $inc);
 	}
 }

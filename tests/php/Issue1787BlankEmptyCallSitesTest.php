@@ -14,14 +14,11 @@ use PHPUnit\Framework\TestCase;
  * Each test pins the corrected observable behaviour of one call site:
  *   - pfb_validate_suppression_line(): a Unicode-whitespace-only line is a
  *     blank no-op, not an "invalid subnet" input error.
- *   - pfb_get_hooks(): a hook whose script is only Unicode whitespace has no
- *     script and is skipped like an empty one.
  *   - pfb_lint_sh_diagnostics()/pfb_lint_py_diagnostics(): a stderr of only
  *     Unicode whitespace carries no diagnostic — degrade to the no-diagnostic/
  *     launch-failed warning instead of surfacing a whitespace "error".
  */
 #[CoversFunction('pfb_validate_suppression_line')]
-#[CoversFunction('pfb_get_hooks')]
 #[CoversFunction('pfb_lint_sh_diagnostics')]
 #[CoversFunction('pfb_lint_py_diagnostics')]
 final class Issue1787BlankEmptyCallSitesTest extends TestCase
@@ -76,21 +73,6 @@ final class Issue1787BlankEmptyCallSitesTest extends TestCase
 		// malformed "address".
 		$this->assertNull(pfb_validate_suppression_line('  # ASCII-indented comment', 'ipv4'));
 		$this->assertNull(pfb_validate_suppression_line(self::NBSP . '# NBSP-indented comment', 'ipv4'));
-	}
-
-	// --- pfb_get_hooks ----------------------------------------------------
-
-	public function testHookWithUnicodeWhitespaceOnlyScriptIsSkipped(): void
-	{
-		$pfbconfig = ['hooks' => ['row' => [
-			['enabled' => 'on', 'when' => 'pre', 'script' => 'echo ok'],
-			['enabled' => 'on', 'when' => 'pre', 'script' => self::NBSP],
-		]]];
-		$hooks = pfb_get_hooks($pfbconfig, 'pre');
-		// Only the hook with a real script survives; a Unicode-whitespace-only
-		// script is as script-less as an empty one.
-		$this->assertCount(1, $hooks);
-		$this->assertSame('echo ok', $hooks[0]['script']);
 	}
 
 	// --- pfb_lint_sh_diagnostics / pfb_lint_py_diagnostics ----------------

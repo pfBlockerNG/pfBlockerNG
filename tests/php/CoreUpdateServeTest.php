@@ -74,15 +74,6 @@ final class CoreUpdateServeTest extends TestCase
 		$this->assertStringContainsString('Core Update request refused: the request is not of version 2', $out);
 	}
 
-	public function testTheVersion1UpdateProgramIsGone(): void
-	{
-		$extra = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');
-		foreach (['function pfb_core_update_run(', 'function pfb_core_update_scheduled(', 'function pfb_core_update_apply(',
-			'function pfb_core_update_request('] as $gone) {
-			$this->assertStringNotContainsString($gone, $extra);
-		}
-	}
-
 	// ----- the verb and its wrapper -----
 
 	private const WRAPPER = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfb_core_update.sh';

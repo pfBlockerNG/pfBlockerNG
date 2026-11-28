@@ -93,7 +93,6 @@ final class SourceScanningWiringPolicyTest extends TestCase
 		'GeoipDocLinkTest.php',
 		'IpSuppressionEditorWiringTest.php',
 		'LintEndpointWiringTest.php',
-		'ListScriptExitStatusTest.php',
 		'LogTimestampBaselineTest.php',
 		'PfbJsCacheBustingWiringTest.php',
 		'PfbSyncStatusDnsblWritersTest.php',

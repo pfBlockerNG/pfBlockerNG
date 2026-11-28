@@ -39,32 +39,6 @@ function pfb_dnsbl_reload_needed(bool $publish_failed, bool $data_changed, bool 
 	return !$publish_failed && ($data_changed || $update || $python || $safesearch_update || $unlock_forced);
 }
 
-/** Remove the transient staged path and known cleanup path after a list-script pass. */
-function pfb_list_script_cleanup_staged(string $parse_path, ?string $staged_path,
-    ?string $known_path = NULL): void {
-	if ($staged_path !== NULL && $parse_path === $staged_path) {
-		unlink_if_exists($staged_path);
-	}
-	if ($known_path !== NULL) {
-		unlink_if_exists($known_path);
-	}
-}
-
-/** Consume a staged pre-script path, then remove transient and known copies. */
-function pfb_list_script_consume_staged(string $parse_path, ?string $staged_path, callable $consumer,
-    ?string $known_path = NULL): mixed {
-	try {
-		return $consumer($parse_path);
-	} finally {
-		pfb_list_script_cleanup_staged($parse_path, $staged_path, $known_path);
-	}
-}
-
-function pfb_dnsbl_script_consume_staged(string $parse_path, ?string $staged_path, callable $consumer,
-    ?string $known_path = NULL): mixed {
-	return pfb_list_script_consume_staged($parse_path, $staged_path, $consumer, $known_path);
-}
-
 /*
  * Detached fire-and-forget firewall-configuration reload (owner directive
  * 2026-09-05). pfSense's reload is not ours to bound or kill; the script loads

@@ -117,15 +117,19 @@ final class CoreSettingsHooksParityTest extends TestCase
 		}
 	}
 
-	/** @param array<string, mixed> $case */
+	/**
+	 * The fixture's `php` observations were frozen through the retired runner's row reader (pfb_get_hooks(), issue #3977); the
+	 * script check it applied, pfb_hook_script_valid(), still guards the hook editor, so each listed script is checked at its fire point.
+	 *
+	 * @param array<string, mixed> $case
+	 */
 	#[DataProvider('cases')]
-	public function testTodaysPhpGivesTheFixturesObservations(array $case): void
+	public function testTodaysScriptCheckGivesTheFixturesObservations(array $case): void
 	{
 		if ($case['php'] === []) {
 			$this->assertStringContainsString('array', strtolower($case['description']), "{$case['id']}: only an array where a string is stored goes unobserved");
 			return;
 		}
-		$config = array_key_exists('stored', $case) ? ['hooks' => $case['stored']] : [];
 		$scripts = "{$this->dir}/scripts";
 		foreach (array_keys($case['php']['valid'] ?? []) as $name) {
 			$name = (string) $name;
@@ -134,15 +138,10 @@ final class CoreSettingsHooksParityTest extends TestCase
 			}
 		}
 		foreach (['pre', 'post'] as $when) {
-			$hooks = pfb_get_hooks($config, $when);
-			$this->assertSame($case['php'][$when], array_column($hooks, 'script'), "{$case['id']}: the scripts of the rows pfb_get_hooks() gives the {$when} fire point");
-			if (isset($case['php']['timeouts'][$when])) {
-				$this->assertSame($case['php']['timeouts'][$when], array_map('pfb_hook_timeout', $hooks), "{$case['id']}: their timeouts");
-			}
-			foreach ($hooks as $hook) {
-				if (isset($case['php']['valid'][$hook['script']])) {
-					$this->assertSame($case['php']['valid'][$hook['script']], pfb_hook_script_valid($hook['script'], $when, $scripts),
-						"{$case['id']}: whether the runner runs " . json_encode($hook['script']) . " at {$when}");
+			foreach ($case['php'][$when] as $script) {
+				if (isset($case['php']['valid'][$script])) {
+					$this->assertSame($case['php']['valid'][$script], pfb_hook_script_valid($script, $when, $scripts),
+						"{$case['id']}: whether the runner runs " . json_encode($script) . " at {$when}");
 				}
 			}
 		}
