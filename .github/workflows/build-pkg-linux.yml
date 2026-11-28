@@ -109,7 +109,7 @@ on:
         type: string
         default: ""
       checkout_ref:
-        description: "Git ref whose src/ is packaged (issue #4315). The build tooling (scripts, uv.lock) always comes from the workflow's own ref. Blank (default) = package the caller's own ref."
+        description: "Git ref whose source tree (src/, go/) is packaged (issue #4315). The build tooling (scripts, uv.lock) always comes from the workflow's own ref. Blank (default) = package the caller's own ref."
         required: false
         type: string
         default: ""
