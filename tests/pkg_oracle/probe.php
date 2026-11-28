@@ -22,7 +22,7 @@ global $pfb, $g;
 $g['product_label'] = 'pfSense';
 $g['unbound_chroot_path'] = '/var/unbound';
 $g['varetc_path'] = '/etc';
-// The proxy here is a real process on the appliance's paths and startup budget: the bootstrap points both at its PHPUnit sandbox
+// The proxy here is a real process on the appliance's paths, with a 30 s readiness budget of its own (production: 60 s): the bootstrap points both at its PHPUnit sandbox
 // and gives readiness one second, and the rc script's daemon writes the pidfile and the --ready-file marker where production says
 $pfb['dns_proxy_pidfile'] = PFB_DNS_PROXY_PIDFILE;
 $pfb['dns_proxy_ready'] = '/var/unbound/pfb_dns_ready';

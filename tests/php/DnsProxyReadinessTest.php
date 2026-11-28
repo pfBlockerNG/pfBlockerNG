@@ -435,14 +435,15 @@ final class DnsProxyReadinessTest extends TestCase
 		$this->assertSame([100000, 100000, 100000], $clock->sleeps, 'three ticks of 100 ms, then ready');
 	}
 
-	public function testTheDefaultBudgetIsTheNativeUnboundStartupBudgetAndTheDefaultsPointAtTheRealFiles(): void
+	public function testTheDefaultBudgetIsSixtySecondsAndTheDefaultsPointAtTheRealFiles(): void
 	{
 		$source = (string) file_get_contents(self::INC);
 
+		// issue #4302: the gateway loads the DNSBL data before it is ready, which takes longer with large lists than Unbound's 30 s
 		$this->assertMatchesRegularExpression(
-			"/if \\(!defined\\('PFB_DNS_PROXY_START_WAIT'\\)\\) \\{\\n\\tdefine\\('PFB_DNS_PROXY_START_WAIT', PFB_UNBOUND_START_WAIT\\);\\n\\}/",
+			"/if \\(!defined\\('PFB_DNS_PROXY_START_WAIT'\\)\\) \\{\\n\\tdefine\\('PFB_DNS_PROXY_START_WAIT', 60\\);\\n\\}/",
 			$source,
-			'the wait for a proxy is the Unbound startup budget (30 s), with no setting of its own'
+			'the wait for a proxy is 60 s of its own, longer than the Unbound startup budget (30 s)'
 		);
 		$this->assertMatchesRegularExpression("/define\\('PFB_UNBOUND_START_WAIT', 30\\);/", $source);
 		$this->assertMatchesRegularExpression("/\\\$pfb\\['dns_proxy_ready'\\]\\s*=\\s*'\\/var\\/unbound\\/pfb_dns_ready';/", $source,

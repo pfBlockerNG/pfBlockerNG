@@ -823,7 +823,7 @@ variable): the boot hook's background start and an apply's `start_service()` oth
 check before `daemon(8)` has written a pidfile and both launch. A start that cannot take the lock logs an error and exits 75.
 
 Every caller that starts or restarts the proxy waits for serving readiness (`pfb_dns_proxy_await_ready()`, on
-`pfb_dns_proxy_serving_ready()`: the 30 s Unbound startup budget, never under a lock): `pfb_dns_proxy_restart()`
+`pfb_dns_proxy_serving_ready()`: 60 s, never under a lock): `pfb_dns_proxy_restart()`
 (the reload and installer), and `pfb_dns_proxy_ensure_running()` only when it started or restarted the gateway.
 The boot check (`dns_check`, backgrounded beside its own start) uses the same `pfb_dns_proxy_confirm_ready()`, except while the cannot-serve marker stands (the rc script's start refused
 for a stranger): there it runs `pfb_dns_proxy_ensure_running()`, which moves Unbound off the stranger or keeps the gateway stopped with the notice (above).
@@ -979,7 +979,7 @@ before `rc.start_packages` begins, and the proxy must keep its pids and keep ans
 prints the daemon launch, the listening socket, Unbound's process start, the first correct answers and Unbound's sync as
 separate times; a launch is not an answer.
 
-The named recovery component waits total 340 s before the final readiness probes. A readiness check now reads a bounded
+The boot check's named component waits are listed in `external-process-waits.md` ("DNS proxy boot check budget"). A readiness check now reads a bounded
 applied-status response from the private control socket, then the bounded native `sockstat` ownership probe.
 The earlier `ps`/`sockstat` timing sum does not describe this path; the current component bounds are documented in
 `external-process-waits.md`. They are not a measured whole-path bound: core restart work also runs untimed mount,
