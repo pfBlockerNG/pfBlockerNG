@@ -2265,9 +2265,9 @@ def test_cron_200_reingest_changed_easylist_feed_classified_text_x_asm(
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
-        # BEFORE: dom_old blocked, dom_new resolves.
+        # BEFORE: dom_old blocked, dom_new resolves (the first answer after the reload is authoritative).
         h.flush_unbound_name(deployed_vm, dom_old)
-        ans_old_before = h.dns_probe_client_until(client_vm, dom_old, h.is_vip)
+        ans_old_before = h.dns_probe_client(client_vm, dom_old, "A")
         assert h.is_vip(ans_old_before), (
             f"BEFORE: {dom_old}: expected VIP-blocked (initial ingest from {feed_url}), actual {ans_old_before}"
         )
@@ -2301,7 +2301,7 @@ def test_cron_200_reingest_changed_easylist_feed_classified_text_x_asm(
 
         # THEN — the new body was published: dom_new blocked, dom_old still blocked.
         h.flush_unbound_name(deployed_vm, dom_new)
-        ans_new_after = h.dns_probe_client_until(client_vm, dom_new, h.is_vip, timeout=120.0)
+        ans_new_after = h.dns_probe_client(client_vm, dom_new, "A")
         assert h.is_vip(ans_new_after), (
             f"AFTER cron: {dom_new}: expected VIP-blocked (changed feed re-ingested), actual {ans_new_after}"
         )
