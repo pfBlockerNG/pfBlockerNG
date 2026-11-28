@@ -499,4 +499,13 @@ final class DnsProxyKeepRunningTest extends TestCase
 		$this->assertIsString($refused);
 		$this->assertStringContainsString('the gateway is stopping', $refused);
 	}
+
+	public function testTheDeciderRestartWaitOutlastsTheGatewaysReadyWaitAndItsKill(): void
+	{
+		// issue #4302: the gateway gives a new decider 60 s to load the DNSBL database (defaultRestartTimeout), then up to 3 s to die
+		$source = (string) file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc');
+
+		$this->assertMatchesRegularExpression("/define\\('PFB_DNS_PROXY_DECIDER_RESTART_WAIT', 70\\.0\\);/", $source,
+			'the reply wait is the gateway\'s 60 s READY wait, its 3 s kill and a margin');
+	}
 }

@@ -45,7 +45,7 @@ import (
 
 const (
 	defaultReadyTimeout   = 300 * time.Second          // the decider boots the whole DNSBL database before it says READY
-	defaultRestartTimeout = 30 * time.Second           // a decider restarted on the control socket: pfBlockerNG waits 40 s for the reply
+	defaultRestartTimeout = 60 * time.Second           // a decider restarted on the control socket loads the whole DNSBL database: pfBlockerNG waits 70 s for the reply
 	defaultKillAfter      = 3 * time.Second            // how long the decider gets to leave on EOF
 	defaultShutdownBudget = 4 * time.Second            // all of shutdown: the rc stop sends KILL 5 s after TERM, which would leave a stale ready file
 	defaultTLSPEM         = "/var/etc/pfb_dns/tls.pem" // the certificate and key pfBlockerNG writes from the pfB-DNS page's selection: root only

@@ -244,6 +244,8 @@ func TestProductionDefaults(t *testing.T) {
 		{"defaultKillAfter", defaultKillAfter, 3 * time.Second},
 		{"defaultWriteTimeout", defaultWriteTimeout, 10 * time.Second},
 		{"defaultReadyTimeout", defaultReadyTimeout, 300 * time.Second},
+		// issue #4302: the new decider loads the whole DNSBL database before READY, as long as a proxy start gets
+		{"defaultRestartTimeout", defaultRestartTimeout, 60 * time.Second},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %s, want %s", c.name, c.got, c.want)

@@ -4199,9 +4199,9 @@ if (!defined('PFB_DNS_PROXY_START_WAIT')) {
 if (!defined('PFB_DNS_PROXY_CTL_TIMEOUT')) {
 	define('PFB_DNS_PROXY_CTL_TIMEOUT', 3.0);
 }
-// Seconds pfb_dns_proxy_decider_restart() waits for the reply: the gateway waits up to 30 s for the new decider's READY, then kills.
+// Seconds pfb_dns_proxy_decider_restart() waits for the reply: the gateway waits up to 60 s for the new decider's READY, then kills.
 if (!defined('PFB_DNS_PROXY_DECIDER_RESTART_WAIT')) {
-	define('PFB_DNS_PROXY_DECIDER_RESTART_WAIT', 40.0);
+	define('PFB_DNS_PROXY_DECIDER_RESTART_WAIT', 70.0);
 }
 // Readiness is read from the daemon's child pidfile and from the marker the proxy publishes with --ready-file (its own PID,
 // written once it serves). Kept in $pfb like the other runtime paths, so a unit test reads its own files; the marker lives
