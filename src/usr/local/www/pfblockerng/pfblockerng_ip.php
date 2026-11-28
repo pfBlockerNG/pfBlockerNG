@@ -313,11 +313,21 @@ if ($_POST) {
 			$pfb['iconfig']['autorule_suffix']	= $_POST['autorule_suffix']					?: 'autorule';
 			$pfb['iconfig']['killstates']		= pfb_filter($_POST['killstates'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
 			// issue #1723: already sanitized by the ingestion prologue -- plain encode.
+			$pfb_spoa_prev = [
+				'enable'  => PfbConfig::read('ip/spoa_enable') === PfbToggle::On ? 'on' : '',
+				'listen'  => (string) PfbConfig::read('ip/spoa_listen'),
+				'aliases' => (string) PfbConfig::read('ip/spoa_aliases'),
+			];
 			$pfb['iconfig']['v4suppression']	= base64_encode($_POST['v4suppression'] ?? '');
 			$pfb['iconfig']['v6suppression']	= base64_encode($_POST['v6suppression'] ?? '');
 			$pfb['iconfig']['spoa_enable']		= pfb_filter($_POST['spoa_enable'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
 			$pfb['iconfig']['spoa_listen']		= $pfb_spoa_listen_post;
 			$pfb['iconfig']['spoa_aliases']		= $_POST['spoa_aliases'];
+			$pfb_spoa_changed = $pfb_spoa_prev !== [
+				'enable'  => $pfb['iconfig']['spoa_enable'],
+				'listen'  => $pfb['iconfig']['spoa_listen'],
+				'aliases' => $pfb['iconfig']['spoa_aliases'],
+			];
 
 			// ADR-11: per-type aggregate aliases multi-select -> CSV scalar (sanitised to the
 			// known option keys; default none). Gateway-registered in the general section, so
@@ -344,7 +354,12 @@ if ($_POST) {
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			if (!pfb_dns_config_write_failed($pfb_written)) {
 				pfb_core_settings_changed(NULL, TRUE);	// Core reads these settings (issue #4031); a failure never undoes the save
-				pfb_core_service();	// refresh pfb_core.sh SPOA flags (#4309)
+				if ($pfb_spoa_changed) {
+					pfb_core_service();	// refresh pfb_core.sh SPOA flags and apply to running daemon (#4309)
+					if (function_exists('restart_service')) {
+						restart_service('pfb_core');
+					}
+				}
 			}
 			if (!empty($savemsg)) {
 				header("Location: /pfblockerng/pfblockerng_ip.php?savemsg={$savemsg}");
@@ -811,7 +826,9 @@ $coreListen = ($pconfig['spoa_listen'] ?? '') !== '' ? (string) $pconfig['spoa_l
 $spoaSnippets = pfb_spoa_haproxy_snippets(
 	$coreListen,
 	$csListen !== '' ? $csListen : PFB_CROWDSEC_SPOA_DEFAULT_LISTEN,
-	(string) PfbConfig::read('crowdsec/appsec_url') !== ''
+	(string) PfbConfig::read('crowdsec/appsec_url') !== '',
+	(string) PfbConfig::read('crowdsec/appsec_timeout') ?: PFB_CROWDSEC_APPSEC_DEFAULT_TIMEOUT,
+	(string) PfbConfig::read('crowdsec/appsec_failure_action') ?: 'passthrough'
 );
 $section->addInput(new Form_StaticText(
 	gettext('HAProxy SPOE Snippet'),

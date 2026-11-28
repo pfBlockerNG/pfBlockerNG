@@ -73,6 +73,17 @@ function pfb_spoa_aliases_valid(string $csv): bool {
 }
 
 /**
+ * Parse a validated Go duration string (50ms..30s) into milliseconds, or 500 on fallback.
+ */
+function pfb_spoa_timeout_ms(string $dur): int {
+	if (!preg_match('/^([0-9]+)(ms|s)$/D', $dur, $m)) {
+		return 500;
+	}
+	$ms = $m[2] === 's' ? ((int) $m[1]) * 1000 : (int) $m[1];
+	return ($ms >= 50 && $ms <= 30000) ? $ms : 500;
+}
+
+/**
  * Validate a Go duration string for AppSec timeout (50ms to 30s).
  */
 function pfb_spoa_timeout_valid(string $dur): bool {
@@ -101,10 +112,13 @@ function pfb_spoa_haproxy_server_addr(string $listen): string {
 function pfb_spoa_haproxy_snippets(
 	string $coreListen = PFB_CORE_SPOA_DEFAULT_LISTEN,
 	string $crowdsecListen = PFB_CROWDSEC_SPOA_DEFAULT_LISTEN,
-	bool $appsecEnabled = FALSE
+	bool $appsecEnabled = FALSE,
+	string $appsecTimeout = PFB_CROWDSEC_APPSEC_DEFAULT_TIMEOUT,
+	string $appsecFailureAction = 'passthrough'
 ): array {
 	$coreAddr = pfb_spoa_haproxy_server_addr($coreListen);
 	$csAddr = pfb_spoa_haproxy_server_addr($crowdsecListen);
+	$csProcessing = $appsecEnabled ? (max(500, pfb_spoa_timeout_ms($appsecTimeout) + 250) . 'ms') : '100ms';
 
 	$spoeCore = <<<EOF
 [pfb-core]
@@ -137,7 +151,7 @@ spoe-agent pfb-crowdsec-agent
     option set-on-error error
     timeout hello      100ms
     timeout idle       30s
-    timeout processing 500ms
+    timeout processing {$csProcessing}
     use-backend be_pfb_crowdsec_spoa
     log global
 
@@ -162,6 +176,10 @@ backend be_pfb_crowdsec_spoa
     server pfb-crowdsec {$csAddr} check
 EOF;
 
+	$csFailClosedLine = ($appsecEnabled && $appsecFailureAction === 'deny')
+		? "\nhttp-request deny deny_status 403 if { var(txn.crowdsec.error) -m found }"
+		: '';
+
 	$frontend = <<<EOF
 # Attach both SPOE engines in your frontend:
 filter spoe engine pfb-core     config /var/etc/haproxy/spoe-pfb-core.conf
@@ -172,7 +190,7 @@ http-request set-src req.hdr_ip(CF-Connecting-IP) if from_cloudflare
 http-request send-spoe-group pfb-core pfb-check if !from_trusted_subnets
 http-request deny deny_status 403 if { var(txn.pfb.blocked) -m bool }
 http-request send-spoe-group pfb-crowdsec cs-check if !from_trusted_subnets
-http-request deny deny_status 403 if { var(txn.crowdsec.remediation) -m str ban }
+http-request deny deny_status 403 if { var(txn.crowdsec.remediation) -m str ban }{$csFailClosedLine}
 EOF;
 
 	return [

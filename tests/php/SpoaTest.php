@@ -45,10 +45,14 @@ final class SpoaTest extends TestCase
 		$this->assertIsInt($csPos);
 		$this->assertLessThan($csPos, $pfbPos, 'pfb-core must be evaluated before pfb-crowdsec');
 
-		$unixAppSec = pfb_spoa_haproxy_snippets('unix:/var/run/pfb_core/spoa.sock', 'unix:/var/run/pfb_crowdsec/spoa.sock', TRUE);
+		$unixAppSec = pfb_spoa_haproxy_snippets('unix:/var/run/pfb_core/spoa.sock', 'unix:/var/run/pfb_crowdsec/spoa.sock', TRUE, '2s', 'deny');
 		$this->assertStringContainsString('server pfb-core unix@/var/run/pfb_core/spoa.sock check', $unixAppSec['haproxy_backends']);
 		$this->assertStringContainsString('server pfb-crowdsec unix@/var/run/pfb_crowdsec/spoa.sock check', $unixAppSec['haproxy_backends']);
 		$this->assertStringContainsString('method=method', $unixAppSec['spoe_crowdsec']);
+		$this->assertStringContainsString('timeout processing 2250ms', $unixAppSec['spoe_crowdsec']);
+		$this->assertStringContainsString('var(txn.crowdsec.error) -m found', $unixAppSec['haproxy_frontend']);
+		$this->assertStringContainsString('timeout processing 100ms', $tcp['spoe_crowdsec']);
+		$this->assertStringNotContainsString('var(txn.crowdsec.error)', $tcp['haproxy_frontend']);
 	}
 
 	public function testCrowdsecValidateAndConfigJsonWithSpoaAndAppsec(): void

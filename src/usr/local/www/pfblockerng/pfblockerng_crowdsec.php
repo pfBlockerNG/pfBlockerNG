@@ -206,7 +206,9 @@ $csListen = ($pconfig['spoa_listen'] ?? '') !== '' ? (string) $pconfig['spoa_lis
 $snippets = pfb_spoa_haproxy_snippets(
 	$coreListen !== '' ? $coreListen : PFB_CORE_SPOA_DEFAULT_LISTEN,
 	$csListen,
-	($pconfig['appsec_url'] ?? '') !== ''
+	($pconfig['appsec_url'] ?? '') !== '',
+	($pconfig['appsec_timeout'] ?? '') !== '' ? (string) $pconfig['appsec_timeout'] : PFB_CROWDSEC_APPSEC_DEFAULT_TIMEOUT,
+	($pconfig['appsec_failure_action'] ?? '') !== '' ? (string) $pconfig['appsec_failure_action'] : 'passthrough'
 );
 $section->addInput(new Form_StaticText(
 	gettext('HAProxy SPOE Snippet'),
