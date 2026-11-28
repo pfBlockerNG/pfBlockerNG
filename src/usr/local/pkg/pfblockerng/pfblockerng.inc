@@ -25137,6 +25137,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 	$md5_download	= trim(escapeshellarg("{$file_dwn}.md5.raw"), "'");
 
 	// If the change-detection probe already downloaded the body, re-utilize instead of downloading twice
+	// Issue #4304: the MIME gates below take $list_url, not this path, so their host exceptions still see the feed host.
 	if (file_exists("{$md5_download}")) {
 		$list_download = "{$md5_download}";
 		pfb_logger(' ( change check ) ', 1);
@@ -25714,7 +25715,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 
 		// Validate File Mime-type
 		$reject_detail = array();
-		$file_type = pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail);
+		$file_type = pfb_filter(array("{$file_dwn_esc}", "{$file_download}", $list_url), PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail);
 		if (!$file_type) {
 			pfb_validate_log($header, 'mime', 'mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 			return PfbDownloadResult::failure();
@@ -25946,7 +25947,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			}
 			else {
 				$reject_detail = array();
-				$inner_type = pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail);
+				$inner_type = pfb_filter(array("{$file_dwn_esc}", "{$file_download}", $list_url), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail);
 				if (!$inner_type) {
 					pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 					return PfbDownloadResult::failure();
@@ -25988,7 +25989,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::failure();
 			}
 			$reject_detail = array();
-			$inner_type = pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail);
+			$inner_type = pfb_filter(array("{$file_dwn_esc}", "{$file_download}", $list_url), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail);
 			if (!$inner_type) {
 				pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 				return PfbDownloadResult::failure();
@@ -26132,7 +26133,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				}
 				if (!$top1m_target_dir) {
 					$top1m_inner_type = pfb_filter(
-						array(escapeshellarg($top1m_staged_files[0]), $top1m_staged_files[0], $list_download),
+						array(escapeshellarg($top1m_staged_files[0]), $top1m_staged_files[0], $list_url),
 						PFB_FILTER_FILE_MIME,
 						'pfb_download'
 					);
@@ -26231,7 +26232,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			   cannot classify a multi-member container (-Z decompresses a single stream);
 			   the post-extraction PFB_FILTER_FILE_MIME re-check below is the ZIP
 			   inner-content gate (issue #808).
-			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download')) {
+			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", $list_url), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download')) {
 				return PfbDownloadResult::failure();
 			}
 			*/
@@ -26280,7 +26281,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				$pfb_sanity = NULL;
 				$tar_bin = escapeshellcmd($pfb['tar'] ?? '/usr/bin/tar');
 				if (!pfb_stage_publish($orig_download,
-				    static function (string $staged) use ($file_dwn_esc, $list_download, $tar_bin,
+				    static function (string $staged) use ($file_dwn_esc, $list_url, $tar_bin,
 				        &$output, &$retval, &$reject_detail, &$inner_rejected, &$pfb_sanity): int {
 					exec(pfb_extract_cmd("set -o pipefail; {$tar_bin} -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > " . escapeshellarg($staged)), $output, $retval);
 					if ($retval !== 0) {
@@ -26288,7 +26289,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 					}
 					// issue #2169: the inner-content gate unlinks whatever it probes, so
 					// probe the staged copy -- a rejection must not reach the publication.
-					if (!pfb_filter(array(escapeshellarg($staged), $staged, $list_download),
+					if (!pfb_filter(array(escapeshellarg($staged), $staged, $list_url),
 					    PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail)) {
 						$inner_rejected = TRUE;
 						return pfb_download_initial_retval();
@@ -26312,7 +26313,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			// (orig_download), not the outer archive -- the outer container is
 			// already covered by ADR-44's pfb_mime_normalise().
 			$reject_detail = array();
-			if (!pfb_filter(array("{$file_org_esc}", "{$orig_download}", "{$list_download}"), PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail)) {
+			if (!pfb_filter(array("{$file_org_esc}", "{$orig_download}", $list_url), PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail)) {
 				pfb_validate_log($header, 'inner', 'inner_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 				unlink_if_exists($file_download);
 				return PfbDownloadResult::failure();
