@@ -8,9 +8,9 @@ pointer, never a narrative: the review story — legs, findings, quota windows �
 already lives in that PR's own audit comments, so record only the outcome here.
 The list opens at the first line that begins with a dash and a space, and from
 there the file is entries only (blank lines aside).
-This header is prose and is capped at 1,200 bytes, which is the one place a
-narrative could otherwise park. `scripts/check_context_budget.py` enforces both
-caps, the shape, and this file's 16,384-byte budget; the recorded SHAs
+This header is prose of at most 1,200 bytes, the one place a narrative could
+otherwise park. `scripts/check_context_budget.py` enforces the shape and reports
+both caps and this file's 16,384-byte budget as guidelines; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
 - `eba43e884`  pfb-dns (4.0): 60 s proxy start and decider restart  (#4306) — quota notice

@@ -337,14 +337,15 @@ else
 fi
 
 # --- Context byte budgets + routing headers (map #1383): the bootstrap, the
-#     .agents/policy|context files, dir stubs, and hook capsules stay within
-#     their byte budgets, and every AGENTS.md routing-table target keeps its
-#     Scope/Load-when header. Self-scopes: validates iff the staged diff
-#     touches a context surface; otherwise reports the skip. ---
+#     .agents/policy|context files, dir stubs, and hook capsules report any
+#     byte budget they exceed as a guideline (#4310), and every AGENTS.md
+#     routing-table target must keep its Scope/Load-when header. Self-scopes:
+#     validates iff the staged diff touches a context surface; otherwise
+#     reports the skip. ---
 if exempted scripts/check_context_budget.py; then
 	exempt context-budget
 elif [ -n "$py_bin" ]; then
-	step 'context-budget (bootstrap/policy byte budgets + routing headers)'
+	step 'context-budget (byte budget guidelines + routing headers)'
 	"$py_bin" scripts/check_context_budget.py --staged || failed 'context-budget'
 else
 	skip context-budget
