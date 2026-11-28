@@ -816,22 +816,72 @@ _GEOIP_MMDB_FIXTURE = "GeoLite2-Country.mmdb"
 # pfblockerng.sh's dMax classify loop runs (~:1148).
 _GEOIP_MMDB_PROBE_IP = "67.43.156.1"
 _GEOIP_MMDB_PROBE_CC = "BT"
-# $pfb['ccdir'] (pfblockerng.inc) -- per-continent/per-ISO-code txt files `ugc`'s
-# uc_countries()/get_countries() derive from the CSVs; teardown_geoip_dataset's cleanup.
+# $pfb['ccdir'] (pfblockerng.inc) -- per-continent/per-ISO-code txt files Core's extra:dcc conversion derives from the
+# CSVs (#3977); teardown_geoip_dataset's cleanup.
 _GEOIP_CCDIR = "/usr/local/share/GeoIP/cc"
 
 
+def convert_geoip_through_core(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """One Core Update that converts the seeded MaxMind CSVs into the country lists, with no download (#3977).
+
+    Only Core's extra:dcc step converts, and an Update runs it only when it is due: the smoke box has no MaxMind key, so
+    missing data never makes it run. Core is stopped, extra:dcc is dropped from its scheduler state (an Extra that never
+    completed is due) and ``geoip.update`` is set (it converts even over existing lists), then Core starts again and a
+    manual Update runs. The apply that ends it renders the GeoIP pages from Core's new catalog.
+    """
+    stop = vm.ssh(PFB_CORE_RC, "stop", timeout=timeout)
+    if stop.returncode != 0:
+        raise RuntimeError(
+            f"convert_geoip_through_core: Core did not stop: rc={stop.returncode} {stop.stdout}{stop.stderr}"
+        )
+    state = f"{CORE_STATE_DIR}/schedule_state.json"
+    edit = php_eval(
+        vm,
+        f"$f = {_php_str(state)};\n"
+        "$s = is_file($f) ? json_decode((string) file_get_contents($f), TRUE) : NULL;\n"
+        "if (is_array($s) && isset($s['items']['extra:dcc'])) { unset($s['items']['extra:dcc']);"
+        " if (file_put_contents($f, json_encode($s)) === FALSE) { exit(1); } }\n"
+        f"if (!touch({_php_str(PFB_DBDIR + '/geoip.update')})) {{ exit(1); }}\n"
+        "echo 'OK';",
+        timeout=timeout,
+    )
+    if edit.returncode != 0 or "OK" not in edit.stdout:
+        raise RuntimeError(
+            f"convert_geoip_through_core: state edit failed: rc={edit.returncode} {edit.stdout!r} {edit.stderr!r}"
+        )
+    start = vm.ssh(PFB_CORE_RC, "start", timeout=timeout)
+    if start.returncode != 0:
+        raise RuntimeError(
+            f"convert_geoip_through_core: Core did not start: rc={start.returncode} {start.stdout}{start.stderr}"
+        )
+    deadline = time.monotonic() + timeout
+    while core_call(vm, "GetVersion")["status"] != 200:  # the real condition: the API answers
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"STUCK: Core did not answer GetVersion within {timeout:.0f}s of its start")
+        time.sleep(1)
+    before = core_update_view(vm)["update"]
+    reply = core_call(vm, "StartUpdate", {"trigger": "manual"})
+    if reply["status"] != 200:
+        raise RuntimeError(f"convert_geoip_through_core: StartUpdate did not answer 200: {reply}")
+    view = await_core_update_end(vm, before=before)
+    if vm.ssh("test", "-e", f"{PFB_DBDIR}/geoip.update", timeout=timeout).returncode == 0:
+        raise RuntimeError(
+            f"convert_geoip_through_core: the Update ended without consuming geoip.update: {view}\n"
+            f"{core_update_log(vm)[-3000:]}"
+        )
+
+
 def seed_geoip_dataset(vm: SmokeVM, *, timeout: float = 120.0) -> None:
-    """Seed the official MaxMind-DB test corpus (CSVs + binary mmdb), run `ugc`.
+    """Seed the official MaxMind-DB test corpus (CSVs + binary mmdb), then have Core convert it.
 
     The fixtures under ``tests/smoke/fixtures/GeoLite2-Country*`` are one consistent
-    MaxMind dataset seeded twice: as CSVs for the `ugc` dispatcher and GeoIP page
-    generator, and as the
+    MaxMind dataset seeded twice: as CSVs for Core's country conversion and the GeoIP
+    pages the Outpost apply renders from it (:func:`convert_geoip_through_core`), and as the
     binary `.mmdb` for `mmdblookup`, so both the CSV->continent/cc-file half and the
     dMax reputation half exercise the SAME corpus. Mirrors :func:`write_local_feed`'s
     mkdir-then-tee round trip (mkdir first, as its own request, so `tee` keeps stdin free).
 
-    FAILS LOUDLY on a nonzero `ugc` exit, a missing generated page, a corrupted mmdb
+    FAILS LOUDLY on a failed conversion Update, a missing generated page, a corrupted mmdb
     transfer, or a failing `mmdblookup` sanity probe -- never a silent skip that would
     let a 404 or a corrupt database reach the Tier-A sweep uninformed.
     """
@@ -884,12 +934,7 @@ def seed_geoip_dataset(vm: SmokeVM, *, timeout: float = 120.0) -> None:
             f"local={len(mmdb_bytes)} on-box={on_box_size} (wc rc={size.returncode} stdout={size.stdout!r})"
         )
 
-    result = vm.ssh(PHP_BIN, PFB_CLI, "ugc", timeout=timeout)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"seed_geoip_dataset: 'ugc' failed: rc={result.returncode} "
-            f"stdout={result.stdout[-2000:]!r} stderr={result.stderr!r}"
-        )
+    convert_geoip_through_core(vm, timeout=timeout)
 
     missing = [
         page
@@ -897,7 +942,7 @@ def seed_geoip_dataset(vm: SmokeVM, *, timeout: float = 120.0) -> None:
         if vm.ssh("test", "-f", f"{PFB_WWW_DIR}/{page}", timeout=timeout).returncode != 0
     ]
     if missing:
-        raise RuntimeError(f"seed_geoip_dataset: 'ugc' ran (rc=0) but page(s) missing: {missing}")
+        raise RuntimeError(f"seed_geoip_dataset: the conversion Update ended but page(s) missing: {missing}")
 
     lookup = vm.ssh(
         "/usr/local/bin/mmdblookup",
@@ -1195,6 +1240,7 @@ def case_feed_id(spec: DnsblCase | IpCase) -> str:
 CORE_UPDATE_CMD = "/usr/local/pkg/pfblockerng/pfb_core_update.sh"
 CORE_UPDATE_RESULT = "/tmp/pfb_smoke_core_update_result.json"
 CORE_STATE_DIR = "/usr/local/etc/pfb_core"
+PFB_CORE_RC = "/usr/local/etc/rc.d/pfb_core.sh"
 _CORE_OPEN, _CORE_CLOSE = "<<<CORE>>>", "<<<CORE-END>>>"
 
 
